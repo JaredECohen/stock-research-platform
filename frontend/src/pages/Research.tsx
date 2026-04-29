@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "@/api/client";
 import MemoCard from "@/components/MemoCard";
 import { AgentTrace } from "@/components/AgentTrace";
+import NewsAlertPanel from "@/components/NewsAlertPanel";
 import type { CompanyOut, StockMemoOut, AgentTrace as AgentTraceT } from "@/types";
 
 export default function Research() {
@@ -91,7 +92,10 @@ export default function Research() {
       {memo && (
         <div className="grid lg:grid-cols-[1fr_280px] gap-4">
           <MemoCard memo={memo} />
-          <AgentTrace trace={trace} />
+          <div className="space-y-4">
+            <AgentTrace trace={trace} />
+            <NewsAlertPanel alerts={memo.sector_agent_view.data?.pending_news_alerts} />
+          </div>
         </div>
       )}
     </div>
