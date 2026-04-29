@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: "Inter", system-ui, sans-serif;
+  background:
+    radial-gradient(ellipse at top, rgba(82, 224, 196, 0.08), transparent 60%),
+    radial-gradient(ellipse at bottom right, rgba(82, 224, 196, 0.04), transparent 60%),
+    #0a0f1c;
+  min-height: 100vh;
+}
+
+/* Subtle scrollbar styling */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(82, 224, 196, 0.18);
+  border-radius: 6px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(82, 224, 196, 0.32);
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Cards / utility components */
+@layer components {
+  .card {
+    @apply bg-ink-800/70 border border-ink-700 rounded-xl p-5 backdrop-blur-sm;
+  }
+  .card-tight {
+    @apply bg-ink-800/70 border border-ink-700 rounded-xl p-3 backdrop-blur-sm;
+  }
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border;
+  }
+  .badge-bull {
+    @apply badge bg-accent-700/15 border-accent-600/40 text-accent-500;
+  }
+  .badge-mixed {
+    @apply badge bg-warn-500/15 border-warn-500/40 text-warn-500;
+  }
+  .badge-bear {
+    @apply badge bg-danger-500/15 border-danger-500/40 text-danger-500;
+  }
+  .badge-neutral {
+    @apply badge bg-slate-500/15 border-slate-500/40 text-slate-300;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg border text-sm font-medium transition-colors;
+  }
+  .btn-primary {
+    @apply btn bg-accent-600 hover:bg-accent-500 border-accent-500 text-ink-950;
+  }
+  .btn-ghost {
+    @apply btn bg-ink-800/60 hover:bg-ink-700 border-ink-700 text-slate-100;
+  }
+  .input {
+    @apply bg-ink-900 border border-ink-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-accent-600;
+  }
+  .table-row-hover:hover {
+    background: rgba(82, 224, 196, 0.04);
+  }
+  .section-title {
+    @apply text-xs uppercase tracking-wider text-slate-400 font-semibold;
+  }
+}

@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# Node / Frontend
+node_modules/
+dist/
+.vite/
+.next/
+coverage/
+*.tsbuildinfo
+
+# Env / Secrets
+.env
+.env.local
+.env.production
+*.local
+.env.*
+
+# Databases / Caches
+*.db
+*.sqlite
+*.sqlite3
+.cache/
+*.log
+
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Build artifacts
+build/
+out/

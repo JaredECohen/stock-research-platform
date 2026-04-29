@@ -1,0 +1,1178 @@
+{
+  "NVDA": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 0.1614766821098551,
+        "eps_estimate": 0.15526604049024528,
+        "revenue_actual": 8727468027.256554,
+        "revenue_estimate": 8556341203.192699,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 0.2546071906390027,
+        "eps_estimate": 0.24719144722233274,
+        "revenue_actual": 13527575442.247658,
+        "revenue_estimate": 13327660534.234146,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 0.40133456221198166,
+        "eps_estimate": 0.38222339258283966,
+        "revenue_actual": 20967741935.48387,
+        "revenue_estimate": 20456333595.59402,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 0.6324433673469387,
+        "eps_estimate": 0.6200425170068027,
+        "revenue_actual": 32500000000.0,
+        "revenue_estimate": 32178217821.782177,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "MSFT": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 1.7139606139596841,
+        "eps_estimate": 1.6480390518843115,
+        "revenue_actual": 39240282504.40774,
+        "revenue_estimate": 38470865200.39974,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 2.0356244588813874,
+        "eps_estimate": 1.9763344260984343,
+        "revenue_actual": 45518727705.112976,
+        "revenue_estimate": 44846037147.89456,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 2.416343342460668,
+        "eps_estimate": 2.301279373772065,
+        "revenue_actual": 52801724137.931046,
+        "revenue_estimate": 51513877207.73761,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 2.8667802826379547,
+        "eps_estimate": 2.8105689045470146,
+        "revenue_actual": 61250000000.00001,
+        "revenue_estimate": 60643564356.43565,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "GOOGL": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 1.100711353448027,
+        "eps_estimate": 1.0583763013923337,
+        "revenue_actual": 59775576496.45125,
+        "revenue_estimate": 58603506369.06985,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 1.2867534558735048,
+        "eps_estimate": 1.2492751998771892,
+        "revenue_actual": 67546401440.98991,
+        "revenue_estimate": 66548178759.59597,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 1.5025644830563352,
+        "eps_estimate": 1.4310137933869858,
+        "revenue_actual": 76327433628.31859,
+        "revenue_estimate": 74465788905.67668,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 1.752740243902439,
+        "eps_estimate": 1.7183727881396462,
+        "revenue_actual": 86250000000.0,
+        "revenue_estimate": 85396039603.96039,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "META": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 2.6093091866376183,
+        "eps_estimate": 2.5089511409977097,
+        "revenue_actual": 23148148148.14815,
+        "revenue_estimate": 22694262890.341324,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 3.215936819172114,
+        "eps_estimate": 3.1222687564777805,
+        "revenue_actual": 27777777777.777782,
+        "revenue_estimate": 27367268746.579098,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 3.9608431372549027,
+        "eps_estimate": 3.7722315592903835,
+        "revenue_actual": 33333333333.333336,
+        "revenue_estimate": 32520325203.252037,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 4.875074509803921,
+        "eps_estimate": 4.779484813533256,
+        "revenue_actual": 40000000000.0,
+        "revenue_estimate": 39603960396.039604,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "AMZN": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 0.5536575878757114,
+        "eps_estimate": 0.5323630652651071,
+        "revenue_actual": 110325938411.07869,
+        "revenue_estimate": 108162684716.7438,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 0.7102754494655005,
+        "eps_estimate": 0.689587815015049,
+        "revenue_actual": 123565051020.40814,
+        "revenue_estimate": 121738966522.56961,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 0.8965089285714287,
+        "eps_estimate": 0.8538180272108845,
+        "revenue_actual": 138392857142.85715,
+        "revenue_estimate": 135017421602.78748,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 1.1172104761904766,
+        "eps_estimate": 1.095304388422036,
+        "revenue_actual": 155000000000.00003,
+        "revenue_estimate": 153465346534.6535,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "AVGO": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 0.29862610893529706,
+        "eps_estimate": 0.28714048936086256,
+        "revenue_actual": 4828717201.166182,
+        "revenue_estimate": 4734036471.73155,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 0.42816173250416056,
+        "eps_estimate": 0.4156910024312238,
+        "revenue_actual": 6760204081.632654,
+        "revenue_estimate": 6660299587.815423,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 0.6135456774984673,
+        "eps_estimate": 0.584329216665207,
+        "revenue_actual": 9464285714.285715,
+        "revenue_estimate": 9233449477.351917,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 0.8787309012875536,
+        "eps_estimate": 0.8615008836152486,
+        "revenue_actual": 13250000000.0,
+        "revenue_estimate": 13118811881.188118,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "AMD": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 0.11805123892303016,
+        "eps_estimate": 0.11351080665675976,
+        "revenue_actual": 3651785236.075743,
+        "revenue_estimate": 3580181603.9958267,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 0.15955855009578732,
+        "eps_estimate": 0.1549112136852304,
+        "revenue_actual": 4309106578.569377,
+        "revenue_estimate": 4245425200.560963,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 0.2121836331496309,
+        "eps_estimate": 0.2020796506186961,
+        "revenue_actual": 5084745762.711864,
+        "revenue_estimate": 4960727573.377429,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 0.2785840490797546,
+        "eps_estimate": 0.27312161674485746,
+        "revenue_actual": 6000000000.0,
+        "revenue_estimate": 5940594059.405941,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "AAPL": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 1.2181332236842106,
+        "eps_estimate": 1.1712819458502024,
+        "revenue_actual": 86677144970.4142,
+        "revenue_estimate": 84977593108.2492,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 1.312304292130567,
+        "eps_estimate": 1.274081837019968,
+        "revenue_actual": 90144230769.23077,
+        "revenue_estimate": 88812050018.94658,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 1.412060032894737,
+        "eps_estimate": 1.3448190789473686,
+        "revenue_actual": 93750000000.00002,
+        "revenue_estimate": 91463414634.14636,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 1.517696546052632,
+        "eps_estimate": 1.4879377902476782,
+        "revenue_actual": 97500000000.00002,
+        "revenue_estimate": 96534653465.34654,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "JPM": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 3.0109319646417005,
+        "eps_estimate": 2.895126889078558,
+        "revenue_actual": 34692659767.861206,
+        "revenue_estimate": 34012411537.118828,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 3.3043048227349954,
+        "eps_estimate": 3.20806293469417,
+        "revenue_actual": 37121145951.611496,
+        "revenue_estimate": 36572557587.79458,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 3.623996314334606,
+        "eps_estimate": 3.451425061271053,
+        "revenue_actual": 39719626168.224304,
+        "revenue_estimate": 38750854798.26762,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 3.972253521126762,
+        "eps_estimate": 3.8943661971831,
+        "revenue_actual": 42500000000.00001,
+        "revenue_estimate": 42079207920.79208,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "BAC": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 0.4595221244902773,
+        "eps_estimate": 0.4418481966252666,
+        "revenue_actual": 21164021164.02116,
+        "revenue_estimate": 20749040356.88349,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 0.4998301486199574,
+        "eps_estimate": 0.48527198895141493,
+        "revenue_actual": 22222222222.222218,
+        "revenue_estimate": 21893814997.26327,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 0.5430201698513799,
+        "eps_estimate": 0.5171620665251238,
+        "revenue_actual": 23333333333.33333,
+        "revenue_estimate": 22764227642.27642,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 0.5892796178343948,
+        "eps_estimate": 0.5777251155239164,
+        "revenue_actual": 24499999999.999996,
+        "revenue_estimate": 24257425742.574253,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "GS": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 4.907127512208865,
+        "eps_estimate": 4.718391838662369,
+        "revenue_actual": 9579263711.495113,
+        "revenue_estimate": 9391435011.269718,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 5.592942923553717,
+        "eps_estimate": 5.430041673353123,
+        "revenue_actual": 10537190082.644625,
+        "revenue_estimate": 10381468061.718843,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 6.366850142045453,
+        "eps_estimate": 6.063666801948051,
+        "revenue_actual": 11590909090.909088,
+        "revenue_estimate": 11308203991.13082,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 7.239609375,
+        "eps_estimate": 7.09765625,
+        "revenue_actual": 12749999999.999998,
+        "revenue_estimate": 12623762376.237621,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "MS": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 1.1240388896650804,
+        "eps_estimate": 1.080806624677962,
+        "revenue_actual": 11510567494.79246,
+        "revenue_estimate": 11284870092.933784,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 1.260944300496198,
+        "eps_estimate": 1.224217767472037,
+        "revenue_actual": 12431412894.375856,
+        "revenue_estimate": 12247697432.882618,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 1.412560728166438,
+        "eps_estimate": 1.3452959315870838,
+        "revenue_actual": 13425925925.925926,
+        "revenue_estimate": 13098464317.976515,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 1.5803657407407408,
+        "eps_estimate": 1.5493781771968047,
+        "revenue_actual": 14500000000.000002,
+        "revenue_estimate": 14356435643.564358,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "V": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 1.6119890779012522,
+        "eps_estimate": 1.5499894979819733,
+        "revenue_actual": 6761833208.114198,
+        "revenue_estimate": 6629248243.249213,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 1.8013987911681262,
+        "eps_estimate": 1.748930865211773,
+        "revenue_actual": 7438016528.925618,
+        "revenue_estimate": 7328095102.389772,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 2.0125705563093623,
+        "eps_estimate": 1.9167338631517736,
+        "revenue_actual": 8181818181.818181,
+        "revenue_estimate": 7982261640.798226,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 2.2479626865671642,
+        "eps_estimate": 2.2038849868305532,
+        "revenue_actual": 9000000000.0,
+        "revenue_estimate": 8910891089.108912,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "MA": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 2.1822259357309655,
+        "eps_estimate": 2.098294168972082,
+        "revenue_actual": 4935541823.781414,
+        "revenue_estimate": 4838766493.903347,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 2.466481302575461,
+        "eps_estimate": 2.394642041335399,
+        "revenue_actual": 5478451424.39737,
+        "revenue_estimate": 5397489088.076227,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 2.7868679163034002,
+        "eps_estimate": 2.6541599202889525,
+        "revenue_actual": 6081081081.081081,
+        "revenue_estimate": 5932762030.323007,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 3.147895161290323,
+        "eps_estimate": 3.0861717267552184,
+        "revenue_actual": 6750000000.000001,
+        "revenue_estimate": 6683168316.831684,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "COST": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 1.712950076038147,
+        "eps_estimate": 1.6470673808059106,
+        "revenue_actual": 52038989651.79181,
+        "revenue_estimate": 51018617305.678246,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 1.8328565813608175,
+        "eps_estimate": 1.7794724090881724,
+        "revenue_actual": 55681718927.41724,
+        "revenue_estimate": 54858836381.691864,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 2.477947793003284,
+        "eps_estimate": 2.3599502790507465,
+        "revenue_actual": 59579439252.33645,
+        "revenue_estimate": 58126282197.40142,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 3.7573374155405403,
+        "eps_estimate": 3.6836641328828827,
+        "revenue_actual": 63750000000.0,
+        "revenue_estimate": 63118811881.18812,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "WMT": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 0.21872402913625372,
+        "eps_estimate": 0.21031156647716703,
+        "revenue_actual": 143613000755.85788,
+        "revenue_estimate": 140797059564.56656,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 0.29818788004422336,
+        "eps_estimate": 0.28950279615944013,
+        "revenue_actual": 150793650793.6508,
+        "revenue_estimate": 148565173195.7151,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 0.457005337893864,
+        "eps_estimate": 0.43524317894653713,
+        "revenue_actual": 158333333333.33334,
+        "revenue_estimate": 154471544715.44717,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 0.6309590718283584,
+        "eps_estimate": 0.61858732532192,
+        "revenue_actual": 166250000000.00003,
+        "revenue_estimate": 164603960396.03964,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "HD": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 2.628831834793343,
+        "eps_estimate": 2.5277229180705216,
+        "revenue_actual": 35808248712.78769,
+        "revenue_estimate": 35106126189.00754,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 2.9378910209360036,
+        "eps_estimate": 2.852321379549518,
+        "revenue_actual": 36524413687.04344,
+        "revenue_estimate": 35984644026.64379,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 3.258261041790453,
+        "eps_estimate": 3.1031057540861458,
+        "revenue_actual": 37254901960.78431,
+        "revenue_estimate": 36346245815.39933,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 3.590270707070708,
+        "eps_estimate": 3.5198732422261845,
+        "revenue_actual": 38000000000.0,
+        "revenue_estimate": 37623762376.237625,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "MCD": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 2.194950276606955,
+        "eps_estimate": 2.110529112122072,
+        "revenue_actual": 5778476331.360947,
+        "revenue_estimate": 5665172873.883281,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 2.3380285168598527,
+        "eps_estimate": 2.269930598893061,
+        "revenue_actual": 6009615384.615385,
+        "revenue_estimate": 5920803334.596439,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 2.4890410958904114,
+        "eps_estimate": 2.3705153294194394,
+        "revenue_actual": 6250000000.000001,
+        "revenue_estimate": 6097560975.609757,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 2.648393835616439,
+        "eps_estimate": 2.596464544721999,
+        "revenue_actual": 6500000000.000001,
+        "revenue_estimate": 6435643564.356437,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "NKE": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 0.4502795634361925,
+        "eps_estimate": 0.4329611186886466,
+        "revenue_actual": 13969954189.507086,
+        "revenue_estimate": 13696033519.124594,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 0.5024295886916782,
+        "eps_estimate": 0.4877957171763866,
+        "revenue_actual": 13550855563.821873,
+        "revenue_estimate": 13350596614.60283,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 0.5510453608247423,
+        "eps_estimate": 0.5248051055473736,
+        "revenue_actual": 13144329896.907217,
+        "revenue_estimate": 12823736484.787529,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 0.596292,
+        "eps_estimate": 0.5846,
+        "revenue_actual": 12750000000.0,
+        "revenue_estimate": 12623762376.237623,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "SBUX": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 0.6093823415665952,
+        "eps_estimate": 0.5859445591986492,
+        "revenue_actual": 8716481594.56016,
+        "revenue_estimate": 8545570190.7452545,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 0.6759573623827457,
+        "eps_estimate": 0.6562692838667434,
+        "revenue_actual": 8890811226.451363,
+        "revenue_estimate": 8759419927.53829,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 0.7449516310949157,
+        "eps_estimate": 0.7094777438999197,
+        "revenue_actual": 9068627450.98039,
+        "revenue_estimate": 8847441415.590626,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 0.8164352876106192,
+        "eps_estimate": 0.8004267525594306,
+        "revenue_actual": 9249999999.999998,
+        "revenue_estimate": 9158415841.584156,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "LLY": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 1.0929377380638672,
+        "eps_estimate": 1.0509016712152568,
+        "revenue_actual": 4779244424.214838,
+        "revenue_estimate": 4685533749.230233,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 1.4673185923388352,
+        "eps_estimate": 1.4245811576105196,
+        "revenue_actual": 6213017751.47929,
+        "revenue_estimate": 6121199755.152011,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 1.967963562753037,
+        "eps_estimate": 1.8742510121457494,
+        "revenue_actual": 8076923076.923078,
+        "revenue_estimate": 7879924953.095686,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 2.636936842105264,
+        "eps_estimate": 2.585232198142416,
+        "revenue_actual": 10500000000.000002,
+        "revenue_estimate": 10396039603.960398,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "UNH": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 3.0695163035194795,
+        "eps_estimate": 2.9514579841533455,
+        "revenue_actual": 75414062896.9161,
+        "revenue_estimate": 73935355781.2903,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 3.9585103924375256,
+        "eps_estimate": 3.843213973240316,
+        "revenue_actual": 81447187928.6694,
+        "revenue_estimate": 80243534905.09302,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 4.970098631239937,
+        "eps_estimate": 4.733427267847559,
+        "revenue_actual": 87962962962.96297,
+        "revenue_estimate": 85817524841.9151,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 6.118206521739133,
+        "eps_estimate": 5.998241687979542,
+        "revenue_actual": 95000000000.00002,
+        "revenue_estimate": 94059405940.59407,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "JNJ": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 1.4079047412945287,
+        "eps_estimate": 1.3537545589370468,
+        "revenue_actual": 19004427167.69247,
+        "revenue_estimate": 18631791340.87497,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 1.5404409066531175,
+        "eps_estimate": 1.4955736957797257,
+        "revenue_actual": 19954648526.077095,
+        "revenue_estimate": 19659752242.44049,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 1.682710926694329,
+        "eps_estimate": 1.6025818349469798,
+        "revenue_actual": 20952380952.38095,
+        "revenue_estimate": 20441347270.615562,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 1.835356846473029,
+        "eps_estimate": 1.7993694573264989,
+        "revenue_actual": 22000000000.0,
+        "revenue_estimate": 21782178217.82178,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "MRK": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 1.0252888914240448,
+        "eps_estimate": 0.9858547032923507,
+        "revenue_actual": 13224003707.758753,
+        "revenue_estimate": 12964709517.410542,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 1.127512217223858,
+        "eps_estimate": 1.0946720555571436,
+        "revenue_actual": 14017443930.22428,
+        "revenue_estimate": 13810289586.427862,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 1.238311302110523,
+        "eps_estimate": 1.179344097248117,
+        "revenue_actual": 14858490566.037737,
+        "revenue_estimate": 14496088357.10999,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 1.3583472332015811,
+        "eps_estimate": 1.3317129737270403,
+        "revenue_actual": 15750000000.000002,
+        "revenue_estimate": 15594059405.940596,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "XOM": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 1.4869185649202734,
+        "eps_estimate": 1.4297293893464167,
+        "revenue_actual": 86250000000.0,
+        "revenue_estimate": 84558823529.41176,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 1.6374729498861047,
+        "eps_estimate": 1.5897795629962181,
+        "revenue_actual": 86250000000.0,
+        "revenue_estimate": 84975369458.12808,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 1.7880273348519362,
+        "eps_estimate": 1.702883176049463,
+        "revenue_actual": 86250000000.0,
+        "revenue_estimate": 84146341463.41464,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 1.9385817198177677,
+        "eps_estimate": 1.900570313546831,
+        "revenue_actual": 86250000000.0,
+        "revenue_estimate": 85396039603.96039,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "NEE": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 0.35272150098698274,
+        "eps_estimate": 0.33915528941056033,
+        "revenue_actual": 5667430160.468037,
+        "revenue_estimate": 5556304078.890232,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 0.39182663086420827,
+        "eps_estimate": 0.3804142047225323,
+        "revenue_actual": 6007475970.096119,
+        "revenue_estimate": 5918695537.040512,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 0.43435457892314777,
+        "eps_estimate": 0.413671027545855,
+        "revenue_actual": 6367924528.301887,
+        "revenue_estimate": 6212609295.90428,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 0.48057530487804884,
+        "eps_estimate": 0.4711522596843616,
+        "revenue_actual": 6750000000.0,
+        "revenue_estimate": 6683168316.831683,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "CAT": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 3.6784744655773487,
+        "eps_estimate": 3.536994678439758,
+        "revenue_actual": 15099837379.327133,
+        "revenue_estimate": 14803762136.595228,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 4.0170109706621835,
+        "eps_estimate": 3.9000106511283334,
+        "revenue_actual": 15552832500.706947,
+        "revenue_estimate": 15322987685.425566,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 4.37254903903309,
+        "eps_estimate": 4.164332418126752,
+        "revenue_actual": 16019417475.728157,
+        "revenue_estimate": 15628699976.320154,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 4.745804081632654,
+        "eps_estimate": 4.652749099639857,
+        "revenue_actual": 16500000000.000002,
+        "revenue_estimate": 16336633663.366339,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  },
+  "CRM": {
+    "last_earnings_date": "2026-03-14",
+    "next_earnings_date": "2026-06-12",
+    "quarters": [
+      {
+        "period": "2021",
+        "eps_actual": 0.9027754110931242,
+        "eps_estimate": 0.8680532798972348,
+        "revenue_actual": 6949661908.339592,
+        "revenue_estimate": 6813394027.783914,
+        "surprise_pct": 0.04,
+        "price_reaction": 0.08
+      },
+      {
+        "period": "2022",
+        "eps_actual": 1.0522003067223311,
+        "eps_estimate": 1.0215536958469233,
+        "revenue_actual": 7644628099.173552,
+        "revenue_estimate": 7531653299.678376,
+        "surprise_pct": 0.03,
+        "price_reaction": 0.06
+      },
+      {
+        "period": "2023",
+        "eps_actual": 1.2224824273664474,
+        "eps_estimate": 1.1642689784442355,
+        "revenue_actual": 8409090909.090907,
+        "revenue_estimate": 8203991130.820398,
+        "surprise_pct": 0.05,
+        "price_reaction": 0.1
+      },
+      {
+        "period": "2024",
+        "eps_actual": 1.4162989690721648,
+        "eps_estimate": 1.3885284010511418,
+        "revenue_actual": 9249999999.999998,
+        "revenue_estimate": 9158415841.584156,
+        "surprise_pct": 0.02,
+        "price_reaction": 0.04
+      }
+    ]
+  }
+}

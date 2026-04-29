@@ -1,0 +1,30 @@
+services:
+  marketmosaic:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///./marketmosaic.db}
+      USE_DEMO_DATA: ${USE_DEMO_DATA:-true}
+    volumes:
+      - marketmosaic_data:/app/backend
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-marketmosaic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-marketmosaic}
+      POSTGRES_DB: ${POSTGRES_DB:-marketmosaic}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  marketmosaic_data:
+  postgres_data:

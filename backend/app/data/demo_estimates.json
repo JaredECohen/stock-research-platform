@@ -1,0 +1,562 @@
+{
+  "NVDA": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 201500000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 295701250000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 129.8,
+      "high": 153.4,
+      "low": 100.3
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "MSFT": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 284200000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 322851200000.00006
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 456.50000000000006,
+      "high": 539.5,
+      "low": 352.75
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "GOOGL": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 389849999999.99994
+      },
+      {
+        "period": "FY+2",
+        "value": 432928424999.99994
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 183.70000000000002,
+      "high": 217.1,
+      "low": 141.95
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "META": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 192000000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 224640000000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 561.0,
+      "high": 663.0,
+      "low": 433.5
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "AMZN": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 694400000000.0001
+      },
+      {
+        "period": "FY+2",
+        "value": 765228800000.0002
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 201.3,
+      "high": 237.9,
+      "low": 155.54999999999998
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "AVGO": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 74200000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 99428000000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 176.0,
+      "high": 208.0,
+      "low": 136.0
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "AMD": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 28320000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 32652960000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 161.70000000000002,
+      "high": 191.1,
+      "low": 124.95
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "AAPL": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 405600000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 419390400000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 198.00000000000003,
+      "high": 234.0,
+      "low": 153.0
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "JPM": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 181900000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 192723050000.00003
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 220.00000000000003,
+      "high": 260.0,
+      "low": 170.0
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "BAC": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 102900000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 107273250000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 41.800000000000004,
+      "high": 49.4,
+      "low": 32.3
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "GS": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 56100000000.00001
+      },
+      {
+        "period": "FY+2",
+        "value": 60868500000.00001
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 561.0,
+      "high": 663.0,
+      "low": 433.5
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "MS": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 62640000000.00001
+      },
+      {
+        "period": "FY+2",
+        "value": 66899520000.000015
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 107.80000000000001,
+      "high": 127.4,
+      "low": 83.3
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "V": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 39600000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 42966000000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 302.5,
+      "high": 357.5,
+      "low": 233.75
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "MA": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 29970000000.000004
+      },
+      {
+        "period": "FY+2",
+        "value": 32772195000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 517.0,
+      "high": 611.0,
+      "low": 399.5
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "COST": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 272850000000.00003
+      },
+      {
+        "period": "FY+2",
+        "value": 289084575000.00006
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 990.0000000000001,
+      "high": 1170.0,
+      "low": 765.0
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "WMT": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 698250000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 727925625000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 77.0,
+      "high": 91.0,
+      "low": 59.5
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "HD": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 155040000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 157675680000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 396.00000000000006,
+      "high": 468.0,
+      "low": 306.0
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "MCD": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 27040000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 27959360000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 319.0,
+      "high": 377.0,
+      "low": 246.5
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "NKE": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 49470000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 48208515000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 79.2,
+      "high": 93.60000000000001,
+      "low": 61.199999999999996
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "SBUX": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 37740000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 38381580000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 107.80000000000001,
+      "high": 127.4,
+      "low": 83.3
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "LLY": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 54600000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 68522999999.99999
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 946.0000000000001,
+      "high": 1118.0,
+      "low": 731.0
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "UNH": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 410400000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 438307200000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 572.0,
+      "high": 676.0,
+      "low": 442.0
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "JNJ": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 92400000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 96327000000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 173.8,
+      "high": 205.4,
+      "low": 134.29999999999998
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "MRK": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 66780000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 70185780000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 126.50000000000001,
+      "high": 149.5,
+      "low": 97.75
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "XOM": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 345000000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 345000000000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 121.00000000000001,
+      "high": 143.0,
+      "low": 93.5
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "NEE": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 28620000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 30079620000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 85.80000000000001,
+      "high": 101.4,
+      "low": 66.3
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "CAT": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 67980000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 69713490000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 379.50000000000006,
+      "high": 448.5,
+      "low": 293.25
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "CRM": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 40700000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 44159500000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 302.5,
+      "high": 357.5,
+      "low": 233.75
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  }
+}

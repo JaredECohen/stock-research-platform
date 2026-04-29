@@ -1,0 +1,1318 @@
+{
+  "NVDA": [
+    {
+      "title": "NVIDIA Corporation highlights progress on Hyperscaler AI capex",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.705190",
+      "url": "https://example.com/news/1",
+      "summary": "NVIDIA Corporation provided commentary on Hyperscaler AI capex, reaffirming the broader framework.",
+      "tickers": [
+        "NVDA"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on NVDA: monitoring AI capex digestion",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.705190",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged AI capex digestion as the principal watch item for NVDA.",
+      "tickers": [
+        "NVDA"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Semiconductors",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.705190",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Semiconductors continue to be shaped by Hyperscaler AI capex.",
+      "tickers": [
+        "NVDA"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "MSFT": [
+    {
+      "title": "Microsoft Corporation highlights progress on Azure AI growth",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.706675",
+      "url": "https://example.com/news/1",
+      "summary": "Microsoft Corporation provided commentary on Azure AI growth, reaffirming the broader framework.",
+      "tickers": [
+        "MSFT"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on MSFT: monitoring Azure deceleration",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.706675",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Azure deceleration as the principal watch item for MSFT.",
+      "tickers": [
+        "MSFT"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Software",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.706675",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Software continue to be shaped by Azure AI growth.",
+      "tickers": [
+        "MSFT"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "GOOGL": [
+    {
+      "title": "Alphabet Inc. highlights progress on AI Overviews monetization",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.707707",
+      "url": "https://example.com/news/1",
+      "summary": "Alphabet Inc. provided commentary on AI Overviews monetization, reaffirming the broader framework.",
+      "tickers": [
+        "GOOGL"
+      ],
+      "topics": [
+        "Communication Services"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on GOOGL: monitoring Search disruption from AI",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.707707",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Search disruption from AI as the principal watch item for GOOGL.",
+      "tickers": [
+        "GOOGL"
+      ],
+      "topics": [
+        "Communication Services"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Interactive Media",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.707707",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Interactive Media continue to be shaped by AI Overviews monetization.",
+      "tickers": [
+        "GOOGL"
+      ],
+      "topics": [
+        "Communication Services"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "META": [
+    {
+      "title": "Meta Platforms, Inc. highlights progress on AI-driven ad targeting",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.708612",
+      "url": "https://example.com/news/1",
+      "summary": "Meta Platforms, Inc. provided commentary on AI-driven ad targeting, reaffirming the broader framework.",
+      "tickers": [
+        "META"
+      ],
+      "topics": [
+        "Communication Services"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on META: monitoring Reality Labs cash burn",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.708612",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Reality Labs cash burn as the principal watch item for META.",
+      "tickers": [
+        "META"
+      ],
+      "topics": [
+        "Communication Services"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Interactive Media",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.708612",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Interactive Media continue to be shaped by AI-driven ad targeting.",
+      "tickers": [
+        "META"
+      ],
+      "topics": [
+        "Communication Services"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "AMZN": [
+    {
+      "title": "Amazon.com, Inc. highlights progress on AWS reacceleration with AI workloads",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.709874",
+      "url": "https://example.com/news/1",
+      "summary": "Amazon.com, Inc. provided commentary on AWS reacceleration with AI workloads, reaffirming the broader framework.",
+      "tickers": [
+        "AMZN"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on AMZN: monitoring Capex outpacing returns",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.709874",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Capex outpacing returns as the principal watch item for AMZN.",
+      "tickers": [
+        "AMZN"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Internet Retail",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.709874",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Internet Retail continue to be shaped by AWS reacceleration with AI workloads.",
+      "tickers": [
+        "AMZN"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "AVGO": [
+    {
+      "title": "Broadcom Inc. highlights progress on AI ASIC + networking",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.710852",
+      "url": "https://example.com/news/1",
+      "summary": "Broadcom Inc. provided commentary on AI ASIC + networking, reaffirming the broader framework.",
+      "tickers": [
+        "AVGO"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on AVGO: monitoring AI ASIC competition",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.710852",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged AI ASIC competition as the principal watch item for AVGO.",
+      "tickers": [
+        "AVGO"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Semiconductors",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.710852",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Semiconductors continue to be shaped by AI ASIC + networking.",
+      "tickers": [
+        "AVGO"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "AMD": [
+    {
+      "title": "Advanced Micro Devices, Inc. highlights progress on MI300 / MI325 ramp",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.711866",
+      "url": "https://example.com/news/1",
+      "summary": "Advanced Micro Devices, Inc. provided commentary on MI300 / MI325 ramp, reaffirming the broader framework.",
+      "tickers": [
+        "AMD"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on AMD: monitoring NVIDIA software moat",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.711866",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged NVIDIA software moat as the principal watch item for AMD.",
+      "tickers": [
+        "AMD"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Semiconductors",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.711866",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Semiconductors continue to be shaped by MI300 / MI325 ramp.",
+      "tickers": [
+        "AMD"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "AAPL": [
+    {
+      "title": "Apple Inc. highlights progress on Services margin mix",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.712773",
+      "url": "https://example.com/news/1",
+      "summary": "Apple Inc. provided commentary on Services margin mix, reaffirming the broader framework.",
+      "tickers": [
+        "AAPL"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on AAPL: monitoring China demand and regulatory risk",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.712773",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged China demand and regulatory risk as the principal watch item for AAPL.",
+      "tickers": [
+        "AAPL"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Consumer Electronics",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.712773",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Consumer Electronics continue to be shaped by Services margin mix.",
+      "tickers": [
+        "AAPL"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "JPM": [
+    {
+      "title": "JPMorgan Chase & Co. highlights progress on NII tailwinds + deposit franchise",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.714113",
+      "url": "https://example.com/news/1",
+      "summary": "JPMorgan Chase & Co. provided commentary on NII tailwinds + deposit franchise, reaffirming the broader framework.",
+      "tickers": [
+        "JPM"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on JPM: monitoring Credit normalization",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.714113",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Credit normalization as the principal watch item for JPM.",
+      "tickers": [
+        "JPM"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Banks",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.714113",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Banks continue to be shaped by NII tailwinds + deposit franchise.",
+      "tickers": [
+        "JPM"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "BAC": [
+    {
+      "title": "Bank of America Corporation highlights progress on Deposit franchise leverage to rates",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.715464",
+      "url": "https://example.com/news/1",
+      "summary": "Bank of America Corporation provided commentary on Deposit franchise leverage to rates, reaffirming the broader framework.",
+      "tickers": [
+        "BAC"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on BAC: monitoring AOCI overhang",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.715464",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged AOCI overhang as the principal watch item for BAC.",
+      "tickers": [
+        "BAC"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Banks",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.715464",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Banks continue to be shaped by Deposit franchise leverage to rates.",
+      "tickers": [
+        "BAC"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "GS": [
+    {
+      "title": "The Goldman Sachs Group, Inc. highlights progress on IB reopening",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.716720",
+      "url": "https://example.com/news/1",
+      "summary": "The Goldman Sachs Group, Inc. provided commentary on IB reopening, reaffirming the broader framework.",
+      "tickers": [
+        "GS"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on GS: monitoring Capital markets cyclicality",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.716720",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Capital markets cyclicality as the principal watch item for GS.",
+      "tickers": [
+        "GS"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Capital Markets",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.716720",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Capital Markets continue to be shaped by IB reopening.",
+      "tickers": [
+        "GS"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "MS": [
+    {
+      "title": "Morgan Stanley highlights progress on Net new asset gathering",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.717861",
+      "url": "https://example.com/news/1",
+      "summary": "Morgan Stanley provided commentary on Net new asset gathering, reaffirming the broader framework.",
+      "tickers": [
+        "MS"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on MS: monitoring Wealth flows volatility",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.717861",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Wealth flows volatility as the principal watch item for MS.",
+      "tickers": [
+        "MS"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Capital Markets",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.717861",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Capital Markets continue to be shaped by Net new asset gathering.",
+      "tickers": [
+        "MS"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "V": [
+    {
+      "title": "Visa Inc. highlights progress on Cross-border travel rebound",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.719083",
+      "url": "https://example.com/news/1",
+      "summary": "Visa Inc. provided commentary on Cross-border travel rebound, reaffirming the broader framework.",
+      "tickers": [
+        "V"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on V: monitoring Regulatory pressure on fees",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.719083",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Regulatory pressure on fees as the principal watch item for V.",
+      "tickers": [
+        "V"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Payments",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.719083",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Payments continue to be shaped by Cross-border travel rebound.",
+      "tickers": [
+        "V"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "MA": [
+    {
+      "title": "Mastercard Incorporated highlights progress on Cross-border rebound",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.720310",
+      "url": "https://example.com/news/1",
+      "summary": "Mastercard Incorporated provided commentary on Cross-border rebound, reaffirming the broader framework.",
+      "tickers": [
+        "MA"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on MA: monitoring Regulatory pressure",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.720310",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Regulatory pressure as the principal watch item for MA.",
+      "tickers": [
+        "MA"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Payments",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.720310",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Payments continue to be shaped by Cross-border rebound.",
+      "tickers": [
+        "MA"
+      ],
+      "topics": [
+        "Financials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "COST": [
+    {
+      "title": "Costco Wholesale Corporation highlights progress on Membership renewal rate >90%",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.721281",
+      "url": "https://example.com/news/1",
+      "summary": "Costco Wholesale Corporation provided commentary on Membership renewal rate >90%, reaffirming the broader framework.",
+      "tickers": [
+        "COST"
+      ],
+      "topics": [
+        "Consumer Staples"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on COST: monitoring Premium valuation",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.721281",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Premium valuation as the principal watch item for COST.",
+      "tickers": [
+        "COST"
+      ],
+      "topics": [
+        "Consumer Staples"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Hypermarkets & Super Centers",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.721281",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Hypermarkets & Super Centers continue to be shaped by Membership renewal rate >90%.",
+      "tickers": [
+        "COST"
+      ],
+      "topics": [
+        "Consumer Staples"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "WMT": [
+    {
+      "title": "Walmart Inc. highlights progress on High-income customer trade-down",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.722168",
+      "url": "https://example.com/news/1",
+      "summary": "Walmart Inc. provided commentary on High-income customer trade-down, reaffirming the broader framework.",
+      "tickers": [
+        "WMT"
+      ],
+      "topics": [
+        "Consumer Staples"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on WMT: monitoring Wage pressure",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.722168",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Wage pressure as the principal watch item for WMT.",
+      "tickers": [
+        "WMT"
+      ],
+      "topics": [
+        "Consumer Staples"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Hypermarkets & Super Centers",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.722168",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Hypermarkets & Super Centers continue to be shaped by High-income customer trade-down.",
+      "tickers": [
+        "WMT"
+      ],
+      "topics": [
+        "Consumer Staples"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "HD": [
+    {
+      "title": "The Home Depot, Inc. highlights progress on Housing turnover recovery",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.723152",
+      "url": "https://example.com/news/1",
+      "summary": "The Home Depot, Inc. provided commentary on Housing turnover recovery, reaffirming the broader framework.",
+      "tickers": [
+        "HD"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on HD: monitoring Housing market weakness",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.723152",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Housing market weakness as the principal watch item for HD.",
+      "tickers": [
+        "HD"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Home Improvement",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.723152",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Home Improvement continue to be shaped by Housing turnover recovery.",
+      "tickers": [
+        "HD"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "MCD": [
+    {
+      "title": "McDonald's Corporation highlights progress on Loyalty and digital growth",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.724431",
+      "url": "https://example.com/news/1",
+      "summary": "McDonald's Corporation provided commentary on Loyalty and digital growth, reaffirming the broader framework.",
+      "tickers": [
+        "MCD"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on MCD: monitoring Low-income consumer pressure",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.724431",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Low-income consumer pressure as the principal watch item for MCD.",
+      "tickers": [
+        "MCD"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Restaurants",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.724431",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Restaurants continue to be shaped by Loyalty and digital growth.",
+      "tickers": [
+        "MCD"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "NKE": [
+    {
+      "title": "NIKE, Inc. highlights progress on Innovation pipeline reset",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.725647",
+      "url": "https://example.com/news/1",
+      "summary": "NIKE, Inc. provided commentary on Innovation pipeline reset, reaffirming the broader framework.",
+      "tickers": [
+        "NKE"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on NKE: monitoring Brand momentum",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.725647",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Brand momentum as the principal watch item for NKE.",
+      "tickers": [
+        "NKE"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Apparel & Footwear",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.725647",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Apparel & Footwear continue to be shaped by Innovation pipeline reset.",
+      "tickers": [
+        "NKE"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "SBUX": [
+    {
+      "title": "Starbucks Corporation highlights progress on U.S. transaction recovery",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.726777",
+      "url": "https://example.com/news/1",
+      "summary": "Starbucks Corporation provided commentary on U.S. transaction recovery, reaffirming the broader framework.",
+      "tickers": [
+        "SBUX"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on SBUX: monitoring Throughput / labor cost",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.726777",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Throughput / labor cost as the principal watch item for SBUX.",
+      "tickers": [
+        "SBUX"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Restaurants",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.726777",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Restaurants continue to be shaped by U.S. transaction recovery.",
+      "tickers": [
+        "SBUX"
+      ],
+      "topics": [
+        "Consumer Discretionary"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "LLY": [
+    {
+      "title": "Eli Lilly and Company highlights progress on GLP-1 capacity ramp",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.728011",
+      "url": "https://example.com/news/1",
+      "summary": "Eli Lilly and Company provided commentary on GLP-1 capacity ramp, reaffirming the broader framework.",
+      "tickers": [
+        "LLY"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on LLY: monitoring Pricing pressure on GLP-1",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.728011",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Pricing pressure on GLP-1 as the principal watch item for LLY.",
+      "tickers": [
+        "LLY"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Pharmaceuticals",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.728011",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Pharmaceuticals continue to be shaped by GLP-1 capacity ramp.",
+      "tickers": [
+        "LLY"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "UNH": [
+    {
+      "title": "UnitedHealth Group Incorporated highlights progress on Optum growth",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.729075",
+      "url": "https://example.com/news/1",
+      "summary": "UnitedHealth Group Incorporated provided commentary on Optum growth, reaffirming the broader framework.",
+      "tickers": [
+        "UNH"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on UNH: monitoring MA rate cuts",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.729075",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged MA rate cuts as the principal watch item for UNH.",
+      "tickers": [
+        "UNH"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Managed Care",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.729075",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Managed Care continue to be shaped by Optum growth.",
+      "tickers": [
+        "UNH"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "JNJ": [
+    {
+      "title": "Johnson & Johnson highlights progress on Oncology pipeline",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.729992",
+      "url": "https://example.com/news/1",
+      "summary": "Johnson & Johnson provided commentary on Oncology pipeline, reaffirming the broader framework.",
+      "tickers": [
+        "JNJ"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on JNJ: monitoring Stelara biosimilar erosion",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.729992",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Stelara biosimilar erosion as the principal watch item for JNJ.",
+      "tickers": [
+        "JNJ"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Pharmaceuticals",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.729992",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Pharmaceuticals continue to be shaped by Oncology pipeline.",
+      "tickers": [
+        "JNJ"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "MRK": [
+    {
+      "title": "Merck & Co., Inc. highlights progress on Keytruda subcutaneous launch",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.731218",
+      "url": "https://example.com/news/1",
+      "summary": "Merck & Co., Inc. provided commentary on Keytruda subcutaneous launch, reaffirming the broader framework.",
+      "tickers": [
+        "MRK"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on MRK: monitoring Keytruda LOE in 2028",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.731218",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Keytruda LOE in 2028 as the principal watch item for MRK.",
+      "tickers": [
+        "MRK"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Pharmaceuticals",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.731218",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Pharmaceuticals continue to be shaped by Keytruda subcutaneous launch.",
+      "tickers": [
+        "MRK"
+      ],
+      "topics": [
+        "Healthcare"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "XOM": [
+    {
+      "title": "Exxon Mobil Corporation highlights progress on Guyana volume growth",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.732424",
+      "url": "https://example.com/news/1",
+      "summary": "Exxon Mobil Corporation provided commentary on Guyana volume growth, reaffirming the broader framework.",
+      "tickers": [
+        "XOM"
+      ],
+      "topics": [
+        "Energy"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on XOM: monitoring Oil price drawdown",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.732424",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Oil price drawdown as the principal watch item for XOM.",
+      "tickers": [
+        "XOM"
+      ],
+      "topics": [
+        "Energy"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Integrated Oil & Gas",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.732424",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Integrated Oil & Gas continue to be shaped by Guyana volume growth.",
+      "tickers": [
+        "XOM"
+      ],
+      "topics": [
+        "Energy"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "NEE": [
+    {
+      "title": "NextEra Energy, Inc. highlights progress on Renewables backlog",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.733657",
+      "url": "https://example.com/news/1",
+      "summary": "NextEra Energy, Inc. provided commentary on Renewables backlog, reaffirming the broader framework.",
+      "tickers": [
+        "NEE"
+      ],
+      "topics": [
+        "Utilities"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on NEE: monitoring Long-end rate sensitivity",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.733657",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Long-end rate sensitivity as the principal watch item for NEE.",
+      "tickers": [
+        "NEE"
+      ],
+      "topics": [
+        "Utilities"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Electric Utilities",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.733657",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Electric Utilities continue to be shaped by Renewables backlog.",
+      "tickers": [
+        "NEE"
+      ],
+      "topics": [
+        "Utilities"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "CAT": [
+    {
+      "title": "Caterpillar Inc. highlights progress on Infrastructure spending",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.734697",
+      "url": "https://example.com/news/1",
+      "summary": "Caterpillar Inc. provided commentary on Infrastructure spending, reaffirming the broader framework.",
+      "tickers": [
+        "CAT"
+      ],
+      "topics": [
+        "Industrials"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on CAT: monitoring Construction cyclicality",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.734697",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Construction cyclicality as the principal watch item for CAT.",
+      "tickers": [
+        "CAT"
+      ],
+      "topics": [
+        "Industrials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Construction & Mining Equipment",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.734697",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Construction & Mining Equipment continue to be shaped by Infrastructure spending.",
+      "tickers": [
+        "CAT"
+      ],
+      "topics": [
+        "Industrials"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ],
+  "CRM": [
+    {
+      "title": "Salesforce, Inc. highlights progress on Agentforce monetization",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-27T00:40:36.736018",
+      "url": "https://example.com/news/1",
+      "summary": "Salesforce, Inc. provided commentary on Agentforce monetization, reaffirming the broader framework.",
+      "tickers": [
+        "CRM"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "positive",
+      "relevance_score": 0.85
+    },
+    {
+      "title": "Analyst notes on CRM: monitoring Seat-based saturation",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-24T00:40:36.736018",
+      "url": "https://example.com/news/2",
+      "summary": "Sell-side commentary flagged Seat-based saturation as the principal watch item for CRM.",
+      "tickers": [
+        "CRM"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.65
+    },
+    {
+      "title": "Sector update: Software",
+      "source": "MarketMosaic Demo Wire",
+      "published_at": "2026-04-21T00:40:36.736018",
+      "url": "https://example.com/news/3",
+      "summary": "Industry trends across Software continue to be shaped by Agentforce monetization.",
+      "tickers": [
+        "CRM"
+      ],
+      "topics": [
+        "Technology"
+      ],
+      "sentiment": "neutral",
+      "relevance_score": 0.55
+    }
+  ]
+}
