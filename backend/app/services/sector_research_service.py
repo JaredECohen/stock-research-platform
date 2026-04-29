@@ -474,12 +474,15 @@ def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> D
         if cold:
             parent_ids.append(cold.id)
 
+    # Phase C: in live mode `resolved_cost_tokens` adds any LLM tokens just
+    # consumed; in demo mode it returns the baseline only.
+    from ..cache import resolved_cost_tokens
     cache_put(
         cache_key, "sector_warm",
         payload=payload, sources_used=sources_used,
         generated_by="sector_research_service",
         parent_snapshots=parent_ids,
         ttl_seconds=7 * 24 * 3600,
-        cost_tokens=400,  # rough cohort math + LLM allowance
+        cost_tokens=resolved_cost_tokens(400),
     )
     return payload

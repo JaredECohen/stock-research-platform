@@ -74,6 +74,68 @@ def reset_circuit_breaker(provider: Optional[str] = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Per-call usage tracking (Phase C)
+# ---------------------------------------------------------------------------
+# After every provider call we stash `{provider, input_tokens, output_tokens,
+# total_tokens, model}` into a thread-local. Call-site wrappers (the cache
+# layer in particular) read this with `last_usage()` and pass `total_tokens`
+# into `cache_put(cost_tokens=...)` so warm vs cold accounting reflects real
+# spend, not the rough constants we used in demo mode.
+import threading  # noqa: E402  (keep local — only needed here)
+
+_USAGE_STATE = threading.local()
+
+
+def _record_usage(provider: str, model: str, input_tokens: int, output_tokens: int) -> None:
+    total = max(0, int(input_tokens or 0)) + max(0, int(output_tokens or 0))
+    _USAGE_STATE.last = {
+        "provider": provider,
+        "model": model,
+        "input_tokens": int(input_tokens or 0),
+        "output_tokens": int(output_tokens or 0),
+        "total_tokens": total,
+    }
+
+
+def last_usage() -> Optional[Dict[str, Any]]:
+    """Return the usage dict from the most recent provider call on this thread.
+
+    Calling this *consumes* the value: subsequent calls return None until the
+    next provider call records new usage. This prevents the same usage being
+    accidentally double-counted across two cache_put sites.
+    """
+    val = getattr(_USAGE_STATE, "last", None)
+    if val is not None:
+        _USAGE_STATE.last = None
+    return val
+
+
+def _usage_from_openai(resp: Any) -> tuple[int, int]:
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return 0, 0
+    return int(getattr(usage, "prompt_tokens", 0) or 0), int(getattr(usage, "completion_tokens", 0) or 0)
+
+
+def _usage_from_anthropic(msg: Any) -> tuple[int, int]:
+    usage = getattr(msg, "usage", None)
+    if usage is None:
+        return 0, 0
+    return int(getattr(usage, "input_tokens", 0) or 0), int(getattr(usage, "output_tokens", 0) or 0)
+
+
+def _usage_from_gemini(resp: Any) -> tuple[int, int]:
+    # google-genai exposes `usage_metadata.{prompt_token_count, candidates_token_count}`.
+    meta = getattr(resp, "usage_metadata", None)
+    if meta is None:
+        return 0, 0
+    return (
+        int(getattr(meta, "prompt_token_count", 0) or 0),
+        int(getattr(meta, "candidates_token_count", 0) or 0),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Client factories
 # ---------------------------------------------------------------------------
 
@@ -144,6 +206,8 @@ def gemini_chat_text(
             contents=full_prompt,
             config=config,
         )
+        in_tok, out_tok = _usage_from_gemini(resp)
+        _record_usage("gemini", chosen_model, in_tok, out_tok)
         text = getattr(resp, "text", None)
         if text:
             _record_success("gemini")
@@ -229,6 +293,9 @@ def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_toke
             system=system or "You are a helpful assistant.",
             messages=[{"role": "user", "content": user}],
         )
+        # Capture real token usage for cost accounting (Phase C).
+        in_tok, out_tok = _usage_from_anthropic(msg)
+        _record_usage("anthropic", model, in_tok, out_tok)
         # Concatenate text blocks
         parts = []
         for block in getattr(msg, "content", []) or []:
@@ -260,6 +327,8 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
             temperature=0.3,
             max_tokens=max_tokens,
         )
+        in_tok, out_tok = _usage_from_openai(resp)
+        _record_usage("openai", model, in_tok, out_tok)
         content = resp.choices[0].message.content
         return json.loads(content)
     except Exception as exc:  # pragma: no cover
@@ -276,6 +345,8 @@ def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_to
         resp = client.chat.completions.create(
             model=model, messages=messages, temperature=0.3, max_tokens=max_tokens,
         )
+        in_tok, out_tok = _usage_from_openai(resp)
+        _record_usage("openai", model, in_tok, out_tok)
         return resp.choices[0].message.content
     except Exception as exc:  # pragma: no cover
         log.warning("OpenAI text call failed: %s", exc)
