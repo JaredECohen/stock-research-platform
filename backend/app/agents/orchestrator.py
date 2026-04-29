@@ -280,7 +280,22 @@ class Orchestrator:
             )
 
         if intent == "stock_comparison" and len(tickers) >= 2:
-            memos = [run_stock_memo(t) for t in tickers[:4]]
+            # Defensive: if one ticker's memo blows up, the comparison still
+            # renders for the rest. Each `run_stock_memo` is already
+            # safe-runner-protected internally, so errors here would only come
+            # from the unrecoverable "unknown ticker" case.
+            memos = []
+            for t in tickers[:4]:
+                try:
+                    memos.append(run_stock_memo(t))
+                except Exception:
+                    continue
+            if not memos:
+                return ChatResponse(
+                    intent=intent,
+                    answer="Could not generate any memos for the requested tickers.",
+                    agent_trace=trace,
+                )
             return ChatResponse(
                 intent=intent, answer=_render_comparison_answer(memos),
                 agent_trace=trace, memo=memos[0],
