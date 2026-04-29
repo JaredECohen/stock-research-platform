@@ -44,7 +44,7 @@ from ..schemas import (
     DCFResult,
     RiskItem,
     StockMemoOut,
-)
+)  # CriticReview imported for the safe-runner fallback path  # noqa: F401
 from ..services.fundamentals_service import get_full_financials
 from ..services.market_data_service import get_basic_stats
 from ..services.transcripts_service import latest_transcript
@@ -57,6 +57,12 @@ from .earnings_agent import run_earnings_agent
 from .filing_agent import run_filing_agent
 from .macro_agent import run_macro_agent
 from .risk_agent import derive_risk_items, run_risk_agent
+from .safe_runner import (
+    DegradationLog,
+    safe_call,
+    safe_critic,
+    safe_finding,
+)
 from .sector_agents import run_sector_agent
 from .tools import evidence_quality
 from .valuation_agent import run_valuation_agent
@@ -176,26 +182,47 @@ def run_stock_memo(
     in the dependency tree is bypassed; otherwise, fundamentals/sector/comps/DCF
     are read from the snapshot cache when fresh.
     """
+    # Fundamentals MUST succeed — without a profile we can't even identify
+    # the company, so this is an unrecoverable error and we re-raise.
     fin = get_full_financials(ticker, force_refresh=force_refresh)
     profile = fin["profile"]
     if not profile:
         raise ValueError(f"Unknown ticker: {ticker}")
     ratios = fin.get("ratios", {}) or {}
 
-    transcript = latest_transcript(ticker)
-    filings = get_filings(ticker)
+    # Everything below this point goes through the safe-runner: a failure in
+    # any single specialist becomes a typed fallback rather than killing the
+    # memo. Failures are accumulated into `degradation` and surfaced on the
+    # memo's `degraded_agents` field.
+    degradation = DegradationLog()
+
+    transcript = safe_call(latest_transcript, ticker, fallback=None,
+                           name="Transcript Service", log_to=degradation)
+    filings = safe_call(get_filings, ticker, fallback=[],
+                        name="Filings Service", log_to=degradation)
     earnings = fin.get("earnings", {})
 
-    dcf = build_dcf(ticker, force_refresh=force_refresh)
-    comps = build_comps(ticker, force_refresh=force_refresh)
+    dcf = safe_call(build_dcf, ticker, force_refresh=force_refresh, fallback=None,
+                    name="DCF Engine", log_to=degradation)
+    comps = safe_call(build_comps, ticker, force_refresh=force_refresh, fallback=None,
+                      name="Comps Engine", log_to=degradation)
 
-    sector_finding = run_sector_agent(profile, ratios)
-    earnings_finding = run_earnings_agent(profile, transcript, earnings)
-    filing_finding = run_filing_agent(profile, filings)
-    valuation_finding = run_valuation_agent(profile, ratios, dcf)
-    comps_finding = run_comps_agent(profile, comps)
-    macro_finding = run_macro_agent(profile, scenario)
-    risk_finding = run_risk_agent(profile, ratios, dcf.summary if dcf else None)
+    sector_finding = safe_finding("Sector Analyst", run_sector_agent,
+                                  profile, ratios, log_to=degradation)
+    earnings_finding = safe_finding("Earnings Analyst", run_earnings_agent,
+                                    profile, transcript, earnings, log_to=degradation)
+    filing_finding = safe_finding("Filing Analyst", run_filing_agent,
+                                  profile, filings, log_to=degradation)
+    valuation_finding = safe_finding("Valuation Analyst", run_valuation_agent,
+                                     profile, ratios, dcf, log_to=degradation)
+    comps_finding = safe_finding("Comps Analyst", run_comps_agent,
+                                 profile, comps, log_to=degradation)
+    macro_finding = safe_finding("Macro Analyst", run_macro_agent,
+                                 profile, scenario, log_to=degradation)
+    risk_finding = safe_finding(
+        "Risk Analyst", run_risk_agent,
+        profile, ratios, (dcf.summary if dcf else None), log_to=degradation,
+    )
 
     findings = {
         "sector": sector_finding,
@@ -207,13 +234,28 @@ def run_stock_memo(
         "risk": risk_finding,
     }
 
-    bull = _bull_case(profile, valuation_finding, dcf)
-    bear = _bear_case(profile, dcf)
-    catalysts = _catalysts(profile, transcript)
-    risks = derive_risk_items(profile)
+    bull = safe_call(_bull_case, profile, valuation_finding, dcf,
+                     fallback=BullBearCase(headline="Bull case unavailable.", key_points=[]),
+                     name="Bull Case Builder", log_to=degradation)
+    bear = safe_call(_bear_case, profile, dcf,
+                     fallback=BullBearCase(headline="Bear case unavailable.", key_points=[]),
+                     name="Bear Case Builder", log_to=degradation)
+    catalysts = safe_call(_catalysts, profile, transcript, fallback=[],
+                          name="Catalyst Builder", log_to=degradation)
+    risks = safe_call(derive_risk_items, profile, fallback=[],
+                      name="Risk Item Builder", log_to=degradation)
     thesis_breakers = [r for r in risks if r.severity == "high"][:3]
 
-    synth = _pm_synthesis(profile, findings, dcf)
+    synth = safe_call(
+        _pm_synthesis, profile, findings, dcf,
+        fallback={
+            "final_pm_view": "PM synthesis unavailable; relying on specialist findings only.",
+            "one_sentence_thesis": f"Research draft for {profile.get('ticker', ticker)}.",
+            "rating_label": "Neutral",
+            "confidence_score": 50,
+        },
+        name="PM Synthesis", log_to=degradation,
+    )
     rating = synth.get("rating_label", "Neutral")
     raw_confidence = float(synth.get("confidence_score", 60))
 
@@ -271,7 +313,11 @@ def run_stock_memo(
         thesis_breakers=thesis_breakers,
         dcf_summary=dcf_summary,
         portfolio_fit=_portfolio_fit(profile, rating),
-        risk_committee_challenge=run_critic({}),  # filled below
+        # Stub critic seeded here, then replaced by the real critic call below.
+        # safe_critic guarantees a typed CriticReview even if the stub raises.
+        risk_committee_challenge=safe_critic(run_critic, {}, log_to=None) or CriticReview(
+            overall_assessment="Pending critic review.",
+        ),
         final_verdict="",
         scores=dict(
             confidence=blended_confidence,
@@ -284,13 +330,18 @@ def run_stock_memo(
         sources_used=sources,
         generated_at=datetime.utcnow(),
         generation_mode="live" if settings.has_llm and settings.enable_live_data else "demo",
+        degraded_agents=degradation.degraded_agents(),
     )
 
-    # Run critic on a draft of the memo (pass dict to avoid recursion)
+    # Run critic on a draft of the memo (pass dict to avoid recursion).
+    # safe_critic upgrades exceptions into a typed "critic unavailable" review
+    # so a flaky Anthropic call doesn't kill the memo.
     draft_for_critic = memo.model_dump()
-    critic = run_critic(draft_for_critic)
+    critic = safe_critic(run_critic, draft_for_critic, log_to=degradation)
     if critic:
         memo.risk_committee_challenge = critic
+    # Refresh degraded_agents in case the critic recorded a failure.
+    memo.degraded_agents = degradation.degraded_agents()
 
     # Phase 6: pull through cross-sector relevance from the sector agent's
     # finding into the PM memo so users see related-name implications without

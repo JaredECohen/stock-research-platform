@@ -21,8 +21,17 @@ function FindingBlock({ title, body }: { title: string; body: { headline: string
 
 export default function MemoCard({ memo }: { memo: StockMemoOut }) {
   const dcf = memo.dcf_summary as Record<string, number | string | undefined>;
+  const degraded = memo.degraded_agents ?? [];
   return (
     <div className="space-y-4">
+      {degraded.length > 0 && (
+        <div className="card-tight border-warn-500/40 bg-warn-500/5 text-warn-500 text-sm">
+          <span className="font-semibold">Partial result:</span>{" "}
+          {degraded.length} agent{degraded.length === 1 ? "" : "s"} unavailable —{" "}
+          <span className="text-slate-200">{degraded.join(", ")}</span>. The memo
+          was generated from the remaining specialists.
+        </div>
+      )}
       <div className="card">
         <div className="flex items-start justify-between">
           <div>

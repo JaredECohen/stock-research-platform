@@ -266,6 +266,10 @@ export interface StockMemoOut {
   sources_used: string[];
   generated_at: string;
   generation_mode: "demo" | "live";
+  // Names of specialist agents that failed during this memo's run. Empty when
+  // everything ran normally; populated by the backend safe-runner so the UI
+  // can surface "X analyst unavailable" instead of dropping the memo.
+  degraded_agents?: string[];
   disclaimer: string;
 }
 

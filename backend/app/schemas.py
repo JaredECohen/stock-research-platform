@@ -392,6 +392,10 @@ class StockMemoOut(BaseModel):
     sources_used: List[str] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     generation_mode: Literal["demo", "live"] = "demo"
+    # List of agents that failed during this memo's generation. Empty when
+    # everything ran normally; populated by the safe-runner so the UI can
+    # show "X analyst was unavailable" rather than dropping the memo.
+    degraded_agents: List[str] = Field(default_factory=list)
     disclaimer: str = (
         "MarketMosaic is for investment research and education only. "
         "It does not provide personalized financial, investment, legal, or tax advice."
