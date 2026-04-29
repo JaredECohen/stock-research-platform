@@ -80,11 +80,12 @@ def get_full_financials(ticker: str, *, force_refresh: bool = False) -> Dict:
     full = _build_full_financials(ticker)
     sources_used = _gather_sources(ticker)
 
+    from ..cache import resolved_cost_tokens
     cache_put(
         ticker, "company_cold",
         payload=full, sources_used=sources_used,
         generated_by="fundamentals_service",
-        cost_tokens=120,  # provider calls + ratio derivation ~ rough
+        cost_tokens=resolved_cost_tokens(120),
         ttl_seconds=90 * 24 * 3600,
     )
     return full

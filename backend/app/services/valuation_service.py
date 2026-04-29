@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ..cache import cache_get, cache_put
+from ..cache import cache_get, cache_put, resolved_cost_tokens
 from ..finance import comps as comps_engine
 from ..finance import dcf as dcf_engine
 from ..schemas import CompsResult, CompsRow, DCFAssumptions, DCFResult
@@ -34,7 +34,7 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
     TTL 7d. Invalidation cascades from each peer's company_cold snapshot via
     `parent_snapshot_ids`, so a new peer 10-K naturally restales.
     """
-    from ..cache import cache_get, cache_put
+    from ..cache import cache_get, cache_put, resolved_cost_tokens
 
     if not force_refresh:
         cached = cache_get(target_ticker, "company_warm:comps", max_age_seconds=7 * 24 * 3600)
@@ -93,7 +93,7 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
         payload=result.model_dump(mode="json"),
         sources_used=[f"peer:{p.ticker}" for p in result.peers] + [f"target:{target_ticker}"],
         generated_by="valuation_service.build_comps",
-        cost_tokens=80,
+        cost_tokens=resolved_cost_tokens(80),
         parent_snapshots=parent_ids,
         ttl_seconds=7 * 24 * 3600,
     )
@@ -162,7 +162,7 @@ def build_dcf(
                 payload=result.model_dump(mode="json"),
                 sources_used=[f"target:{ticker}", f"assumptions:default"],
                 generated_by="valuation_service.build_dcf",
-                cost_tokens=60,
+                cost_tokens=resolved_cost_tokens(60),
                 parent_snapshots=parent_ids,
                 ttl_seconds=7 * 24 * 3600,
             )

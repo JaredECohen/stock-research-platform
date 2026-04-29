@@ -12,7 +12,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Set
 
-from ..cache import cache_get, cache_put
+from ..cache import cache_get, cache_put, resolved_cost_tokens
 from ..config import settings
 from ..schemas import NewsAlert
 from ..services import news_service
@@ -154,7 +154,7 @@ def run(ticker: str, *, force_refresh: bool = False) -> List[NewsAlert]:
     cache_put(today_key, "news_hot", payload=payload,
               sources_used=[f"news:{a.url or a.title}" for a in alerts],
               generated_by="news_agent",
-              cost_tokens=80,
+              cost_tokens=resolved_cost_tokens(80),
               ttl_seconds=4 * 3600)
     cache_put(cache_subject, "news_hot", payload=payload,
               sources_used=[f"news:{a.url or a.title}" for a in alerts],
