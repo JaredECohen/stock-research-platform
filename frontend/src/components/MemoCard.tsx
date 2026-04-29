@@ -1,8 +1,18 @@
 import React from "react";
-import type { StockMemoOut } from "@/types";
+import type { AgentFinding, StockMemoOut } from "@/types";
 import { fmtCurrency, fmtPct, ratingBadgeClass } from "@/lib/format";
+import CrossSectorChips from "./CrossSectorChips";
+import MacroRegimeBanner from "./MacroRegimeBanner";
 
-function FindingBlock({ title, body }: { title: string; body: { headline: string; summary: string; key_points?: string[] } }) {
+function FindingBlock({
+  title,
+  body,
+  footer,
+}: {
+  title: string;
+  body: AgentFinding | { headline: string; summary: string; key_points?: string[] };
+  footer?: React.ReactNode;
+}) {
   return (
     <div className="card-tight">
       <div className="section-title mb-1">{title}</div>
@@ -15,6 +25,7 @@ function FindingBlock({ title, body }: { title: string; body: { headline: string
           ))}
         </ul>
       )}
+      {footer && <div className="mt-3 border-t border-ink-700 pt-2">{footer}</div>}
     </div>
   );
 }
@@ -22,6 +33,11 @@ function FindingBlock({ title, body }: { title: string; body: { headline: string
 export default function MemoCard({ memo }: { memo: StockMemoOut }) {
   const dcf = memo.dcf_summary as Record<string, number | string | undefined>;
   const degraded = memo.degraded_agents ?? [];
+  // Phase 6 sector-finding fields ride on `sector_agent_view.data`.
+  const sectorData = memo.sector_agent_view.data;
+  const crossSector = sectorData?.cross_sector_relevance ?? [];
+  const macroBroadcast = sectorData?.macro_broadcast;
+  const macroAlignment = sectorData?.macro_alignment;
   return (
     <div className="space-y-4">
       {degraded.length > 0 && (
@@ -50,11 +66,26 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
         <div className="border-t border-ink-700 mt-4 pt-3 text-sm text-slate-200">
           <div className="section-title mb-1">PM Final View</div>
           <p>{memo.final_pm_view}</p>
+          {crossSector.length > 0 && <CrossSectorChips tickers={crossSector} className="mt-3" />}
         </div>
       </div>
 
+      {macroBroadcast && (
+        <MacroRegimeBanner
+          broadcast={macroBroadcast}
+          alignment={macroAlignment}
+          sector={memo.sector}
+        />
+      )}
+
       <div className="grid md:grid-cols-2 gap-4">
-        <FindingBlock title="Sector Analyst" body={memo.sector_agent_view} />
+        <FindingBlock
+          title="Sector Analyst"
+          body={memo.sector_agent_view}
+          footer={
+            crossSector.length > 0 ? <CrossSectorChips tickers={crossSector} /> : undefined
+          }
+        />
         <FindingBlock title="Earnings Analyst" body={memo.earnings_agent_view} />
         <FindingBlock title="Filing Analyst" body={memo.filing_agent_view} />
         <FindingBlock title="Valuation Analyst" body={memo.valuation_agent_view} />

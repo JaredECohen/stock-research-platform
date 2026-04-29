@@ -35,6 +35,41 @@ export interface CompanyOut {
   shares_outstanding?: number | null;
 }
 
+// Multi-agent message contracts surfaced from sector_agent_view.data when
+// the backend's sector agent has subscribed to MacroBroadcast / NewsAlerts
+// (Phase 6). All optional — older memos won't carry these fields.
+export type NewsSeverity = "advisory" | "material" | "breaking";
+
+export interface NewsAlert {
+  ticker?: string | null;
+  sector?: string | null;
+  title: string;
+  summary?: string;
+  url?: string;
+  severity: NewsSeverity;
+  published_at?: string | null;
+  source?: string;
+}
+
+export interface MacroBroadcast {
+  snapshot: Record<string, number>;
+  regime: string;
+  favored_sectors: string[];
+  pressured_sectors: string[];
+  note?: string;
+  generated_at?: string;
+}
+
+export interface SectorFindingData {
+  cross_sector_relevance?: string[];
+  macro_alignment?: string;
+  macro_broadcast?: MacroBroadcast;
+  pending_news_alerts?: NewsAlert[];
+  // The full sector research payload also rides here; consumers tolerate
+  // arbitrary extra keys via the index signature.
+  [key: string]: unknown;
+}
+
 export interface AgentFinding {
   agent: string;
   headline: string;
@@ -42,6 +77,7 @@ export interface AgentFinding {
   key_points: string[];
   confidence: number;
   sources: string[];
+  data?: SectorFindingData;
 }
 
 export interface BullBearCase {
