@@ -1,0 +1,674 @@
+{
+  "NVDA": [
+    {
+      "ticker": "NVDA",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Hyperscaler AI capex, Sovereign AI projects, Networking + software stack. Demand commentary remained constructive across Data Center and Automotive. Operating margin held at 61%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Hyperscaler AI capex, Sovereign AI projects, Networking + software stack. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor AI capex digestion, Geopolitical export restrictions.",
+      "bullish_takeaways": [
+        "Management leaning into Hyperscaler AI capex",
+        "Margin commentary supportive at 61%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: AI capex digestion",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "MSFT": [
+    {
+      "ticker": "MSFT",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Azure AI growth, Copilot monetization, Enterprise cloud migration. Demand commentary remained constructive across Productivity & Business Processes and More Personal Computing. Operating margin held at 45%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Azure AI growth, Copilot monetization, Enterprise cloud migration. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Azure deceleration, Capex intensity.",
+      "bullish_takeaways": [
+        "Management leaning into Azure AI growth",
+        "Margin commentary supportive at 45%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Azure deceleration",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "GOOGL": [
+    {
+      "ticker": "GOOGL",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting AI Overviews monetization, Cloud growth + GPU TPU stack, YouTube Shorts + connected TV. Demand commentary remained constructive across Google Services and Other Bets. Operating margin held at 32%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against AI Overviews monetization, Cloud growth + GPU TPU stack, YouTube Shorts + connected TV. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Search disruption from AI, Antitrust remedies.",
+      "bullish_takeaways": [
+        "Management leaning into AI Overviews monetization",
+        "Margin commentary supportive at 32%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Search disruption from AI",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "META": [
+    {
+      "ticker": "META",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting AI-driven ad targeting, Reels engagement and monetization, Llama / agentic AI products. Demand commentary remained constructive across Family of Apps and Reality Labs. Operating margin held at 40%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against AI-driven ad targeting, Reels engagement and monetization, Llama / agentic AI products. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Reality Labs cash burn, Privacy/regulatory headwinds.",
+      "bullish_takeaways": [
+        "Management leaning into AI-driven ad targeting",
+        "Margin commentary supportive at 40%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Reality Labs cash burn",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "AMZN": [
+    {
+      "ticker": "AMZN",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting AWS reacceleration with AI workloads, Retail margin expansion, Advertising monetization. Demand commentary remained constructive across North America Retail and AWS. Operating margin held at 10%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against AWS reacceleration with AI workloads, Retail margin expansion, Advertising monetization. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Capex outpacing returns, Retail margin volatility.",
+      "bullish_takeaways": [
+        "Management leaning into AWS reacceleration with AI workloads",
+        "Margin commentary supportive at 10%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Capex outpacing returns",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "AVGO": [
+    {
+      "ticker": "AVGO",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting AI ASIC + networking, VMware monetization, Custom silicon for hyperscalers. Demand commentary remained constructive across Semiconductor Solutions and Infrastructure Software. Operating margin held at 45%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against AI ASIC + networking, VMware monetization, Custom silicon for hyperscalers. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor AI ASIC competition, Cyclicality in non-AI semis.",
+      "bullish_takeaways": [
+        "Management leaning into AI ASIC + networking",
+        "Margin commentary supportive at 45%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: AI ASIC competition",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "AMD": [
+    {
+      "ticker": "AMD",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting MI300 / MI325 ramp, EPYC server share gains, AI inference workload mix. Demand commentary remained constructive across Data Center and Embedded. Operating margin held at 10%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against MI300 / MI325 ramp, EPYC server share gains, AI inference workload mix. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor NVIDIA software moat, Gaming/embedded weakness.",
+      "bullish_takeaways": [
+        "Management leaning into MI300 / MI325 ramp",
+        "Margin commentary supportive at 10%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: NVIDIA software moat",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "AAPL": [
+    {
+      "ticker": "AAPL",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Services margin mix, Apple Intelligence + iPhone replacement cycle, India/EM growth. Demand commentary remained constructive across iPhone and Services. Operating margin held at 31%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Services margin mix, Apple Intelligence + iPhone replacement cycle, India/EM growth. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor China demand and regulatory risk, Mature smartphone TAM.",
+      "bullish_takeaways": [
+        "Management leaning into Services margin mix",
+        "Margin commentary supportive at 31%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: China demand and regulatory risk",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "JPM": [
+    {
+      "ticker": "JPM",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting NII tailwinds + deposit franchise, Capital markets recovery, Excess capital deployment. Demand commentary remained constructive across Consumer & Community Banking and Asset & Wealth Management. Operating margin held at 43%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against NII tailwinds + deposit franchise, Capital markets recovery, Excess capital deployment. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Credit normalization, Yield-curve dynamics.",
+      "bullish_takeaways": [
+        "Management leaning into NII tailwinds + deposit franchise",
+        "Margin commentary supportive at 43%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Credit normalization",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "BAC": [
+    {
+      "ticker": "BAC",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Deposit franchise leverage to rates, Loan growth, Capital return. Demand commentary remained constructive across Consumer Banking and Global Markets. Operating margin held at 32%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Deposit franchise leverage to rates, Loan growth, Capital return. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor AOCI overhang, Office CRE.",
+      "bullish_takeaways": [
+        "Management leaning into Deposit franchise leverage to rates",
+        "Margin commentary supportive at 32%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: AOCI overhang",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "GS": [
+    {
+      "ticker": "GS",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting IB reopening, Asset & wealth fee growth, Capital markets re-rating. Demand commentary remained constructive across Global Banking & Markets and Platform Solutions. Operating margin held at 32%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against IB reopening, Asset & wealth fee growth, Capital markets re-rating. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Capital markets cyclicality, CRE losses.",
+      "bullish_takeaways": [
+        "Management leaning into IB reopening",
+        "Margin commentary supportive at 32%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Capital markets cyclicality",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "MS": [
+    {
+      "ticker": "MS",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Net new asset gathering, Fee-based asset mix, IB reopening. Demand commentary remained constructive across Institutional Securities and Investment Management. Operating margin held at 30%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Net new asset gathering, Fee-based asset mix, IB reopening. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Wealth flows volatility, Markets cyclicality.",
+      "bullish_takeaways": [
+        "Management leaning into Net new asset gathering",
+        "Margin commentary supportive at 30%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Wealth flows volatility",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "V": [
+    {
+      "ticker": "V",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Cross-border travel rebound, Real-time payments + value-added services, EM digitization. Demand commentary remained constructive across Payments Volume and Value-added Services. Operating margin held at 66%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Cross-border travel rebound, Real-time payments + value-added services, EM digitization. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Regulatory pressure on fees, FX strength reducing cross-border.",
+      "bullish_takeaways": [
+        "Management leaning into Cross-border travel rebound",
+        "Margin commentary supportive at 66%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Regulatory pressure on fees",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "MA": [
+    {
+      "ticker": "MA",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Cross-border rebound, Services attach rate. Demand commentary remained constructive across Payment Network and Value-added Services. Operating margin held at 58%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Cross-border rebound, Services attach rate. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Regulatory pressure, FX.",
+      "bullish_takeaways": [
+        "Management leaning into Cross-border rebound",
+        "Margin commentary supportive at 58%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Regulatory pressure",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "COST": [
+    {
+      "ticker": "COST",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Membership renewal rate >90%, Price increase optionality, Warehouse openings. Demand commentary remained constructive across U.S. and Other. Operating margin held at 4%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Membership renewal rate >90%, Price increase optionality, Warehouse openings. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Premium valuation, Membership saturation.",
+      "bullish_takeaways": [
+        "Management leaning into Membership renewal rate >90%",
+        "Margin commentary supportive at 4%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Premium valuation",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "WMT": [
+    {
+      "ticker": "WMT",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting High-income customer trade-down, Advertising + marketplace mix, Margin expansion. Demand commentary remained constructive across Walmart U.S. and Sam's Club. Operating margin held at 4%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against High-income customer trade-down, Advertising + marketplace mix, Margin expansion. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Wage pressure, Tariffs on imported goods.",
+      "bullish_takeaways": [
+        "Management leaning into High-income customer trade-down",
+        "Margin commentary supportive at 4%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Wage pressure",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "HD": [
+    {
+      "ticker": "HD",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Housing turnover recovery, Pro share gains, Distribution efficiency. Demand commentary remained constructive across U.S. and Mexico/Canada. Operating margin held at 14%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Housing turnover recovery, Pro share gains, Distribution efficiency. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Housing market weakness, Big-ticket discretionary.",
+      "bullish_takeaways": [
+        "Management leaning into Housing turnover recovery",
+        "Margin commentary supportive at 14%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Housing market weakness",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "MCD": [
+    {
+      "ticker": "MCD",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Loyalty and digital growth, Value menu repositioning, Unit growth in Asia. Demand commentary remained constructive across U.S. and International Developmental Licensed. Operating margin held at 45%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Loyalty and digital growth, Value menu repositioning, Unit growth in Asia. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Low-income consumer pressure, Currency.",
+      "bullish_takeaways": [
+        "Management leaning into Loyalty and digital growth",
+        "Margin commentary supportive at 45%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Low-income consumer pressure",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "NKE": [
+    {
+      "ticker": "NKE",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Innovation pipeline reset, China stabilization, Wholesale reset. Demand commentary remained constructive across NIKE Brand and Converse. Operating margin held at 10%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Innovation pipeline reset, China stabilization, Wholesale reset. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Brand momentum, China consumer.",
+      "bullish_takeaways": [
+        "Management leaning into Innovation pipeline reset",
+        "Margin commentary supportive at 10%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Brand momentum",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "SBUX": [
+    {
+      "ticker": "SBUX",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting U.S. transaction recovery, China repositioning, Reinvention plan execution. Demand commentary remained constructive across North America and Channel Development. Operating margin held at 15%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against U.S. transaction recovery, China repositioning, Reinvention plan execution. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Throughput / labor cost, China softness.",
+      "bullish_takeaways": [
+        "Management leaning into U.S. transaction recovery",
+        "Margin commentary supportive at 15%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Throughput / labor cost",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "LLY": [
+    {
+      "ticker": "LLY",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting GLP-1 capacity ramp, Oral GLP-1 readouts, Manufacturing capacity. Demand commentary remained constructive across Diabetes & Obesity and Neuroscience. Operating margin held at 34%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against GLP-1 capacity ramp, Oral GLP-1 readouts, Manufacturing capacity. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Pricing pressure on GLP-1, Competitive entries.",
+      "bullish_takeaways": [
+        "Management leaning into GLP-1 capacity ramp",
+        "Margin commentary supportive at 34%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Pricing pressure on GLP-1",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "UNH": [
+    {
+      "ticker": "UNH",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Optum growth, Medicare Advantage normalization, Value-based care. Demand commentary remained constructive across UnitedHealthcare and Optum Rx. Operating margin held at 8%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Optum growth, Medicare Advantage normalization, Value-based care. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor MA rate cuts, Medical-cost trend.",
+      "bullish_takeaways": [
+        "Management leaning into Optum growth",
+        "Margin commentary supportive at 8%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: MA rate cuts",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "JNJ": [
+    {
+      "ticker": "JNJ",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Oncology pipeline, MedTech recovery, Stelara biosimilar offsets. Demand commentary remained constructive across Innovative Medicine and MedTech. Operating margin held at 27%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Oncology pipeline, MedTech recovery, Stelara biosimilar offsets. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Stelara biosimilar erosion, Talc litigation.",
+      "bullish_takeaways": [
+        "Management leaning into Oncology pipeline",
+        "Margin commentary supportive at 27%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Stelara biosimilar erosion",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "MRK": [
+    {
+      "ticker": "MRK",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Keytruda subcutaneous launch, Pipeline diversification, Animal Health growth. Demand commentary remained constructive across Pharmaceutical and Animal Health. Operating margin held at 30%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Keytruda subcutaneous launch, Pipeline diversification, Animal Health growth. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Keytruda LOE in 2028, Pipeline execution.",
+      "bullish_takeaways": [
+        "Management leaning into Keytruda subcutaneous launch",
+        "Margin commentary supportive at 30%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Keytruda LOE in 2028",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "XOM": [
+    {
+      "ticker": "XOM",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Guyana volume growth, Permian efficiency, Capital discipline / buybacks. Demand commentary remained constructive across Upstream and Specialty Products. Operating margin held at 13%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Guyana volume growth, Permian efficiency, Capital discipline / buybacks. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Oil price drawdown, Energy transition.",
+      "bullish_takeaways": [
+        "Management leaning into Guyana volume growth",
+        "Margin commentary supportive at 13%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Oil price drawdown",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "NEE": [
+    {
+      "ticker": "NEE",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Renewables backlog, Data center power demand, Rate base growth. Demand commentary remained constructive across FPL and NextEra Energy Resources. Operating margin held at 25%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Renewables backlog, Data center power demand, Rate base growth. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Long-end rate sensitivity, Permitting.",
+      "bullish_takeaways": [
+        "Management leaning into Renewables backlog",
+        "Margin commentary supportive at 25%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Long-end rate sensitivity",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "CAT": [
+    {
+      "ticker": "CAT",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Infrastructure spending, Data center power gen, Aftermarket services. Demand commentary remained constructive across Construction Industries and Energy & Transportation. Operating margin held at 20%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Infrastructure spending, Data center power gen, Aftermarket services. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Construction cyclicality, Mining capex.",
+      "bullish_takeaways": [
+        "Management leaning into Infrastructure spending",
+        "Margin commentary supportive at 20%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Construction cyclicality",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ],
+  "CRM": [
+    {
+      "ticker": "CRM",
+      "period": "2024Q4",
+      "date": "2026-03-14",
+      "speakers": [
+        "CEO",
+        "CFO",
+        "Analyst"
+      ],
+      "prepared_remarks": "Management opened by highlighting Agentforce monetization, Data Cloud growth, Margin expansion. Demand commentary remained constructive across Sales Cloud and Platform & Other. Operating margin held at 20%, with management reiterating the framework on capital allocation. Guidance pointed to continued execution against Agentforce monetization, Data Cloud growth, Margin expansion. Capital priorities remain organic investment, dividends, and opportunistic buybacks.",
+      "qa": "Q (Analyst): Demand visibility into next year? A (CEO): Constructive signals; backlog supports the framework. Q (Analyst): Capital intensity? A (CFO): We expect capex to remain elevated as we invest behind durable returns. Q (Analyst): Risk to the thesis? A (CEO): We continue to monitor Seat-based saturation, Competition from MSFT.",
+      "bullish_takeaways": [
+        "Management leaning into Agentforce monetization",
+        "Margin commentary supportive at 20%",
+        "Capital return remains a priority"
+      ],
+      "bearish_takeaways": [
+        "Watch item: Seat-based saturation",
+        "Tone slightly more measured on near-term guidance versus prior quarter"
+      ],
+      "management_tone": "constructive"
+    }
+  ]
+}

@@ -1,0 +1,227 @@
+{
+  "Technology": {
+    "key_drivers": [
+      "AI infrastructure spend",
+      "Cloud workload migration",
+      "Software ARR growth",
+      "Semiconductor cycle",
+      "Hyperscaler capex"
+    ],
+    "kpi_groups": {
+      "growth":            ["revenue_growth"],
+      "quality":           ["gross_margin", "operating_margin", "fcf_margin", "ROIC"],
+      "capital_intensity": ["capex_pct_revenue", "rd_pct_revenue"],
+      "valuation":         ["EV_EBITDA", "EV_Revenue", "PFCF", "FCF_yield"]
+    },
+    "valuation_lens": "Premium for durable growth + FCF margin; sensitive to discount rate.",
+    "macro_sensitivities": ["Long-end rates", "USD strength", "Enterprise IT budgets"],
+    "common_risks": ["Rising rates compressing multiples", "Cloud digestion", "Geopolitical chip restrictions"],
+    "secular_trends": [
+      "AI workload share of compute spend rising",
+      "Hyperscaler capex re-rating from cycle to secular",
+      "Software seat-based pricing under pressure from AI agents"
+    ],
+    "subindustry_overrides": {
+      "Semiconductors": {
+        "additional_kpis": ["inventory_turnover", "gross_margin", "capex_pct_revenue"],
+        "cycle_indicator": "Inventory turnover + book-to-bill",
+        "watch": "DRAM/NAND price cycles, foundry capex, custom-silicon entrants",
+        "structural_themes": "Cycle is bifurcated — AI accelerators in expansion, non-AI semis digesting."
+      },
+      "Software": {
+        "additional_kpis": ["operating_margin", "fcf_margin"],
+        "cycle_indicator": "Net retention proxy via FCF margin trend",
+        "watch": "Seat-based saturation, AI agent disruption, RPO growth",
+        "structural_themes": "Platform consolidation; AI is both a moat and a margin tailwind for incumbents."
+      },
+      "Consumer Electronics": {
+        "additional_kpis": ["gross_margin", "fcf_margin"],
+        "watch": "Replacement cycle, services attach rate, China demand",
+        "structural_themes": "Hardware mature; services drive incremental margin."
+      }
+    }
+  },
+  "Communication Services": {
+    "key_drivers": [
+      "Ad market growth",
+      "DAU/MAU engagement",
+      "AI monetization",
+      "Cloud growth (Alphabet)",
+      "Subscription mix"
+    ],
+    "kpi_groups": {
+      "growth":            ["revenue_growth"],
+      "quality":           ["operating_margin", "fcf_margin", "ROIC"],
+      "capital_intensity": ["capex_pct_revenue"],
+      "valuation":         ["EV_EBITDA", "PFCF", "FCF_yield"]
+    },
+    "valuation_lens": "EV/EBITDA + FCF yield; growth premium for AI integration.",
+    "macro_sensitivities": ["Ad spend cyclicality", "Privacy regulation"],
+    "common_risks": ["Ad budget cuts", "Antitrust scrutiny", "AI capex outpacing returns"],
+    "secular_trends": [
+      "Search disruption from AI assistants",
+      "Reels/Shorts engagement displacing legacy formats",
+      "Connected TV ad inventory growth"
+    ],
+    "subindustry_overrides": {
+      "Interactive Media": {
+        "watch": "Search disruption, capex intensity, antitrust remedies"
+      }
+    }
+  },
+  "Financials": {
+    "key_drivers": [
+      "Net interest margin",
+      "Loan growth",
+      "Credit quality",
+      "Capital markets activity",
+      "Capital return"
+    ],
+    "kpi_groups": {
+      "growth":     ["revenue_growth"],
+      "quality":    ["operating_margin", "ROE"],
+      "leverage":   ["debt_to_ebitda"],
+      "valuation":  ["PE", "PB", "FCF_yield"]
+    },
+    "valuation_lens": "P/TBV vs ROTCE; rate-sensitive earnings.",
+    "macro_sensitivities": ["Yield curve", "Credit spreads", "Loan demand"],
+    "common_risks": ["Recession driving credit losses", "Yield-curve inversion", "Capital rules"],
+    "secular_trends": [
+      "Higher-for-longer NIM tailwind for deposit franchises",
+      "Capital markets reopening from 2022 trough",
+      "Office CRE absorption multi-year drag"
+    ],
+    "subindustry_overrides": {
+      "Banks": {
+        "additional_kpis": ["ROE"],
+        "watch": "AOCI dynamics, deposit beta, office CRE losses",
+        "structural_themes": "Big banks gaining share at expense of regionals."
+      },
+      "Capital Markets": {
+        "watch": "IB pipeline reopening, fee mix, comp ratio",
+        "structural_themes": "Wealth management is the durable margin engine."
+      },
+      "Payments": {
+        "additional_kpis": ["operating_margin", "fcf_margin"],
+        "watch": "Cross-border volume, value-added services attach rate",
+        "structural_themes": "Asset-light networks; pricing under regulatory pressure."
+      }
+    }
+  },
+  "Consumer Discretionary": {
+    "key_drivers": ["Same-store sales", "Traffic vs ticket", "Promotional intensity", "Wage costs"],
+    "kpi_groups": {
+      "growth":            ["revenue_growth"],
+      "quality":           ["gross_margin", "operating_margin", "fcf_margin"],
+      "capital_intensity": ["capex_pct_revenue"],
+      "valuation":         ["EV_EBITDA", "FCF_yield"]
+    },
+    "valuation_lens": "EV/EBITDA and FCF yield; quality compounders earn premium.",
+    "macro_sensitivities": ["Real disposable income", "Labor market", "Commodity costs"],
+    "common_risks": ["Consumer slowdown", "Tariffs", "Margin pressure from wages"],
+    "secular_trends": [
+      "K-shaped consumer; high-end resilient, low-end pressured",
+      "Loyalty + digital reshaping unit economics",
+      "Off-price and value retail share gains"
+    ],
+    "subindustry_overrides": {
+      "Restaurants": {
+        "watch": "Traffic vs ticket, franchisee margin pressure, loyalty growth"
+      },
+      "Internet Retail": {
+        "watch": "Advertising mix, fulfillment leverage, AWS read-through"
+      }
+    }
+  },
+  "Consumer Staples": {
+    "key_drivers": ["Membership economics", "Volume growth", "Pricing power", "Mix"],
+    "kpi_groups": {
+      "growth":   ["revenue_growth"],
+      "quality":  ["gross_margin", "operating_margin"],
+      "valuation":["EV_EBITDA", "PE"]
+    },
+    "valuation_lens": "Defensive premium; valuation rich vs history.",
+    "macro_sensitivities": ["Real wages", "Commodity input costs"],
+    "common_risks": ["Premium valuation", "Wage pressure", "Volume softness"],
+    "secular_trends": [
+      "Private label gaining share",
+      "Membership models extending pricing power"
+    ]
+  },
+  "Healthcare": {
+    "key_drivers": ["Pipeline + clinical readouts", "MLR for managed care", "GLP-1 dynamics"],
+    "kpi_groups": {
+      "growth":            ["revenue_growth"],
+      "quality":           ["operating_margin", "fcf_margin", "ROIC"],
+      "capital_intensity": ["rd_pct_revenue"],
+      "valuation":         ["PE", "EV_EBITDA"]
+    },
+    "valuation_lens": "Sum-of-parts pipelines and risk-adjusted NPV.",
+    "macro_sensitivities": ["Drug pricing policy", "Medicare rates", "Election risk"],
+    "common_risks": ["Patent cliffs", "Trial failures", "Policy changes to reimbursement"],
+    "secular_trends": [
+      "GLP-1 demand re-shaping pharma capex",
+      "Medicare Advantage rates normalizing",
+      "Pipeline diversification post-Stelara LOE"
+    ],
+    "subindustry_overrides": {
+      "Pharmaceuticals": {
+        "watch": "Patent cliff exposure, pipeline NPV, manufacturing capacity"
+      },
+      "Managed Care": {
+        "watch": "MLR trend, MA rate cuts, Optum growth"
+      }
+    }
+  },
+  "Energy": {
+    "key_drivers": ["Oil/gas prices", "Capital discipline", "Production growth", "Shareholder returns"],
+    "kpi_groups": {
+      "growth":            ["revenue_growth"],
+      "quality":           ["operating_margin", "fcf_margin"],
+      "capital_intensity": ["capex_pct_revenue"],
+      "valuation":         ["FCF_yield", "PE"]
+    },
+    "valuation_lens": "FCF yield at normalized commodity decks.",
+    "macro_sensitivities": ["Crude prices", "OPEC", "Demand growth"],
+    "common_risks": ["Commodity downcycle", "Stranded asset risk", "Policy"],
+    "secular_trends": [
+      "Capital discipline replacing volume-growth model",
+      "Permian + Guyana the marginal supply growth",
+      "AI data-center power demand re-rating LNG / nat-gas"
+    ]
+  },
+  "Industrials": {
+    "key_drivers": ["End-market mix", "Backlog", "Pricing", "Mix shift to services"],
+    "kpi_groups": {
+      "growth":            ["revenue_growth"],
+      "quality":           ["operating_margin", "fcf_margin"],
+      "capital_intensity": ["capex_pct_revenue"],
+      "valuation":         ["EV_EBITDA", "PE"]
+    },
+    "valuation_lens": "P/E on mid-cycle EPS.",
+    "macro_sensitivities": ["PMI", "Capex cycle", "Infrastructure spending"],
+    "common_risks": ["Recession reducing capex", "Input cost spikes"],
+    "secular_trends": [
+      "Data-center power gen + electrical infrastructure boom",
+      "Reshoring driving construction equipment cycle",
+      "Aftermarket services lifting structural margins"
+    ]
+  },
+  "Utilities": {
+    "key_drivers": ["Rate base growth", "Renewables backlog", "Load growth"],
+    "kpi_groups": {
+      "growth":            ["revenue_growth"],
+      "quality":           ["operating_margin"],
+      "capital_intensity": ["capex_pct_revenue"],
+      "valuation":         ["PE", "EV_EBITDA"]
+    },
+    "valuation_lens": "Regulated rate base × ROE; rate-sensitive duration.",
+    "macro_sensitivities": ["Long-end rates", "Permitting", "Load forecasts"],
+    "common_risks": ["Rate-case denials", "Capex execution", "Permitting delays"],
+    "secular_trends": [
+      "Data-center load reshaping demand forecasts",
+      "Renewables backlog at record levels",
+      "Long-duration bond-proxy headwind in rising-rate regimes"
+    ]
+  }
+}

@@ -1,0 +1,146 @@
+"""Application configuration loaded from environment variables.
+
+A single Settings object is constructed at import time. Modules that need
+runtime config import `settings` from here. All values are safe defaults so
+the application boots even with a completely empty environment.
+"""
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+from typing import List
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _project_env_files() -> list[str]:
+    """Look for env files at backend/.env and at repo root."""
+    here = Path(__file__).resolve()
+    return [
+        str(here.parent.parent / ".env"),
+        str(here.parent.parent.parent / ".env"),
+    ]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=tuple(_project_env_files()),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # LLM — provider selection + per-provider config
+    llm_provider: str = "auto"  # "auto" | "openai" | "anthropic"
+    openai_api_key: str = ""
+    openai_strong_model: str = "gpt-5.5"
+    openai_cheap_model: str = "gpt-4.1-mini"
+    # Multi-agent role assignment (Phase 3+). Defaults reflect the architecture
+    # spec: PM=GPT-5.5 Pro, sector/tool agents=GPT-5.4, critic=Opus 4.7,
+    # news/social/long-doc analysts=Gemini.
+    openai_pm_model: str = "gpt-5.5-pro"
+    openai_sector_model: str = "gpt-5.4"
+    openai_tool_model: str = "gpt-5.4"
+    anthropic_api_key: str = ""
+    anthropic_strong_model: str = "claude-opus-4-7"
+    anthropic_cheap_model: str = "claude-haiku-4-5"
+    anthropic_critic_model: str = "claude-opus-4-7"
+    # Gemini (Google GenAI) — used for news/social/long-doc analysts.
+    gemini_api_key: str = ""
+    gemini_news_model: str = "gemini-2.5-flash"
+    gemini_social_model: str = "gemini-2.5-flash"
+    gemini_longdoc_model: str = "gemini-3.1-pro"
+
+    # Database
+    database_url: str = "sqlite:///./marketmosaic.db"
+
+    # Feature flags
+    use_demo_data: bool = True
+    enable_live_data: bool = False
+    enable_agent_critic: bool = True
+    enable_vector_search: bool = False
+    # Phase 3: route single_stock_analysis through the OpenAI Agents SDK
+    # instead of the legacy hand-rolled graph. Default off so existing tests
+    # keep using the deterministic legacy path.
+    use_agents_sdk: bool = False
+    # Phase 5: always-on monitoring loops (EDGAR, news, social, macro). Default
+    # off in dev/test; flip on in prod via env.
+    enable_monitoring: bool = False
+
+    # Providers
+    fmp_api_key: str = ""
+    alpha_vantage_api_key: str = ""
+    fred_api_key: str = ""
+    polygon_api_key: str = ""
+    tiingo_api_key: str = ""
+    finnhub_api_key: str = ""
+    intrinio_api_key: str = ""
+    nasdaq_data_link_api_key: str = ""
+    sec_user_agent: str = "MarketMosaic contact@example.com"
+
+    # App / server
+    app_env: str = "development"
+    backend_host: str = "0.0.0.0"
+    backend_port: int = 8000
+    frontend_url: str = "http://localhost:5173"
+    cors_origins: str = "http://localhost:5173,http://localhost:3000"
+
+    # Runtime
+    cache_ttl_seconds: int = 3600
+    max_agent_context_chars: int = 60000
+    max_stocks_in_portfolio: int = 25
+    default_stock_universe: str = "large_cap_demo"
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def has_openai(self) -> bool:
+        return bool(self.openai_api_key)
+
+    @property
+    def has_anthropic(self) -> bool:
+        return bool(self.anthropic_api_key)
+
+    @property
+    def has_gemini(self) -> bool:
+        return bool(self.gemini_api_key)
+
+    @property
+    def has_llm(self) -> bool:
+        return self.has_openai or self.has_anthropic
+
+    @property
+    def active_llm_provider(self) -> str:
+        """Resolve the effective provider, honoring LLM_PROVIDER + key presence."""
+        choice = (self.llm_provider or "auto").lower()
+        if choice == "anthropic" and self.has_anthropic:
+            return "anthropic"
+        if choice == "openai" and self.has_openai:
+            return "openai"
+        # auto: prefer Anthropic if configured, else OpenAI
+        if self.has_anthropic:
+            return "anthropic"
+        if self.has_openai:
+            return "openai"
+        return "none"
+
+    @property
+    def llm_enabled(self) -> bool:
+        return self.has_llm and not self.use_demo_data_only
+
+    @property
+    def use_demo_data_only(self) -> bool:
+        # If demo data flag is explicit and live data disabled, force demo
+        return self.use_demo_data and not self.enable_live_data
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()
