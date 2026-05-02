@@ -314,6 +314,22 @@ def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_toke
 # OpenAI helpers
 # ---------------------------------------------------------------------------
 
+def _openai_token_kwarg(model: str, n: int) -> Dict[str, int]:
+    """Return the correct max-output-tokens kwarg for the OpenAI model family.
+
+    GPT-5.x and the o-series reasoning models (o1, o3, o4, …) reject
+    `max_tokens` and require `max_completion_tokens`. Older / non-reasoning
+    chat models (gpt-4.1, gpt-4o, gpt-3.5, …) still take `max_tokens`.
+    Verified empirically against gpt-5.4, gpt-5.5, and gpt-4.1-mini on
+    2026-05-02; the new-name convention also covers o1 / o3 reasoning
+    models which use the same API contract.
+    """
+    m = (model or "").lower().strip()
+    if m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+        return {"max_completion_tokens": int(n)}
+    return {"max_tokens": int(n)}
+
+
 def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[Dict[str, Any]]:
     messages = []
     if system:
@@ -325,7 +341,7 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
             messages=messages,
             response_format={"type": "json_object"},
             temperature=0.3,
-            max_tokens=max_tokens,
+            **_openai_token_kwarg(model, max_tokens),
         )
         in_tok, out_tok = _usage_from_openai(resp)
         _record_usage("openai", model, in_tok, out_tok)
@@ -343,7 +359,8 @@ def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_to
     messages.append({"role": "user", "content": user})
     try:
         resp = client.chat.completions.create(
-            model=model, messages=messages, temperature=0.3, max_tokens=max_tokens,
+            model=model, messages=messages, temperature=0.3,
+            **_openai_token_kwarg(model, max_tokens),
         )
         in_tok, out_tok = _usage_from_openai(resp)
         _record_usage("openai", model, in_tok, out_tok)
