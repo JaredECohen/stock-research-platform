@@ -6,9 +6,11 @@ even on a cold start.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Set
 
 from .data.demo_dataset import build_dataset, export_to_disk
 from .database import init_db, session_scope
@@ -52,6 +54,43 @@ def seed_companies(refresh: bool = False) -> int:
     return n_written
 
 
+def _load_tier1_universe() -> Set[str]:
+    """Read the curated tier-1 watch list (sectors → tickers) into a flat set."""
+    path = Path(__file__).resolve().parent / "data" / "universe_tier1.json"
+    if not path.exists():
+        return set()
+    cfg = json.loads(path.read_text())
+    out: Set[str] = set()
+    for tickers in (cfg.get("sectors") or {}).values():
+        for t in tickers or []:
+            out.add(t.upper())
+    return out
+
+
+def seed_universe_tiers() -> Dict[str, int]:
+    """Mark tier-1 names as `auto_analysis`; everyone else stays `data_only`.
+
+    Idempotent. Safe to re-run after edits to `universe_tier1.json` — every
+    company's tier is reset on each pass except for `analyzed_on_demand`,
+    which we preserve as runtime state set by the on-demand-analysis flow.
+    """
+    tier1 = _load_tier1_universe()
+    counts: Dict[str, int] = {"auto_analysis": 0, "data_only": 0, "analyzed_on_demand": 0}
+    with session_scope() as db:
+        for row in db.query(Company).all():
+            current = row.universe_tier or "data_only"
+            if row.ticker in tier1:
+                row.universe_tier = "auto_analysis"
+            elif current == "analyzed_on_demand":
+                # Keep on-demand promotion intact across seeds — that's
+                # runtime state set by the UI, not config.
+                pass
+            else:
+                row.universe_tier = "data_only"
+            counts[row.universe_tier] = counts.get(row.universe_tier, 0) + 1
+    return counts
+
+
 def seed_screener_scores() -> int:
     result = compute_universe_scores(theme=None)
     with session_scope() as db:
@@ -80,9 +119,11 @@ def run_full_seed() -> dict:
     init_db()
     paths = export_to_disk()
     n_companies = seed_companies(refresh=True)
+    tier_counts = seed_universe_tiers()
     n_scores = seed_screener_scores()
     return dict(
         companies=n_companies,
+        universe_tiers=tier_counts,
         screener_rows=n_scores,
         json_files=[str(p) for p in paths.values()],
     )

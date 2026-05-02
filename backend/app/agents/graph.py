@@ -116,12 +116,13 @@ def _catalysts(profile: Dict, transcript: Optional[Dict]) -> List[CatalystItem]:
 
 
 def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optional[DCFResult]) -> Dict:
-    # LLM synthesis if available
+    # PM uses its dedicated model (OPENAI_PM_MODEL — gpt-5.5-pro by default).
     llm_out = llm.chat_json(
         prompts.PM_SYNTHESIS_PROMPT
         + "\n\nFindings:\n"
         + json.dumps({k: v.model_dump() for k, v in findings.items()}, default=str)[: settings.max_agent_context_chars],
         system=prompts.PM_SYSTEM, route="strong",
+        model=settings.openai_pm_model,
     )
     if llm_out and "rating_label" in llm_out:
         return llm_out
@@ -385,7 +386,28 @@ def run_stock_memo(
     )
     if cross_relevance and isinstance(memo.scores, dict):
         memo.scores = {**memo.scores, "cross_sector_relevance_count": float(len(cross_relevance))}
+
+    # Phase F: persist a versioned snapshot. `first_run` only fires when no
+    # prior version exists for this ticker; otherwise this is a
+    # `full_reanalysis` (the news-driven `incremental_patch` path is owned
+    # by the future update-orchestrator, not this code path). safe_call so
+    # a DB hiccup never prevents the memo from being returned to the caller.
+    safe_call(
+        _persist_memo_snapshot, memo,
+        fallback=None, name="Memo store", log_to=degradation,
+    )
+    memo.degraded_agents = degradation.degraded_agents()
     return memo
+
+
+def _persist_memo_snapshot(memo: StockMemoOut) -> None:
+    """Indirection so safe_call wraps DB I/O. Lazy-import keeps graph.py from
+    pulling the ORM at module import time (it's already loaded via models)."""
+    from ..services import memo_store
+    prior = memo_store.latest_memo(memo.ticker)
+    trigger = "first_run" if prior is None else "full_reanalysis"
+    parent_version = prior.version if prior is not None else None
+    memo_store.save_memo(memo, trigger=trigger, parent_version=parent_version)
 
 
 # ---------------------------------------------------------------------------

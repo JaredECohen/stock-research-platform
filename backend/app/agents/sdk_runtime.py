@@ -1,28 +1,27 @@
 """OpenAI Agents SDK runtime for MarketMosaic.
 
-Why this file exists in two flavors:
-    The official `openai-agents` package depends on `openai>=2.26` which in
-    turn pulls in newer pydantic (>=2.12) and starlette (>=0.49) — both
-    incompatible with the pinned FastAPI 0.115 in this repo. Per the spec's
-    autonomy rules, we ship an in-process shim that mirrors the public surface
-    of the SDK (`Agent`, `Runner`, `function_tool`, handoffs) so the rest of
-    the codebase can target a stable interface and we can swap in the real
-    package once dependency conflicts are resolved upstream.
+Two execution paths live in this file:
 
-What the shim does:
-    - Models a hub-and-spokes topology: PM (`pm_agent`) at the hub, sector
-      agents as spokes, tool agents as sub-agents of sectors. PM hands off
-      to sectors via the `query_sector` function tool; sectors hand off to
-      tool agents via per-tool function tools.
-    - Supports cache-backed tools that wrap the snapshot store, so any agent
-      can read warm/cold/hot data without re-running provider calls.
-    - Caps recursion via a Runner-level max-iteration guard so peer-sector
-      cross-talk in Phase 6 cannot loop forever.
+1. **Real SDK path** (`_run_via_real_sdk`) — used when the official
+   `openai-agents` package is installed AND `OPENAI_API_KEY` is set AND
+   `USE_AGENTS_SDK=true`. Builds a real `agents.Agent` with real
+   `agents.Runner.run_sync()`, exercising actual LLM-driven handoffs and
+   tool calls. Returns trace info; the canonical `StockMemoOut` is still
+   produced by the legacy graph so the API contract stays stable.
 
-Demo-mode behavior:
-    With no API keys, agents fall through to deterministic implementations
-    (the same logic the legacy graph uses). This satisfies the contract that
-    the SDK runtime returns a populated memo even with zero LLM calls.
+2. **Shim path** (the dataclass-based `Agent` / `Runner` / `function_tool`
+   below) — used when the real SDK isn't installed, the OpenAI key is
+   missing, or for tests that don't want to spend tokens. Mirrors the real
+   SDK's public surface so downstream code (`get_agents`, `get_cached_*`
+   tools, peer-sector queries) doesn't care which path is active.
+
+Why both:
+    The shim makes the topology deterministic and testable without spending
+    tokens. The real SDK makes the topology *actually agentic* — the PM's
+    LLM decides when to hand off to a sector, the sector's LLM decides when
+    to query a peer, etc. Both paths produce the same `StockMemoOut`
+    contract via the legacy graph, so flipping `USE_AGENTS_SDK` at runtime
+    only changes what runs *behind* the memo, not the API.
 """
 from __future__ import annotations
 
@@ -35,6 +34,26 @@ from ..config import settings
 from ..schemas import AgentFinding, StockMemoOut
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Real-SDK feature detection
+# ---------------------------------------------------------------------------
+# Try to import the official `openai-agents` package. If it's available AND
+# OPENAI_API_KEY is set, the production path uses it. Otherwise we fall
+# back to the in-process shim (defined below).
+
+try:
+    import agents as _real_agents_pkg  # type: ignore  # the openai-agents package
+    _HAS_REAL_SDK = True
+except Exception:  # pragma: no cover
+    _real_agents_pkg = None  # type: ignore
+    _HAS_REAL_SDK = False
+
+
+def _can_use_real_sdk() -> bool:
+    """Production path is active iff the package is installed AND a key is set."""
+    return _HAS_REAL_SDK and bool(settings.openai_api_key)
 
 
 # ---------------------------------------------------------------------------
@@ -325,8 +344,17 @@ def _build_sector_agent(sector: str) -> Agent:
 
 
 SECTOR_NAMES = [
-    "Technology", "Financials", "Consumer",
-    "Healthcare", "Energy", "Industrials", "Utilities",
+    "Technology",
+    "Communication Services",
+    "Financials",
+    "Consumer Discretionary",
+    "Consumer Staples",
+    "Healthcare",
+    "Energy",
+    "Industrials",
+    "Utilities",
+    "Materials",
+    "Real Estate",
 ]
 TOOL_NAMES = ["filing", "earnings", "valuation", "comps", "risk"]
 
@@ -359,13 +387,94 @@ def get_agents() -> Dict[str, Agent]:
     return _AGENT_CACHE
 
 
+def _run_via_real_sdk(ticker: str) -> Optional[Dict[str, Any]]:
+    """Real OpenAI Agents SDK exchange.
+
+    Builds a real `agents.Agent` for the PM with sector-handoff agents and
+    a `produce_legacy_memo` tool that calls into our existing graph. Runs
+    one synchronous turn against the user's actual model. Returns the
+    SDK's RunResult dict (final_output + new_items) for telemetry; callers
+    still pull the canonical `StockMemoOut` from the legacy graph because
+    that's what owns memo persistence + memory-store writes.
+
+    Returns None if the real SDK isn't available or the call fails — the
+    caller falls back to the legacy graph in either case.
+    """
+    if not _can_use_real_sdk():
+        return None
+    try:
+        from agents import Agent as RealAgent, Runner as RealRunner, function_tool as real_function_tool
+
+        @real_function_tool
+        def produce_legacy_memo(ticker: str) -> Dict[str, Any]:
+            """Generate a structured StockMemoOut for the requested ticker
+            using the firm's specialist-agent graph (sector / earnings /
+            filing / valuation / comps / macro / risk + critic). Always
+            call this tool exactly once, then return a 2-3 sentence summary."""
+            from .graph import run_stock_memo as _legacy
+            memo = _legacy(ticker)
+            return memo.model_dump(mode="json")
+
+        sector_agents_real = []
+        for sector in SECTOR_NAMES:
+            sector_agents_real.append(RealAgent(
+                name=f"sector-{sector.lower()}",
+                instructions=(
+                    f"You are the {sector} sector analyst. If the PM asks "
+                    "you about a name in your sector, respond with one "
+                    "sector-specific observation."
+                ),
+                model=settings.openai_sector_model,
+            ))
+
+        pm = RealAgent(
+            name="pm",
+            instructions=(
+                "You are the Portfolio Manager. To research a single stock, "
+                "call `produce_legacy_memo` with the ticker, then summarize "
+                "the rating + thesis in 2-3 sentences. You may hand off to "
+                "a sector agent if the user's question is sector-scoped."
+            ),
+            model=settings.openai_pm_model,
+            tools=[produce_legacy_memo],
+            handoffs=sector_agents_real,
+        )
+
+        result = RealRunner.run_sync(
+            pm, f"Analyze {ticker} as a long-term investment.",
+        )
+        return {
+            "final_output": getattr(result, "final_output", None),
+            "new_items": getattr(result, "new_items", None),
+        }
+    except Exception as exc:
+        log.warning("real Agents SDK exchange failed for %s: %s", ticker, exc)
+        return None
+
+
 def run_stock_memo_via_sdk(ticker: str) -> StockMemoOut:
-    """Public entry point invoked by the orchestrator when USE_AGENTS_SDK=true."""
+    """Public entry point invoked by the orchestrator when USE_AGENTS_SDK=true.
+
+    When `OPENAI_API_KEY` is set + the official `openai-agents` package is
+    installed, this fires a real LLM-driven Agents SDK exchange first
+    (exercising real handoffs / tool calls) and then returns the canonical
+    `StockMemoOut` from the legacy graph. When keys aren't present, only
+    the legacy graph runs — the SDK shim's topology stays observable via
+    `get_agents()` for tests + introspection.
+    """
+    # Real-SDK exchange (no-op if keys missing or package unavailable).
+    sdk_trace = _run_via_real_sdk(ticker)
+    if sdk_trace is not None:
+        log.info("Agents SDK trace for %s: %s", ticker,
+                 (sdk_trace.get("final_output") or "")[:200])
+
+    # Shim path: keep the topology callable so tests / introspection see it.
     agents_map = get_agents()
     pm = agents_map["pm"]
     result = Runner.run(pm, {"ticker": ticker})
-    if result.final_output is None:
-        # Hard fall-through to the legacy graph so demo mode never returns empty.
-        from .graph import run_stock_memo
-        return run_stock_memo(ticker)
-    return result.final_output
+    if result.final_output is not None:
+        return result.final_output
+
+    # Last-resort fallback so demo mode never returns empty.
+    from .graph import run_stock_memo
+    return run_stock_memo(ticker)

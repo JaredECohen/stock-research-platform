@@ -26,5 +26,10 @@
   "XOM":  ["NEE", "CAT"],
   "NEE":  ["XOM"],
   "CAT":  ["XOM"],
-  "CRM":  ["MSFT", "GOOGL", "META"]
+  "CRM":  ["MSFT", "GOOGL", "META"],
+  "PLTR": ["MSFT", "CRM", "GOOGL"],
+  "NFLX": ["GOOGL", "META"],
+  "TSLA": ["AMZN"],
+  "LIN":  ["XOM", "CAT"],
+  "AMT":  ["NEE"]
 }

@@ -16,11 +16,31 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _project_env_files() -> list[str]:
-    """Look for env files at backend/.env and at repo root."""
+    """Resolve env files in load order.
+
+    Order matters — pydantic-settings applies LATER files on top of earlier
+    ones. The intended precedence is:
+        1. config.env   ← committed defaults (model assignments, feature
+                          flags, runtime tuning). In git.
+        2. .env         ← gitignored secrets + per-deployment overrides
+                          (API keys, DATABASE_URL, …).
+        3. process env  ← OS environment wins over both (handled by
+                          pydantic-settings automatically).
+
+    Both files are searched at the repo root and inside `backend/` so the
+    same code works regardless of where the process is launched from.
+    Missing files are silently skipped by pydantic-settings.
+    """
     here = Path(__file__).resolve()
+    backend_dir = here.parent.parent  # backend/
+    repo_root = here.parent.parent.parent  # repo root
     return [
-        str(here.parent.parent / ".env"),
-        str(here.parent.parent.parent / ".env"),
+        # Defaults / committed config — loaded first.
+        str(repo_root / "config.env"),
+        str(backend_dir / "config.env"),
+        # Secrets / per-developer overrides — loaded second so they win.
+        str(repo_root / ".env"),
+        str(backend_dir / ".env"),
     ]
 
 
@@ -43,6 +63,9 @@ class Settings(BaseSettings):
     openai_pm_model: str = "gpt-5.5-pro"
     openai_sector_model: str = "gpt-5.4"
     openai_tool_model: str = "gpt-5.4"
+    # Macro agent: GPT-5.4 default per the architecture spec; flip to Gemini
+    # by setting OPENAI_MACRO_MODEL="" + GEMINI_API_KEY in the agent code path.
+    openai_macro_model: str = "gpt-5.4"
     anthropic_api_key: str = ""
     anthropic_strong_model: str = "claude-opus-4-7"
     anthropic_cheap_model: str = "claude-haiku-4-5"

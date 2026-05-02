@@ -223,5 +223,63 @@
       "Renewables backlog at record levels",
       "Long-duration bond-proxy headwind in rising-rate regimes"
     ]
+  },
+  "Materials": {
+    "key_drivers": [
+      "End-market industrial demand",
+      "Commodity / input cost pass-through",
+      "Project backlog and on-site contract wins",
+      "Decarbonization / clean-hydrogen tailwinds"
+    ],
+    "kpi_groups": {
+      "growth":            ["revenue_growth"],
+      "quality":           ["gross_margin", "operating_margin", "fcf_margin", "ROIC"],
+      "capital_intensity": ["capex_pct_revenue"],
+      "valuation":         ["EV_EBITDA", "PFCF", "FCF_yield"]
+    },
+    "valuation_lens": "Mid-cycle EBITDA × multiple; ROIC vs cost of capital is the durable signal.",
+    "macro_sensitivities": ["Industrial production", "Commodity prices", "FX translation", "China demand"],
+    "common_risks": ["Cyclical demand swings", "Input-cost volatility", "FX translation", "Project execution"],
+    "secular_trends": [
+      "Decarbonization driving long-dated industrial-gas + clean-hydrogen contracts",
+      "Reshoring / IRA tailwind for specialty chemicals and electronics gases",
+      "Pricing discipline holding gross margins above pre-2020 baselines"
+    ],
+    "subindustry_overrides": {
+      "Industrial Gases": {
+        "additional_kpis": ["operating_margin", "fcf_margin"],
+        "structural_themes": "Long-dated take-or-pay on-site contracts give industrial gas a utility-like cash-flow profile.",
+        "watch": "Project backlog conversion + clean-hydrogen win rate."
+      }
+    }
+  },
+  "Real Estate": {
+    "key_drivers": [
+      "Same-store NOI growth",
+      "Lease escalators + renewal spreads",
+      "External growth (acquisitions / development)",
+      "Cost of debt vs cap rates"
+    ],
+    "kpi_groups": {
+      "growth":            ["revenue_growth"],
+      "quality":           ["operating_margin", "fcf_margin"],
+      "capital_intensity": ["capex_pct_revenue"],
+      "valuation":         ["EV_EBITDA", "PFCF", "FCF_yield"]
+    },
+    "valuation_lens": "AFFO × multiple or implied cap rate vs replacement cost.",
+    "macro_sensitivities": ["Long-end rates", "Cap-rate spreads", "Credit availability", "Tenant credit cycles"],
+    "common_risks": ["Refinancing risk", "Tenant concentration", "Long-duration bond-proxy compression"],
+    "secular_trends": [
+      "Cell-tower / data-center REITs riding 5G + AI compute demand",
+      "Industrial REITs benefiting from reshoring + e-commerce footprints",
+      "Office sector rerating from hybrid work permanence"
+    ],
+    "subindustry_overrides": {
+      "Cell Tower REIT": {
+        "additional_kpis": ["operating_margin", "fcf_margin"],
+        "structural_themes": "Recurring tower lease income with built-in escalators; tenancy ratio is the operating-leverage lever.",
+        "watch": "5G mid-band rollout pace and big-3 carrier capex cadence."
+      }
+    }
   }
 }
