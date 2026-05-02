@@ -8,10 +8,10 @@ shapes from external APIs and can be cached into ORM tables if desired.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -198,3 +198,91 @@ class LLMCallLog(Base):
 
 
 Index("ix_llm_call_run", LLMCallLog.run_id, LLMCallLog.generated_at)
+
+
+# ---------------------------------------------------------------------------
+# Wave 2 — Financial history depth
+# ---------------------------------------------------------------------------
+
+class FinancialPeriod(Base):
+    """One row per (ticker, period, statement, line_item).
+
+    Long format so 10y of revenue is one indexed SELECT instead of unpacking
+    a JSON blob per quarter. The unique constraint on (ticker, period,
+    statement, line_item) makes the backfill job idempotent — re-running it
+    upserts existing rows rather than duplicating them.
+
+    `period` is a free-form string ("2024Q4", "FY2024") so we accept both
+    quarterly and annual cadences from upstream providers; `period_end` is
+    the canonical date for ordering and as-of-date queries.
+    """
+    __tablename__ = "financial_periods"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    period: Mapped[str] = mapped_column(String(16))
+    period_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    fiscal_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    fiscal_quarter: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    statement: Mapped[str] = mapped_column(String(16), index=True)  # income | balance | cash
+    line_item: Mapped[str] = mapped_column(String(64))
+    value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    source: Mapped[str] = mapped_column(String(32), default="demo")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+Index(
+    "ix_finperiod_unique",
+    FinancialPeriod.ticker, FinancialPeriod.period,
+    FinancialPeriod.statement, FinancialPeriod.line_item,
+    unique=True,
+)
+
+
+class FilingDoc(Base):
+    """SEC filing — raw text + parsed sections for retrieval.
+
+    `accession_number` is the SEC's globally unique key, so it doubles as
+    our idempotency token. `sections` holds the parsed cuts (risk_factors,
+    mda, business, ...); `raw_text` is the full body for full-text search /
+    BM25 over the corpus.
+    """
+    __tablename__ = "filing_docs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    accession_number: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    filing_type: Mapped[str] = mapped_column(String(16), index=True)  # 10-K | 10-Q | 8-K
+    filing_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    period_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    raw_text: Mapped[str] = mapped_column(Text, default="")
+    sections: Mapped[dict] = mapped_column(JSON, default=dict)
+    word_count: Mapped[int] = mapped_column(Integer, default=0)
+    url: Mapped[str] = mapped_column(String(1024), default="")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class EarningsTranscript(Base):
+    """Quarterly earnings call — structured speaker blocks + full text.
+
+    `(ticker, period)` is the natural key. `blocks` is the speaker-segmented
+    list ([{speaker, role, segment, text}]) so retrieval can target prepared
+    remarks vs. Q&A independently; `full_text` is the concatenated body.
+    """
+    __tablename__ = "earnings_transcripts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    period: Mapped[str] = mapped_column(String(16), index=True)
+    fiscal_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    fiscal_quarter: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    call_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    blocks: Mapped[list] = mapped_column(JSON, default=list)
+    full_text: Mapped[str] = mapped_column(Text, default="")
+    word_count: Mapped[int] = mapped_column(Integer, default=0)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("ticker", "period", name="uq_earnings_transcript_ticker_period"),
+    )
