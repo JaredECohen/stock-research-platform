@@ -81,12 +81,61 @@ def reset_circuit_breaker(provider: Optional[str] = None) -> None:
 # layer in particular) read this with `last_usage()` and pass `total_tokens`
 # into `cache_put(cost_tokens=...)` so warm vs cold accounting reflects real
 # spend, not the rough constants we used in demo mode.
+import contextvars  # noqa: E402
 import threading  # noqa: E402  (keep local — only needed here)
 
 _USAGE_STATE = threading.local()
 
 
-def _record_usage(provider: str, model: str, input_tokens: int, output_tokens: int) -> None:
+# ---------------------------------------------------------------------------
+# Wave 1A — LLM call trace logging context
+# ---------------------------------------------------------------------------
+# `LLMCallContext` (set via `llm_call_context()`) tags every provider call
+# with the agent name + run_id so the persisted LLMCallLog row can be
+# attributed to a specific memo run. Default values when no context is set
+# keep older callers working unchanged.
+
+_CALL_CONTEXT: contextvars.ContextVar[Dict[str, Any]] = contextvars.ContextVar(
+    "llm_call_context", default={"agent_name": "unknown", "run_id": None, "route": ""}
+)
+
+
+class llm_call_context:
+    """Context manager that tags subsequent llm.* calls with agent + run_id.
+
+    Usage:
+        with llm_call_context(agent_name="Sector Analyst", run_id=run_id):
+            llm.chat_json(...)
+    """
+
+    def __init__(self, *, agent_name: str = "unknown", run_id: Optional[str] = None,
+                 route: str = "") -> None:
+        self._values = {"agent_name": agent_name, "run_id": run_id, "route": route}
+        self._token: Optional[contextvars.Token] = None
+
+    def __enter__(self) -> "llm_call_context":
+        # Layer on top of any existing context — fields the caller didn't set
+        # carry over. Lets nested calls override only what they need.
+        prev = _CALL_CONTEXT.get()
+        merged = {**prev, **{k: v for k, v in self._values.items() if v}}
+        self._token = _CALL_CONTEXT.set(merged)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self._token is not None:
+            _CALL_CONTEXT.reset(self._token)
+
+
+def _record_usage(
+    provider: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    duration_ms: int = 0,
+    success: bool = True,
+    error: str = "",
+) -> None:
     total = max(0, int(input_tokens or 0)) + max(0, int(output_tokens or 0))
     _USAGE_STATE.last = {
         "provider": provider,
@@ -95,6 +144,31 @@ def _record_usage(provider: str, model: str, input_tokens: int, output_tokens: i
         "output_tokens": int(output_tokens or 0),
         "total_tokens": total,
     }
+    # Persist to the LLMCallLog audit table (Wave 1A). Lazy import to avoid
+    # an import-time cycle (models → cache → ... ). DB failures must NEVER
+    # break the LLM call path — wrap and swallow.
+    try:
+        from ..models import LLMCallLog
+        from ..database import SessionLocal
+        ctx = _CALL_CONTEXT.get()
+        with SessionLocal() as db:
+            # Lazy create so direct-import callers don't need init_db().
+            LLMCallLog.__table__.create(bind=db.get_bind(), checkfirst=True)
+            db.add(LLMCallLog(
+                run_id=ctx.get("run_id"),
+                agent_name=ctx.get("agent_name") or "unknown",
+                provider=provider,
+                model=model,
+                route=ctx.get("route") or "",
+                tokens_in=int(input_tokens or 0),
+                tokens_out=int(output_tokens or 0),
+                duration_ms=int(duration_ms or 0),
+                success=bool(success),
+                error=str(error or "")[:500],
+            ))
+            db.commit()
+    except Exception as exc:  # pragma: no cover - defense in depth
+        log.warning("LLMCallLog persist failed: %s", exc)
 
 
 def last_usage() -> Optional[Dict[str, Any]]:
@@ -221,6 +295,8 @@ def gemini_chat_text(
         return None
     chosen_model = _resolve_gemini_model(model, settings.gemini_news_model)
     full_prompt = (system + "\n\n" + prompt).strip() if system else prompt
+    import time as _time
+    t0 = _time.perf_counter()
     try:
         # Build config dynamically — different google-genai versions accept
         # slightly different shapes. We err on the side of being permissive.
@@ -237,16 +313,24 @@ def gemini_chat_text(
             contents=full_prompt,
             config=config,
         )
+        dur = int((_time.perf_counter() - t0) * 1000)
         in_tok, out_tok = _usage_from_gemini(resp)
-        _record_usage("gemini", chosen_model, in_tok, out_tok)
         text = getattr(resp, "text", None)
+        _record_usage(
+            "gemini", chosen_model, in_tok, out_tok,
+            duration_ms=dur, success=bool(text),
+            error="" if text else "empty_response",
+        )
         if text:
             _record_success("gemini")
             return text
         _record_failure("gemini")
         return None
     except Exception as exc:  # pragma: no cover
+        dur = int((_time.perf_counter() - t0) * 1000)
         log.warning("Gemini call failed: %s", exc)
+        _record_usage("gemini", chosen_model, 0, 0,
+                      duration_ms=dur, success=False, error=str(exc))
         _record_failure("gemini")
         return None
 
@@ -316,6 +400,8 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[str]:
+    import time as _time
+    t0 = _time.perf_counter()
     try:
         msg = client.messages.create(
             model=model,
@@ -324,9 +410,9 @@ def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_toke
             system=system or "You are a helpful assistant.",
             messages=[{"role": "user", "content": user}],
         )
-        # Capture real token usage for cost accounting (Phase C).
+        dur = int((_time.perf_counter() - t0) * 1000)
+        # Capture real token usage for cost accounting (Phase C) + log row (Wave 1A).
         in_tok, out_tok = _usage_from_anthropic(msg)
-        _record_usage("anthropic", model, in_tok, out_tok)
         # Concatenate text blocks
         parts = []
         for block in getattr(msg, "content", []) or []:
@@ -335,9 +421,16 @@ def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_toke
                 parts.append(text)
             elif isinstance(block, dict):
                 parts.append(block.get("text", ""))
-        return "".join(parts).strip() or None
+        out = "".join(parts).strip() or None
+        _record_usage("anthropic", model, in_tok, out_tok,
+                      duration_ms=dur, success=bool(out),
+                      error="" if out else "empty_response")
+        return out
     except Exception as exc:  # pragma: no cover
+        dur = int((_time.perf_counter() - t0) * 1000)
         log.warning("Anthropic call failed: %s", exc)
+        _record_usage("anthropic", model, 0, 0,
+                      duration_ms=dur, success=False, error=str(exc))
         return None
 
 
@@ -362,10 +455,12 @@ def _openai_token_kwarg(model: str, n: int) -> Dict[str, int]:
 
 
 def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[Dict[str, Any]]:
+    import time as _time
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": user + "\n\nReturn ONLY valid JSON."})
+    t0 = _time.perf_counter()
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -374,30 +469,44 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
             temperature=0.3,
             **_openai_token_kwarg(model, max_tokens),
         )
+        dur = int((_time.perf_counter() - t0) * 1000)
         in_tok, out_tok = _usage_from_openai(resp)
-        _record_usage("openai", model, in_tok, out_tok)
         content = resp.choices[0].message.content
-        return json.loads(content)
+        out = json.loads(content)
+        _record_usage("openai", model, in_tok, out_tok,
+                      duration_ms=dur, success=True)
+        return out
     except Exception as exc:  # pragma: no cover
+        dur = int((_time.perf_counter() - t0) * 1000)
         log.warning("OpenAI JSON call failed: %s", exc)
+        _record_usage("openai", model, 0, 0,
+                      duration_ms=dur, success=False, error=str(exc))
         return None
 
 
 def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[str]:
+    import time as _time
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": user})
+    t0 = _time.perf_counter()
     try:
         resp = client.chat.completions.create(
             model=model, messages=messages, temperature=0.3,
             **_openai_token_kwarg(model, max_tokens),
         )
+        dur = int((_time.perf_counter() - t0) * 1000)
         in_tok, out_tok = _usage_from_openai(resp)
-        _record_usage("openai", model, in_tok, out_tok)
-        return resp.choices[0].message.content
+        out = resp.choices[0].message.content
+        _record_usage("openai", model, in_tok, out_tok,
+                      duration_ms=dur, success=bool(out))
+        return out
     except Exception as exc:  # pragma: no cover
+        dur = int((_time.perf_counter() - t0) * 1000)
         log.warning("OpenAI text call failed: %s", exc)
+        _record_usage("openai", model, 0, 0,
+                      duration_ms=dur, success=False, error=str(exc))
         return None
 
 

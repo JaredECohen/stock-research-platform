@@ -155,3 +155,38 @@ class PortfolioRun(Base):
     request: Mapped[dict] = mapped_column(JSON, default=dict)
     result: Mapped[dict] = mapped_column(JSON, default=dict)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class LLMCallLog(Base):
+    """Append-only audit log of every provider LLM call (Wave 1A).
+
+    One row per real LLM call with attribution to the agent that made it
+    and the memo run it belongs to. Used for cost-per-run / cost-per-agent
+    breakdowns + slow-call audit. Distinct from `CacheCostLog` (which
+    tracks snapshot-write savings) — this one tracks actual provider
+    spend regardless of caching.
+
+    GC: rows older than 90 days are deleted by a daily monitoring job
+    when ENABLE_MONITORING is on; otherwise they accumulate harmlessly
+    (rows are small).
+    """
+    __tablename__ = "llm_call_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
+    ticker: Mapped[Optional[str]] = mapped_column(String(16), index=True, nullable=True)
+    agent_name: Mapped[str] = mapped_column(String(64), index=True, default="unknown")
+    provider: Mapped[str] = mapped_column(String(16), default="openai")
+    model: Mapped[str] = mapped_column(String(64), default="")
+    route: Mapped[str] = mapped_column(String(16), default="")
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True,
+    )
+
+
+Index("ix_llm_call_run", LLMCallLog.run_id, LLMCallLog.generated_at)
