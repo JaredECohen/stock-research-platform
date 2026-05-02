@@ -65,6 +65,10 @@ function FindingBlock({
   body: AgentFinding | { headline: string; summary: string; key_points?: string[] };
   footer?: React.ReactNode;
 }) {
+  const [showFull, setShowFull] = React.useState(false);
+  // Long-form report only present on AgentFinding shape; the structurally-typed
+  // alternative has no `long_form_report` field, so the cast is a no-op there.
+  const longForm = (body as AgentFinding).long_form_report;
   return (
     <div className="card-tight">
       <div className="section-title mb-1">{title}</div>
@@ -76,6 +80,24 @@ function FindingBlock({
             <li key={i}>{p}</li>
           ))}
         </ul>
+      )}
+      {longForm && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => setShowFull((v) => !v)}
+            className="text-xs text-accent-500 hover:text-accent-400 inline-flex items-center gap-1"
+          >
+            {showFull ? "Hide full report ▴" : "Read full report ▾"}
+          </button>
+          {showFull && (
+            <div className="mt-2 border-t border-ink-700 pt-2">
+              <pre className="text-xs text-slate-200 whitespace-pre-wrap font-sans leading-relaxed">
+                {longForm}
+              </pre>
+            </div>
+          )}
+        </div>
       )}
       {footer && <div className="mt-3 border-t border-ink-700 pt-2">{footer}</div>}
     </div>
