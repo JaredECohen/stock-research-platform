@@ -107,15 +107,20 @@ def test_tier1_universe_marked_auto_analysis_after_seed():
     # promoted; everyone else stays data_only.
     _ensure_started()
     with SessionLocal() as db:
-        msft = db.get(Company, "MSFT")
-        cat = db.get(Company, "CAT")
-        # MSFT is tier-1 (Technology, top 2 by mcap); CAT is sole tier-1 in Industrials.
-        assert msft.universe_tier == "auto_analysis"
-        assert cat.universe_tier == "auto_analysis"
-        # Pick a name we *know* is in the demo set but not tier-1.
-        bac = db.get(Company, "BAC")
-        if bac is not None:
-            assert bac.universe_tier == "data_only"
+        # Tier-1 (Technology + Communication Services + Consumer Discretionary)
+        for ticker in ("MSFT", "NVDA", "PLTR", "GOOGL", "META", "NFLX", "AMZN", "TSLA"):
+            row = db.get(Company, ticker)
+            assert row is not None, f"missing tier-1 ticker {ticker} in demo dataset"
+            assert row.universe_tier == "auto_analysis", (
+                f"{ticker} should be tier-1 but is {row.universe_tier}"
+            )
+        # Names known to be in the demo set but explicitly NOT tier-1 should be data_only.
+        for ticker in ("BAC", "CAT", "JPM"):
+            row = db.get(Company, ticker)
+            if row is not None:
+                assert row.universe_tier == "data_only", (
+                    f"{ticker} should be data_only but is {row.universe_tier}"
+                )
 
 
 # ---------------------------------------------------------------------------

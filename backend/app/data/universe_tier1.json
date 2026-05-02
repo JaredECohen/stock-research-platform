@@ -1,15 +1,15 @@
 {
-  "_doc": "Tier-1 watch list: top 2 names per sector that get auto-refresh on filings / earnings. Materials and Real Estate sector agents exist (see SECTOR_NAMES in sdk_runtime.py) but have no demo coverage yet — leaving them empty here so the seeder doesn't blow up; populate in a follow-up PR alongside demo data for those tickers.",
+  "_doc": "Tier-1 watch list: names that get the full memo + auto-refresh on filings/earnings deltas. Everyone else stays `data_only` until the UI explicitly asks for an analysis (which then promotes them to `analyzed_on_demand`). Sectors with empty arrays still have agent code wired up (see SECTOR_NAMES in sdk_runtime.py); add tier-1 names alongside their demo data when expanding.",
   "sectors": {
-    "Technology": ["MSFT", "NVDA"],
-    "Communication Services": ["GOOGL", "META"],
-    "Financials": ["JPM", "V"],
-    "Consumer Discretionary": ["AMZN", "HD"],
-    "Consumer Staples": ["WMT", "COST"],
-    "Healthcare": ["LLY", "UNH"],
-    "Energy": ["XOM"],
-    "Industrials": ["CAT"],
-    "Utilities": ["NEE"],
+    "Technology": ["NVDA", "AAPL", "MSFT", "PLTR"],
+    "Communication Services": ["GOOGL", "META", "NFLX"],
+    "Consumer Discretionary": ["AMZN", "TSLA"],
+    "Financials": [],
+    "Consumer Staples": [],
+    "Healthcare": [],
+    "Energy": [],
+    "Industrials": [],
+    "Utilities": [],
     "Materials": [],
     "Real Estate": []
   }
