@@ -68,6 +68,16 @@ class Settings(BaseSettings):
     # Phase 5: always-on monitoring loops (EDGAR, news, social, macro). Default
     # off in dev/test; flip on in prod via env.
     enable_monitoring: bool = False
+    # Long-term agent memory (filesystem markdown, delta-triggered).
+    # `memory_dir` is the root; companies live at <root>/companies/<TICKER>.md
+    # and sectors at <root>/sectors/<sector_slug>.md. Set absolute or
+    # relative-to-CWD; default keeps state inside the backend dir for dev.
+    enable_long_term_memory: bool = True
+    memory_dir: str = "./memory"
+    # When entry count crosses this cap, the oldest entries are condensed
+    # into a "Historical context" block rather than discarded outright.
+    memory_max_entries: int = 50
+    memory_condense_batch: int = 10
 
     # Providers
     fmp_api_key: str = ""

@@ -175,6 +175,13 @@ def _portfolio_fit(profile: Dict, rating: str) -> str:
 # Public graph entry point
 # ---------------------------------------------------------------------------
 
+def _run_reflection_step(memo: StockMemoOut):
+    """Local indirection so safe_call can wrap the reflection step. Imports
+    lazily to avoid an import-time cycle (reflection_agent → memory → cache)."""
+    from .reflection_agent import run as _reflect
+    return _reflect(memo)
+
+
 def run_stock_memo(
     ticker: str, *, scenario: str = "soft_landing", force_refresh: bool = False,
 ) -> StockMemoOut:
@@ -341,6 +348,17 @@ def run_stock_memo(
     if critic:
         memo.risk_committee_challenge = critic
     # Refresh degraded_agents in case the critic recorded a failure.
+    memo.degraded_agents = degradation.degraded_agents()
+
+    # Long-term memory: appends a structured entry to the company + sector
+    # memory files iff a delta event fired this run (new earnings / new
+    # filing / material news). safe_call wraps it so a memory write never
+    # blocks the memo from being returned.
+    safe_call(
+        _run_reflection_step, memo,
+        fallback=([], []),
+        name="Reflection (long-term memory)", log_to=degradation,
+    )
     memo.degraded_agents = degradation.degraded_agents()
 
     # Phase 6: pull through cross-sector relevance from the sector agent's

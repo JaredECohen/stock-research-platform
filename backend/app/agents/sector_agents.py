@@ -16,6 +16,8 @@ import json
 from typing import Dict, List
 
 from ..cache import cache_get
+from ..config import settings
+from ..memory import CompanyMemory, SectorMemory
 from ..schemas import AgentFinding
 from ..services.data_service import get_data_service
 from ..services.sector_research_service import run_sector_research
@@ -130,6 +132,22 @@ def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
     research = run_sector_research(ticker)
     macro_broadcast = _macro_broadcast_payload()
     news_alerts = _pending_news_alerts(ticker)
+
+    # Long-term agent memory (gated by ENABLE_LONG_TERM_MEMORY). Read both
+    # files: the company-specific notebook and the sector-wide self-reflection
+    # journal (with cross-company patterns filtered to this ticker).
+    memory_context = ""
+    if settings.enable_long_term_memory:
+        try:
+            cm = CompanyMemory.for_ticker(ticker)
+            sm = SectorMemory.for_sector(profile.get("sector") or "unknown")
+            company_block = cm.as_prompt_context(max_chars=2500)
+            sector_block = sm.as_prompt_context_for(ticker, max_chars=2500)
+            chunks = [b for b in (company_block, sector_block) if b]
+            if chunks:
+                memory_context = "\n\n".join(chunks)
+        except Exception:  # pragma: no cover — memory should never block a memo
+            memory_context = ""
     sector = research["sector"]
     sub_industry = research["sub_industry"]
     cohort = research["cohort"]
@@ -180,6 +198,8 @@ def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
             macro_broadcast=json.dumps(macro_broadcast, default=str)[:600] or "{}",
             news_alerts=json.dumps(news_alerts, default=str)[:600] or "[]",
         )
+        + ("\n\nPrior context from long-term memory (use to inform but do not over-anchor):\n"
+           + memory_context if memory_context else "")
         + "\n\nDeep research payload (cohort math + regime + filing themes):\n"
         + json.dumps(research_for_prompt, default=str)[:4500]
     )
