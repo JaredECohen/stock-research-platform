@@ -273,8 +273,12 @@ routing with `LLM_PROVIDER`:
 | `NASDAQ_DATA_LINK_API_KEY`     | Reserved                                             | Paid        |
 | `SEC_USER_AGENT`               | Required by SEC EDGAR (no API key)                   | Free        |
 
-Set these in `.env` (copy from `example.env`). The `Settings` page shows which providers are
-configured at runtime.
+Configuration is split across two files:
+
+- **`config.env`** (in git) — committed defaults: per-agent model assignments, feature flags, runtime tuning. Edit via PR when you're committing a decision the whole team should run.
+- **`.env`** (gitignored — copy from `example.env`) — secrets and per-deployment overrides: API keys, `DATABASE_URL`, `SEC_USER_AGENT`, etc.
+
+Load order: `config.env` → `.env` → process env (each later source overrides). So a one-off `OPENAI_PM_MODEL=...` in `.env` overrides the committed default without changing `config.env`. The `Settings` page in the UI shows which providers are configured at runtime.
 
 ---
 
@@ -329,6 +333,8 @@ Provider selection is resolved per call by `settings.active_llm_provider`, which
 
 ```bash
 # 1. Configure env (everything is optional — runs as-is)
+# config.env (committed) holds model assignments + flags; copy example.env
+# to .env (gitignored) for your secrets.
 cp example.env .env
 
 # 2. Backend
@@ -413,7 +419,8 @@ docker compose --profile postgres up   # backend + postgres
 .
 ├── README.md
 ├── BUSINESS_ONE_PAGER.md
-├── example.env
+├── config.env             # committed: model assignments, feature flags
+├── example.env            # template for `.env` (secrets, gitignored)
 ├── Dockerfile
 ├── docker-compose.yml
 ├── backend/
