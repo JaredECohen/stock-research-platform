@@ -71,9 +71,15 @@ def save_memo(
     trigger: str = "full_reanalysis",
     parent_version: Optional[int] = None,
     revision_log: Optional[List[Dict[str, Any]]] = None,
+    as_of_date: Optional[Any] = None,
     db: Optional[Session] = None,
 ) -> MemoSnapshot:
     """Persist a memo as a new version. Returns the inserted snapshot row.
+
+    `as_of_date` (Wave 1C) marks a memo as a backtest reproduction —
+    distinct from `generated_at`. When set, the memo is excluded from
+    the default `latest_memo` lookup (callers explicitly opt in via
+    `latest_memo(..., as_of=...)`).
 
     `revision_log` lets callers attach structured context about *what changed*
     in this version (e.g., for a patch: which fields the news_impact_agent
@@ -90,6 +96,15 @@ def save_memo(
         # column even when fields contain non-serializable types like datetime.
         memo_payload: Dict[str, Any] = json.loads(memo.model_dump_json())
         version = _next_version(db, memo.ticker)
+        # Coerce date → datetime for SQLite (DateTime column).
+        as_of_dt = None
+        if as_of_date is not None:
+            from datetime import date as _date
+            as_of_dt = (
+                datetime.combine(as_of_date, datetime.min.time())
+                if isinstance(as_of_date, _date) and not isinstance(as_of_date, datetime)
+                else as_of_date
+            )
         snap = MemoSnapshot(
             ticker=memo.ticker,
             version=version,
@@ -101,8 +116,10 @@ def save_memo(
                     "version": version,
                     "trigger": trigger,
                     "at": datetime.utcnow().isoformat(),
+                    "as_of_date": as_of_dt.isoformat() if as_of_dt else None,
                 }
             ]),
+            as_of_date=as_of_dt,
         )
         db.add(snap)
         db.commit()
@@ -115,20 +132,31 @@ def save_memo(
 
 
 def latest_memo(
-    ticker: str, *, db: Optional[Session] = None,
+    ticker: str, *,
+    include_backtests: bool = False,
+    db: Optional[Session] = None,
 ) -> Optional[MemoSnapshot]:
-    """Return the highest-version snapshot for `ticker`, or None."""
+    """Return the highest-version snapshot for `ticker`, or None.
+
+    By default, backtest snapshots (those with `as_of_date` set) are
+    excluded — callers asking for "the latest memo" want the live one.
+    Pass `include_backtests=True` to consider every version regardless
+    of mode.
+    """
     own = db is None
     if own:
         db = SessionLocal()
     try:
         _ensure_table(db)
-        snap = db.execute(
+        stmt = (
             select(MemoSnapshot)
             .where(MemoSnapshot.ticker == ticker.upper())
             .order_by(MemoSnapshot.version.desc())
             .limit(1)
-        ).scalars().first()
+        )
+        if not include_backtests:
+            stmt = stmt.where(MemoSnapshot.as_of_date.is_(None))
+        snap = db.execute(stmt).scalars().first()
         if snap is None:
             return None
         db.expunge(snap)

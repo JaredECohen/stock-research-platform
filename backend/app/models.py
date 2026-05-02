@@ -130,6 +130,11 @@ class MemoSnapshot(Base):
     The `memo_json` column stores the entire `StockMemoOut` so we don't
     have to re-derive its shape; ad-hoc fields evolve without schema
     migrations as long as the Pydantic model stays additive.
+
+    Wave 1C: `as_of_date` distinguishes a backtest run (memo reproduced
+    as of an earlier date) from a live memo (`generated_at` only). When
+    set, the memo SHOULD reflect only data observable on or before that
+    date and is excluded from the default `latest_memo` lookup.
     """
     __tablename__ = "memo_snapshots"
 
@@ -142,6 +147,9 @@ class MemoSnapshot(Base):
     revision_log: Mapped[list] = mapped_column(JSON, default=list)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True,
+    )
+    as_of_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, index=True,
     )
 
 

@@ -1,9 +1,10 @@
 """Stock endpoints — list, detail, memo generation."""
 from __future__ import annotations
 
+from datetime import date as _date
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import select
 
 from ..agents.graph import run_stock_memo
@@ -70,12 +71,28 @@ def get_stock_prices(ticker: str, days: int = 252) -> List[Dict[str, Any]]:
     return rows
 
 
+def _parse_as_of(as_of: Optional[str]) -> Optional[_date]:
+    """Parse + validate `?as_of=YYYY-MM-DD`. Future dates are rejected."""
+    if not as_of:
+        return None
+    try:
+        d = _date.fromisoformat(as_of)
+    except ValueError:
+        raise HTTPException(status_code=422,
+                            detail=f"as_of must be YYYY-MM-DD; got {as_of!r}")
+    if d > _date.today():
+        raise HTTPException(status_code=422,
+                            detail=f"as_of {d} is in the future")
+    return d
+
+
 @router.get("/api/stocks/{ticker}/memo", response_model=StockMemoOut)
 def get_stock_memo(
     ticker: str,
     response: Response,
     scenario: str = "soft_landing",
     ondemand: bool = False,
+    as_of: Optional[str] = Query(None, description="YYYY-MM-DD; backtest mode"),
 ) -> StockMemoOut:
     """Return the latest memo for `ticker`.
 
@@ -87,17 +104,25 @@ def get_stock_memo(
       the `data_only` tier this requires `ondemand=true` to avoid
       surprise-charging the user; without the flag we 409 so the UI can
       surface an explicit "Analyze this stock" affordance.
+    - When `as_of=YYYY-MM-DD` is passed (Wave 1C), the memo is reproduced
+      as of that historical date. Backtest results are stored separately
+      (won't shadow live memos) and skip long-term memory writes.
     """
     t = ticker.upper()
-    snap = memo_store.latest_memo(t)
-    if snap is not None:
-        response.headers["X-Memo-Version"] = str(snap.version)
-        response.headers["X-Memo-Trigger"] = snap.trigger
-        response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
-        return memo_store.memo_to_pydantic(snap)
+    as_of_date = _parse_as_of(as_of)
+
+    # Backtest path: skip the cached-snapshot shortcut so we always
+    # generate a fresh historical memo.
+    if as_of_date is None:
+        snap = memo_store.latest_memo(t)
+        if snap is not None:
+            response.headers["X-Memo-Version"] = str(snap.version)
+            response.headers["X-Memo-Trigger"] = snap.trigger
+            response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
+            return memo_store.memo_to_pydantic(snap)
 
     tier = _company_tier(t)
-    if tier == "data_only" and not ondemand:
+    if as_of_date is None and tier == "data_only" and not ondemand:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -106,24 +131,28 @@ def get_stock_memo(
             ),
         )
     try:
-        memo = run_stock_memo(t, scenario=scenario)
+        memo = run_stock_memo(t, scenario=scenario, as_of_date=as_of_date)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
     # Promote `data_only` → `analyzed_on_demand` so subsequent calls use
     # the cached memo and don't re-trigger an expensive run automatically.
-    if tier == "data_only":
+    # Skip promotion when running a backtest — that's diagnostic and
+    # shouldn't change the universe state.
+    if as_of_date is None and tier == "data_only":
         with SessionLocal() as db:
             row = db.get(Company, t)
             if row:
                 row.universe_tier = "analyzed_on_demand"
                 db.commit()
 
-    fresh = memo_store.latest_memo(t)
+    fresh = memo_store.latest_memo(t, include_backtests=as_of_date is not None)
     if fresh is not None:
         response.headers["X-Memo-Version"] = str(fresh.version)
         response.headers["X-Memo-Trigger"] = fresh.trigger
         response.headers["X-Memo-Generated-At"] = fresh.generated_at.isoformat()
+        if fresh.as_of_date:
+            response.headers["X-Memo-As-Of"] = fresh.as_of_date.date().isoformat() if hasattr(fresh.as_of_date, "date") else str(fresh.as_of_date)
     return memo
 
 

@@ -5,10 +5,19 @@ providers first (when ENABLE_LIVE_DATA=true) and gracefully falls back to
 DemoProvider for any method that returns None or raises. All callers go
 through this service so they never need to know whether data came from a
 live API or local fixtures.
+
+Wave 1C: an `as_of_date` ContextVar lets `run_stock_memo` mark the entire
+call tree as a backtest for a specific historical date. Provider methods
+that respect the context filter their results to data observable on or
+before that date; providers that don't yet support date filtering simply
+ignore it (no-op, with the cache key still segregated so live and
+backtest data don't collide).
 """
 from __future__ import annotations
 
+import contextvars
 import logging
+from datetime import date as _date
 from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional
 
@@ -23,6 +32,42 @@ from ..providers.sec_edgar_provider import SECEdgarProvider
 from ..providers.tiingo_provider import TiingoProvider
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Wave 1C — As-of-date context
+# ---------------------------------------------------------------------------
+_AS_OF_CONTEXT: contextvars.ContextVar[Optional[_date]] = contextvars.ContextVar(
+    "as_of_date", default=None,
+)
+
+
+class as_of_context:
+    """Context manager that pins the data layer to a historical date.
+
+    All cache reads and writes inside the with-block use a per-date cache
+    namespace so live and backtest data don't collide. Memory writes are
+    skipped (a backtest run shouldn't pollute the long-term memory file).
+    Provider methods that support date filtering should consult
+    `current_as_of_date()` and clip their results accordingly.
+    """
+
+    def __init__(self, as_of: Optional[_date]) -> None:
+        self._as_of = as_of
+        self._token: Optional[contextvars.Token] = None
+
+    def __enter__(self) -> "as_of_context":
+        self._token = _AS_OF_CONTEXT.set(self._as_of)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self._token is not None:
+            _AS_OF_CONTEXT.reset(self._token)
+
+
+def current_as_of_date() -> Optional[_date]:
+    """Read the active as_of date, if any. Returns None for live mode."""
+    return _AS_OF_CONTEXT.get()
 
 
 class DataService:
