@@ -185,11 +185,32 @@ def _run_reflection_step(memo: StockMemoOut):
 
 def run_stock_memo(
     ticker: str, *, scenario: str = "soft_landing", force_refresh: bool = False,
+    run_id: Optional[str] = None,
 ) -> StockMemoOut:
     """Generate a stock memo. When `force_refresh=True`, every cached snapshot
     in the dependency tree is bypassed; otherwise, fundamentals/sector/comps/DCF
     are read from the snapshot cache when fresh.
+
+    `run_id` (Wave 1A) tags every LLM call made during this memo run for
+    cost / trace attribution via `LLMCallLog`. Auto-generated when None.
     """
+    import uuid
+    if run_id is None:
+        run_id = str(uuid.uuid4())
+    from .llm import llm_call_context
+    # Set the outer context once; per-agent steps below layer their own
+    # `agent_name` on top by re-entering `llm_call_context`. Inheriting the
+    # `run_id` from the enclosing context.
+    with llm_call_context(agent_name="run_stock_memo", run_id=run_id):
+        return _run_stock_memo_inner(ticker, scenario=scenario,
+                                     force_refresh=force_refresh, run_id=run_id)
+
+
+def _run_stock_memo_inner(
+    ticker: str, *, scenario: str, force_refresh: bool, run_id: str,
+) -> StockMemoOut:
+    """Indirection so `run_stock_memo` can wrap the entire body in a single
+    `llm_call_context`. Splitting keeps the public signature clean."""
     # Fundamentals MUST succeed — without a profile we can't even identify
     # the company, so this is an unrecoverable error and we re-raise.
     fin = get_full_financials(ticker, force_refresh=force_refresh)
@@ -215,22 +236,32 @@ def run_stock_memo(
     comps = safe_call(build_comps, ticker, force_refresh=force_refresh, fallback=None,
                       name="Comps Engine", log_to=degradation)
 
-    sector_finding = safe_finding("Sector Analyst", run_sector_agent,
-                                  profile, ratios, log_to=degradation)
-    earnings_finding = safe_finding("Earnings Analyst", run_earnings_agent,
-                                    profile, transcript, earnings, log_to=degradation)
-    filing_finding = safe_finding("Filing Analyst", run_filing_agent,
-                                  profile, filings, log_to=degradation)
-    valuation_finding = safe_finding("Valuation Analyst", run_valuation_agent,
-                                     profile, ratios, dcf, log_to=degradation)
-    comps_finding = safe_finding("Comps Analyst", run_comps_agent,
-                                 profile, comps, log_to=degradation)
-    macro_finding = safe_finding("Macro Analyst", run_macro_agent,
-                                 profile, scenario, log_to=degradation)
-    risk_finding = safe_finding(
-        "Risk Analyst", run_risk_agent,
-        profile, ratios, (dcf.summary if dcf else None), log_to=degradation,
-    )
+    # Each specialist runs with its own llm_call_context so any LLM calls it
+    # makes get tagged with the right agent_name in LLMCallLog (Wave 1A).
+    from .llm import llm_call_context
+    with llm_call_context(agent_name="Sector Analyst", run_id=run_id):
+        sector_finding = safe_finding("Sector Analyst", run_sector_agent,
+                                      profile, ratios, log_to=degradation)
+    with llm_call_context(agent_name="Earnings Analyst", run_id=run_id):
+        earnings_finding = safe_finding("Earnings Analyst", run_earnings_agent,
+                                        profile, transcript, earnings, log_to=degradation)
+    with llm_call_context(agent_name="Filing Analyst", run_id=run_id):
+        filing_finding = safe_finding("Filing Analyst", run_filing_agent,
+                                      profile, filings, log_to=degradation)
+    with llm_call_context(agent_name="Valuation Analyst", run_id=run_id):
+        valuation_finding = safe_finding("Valuation Analyst", run_valuation_agent,
+                                         profile, ratios, dcf, log_to=degradation)
+    with llm_call_context(agent_name="Comps Analyst", run_id=run_id):
+        comps_finding = safe_finding("Comps Analyst", run_comps_agent,
+                                     profile, comps, log_to=degradation)
+    with llm_call_context(agent_name="Macro Analyst", run_id=run_id):
+        macro_finding = safe_finding("Macro Analyst", run_macro_agent,
+                                     profile, scenario, log_to=degradation)
+    with llm_call_context(agent_name="Risk Analyst", run_id=run_id):
+        risk_finding = safe_finding(
+            "Risk Analyst", run_risk_agent,
+            profile, ratios, (dcf.summary if dcf else None), log_to=degradation,
+        )
 
     findings = {
         "sector": sector_finding,
@@ -254,16 +285,17 @@ def run_stock_memo(
                       name="Risk Item Builder", log_to=degradation)
     thesis_breakers = [r for r in risks if r.severity == "high"][:3]
 
-    synth = safe_call(
-        _pm_synthesis, profile, findings, dcf,
-        fallback={
-            "final_pm_view": "PM synthesis unavailable; relying on specialist findings only.",
-            "one_sentence_thesis": f"Research draft for {profile.get('ticker', ticker)}.",
-            "rating_label": "Neutral",
-            "confidence_score": 50,
-        },
-        name="PM Synthesis", log_to=degradation,
-    )
+    with llm_call_context(agent_name="PM Synthesis", run_id=run_id, route="strong"):
+        synth = safe_call(
+            _pm_synthesis, profile, findings, dcf,
+            fallback={
+                "final_pm_view": "PM synthesis unavailable; relying on specialist findings only.",
+                "one_sentence_thesis": f"Research draft for {profile.get('ticker', ticker)}.",
+                "rating_label": "Neutral",
+                "confidence_score": 50,
+            },
+            name="PM Synthesis", log_to=degradation,
+        )
     rating = synth.get("rating_label", "Neutral")
     raw_confidence = float(synth.get("confidence_score", 60))
 
@@ -345,7 +377,8 @@ def run_stock_memo(
     # safe_critic upgrades exceptions into a typed "critic unavailable" review
     # so a flaky Anthropic call doesn't kill the memo.
     draft_for_critic = memo.model_dump()
-    critic = safe_critic(run_critic, draft_for_critic, log_to=degradation)
+    with llm_call_context(agent_name="Risk Committee", run_id=run_id, route="strong"):
+        critic = safe_critic(run_critic, draft_for_critic, log_to=degradation)
     if critic:
         memo.risk_committee_challenge = critic
     # Refresh degraded_agents in case the critic recorded a failure.
