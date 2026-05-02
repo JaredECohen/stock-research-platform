@@ -160,13 +160,44 @@ def _anthropic_client() -> Optional[Any]:
 
 
 def _gemini_client() -> Optional[Any]:
-    if not settings.gemini_api_key or _genai is None:
+    """Construct a Gemini client.
+
+    Backend selection precedence (Vertex wins when both are set):
+      1. Vertex AI:    `VERTEX_PROJECT_ID` set → `Client(vertexai=True, project=…)`.
+                       Auth via Google Application Default Credentials.
+      2. Direct API:   `GEMINI_API_KEY` set → `Client(api_key=…)`.
+      3. Otherwise:    None (caller falls back to deterministic stub).
+    """
+    if _genai is None:
         return None
     try:
-        return _genai.Client(api_key=settings.gemini_api_key)
+        if settings.has_vertex:
+            return _genai.Client(
+                vertexai=True,
+                project=settings.vertex_project_id,
+                location=settings.vertex_location or "us-central1",
+            )
+        if settings.gemini_api_key:
+            return _genai.Client(api_key=settings.gemini_api_key)
+        return None
     except Exception as exc:  # pragma: no cover
         log.warning("Gemini client init failed: %s", exc)
         return None
+
+
+def _resolve_gemini_model(caller_model: Optional[str], default: str) -> str:
+    """Pick the Gemini model for a call.
+
+    Order of precedence:
+      1. `caller_model` (explicit override at the call site)
+      2. `settings.vertex_model` when Vertex is configured (global override)
+      3. `default` (per-agent env, e.g. settings.gemini_news_model)
+    """
+    if caller_model and caller_model.strip():
+        return caller_model.strip()
+    if settings.has_vertex and settings.vertex_model:
+        return settings.vertex_model
+    return default
 
 
 def gemini_chat_text(
@@ -188,7 +219,7 @@ def gemini_chat_text(
     client = _gemini_client()
     if client is None:
         return None
-    chosen_model = model or settings.gemini_news_model
+    chosen_model = _resolve_gemini_model(model, settings.gemini_news_model)
     full_prompt = (system + "\n\n" + prompt).strip() if system else prompt
     try:
         # Build config dynamically — different google-genai versions accept

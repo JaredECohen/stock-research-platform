@@ -280,6 +280,25 @@ Configuration is split across two files:
 
 Load order: `config.env` → `.env` → process env (each later source overrides). So a one-off `OPENAI_PM_MODEL=...` in `.env` overrides the committed default without changing `config.env`. The `Settings` page in the UI shows which providers are configured at runtime.
 
+### Gemini access — direct API or Vertex AI
+
+Two paths to Gemini, pick whichever your environment is set up for. Vertex wins when both are configured:
+
+```bash
+# Option A — direct API key (quick setup)
+GEMINI_API_KEY=...                   # in .env
+
+# Option B — Vertex AI via Google Cloud (auth via ADC)
+LLM_PROVIDER=vertex                  # documentation/intent flag (in .env)
+VERTEX_PROJECT_ID=your-project-id    # in .env
+VERTEX_LOCATION=us-central1          # in .env (defaults to us-central1)
+VERTEX_MODEL=gemini-3.1-pro          # in config.env (overrides per-agent envs)
+
+# Then authenticate ADC (locally):
+gcloud auth application-default login
+# Or in production, set GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json
+```
+
 ---
 
 ## 9. How demo mode works
