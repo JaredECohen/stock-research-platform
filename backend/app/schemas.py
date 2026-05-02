@@ -71,6 +71,33 @@ class BullBearCase(BaseModel):
     key_points: List[str] = Field(default_factory=list)
 
 
+class FalsifiableTest(BaseModel):
+    """A concrete observation that would invalidate one side of the thesis.
+
+    Required by the sector-integrated bull/bear (Wave 3A): a side without a
+    falsifiable test is hand-waving. Forcing the analyst to articulate
+    "this is wrong if X is observed" disciplines the case construction.
+    """
+    statement: str
+    invalidates_side: Literal["bull", "bear"]
+
+
+class BullBearAnalysis(BaseModel):
+    """Wave 3A — sector-integrated bull/bear with bias mitigations.
+
+    Stored under `sector_agent_view.data["bull_bear_analysis"]`. PM
+    synthesis treats `sector_synthesis` as a prior, not a directive: the
+    PM rating may diverge from `sector_lean` when other findings outvote
+    the sector view, and the PM should explain that divergence.
+    """
+    bull_case: BullBearCase
+    bear_case: BullBearCase
+    key_disagreement: str
+    falsifiable_tests: List[FalsifiableTest] = Field(default_factory=list)
+    sector_synthesis: str
+    sector_lean: Literal["bull", "bear", "balanced"] = "balanced"
+
+
 class AgentFinding(BaseModel):
     """One agent's contribution to a memo.
 

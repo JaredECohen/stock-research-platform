@@ -72,7 +72,39 @@ from .valuation_agent import run_valuation_agent
 # Memo construction
 # ---------------------------------------------------------------------------
 
-def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult]) -> BullBearCase:
+def _bull_bear_from_sector(sector_finding: AgentFinding) -> Optional[Dict[str, Any]]:
+    """Wave 3A: pluck the structured bull_bear_analysis out of the sector
+    finding's data payload, if present. Returns the dict (not the Pydantic
+    model) so the caller can pull out the raw `bull_case`/`bear_case`
+    objects directly into the memo."""
+    if not isinstance(sector_finding.data, dict):
+        return None
+    bb = sector_finding.data.get("bull_bear_analysis")
+    return bb if isinstance(bb, dict) else None
+
+
+def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
+               sector_finding: Optional[AgentFinding] = None) -> BullBearCase:
+    """Build the memo's bull case.
+
+    Wave 3A: when the sector analyst produced a structured
+    `bull_bear_analysis`, the memo's bull case is the sector-integrated
+    one (with DCF appended as additional evidence). Otherwise we fall
+    back to the legacy template construction.
+    """
+    sector_bb = _bull_bear_from_sector(sector_finding) if sector_finding else None
+    if sector_bb and isinstance(sector_bb.get("bull_case"), dict):
+        bull = sector_bb["bull_case"]
+        points = list(bull.get("key_points") or [])
+        if dcf:
+            points.append(
+                f"DCF bull case implies ${dcf.bull.implied_share_price:,.2f} "
+                f"({dcf.bull.upside_pct:+.0%})."
+            )
+        return BullBearCase(
+            headline=str(bull.get("headline") or "Bull case from sector synthesis."),
+            key_points=points,
+        )
     points: List[str] = []
     drivers = profile.get("drivers") or []
     for d in drivers[:3]:
@@ -86,7 +118,25 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult])
     )
 
 
-def _bear_case(profile: Dict, dcf: Optional[DCFResult]) -> BullBearCase:
+def _bear_case(profile: Dict, dcf: Optional[DCFResult],
+               sector_finding: Optional[AgentFinding] = None) -> BullBearCase:
+    """Build the memo's bear case (mirror of `_bull_case`).
+
+    Wave 3A: prefers the sector analyst's bear if present.
+    """
+    sector_bb = _bull_bear_from_sector(sector_finding) if sector_finding else None
+    if sector_bb and isinstance(sector_bb.get("bear_case"), dict):
+        bear = sector_bb["bear_case"]
+        points = list(bear.get("key_points") or [])
+        if dcf:
+            points.append(
+                f"DCF bear case implies ${dcf.bear.implied_share_price:,.2f} "
+                f"({dcf.bear.upside_pct:+.0%})."
+            )
+        return BullBearCase(
+            headline=str(bear.get("headline") or "Bear case from sector synthesis."),
+            key_points=points,
+        )
     points: List[str] = []
     risks = profile.get("risks") or []
     for r in risks[:3]:
@@ -291,10 +341,10 @@ def _run_stock_memo_inner(
         "risk": risk_finding,
     }
 
-    bull = safe_call(_bull_case, profile, valuation_finding, dcf,
+    bull = safe_call(_bull_case, profile, valuation_finding, dcf, sector_finding,
                      fallback=BullBearCase(headline="Bull case unavailable.", key_points=[]),
                      name="Bull Case Builder", log_to=degradation)
-    bear = safe_call(_bear_case, profile, dcf,
+    bear = safe_call(_bear_case, profile, dcf, sector_finding,
                      fallback=BullBearCase(headline="Bear case unavailable.", key_points=[]),
                      name="Bear Case Builder", log_to=degradation)
     catalysts = safe_call(_catalysts, profile, transcript, fallback=[],
@@ -433,11 +483,26 @@ def _run_stock_memo_inner(
         if kpi_placements:
             cohort_blurb = " Cohort placement: see sector view for KPI quartile context."
 
+    # Wave 3A: surface the key disagreement + sector lean in the verdict so
+    # readers can see what the bull/bear case actually pivots on.
+    sector_lean_blurb = ""
+    bb_payload = (
+        sector_finding.data.get("bull_bear_analysis")
+        if isinstance(sector_finding.data, dict) else None
+    )
+    if isinstance(bb_payload, dict):
+        lean = bb_payload.get("sector_lean")
+        disagreement = (bb_payload.get("key_disagreement") or "").strip()
+        if lean and lean != "balanced":
+            sector_lean_blurb += f" Sector lean: {lean}."
+        if disagreement:
+            sector_lean_blurb += f" Key disagreement: {disagreement}"
+
     # Final verdict ties together rating, confidence, and PM view succinctly
     memo.final_verdict = (
         f"PM final view: {rating} (confidence {int(memo.confidence_score)}). "
         f"{memo.one_sentence_thesis}"
-        f"{cohort_blurb}{cross_relevance_blurb} "
+        f"{cohort_blurb}{cross_relevance_blurb}{sector_lean_blurb} "
         f"Watch items: {', '.join(r.title for r in thesis_breakers) or 'none flagged.'}"
     )
     if cross_relevance and isinstance(memo.scores, dict):

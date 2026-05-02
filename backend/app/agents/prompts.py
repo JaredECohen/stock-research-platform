@@ -47,16 +47,54 @@ Macro sensitivities: {macro_sensitivities}.
 Macro broadcast (current regime + favored/pressured sectors): {macro_broadcast}.
 Pending news alerts for this name: {news_alerts}.
 
-Given the company snapshot below, write a structured sector view in 5-8 sentences:
-- where this name fits in the sector,
-- relative quality versus the cohort,
-- the dominant sector driver supporting/undermining the thesis,
-- one sector risk to watch,
-- which OTHER sectors' tickers are RELEVANT to the thesis (cross-sector pull-through),
-- macro alignment (does the current regime help or hurt this name).
+Given the company snapshot below, you have TWO jobs:
 
-Return JSON with keys: headline, summary, key_points (list), confidence (0-1),
-cross_sector_relevance (list of tickers from OTHER sectors), macro_alignment (str)."""
+1) Write a structured sector view (5-8 sentences):
+   - where this name fits in the sector,
+   - relative quality versus the cohort,
+   - the dominant sector driver supporting/undermining the thesis,
+   - one sector risk to watch,
+   - which OTHER sectors' tickers are RELEVANT to the thesis (cross-sector pull-through),
+   - macro alignment (does the current regime help or hurt this name).
+
+2) Build the sector-integrated bull/bear analysis. ORDER MATTERS — write the
+   bear case FIRST. Producing the hardest-to-write side first prevents
+   back-loading hand-waving onto the bear after the bull is fleshed out.
+
+   Both sides must include AT LEAST ONE falsifiable test — a concrete
+   future observation that, if it occurs, makes that side wrong. Examples:
+   "Cohort op margin compresses ≥200bps for 2 consecutive quarters → bull
+   invalidated"; "AWS growth re-accelerates above 18% → bear invalidated".
+
+   After both sides are written, name the SINGLE most important
+   disagreement between them (one short sentence; what is each side
+   actually betting on that the other denies?) and synthesize a 2-3
+   sentence sector view (what does the cohort context tell you, on
+   balance, given both sides?).
+
+   Take a sector_lean ("bull", "bear", or "balanced") — this is YOUR
+   sector view as a prior; the PM may outvote it.
+
+Return strict JSON with keys:
+  headline (string),
+  summary (string),
+  key_points (list of strings),
+  confidence (0-1),
+  cross_sector_relevance (list of tickers from OTHER sectors),
+  macro_alignment (str),
+  bull_bear_analysis (object) with shape:
+    {{
+      "bear_case": {{ "headline": "...", "key_points": [...] }},
+      "bull_case": {{ "headline": "...", "key_points": [...] }},
+      "falsifiable_tests": [
+        {{ "statement": "...", "invalidates_side": "bull" }},
+        {{ "statement": "...", "invalidates_side": "bear" }}
+      ],
+      "key_disagreement": "...",
+      "sector_synthesis": "...",
+      "sector_lean": "bull" | "bear" | "balanced"
+    }}
+"""
 
 EARNINGS_ANALYST_PROMPT = """You are an earnings call analyst.
 Read the prepared remarks and Q&A and produce structured findings:
@@ -110,7 +148,19 @@ Reminder: {DISCLAIMER}
 """
 
 PM_SYNTHESIS_PROMPT = """You are the PM. Synthesize the specialist agent findings into a final research view.
-Keep it clear, structured, and balanced. Output a paragraph for the PM view, then a one-sentence thesis,
-a rating label (Bullish / Mixed Positive / Neutral / Mixed Negative / Bearish), and a confidence score 0-100.
+Keep it clear, structured, and balanced.
+
+The Sector Analyst's `bull_bear_analysis` (under sector_agent_view.data) is your
+PRIOR — not a directive. Read its `sector_synthesis`, `sector_lean`, and
+`key_disagreement`, then weigh whether the OTHER findings (earnings,
+filing, valuation, comps, macro, risk) outvote it. If your final rating
+diverges from `sector_lean`, briefly explain why in `final_pm_view`.
+
+Output:
+- a paragraph for the PM view (acknowledge sector lean + your divergence
+  if any),
+- a one-sentence thesis,
+- a rating label (Bullish / Mixed Positive / Neutral / Mixed Negative / Bearish),
+- a confidence score 0-100.
 
 Return JSON with keys: final_pm_view, one_sentence_thesis, rating_label, confidence_score."""

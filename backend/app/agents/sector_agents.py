@@ -13,12 +13,17 @@ Workflow:
 from __future__ import annotations
 
 import json
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..cache import cache_get
 from ..config import settings
 from ..memory import CompanyMemory, SectorMemory
-from ..schemas import AgentFinding
+from ..schemas import (
+    AgentFinding,
+    BullBearAnalysis,
+    BullBearCase,
+    FalsifiableTest,
+)
 from ..services.data_service import get_data_service
 from ..services.sector_research_service import run_sector_research
 from . import llm, prompts
@@ -112,6 +117,168 @@ def _cross_sector_relevance_heuristic(ticker: str, sector: str) -> List[str]:
     candidates = adjacency.get(sector, [])
     universe = set(ds.list_tickers())
     return [c for c in candidates if c in universe and c != ticker]
+
+
+def _coerce_bull_bear_analysis(raw: Any) -> Optional[BullBearAnalysis]:
+    """Best-effort parse of an LLM-emitted bull_bear_analysis block.
+
+    Returns None when the payload is missing required fields or malformed.
+    Falls back gracefully (graph.py will use the deterministic builder)
+    rather than risk a memo failure on an over-strict schema check.
+    """
+    if not isinstance(raw, dict):
+        return None
+    bull = raw.get("bull_case") or {}
+    bear = raw.get("bear_case") or {}
+    if not isinstance(bull, dict) or not isinstance(bear, dict):
+        return None
+    if not (bull.get("headline") and bear.get("headline")):
+        return None
+    tests_raw = raw.get("falsifiable_tests") or []
+    falsifiable: List[FalsifiableTest] = []
+    for t in tests_raw:
+        if not isinstance(t, dict):
+            continue
+        side = t.get("invalidates_side")
+        statement = (t.get("statement") or "").strip()
+        if side not in ("bull", "bear") or not statement:
+            continue
+        falsifiable.append(FalsifiableTest(
+            statement=statement, invalidates_side=side,
+        ))
+    lean = raw.get("sector_lean")
+    if lean not in ("bull", "bear", "balanced"):
+        lean = "balanced"
+    try:
+        return BullBearAnalysis(
+            bull_case=BullBearCase(
+                headline=str(bull.get("headline", ""))[:240],
+                key_points=[str(p) for p in (bull.get("key_points") or [])][:8],
+            ),
+            bear_case=BullBearCase(
+                headline=str(bear.get("headline", ""))[:240],
+                key_points=[str(p) for p in (bear.get("key_points") or [])][:8],
+            ),
+            key_disagreement=str(raw.get("key_disagreement", "")).strip(),
+            falsifiable_tests=falsifiable,
+            sector_synthesis=str(raw.get("sector_synthesis", "")).strip(),
+            sector_lean=lean,
+        )
+    except Exception:
+        return None
+
+
+def _deterministic_bull_bear_analysis(
+    profile: Dict, research: Dict,
+) -> BullBearAnalysis:
+    """Cohort-grounded fallback when the LLM is offline or output is malformed.
+
+    Bear-first by construction (we build it before bull), uses cohort
+    placement + risks/drivers from the profile so it's not just
+    template prose. Always emits a falsifiable test on each side so the
+    contract is upheld.
+    """
+    sector = profile.get("sector", "")
+    sub_industry = profile.get("sub_industry", "")
+    drivers = profile.get("drivers") or []
+    risks = profile.get("risks") or []
+    placements = research.get("kpi_placements") or {}
+    trends = research.get("trends") or {}
+    regime = research.get("regime") or "mixed"
+
+    # Bear case — written first.
+    bear_points: List[str] = []
+    if risks:
+        bear_points.extend(f"Headwind: {r}" for r in risks[:3])
+    om_d = trends.get("cohort_op_margin_delta")
+    if om_d is not None and om_d < -0.005:
+        bear_points.append(
+            f"Cohort op margin compressing ({om_d:+.1%} multi-year) — competitive intensity is rising."
+        )
+    val = placements.get("EV_EBITDA") or placements.get("PFCF")
+    if val and val.get("quartile") in (3, 4):
+        bear_points.append(
+            f"Valuation in the {'top' if val['quartile'] == 4 else 'upper'} cohort quartile — "
+            f"any execution slip re-rates the multiple."
+        )
+    if not bear_points:
+        bear_points = ["Execution risk on the dominant driver."]
+    bear_headline = (
+        f"Bear case: {sub_industry or sector} thesis breaks on "
+        f"{risks[0] if risks else 'execution'}."
+    )
+    bear = BullBearCase(headline=bear_headline, key_points=bear_points)
+
+    # Bull case — written second so any leftover slack lands here.
+    bull_points: List[str] = []
+    if drivers:
+        bull_points.extend(f"Tailwind: {d}" for d in drivers[:3])
+    growth = placements.get("revenue_growth")
+    if growth and growth.get("quartile") in (1, 2):
+        bull_points.append(
+            f"Revenue growth in the {'top' if growth['quartile'] == 1 else 'upper-half'} "
+            f"cohort quartile — share-take story is empirical, not narrative."
+        )
+    margin = placements.get("operating_margin")
+    if margin and margin.get("quartile") in (1, 2):
+        bull_points.append(
+            "Operating margin above cohort median — quality premium is earned."
+        )
+    if not bull_points:
+        bull_points = ["Quality + growth profile supports a premium versus peers."]
+    bull_headline = (
+        f"Bull case: durable execution against "
+        f"{drivers[0] if drivers else 'sector tailwinds'}."
+    )
+    bull = BullBearCase(headline=bull_headline, key_points=bull_points)
+
+    # Falsifiable tests — one per side, anchored to cohort observable.
+    falsifiable = [
+        FalsifiableTest(
+            statement=(
+                f"Cohort revenue growth turns negative for two consecutive quarters "
+                f"AND target margin compresses with it."
+            ),
+            invalidates_side="bull",
+        ),
+        FalsifiableTest(
+            statement=(
+                f"{drivers[0] if drivers else 'Core driver'} re-accelerates and the "
+                f"target's cohort margin quartile improves."
+            ),
+            invalidates_side="bear",
+        ),
+    ]
+
+    # Decide a sector lean from cohort math: positive growth delta + favorable
+    # margin placement → bull; the opposite → bear; else balanced.
+    lean = "balanced"
+    growth_q = (placements.get("revenue_growth") or {}).get("quartile")
+    margin_q = (placements.get("operating_margin") or {}).get("quartile")
+    if growth_q in (1, 2) and margin_q in (1, 2):
+        lean = "bull"
+    elif growth_q in (3, 4) and margin_q in (3, 4):
+        lean = "bear"
+
+    synthesis = (
+        f"Cohort context for {sub_industry or sector} ({regime} regime): "
+        f"the bear case rests on {risks[0] if risks else 'execution'}; the bull "
+        f"case rests on {drivers[0] if drivers else 'execution against the dominant driver'}. "
+        f"Sector lean is {lean} based on cohort placement; PM should weigh other findings."
+    )
+    key_disagreement = (
+        f"Bears price in cohort margin compression flowing through to this name; "
+        f"bulls price in this name continuing to outpace cohort on the dominant driver."
+    )
+
+    return BullBearAnalysis(
+        bull_case=bull,
+        bear_case=bear,
+        key_disagreement=key_disagreement,
+        falsifiable_tests=falsifiable,
+        sector_synthesis=synthesis,
+        sector_lean=lean,
+    )
 
 
 def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
@@ -221,6 +388,14 @@ def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
         finding_data["macro_alignment"] = llm_out.get("macro_alignment", "")
         finding_data["macro_broadcast"] = macro_broadcast
         finding_data["pending_news_alerts"] = news_alerts
+        # Wave 3A: pull through the structured bull/bear analysis. If the
+        # LLM didn't produce a parseable block, fall back to the
+        # cohort-grounded deterministic builder so this contract is
+        # always satisfied.
+        bb = _coerce_bull_bear_analysis(llm_out.get("bull_bear_analysis"))
+        if bb is None:
+            bb = _deterministic_bull_bear_analysis(profile, research)
+        finding_data["bull_bear_analysis"] = bb.model_dump()
         finding = AgentFinding(
             agent="Sector Analyst",
             headline=llm_out.get("headline", f"{sub_industry} cohort placement"),
@@ -286,6 +461,10 @@ def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
     finding_data["macro_alignment"] = macro_alignment
     finding_data["macro_broadcast"] = macro_broadcast
     finding_data["pending_news_alerts"] = news_alerts
+    # Wave 3A: contract-satisfying bull/bear analysis even on the no-LLM path.
+    finding_data["bull_bear_analysis"] = (
+        _deterministic_bull_bear_analysis(profile, research).model_dump()
+    )
 
     return AgentFinding(
         agent="Sector Analyst",
