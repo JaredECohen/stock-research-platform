@@ -71,10 +71,24 @@ class Settings(BaseSettings):
     anthropic_cheap_model: str = "claude-haiku-4-5"
     anthropic_critic_model: str = "claude-opus-4-7"
     # Gemini (Google GenAI) — used for news/social/long-doc analysts.
+    # Two access paths:
+    #   - Direct API: set GEMINI_API_KEY. Quick setup; generous free tier.
+    #   - Vertex AI: set VERTEX_PROJECT_ID (+ optionally VERTEX_LOCATION,
+    #     VERTEX_MODEL). Auth via Google Application Default Credentials —
+    #     run `gcloud auth application-default login` locally, or set
+    #     GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json in prod.
+    # When both are configured, Vertex wins so production deployments
+    # don't accidentally fall back to API-key auth.
     gemini_api_key: str = ""
     gemini_news_model: str = "gemini-2.5-flash"
     gemini_social_model: str = "gemini-2.5-flash"
     gemini_longdoc_model: str = "gemini-3.1-pro"
+    vertex_project_id: str = ""
+    vertex_location: str = "us-central1"
+    # When set, overrides the per-agent Gemini model envs across all Gemini
+    # calls (news / social / longdoc) on the Vertex backend. Leave empty to
+    # let each agent use its own GEMINI_*_MODEL.
+    vertex_model: str = ""
 
     # Database
     database_url: str = "sqlite:///./marketmosaic.db"
@@ -140,7 +154,15 @@ class Settings(BaseSettings):
 
     @property
     def has_gemini(self) -> bool:
-        return bool(self.gemini_api_key)
+        """True when ANY Gemini access path is configured (direct API or Vertex)."""
+        return bool(self.gemini_api_key) or self.has_vertex
+
+    @property
+    def has_vertex(self) -> bool:
+        """True when Vertex AI backend is configured. Auth handled by ADC —
+        set GOOGLE_APPLICATION_CREDENTIALS or run `gcloud auth application-default
+        login`. Vertex wins over direct API when both are set."""
+        return bool(self.vertex_project_id)
 
     @property
     def has_llm(self) -> bool:
