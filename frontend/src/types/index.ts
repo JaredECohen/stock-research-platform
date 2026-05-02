@@ -308,6 +308,8 @@ export interface StockMemoOut {
   valuation_agent_view: AgentFinding;
   comps_agent_view: AgentFinding;
   macro_sensitivity: AgentFinding;
+  // Wave 3B — Technical Analyst. Optional: older memos may not have it.
+  technical_agent_view?: AgentFinding | null;
   bull_case: BullBearCase;
   bear_case: BullBearCase;
   catalysts: CatalystItem[];

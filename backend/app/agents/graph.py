@@ -64,6 +64,7 @@ from .safe_runner import (
     safe_finding,
 )
 from .sector_agents import run_sector_agent
+from .technical_agent import run_technical_agent
 from .tools import evidence_quality
 from .valuation_agent import run_valuation_agent
 
@@ -330,6 +331,14 @@ def _run_stock_memo_inner(
             "Risk Analyst", run_risk_agent,
             profile, ratios, (dcf.summary if dcf else None), log_to=degradation,
         )
+    # Wave 3B — Technical Analyst. By design technicals do NOT influence
+    # the rating; they're positioning context only. The agent gets its own
+    # llm_call_context so the LLM narrative pass is attributed correctly.
+    with llm_call_context(agent_name="Technical Analyst", run_id=run_id):
+        technical_finding = safe_finding(
+            "Technical Analyst", run_technical_agent, profile,
+            log_to=degradation,
+        )
 
     findings = {
         "sector": sector_finding,
@@ -339,6 +348,7 @@ def _run_stock_memo_inner(
         "comps": comps_finding,
         "macro": macro_finding,
         "risk": risk_finding,
+        "technical": technical_finding,
     }
 
     bull = safe_call(_bull_case, profile, valuation_finding, dcf, sector_finding,
@@ -414,6 +424,7 @@ def _run_stock_memo_inner(
         valuation_agent_view=valuation_finding,
         comps_agent_view=comps_finding,
         macro_sensitivity=macro_finding,
+        technical_agent_view=technical_finding,
         bull_case=bull,
         bear_case=bear,
         catalysts=catalysts,

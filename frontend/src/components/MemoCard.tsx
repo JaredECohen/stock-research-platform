@@ -143,6 +143,9 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
         <FindingBlock title="Valuation Analyst" body={memo.valuation_agent_view} />
         <FindingBlock title="Comps Analyst" body={memo.comps_agent_view} />
         <FindingBlock title="Macro Analyst" body={memo.macro_sensitivity} />
+        {memo.technical_agent_view && (
+          <FindingBlock title="Technical Analyst" body={memo.technical_agent_view} />
+        )}
       </div>
 
       <div className="grid md:grid-cols-2 gap-4">
