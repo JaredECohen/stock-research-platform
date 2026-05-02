@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from typing import Dict, Optional
 
+from ..config import settings
 from ..schemas import AgentFinding
 from . import llm, prompts
 
@@ -27,9 +28,11 @@ def run_earnings_agent(profile: Dict, transcript: Optional[Dict], earnings: Opti
         "qa": (transcript.get("qa") or "")[:2000],
         "next_earnings": (earnings or {}).get("next_earnings_date"),
     }
+    # Tool-agent role — uses OPENAI_TOOL_MODEL (gpt-5.4 by default).
     llm_out = llm.chat_json(
         prompts.EARNINGS_ANALYST_PROMPT + "\n\nTranscript context:\n" + json.dumps(payload, default=str),
         system=prompts.PM_SYSTEM, route="cheap",
+        model=settings.openai_tool_model,
     )
     if llm_out:
         return AgentFinding(

@@ -19,13 +19,20 @@ def run_critic(memo_dict: Dict) -> Optional[CriticReview]:
 
     payload = json.dumps(memo_dict, default=str)[: settings.max_agent_context_chars]
     # Critic intentionally crosses provider families (Phase 4): if Anthropic is
-    # configured, force-route through Opus regardless of `LLM_PROVIDER`. Falls
-    # back to the active provider (or rule-based stub) when Anthropic is absent.
-    provider_override = "anthropic" if settings.has_anthropic else None
+    # configured, force-route through ANTHROPIC_CRITIC_MODEL regardless of
+    # LLM_PROVIDER. Falls back to the active provider (or rule-based stub)
+    # when Anthropic is absent.
+    if settings.has_anthropic:
+        provider_override = "anthropic"
+        critic_model = settings.anthropic_critic_model
+    else:
+        provider_override = None
+        critic_model = None  # use the active provider's strong-route default
     llm_out = llm.chat_json(
         prompts.CRITIC_PROMPT + "\n\nDraft memo:\n" + payload,
         system=prompts.PM_SYSTEM, route="strong",
         provider_override=provider_override,
+        model=critic_model,
     )
     if llm_out:
         review = CriticReview(

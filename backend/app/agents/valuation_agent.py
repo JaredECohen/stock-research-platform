@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from typing import Dict, Optional
 
+from ..config import settings
 from ..schemas import AgentFinding, DCFResult
 from ..services.valuation_service import build_dcf
 from . import llm, prompts
@@ -25,9 +26,11 @@ def run_valuation_agent(profile: Dict, ratios: Dict, dcf: Optional[DCFResult]) -
         "dcf_bear_implied": dcf.bear.implied_share_price if dcf else None,
         "dcf_base_upside": dcf.base.upside_pct if dcf else None,
     }
+    # Tool-agent role — uses OPENAI_TOOL_MODEL (gpt-5.4 by default).
     llm_out = llm.chat_json(
         prompts.VALUATION_ANALYST_PROMPT + "\n\nContext:\n" + json.dumps(payload, default=str),
         system=prompts.PM_SYSTEM, route="strong",
+        model=settings.openai_tool_model,
     )
     if llm_out:
         return AgentFinding(

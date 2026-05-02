@@ -204,7 +204,11 @@ def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
         + json.dumps(research_for_prompt, default=str)[:4500]
     )
 
-    llm_out = llm.chat_json(user_prompt, system=prompts.PM_SYSTEM, route="cheap")
+    # Sector agents share OPENAI_SECTOR_MODEL (gpt-5.4 by default).
+    llm_out = llm.chat_json(
+        user_prompt, system=prompts.PM_SYSTEM, route="cheap",
+        model=settings.openai_sector_model,
+    )
 
     if llm_out:
         cross_sector = llm_out.get("cross_sector_relevance") or []

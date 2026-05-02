@@ -364,12 +364,21 @@ def chat_json(
     route: str = "cheap",
     max_tokens: int = 800,
     provider_override: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Single-shot JSON-mode chat call. Returns parsed dict or None.
 
     `provider_override` lets a caller force a specific provider regardless of
     `settings.active_llm_provider`. Used by the Phase 4 critic agent which
     intentionally crosses the provider family boundary.
+
+    `model` is an explicit per-call model override. When set (and non-empty),
+    it bypasses the `route="strong"|"cheap"` default. Per-agent envs
+    (`OPENAI_PM_MODEL`, `OPENAI_SECTOR_MODEL`, `ANTHROPIC_CRITIC_MODEL`, …)
+    flow through this knob: the call site reads `settings.openai_pm_model`
+    (or whichever role applies) and passes it here, so changing the env
+    reroutes that one agent without code changes. Empty string is treated
+    as "use the route default" for ergonomic env handling.
     """
     provider = (provider_override or settings.active_llm_provider).lower()
     if provider == "none":
@@ -381,9 +390,9 @@ def chat_json(
         client = _anthropic_client()
         if client is None:
             return None
-        model = _model_for("anthropic", route)
+        chosen = (model or "").strip() or _model_for("anthropic", route)
         sys_with_json = (system + "\n\nReturn ONLY valid JSON, no prose.").strip()
-        text = _anthropic_chat(client, model=model, system=sys_with_json, user=prompt, max_tokens=max_tokens)
+        text = _anthropic_chat(client, model=chosen, system=sys_with_json, user=prompt, max_tokens=max_tokens)
         if text is None:
             _record_failure("anthropic")
             return None
@@ -391,14 +400,14 @@ def chat_json(
         return _extract_json(text)
 
     if provider == "gemini":
-        return gemini_chat_json(prompt, system=system, max_tokens=max_tokens)
+        return gemini_chat_json(prompt, system=system, model=model, max_tokens=max_tokens)
 
     # OpenAI
     client = _openai_client()
     if client is None:
         return None
-    model = _model_for("openai", route)
-    out = _openai_chat_json(client, model=model, system=system, user=prompt, max_tokens=max_tokens)
+    chosen = (model or "").strip() or _model_for("openai", route)
+    out = _openai_chat_json(client, model=chosen, system=system, user=prompt, max_tokens=max_tokens)
     if out is None:
         _record_failure("openai")
     else:
@@ -413,7 +422,9 @@ def chat_text(
     route: str = "cheap",
     max_tokens: int = 600,
     provider_override: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Optional[str]:
+    """Same `model` semantics as `chat_json`. Returns plain text or None."""
     provider = (provider_override or settings.active_llm_provider).lower()
     if provider == "none":
         return None
@@ -424,8 +435,8 @@ def chat_text(
         client = _anthropic_client()
         if client is None:
             return None
-        model = _model_for("anthropic", route)
-        text = _anthropic_chat(client, model=model, system=system, user=prompt, max_tokens=max_tokens)
+        chosen = (model or "").strip() or _model_for("anthropic", route)
+        text = _anthropic_chat(client, model=chosen, system=system, user=prompt, max_tokens=max_tokens)
         if text is None:
             _record_failure("anthropic")
         else:
@@ -433,13 +444,13 @@ def chat_text(
         return text
 
     if provider == "gemini":
-        return gemini_chat_text(prompt, system=system, max_tokens=max_tokens)
+        return gemini_chat_text(prompt, system=system, model=model, max_tokens=max_tokens)
 
     client = _openai_client()
     if client is None:
         return None
-    model = _model_for("openai", route)
-    text = _openai_chat_text(client, model=model, system=system, user=prompt, max_tokens=max_tokens)
+    chosen = (model or "").strip() or _model_for("openai", route)
+    text = _openai_chat_text(client, model=chosen, system=system, user=prompt, max_tokens=max_tokens)
     if text is None:
         _record_failure("openai")
     else:

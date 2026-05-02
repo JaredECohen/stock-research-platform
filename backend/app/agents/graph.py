@@ -116,12 +116,13 @@ def _catalysts(profile: Dict, transcript: Optional[Dict]) -> List[CatalystItem]:
 
 
 def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optional[DCFResult]) -> Dict:
-    # LLM synthesis if available
+    # PM uses its dedicated model (OPENAI_PM_MODEL — gpt-5.5-pro by default).
     llm_out = llm.chat_json(
         prompts.PM_SYNTHESIS_PROMPT
         + "\n\nFindings:\n"
         + json.dumps({k: v.model_dump() for k, v in findings.items()}, default=str)[: settings.max_agent_context_chars],
         system=prompts.PM_SYSTEM, route="strong",
+        model=settings.openai_pm_model,
     )
     if llm_out and "rating_label" in llm_out:
         return llm_out
