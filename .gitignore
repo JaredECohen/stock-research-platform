@@ -33,6 +33,12 @@ coverage/
 .cache/
 *.log
 
+# Long-term agent memory — per-deployment state, not source. Live files
+# are runtime artifacts created at memo-generation time. Templates / seed
+# content (if any) would live in the codebase under a different path.
+**/memory/companies/
+**/memory/sectors/
+
 # OS / Editor
 .DS_Store
 .idea/
