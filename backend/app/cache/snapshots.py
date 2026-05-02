@@ -132,6 +132,20 @@ def _now() -> datetime:
     return datetime.utcnow()
 
 
+def _as_of_subject(subject: str) -> str:
+    """Wave 1C: segregate cache keys by the active as_of date so backtest
+    runs don't collide with live data. Lazy import dodges the circular
+    `cache → data_service → cache` chain."""
+    try:
+        from ..services.data_service import current_as_of_date
+    except Exception:
+        return subject
+    as_of = current_as_of_date()
+    if as_of is None:
+        return subject
+    return f"{subject}:asof:{as_of.isoformat()}"
+
+
 def _is_expired(snap: ResearchSnapshot, max_age_seconds: Optional[int]) -> bool:
     if snap.expires_at and _now() >= snap.expires_at:
         return True
@@ -156,7 +170,12 @@ def cache_get(
 
     Returns None if no usable snapshot exists. Callers should treat the return
     as read-only; mutations should go through `cache_put` so we keep history.
+
+    Wave 1C: when an as_of date is active in the calling context the
+    `subject` is automatically suffixed `:asof:<YYYY-MM-DD>` so backtest
+    cache entries never collide with live data.
     """
+    subject = _as_of_subject(subject)
     own = db is None
     if own:
         db = SessionLocal()
@@ -209,7 +228,12 @@ def cache_put(
     schema_version: int = 1,
     db: Optional[Session] = None,
 ) -> ResearchSnapshot:
-    """Store a new snapshot. Returns the persisted row with .id populated."""
+    """Store a new snapshot. Returns the persisted row with .id populated.
+
+    Wave 1C: when an as_of date is active the `subject` is suffixed
+    `:asof:<YYYY-MM-DD>` so backtest writes don't shadow live entries.
+    """
+    subject = _as_of_subject(subject)
     own = db is None
     if own:
         db = SessionLocal()

@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..config import settings
 from ..schemas import (
@@ -186,6 +186,7 @@ def _run_reflection_step(memo: StockMemoOut):
 def run_stock_memo(
     ticker: str, *, scenario: str = "soft_landing", force_refresh: bool = False,
     run_id: Optional[str] = None,
+    as_of_date: Optional[Any] = None,
 ) -> StockMemoOut:
     """Generate a stock memo. When `force_refresh=True`, every cached snapshot
     in the dependency tree is bypassed; otherwise, fundamentals/sector/comps/DCF
@@ -193,24 +194,41 @@ def run_stock_memo(
 
     `run_id` (Wave 1A) tags every LLM call made during this memo run for
     cost / trace attribution via `LLMCallLog`. Auto-generated when None.
+
+    `as_of_date` (Wave 1C) reproduces the memo as of a historical date.
+    All cache reads/writes inside the call are namespaced by date so
+    backtests don't collide with live data; long-term memory writes are
+    skipped (a backtest shouldn't pollute the agent's notebook). Future
+    PRs will thread per-provider date filtering through the data
+    service so backtests truly see only past data.
     """
     import uuid
+    from datetime import date as _date_cls, datetime as _dt_cls
     if run_id is None:
         run_id = str(uuid.uuid4())
+    # Coerce datetime → date if a caller hands us a datetime.
+    if isinstance(as_of_date, _dt_cls):
+        as_of_date = as_of_date.date()
+    if as_of_date is not None and as_of_date > _date_cls.today():
+        raise ValueError(f"as_of_date {as_of_date} is in the future")
+
     from .llm import llm_call_context
-    # Set the outer context once; per-agent steps below layer their own
-    # `agent_name` on top by re-entering `llm_call_context`. Inheriting the
-    # `run_id` from the enclosing context.
-    with llm_call_context(agent_name="run_stock_memo", run_id=run_id):
-        return _run_stock_memo_inner(ticker, scenario=scenario,
-                                     force_refresh=force_refresh, run_id=run_id)
+    from ..services.data_service import as_of_context
+    with as_of_context(as_of_date), llm_call_context(
+        agent_name="run_stock_memo", run_id=run_id,
+    ):
+        return _run_stock_memo_inner(
+            ticker, scenario=scenario, force_refresh=force_refresh,
+            run_id=run_id, as_of_date=as_of_date,
+        )
 
 
 def _run_stock_memo_inner(
     ticker: str, *, scenario: str, force_refresh: bool, run_id: str,
+    as_of_date: Optional[Any] = None,
 ) -> StockMemoOut:
     """Indirection so `run_stock_memo` can wrap the entire body in a single
-    `llm_call_context`. Splitting keeps the public signature clean."""
+    `llm_call_context` + `as_of_context`. Splitting keeps the public signature clean."""
     # Fundamentals MUST succeed — without a profile we can't even identify
     # the company, so this is an unrecoverable error and we re-raise.
     fin = get_full_financials(ticker, force_refresh=force_refresh)
@@ -388,12 +406,17 @@ def _run_stock_memo_inner(
     # memory files iff a delta event fired this run (new earnings / new
     # filing / material news). safe_call wraps it so a memory write never
     # blocks the memo from being returned.
-    safe_call(
-        _run_reflection_step, memo,
-        fallback=([], []),
-        name="Reflection (long-term memory)", log_to=degradation,
-    )
-    memo.degraded_agents = degradation.degraded_agents()
+    #
+    # Wave 1C: skip memory writes when running as a backtest (`as_of_date`
+    # set). Backtests are diagnostic — we don't want the agent's notebook
+    # polluted with retroactive entries.
+    if as_of_date is None:
+        safe_call(
+            _run_reflection_step, memo,
+            fallback=([], []),
+            name="Reflection (long-term memory)", log_to=degradation,
+        )
+        memo.degraded_agents = degradation.degraded_agents()
 
     # Phase 6: pull through cross-sector relevance from the sector agent's
     # finding into the PM memo so users see related-name implications without
@@ -426,21 +449,29 @@ def _run_stock_memo_inner(
     # by the future update-orchestrator, not this code path). safe_call so
     # a DB hiccup never prevents the memo from being returned to the caller.
     safe_call(
-        _persist_memo_snapshot, memo,
+        _persist_memo_snapshot, memo, as_of_date,
         fallback=None, name="Memo store", log_to=degradation,
     )
     memo.degraded_agents = degradation.degraded_agents()
     return memo
 
 
-def _persist_memo_snapshot(memo: StockMemoOut) -> None:
+def _persist_memo_snapshot(memo: StockMemoOut, as_of_date: Optional[Any] = None) -> None:
     """Indirection so safe_call wraps DB I/O. Lazy-import keeps graph.py from
-    pulling the ORM at module import time (it's already loaded via models)."""
+    pulling the ORM at module import time (it's already loaded via models).
+
+    Wave 1C: backtest snapshots are persisted with `as_of_date` set so the
+    default `latest_memo` lookup excludes them.
+    """
     from ..services import memo_store
-    prior = memo_store.latest_memo(memo.ticker)
+    # latest_memo defaults to live snapshots only. For backtests we ask
+    # for include_backtests so version chains stay continuous within the
+    # same as-of date space.
+    prior = memo_store.latest_memo(memo.ticker, include_backtests=as_of_date is not None)
     trigger = "first_run" if prior is None else "full_reanalysis"
     parent_version = prior.version if prior is not None else None
-    memo_store.save_memo(memo, trigger=trigger, parent_version=parent_version)
+    memo_store.save_memo(memo, trigger=trigger, parent_version=parent_version,
+                         as_of_date=as_of_date)
 
 
 # ---------------------------------------------------------------------------
