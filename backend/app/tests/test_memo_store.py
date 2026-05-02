@@ -106,16 +106,23 @@ def test_tier1_universe_marked_auto_analysis_after_seed():
     # `seed_universe_tiers`. Tier-1 names from the JSON config should be
     # promoted; everyone else stays data_only.
     _ensure_started()
+    tier1 = (
+        # Tech (4) + Comm Services (3) + Consumer Disc (2)
+        "NVDA", "AAPL", "MSFT", "PLTR",
+        "GOOGL", "META", "NFLX",
+        "AMZN", "TSLA",
+        # one representative per remaining sector (8)
+        "JPM", "COST", "LLY", "XOM", "CAT", "NEE", "LIN", "AMT",
+    )
     with SessionLocal() as db:
-        # Tier-1 (Technology + Communication Services + Consumer Discretionary)
-        for ticker in ("MSFT", "NVDA", "PLTR", "GOOGL", "META", "NFLX", "AMZN", "TSLA"):
+        for ticker in tier1:
             row = db.get(Company, ticker)
             assert row is not None, f"missing tier-1 ticker {ticker} in demo dataset"
             assert row.universe_tier == "auto_analysis", (
                 f"{ticker} should be tier-1 but is {row.universe_tier}"
             )
         # Names known to be in the demo set but explicitly NOT tier-1 should be data_only.
-        for ticker in ("BAC", "CAT", "JPM"):
+        for ticker in ("BAC", "GS", "MS", "MA", "V", "WMT", "MRK", "JNJ", "UNH"):
             row = db.get(Company, ticker)
             if row is not None:
                 assert row.universe_tier == "data_only", (

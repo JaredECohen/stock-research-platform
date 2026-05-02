@@ -367,6 +367,28 @@ COMPANY_PROFILES: Dict[str, Dict] = {
         drivers=["Robotaxi / FSD monetization", "Energy storage growth", "Lower-priced model launches"],
         risks=["Auto gross margin compression", "FSD timeline / regulatory", "EV demand cyclicality + China competition"],
     ),
+    "LIN": dict(
+        company_name="Linde plc", exchange="NYSE",
+        sector="Materials", industry="Chemicals", sub_industry="Industrial Gases",
+        market_cap_b=215.0, revenue_b=33.0, op_margin=0.27, fcf_margin=0.20,
+        growth=0.04, beta=0.85, debt_to_ebitda=1.6, shares_b=0.475, price=455.0,
+        cik="0001707925", fye="December",
+        description="Global leader in industrial gases (oxygen, nitrogen, hydrogen, argon) sold under long-dated, take-or-pay contracts to industrial, electronics, healthcare, and energy customers.",
+        segments=["Americas", "EMEA", "APAC", "Engineering"],
+        drivers=["On-site project backlog ramp", "Decarbonization / clean-hydrogen contracts", "Pricing flow-through + volume leverage"],
+        risks=["European industrial-gas demand weakness", "Project execution delays", "FX translation"],
+    ),
+    "AMT": dict(
+        company_name="American Tower Corporation", exchange="NYSE",
+        sector="Real Estate", industry="REITs", sub_industry="Cell Tower REIT",
+        market_cap_b=100.0, revenue_b=11.0, op_margin=0.32, fcf_margin=0.30,
+        growth=0.05, beta=0.80, debt_to_ebitda=5.5, shares_b=0.467, price=215.0,
+        cik="0001053507", fye="December",
+        description="Global owner-operator of cell towers and a US data-center portfolio (CoreSite); revenue is recurring lease income with built-in escalators.",
+        segments=["U.S. & Canada", "Asia-Pacific", "Africa", "Europe", "Latin America", "Data Centers"],
+        drivers=["5G mid-band densification", "International tenancy growth", "CoreSite data-center expansion"],
+        risks=["Customer concentration in big-3 US carriers", "FX translation in EM markets", "Long-end rate sensitivity for REIT multiples"],
+    ),
 }
 
 

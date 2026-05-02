@@ -29,5 +29,7 @@
   "CRM":  ["MSFT", "GOOGL", "META"],
   "PLTR": ["MSFT", "CRM", "GOOGL"],
   "NFLX": ["GOOGL", "META"],
-  "TSLA": ["AMZN"]
+  "TSLA": ["AMZN"],
+  "LIN":  ["XOM", "CAT"],
+  "AMT":  ["NEE"]
 }
