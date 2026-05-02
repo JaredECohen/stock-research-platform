@@ -358,12 +358,33 @@ def run(memo: StockMemoOut) -> Tuple[List[Dict[str, Any]], List[str]]:
     if not triggers:
         return [], []
 
+    # Wave 3D: when filings/transcripts triggered, pull structured facts
+    # from the Wave 2 history tables and attach them to the entry. The
+    # backfill ensures the source rows exist even on first contact (the
+    # rest of the pipeline will hit the same provider data so the
+    # marginal cost of one more upsert is trivial). Wrapped defensively
+    # so a missing source never blocks the memo from logging the trigger.
+    structured_facts = None
+    try:
+        from .fact_extraction import collect_structured_facts
+        from ..services.history_service import backfill_ticker
+        # Best-effort backfill — quiet no-op if data_service has nothing.
+        try:
+            backfill_ticker(memo.ticker)
+        except Exception as exc:  # pragma: no cover — diagnostic only
+            log.debug("history backfill silenced for %s: %s", memo.ticker, exc)
+        structured_facts = collect_structured_facts(memo.ticker, triggers)
+    except Exception as exc:  # pragma: no cover — fact extraction must never block memory
+        log.warning("structured fact extraction failed for %s: %s", memo.ticker, exc)
+        structured_facts = None
+
     # Company entry
     company_body = _compose_company_entry(memo, triggers)
     company_mem.append_entry(MemoryEntry(
         date=date.today().isoformat(),
         trigger=", ".join(t["kind"] for t in triggers),
         body=company_body,
+        structured_facts=structured_facts,
     ))
     company_mem.condense_oldest(summarizer=_llm_condenser)
     company_mem.save()
