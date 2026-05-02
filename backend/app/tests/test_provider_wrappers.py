@@ -60,7 +60,12 @@ def test_circuit_breaker_trips_after_three_failures():
     llm_mod.reset_circuit_breaker()
 
 
-def test_provider_override_routes_to_anthropic_branch_with_no_key():
-    """With ANTHROPIC_API_KEY blank, an explicit override still safely returns None."""
+def test_provider_override_routes_to_anthropic_branch_with_no_key(monkeypatch):
+    """With ANTHROPIC_API_KEY blank, an explicit override still safely returns None.
+
+    Force-clear the key via monkeypatch so this stays deterministic regardless
+    of the developer's `.env` (which may legitimately have a real key set)."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
     out = llm_mod.chat_json("hello", provider_override="anthropic")
     assert out is None
