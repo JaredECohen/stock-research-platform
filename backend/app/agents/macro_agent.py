@@ -1,9 +1,25 @@
-"""Macro analyst agent — answers macro questions and produces sector mappings."""
+"""Macro analyst agent — LLM-driven scenario reading + per-company impact.
+
+Architecture:
+- `detect_scenario_key` — LLM classifier (regex fallback) that maps free-form
+  text to one of the canned scenario archetypes. The archetype is just the
+  *seed* template; the LLM is then free to generalize beyond it.
+- `run_macro_scenario` — returns a `MacroScenarioResult` whose narrative is
+  rewritten by the LLM using the live FRED snapshot, with the canned
+  template only used as a deterministic backstop.
+- `run_macro_agent` — produces the per-company `AgentFinding` for the memo.
+  The prompt carries snapshot + scenario context + company profile so the
+  output is sector- and ticker-aware, not a generic regime read.
+
+All three layers consult `OPENAI_MACRO_MODEL` via `settings.openai_macro_model`,
+matching the per-agent model wiring that PM/sector/tool agents already use.
+"""
 from __future__ import annotations
 
 import json
 from typing import Dict, Optional
 
+from ..config import settings
 from ..schemas import AgentFinding, MacroScenarioResult
 from ..services.macro_service import macro_snapshot
 from . import llm, prompts
@@ -129,8 +145,12 @@ SCENARIO_TEMPLATES: Dict[str, MacroScenarioResult] = {
 }
 
 
-def detect_scenario_key(text: str) -> str:
-    t = text.lower()
+_SCENARIO_KEYS = list(SCENARIO_TEMPLATES.keys())
+
+
+def _detect_scenario_key_regex(text: str) -> str:
+    """Deterministic fallback used when the LLM is unavailable."""
+    t = (text or "").lower()
     if "soft landing" in t:
         return "soft_landing"
     if "recession" in t or "downturn" in t:
@@ -144,12 +164,66 @@ def detect_scenario_key(text: str) -> str:
     return "soft_landing"
 
 
+def detect_scenario_key(text: str) -> str:
+    """LLM-driven scenario classifier; regex fallback when no LLM is available.
+
+    The LLM is constrained to one of `SCENARIO_TEMPLATES.keys()` so downstream
+    code never has to handle a free-form scenario name.
+    """
+    if not settings.has_llm or not text:
+        return _detect_scenario_key_regex(text)
+    out = llm.chat_json(
+        f"Classify this macro scenario into ONE of: {_SCENARIO_KEYS}. "
+        f"Return strict JSON: {{\"key\": \"<one of the listed keys>\"}}.\n\n"
+        f"User text:\n{text}",
+        route="cheap",
+        model=settings.openai_macro_model,
+        max_tokens=60,
+    )
+    if isinstance(out, dict):
+        key = (out.get("key") or "").strip().lower()
+        if key in SCENARIO_TEMPLATES:
+            return key
+    return _detect_scenario_key_regex(text)
+
+
 def run_macro_scenario(scenario: str) -> MacroScenarioResult:
+    """Live narrative rewrite anchored to the FRED snapshot.
+
+    The canned template still seeds the structure (sector_impacts, favored,
+    pressured) so the response shape is stable, but the narrative + suggested
+    research views get an LLM pass when one is available.
+    """
     key = detect_scenario_key(scenario)
     base = SCENARIO_TEMPLATES[key]
     snapshot = macro_snapshot()
+
+    # LLM-driven narrative + research views; deterministic concat fallback.
+    if settings.has_llm:
+        prompt = (
+            "You are the macro analyst. Given the regime archetype and the live "
+            "macro snapshot below, rewrite the narrative in 4-6 sentences making "
+            "it specific to current numbers. Keep the same regime label. Suggest "
+            "3-5 research views that follow from this regime + snapshot.\n\n"
+            f"Regime: {base.scenario}\n"
+            f"Archetype narrative: {base.narrative}\n"
+            f"Live snapshot (FRED): {json.dumps(snapshot, default=str)}\n\n"
+            "Return JSON: {\"narrative\": \"<text>\", \"suggested_research_views\": [\"...\", ...]}"
+        )
+        out = llm.chat_json(
+            prompt, system=prompts.MACRO_ANALYST_PROMPT, route="cheap",
+            model=settings.openai_macro_model, max_tokens=600,
+        )
+        if isinstance(out, dict) and (out.get("narrative") or out.get("suggested_research_views")):
+            return base.model_copy(update={
+                "narrative": out.get("narrative") or base.narrative,
+                "suggested_research_views": (
+                    out.get("suggested_research_views") or base.suggested_research_views
+                ),
+            })
+
+    # Deterministic fallback: append the live snapshot to the canned narrative.
     if snapshot:
-        # tag narrative with current macro snapshot
         narrative = base.narrative + (
             f" Current snapshot: Fed Funds {snapshot.get('FEDFUNDS', '—')}%, "
             f"10Y {snapshot.get('DGS10', '—')}%, "
@@ -161,10 +235,46 @@ def run_macro_scenario(scenario: str) -> MacroScenarioResult:
 
 
 def run_macro_agent(profile: Dict, scenario: str = "soft_landing") -> AgentFinding:
+    """Per-company macro `AgentFinding` for the memo.
+
+    LLM-driven: prompt carries the regime + snapshot + the target company's
+    sector, drivers, and risks so the resulting summary is *specific to this
+    name*, not a generic regime read. Deterministic template-based fallback
+    runs when no LLM is configured.
+    """
     s = run_macro_scenario(scenario)
     sector = profile.get("sector", "")
     sector_view = s.sector_impacts.get(sector, "Macro impact mapped via sector framework.")
 
+    if settings.has_llm:
+        snapshot = macro_snapshot()
+        prompt = (
+            "Given the regime read and live macro snapshot, write a 4-6 sentence "
+            "view focused on THIS COMPANY: how the regime helps or hurts its "
+            "thesis, what to watch in the next data print, and which risks "
+            "would invalidate the call. Reference at least one snapshot value.\n\n"
+            f"Regime: {s.scenario}\n"
+            f"Regime narrative: {s.narrative}\n"
+            f"Sector default impact ({sector}): {sector_view}\n"
+            f"Live snapshot: {json.dumps(snapshot, default=str)}\n"
+            f"Company profile: {json.dumps({'ticker': profile.get('ticker'), 'sector': sector, 'industry': profile.get('industry'), 'drivers': profile.get('drivers'), 'risks': profile.get('risks')}, default=str)}\n\n"
+            "Return JSON: {headline, summary, key_points (list of strings), confidence (0-1)}."
+        )
+        out = llm.chat_json(
+            prompt, system=prompts.MACRO_ANALYST_PROMPT, route="cheap",
+            model=settings.openai_macro_model, max_tokens=600,
+        )
+        if isinstance(out, dict) and out.get("summary"):
+            return AgentFinding(
+                agent="Macro Analyst",
+                headline=out.get("headline") or f"Macro scenario: {s.scenario}",
+                summary=out["summary"],
+                key_points=list(out.get("key_points") or []),
+                confidence=float(out.get("confidence", 0.75)),
+                sources=["macro_scenario_framework", "fred_snapshot"],
+            )
+
+    # Deterministic fallback
     summary = f"Scenario read: {s.narrative} {sector} positioning: {sector_view}"
     key_points = [
         f"Favored sectors: {', '.join(s.favored_sectors)}.",

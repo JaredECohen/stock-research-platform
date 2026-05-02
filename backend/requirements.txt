@@ -1,21 +1,42 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pydantic==2.9.2
-pydantic-settings==2.5.2
-sqlalchemy==2.0.35
-python-dotenv==1.0.1
-httpx==0.27.2
-numpy==1.26.4
-pandas==2.2.3
-openai==1.51.0
-anthropic==0.39.0
+# Pins are floors, not ceilings, on most packages so the
+# OpenAI Agents SDK ecosystem (which moves quickly) stays installable
+# without manual unpinning. Hard caps are reserved for packages where a
+# major-version bump would break our test surface.
+
+# --- Web framework -----------------------------------------------------------
+# FastAPI 0.118+ allows starlette 1.x, which is required by the openai-agents
+# / mcp / sse-starlette transitive chain.
+fastapi>=0.118.0
+uvicorn[standard]>=0.30.6
+
+# --- Data + persistence ------------------------------------------------------
+pydantic>=2.12.2
+pydantic-settings>=2.5.2
+sqlalchemy>=2.0.35
+python-dotenv>=1.0.1
+httpx>=0.27.2
+numpy>=1.26.4
+pandas>=2.2.3
+
+# --- LLM SDKs ----------------------------------------------------------------
+# openai 2.26+ is required by openai-agents.
+openai>=2.26.0
+anthropic>=0.39.0
 # google-genai is optional — without it the Gemini branch in agents/llm.py
 # disables itself gracefully and demo mode remains fully functional.
 google-genai>=0.7.0; python_version >= "3.10"
-python-multipart==0.0.12
-tenacity==9.0.0
-pytest==8.3.3
-pytest-asyncio==0.24.0
+
+# OpenAI Agents SDK — official multi-agent runtime (Phase 3 production path).
+# When OPENAI_API_KEY is set + USE_AGENTS_SDK=true, sdk_runtime.py uses this
+# to drive real LLM handoffs / tool calls. Otherwise the in-process shim
+# defined in the same file handles the topology deterministically.
+openai-agents>=0.14.6
+
+# --- Misc --------------------------------------------------------------------
+python-multipart>=0.0.12
+tenacity>=9.0.0
+pytest>=8.3.3
+pytest-asyncio>=0.24.0
 # APScheduler powers the Phase 5 monitoring loops in production. Dev/test
 # run with ENABLE_MONITORING=false so this dependency is not exercised
 # unless the runtime explicitly opts in.

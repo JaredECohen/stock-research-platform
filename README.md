@@ -790,15 +790,15 @@ Both default off so the existing test suite + smoke test remain deterministic.
 These items are tracked in the codebase but not yet completed. Each links to
 the relevant code path so a future contributor can pick it up.
 
-### 20.1 OpenAI Agents SDK package upgrade
+### 20.1 OpenAI Agents SDK package upgrade — DONE
 
-The official `openai-agents` package depends on `openai>=2.26`,
-`pydantic>=2.12`, and `starlette>=0.49`, all incompatible with the pinned
-`fastapi==0.115.0`. The current implementation in
-[`agents/sdk_runtime.py`](backend/app/agents/sdk_runtime.py) is a wire-
-compatible in-process shim that mirrors `Agent`, `Runner`, `function_tool`,
-and handoffs. **Action:** coordinate a FastAPI/pydantic/starlette bump and
-replace the shim with the upstream package.
+The official `openai-agents` package is installed (≥0.14.6); FastAPI was
+bumped to ≥0.118 to allow the required `starlette` 1.x. When
+`OPENAI_API_KEY` is set + `USE_AGENTS_SDK=true`,
+[`agents/sdk_runtime.py::_run_via_real_sdk`](backend/app/agents/sdk_runtime.py)
+fires a real `agents.Runner.run_sync()` exchange against the configured
+PM model — the in-process shim remains as the deterministic fallback for
+tests and demo-mode runs without keys.
 
 ### 20.2 Live-mode token cost measurement
 
@@ -850,12 +850,15 @@ trigger a recompute.
 config under `app/data/` so editorial governance doesn't require a code
 change.
 
-### 20.7 SDK-runtime LLM wiring
+### 20.7 SDK-runtime LLM wiring — DONE
 
-The shim's `Agent.handler` currently delegates to legacy implementations so
-demo mode works without an LLM. **Action:** when the upstream SDK is in
-place (§20.1), wire the PM/sector/tool handlers to actually issue model
-calls + handoffs, and capture per-step cost into `CacheCostLog`.
+The PM agent now runs as a real `agents.Agent` with a `produce_legacy_memo`
+tool + per-sector handoffs whenever the real SDK is available and an
+OpenAI key is set. The exchange exercises real LLM-driven tool calls and
+handoffs; the canonical `StockMemoOut` is still produced by the legacy
+graph (which owns memo persistence + memory writes), so flipping the
+flag only changes what runs *behind* the memo, not the API contract.
+Per-handoff cost capture into `CacheCostLog` is the natural extension.
 
 ### 20.8 Schema-version migration path
 
