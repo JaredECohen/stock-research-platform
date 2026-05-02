@@ -24,7 +24,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`API ${res.status}: ${text || res.statusText}`);
+    // Tag 409 (data-only ticker requires ondemand) so callers can detect it
+    // explicitly and render the gate instead of a generic error.
+    const err = new Error(`API ${res.status}: ${text || res.statusText}`) as Error & {
+      status?: number;
+      detail?: string;
+    };
+    err.status = res.status;
+    try {
+      const parsed = JSON.parse(text || "{}") as { detail?: string };
+      err.detail = parsed.detail;
+    } catch {}
+    throw err;
   }
   return (await res.json()) as T;
 }
@@ -49,10 +60,13 @@ export const api = {
       earnings: Record<string, unknown>;
       market_stats: Record<string, number>;
     }>(`/api/stocks/${ticker}`),
-  getStockMemo: (ticker: string, scenario?: string) =>
-    request<StockMemoOut>(
-      `/api/stocks/${ticker}/memo${scenario ? `?scenario=${encodeURIComponent(scenario)}` : ""}`,
-    ),
+  getStockMemo: (ticker: string, opts?: { scenario?: string; ondemand?: boolean }) => {
+    const qs: string[] = [];
+    if (opts?.scenario) qs.push(`scenario=${encodeURIComponent(opts.scenario)}`);
+    if (opts?.ondemand) qs.push(`ondemand=true`);
+    const suffix = qs.length ? `?${qs.join("&")}` : "";
+    return request<StockMemoOut>(`/api/stocks/${ticker}/memo${suffix}`);
+  },
   analyzeStock: (ticker: string) =>
     request<StockMemoOut>(`/api/stocks/${ticker}/analyze`, { method: "POST", body: "{}" }),
   getStockPrices: (ticker: string, days = 252) =>
