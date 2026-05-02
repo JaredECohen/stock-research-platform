@@ -351,6 +351,29 @@ def _run_stock_memo_inner(
         "technical": technical_finding,
     }
 
+    # Wave 3C: drill-down long-form reports. The deterministic build is
+    # cheap and always populates the field; LLM enrichment runs only when
+    # ENABLE_LONG_FORM_REPORTS=true. safe_call wraps so a failure never
+    # blocks the memo.
+    from .long_form import attach_long_form
+    _t = profile.get("ticker", ticker)
+    safe_call(attach_long_form, sector_finding, ticker=_t, agent_name="Sector Analyst",
+              profile=profile, fallback=None, name="Long-form (Sector)", log_to=degradation)
+    safe_call(attach_long_form, earnings_finding, ticker=_t, agent_name="Earnings Analyst",
+              profile=profile, fallback=None, name="Long-form (Earnings)", log_to=degradation)
+    safe_call(attach_long_form, filing_finding, ticker=_t, agent_name="Filing Analyst",
+              profile=profile, fallback=None, name="Long-form (Filing)", log_to=degradation)
+    safe_call(attach_long_form, valuation_finding, ticker=_t, agent_name="Valuation Analyst",
+              profile=profile, fallback=None, name="Long-form (Valuation)", log_to=degradation)
+    safe_call(attach_long_form, comps_finding, ticker=_t, agent_name="Comps Analyst",
+              profile=profile, fallback=None, name="Long-form (Comps)", log_to=degradation)
+    safe_call(attach_long_form, macro_finding, ticker=_t, agent_name="Macro Analyst",
+              profile=profile, fallback=None, name="Long-form (Macro)", log_to=degradation)
+    safe_call(attach_long_form, risk_finding, ticker=_t, agent_name="Risk Analyst",
+              profile=profile, fallback=None, name="Long-form (Risk)", log_to=degradation)
+    safe_call(attach_long_form, technical_finding, ticker=_t, agent_name="Technical Analyst",
+              profile=profile, fallback=None, name="Long-form (Technical)", log_to=degradation)
+
     bull = safe_call(_bull_case, profile, valuation_finding, dcf, sector_finding,
                      fallback=BullBearCase(headline="Bull case unavailable.", key_points=[]),
                      name="Bull Case Builder", log_to=degradation)

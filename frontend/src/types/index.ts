@@ -97,6 +97,8 @@ export interface AgentFinding {
   confidence: number;
   sources: string[];
   data?: SectorFindingData;
+  // Wave 3C — drill-down report (markdown). Optional; older memos won't carry it.
+  long_form_report?: string | null;
 }
 
 export interface BullBearCase {

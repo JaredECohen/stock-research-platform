@@ -111,6 +111,11 @@ class Settings(BaseSettings):
     # relative-to-CWD; default keeps state inside the backend dir for dev.
     enable_long_term_memory: bool = True
     memory_dir: str = "./memory"
+    # Wave 3C: drill-down "long-form" agent reports. The deterministic
+    # markdown is always populated (cheap, no LLM); when this flag is on,
+    # the deterministic body is enriched via a 1-2 paragraph LLM expansion
+    # per agent. Off by default — adds ~3.5-7K output tokens / memo.
+    enable_long_form_reports: bool = False
     # When entry count crosses this cap, the oldest entries are condensed
     # into a "Historical context" block rather than discarded outright.
     memory_max_entries: int = 50

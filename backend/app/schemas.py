@@ -105,6 +105,12 @@ class AgentFinding(BaseModel):
     (e.g. sector cohort analysis) attach distributional stats, peer placements,
     and trend tables here so the frontend can render rich evidence beyond
     prose.
+
+    `long_form_report` (Wave 3C) is an optional 4-8 paragraph markdown
+    drill-down. Always at least a deterministic build from the structured
+    fields above; when `ENABLE_LONG_FORM_REPORTS=true`, enriched with an
+    LLM expansion per agent. Frontend renders it in a collapsible drawer
+    on each agent tile.
     """
     agent: str
     headline: str
@@ -113,6 +119,7 @@ class AgentFinding(BaseModel):
     confidence: float = 0.7
     sources: List[str] = Field(default_factory=list)
     data: Dict[str, Any] = Field(default_factory=dict)
+    long_form_report: Optional[str] = None
 
 
 class CriticReview(BaseModel):
