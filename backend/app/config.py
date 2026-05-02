@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     openai_pm_model: str = "gpt-5.5-pro"
     openai_sector_model: str = "gpt-5.4"
     openai_tool_model: str = "gpt-5.4"
+    # Macro agent: GPT-5.4 default per the architecture spec; flip to Gemini
+    # by setting OPENAI_MACRO_MODEL="" + GEMINI_API_KEY in the agent code path.
+    openai_macro_model: str = "gpt-5.4"
     anthropic_api_key: str = ""
     anthropic_strong_model: str = "claude-opus-4-7"
     anthropic_cheap_model: str = "claude-haiku-4-5"
