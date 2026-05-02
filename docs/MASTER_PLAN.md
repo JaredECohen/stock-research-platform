@@ -56,12 +56,12 @@ per-call, per-agent, per-ticker.
 |---|---|---|---|
 | **1** | Observability + on-demand UI + historical anchor | 3 PRs | ~5 |
 | **2** | Financial-history depth | 1 PR | ~3 |
-| **3** | Research-depth analytics | 4 PRs | ~6 |
+| **3** | Research-depth analytics | 5 PRs | ~7.5 |
 | **4** | Eval + integration testing | 2 PRs | ~3 |
 | **5** | Persistent DCF + incremental updates | 2 PRs | ~5 |
 | **6** | Resilience + polish | 4 PRs | ~4 |
 | **7** | Discretionary research notes injection | 3 PRs | ~3 |
-| **Total** | | **19 PRs** | **~29 dev-days** |
+| **Total** | | **20 PRs** | **~30.5 dev-days** |
 
 ---
 
@@ -282,6 +282,71 @@ Optionally gated by `ENABLE_LONG_FORM_REPORTS=true` flag.
 top-of-memo "View all reports" tab.
 
 **Effort:** ~1.5 days.
+
+#### PR-W3E — Self-historical valuation comparison (Comps Analyst)
+
+Today the Comps Analyst only compares the target's metrics against a static
+peer set ([backend/app/finance/comps.py](backend/app/finance/comps.py)). Add a
+second axis: each metric also gets compared against the target's *own* history
+(distribution stats over a 5-year window of its own quarters). A stock can
+look cheap vs. peers but expensive vs. its own history — surfacing both
+prevents single-axis valuation calls.
+
+**Schema additions:**
+
+```python
+class CompsHistoryStats(BaseModel):
+    lookback_periods: int
+    lookback_label: str        # "20 quarters" / "5y"
+    own_median: Dict[str, Optional[float]]
+    own_p25: Dict[str, Optional[float]]
+    own_p75: Dict[str, Optional[float]]
+    current_percentile: Dict[str, float]      # 0..1
+    current_vs_own_median: Dict[str, float]   # signed pct delta
+    interpretation: str
+
+class CompsResult(BaseModel):
+    # ... existing fields ...
+    history: Optional[CompsHistoryStats] = None
+```
+
+`history` is optional — degrades gracefully when the target has < 8 quarters
+of usable history.
+
+**New module:** `app/finance/comps_history.py` exposing
+`build_history_stats(ticker, target_row, lookback_quarters=20)`. Pulls line
+items from `history_service.get_financial_history`; pairs with closing
+prices from `market_data_service.get_price_series` to recompute historical
+multiples (P/E, EV/Revenue, EV/EBITDA, P/FCF, FCF yield). Same metric
+definitions as `compute_comps` so the historical and live numbers are
+apples-to-apples.
+
+**Wiring:** `valuation_service.build_comps` calls `build_history_stats` and
+attaches to `result.history` before the cache_put. The target's
+history snapshot is added to `parent_snapshots` so a backfill restales the
+warm comps.
+
+**Agent update:** `comps_agent.run_comps_agent` extends to surface both
+lenses. Confidence bumps to 0.75 when peer + own-history premium agree;
+0.65 with explicit divergence call-out when they disagree (that's the alpha).
+
+**Frontend:** new own-history mini-row under the peer comps row in the
+Comps tile. Same visual style as peers — current vs own-median, with
+percentile shown as a small bar/pill.
+
+**Edge cases:**
+- IPO'd within window → use whatever's available if ≥ 8 quarters; reflect
+  actual count in `lookback_periods` / `lookback_label`.
+- Negative-earnings periods drop from P/E only, kept for other metrics.
+- Currency mismatches are dropped.
+
+**Effort:** ~1.5 days. Pure deterministic plumbing on top of existing data;
+no new LLM calls.
+
+**Exit criteria:** `GET /api/comps/NVDA` returns a non-null `history` block;
+the Comps memo card surfaces at least one own-history bullet alongside
+peer-relative bullets; cache lineage causes a backfill to restale the warm
+comps snapshot.
 
 #### PR-W3D — Memory hooks for filings/transcripts (Phase K)
 
