@@ -3,15 +3,28 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
+from sqlalchemy import select
 
 from ..agents.graph import run_stock_memo
+from ..database import SessionLocal
+from ..models import Company
 from ..schemas import CompanyOut, StockMemoOut
+from ..services import memo_store
 from ..services.data_service import get_data_service
 from ..services.fundamentals_service import get_full_financials
 from ..services.market_data_service import get_basic_stats, get_price_series
 
 router = APIRouter()
+
+
+def _company_tier(ticker: str) -> str:
+    """Look up the universe tier for a ticker; returns 'data_only' if unknown."""
+    with SessionLocal() as db:
+        row = db.execute(
+            select(Company.universe_tier).where(Company.ticker == ticker.upper())
+        ).first()
+    return (row[0] if row else "data_only") or "data_only"
 
 
 @router.get("/api/stocks", response_model=List[CompanyOut])
@@ -51,16 +64,100 @@ def get_stock_prices(ticker: str, days: int = 252) -> List[Dict[str, Any]]:
 
 
 @router.get("/api/stocks/{ticker}/memo", response_model=StockMemoOut)
-def get_stock_memo(ticker: str, scenario: str = "soft_landing") -> StockMemoOut:
+def get_stock_memo(
+    ticker: str,
+    response: Response,
+    scenario: str = "soft_landing",
+    ondemand: bool = False,
+) -> StockMemoOut:
+    """Return the latest memo for `ticker`.
+
+    Behavior:
+    - If a stored snapshot exists, return it (cheap path) and stamp
+      `X-Memo-Version` / `X-Memo-Trigger` / `X-Memo-Generated-At` headers
+      so the UI can show "updated 2 days ago because of Q1 2026 earnings".
+    - If no snapshot exists, run a full memo synchronously. For tickers in
+      the `data_only` tier this requires `ondemand=true` to avoid
+      surprise-charging the user; without the flag we 409 so the UI can
+      surface an explicit "Analyze this stock" affordance.
+    """
+    t = ticker.upper()
+    snap = memo_store.latest_memo(t)
+    if snap is not None:
+        response.headers["X-Memo-Version"] = str(snap.version)
+        response.headers["X-Memo-Trigger"] = snap.trigger
+        response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
+        return memo_store.memo_to_pydantic(snap)
+
+    tier = _company_tier(t)
+    if tier == "data_only" and not ondemand:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{t} is in the data-only universe; pass ondemand=true to "
+                "trigger the first deep analysis."
+            ),
+        )
     try:
-        return run_stock_memo(ticker.upper(), scenario=scenario)
+        memo = run_stock_memo(t, scenario=scenario)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+    # Promote `data_only` → `analyzed_on_demand` so subsequent calls use
+    # the cached memo and don't re-trigger an expensive run automatically.
+    if tier == "data_only":
+        with SessionLocal() as db:
+            row = db.get(Company, t)
+            if row:
+                row.universe_tier = "analyzed_on_demand"
+                db.commit()
+
+    fresh = memo_store.latest_memo(t)
+    if fresh is not None:
+        response.headers["X-Memo-Version"] = str(fresh.version)
+        response.headers["X-Memo-Trigger"] = fresh.trigger
+        response.headers["X-Memo-Generated-At"] = fresh.generated_at.isoformat()
+    return memo
+
+
+@router.get("/api/stocks/{ticker}/memos")
+def get_stock_memo_history(ticker: str, limit: int = 25) -> List[Dict[str, Any]]:
+    """Memo timeline for `ticker`, newest-first.
+
+    Returns the metadata only (version / trigger / parent_version /
+    revision_log / generated_at). Use `?version=N` on the singular memo
+    endpoint to fetch a specific version's full body.
+    """
+    rows = memo_store.memo_history(ticker.upper(), limit=limit)
+    return [
+        {
+            "version": r.version,
+            "trigger": r.trigger,
+            "parent_version": r.parent_version,
+            "generated_at": r.generated_at.isoformat(),
+            "revision_log": r.revision_log,
+            "rating_label": (r.memo_json or {}).get("rating_label"),
+            "confidence_score": (r.memo_json or {}).get("confidence_score"),
+        }
+        for r in rows
+    ]
 
 
 @router.post("/api/stocks/{ticker}/analyze", response_model=StockMemoOut)
-def analyze_stock(ticker: str, scenario: Optional[str] = None) -> StockMemoOut:
+def analyze_stock(
+    ticker: str,
+    response: Response,
+    scenario: Optional[str] = None,
+) -> StockMemoOut:
+    """Force a fresh full reanalysis. Always creates a new memo version."""
+    t = ticker.upper()
     try:
-        return run_stock_memo(ticker.upper(), scenario=scenario or "soft_landing")
+        memo = run_stock_memo(t, scenario=scenario or "soft_landing", force_refresh=True)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    snap = memo_store.latest_memo(t)
+    if snap is not None:
+        response.headers["X-Memo-Version"] = str(snap.version)
+        response.headers["X-Memo-Trigger"] = snap.trigger
+        response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
+    return memo

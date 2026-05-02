@@ -1,0 +1,16 @@
+{
+  "_doc": "Tier-1 watch list: top 2 names per sector that get auto-refresh on filings / earnings. Materials and Real Estate sector agents exist (see SECTOR_NAMES in sdk_runtime.py) but have no demo coverage yet — leaving them empty here so the seeder doesn't blow up; populate in a follow-up PR alongside demo data for those tickers.",
+  "sectors": {
+    "Technology": ["MSFT", "NVDA"],
+    "Communication Services": ["GOOGL", "META"],
+    "Financials": ["JPM", "V"],
+    "Consumer Discretionary": ["AMZN", "HD"],
+    "Consumer Staples": ["WMT", "COST"],
+    "Healthcare": ["LLY", "UNH"],
+    "Energy": ["XOM"],
+    "Industrials": ["CAT"],
+    "Utilities": ["NEE"],
+    "Materials": [],
+    "Real Estate": []
+  }
+}

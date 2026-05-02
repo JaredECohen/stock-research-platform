@@ -325,8 +325,17 @@ def _build_sector_agent(sector: str) -> Agent:
 
 
 SECTOR_NAMES = [
-    "Technology", "Financials", "Consumer",
-    "Healthcare", "Energy", "Industrials", "Utilities",
+    "Technology",
+    "Communication Services",
+    "Financials",
+    "Consumer Discretionary",
+    "Consumer Staples",
+    "Healthcare",
+    "Energy",
+    "Industrials",
+    "Utilities",
+    "Materials",
+    "Real Estate",
 ]
 TOOL_NAMES = ["filing", "earnings", "valuation", "comps", "risk"]
 

@@ -385,7 +385,28 @@ def run_stock_memo(
     )
     if cross_relevance and isinstance(memo.scores, dict):
         memo.scores = {**memo.scores, "cross_sector_relevance_count": float(len(cross_relevance))}
+
+    # Phase F: persist a versioned snapshot. `first_run` only fires when no
+    # prior version exists for this ticker; otherwise this is a
+    # `full_reanalysis` (the news-driven `incremental_patch` path is owned
+    # by the future update-orchestrator, not this code path). safe_call so
+    # a DB hiccup never prevents the memo from being returned to the caller.
+    safe_call(
+        _persist_memo_snapshot, memo,
+        fallback=None, name="Memo store", log_to=degradation,
+    )
+    memo.degraded_agents = degradation.degraded_agents()
     return memo
+
+
+def _persist_memo_snapshot(memo: StockMemoOut) -> None:
+    """Indirection so safe_call wraps DB I/O. Lazy-import keeps graph.py from
+    pulling the ORM at module import time (it's already loaded via models)."""
+    from ..services import memo_store
+    prior = memo_store.latest_memo(memo.ticker)
+    trigger = "first_run" if prior is None else "full_reanalysis"
+    parent_version = prior.version if prior is not None else None
+    memo_store.save_memo(memo, trigger=trigger, parent_version=parent_version)
 
 
 # ---------------------------------------------------------------------------

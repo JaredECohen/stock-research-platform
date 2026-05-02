@@ -44,6 +44,20 @@ class Company(Base):
     shares_outstanding: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     last_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     last_price_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Universe tiering (Phase F). Three states:
+    #   data_only          — provider data ingested; no memo generated unless
+    #                        the UI explicitly asks for it. Default for the
+    #                        long tail of the universe.
+    #   auto_analysis      — full memo refreshes automatically on EDGAR /
+    #                        earnings deltas. Reserved for the curated
+    #                        tier-1 watch list (e.g., 11 sectors × 2 names).
+    #   analyzed_on_demand — first promoted out of `data_only` when the UI
+    #                        called for a deep analysis. The memo is kept,
+    #                        but auto-refresh is off; the next refresh
+    #                        happens only on a manual request.
+    universe_tier: Mapped[str] = mapped_column(
+        String(24), default="data_only", index=True
+    )
 
     memos: Mapped[list["StockMemo"]] = relationship(back_populates="company")
 
@@ -102,6 +116,36 @@ class CachedDocument(Base):
 
 
 Index("ix_doc_ticker_source", CachedDocument.ticker, CachedDocument.source_type)
+
+
+class MemoSnapshot(Base):
+    """Versioned, lineage-aware persistence of every generated memo.
+
+    Each `(ticker, version)` is one immutable snapshot. A new version is
+    created either by a `full_reanalysis` (after a filing or earnings
+    delta) or an `incremental_patch` (driven by material news) — the
+    latter case stores `parent_version` so reviewers can trace what was
+    inherited from the prior memo and what was patched.
+
+    The `memo_json` column stores the entire `StockMemoOut` so we don't
+    have to re-derive its shape; ad-hoc fields evolve without schema
+    migrations as long as the Pydantic model stays additive.
+    """
+    __tablename__ = "memo_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    parent_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    trigger: Mapped[str] = mapped_column(String(48), default="full_reanalysis")
+    memo_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    revision_log: Mapped[list] = mapped_column(JSON, default=list)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True,
+    )
+
+
+Index("ix_memo_snap_ticker_version", MemoSnapshot.ticker, MemoSnapshot.version, unique=True)
 
 
 class PortfolioRun(Base):
