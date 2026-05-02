@@ -34,10 +34,11 @@ import logging
 import os
 import re
 import tempfile
+import json as _json
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..config import settings
 
@@ -79,13 +80,29 @@ def sector_memory_path(sector: str) -> Path:
 
 @dataclass
 class MemoryEntry:
-    """One structured entry in the 'Recent entries' section."""
+    """One structured entry in the 'Recent entries' section.
+
+    Wave 3D: when a filing/transcript trigger fires, the reflection step
+    can attach a `structured_facts` dict (segments, guidance changes,
+    capex commentary, M&A, leadership changes). It's persisted as a JSON
+    fenced code block following the markdown body so the parser can round-
+    trip it without breaking older entries (the parser ignores the block
+    if it's missing).
+    """
     date: str  # ISO date (YYYY-MM-DD)
     trigger: str  # e.g. "earnings", "filing:10-K", "material_news"
     body: str  # Markdown — multiple paragraphs allowed
+    structured_facts: Optional[Dict[str, Any]] = None
 
     def render(self) -> str:
-        return f"### {self.date} — {self.trigger}\n\n{self.body.strip()}\n"
+        out = f"### {self.date} — {self.trigger}\n\n{self.body.strip()}\n"
+        if self.structured_facts:
+            try:
+                blob = _json.dumps(self.structured_facts, indent=2, default=str, sort_keys=True)
+                out += f"\n```structured-facts\n{blob}\n```\n"
+            except Exception:
+                pass
+        return out
 
 
 @dataclass
@@ -317,6 +334,31 @@ class _MemoryFile:
         return "\n".join(lines)
 
 
+_STRUCTURED_FACTS_RE = re.compile(
+    r"```structured-facts\s*\n(.*?)\n```", re.DOTALL,
+)
+
+
+def _split_structured_facts(body: str) -> "tuple[str, Optional[Dict[str, Any]]]":
+    """Pull a trailing ```structured-facts``` JSON block out of an entry body.
+
+    Wave 3D round-trips structured-fact dicts by appending them as a
+    fenced code block. Older entries lack the block; parsing returns
+    `(body_unchanged, None)` for those.
+    """
+    m = _STRUCTURED_FACTS_RE.search(body)
+    if not m:
+        return body, None
+    try:
+        facts = _json.loads(m.group(1))
+    except (ValueError, TypeError):
+        return body, None
+    cleaned = (body[: m.start()] + body[m.end():]).rstrip()
+    if not isinstance(facts, dict):
+        return cleaned, None
+    return cleaned, facts
+
+
 def _parse_entries(block: str) -> List[MemoryEntry]:
     if not block.strip():
         return []
@@ -330,7 +372,11 @@ def _parse_entries(block: str) -> List[MemoryEntry]:
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(block)
         body = block[start:end].strip()
-        out.append(MemoryEntry(date=m.group(1), trigger=m.group(2).strip(), body=body))
+        body, facts = _split_structured_facts(body)
+        out.append(MemoryEntry(
+            date=m.group(1), trigger=m.group(2).strip(), body=body,
+            structured_facts=facts,
+        ))
     return out
 
 
