@@ -396,6 +396,38 @@ class ScreenerResult(BaseModel):
 # Memos
 # ---------------------------------------------------------------------------
 
+class TechnicalSignals(BaseModel):
+    """Wave 3B — pure-math indicators surfaced by the Technical Analyst.
+
+    All numeric fields are optional because the indicator may need more
+    bars than the price history exposes (e.g., SMA200 needs 200 bars).
+    `trend` and `momentum` are best-effort buckets derived from whichever
+    indicators came back populated.
+    """
+    last_price: Optional[float] = None
+    last_date: Optional[str] = None
+    sma_50: Optional[float] = None
+    sma_200: Optional[float] = None
+    sma_50_above_200: Optional[bool] = None
+    ema_10: Optional[float] = None
+    ema_20: Optional[float] = None
+    rsi_14: Optional[float] = None
+    macd_line: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_histogram: Optional[float] = None
+    bb_upper: Optional[float] = None
+    bb_lower: Optional[float] = None
+    bb_middle: Optional[float] = None
+    bb_position: Optional[float] = None
+    vwma_20: Optional[float] = None
+    high_52w: Optional[float] = None
+    low_52w: Optional[float] = None
+    position_52w: Optional[float] = None
+    trend: Literal["up", "down", "sideways"] = "sideways"
+    momentum: Literal["positive", "negative", "neutral"] = "neutral"
+    notes: List[str] = Field(default_factory=list)
+
+
 class StockMemoOut(BaseModel):
     ticker: str
     company_name: str
@@ -411,6 +443,9 @@ class StockMemoOut(BaseModel):
     valuation_agent_view: AgentFinding
     comps_agent_view: AgentFinding
     macro_sensitivity: AgentFinding
+    # Wave 3B — Technical Analyst. Optional so older memos that pre-date
+    # this addition still validate; the graph populates it on every run.
+    technical_agent_view: Optional[AgentFinding] = None
     bull_case: BullBearCase
     bear_case: BullBearCase
     catalysts: List[CatalystItem]
