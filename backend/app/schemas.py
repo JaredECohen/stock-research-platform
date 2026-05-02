@@ -45,6 +45,11 @@ class CompanyOut(BaseModel):
     is_etf: bool = False
     beta: Optional[float] = None
     shares_outstanding: Optional[float] = None
+    # Universe tier (Phase F + Wave 1B). Frontend uses this to render
+    # the appropriate analyze affordance: `auto_analysis` shows a memo
+    # immediately, `analyzed_on_demand` shows a cached memo, `data_only`
+    # shows an explicit "Analyze this stock" gate.
+    universe_tier: str = "data_only"
 
 
 class CatalystItem(BaseModel):

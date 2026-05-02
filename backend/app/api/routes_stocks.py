@@ -30,11 +30,18 @@ def _company_tier(ticker: str) -> str:
 @router.get("/api/stocks", response_model=List[CompanyOut])
 def list_stocks() -> List[CompanyOut]:
     ds = get_data_service()
+    # Single bulk-fetch of tier values so we don't run N queries.
+    tiers: Dict[str, str] = {}
+    with SessionLocal() as db:
+        for tkr, tier in db.execute(select(Company.ticker, Company.universe_tier)).all():
+            tiers[tkr] = tier or "data_only"
     out: List[CompanyOut] = []
     for ticker in ds.list_tickers():
         profile = ds.get_company_profile(ticker)
         if profile:
-            out.append(CompanyOut(**{k: profile.get(k) for k in CompanyOut.model_fields.keys() if k in profile}))
+            payload = {k: profile.get(k) for k in CompanyOut.model_fields.keys() if k in profile}
+            payload["universe_tier"] = tiers.get(ticker, "data_only")
+            out.append(CompanyOut(**payload))
     return out
 
 

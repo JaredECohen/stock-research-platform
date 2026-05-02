@@ -4,7 +4,10 @@ import { api } from "@/api/client";
 import MemoCard from "@/components/MemoCard";
 import { AgentTrace } from "@/components/AgentTrace";
 import NewsAlertPanel from "@/components/NewsAlertPanel";
+import AnalyzeStockGate, { TierBadge } from "@/components/AnalyzeStockGate";
 import type { CompanyOut, StockMemoOut, AgentTrace as AgentTraceT } from "@/types";
+
+type FetchError = Error & { status?: number; detail?: string };
 
 export default function Research() {
   const [params, setParams] = useSearchParams();
@@ -12,6 +15,7 @@ export default function Research() {
   const [universe, setUniverse] = useState<CompanyOut[]>([]);
   const [memo, setMemo] = useState<StockMemoOut | null>(null);
   const [loading, setLoading] = useState(false);
+  const [needsGate, setNeedsGate] = useState(false);   // 409 from backend
   const [error, setError] = useState<string | null>(null);
   const [trace, setTrace] = useState<AgentTraceT[]>([]);
 
@@ -19,13 +23,16 @@ export default function Research() {
     api.listStocks().then(setUniverse).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (!ticker) {
-      setMemo(null);
-      return;
-    }
+  const company = universe.find((c) => c.ticker === ticker);
+
+  // Fetch memo. When the backend returns 409 (data_only tier without
+  // ondemand=true), surface the analyze gate instead of raising.
+  function loadMemo(opts?: { ondemand?: boolean }) {
+    if (!ticker) return;
     setLoading(true);
     setError(null);
+    setMemo(null);
+    setNeedsGate(false);
     setTrace([
       { agent: "PM Orchestrator", status: "running", detail: "Routing single-stock memo workflow." },
       { agent: "Sector Analyst", status: "queued", detail: "" },
@@ -37,14 +44,37 @@ export default function Research() {
       { agent: "Risk Committee", status: "queued", detail: "" },
     ]);
     api
-      .getStockMemo(ticker)
+      .getStockMemo(ticker, opts)
       .then((m) => {
         setMemo(m);
         setTrace((cur) => cur.map((t) => ({ ...t, status: "done" as const, detail: t.detail || "complete" })));
       })
-      .catch((e) => setError(String(e)))
+      .catch((e: FetchError) => {
+        if (e.status === 409) {
+          setNeedsGate(true);
+        } else {
+          setError(e.detail || String(e));
+        }
+      })
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    if (!ticker) {
+      setMemo(null);
+      setNeedsGate(false);
+      return;
+    }
+    loadMemo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticker]);
+
+  // After a successful on-demand analysis the backend promotes the ticker
+  // to `analyzed_on_demand`; refresh the universe list so the badge updates.
+  function onAnalyzed(m: StockMemoOut) {
+    setMemo(m);
+    api.listStocks().then(setUniverse).catch(() => {});
+  }
 
   return (
     <div className="space-y-4">
@@ -63,7 +93,7 @@ export default function Research() {
             <option value="">Select a ticker…</option>
             {universe.map((c) => (
               <option key={c.ticker} value={c.ticker}>
-                {c.ticker} — {c.company_name}
+                {c.ticker} — {c.company_name} [{c.universe_tier || "data_only"}]
               </option>
             ))}
           </select>
@@ -71,16 +101,39 @@ export default function Research() {
             type="button"
             disabled={!ticker || loading}
             className="btn-primary"
-            onClick={() => ticker && api.analyzeStock(ticker).then(setMemo)}
+            onClick={() =>
+              ticker &&
+              api
+                .analyzeStock(ticker)
+                .then(onAnalyzed)
+                .catch((e: FetchError) =>
+                  setError(e.detail || String(e)),
+                )
+            }
           >
             {loading ? "Generating…" : "Refresh memo"}
           </button>
         </div>
+        {company && (
+          <div className="flex items-center gap-2 mt-2 text-xs text-slate-400">
+            <TierBadge tier={company.universe_tier} />
+            <span>{company.sector}</span>
+            {company.industry && <span>· {company.industry}</span>}
+          </div>
+        )}
       </div>
 
       {error && <div className="card-tight border-danger-500/40 text-danger-500 text-sm">{error}</div>}
 
-      {ticker && !memo && !error && (
+      {needsGate && company && (
+        <AnalyzeStockGate
+          company={company}
+          loading={loading}
+          onAnalyze={() => loadMemo({ ondemand: true })}
+        />
+      )}
+
+      {ticker && !memo && !error && !needsGate && loading && (
         <div className="grid lg:grid-cols-[1fr_280px] gap-4">
           <div className="card">
             <div className="text-sm text-slate-400">Generating memo for {ticker}…</div>

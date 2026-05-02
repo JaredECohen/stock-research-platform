@@ -18,6 +18,8 @@ export type IntentType =
   | "comps_analysis"
   | "general_research_chat";
 
+export type UniverseTier = "data_only" | "auto_analysis" | "analyzed_on_demand";
+
 export interface CompanyOut {
   ticker: string;
   company_name: string;
@@ -33,6 +35,8 @@ export interface CompanyOut {
   is_etf?: boolean;
   beta?: number | null;
   shares_outstanding?: number | null;
+  // Universe tier (Phase F + Wave 1B). Drives the analyze affordance.
+  universe_tier?: UniverseTier;
 }
 
 // Multi-agent message contracts surfaced from sector_agent_view.data when
