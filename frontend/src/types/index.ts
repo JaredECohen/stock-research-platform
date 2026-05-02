@@ -64,11 +64,26 @@ export interface MacroBroadcast {
   generated_at?: string;
 }
 
+export interface FalsifiableTest {
+  statement: string;
+  invalidates_side: "bull" | "bear";
+}
+
+export interface BullBearAnalysis {
+  bull_case: { headline: string; key_points: string[] };
+  bear_case: { headline: string; key_points: string[] };
+  key_disagreement: string;
+  falsifiable_tests: FalsifiableTest[];
+  sector_synthesis: string;
+  sector_lean: "bull" | "bear" | "balanced";
+}
+
 export interface SectorFindingData {
   cross_sector_relevance?: string[];
   macro_alignment?: string;
   macro_broadcast?: MacroBroadcast;
   pending_news_alerts?: NewsAlert[];
+  bull_bear_analysis?: BullBearAnalysis;
   // The full sector research payload also rides here; consumers tolerate
   // arbitrary extra keys via the index signature.
   [key: string]: unknown;

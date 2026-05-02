@@ -1,8 +1,60 @@
 import React from "react";
-import type { AgentFinding, StockMemoOut } from "@/types";
+import type { AgentFinding, BullBearAnalysis, StockMemoOut } from "@/types";
 import { fmtCurrency, fmtPct, ratingBadgeClass } from "@/lib/format";
 import CrossSectorChips from "./CrossSectorChips";
 import MacroRegimeBanner from "./MacroRegimeBanner";
+
+function BullBearAnalysisBlock({ analysis }: { analysis: BullBearAnalysis }) {
+  const leanBadge =
+    analysis.sector_lean === "bull"
+      ? "bg-accent-500/15 text-accent-500 border-accent-500/30"
+      : analysis.sector_lean === "bear"
+      ? "bg-danger-500/15 text-danger-500 border-danger-500/30"
+      : "bg-slate-500/15 text-slate-300 border-slate-500/30";
+  return (
+    <div className="card-tight border-ink-700/80 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="section-title">Sector synthesis · key disagreement</div>
+        <span
+          className={`text-[10px] uppercase tracking-widest px-2 py-0.5 rounded border ${leanBadge}`}
+          title="Sector analyst's lean — PM may diverge"
+        >
+          Sector lean: {analysis.sector_lean}
+        </span>
+      </div>
+      {analysis.sector_synthesis && (
+        <p className="text-sm text-slate-200">{analysis.sector_synthesis}</p>
+      )}
+      {analysis.key_disagreement && (
+        <div className="text-sm">
+          <span className="text-slate-400">Where bulls and bears disagree: </span>
+          <span className="text-slate-100">{analysis.key_disagreement}</span>
+        </div>
+      )}
+      {analysis.falsifiable_tests?.length > 0 && (
+        <div>
+          <div className="section-title mb-1">Falsifiable tests</div>
+          <ul className="text-xs text-slate-300 space-y-1">
+            {analysis.falsifiable_tests.map((t, i) => (
+              <li key={i}>
+                <span
+                  className={
+                    t.invalidates_side === "bull"
+                      ? "text-accent-500 font-medium"
+                      : "text-danger-500 font-medium"
+                  }
+                >
+                  Invalidates {t.invalidates_side}:
+                </span>{" "}
+                {t.statement}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function FindingBlock({
   title,
@@ -109,6 +161,10 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
           </ul>
         </div>
       </div>
+
+      {sectorData?.bull_bear_analysis && (
+        <BullBearAnalysisBlock analysis={sectorData.bull_bear_analysis} />
+      )}
 
       <div className="grid md:grid-cols-2 gap-4">
         <div className="card-tight">
