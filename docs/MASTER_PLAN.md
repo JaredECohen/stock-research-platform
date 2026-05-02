@@ -60,7 +60,8 @@ per-call, per-agent, per-ticker.
 | **4** | Eval + integration testing | 2 PRs | ~3 |
 | **5** | Persistent DCF + incremental updates | 2 PRs | ~5 |
 | **6** | Resilience + polish | 4 PRs | ~4 |
-| **Total** | | **16 PRs** | **~26 dev-days** |
+| **7** | Discretionary research notes injection | 3 PRs | ~3 |
+| **Total** | | **19 PRs** | **~29 dev-days** |
 
 ---
 
@@ -428,6 +429,175 @@ version doesn't match the current code's version.
 
 ---
 
+### Wave 7 — Discretionary research notes injection
+
+User-curated investment notes (book excerpts, PM interviews, articles,
+personal frameworks) systematically injected into the relevant agent
+prompts. Solves the "I read something interesting and want the agents
+to know about it" problem without muddying context as the corpus grows.
+
+**Design principles** (locked):
+
+1. **Tagged routing.** Each note declares which agents and which sectors
+   it applies to via YAML frontmatter. A software-investing article
+   tagged `applies_to_sectors: [Technology]` never reaches an energy memo.
+2. **Two-tier injection.** Summaries always inject (cheap, ~30 tokens
+   each); full bodies only inject for the top-K most relevant via BM25
+   over the agent's working context. Caps total budget regardless of
+   corpus size.
+3. **Separate from agent memory.** `memory/` is auto-written by
+   reflection on delta events; `research_notes/` is user-written
+   discretionary input. Different lifecycle, different folder, different
+   ingestion pipeline.
+
+#### File layout
+
+```
+research_notes/
+├── _index.json                              # auto-generated
+├── books/
+│   ├── pat-dorsey-moats.md
+│   └── howard-marks-cycles.md
+├── interviews/
+│   └── 2024-q3-druckenmiller.md
+├── articles/
+│   └── 2024-software-investing-thesis.md
+├── frameworks/
+│   └── quality-compounders-checklist.md
+└── personal/
+    └── 2025-evaluating-pltr.md
+```
+
+Subfolders are organizational; routing comes from frontmatter.
+
+#### Frontmatter contract
+
+```yaml
+---
+title: "Pat Dorsey: Moat Durability Heuristics"
+source: "The Little Book That Builds Wealth (2008), Ch. 4"
+date: 2024-08-15
+
+# Routing
+applies_to_agents: [sector, valuation, comps]
+applies_to_sectors: ["*"]                       # ["*"] or named sectors
+applies_to_sub_industries: []                   # optional fine-grain
+applies_to_tickers: []                          # optional super-fine
+
+# Lifecycle
+weight: 0.8                                     # 0.0-1.0 priority
+expires: null                                   # ISO date or null
+status: active                                  # active|archived|superseded
+
+# Auto-filled by indexer
+chars: 4523
+summary: "..."                                  # 1-2 sentence auto-summary
+---
+
+[free-form markdown body]
+```
+
+The indexer fills missing fields with sensible defaults
+(`applies_to_agents: [sector]`, `applies_to_sectors: ["*"]`,
+`status: active`, `weight: 0.5`) and auto-generates the `summary` via
+cheap LLM (deterministic fallback = first 200 chars of body).
+
+#### PR-W7A — Tagged docs + summary-only injection (MVP)
+
+**Touches:**
+- `research_notes/` folder + a few seed notes (3-5 representative MDs).
+- `backend/app/services/research_notes.py`:
+  - `_index_path()` / `_load_index()` cached read of `_index.json`.
+  - `select_for(agent_name, sector, sub_industry, ticker, max_chars=2000) -> List[NoteSummary]`
+    filters + sorts by weight + returns serialized summaries.
+  - `NoteSummary` Pydantic model: `{title, source, summary, weight, applies_to_*}`.
+- `backend/app/agents/sector_agents.py::run_sector_agent`:
+  - After memory read, before LLM call, fetch
+    `research_notes.select_for("sector", profile["sector"], profile.get("sub_industry"), ticker)`.
+  - Prepend rendered summaries as a "## Discretionary investment context"
+    block in the user prompt.
+- `backend/scripts/index_research_notes.py`:
+  - Walks `research_notes/`, parses frontmatter via PyYAML, fills defaults,
+    auto-generates summaries via `agents.llm.chat_text(route="cheap")`,
+    writes back the file (preserves body), rebuilds `_index.json`.
+  - Idempotent. Logs new vs. updated count.
+- `backend/app/tests/test_research_notes.py`:
+  - Round-trip: write a note with frontmatter → index → load → assert
+    routing + summary populated.
+  - Filter correctness: agent/sector mismatches excluded; expired
+    notes excluded; `applies_to_sectors=["*"]` matches everything.
+  - Summary fallback: with no LLM, deterministic 200-char takeaway.
+  - Empty-corpus path: `select_for` returns `[]` cleanly.
+- `.gitignore`: add `research_notes/_index.json` (auto-regenerated).
+  Notes themselves get committed since they're user-curated content.
+
+**Schema:**
+
+```python
+class NoteFrontmatter(BaseModel):
+    title: str
+    source: str = ""
+    date: Optional[str] = None
+    applies_to_agents: List[str] = Field(default_factory=lambda: ["sector"])
+    applies_to_sectors: List[str] = Field(default_factory=lambda: ["*"])
+    applies_to_sub_industries: List[str] = Field(default_factory=list)
+    applies_to_tickers: List[str] = Field(default_factory=list)
+    weight: float = 0.5
+    expires: Optional[str] = None
+    status: Literal["active", "archived", "superseded"] = "active"
+    chars: int = 0
+    summary: str = ""
+
+class ResearchNote(BaseModel):
+    path: str                # relative path under research_notes/
+    frontmatter: NoteFrontmatter
+    body: str                # markdown body (excluding frontmatter)
+```
+
+**Effort:** ~1.5 days.
+**Exit criteria:** drop a `Pat Dorsey` note tagged `applies_to_sectors: ["*"]`
+into `research_notes/books/`, run the indexer, then re-run the NVDA memo.
+The sector agent's prompt context contains the Dorsey summary block; the
+memo's reasoning references moat-durability framing; an energy-only
+note dropped in the same pass does NOT appear in the NVDA prompt.
+
+#### PR-W7B — Two-tier with BM25 body retrieval
+
+When summaries alone aren't enough — the user wants the agent to read
+the *full* note body for the most relevant 1-2 entries per run.
+
+**Touches:**
+- `services/research_notes.py`: extend `select_for` to also return up
+  to K body chunks (default K=2) ranked by BM25 over the agent's
+  working context (profile + sector + cohort + regime). Reuse
+  `app/services/retrieval_service.py` BM25 if applicable.
+- Agent prompt template: insert `## Discretionary investment context
+  (relevant excerpts)` block after the summaries.
+- Token budget: hard-cap total body inject at 4KB. Fall back to summaries
+  only when bodies would exceed cap.
+- Tests: simulate 50-note corpus; verify only top-K bodies inject;
+  verify cap respected; verify deterministic ordering when scores tie.
+
+**Effort:** ~1 day.
+
+#### PR-W7C — Cross-agent injection
+
+Extend filter routing so valuation / comps / risk / earnings agents
+also pull relevant notes from `research_notes/`.
+
+**Touches:**
+- Add `research_notes.select_for("valuation", ...)` etc. calls in each
+  per-agent runner.
+- Update default `applies_to_agents` in indexer to include the additional
+  agents based on simple keyword detection in body (e.g., note mentions
+  "DCF" → also apply to valuation).
+- Tests: a note tagged for valuation surfaces in the valuation agent's
+  prompt and not the sector agent's, when routing is exclusive.
+
+**Effort:** ~½ day.
+
+---
+
 ## 4. Critical path / sequencing
 
 ```
@@ -457,12 +627,17 @@ Wave 0 (merge in-flight PRs)  [DONE]
                                                     │
                                                     ▼
                                     Wave 6 (resilience + polish, opportunistic)
+
+        Wave 7A (research notes MVP) ─────── (parallel; no deps beyond Wave 0)
+        Wave 7B (BM25 body retrieval) ────── (after 7A)
+        Wave 7C (cross-agent injection) ──── (after 7A; depends on Wave 3 specialists for routing)
 ```
 
-**Parallelizable PRs:** all of Wave 1, all of Wave 3 (3D after Wave 2).
+**Parallelizable PRs:** all of Wave 1, all of Wave 3 (3D after Wave 2),
+Wave 7A.
 **Critical path:** Wave 1C → Wave 2 → Wave 5A → Wave 5B → Wave 4A.
 **Total dev-days on critical path:** ~14. **Total work if every PR is
-single-threaded:** ~26.
+single-threaded:** ~29.
 
 ---
 
@@ -491,6 +666,20 @@ don't re-debate.
   Ultimate's deeper history is wired (Wave 2).
 - **LLM trace retention:** 90 days then GC. Useful for monthly cost
   reports without bloating SQLite.
+- **Research notes vs. agent memory:** different folders, different
+  pipelines. `memory/` is system-written on delta events; `research_notes/`
+  is user-written discretionary input. Never collapse them.
+- **Research notes routing:** explicit frontmatter tagging
+  (`applies_to_agents`, `applies_to_sectors`) is the source of truth.
+  No automatic LLM-classification of which agents should see a note;
+  the user controls precision intentionally. Keyword-based defaults
+  during indexing only fill *missing* fields — they never override
+  explicit user tagging.
+- **Research notes injection caps:** summaries always-inject (linear in
+  filtered subset), full bodies hard-capped at 4KB total per agent run.
+  Two failure modes to watch: over-tagging (`["*"]` everywhere) and
+  stale heuristics; mitigated by `expires` field + quarterly archival
+  pass.
 
 ---
 
