@@ -48,3 +48,4 @@ coverage/
 # Build artifacts
 build/
 out/
+research_notes/_index.json

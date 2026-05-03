@@ -355,6 +355,21 @@ def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
         "valuation_lens": research.get("valuation_lens", ""),
     }
     kpi_names = sorted(placements.keys())
+    # Wave 7A: discretionary research notes — user-curated context tagged
+    # for the sector agent (or this sector / sub-industry / ticker
+    # specifically). Summaries only at this stage; Wave 7B will add
+    # body-level retrieval for the top-K most relevant.
+    research_notes_block = ""
+    try:
+        from ..services.research_notes import render_summary_block, select_for
+        notes = select_for(
+            "sector", sector=sector, sub_industry=sub_industry, ticker=ticker,
+            max_notes=6,
+        )
+        research_notes_block = render_summary_block(notes)
+    except Exception:  # pragma: no cover — research notes never block a memo
+        research_notes_block = ""
+
     user_prompt = (
         prompts.SECTOR_ANALYST_PROMPT.format(
             sector=sector,
@@ -367,6 +382,7 @@ def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
         )
         + ("\n\nPrior context from long-term memory (use to inform but do not over-anchor):\n"
            + memory_context if memory_context else "")
+        + (("\n\n" + research_notes_block) if research_notes_block else "")
         + "\n\nDeep research payload (cohort math + regime + filing themes):\n"
         + json.dumps(research_for_prompt, default=str)[:4500]
     )
