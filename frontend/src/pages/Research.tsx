@@ -5,6 +5,9 @@ import MemoCard from "@/components/MemoCard";
 import { AgentTrace } from "@/components/AgentTrace";
 import NewsAlertPanel from "@/components/NewsAlertPanel";
 import AnalyzeStockGate, { TierBadge } from "@/components/AnalyzeStockGate";
+import MemoVersionTimeline from "@/components/MemoVersionTimeline";
+import DCFVersionHistory from "@/components/DCFVersionHistory";
+import MemoryTrail from "@/components/MemoryTrail";
 import type { CompanyOut, StockMemoOut, AgentTrace as AgentTraceT } from "@/types";
 
 type FetchError = Error & { status?: number; detail?: string };
@@ -148,6 +151,15 @@ export default function Research() {
           <div className="space-y-4">
             <AgentTrace trace={trace} />
             <NewsAlertPanel alerts={memo.sector_agent_view.data?.pending_news_alerts} />
+            <div className="card-tight">
+              <MemoVersionTimeline ticker={memo.ticker} />
+            </div>
+            <div className="card-tight">
+              <DCFVersionHistory ticker={memo.ticker} />
+            </div>
+            <div className="card-tight">
+              <MemoryTrail ticker={memo.ticker} />
+            </div>
           </div>
         </div>
       )}

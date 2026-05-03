@@ -156,6 +156,35 @@ def get_stock_memo(
     return memo
 
 
+@router.get("/api/stocks/{ticker}/memory")
+def get_stock_memory(ticker: str, limit: int = 10) -> Dict[str, Any]:
+    """Wave 8D — surface long-term memory entries for the UI.
+
+    Returns the most recent `limit` entries from `memory/companies/<T>.md`
+    plus any `structured_facts` blobs Wave 3D extracted from filings /
+    transcripts. Read-only; the file itself remains the source of truth.
+    """
+    from ..memory import CompanyMemory
+    from ..memory.longterm import company_memory_path
+    cm = CompanyMemory.for_ticker(ticker.upper())
+    entries = list(cm.entries[-limit:])
+    return {
+        "ticker": ticker.upper(),
+        "path": str(company_memory_path(ticker.upper())),
+        "entry_count": len(cm.entries),
+        "historical_context": cm.historical_context or "",
+        "entries": [
+            {
+                "date": e.date,
+                "trigger": e.trigger,
+                "body": e.body,
+                "structured_facts": e.structured_facts,
+            }
+            for e in reversed(entries)  # newest-first
+        ],
+    }
+
+
 @router.get("/api/stocks/{ticker}/memos")
 def get_stock_memo_history(ticker: str, limit: int = 25) -> List[Dict[str, Any]]:
     """Memo timeline for `ticker`, newest-first.
