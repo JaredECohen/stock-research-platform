@@ -38,10 +38,23 @@ def _tier1_tickers() -> List[str]:
 
 
 def run_once(ticker: Optional[str] = None) -> Dict[str, int]:
-    """Backfill `ticker` (one) or every tier-1 name. Returns aggregate counts."""
+    """Backfill `ticker` (one) or every tier-1 name. Returns aggregate counts.
+
+    Wave 8E: classify per-ticker failures so a wedged provider (rate-
+    limit, auth, network) shows up in the loop status note rather than
+    being silently absorbed. Counts surfaced:
+      - `errors`: total per-ticker failures (any reason).
+      - `rate_limited`: rows where the exception text mentions 429 / rate-limit.
+      - `auth_errors`: rows where the exception text mentions 401 / 403 / forbidden.
+
+    Loop status (`status_snapshot()`) reports `success=False` when ANY
+    error fires so the admin endpoint flags the loop as unhealthy.
+    """
     tickers = [ticker.upper()] if ticker else _tier1_tickers()
     totals = {"financial_periods": 0, "filings": 0, "transcripts": 0}
     errors = 0
+    rate_limited = 0
+    auth_errors = 0
     for t in tickers:
         try:
             res = backfill_ticker(t)
@@ -49,14 +62,27 @@ def run_once(ticker: Optional[str] = None) -> Dict[str, int]:
                 totals[k] = totals.get(k, 0) + v
         except Exception as exc:  # pragma: no cover — diagnostic only
             errors += 1
+            msg = str(exc).lower()
+            if "429" in msg or "rate limit" in msg or "rate-limit" in msg:
+                rate_limited += 1
+            if "401" in msg or "403" in msg or "forbidden" in msg or "unauthorized" in msg:
+                auth_errors += 1
             log.warning("history_backfill failed for %s: %s", t, exc)
-    note = (
-        f"tickers={len(tickers)} fp={totals['financial_periods']} "
-        f"filings={totals['filings']} transcripts={totals['transcripts']} "
-        f"errors={errors}"
-    )
-    record_run("history_backfill", success=errors == 0, note=note)
+    note_parts = [
+        f"tickers={len(tickers)}",
+        f"fp={totals['financial_periods']}",
+        f"filings={totals['filings']}",
+        f"transcripts={totals['transcripts']}",
+        f"errors={errors}",
+    ]
+    if rate_limited:
+        note_parts.append(f"rate_limited={rate_limited}")
+    if auth_errors:
+        note_parts.append(f"auth_errors={auth_errors}")
+    record_run("history_backfill", success=errors == 0, note=" ".join(note_parts))
     totals["errors"] = errors
+    totals["rate_limited"] = rate_limited
+    totals["auth_errors"] = auth_errors
     totals["tickers_processed"] = len(tickers)
     return totals
 

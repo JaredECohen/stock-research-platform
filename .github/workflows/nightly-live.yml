@@ -1,0 +1,49 @@
+name: Nightly live integration
+
+# Wave 4B opt-in suite. Hits real provider APIs (FMP, FRED, SEC EDGAR,
+# OpenAI, Anthropic) + a full live memo run on AAPL. Skipped per-test
+# when its specific key isn't set, so a partial secrets configuration
+# still yields a green run with informative skip messages.
+
+on:
+  schedule:
+    # 09:00 UTC ≈ 04:00 ET — runs once a day after market close on the
+    # prior US trading day so any same-day filings have been ingested.
+    - cron: "0 9 * * *"
+  workflow_dispatch:  # Manual trigger from the Actions UI.
+
+jobs:
+  live-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run live integration tests
+        working-directory: backend
+        env:
+          RUN_LIVE_TESTS: "1"
+          ENABLE_LIVE_DATA: "true"
+          USE_DEMO_DATA: "false"
+          # Provider keys come from repository secrets. Each test
+          # individually skips when its key isn't set, so a partial
+          # configuration won't fail the run.
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          SEC_EDGAR_USER_AGENT: ${{ secrets.SEC_EDGAR_USER_AGENT }}
+        run: |
+          rm -f marketmosaic.db
+          python -m pytest -q app/tests/test_live_integration.py
