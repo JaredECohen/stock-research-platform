@@ -263,6 +263,37 @@ class FilingDoc(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class MemoRunCheckpoint(Base):
+    """Wave 6A — per-step checkpoint for resumable memo runs.
+
+    Each `(run_id, step_name)` tuple stores the JSON-serializable result
+    of that step, the timestamp, and an `expires_at` (default 24h).
+    `run_stock_memo` populates `run_id` (Wave 1A); a `@checkpointed(step)`
+    decorator wraps each major step in `graph.py` so a crash mid-memo
+    doesn't force a full rerun — the next call with the same `run_id`
+    skips already-completed steps and resumes from the next.
+
+    The store is intentionally simple: read-modify-write on every step
+    (no pickling, no compression). At memo scale (~10 steps × ~tens of
+    KB each) this is fine; the daily GC keeps the table bounded.
+    """
+    __tablename__ = "memo_run_checkpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    step_name: Mapped[str] = mapped_column(String(64))
+    ticker: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True,
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "step_name", name="uq_run_step"),
+    )
+
+
 class DCFModel(Base):
     """Wave 5A — versioned, persistent DCF with assumption lineage.
 

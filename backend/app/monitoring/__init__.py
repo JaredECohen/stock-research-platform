@@ -28,12 +28,12 @@ def status_snapshot() -> dict:
 
 
 from . import (  # noqa: E402,F401
-    edgar_poller, history_backfill, llm_log_gc, macro_loop,
-    news_loop, outcome_loop, social_loop,
+    checkpoint_gc, edgar_poller, history_backfill, llm_log_gc,
+    macro_loop, news_loop, outcome_loop, social_loop,
 )
 
 __all__ = [
-    "edgar_poller", "history_backfill", "llm_log_gc",
+    "checkpoint_gc", "edgar_poller", "history_backfill", "llm_log_gc",
     "macro_loop", "news_loop", "outcome_loop", "social_loop",
     "register_all", "record_run", "status_snapshot",
 ]
@@ -48,3 +48,4 @@ def register_all(scheduler) -> None:
     llm_log_gc.register(scheduler)
     history_backfill.register(scheduler)
     outcome_loop.register(scheduler)
+    checkpoint_gc.register(scheduler)
