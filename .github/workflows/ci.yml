@@ -1,0 +1,58 @@
+name: CI
+
+# Runs on every push + every PR. Demo-mode only (ENABLE_LIVE_DATA=false
+# is the test-session default via conftest.py); no API keys required.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run pytest (demo mode)
+        working-directory: backend
+        env:
+          ENABLE_LIVE_DATA: "false"
+          USE_DEMO_DATA: "true"
+        run: |
+          rm -f marketmosaic.db
+          python -m pytest -q
+      - name: Run smoke test
+        working-directory: backend
+        env:
+          ENABLE_LIVE_DATA: "false"
+          USE_DEMO_DATA: "true"
+        run: |
+          rm -f marketmosaic.db
+          python -m scripts.smoke_test
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build
+        working-directory: frontend
+        run: npm run build
