@@ -1,9 +1,13 @@
 # MarketMosaic — Your AI Investment Committee
 
 > A multi-agent equity research and portfolio management platform for self-directed investors.
-> Specialist agents (sector, earnings, filings, valuation, comps, macro, risk) collaborate under a
-> Portfolio Manager orchestrator to produce structured stock memos, ranked ideas, and scenario-based
-> model portfolios.
+> Eight specialist agents (sector with integrated bull/bear, earnings, filings, valuation, comps
+> with self-historical comparison, macro, risk, technical) collaborate under a Portfolio Manager
+> orchestrator to produce structured stock memos with versioned lineage, persistent DCF models
+> that roll forward each quarter, realized-outcome tracking against forward returns, and a
+> long-term agent memory that learns across runs. Scenario-based model portfolios, discretionary
+> research-notes injection, and full backtest support via `as_of=YYYY-MM-DD` round out the
+> research-platform surface.
 
 > **Disclaimer.** MarketMosaic is for investment research and education only. It does not provide
 > personalized financial, investment, legal, or tax advice. Model portfolios and stock analyses are
@@ -34,6 +38,9 @@
 18. [Evaluation strategy](#18-evaluation-strategy)
 19. [Multi-agent + memory-tier architecture](#19-multi-agent--memory-tier-architecture)
 20. [Pending items / deferred work](#20-pending-items--deferred-work)
+21. [Versioning, lineage & longitudinal features](#21-versioning-lineage--longitudinal-features)
+22. [Operational tooling](#22-operational-tooling)
+23. [Cost observability](#23-cost-observability)
 
 ---
 
@@ -167,21 +174,23 @@ lean.
                               │
        ┌──────────────────────┼──────────────────────┐
        ▼                      ▼                      ▼
-  ┌────────┐  ┌────────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐
-  │ Sector │  │ Earnings   │  │  Filing  │  │Valuation │  │ Comps  │
-  │ agent  │  │ Call agent │  │  agent   │  │  + DCF   │  │ agent  │
-  └───┬────┘  └─────┬──────┘  └────┬─────┘  └────┬─────┘  └────┬───┘
-      │             │              │             │             │
-      └─────────────┴──────────────┴──┬──────────┴─────────────┘
+  ┌─────────┐  ┌────────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐
+  │ Sector  │  │ Earnings   │  │  Filing  │  │Valuation │  │ Comps  │
+  │ + bull/ │  │ Call agent │  │  agent   │  │  + DCF   │  │ + own- │
+  │ bear    │  │            │  │          │  │ (versn'd)│  │ history│
+  └───┬─────┘  └─────┬──────┘  └────┬─────┘  └────┬─────┘  └────┬───┘
+      │              │              │             │             │
+      └──────────────┴──────────────┴─┬───────────┴─────────────┘
                                       ▼
-                            ┌──────────────────┐
-                            │  Macro · Risk    │
-                            │  Agents          │
-                            └──────┬───────────┘
-                                   ▼
+                          ┌────────────────────────┐
+                          │ Macro · Risk · Tech-   │
+                          │ nical (positioning)    │
+                          └────────────┬───────────┘
+                                       ▼
                           ┌────────────────────┐
-                          │  Risk Committee /  │
-                          │  Critic            │
+                          │  Risk Committee /  │   News-impact agent
+                          │  Critic (Anthropic │   (Anthropic Haiku
+                          │  Opus 4.7)         │   4.5) for patches
                           └────────┬───────────┘
                                    ▼
                           ┌────────────────────┐
@@ -196,14 +205,18 @@ lean.
 |-----------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
 | PM Orchestrator             | [`backend/app/agents/orchestrator.py`](backend/app/agents/orchestrator.py)                                                        |
 | Graph + memo synthesis      | [`backend/app/agents/graph.py`](backend/app/agents/graph.py)                                                                       |
-| Sector specialist           | [`backend/app/agents/sector_agents.py`](backend/app/agents/sector_agents.py) (configs: [`backend/app/data/sector_configs.json`](backend/app/data/sector_configs.json)) |
+| Sector specialist + bull/bear | [`backend/app/agents/sector_agents.py`](backend/app/agents/sector_agents.py) (configs: [`backend/app/data/sector_configs.json`](backend/app/data/sector_configs.json))  — Wave 3A integrated bull/bear with falsifiable tests, bear-first construction, sector lean as a prior |
 | Earnings call analyst       | [`backend/app/agents/earnings_agent.py`](backend/app/agents/earnings_agent.py)                                                    |
-| Filing analyst (10-K/Q/8-K) | [`backend/app/agents/filing_agent.py`](backend/app/agents/filing_agent.py)                                                        |
-| Valuation analyst (DCF)     | [`backend/app/agents/valuation_agent.py`](backend/app/agents/valuation_agent.py) + engine [`finance/dcf.py`](backend/app/finance/dcf.py) |
-| Comps analyst               | [`backend/app/agents/comps_agent.py`](backend/app/agents/comps_agent.py) + engine [`finance/comps.py`](backend/app/finance/comps.py) |
+| Filing analyst (10-K/Q/8-K) | [`backend/app/agents/filing_agent.py`](backend/app/agents/filing_agent.py) + structured-fact extractor [`agents/fact_extraction.py`](backend/app/agents/fact_extraction.py) |
+| Valuation analyst (DCF)     | [`backend/app/agents/valuation_agent.py`](backend/app/agents/valuation_agent.py) + engine [`finance/dcf.py`](backend/app/finance/dcf.py) + persistent versioned model [`services/dcf_store.py`](backend/app/services/dcf_store.py) + LLM updater [`agents/dcf_updater.py`](backend/app/agents/dcf_updater.py) |
+| Comps analyst               | [`backend/app/agents/comps_agent.py`](backend/app/agents/comps_agent.py) + engines [`finance/comps.py`](backend/app/finance/comps.py) + [`finance/comps_history.py`](backend/app/finance/comps_history.py) (Wave 3E self-historical lens) |
 | Macro analyst               | [`backend/app/agents/macro_agent.py`](backend/app/agents/macro_agent.py)                                                          |
 | Risk analyst                | [`backend/app/agents/risk_agent.py`](backend/app/agents/risk_agent.py)                                                            |
-| Risk committee / Critic     | [`backend/app/agents/critic_agent.py`](backend/app/agents/critic_agent.py)                                                        |
+| Technical analyst           | [`backend/app/agents/technical_agent.py`](backend/app/agents/technical_agent.py) + math [`finance/technicals.py`](backend/app/finance/technicals.py) — positioning context only; does NOT influence rating |
+| Risk committee / Critic     | [`backend/app/agents/critic_agent.py`](backend/app/agents/critic_agent.py) — Anthropic Opus 4.7 (cross-family) |
+| News-impact agent           | [`backend/app/agents/news_impact_agent.py`](backend/app/agents/news_impact_agent.py) — Anthropic Haiku 4.5 (cross-family). Decides whether a fresh news alert is material to a memo's thesis; if yes, builds an `incremental_patch` snapshot |
+| Reflection / memory writer  | [`backend/app/agents/reflection_agent.py`](backend/app/agents/reflection_agent.py) — fires on delta events (new earnings/filings/news), appends entries to long-term memory, distills cross-company patterns |
+| Long-form drill-down        | [`backend/app/agents/long_form.py`](backend/app/agents/long_form.py) — Wave 3C per-tile markdown reports (always-on deterministic build + optional LLM enrichment) |
 | Portfolio construction      | [`backend/app/agents/portfolio_agent.py`](backend/app/agents/portfolio_agent.py) + engine [`finance/portfolio_construction.py`](backend/app/finance/portfolio_construction.py) |
 | Screener                    | [`backend/app/services/screener_service.py`](backend/app/services/screener_service.py) + [`finance/factor_scores.py`](backend/app/finance/factor_scores.py) |
 
@@ -233,13 +246,31 @@ endpoint that returns `None` or raises.
 
 **Persistence.** SQLAlchemy ORM models in [`backend/app/models.py`](backend/app/models.py):
 
-- `Company` — master security universe
-- `StockMemo` — generated memos (versioned, scored)
-- `ScreenerScore` — pre-computed factor scores per ticker / theme
-- `CachedDocument` — chunked filings, transcripts, news (used by retrieval)
-- `PortfolioRun` — saved portfolio constructions
+| Table | Purpose |
+|---|---|
+| `Company` | Master security universe with `universe_tier` (`auto_analysis` / `analyzed_on_demand` / `data_only`) |
+| `StockMemo` | Legacy single-row-per-ticker memo (back-compat; readers should prefer `MemoSnapshot`) |
+| `MemoSnapshot` | **Versioned** memos with `parent_version` lineage, `revision_log`, `as_of_date` for backtests, and trigger taxonomy (`first_run` / `full_reanalysis` / `incremental_patch` / `force_refresh` / `scheduled`) |
+| `MemoOutcome` | Realized forward-return scoring per `(memo_snapshot_id, horizon_days)` — Wave 4A |
+| `MemoRunCheckpoint` | `(run_id, step_name)` per-step cache so a retried memo skips already-completed work — Wave 6A |
+| `DCFModel` | Versioned DCF assumptions + result + `assumption_changes` (LLM updater audit trail) — Wave 5A |
+| `FinancialPeriod` | Long-format statement data; one row per `(ticker, period, statement, line_item)`, unique-keyed for idempotent backfill — Wave 2 |
+| `FilingDoc` | SEC filings (raw text + parsed sections); `accession_number` is the unique key — Wave 2 |
+| `EarningsTranscript` | Speaker-segmented transcripts; `(ticker, period)` unique — Wave 2 |
+| `LLMCallLog` | Append-only audit log of every provider call (Wave 1A) — `run_id` / `agent_name` / `provider` / `model` / `tokens_in` / `tokens_out` / `duration_ms` / `success` / `error` |
+| `ResearchSnapshot` | Lineage-aware cache (cold/warm/hot) with `parent_snapshot_ids` cascade |
+| `CacheCostLog` | Per-snapshot cost ledger — token savings telemetry |
+| `ScreenerScore` | Pre-computed factor scores per ticker / theme |
+| `CachedDocument` | Chunked filings/transcripts/news (used by retrieval) |
+| `PortfolioRun` | Saved portfolio constructions |
 
 SQLite by default; switch to Postgres by setting `DATABASE_URL=postgresql+psycopg2://...`.
+
+Long-term agent memory lives **outside** the DB as filesystem markdown:
+`memory/companies/<TICKER>.md` and `memory/sectors/<sector_slug>.md`.
+Atomic writes (temp file + rename); reflection appends only on delta
+events; condense-on-cap pulls the oldest entries into a "historical
+context" block via an LLM condenser (deterministic fallback).
 
 ---
 
@@ -813,86 +844,266 @@ Both default off so the existing test suite + smoke test remain deterministic.
 
 ## 20. Pending items / deferred work
 
-These items are tracked in the codebase but not yet completed. Each links to
-the relevant code path so a future contributor can pick it up.
+All items previously listed here have shipped. The full delivery is
+documented in [docs/MASTER_PLAN.md](docs/MASTER_PLAN.md) (Waves 1–8).
 
-### 20.1 OpenAI Agents SDK package upgrade — DONE
+| Originally deferred | Status | Shipped in |
+|---|---|---|
+| OpenAI Agents SDK package upgrade | DONE | PR #6 |
+| Live-mode token cost measurement | DONE — `LLMCallLog` + `cost_per_run` aggregation + USD estimates via `MODEL_PRICES_PER_MTOK` | Wave 1A + 8D |
+| EDGAR / Gemini live integration tests | DONE — `pytest.mark.live` + `.github/workflows/nightly-live.yml` | Wave 4B + 8E |
+| Frontend wiring of cross-sector / macro / news fields | DONE | PR #2 |
+| Cohort-similarity invalidation tightening | DONE — KPI-only fingerprint | Wave 6B |
+| News allow-list governance to JSON | DONE — `app/data/news_domains.json` | Wave 6C |
+| SDK-runtime LLM wiring | DONE | PR #6 |
+| Schema-version migration path | DONE — read-time upgrader registry | Wave 6D |
 
-The official `openai-agents` package is installed (≥0.14.6); FastAPI was
-bumped to ≥0.118 to allow the required `starlette` 1.x. When
-`OPENAI_API_KEY` is set + `USE_AGENTS_SDK=true`,
-[`agents/sdk_runtime.py::_run_via_real_sdk`](backend/app/agents/sdk_runtime.py)
-fires a real `agents.Runner.run_sync()` exchange against the configured
-PM model — the in-process shim remains as the deterministic fallback for
-tests and demo-mode runs without keys.
+Out of scope for now: vector RAG with pgvector, full backtest engine
+(replay portfolios, Sharpe / drawdown), multi-account / advisor
+features, earnings preview mode, mobile UI.
 
-### 20.2 Live-mode token cost measurement
+---
 
-The cold-vs-warm cost ratio reported in §19.2 is from cache-write accounting
-on demo data (LLMs disabled). Real-token measurement requires running the
-smoke suite with `OPENAI_API_KEY` + `ANTHROPIC_API_KEY` configured and
-diffing actual usage. Hook into [`cache/snapshots.py::log_cost`](backend/app/cache/snapshots.py)
-from the LLM helpers so live runs annotate `cost_tokens` with real values.
+## 21. Versioning, lineage & longitudinal features
 
-### 20.3 EDGAR / Gemini live integration tests
+The platform records what it thought, when, and why — not just the
+latest answer. Three tables form the lineage backbone:
 
-[`monitoring/edgar_poller.py`](backend/app/monitoring/edgar_poller.py) is a no-op
-in demo mode (DemoProvider returns no filings). Add an opt-in
-`RUN_LIVE_TESTS=1` test path that exercises:
+### 21.1 Memo lineage — `MemoSnapshot`
 
-- Real EDGAR submissions API → `company_cold` invalidation flow.
-- Real Gemini news + social calls (with the search-grounding allow-list).
-- The Anthropic critic round-trip when `ANTHROPIC_API_KEY` is set.
+Every `run_stock_memo` call writes an immutable
+[`MemoSnapshot`](backend/app/services/memo_store.py) row tagged with a
+`trigger`:
 
-### 20.4 Frontend wiring of new memo fields
+| Trigger | Source | Critic runs? |
+|---|---|---|
+| `first_run` | First analysis of a ticker | Yes |
+| `full_reanalysis` | EDGAR poller saw a new 10-K/Q/8-K → orchestrator re-fires | Yes |
+| `incremental_patch` | News-impact agent verdict on a material/breaking alert | **No** (locked decision) |
+| `force_refresh` | Explicit user-driven refresh | Yes |
+| `scheduled` | Background cadence | Yes |
 
-The sector finding now carries:
+`parent_version` chains a patch off its predecessor so reviewers can
+trace exactly what changed. `revision_log` carries the full audit trail
+(fields patched, LLM rationales, critic_skipped flag, source alert)
+on every patch. Backtest snapshots (`as_of_date` set) live in the same
+table but are excluded from `latest_memo` by default so a backtest never
+shadows a live recommendation.
 
-- `cross_sector_relevance: List[str]`
-- `macro_alignment: str`
-- `macro_broadcast: MacroBroadcast`
-- `pending_news_alerts: List[NewsAlert]`
+### 21.2 DCF lineage — `DCFModel`
 
-These ride inside `sector_agent_view.data` but aren't yet rendered by
-[`frontend/src/components/MemoCard.tsx`](frontend/src/components/MemoCard.tsx)
-or [`frontend/src/pages/Research.tsx`](frontend/src/pages/Research.tsx).
-**Action:** add UI affordances for the cross-sector pull-through chips, the
-macro regime banner, and a hot-news side panel.
+Each ticker's DCF is a versioned object that **rolls forward** every
+quarter rather than rebuilding from scratch. The
+[`agents/dcf_updater.py`](backend/app/agents/dcf_updater.py) flow:
 
-### 20.5 Cohort-similarity invalidation tightening
+1. Drop year-1 forecast (now an actual), shift the explicit forecast
+   left, repeat the tail.
+2. LLM reads prior assumptions vs actuals (revenue, op margin, capex %,
+   FCF) from the Wave 2 history tables; proposes adjustments.
+3. **Per-cycle delta capped at ±20%** of the prior assumption value
+   (prevents a hallucinating LLM from moving WACC from 8.5% to 25%).
+4. Each changed field requires a one-sentence rationale; fields without
+   one are silently dropped (analyst discipline).
+5. New version persisted as v(N+1) referencing v(N).
 
-[`services/sector_research_service.py::run_sector_research`](backend/app/services/sector_research_service.py)
-attaches every cohort member's `company_cold` snapshot as a parent. Any
-peer's 10-K refresh stales the warm snapshot — even when the changed peer's
-ratios that matter for cohort math are unchanged. **Action:** hash the
-specific KPI inputs (revenue / op income / capex / shares) into the warm
-snapshot's `sources_used` so unchanged-in-relevant-ways refreshes don't
-trigger a recompute.
+Trigger taxonomy: `initial`, `memo_rebuild`, `earnings_update`,
+`force_refresh`. `assumption_changes` carries the per-version diff with
+LLM rationale per change. Surfaced in the UI via
+[`DCFVersionHistory`](frontend/src/components/DCFVersionHistory.tsx) on
+the Research page.
 
-### 20.6 News allow-list governance
+### 21.3 Outcome tracking — `MemoOutcome`
 
-[`agents/news_agent.py`](backend/app/agents/news_agent.py) ships a hard-coded
-`_ALLOWED_DOMAINS` / `_BLOCKED_DOMAINS`. **Action:** move these to a JSON
-config under `app/data/` so editorial governance doesn't require a code
-change.
+[`services/outcome_service.py`](backend/app/services/outcome_service.py)
+runs daily under `ENABLE_MONITORING`. For every `MemoSnapshot` whose
+forward window has come of age, it computes:
 
-### 20.7 SDK-runtime LLM wiring — DONE
+- Forward return at 30 / 90 / 180 / 365 days
+- SPY-relative alpha
+- `thesis_held` — Bullish + positive return → True; Bearish + negative
+  → True; opposite signs → False; Neutral → None (no directional bet)
 
-The PM agent now runs as a real `agents.Agent` with a `produce_legacy_memo`
-tool + per-sector handoffs whenever the real SDK is available and an
-OpenAI key is set. The exchange exercises real LLM-driven tool calls and
-handoffs; the canonical `StockMemoOut` is still produced by the legacy
-graph (which owns memo persistence + memory writes), so flipping the
-flag only changes what runs *behind* the memo, not the API contract.
-Per-handoff cost capture into `CacheCostLog` is the natural extension.
+Long horizons (90d / 365d) write a reflection entry into the company's
+long-term memory file so the next sector pass can read its own track
+record. Short horizons (30d / 180d) stay numeric only.
 
-### 20.8 Schema-version migration path
+Track-record dashboard at `/track-record` exposes hit rate + avg alpha,
+filterable by ticker / sector / horizon.
 
-[`cache/snapshots.py`](backend/app/cache/snapshots.py) writes
-`schema_version` into both the column and the payload. Forward-compat
-readers exist in tests but there's no concrete upgrader. **Action:** add a
-`backend/app/cache/migrations.py` that registers per-`(kind, from_version,
-to_version)` transformer functions and runs on read when versions don't match.
+### 21.4 Long-term agent memory
+
+Filesystem markdown notebooks at `memory/companies/<TICKER>.md` and
+`memory/sectors/<sector_slug>.md`. Each holds a frontmatter block + a
+condensed "historical context" + recent entries. Reflection writes
+trigger only on **delta events** (new earnings, new filing, material
+news) so the file grows with real signal, not every memo run.
+
+Wave 3D added structured-fact extraction: when a filing/transcript
+trigger fires, [`agents/fact_extraction.py`](backend/app/agents/fact_extraction.py)
+pulls a small typed schema (segment performance, guidance changes,
+capex commentary, M&A, leadership changes) from the source text — first
+via deterministic regex (always runs, no LLM bill), then LLM-enriched
+when keys are present. Persisted alongside the entry as a
+fenced ` ```structured-facts ` JSON block; round-trips via the parser.
+
+When entry count crosses `MEMORY_MAX_ENTRIES` (default 50), the oldest
+`MEMORY_CONDENSE_BATCH` entries (default 10) fold into the historical-
+context block via an LLM condenser (deterministic fallback).
+
+Sector files also carry `cross_company_patterns`: transferable lessons
+learned on one company that apply to peers. The next time the sector
+agent runs on a peer, those patterns are surfaced in its prompt.
+
+### 21.5 Backtest support — `as_of_date`
+
+Every memo can be reproduced for any historical date via
+`?as_of=YYYY-MM-DD`. Implementation:
+
+- `as_of_context` ContextVar (Wave 1C) makes the cutoff visible to
+  cache, providers, and memory without threading it through every signature.
+- Cache keys auto-namespace `:asof:<YYYY-MM-DD>` so live and backtest
+  payloads never collide.
+- `data_service` clips every list-shaped historical payload (filings,
+  transcripts, financial statements, prices, news) to the cutoff (Wave
+  8B). Ratios are recomputed from clipped statements rather than
+  serving today's snapshot.
+- `MemoSnapshot.as_of_date` distinguishes backtest snapshots; default
+  `latest_memo` lookup excludes them so a live recommendation isn't
+  shadowed.
+- Memory writes skip on backtest runs (a diagnostic shouldn't pollute
+  the agent's notebook).
+
+### 21.6 Research notes — discretionary context injection
+
+User-curated investment notes live under `research_notes/` (books,
+interviews, articles, frameworks, personal). Each declares routing
+via YAML frontmatter:
+
+```yaml
+applies_to_agents: [sector, valuation, comps]
+applies_to_sectors: ["*"]              # or named sectors
+applies_to_sub_industries: []          # empty = no narrowing
+applies_to_tickers: []                 # empty = no narrowing
+weight: 0.8                            # 0-1 priority
+expires: null                          # ISO date or null
+status: active                         # active|archived|superseded
+```
+
+Two-tier injection (Wave 7A + 7B): summaries always inject (~30 tokens
+each, capped at 6 per agent run); top-K full bodies inject via BM25
+over the agent's working context, hard-capped at 4KB combined. Wave 7C
+extends routing to all six LLM-consuming specialists (sector, valuation,
+earnings, filing, comps, risk). The CLI indexer
+([`scripts/index_research_notes.py`](backend/scripts/index_research_notes.py))
+normalizes frontmatter, optionally regenerates summaries via LLM, and
+emits an `_index.json` for tooling; `--check` mode is dry-run + exits
+nonzero when changes would land (drop-in for CI gating).
+
+### 21.7 Update orchestrator + news patcher
+
+[`services/update_orchestrator.py`](backend/app/services/update_orchestrator.py)
+wires monitoring loops to memo refresh policy:
+
+- New filing → `on_filing_event(ticker)` → `run_stock_memo(force_refresh=True)`.
+- Material/breaking news → `on_news_alert(ticker, alert)` → calls the
+  cross-family news-impact agent (Anthropic Haiku 4.5 — independent
+  read, not an OpenAI echo of PM synthesis). If material, builds an
+  `incremental_patch` snapshot with rating / confidence / risks
+  patched. Critic skipped per the locked decision.
+- Per-ticker FIFO queue prevents same-ticker race conditions.
+- Daily patch cap: max 2 patches per ticker per UTC day. Confidence
+  change capped at ±15 points per patch. Each changed field requires a
+  one-sentence rationale; fields without one are dropped.
+
+---
+
+## 22. Operational tooling
+
+### 22.1 Admin endpoints
+
+| Endpoint | Surface |
+|---|---|
+| `GET /api/admin/monitoring/status` | Last-run timestamps + notes per registered loop |
+| `GET /api/admin/llm-metrics?run_id=X&since_days=N` | Per-call detail or aggregated cost summary (with USD figures) |
+| `GET /api/admin/track-record?horizon_days=X&ticker=Y&sector=Z` | Realized-outcome stats |
+| `POST /api/admin/evaluate-outcomes` | Manual trigger for the daily outcome scorer |
+| `GET /api/admin/dcf-versions/{ticker}` | DCF version chain with assumption_changes |
+| `GET /api/admin/update-queue?ticker=X` | In-process FIFO queue depth |
+| `POST /api/admin/news-domains/reload` | Hot-reload `news_domains.json` |
+| `GET /api/admin/lopsidedness-audit?n=10` | Per-memo bull-vs-bear key-point + sector-lean distribution. Telemetry on whether the sector-integrated bull/bear is staying balanced (Wave 3A risk-register mitigation) |
+
+### 22.2 Monitoring loops (under `ENABLE_MONITORING=true`)
+
+| Loop | Cadence | Job |
+|---|---|---|
+| `edgar_poller` | 30 min | Detect new 10-K/Q/8-K; invalidate `company_cold`; enqueue `full_reanalysis` |
+| `news_loop` | 1 h / ticker | Push `NewsAlert` records; on material/breaking, call orchestrator's `on_news_alert` |
+| `social_loop` | daily | Hot-cache social sentiment |
+| `macro_loop` | hourly | FRED snapshot + regime broadcast |
+| `outcome_loop` | daily 02:30 UTC | Score every `MemoSnapshot` whose forward window has come of age |
+| `history_backfill` | daily 03:15 UTC | Wave 2 — ingest tier-1 financial periods + filings + transcripts |
+| `llm_log_gc` | daily | GC `LLMCallLog` rows >90 days old |
+| `checkpoint_gc` | daily 04:00 UTC | GC expired `MemoRunCheckpoint` rows |
+
+`history_backfill` (Wave 8E) classifies failures into `rate_limited`
+(429s) vs. `auth_errors` (401/403) vs. generic — surfaces the
+classification in the loop note so a wedged provider shows up at
+`/api/admin/monitoring/status`.
+
+### 22.3 Resumable memo runs — `@checkpointed`
+
+[`services/checkpoint_store.py`](backend/app/services/checkpoint_store.py)
+backs every major step of `run_stock_memo` (fundamentals, dcf, comps,
+all eight specialists, critic) with a `(run_id, step_name)` cache. A
+retry with the same `run_id` skips already-completed steps; first runs
+see no behavior change. 24h TTL with daily GC bounds the table.
+
+### 22.4 CI workflows (`.github/workflows/`)
+
+- **`ci.yml`** — pytest (demo mode) + smoke test + frontend build on
+  every push and PR. No secrets needed.
+- **`nightly-live.yml`** — `pytest.mark.live` suite at 09:00 UTC daily
+  with `RUN_LIVE_TESTS=1`. Provider keys come from repo secrets;
+  per-test `_require_key` skips when individual keys are missing so
+  partial configs still yield green runs.
+
+### 22.5 Schema migrations
+
+[`cache/migrations.py`](backend/app/cache/migrations.py) holds a
+`(kind, from_version) -> upgrader` registry. `cache_get` walks the
+chain on read so consumers always see the current shape. Missing
+intermediates pass through with a warning; exceptions abort the chain
+without raising. No upgraders are registered today — this is the
+plumbing for the first schema bump.
+
+---
+
+## 23. Cost observability
+
+Every provider LLM call lands in [`LLMCallLog`](backend/app/models.py)
+with full attribution: `run_id` / `ticker` / `agent_name` / `provider` /
+`model` / `route` / `tokens_in` / `tokens_out` / `duration_ms` /
+`success` / `error` / `generated_at`. 90-day retention with a daily GC
+job; rows are small enough that this stays cheap on SQLite.
+
+[`services/llm_metrics.py`](backend/app/services/llm_metrics.py)
+exposes:
+
+- `cost_per_run(run_id)` — per-call detail + run total tokens + run
+  total USD cost.
+- `cost_per_agent(since=N days)` — aggregate by agent_name with
+  tokens + duration + USD.
+- `cost_per_provider(since=...)` — aggregate by provider with USD.
+- `slowest_calls(since=..., n=10)` — top-N pathological prompts.
+
+Wave 8D added USD estimation via `estimate_cost_usd(provider, model,
+tokens_in, tokens_out)` and `MODEL_PRICES_PER_MTOK` (per-million-token
+rates per model, with provider-level fallback). Update the price table
+when a provider's published rates change.
+
+CLI report at [`scripts/llm_cost_report.py`](backend/scripts/llm_cost_report.py)
+emits a monthly cost summary suitable for posting to Slack or piping
+into a finance review.
 
 ---
 
