@@ -126,6 +126,15 @@ class llm_call_context:
             _CALL_CONTEXT.reset(self._token)
 
 
+def current_call_context() -> Dict[str, Any]:
+    """Return the active llm_call_context dict (agent_name / run_id / route).
+
+    Used by Wave 6A's checkpoint decorator to read the active `run_id`
+    without threading it through every step's signature.
+    """
+    return dict(_CALL_CONTEXT.get())
+
+
 def _record_usage(
     provider: str,
     model: str,
