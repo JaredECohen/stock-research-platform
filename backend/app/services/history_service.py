@@ -34,20 +34,26 @@ log = logging.getLogger(__name__)
 
 
 # Lines we always lift from a provider statement payload. Anything else in
-# the row is ignored at backfill time. Kept narrow so we don't pollute the
-# table with provider-specific extras; downstream readers want a stable
-# vocabulary.
+# the row is ignored at backfill time. Vocabulary matches the demo dataset
+# / common provider convention so `get_financial_history` returns rows
+# keyed by the same names downstream readers (ratios.py, comps_history)
+# already use — no per-caller renaming.
 _INCOME_LINES = (
     "revenue", "cost_of_revenue", "gross_profit", "r_and_d", "sga",
     "operating_income", "ebit", "ebitda", "net_income", "eps_diluted",
+    "weighted_avg_shares_diluted", "interest_expense", "pretax_income",
+    "tax_expense",
 )
 _BALANCE_LINES = (
-    "total_assets", "total_liabilities", "total_equity", "cash",
-    "short_term_debt", "long_term_debt", "shares_outstanding", "goodwill",
+    "total_assets", "total_liabilities", "shareholders_equity",
+    "cash_and_equivalents", "short_term_investments",
+    "short_term_debt", "long_term_debt", "total_debt",
+    "goodwill", "current_assets", "current_liabilities",
 )
 _CASH_LINES = (
-    "operating_cash_flow", "capex", "free_cash_flow",
-    "dividends_paid", "share_repurchases",
+    "cash_from_operations", "capex", "free_cash_flow",
+    "depreciation_and_amortization", "dividends_paid",
+    "share_repurchases", "stock_based_compensation",
 )
 
 
