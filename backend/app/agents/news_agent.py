@@ -8,9 +8,12 @@ to whatever the existing `news_service` returns and labels everything
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Set
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..cache import cache_get, cache_put, resolved_cost_tokens
 from ..config import settings
@@ -21,19 +24,54 @@ from . import llm
 log = logging.getLogger(__name__)
 
 
-# Allow / block lists for grounded sources. Keep this conservative; we'd
-# rather drop a low-quality source than cite it.
-_ALLOWED_DOMAINS: Set[str] = {
-    "reuters.com", "bloomberg.com", "wsj.com", "ft.com",
-    "cnbc.com", "barrons.com", "marketwatch.com", "nytimes.com",
-    "axios.com", "theinformation.com", "businesswire.com", "prnewswire.com",
-    "sec.gov", "fool.com", "seekingalpha.com", "investors.com",
-    "techcrunch.com", "stratechery.com",
-}
-_BLOCKED_DOMAINS: Set[str] = {
-    # Aggregators and content farms — keep these out of grounded citations.
-    "msn.com", "yahoo.com",
-}
+# Wave 6C: domain governance moved to `app/data/news_domains.json` so
+# editorial calls about which sources to cite live in a reviewable JSON
+# file, not Python constants. The file is the source of truth — edit +
+# commit; the cached read below auto-picks up changes on next process boot.
+
+_NEWS_DOMAINS_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "news_domains.json"
+)
+
+
+def _load_domain_lists() -> Tuple[Set[str], Set[str]]:
+    """Read the governance file. Returns `(allowed, blocked)` sets, lower-cased.
+
+    Falls back to empty sets if the file is missing or malformed — the
+    filter then applies the conservative "skip-when-no-allow-list" rule
+    in `_filter_grounded_sources` (every grounded source dropped),
+    which is the safe behavior.
+    """
+    try:
+        with open(_NEWS_DOMAINS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        log.warning("news_domains.json unreadable (%s) — defaulting to empty lists", exc)
+        return set(), set()
+    allowed = {str(d).strip().lower() for d in (data.get("allowed") or []) if d}
+    blocked = {str(d).strip().lower() for d in (data.get("blocked") or []) if d}
+    return allowed, blocked
+
+
+@lru_cache(maxsize=1)
+def _domain_lists_cached() -> Tuple[Set[str], Set[str]]:
+    return _load_domain_lists()
+
+
+def reload_domain_lists() -> Tuple[Set[str], Set[str]]:
+    """Force-reload the governance file. Useful for tests + admin tooling
+    after the JSON has been edited live."""
+    _domain_lists_cached.cache_clear()
+    return _domain_lists_cached()
+
+
+# Public for tests + admin use.
+def allowed_domains() -> Set[str]:
+    return _domain_lists_cached()[0]
+
+
+def blocked_domains() -> Set[str]:
+    return _domain_lists_cached()[1]
 
 
 def _classify_severity(title: str, summary: str) -> str:
@@ -66,17 +104,19 @@ def _domain_of(url: str) -> str:
 
 
 def _filter_grounded_sources(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    allowed = allowed_domains()
+    blocked = blocked_domains()
     out: List[Dict[str, Any]] = []
     for it in items:
         d = _domain_of(it.get("url", ""))
         if not d:
             out.append(it)
             continue
-        if d in _BLOCKED_DOMAINS:
+        if d in blocked:
             continue
         # If the allow-list is set and we don't match, skip — but be lenient
         # with subdomains (e.g. `nordics.reuters.com`).
-        if any(d == ad or d.endswith("." + ad) for ad in _ALLOWED_DOMAINS):
+        if any(d == ad or d.endswith("." + ad) for ad in allowed):
             out.append(it)
     return out
 

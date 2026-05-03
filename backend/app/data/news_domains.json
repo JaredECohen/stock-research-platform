@@ -1,0 +1,27 @@
+{
+  "_comment": "Wave 6C — governance file for the news agent's grounded-source filter. Edit + commit; news_agent reloads on startup. Keep curation conservative — better to drop a low-quality source than cite it.",
+  "allowed": [
+    "reuters.com",
+    "bloomberg.com",
+    "wsj.com",
+    "ft.com",
+    "cnbc.com",
+    "barrons.com",
+    "marketwatch.com",
+    "nytimes.com",
+    "axios.com",
+    "theinformation.com",
+    "businesswire.com",
+    "prnewswire.com",
+    "sec.gov",
+    "fool.com",
+    "seekingalpha.com",
+    "investors.com",
+    "techcrunch.com",
+    "stratechery.com"
+  ],
+  "blocked": [
+    "msn.com",
+    "yahoo.com"
+  ]
+}
