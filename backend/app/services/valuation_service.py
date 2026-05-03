@@ -159,7 +159,7 @@ def build_dcf(
         return None
     result = dcf_engine.build_full_dcf(ticker, assumptions)
 
-    if assumptions is not None and not force_refresh and result is not None:
+    if assumptions is not None and result is not None:
         # Only cache the default-assumption build to avoid per-call thrash.
         # Detect "default" by hashing the assumptions and comparing.
         try:
@@ -168,17 +168,36 @@ def build_dcf(
         except Exception:
             same = False
         if same:
-            parent_ids: List[int] = []
-            cold = cache_get(ticker, "company_cold")
-            if cold:
-                parent_ids.append(cold.id)
-            cache_put(
-                ticker, "company_warm:dcf",
-                payload=result.model_dump(mode="json"),
-                sources_used=[f"target:{ticker}", f"assumptions:default"],
-                generated_by="valuation_service.build_dcf",
-                cost_tokens=resolved_cost_tokens(60),
-                parent_snapshots=parent_ids,
-                ttl_seconds=7 * 24 * 3600,
-            )
+            if not force_refresh:
+                parent_ids: List[int] = []
+                cold = cache_get(ticker, "company_cold")
+                if cold:
+                    parent_ids.append(cold.id)
+                cache_put(
+                    ticker, "company_warm:dcf",
+                    payload=result.model_dump(mode="json"),
+                    sources_used=[f"target:{ticker}", f"assumptions:default"],
+                    generated_by="valuation_service.build_dcf",
+                    cost_tokens=resolved_cost_tokens(60),
+                    parent_snapshots=parent_ids,
+                    ttl_seconds=7 * 24 * 3600,
+                )
+            # Wave 5A: persist as a versioned DCFModel so the assumption
+            # updater + reviewers can chain off prior versions. First save
+            # for a ticker is `initial`; subsequent default-rebuilds tag
+            # `memo_rebuild` (vs. the LLM-driven `earnings_update` path).
+            # Runs even on force_refresh — that's the user signaling they
+            # want a fresh authoritative version recorded.
+            try:
+                from . import dcf_store
+                prior = dcf_store.latest_version(ticker)
+                trigger = "initial" if prior is None else "memo_rebuild"
+                parent_version = prior.version if prior is not None else None
+                dcf_store.save_version(
+                    ticker, assumptions=assumptions, dcf_result=result,
+                    trigger=trigger, parent_version=parent_version,
+                )
+            except Exception as exc:  # pragma: no cover — diagnostic only
+                # DCF build must not be blocked by a persistence hiccup.
+                pass
     return result
