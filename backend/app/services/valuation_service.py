@@ -78,6 +78,21 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
 
     result = comps_engine.compute_comps(target_row, peer_rows)
 
+    # Wave 3E: self-historical context. Best-effort backfill of the
+    # history tables (no-op if data is unchanged), then build the
+    # self-historical distribution. None when the target lacks enough
+    # usable history — degrades gracefully.
+    try:
+        from .history_service import backfill_ticker
+        backfill_ticker(target_ticker)
+    except Exception:  # pragma: no cover — diagnostic only
+        pass
+    try:
+        from ..finance.comps_history import build_history_stats
+        result.history = build_history_stats(target_ticker, target_row)
+    except Exception:  # pragma: no cover — defensive
+        result.history = None
+
     # Snapshot for re-use; lineage = each peer's company_cold so a peer-side
     # 10-K refresh stales us.
     parent_ids: List[int] = []

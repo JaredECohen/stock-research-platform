@@ -217,6 +217,17 @@ export interface CompsRow {
   fcf_yield?: number | null;
 }
 
+export interface CompsHistoryStats {
+  lookback_periods: number;
+  lookback_label: string;
+  own_median: Record<string, number | null>;
+  own_p25: Record<string, number | null>;
+  own_p75: Record<string, number | null>;
+  current_percentile: Record<string, number>;
+  current_vs_own_median: Record<string, number>;
+  interpretation: string;
+}
+
 export interface CompsResult {
   target: CompsRow;
   peers: CompsRow[];
@@ -224,6 +235,8 @@ export interface CompsResult {
   target_percentiles: Record<string, number>;
   premium_discount: Record<string, number>;
   interpretation: string;
+  // Wave 3E: optional self-historical context.
+  history?: CompsHistoryStats | null;
 }
 
 export interface MacroScenarioResult {
