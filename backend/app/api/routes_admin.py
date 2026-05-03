@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query
 
 from ..monitoring import status_snapshot
 from ..seed_demo_data import run_full_seed
-from ..services import llm_metrics
+from ..services import llm_metrics, outcome_service
 
 router = APIRouter()
 
@@ -43,3 +43,27 @@ def llm_metrics_endpoint(
         "by_provider": llm_metrics.cost_per_provider(since=since),
         "slowest": llm_metrics.slowest_calls(since=since, n=10),
     }
+
+
+@router.get("/api/admin/track-record")
+def track_record_endpoint(
+    horizon_days: int = Query(90, ge=1, le=365),
+    ticker: Optional[str] = None,
+    sector: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Wave 4A: aggregate realized-outcome stats over evaluated memos.
+
+    Filters: `ticker` (single name), `sector`, `horizon_days` (which forward
+    window to look at). Returns hit rate + avg alpha + total evaluated.
+    """
+    return outcome_service.track_record(
+        ticker=ticker, sector=sector, horizon_days=horizon_days,
+    )
+
+
+@router.post("/api/admin/evaluate-outcomes")
+def evaluate_outcomes_now() -> Dict[str, Any]:
+    """Manual trigger for the daily outcome loop. Useful in dev / for
+    backfilling the table after deploys; production runs the scheduled
+    job via APScheduler."""
+    return outcome_service.evaluate_all_due()
