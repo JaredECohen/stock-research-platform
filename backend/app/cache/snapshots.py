@@ -210,6 +210,18 @@ def cache_get(
         # whole row is already loaded into memory because we just SELECTed it.
         db.refresh(row)
         db.expunge(row)
+        # Wave 6D: read-time schema upgrade. Stored payloads at older
+        # `schema_version` are walked through the registered migration
+        # chain so consumers always see the current shape. The DB row
+        # itself is left at its stored version — the upgrade cost is
+        # paid once per read and absorbed by the caller's own caching.
+        try:
+            from .migrations import upgrade_payload
+            if isinstance(row.payload, dict):
+                row.payload = upgrade_payload(row.kind, row.payload)
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("schema upgrade on read failed (id=%s, kind=%s): %s",
+                        row.id, row.kind, exc)
         return row
     finally:
         if own:
