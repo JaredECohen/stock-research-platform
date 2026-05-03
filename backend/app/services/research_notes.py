@@ -49,7 +49,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +78,18 @@ class NoteFrontmatter(BaseModel):
     status: str = "active"  # active | archived | superseded
     chars: int = 0
     summary: str = ""
+
+    # YAML's `safe_load` turns bare `2024-08-15` into a `datetime.date`
+    # object — coerce back to ISO string here so downstream code
+    # consistently sees `Optional[str]`. Same for `expires`.
+    @field_validator("date", "expires", mode="before")
+    @classmethod
+    def _coerce_date_to_iso(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, _date):
+            return value.isoformat()
+        return str(value)
 
 
 class ResearchNote(BaseModel):

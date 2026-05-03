@@ -40,6 +40,7 @@ from ..schemas import (
     AgentTrace,
     BullBearCase,
     CatalystItem,
+    CompsResult,
     CriticReview,
     DCFResult,
     RiskItem,
@@ -224,6 +225,82 @@ def _portfolio_fit(profile: Dict, rating: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Wave 8A: per-step checkpointing
+# ---------------------------------------------------------------------------
+# Each specialist gets a thin checkpointed wrapper that the safe-runner calls.
+# When `run_id` is in scope (always, since `run_stock_memo` sets it), the
+# decorator caches each step's `AgentFinding` under `(run_id, step_name)` so
+# a retried run with the same `run_id` skips the underlying work.
+#
+# Why thin wrappers vs. decorating each agent at definition: keeping the
+# specialist functions un-decorated lets other callers (tests, ad-hoc
+# scripts, future workers) use them without checkpoint side effects. The
+# checkpoint behavior is deliberately scoped to the graph entry path.
+
+from ..services.checkpoint_store import checkpointed
+
+
+@checkpointed("graph.fundamentals", return_type=None)
+def _checkpointed_fundamentals(ticker: str, *, force_refresh: bool):
+    return get_full_financials(ticker, force_refresh=force_refresh)
+
+
+@checkpointed("graph.dcf", return_type=DCFResult)
+def _checkpointed_dcf(ticker: str, *, force_refresh: bool):
+    return build_dcf(ticker, force_refresh=force_refresh)
+
+
+@checkpointed("graph.comps", return_type=CompsResult)
+def _checkpointed_comps(ticker: str, *, force_refresh: bool):
+    return build_comps(ticker, force_refresh=force_refresh)
+
+
+@checkpointed("graph.sector_finding", return_type=AgentFinding)
+def _checkpointed_sector(profile: Dict, ratios: Dict) -> AgentFinding:
+    return run_sector_agent(profile, ratios)
+
+
+@checkpointed("graph.earnings_finding", return_type=AgentFinding)
+def _checkpointed_earnings(profile, transcript, earnings) -> AgentFinding:
+    return run_earnings_agent(profile, transcript, earnings)
+
+
+@checkpointed("graph.filing_finding", return_type=AgentFinding)
+def _checkpointed_filing(profile, filings) -> AgentFinding:
+    return run_filing_agent(profile, filings)
+
+
+@checkpointed("graph.valuation_finding", return_type=AgentFinding)
+def _checkpointed_valuation(profile, ratios, dcf) -> AgentFinding:
+    return run_valuation_agent(profile, ratios, dcf)
+
+
+@checkpointed("graph.comps_finding", return_type=AgentFinding)
+def _checkpointed_comps_agent(profile, comps) -> AgentFinding:
+    return run_comps_agent(profile, comps)
+
+
+@checkpointed("graph.macro_finding", return_type=AgentFinding)
+def _checkpointed_macro(profile, scenario: str) -> AgentFinding:
+    return run_macro_agent(profile, scenario)
+
+
+@checkpointed("graph.risk_finding", return_type=AgentFinding)
+def _checkpointed_risk(profile, ratios, dcf_summary) -> AgentFinding:
+    return run_risk_agent(profile, ratios, dcf_summary)
+
+
+@checkpointed("graph.technical_finding", return_type=AgentFinding)
+def _checkpointed_technical(profile) -> AgentFinding:
+    return run_technical_agent(profile)
+
+
+@checkpointed("graph.critic", return_type=CriticReview)
+def _checkpointed_critic(memo_dict: Dict) -> CriticReview:
+    return run_critic(memo_dict)
+
+
+# ---------------------------------------------------------------------------
 # Public graph entry point
 # ---------------------------------------------------------------------------
 
@@ -279,10 +356,16 @@ def _run_stock_memo_inner(
     as_of_date: Optional[Any] = None,
 ) -> StockMemoOut:
     """Indirection so `run_stock_memo` can wrap the entire body in a single
-    `llm_call_context` + `as_of_context`. Splitting keeps the public signature clean."""
+    `llm_call_context` + `as_of_context`. Splitting keeps the public signature clean.
+
+    Wave 8A: each major step (fundamentals, dcf, comps, every specialist,
+    critic) runs through a `@checkpointed` wrapper. When `run_id` is reused
+    across calls (e.g., a retry after a transient failure), each completed
+    step's result is loaded from `MemoRunCheckpoint` instead of re-fired.
+    First-time runs see no behavior change; the cache writes are cheap."""
     # Fundamentals MUST succeed — without a profile we can't even identify
     # the company, so this is an unrecoverable error and we re-raise.
-    fin = get_full_financials(ticker, force_refresh=force_refresh)
+    fin = _checkpointed_fundamentals(ticker, force_refresh=force_refresh)
     profile = fin["profile"]
     if not profile:
         raise ValueError(f"Unknown ticker: {ticker}")
@@ -300,35 +383,35 @@ def _run_stock_memo_inner(
                         name="Filings Service", log_to=degradation)
     earnings = fin.get("earnings", {})
 
-    dcf = safe_call(build_dcf, ticker, force_refresh=force_refresh, fallback=None,
+    dcf = safe_call(_checkpointed_dcf, ticker, force_refresh=force_refresh, fallback=None,
                     name="DCF Engine", log_to=degradation)
-    comps = safe_call(build_comps, ticker, force_refresh=force_refresh, fallback=None,
+    comps = safe_call(_checkpointed_comps, ticker, force_refresh=force_refresh, fallback=None,
                       name="Comps Engine", log_to=degradation)
 
     # Each specialist runs with its own llm_call_context so any LLM calls it
     # makes get tagged with the right agent_name in LLMCallLog (Wave 1A).
     from .llm import llm_call_context
     with llm_call_context(agent_name="Sector Analyst", run_id=run_id):
-        sector_finding = safe_finding("Sector Analyst", run_sector_agent,
+        sector_finding = safe_finding("Sector Analyst", _checkpointed_sector,
                                       profile, ratios, log_to=degradation)
     with llm_call_context(agent_name="Earnings Analyst", run_id=run_id):
-        earnings_finding = safe_finding("Earnings Analyst", run_earnings_agent,
+        earnings_finding = safe_finding("Earnings Analyst", _checkpointed_earnings,
                                         profile, transcript, earnings, log_to=degradation)
     with llm_call_context(agent_name="Filing Analyst", run_id=run_id):
-        filing_finding = safe_finding("Filing Analyst", run_filing_agent,
+        filing_finding = safe_finding("Filing Analyst", _checkpointed_filing,
                                       profile, filings, log_to=degradation)
     with llm_call_context(agent_name="Valuation Analyst", run_id=run_id):
-        valuation_finding = safe_finding("Valuation Analyst", run_valuation_agent,
+        valuation_finding = safe_finding("Valuation Analyst", _checkpointed_valuation,
                                          profile, ratios, dcf, log_to=degradation)
     with llm_call_context(agent_name="Comps Analyst", run_id=run_id):
-        comps_finding = safe_finding("Comps Analyst", run_comps_agent,
+        comps_finding = safe_finding("Comps Analyst", _checkpointed_comps_agent,
                                      profile, comps, log_to=degradation)
     with llm_call_context(agent_name="Macro Analyst", run_id=run_id):
-        macro_finding = safe_finding("Macro Analyst", run_macro_agent,
+        macro_finding = safe_finding("Macro Analyst", _checkpointed_macro,
                                      profile, scenario, log_to=degradation)
     with llm_call_context(agent_name="Risk Analyst", run_id=run_id):
         risk_finding = safe_finding(
-            "Risk Analyst", run_risk_agent,
+            "Risk Analyst", _checkpointed_risk,
             profile, ratios, (dcf.summary if dcf else None), log_to=degradation,
         )
     # Wave 3B — Technical Analyst. By design technicals do NOT influence
@@ -336,7 +419,7 @@ def _run_stock_memo_inner(
     # llm_call_context so the LLM narrative pass is attributed correctly.
     with llm_call_context(agent_name="Technical Analyst", run_id=run_id):
         technical_finding = safe_finding(
-            "Technical Analyst", run_technical_agent, profile,
+            "Technical Analyst", _checkpointed_technical, profile,
             log_to=degradation,
         )
 
@@ -480,7 +563,7 @@ def _run_stock_memo_inner(
     # so a flaky Anthropic call doesn't kill the memo.
     draft_for_critic = memo.model_dump()
     with llm_call_context(agent_name="Risk Committee", run_id=run_id, route="strong"):
-        critic = safe_critic(run_critic, draft_for_critic, log_to=degradation)
+        critic = safe_critic(_checkpointed_critic, draft_for_critic, log_to=degradation)
     if critic:
         memo.risk_committee_challenge = critic
     # Refresh degraded_agents in case the critic recorded a failure.
