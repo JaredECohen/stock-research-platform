@@ -1,6 +1,6 @@
 import React from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Activity, BarChart3, Briefcase, GanttChart, MessageCircle, Newspaper, Search, Settings, Sparkles, TrendingUp } from "lucide-react";
+import { Activity, Award, BarChart3, Briefcase, GanttChart, MessageCircle, Newspaper, Search, Settings, Sparkles, TrendingUp } from "lucide-react";
 
 const links = [
   { to: "/", label: "Dashboard", icon: Sparkles },
@@ -11,6 +11,7 @@ const links = [
   { to: "/screener", label: "Screener", icon: Search },
   { to: "/portfolio", label: "Portfolio Builder", icon: Briefcase },
   { to: "/macro", label: "Macro", icon: GanttChart },
+  { to: "/track-record", label: "Track Record", icon: Award },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

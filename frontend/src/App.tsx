@@ -10,6 +10,7 @@ import Screener from "@/pages/Screener";
 import PortfolioBuilder from "@/pages/PortfolioBuilder";
 import Macro from "@/pages/Macro";
 import Settings from "@/pages/Settings";
+import TrackRecord from "@/pages/TrackRecord";
 
 export default function App() {
   return (
@@ -23,6 +24,7 @@ export default function App() {
         <Route path="/screener" element={<Screener />} />
         <Route path="/portfolio" element={<PortfolioBuilder />} />
         <Route path="/macro" element={<Macro />} />
+        <Route path="/track-record" element={<TrackRecord />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Dashboard />} />
       </Route>
