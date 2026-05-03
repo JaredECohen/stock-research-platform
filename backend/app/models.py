@@ -263,6 +263,42 @@ class FilingDoc(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class MemoOutcome(Base):
+    """Wave 4A — realized-outcome scoring for a memo at a forward horizon.
+
+    One row per `(memo_snapshot_id, horizon_days)`. The daily evaluator
+    computes forward returns at 30 / 90 / 180 / 365 days vs. SPY, lays
+    them down here, and (for the longer horizons) writes a reflection
+    entry into the company's long-term memory file. Used for:
+      - admin track-record stats (rating accuracy / alpha by sector / etc.),
+      - reflection feedback loops (sector agent reads its own past calls).
+    """
+    __tablename__ = "memo_outcomes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    memo_snapshot_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("memo_snapshots.id"), index=True,
+    )
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    rating_at_memo: Mapped[str] = mapped_column(String(32), default="")
+    confidence_at_memo: Mapped[float] = mapped_column(Float, default=0.0)
+    price_at_memo: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    horizon_days: Mapped[int] = mapped_column(Integer, index=True)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    forward_return: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    benchmark_return: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    alpha: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    thesis_held: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "memo_snapshot_id", "horizon_days",
+            name="uq_memo_outcome_snapshot_horizon",
+        ),
+    )
+
+
 class EarningsTranscript(Base):
     """Quarterly earnings call — structured speaker blocks + full text.
 
