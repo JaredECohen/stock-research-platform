@@ -344,6 +344,46 @@ def industry_structure(cohort_with_target: List[Dict]) -> Dict[str, Any]:
 # Sector regime detection (heuristic; opinionated)
 # ---------------------------------------------------------------------------
 
+def _kpi_fingerprint_inputs(entry: Dict[str, Any]) -> Optional[str]:
+    """Wave 6B: build a stable, KPI-only fingerprint string for a cohort member.
+
+    Returns a compact `kpi:<ticker>:<rounded values>` token that goes into
+    `sources_used` so the sector_warm fingerprint hashes only on the values
+    that actually move the cohort math. Compared to the previous "every
+    filing invalidates" approach, this keeps the warm snapshot fresh
+    through irrelevant peer filings (legal disclosures, shelf registrations,
+    dividend declarations).
+
+    Rounding is intentional — micro-jitter from currency translation or
+    one-off charges shouldn't trigger a recompute. Round revenue / op
+    income / capex to nearest $1M, shares to nearest 1M.
+    """
+    ticker = (entry or {}).get("ticker")
+    fin = (entry or {}).get("financials") or {}
+    if not ticker:
+        return None
+    income_rows = fin.get("income") or []
+    cash_rows = fin.get("cash") or []
+    if not income_rows:
+        return None
+    # Most recent period (rows are typically chronological — defend either way).
+    income = max(income_rows, key=lambda r: r.get("period", "")) if income_rows else {}
+    cash = max(cash_rows, key=lambda r: r.get("period", "")) if cash_rows else {}
+    profile = fin.get("profile") or {}
+
+    def _round_m(v: Any, scale: float = 1e6) -> str:
+        try:
+            return f"{round(float(v) / scale):.0f}"
+        except (TypeError, ValueError):
+            return "_"
+
+    rev = _round_m(income.get("revenue"))
+    op_inc = _round_m(income.get("operating_income"))
+    capex = _round_m(cash.get("capex"))
+    shares = _round_m(profile.get("shares_outstanding"))
+    return f"kpi:{ticker}:rev={rev}:op={op_inc}:cx={capex}:sh={shares}"
+
+
 def detect_sector_regime(sector: str, trends: Dict[str, Any], industry: str) -> str:
     growth = trends.get("cohort_revenue_growth_recent") or 0.0
     capex_delta = trends.get("cohort_capex_delta") or 0.0
@@ -460,14 +500,24 @@ def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> D
         "cohort_filing_themes": filing_themes,
     }
 
-    # Build sources_used: cohort identities + peer filing accessions for
-    # fingerprint stability — any new 10-K in the cohort changes the hash.
+    # Wave 6B: tighten cohort invalidation. Previously every peer-side
+    # 10-K invalidated this sector_warm entry — even when the filing
+    # didn't move any of the KPIs the sector math actually consumes.
+    # Now we fingerprint the *KPI inputs* (revenue / operating_income /
+    # capex / shares) per cohort member. A peer's irrelevant 10-K (e.g.
+    # legal disclosures, shelf registration) leaves the fingerprint
+    # untouched and the warm snapshot stays fresh — saving a bunch of
+    # spurious recomputes.
     sources_used: List[Any] = [f"cohort:{','.join(sorted(cohort_tickers))}"]
-    for t in cohort_tickers + [target_ticker]:
-        for f in get_filings(t):
-            sources_used.append(f"filing:{t}:{f.get('accession_number') or f.get('type')}")
+    for entry in cohort_with_target:
+        kpis = _kpi_fingerprint_inputs(entry)
+        if kpis is not None:
+            sources_used.append(kpis)
 
-    # Lineage: parent ids = each cohort member's most recent company_cold snapshot.
+    # Lineage: parent ids = each cohort member's most recent company_cold
+    # snapshot. Lineage cascades remain useful for cohort-membership
+    # changes (a name dropped from the universe, replaced by another),
+    # which the per-KPI fingerprint above wouldn't catch.
     parent_ids: List[int] = []
     for t in cohort_tickers + [target_ticker]:
         cold = cache_get(t, "company_cold")
