@@ -285,3 +285,156 @@ def render_summary_block(notes: List[NoteSummary]) -> str:
         summary = n.summary or "—"
         lines.append(f"- **{n.title}**{src}: {summary}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Wave 7B — BM25 body retrieval
+# ---------------------------------------------------------------------------
+
+class NoteExcerpt(BaseModel):
+    """The full-body projection of a research note. Used for top-K
+    retrieval (Wave 7B) when the agent wants more than a one-line summary
+    but the corpus is too large to inject every body wholesale."""
+    title: str
+    source: str = ""
+    body: str
+    score: float = 0.0
+
+
+# Hard cap on combined body bytes injected per agent run. Locked in
+# MASTER_PLAN. Tighter than the summary budget because each body can run
+# 2-4KB on its own; 4KB total is roughly 2-3 medium notes.
+_BODY_CHAR_CAP = 4096
+
+
+def _bm25_score_body(
+    query_tokens: List[str], doc_tokens: List[str],
+    df: Dict[str, int], n_docs: int, avgdl: float,
+    k1: float = 1.5, b: float = 0.75,
+) -> float:
+    """Vendored BM25 — same form as `services/retrieval_service._bm25_score`
+    but kept local to avoid circular imports between services. Identical
+    constants so retrieval over notes scores comparably to filings."""
+    import math
+    from collections import Counter
+    score = 0.0
+    tf = Counter(doc_tokens)
+    dl = len(doc_tokens) or 1
+    for q in query_tokens:
+        if q not in tf:
+            continue
+        idf = math.log(1 + (n_docs - df.get(q, 0) + 0.5) / (df.get(q, 0) + 0.5))
+        f = tf[q]
+        score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl))
+    return score
+
+
+_BODY_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]+")
+
+
+def _tokenize_body(text: str) -> List[str]:
+    return [t.lower() for t in _BODY_TOKEN_RE.findall(text or "")]
+
+
+def select_bodies(
+    agent_name: str, query: str, *,
+    sector: Optional[str] = None,
+    sub_industry: Optional[str] = None,
+    ticker: Optional[str] = None,
+    corpus_root: Optional[Path] = None,
+    top_k: int = 2,
+    char_cap: int = _BODY_CHAR_CAP,
+    today: Optional[_date] = None,
+) -> List[NoteExcerpt]:
+    """Wave 7B: BM25 over note bodies, returns top-K most-relevant excerpts.
+
+    The same routing filter that gates `select_for` runs first — bodies
+    are only ranked over the agent-eligible subset. `query` is the
+    agent's working context (profile + sector + cohort + regime
+    rendered to a single string by the caller).
+
+    `top_k` caps the number of notes returned; `char_cap` is a hard cap
+    on combined body bytes. When the top-ranked notes would exceed
+    `char_cap`, the lower-ranked ones are dropped (deterministic ordering
+    on tie via title) so the prompt budget stays bounded regardless of
+    corpus size.
+
+    Returns `[]` cleanly when the filtered corpus is empty or the query
+    matches no notes — caller falls through to summaries-only injection.
+    """
+    notes = list_notes(corpus_root=corpus_root)
+    eligible: List[ResearchNote] = []
+    for n in notes:
+        fm = n.frontmatter
+        if not _is_active(fm, today=today):
+            continue
+        if not _matches_filter(fm.applies_to_agents, agent_name):
+            continue
+        if not _matches_filter(fm.applies_to_sectors, sector):
+            continue
+        if not _matches_filter(fm.applies_to_sub_industries, sub_industry):
+            continue
+        if not _matches_filter(fm.applies_to_tickers, ticker):
+            continue
+        eligible.append(n)
+    if not eligible:
+        return []
+
+    # BM25 stats over the eligible subset.
+    docs = [(_tokenize_body(n.body), n) for n in eligible]
+    from collections import defaultdict
+    df: Dict[str, int] = defaultdict(int)
+    for tokens, _ in docs:
+        for t in set(tokens):
+            df[t] += 1
+    n_docs = len(docs)
+    avgdl = sum(len(t) for t, _ in docs) / max(1, n_docs)
+    q_tokens = _tokenize_body(query)
+
+    scored: List[tuple[float, ResearchNote]] = []
+    for tokens, note in docs:
+        s = _bm25_score_body(q_tokens, tokens, df, n_docs, avgdl)
+        if s > 0:
+            scored.append((s, note))
+    # Deterministic ordering: score desc, then weight desc, then title asc.
+    scored.sort(
+        key=lambda r: (
+            -r[0], -r[1].frontmatter.weight, r[1].frontmatter.title.lower(),
+        ),
+    )
+
+    out: List[NoteExcerpt] = []
+    used = 0
+    for score, note in scored[: max(top_k * 2, top_k)]:
+        if len(out) >= top_k:
+            break
+        body = note.body or ""
+        if used + len(body) > char_cap:
+            # Truncate the last note's body if a partial fits, so cap is
+            # respected exactly without a one-note-bigger-than-cap edge case.
+            remaining = char_cap - used
+            if remaining < 200:
+                break
+            body = body[:remaining].rstrip() + "…"
+        out.append(NoteExcerpt(
+            title=note.frontmatter.title,
+            source=note.frontmatter.source,
+            body=body,
+            score=round(score, 3),
+        ))
+        used += len(body)
+        if used >= char_cap:
+            break
+    return out
+
+
+def render_body_block(excerpts: List[NoteExcerpt]) -> str:
+    """Markdown block of the top-K full bodies. Empty string when no excerpts."""
+    if not excerpts:
+        return ""
+    lines = ["## Discretionary investment context (relevant excerpts)"]
+    for e in excerpts:
+        src = f" ({e.source})" if e.source else ""
+        lines.append(f"### {e.title}{src}")
+        lines.append(e.body)
+    return "\n\n".join(lines)

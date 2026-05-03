@@ -355,18 +355,38 @@ def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
         "valuation_lens": research.get("valuation_lens", ""),
     }
     kpi_names = sorted(placements.keys())
-    # Wave 7A: discretionary research notes — user-curated context tagged
-    # for the sector agent (or this sector / sub-industry / ticker
-    # specifically). Summaries only at this stage; Wave 7B will add
-    # body-level retrieval for the top-K most relevant.
+    # Wave 7A + 7B: discretionary research notes.
+    # - Summaries always inject (cheap, ~30 tokens each).
+    # - Top-K bodies inject via BM25 over the agent's working context
+    #   (profile + sector + cohort + regime). Hard-capped at 4KB total
+    #   so the prompt budget stays bounded regardless of corpus size.
     research_notes_block = ""
     try:
-        from ..services.research_notes import render_summary_block, select_for
-        notes = select_for(
+        from ..services.research_notes import (
+            render_body_block, render_summary_block, select_bodies, select_for,
+        )
+        summaries = select_for(
             "sector", sector=sector, sub_industry=sub_industry, ticker=ticker,
             max_notes=6,
         )
-        research_notes_block = render_summary_block(notes)
+        # Working-context query for BM25: combine profile + sector + cohort.
+        bm25_query_parts = [
+            sector or "", sub_industry or "", ticker or "",
+            profile.get("company_name", ""),
+            " ".join(profile.get("drivers") or []),
+            " ".join(profile.get("risks") or []),
+            regime,
+        ]
+        bm25_query = " ".join(p for p in bm25_query_parts if p)
+        excerpts = select_bodies(
+            "sector", bm25_query, sector=sector, sub_industry=sub_industry,
+            ticker=ticker, top_k=2,
+        )
+        blocks = [
+            render_summary_block(summaries),
+            render_body_block(excerpts),
+        ]
+        research_notes_block = "\n\n".join(b for b in blocks if b)
     except Exception:  # pragma: no cover — research notes never block a memo
         research_notes_block = ""
 
