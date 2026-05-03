@@ -75,6 +75,17 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
             invalidate(cache_key, kind="sector_warm")
             events.append({"ticker": t, "severity_count": len(material)})
 
+            # Wave 5B: hand each material/breaking alert to the update
+            # orchestrator. It gates on prior-memo presence + daily patch
+            # cap + news_impact_agent's materiality verdict, and only
+            # writes a patched snapshot when all gates pass.
+            try:
+                from ..services.update_orchestrator import on_news_alert
+                for alert in material:
+                    on_news_alert(t, alert)
+            except Exception as exc:  # pragma: no cover — diagnostic only
+                log.warning("update_orchestrator failed for %s: %s", t, exc)
+
     record_run("news_loop", note=f"{len(events)} material events")
     return events
 
