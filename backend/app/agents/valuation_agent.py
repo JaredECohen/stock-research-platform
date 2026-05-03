@@ -26,9 +26,16 @@ def run_valuation_agent(profile: Dict, ratios: Dict, dcf: Optional[DCFResult]) -
         "dcf_bear_implied": dcf.bear.implied_share_price if dcf else None,
         "dcf_base_upside": dcf.base.upside_pct if dcf else None,
     }
+    # Wave 7C: discretionary notes tagged for the valuation agent.
+    from ..services.research_notes import build_notes_block_for_agent
+    notes_block = build_notes_block_for_agent(
+        "valuation", profile, extra_query="DCF terminal growth WACC multiple",
+    )
     # Tool-agent role — uses OPENAI_TOOL_MODEL (gpt-5.4 by default).
     llm_out = llm.chat_json(
-        prompts.VALUATION_ANALYST_PROMPT + "\n\nContext:\n" + json.dumps(payload, default=str),
+        prompts.VALUATION_ANALYST_PROMPT
+        + (("\n\n" + notes_block) if notes_block else "")
+        + "\n\nContext:\n" + json.dumps(payload, default=str),
         system=prompts.PM_SYSTEM, route="strong",
         model=settings.openai_tool_model,
     )

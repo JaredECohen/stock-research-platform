@@ -9,7 +9,7 @@ Two valuation lenses, both surfaced when available (Wave 3E):
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..schemas import AgentFinding, CompsHistoryStats, CompsResult
 
@@ -148,6 +148,19 @@ def run_comps_agent(profile: Dict, comps: Optional[CompsResult]) -> AgentFinding
                     f"on EV/EBITDA — divergence to investigate."
                 )
 
+    # Wave 7C: discretionary notes tagged for the comps agent. Stashed
+    # on data so the drill-down report can surface them; the existing
+    # Wave 3E `data["history"]` payload is preserved.
+    from ..services.research_notes import build_notes_block_for_agent
+    notes_block = build_notes_block_for_agent(
+        "comps", profile, extra_query="EV EBITDA multiple cohort peer premium discount",
+    )
+    finding_data: Dict[str, Any] = {}
+    if history is not None:
+        finding_data["history"] = history.model_dump()
+    if notes_block:
+        finding_data["research_notes"] = notes_block
+
     return AgentFinding(
         agent="Comps Analyst",
         headline=headline,
@@ -156,5 +169,5 @@ def run_comps_agent(profile: Dict, comps: Optional[CompsResult]) -> AgentFinding
         confidence=confidence,
         sources=[f"peer:{p.ticker}" for p in comps.peers]
         + ([f"history:{ticker}"] if history is not None else []),
-        data={"history": history.model_dump()} if history is not None else {},
+        data=finding_data,
     )
