@@ -25,6 +25,15 @@ def run_risk_agent(profile: Dict, ratios: Dict, dcf_summary: Optional[Dict] = No
     if dcf_summary and "bear" in dcf_summary:
         key_points.append("DCF bear case maps the downside if growth and margin slip.")
 
+    # Wave 7C: discretionary notes tagged for the risk agent. Risk has no
+    # LLM call, so matched notes ride on `data["research_notes"]` for the
+    # drill-down report (Wave 3C) to surface.
+    from ..services.research_notes import build_notes_block_for_agent
+    notes_block = build_notes_block_for_agent(
+        "risk", profile, extra_query="thesis breakers downside survivable",
+    )
+    finding_data = {"research_notes": notes_block} if notes_block else {}
+
     return AgentFinding(
         agent="Risk Analyst",
         headline=f"Risk profile for {profile.get('ticker', '')}",
@@ -32,6 +41,7 @@ def run_risk_agent(profile: Dict, ratios: Dict, dcf_summary: Optional[Dict] = No
         key_points=key_points,
         confidence=0.7,
         sources=[],
+        data=finding_data,
     )
 
 

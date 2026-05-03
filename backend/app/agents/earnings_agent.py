@@ -28,9 +28,16 @@ def run_earnings_agent(profile: Dict, transcript: Optional[Dict], earnings: Opti
         "qa": (transcript.get("qa") or "")[:2000],
         "next_earnings": (earnings or {}).get("next_earnings_date"),
     }
+    # Wave 7C: discretionary notes tagged for the earnings agent.
+    from ..services.research_notes import build_notes_block_for_agent
+    notes_block = build_notes_block_for_agent(
+        "earnings", profile, extra_query="guidance margins capex demand",
+    )
     # Tool-agent role — uses OPENAI_TOOL_MODEL (gpt-5.4 by default).
     llm_out = llm.chat_json(
-        prompts.EARNINGS_ANALYST_PROMPT + "\n\nTranscript context:\n" + json.dumps(payload, default=str),
+        prompts.EARNINGS_ANALYST_PROMPT
+        + (("\n\n" + notes_block) if notes_block else "")
+        + "\n\nTranscript context:\n" + json.dumps(payload, default=str),
         system=prompts.PM_SYSTEM, route="cheap",
         model=settings.openai_tool_model,
     )

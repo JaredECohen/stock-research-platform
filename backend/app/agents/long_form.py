@@ -98,6 +98,13 @@ def _format_data_evidence(data: Dict[str, Any]) -> str:
         if rows:
             bits.append("### Indicator readout\n" + "\n".join(rows))
 
+    # Wave 7C: discretionary research notes for agents without an LLM
+    # injection point (risk, comps). The block is already markdown —
+    # splice it into the drill-down report verbatim.
+    notes_md = data.get("research_notes")
+    if isinstance(notes_md, str) and notes_md.strip():
+        bits.append(notes_md.strip())
+
     return "\n\n".join(bits)
 
 

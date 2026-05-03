@@ -201,18 +201,27 @@ def list_notes(corpus_root: Optional[Path] = None) -> List[ResearchNote]:
 # Filtering / selection
 # ---------------------------------------------------------------------------
 
-def _matches_filter(note_tags: List[str], target: Optional[str]) -> bool:
+def _matches_filter(
+    note_tags: List[str], target: Optional[str],
+    *, empty_means_no_restriction: bool = False,
+) -> bool:
     """Tag-list match with wildcard support.
 
     - target is None → no filter on this dimension (always matches).
-    - note_tags == [] → note doesn't apply to this dimension.
-    - note_tags contains "*" → note applies to everything.
+    - note_tags contains "*" → applies to everything.
+    - note_tags == [] →
+        * by default: dormant (note doesn't apply to this dimension).
+          Used for `applies_to_agents` and `applies_to_sectors` where
+          the *non-empty* default is the source of truth.
+        * with `empty_means_no_restriction=True`: applies to anything.
+          Used for `applies_to_sub_industries` and `applies_to_tickers`
+          where the default is `[]` and emptiness encodes "no narrowing".
     - else: case-insensitive equality match on `target` against any tag.
     """
     if target is None:
         return True
     if not note_tags:
-        return False
+        return empty_means_no_restriction
     if "*" in note_tags:
         return True
     target_norm = (target or "").strip().lower()
@@ -257,9 +266,16 @@ def select_for(
             continue
         if not _matches_filter(fm.applies_to_sectors, sector):
             continue
-        if not _matches_filter(fm.applies_to_sub_industries, sub_industry):
+        # Sub-industry / ticker have empty defaults, so empty = "no narrowing".
+        if not _matches_filter(
+            fm.applies_to_sub_industries, sub_industry,
+            empty_means_no_restriction=True,
+        ):
             continue
-        if not _matches_filter(fm.applies_to_tickers, ticker):
+        if not _matches_filter(
+            fm.applies_to_tickers, ticker,
+            empty_means_no_restriction=True,
+        ):
             continue
         out.append(NoteSummary(
             title=fm.title, source=fm.source, summary=fm.summary,
@@ -372,9 +388,15 @@ def select_bodies(
             continue
         if not _matches_filter(fm.applies_to_sectors, sector):
             continue
-        if not _matches_filter(fm.applies_to_sub_industries, sub_industry):
+        if not _matches_filter(
+            fm.applies_to_sub_industries, sub_industry,
+            empty_means_no_restriction=True,
+        ):
             continue
-        if not _matches_filter(fm.applies_to_tickers, ticker):
+        if not _matches_filter(
+            fm.applies_to_tickers, ticker,
+            empty_means_no_restriction=True,
+        ):
             continue
         eligible.append(n)
     if not eligible:
@@ -438,3 +460,66 @@ def render_body_block(excerpts: List[NoteExcerpt]) -> str:
         lines.append(f"### {e.title}{src}")
         lines.append(e.body)
     return "\n\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Wave 7C — unified per-agent injection helper
+# ---------------------------------------------------------------------------
+
+def build_notes_block_for_agent(
+    agent_name: str, profile: Optional[Dict[str, Any]] = None, *,
+    extra_query: str = "",
+    max_summaries: int = 6,
+    top_k_bodies: int = 2,
+    body_char_cap: int = _BODY_CHAR_CAP,
+    today: Optional[_date] = None,
+) -> str:
+    """Wave 7C: one-call entry point for any specialist agent.
+
+    Combines summary-only injection (Wave 7A) with BM25 top-K body
+    retrieval (Wave 7B) into a single markdown block ready to splice
+    into the agent's prompt. Returns the empty string when nothing
+    matches the routing filter — callers can unconditionally
+    concatenate the result.
+
+    `profile` is the same company-profile dict the agents already pass
+    around; we pull `sector`, `sub_industry`, `ticker`, `drivers`,
+    `risks` out of it to feed both routing and the BM25 query.
+    `extra_query` lets the caller add agent-specific keywords (e.g.,
+    "DCF terminal_growth" for the valuation agent) so retrieval lands
+    on the right notes when corpus distribution is uneven.
+
+    The same defensive wrapper pattern as the sector agent: this
+    function should never raise — exceptions become an empty string
+    + a debug log.
+    """
+    profile = profile or {}
+    sector = profile.get("sector") or None
+    sub_industry = profile.get("sub_industry") or profile.get("industry") or None
+    ticker = profile.get("ticker") or None
+    try:
+        summaries = select_for(
+            agent_name, sector=sector, sub_industry=sub_industry, ticker=ticker,
+            max_notes=max_summaries, today=today,
+        )
+        bm25_query_parts = [
+            sector or "", sub_industry or "", ticker or "",
+            profile.get("company_name", ""),
+            " ".join(profile.get("drivers") or []),
+            " ".join(profile.get("risks") or []),
+            extra_query,
+        ]
+        bm25_query = " ".join(p for p in bm25_query_parts if p)
+        excerpts = select_bodies(
+            agent_name, bm25_query, sector=sector, sub_industry=sub_industry,
+            ticker=ticker, top_k=top_k_bodies, char_cap=body_char_cap,
+            today=today,
+        )
+        blocks = [
+            render_summary_block(summaries),
+            render_body_block(excerpts),
+        ]
+        return "\n\n".join(b for b in blocks if b)
+    except Exception as exc:  # pragma: no cover — research notes never block a memo
+        log.debug("research notes build failed for %s: %s", agent_name, exc)
+        return ""

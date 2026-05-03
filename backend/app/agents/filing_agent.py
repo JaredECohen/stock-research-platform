@@ -36,10 +36,17 @@ def run_filing_agent(profile: Dict, filings: List[Dict]) -> AgentFinding:
         "segments": primary.get("segments", []),
         "retrieved_chunks": [r["text"] for r in retrieved][:4],
     }
+    # Wave 7C: discretionary notes tagged for the filing agent.
+    from ..services.research_notes import build_notes_block_for_agent
+    notes_block = build_notes_block_for_agent(
+        "filing", profile, extra_query="risk factors disclosure litigation regulation",
+    )
     # Long-doc analyst — uses OPENAI_TOOL_MODEL today; GEMINI_LONGDOC_MODEL
     # is documented as a future Gemini override but not yet routed here.
     llm_out = llm.chat_json(
-        prompts.FILING_ANALYST_PROMPT + "\n\nFiling context:\n" + json.dumps(payload, default=str)[:3500],
+        prompts.FILING_ANALYST_PROMPT
+        + (("\n\n" + notes_block) if notes_block else "")
+        + "\n\nFiling context:\n" + json.dumps(payload, default=str)[:3500],
         system=prompts.PM_SYSTEM, route="cheap",
         model=settings.openai_tool_model,
     )
