@@ -234,10 +234,13 @@ class DataService:
         chains: Dict[str, List[Any]] = {
             "profile": [self.fmp, self.alpha],
             "prices": [self.fmp, self.tiingo, self.polygon],
-            "financials": [self.fmp],
+            # Wave 9b — Alpha Vantage as a financials fallback. FMP's
+            # Starter tier returns 403 on most fundamentals endpoints;
+            # AV Premium covers the same vocabulary.
+            "financials": [self.fmp, self.alpha],
             "ratios": [self.fmp],
             "key_metrics": [self.fmp],
-            "earnings": [self.fmp],
+            "earnings": [self.fmp, self.alpha],
             "transcripts": [self.alpha],
             "filings": [self.sec],
             "news": [self.alpha, self.polygon],
@@ -333,17 +336,40 @@ class DataService:
         return _clip_dated_rows(rows, "filing_date", fallback_key="period_end")
 
     def _lookup_cik(self, ticker: str) -> Optional[str]:
-        """Resolve a ticker's CIK. Reads the `companies` table first to
-        avoid an extra FMP call; falls back to a live profile fetch (and
-        backfills the row) for tickers not yet seeded."""
+        """Resolve a ticker's CIK.
+
+        Order:
+          1. `companies.cik` column — populated by FMP profile or a
+             previous SEC lookup.
+          2. Live FMP profile fetch (FMP returns CIK with the profile).
+          3. SEC's public ticker→CIK map — last-resort fallback used
+             when the chain is on AV-only profiles (which don't include
+             CIK). Backfilled into `companies` so subsequent calls skip
+             the network.
+        """
         from ..database import SessionLocal
         from ..models import Company
+        ticker_up = ticker.upper()
         with SessionLocal() as db:
-            row = db.get(Company, ticker.upper())
+            row = db.get(Company, ticker_up)
             if row and row.cik:
                 return row.cik
         profile = self.get_company_profile(ticker) or {}
-        return profile.get("cik")
+        cik = profile.get("cik")
+        if cik:
+            return cik
+        # SEC fallback. Persist back to `companies` so the next call is free.
+        cik = self.sec.lookup_cik(ticker_up)
+        if cik:
+            try:
+                with SessionLocal() as db:
+                    row = db.get(Company, ticker_up)
+                    if row is not None:
+                        row.cik = cik
+                        db.commit()
+            except Exception:  # pragma: no cover
+                log.debug("CIK persist failed for %s", ticker_up)
+        return cik
 
     def get_news(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
         rows = self._try_chain("news", "get_news", ticker)

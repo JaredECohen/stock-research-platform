@@ -66,8 +66,110 @@ class AlphaVantageProvider:
     def get_price_history(self, ticker: str, days: int = 252) -> Optional[List[Dict[str, Any]]]:
         return None
 
+    # ------------------------------------------------------------------
+    # Wave 9b — fundamentals fallback
+    # ------------------------------------------------------------------
+    # FMP's free / Starter tier returns 403 on financial statements for
+    # most tickers. Alpha Vantage covers the gap on paid plans (75 rpm
+    # on Premium). Field mappings hew to the same vocabulary
+    # `history_service` expects (`revenue`, `gross_profit`, …).
+
+    @staticmethod
+    def _to_float(v: Any) -> Optional[float]:
+        if v in (None, "None", "", "-"):
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _income_row(cls, r: Dict[str, Any]) -> Dict[str, Any]:
+        date_str = r.get("fiscalDateEnding") or ""
+        period_label = date_str
+        if date_str:
+            # Map fiscal end to a 4-quarter label so downstream period
+            # parsing matches what FMP / demo emit (`2024Q4`, etc.).
+            try:
+                year, month = date_str[:4], int(date_str[5:7])
+                quarter = (month - 1) // 3 + 1
+                period_label = f"{year}Q{quarter}"
+            except (ValueError, IndexError):
+                pass
+        revenue = cls._to_float(r.get("totalRevenue"))
+        cogs = cls._to_float(r.get("costOfRevenue"))
+        gross = cls._to_float(r.get("grossProfit"))
+        if gross is None and revenue is not None and cogs is not None:
+            gross = revenue - cogs
+        return dict(
+            period=period_label,
+            period_end=date_str,
+            currency=r.get("reportedCurrency") or "USD",
+            revenue=revenue,
+            cost_of_revenue=cogs,
+            gross_profit=gross,
+            r_and_d=cls._to_float(r.get("researchAndDevelopment")),
+            sga=cls._to_float(r.get("sellingGeneralAndAdministrative")),
+            operating_income=cls._to_float(r.get("operatingIncome")),
+            ebit=cls._to_float(r.get("ebit")),
+            ebitda=cls._to_float(r.get("ebitda")),
+            net_income=cls._to_float(r.get("netIncome")),
+            eps_diluted=None,
+            weighted_avg_shares_diluted=None,
+            interest_expense=cls._to_float(r.get("interestExpense")),
+            pretax_income=cls._to_float(r.get("incomeBeforeTax")),
+            tax_expense=cls._to_float(r.get("incomeTaxExpense")),
+        )
+
+    @classmethod
+    def _balance_row(cls, r: Dict[str, Any]) -> Dict[str, Any]:
+        return dict(
+            period=r.get("fiscalDateEnding") or "",
+            period_end=r.get("fiscalDateEnding") or "",
+            currency=r.get("reportedCurrency") or "USD",
+            total_assets=cls._to_float(r.get("totalAssets")),
+            total_liabilities=cls._to_float(r.get("totalLiabilities")),
+            shareholders_equity=cls._to_float(r.get("totalShareholderEquity")),
+            cash_and_equivalents=cls._to_float(r.get("cashAndCashEquivalentsAtCarryingValue")),
+            short_term_investments=cls._to_float(r.get("shortTermInvestments")),
+            short_term_debt=cls._to_float(r.get("shortTermDebt")),
+            long_term_debt=cls._to_float(r.get("longTermDebt")),
+            total_debt=cls._to_float(r.get("shortLongTermDebtTotal")),
+            goodwill=cls._to_float(r.get("goodwill")),
+            current_assets=cls._to_float(r.get("totalCurrentAssets")),
+            current_liabilities=cls._to_float(r.get("totalCurrentLiabilities")),
+        )
+
+    @classmethod
+    def _cash_row(cls, r: Dict[str, Any]) -> Dict[str, Any]:
+        ops = cls._to_float(r.get("operatingCashflow"))
+        capex = cls._to_float(r.get("capitalExpenditures"))
+        fcf = None
+        if ops is not None and capex is not None:
+            fcf = ops - abs(capex)
+        return dict(
+            period=r.get("fiscalDateEnding") or "",
+            period_end=r.get("fiscalDateEnding") or "",
+            currency=r.get("reportedCurrency") or "USD",
+            cash_from_operations=ops,
+            capex=capex,
+            free_cash_flow=fcf,
+            depreciation_and_amortization=cls._to_float(r.get("depreciationDepletionAndAmortization")),
+            dividends_paid=cls._to_float(r.get("dividendPayoutCommonStock")),
+            share_repurchases=cls._to_float(r.get("paymentsForRepurchaseOfCommonStock")),
+            stock_based_compensation=cls._to_float(r.get("stockBasedCompensation")),
+        )
+
     def get_financial_statements(self, ticker: str) -> Optional[Dict[str, Any]]:
-        return None
+        income_raw = self._get(function="INCOME_STATEMENT", symbol=ticker) or {}
+        balance_raw = self._get(function="BALANCE_SHEET", symbol=ticker) or {}
+        cash_raw = self._get(function="CASH_FLOW", symbol=ticker) or {}
+        income = [self._income_row(r) for r in (income_raw.get("annualReports") or [])][:8]
+        balance = [self._balance_row(r) for r in (balance_raw.get("annualReports") or [])][:8]
+        cash = [self._cash_row(r) for r in (cash_raw.get("annualReports") or [])][:8]
+        if not income:
+            return None
+        return dict(income=income, balance=balance, cash=cash)
 
     def get_ratios(self, ticker: str) -> Optional[Dict[str, Any]]:
         return None
@@ -76,7 +178,22 @@ class AlphaVantageProvider:
         return None
 
     def get_earnings(self, ticker: str) -> Optional[Dict[str, Any]]:
-        return None
+        data = self._get(function="EARNINGS", symbol=ticker)
+        if not data:
+            return None
+        quarterly = data.get("quarterlyEarnings") or []
+        if not quarterly:
+            return None
+        rows: List[Dict[str, Any]] = []
+        for q in quarterly[:8]:
+            rows.append(dict(
+                period=q.get("fiscalDateEnding") or "",
+                report_date=q.get("reportedDate") or "",
+                eps_actual=self._to_float(q.get("reportedEPS")),
+                eps_estimate=self._to_float(q.get("estimatedEPS")),
+                surprise_pct=self._to_float(q.get("surprisePercentage")),
+            ))
+        return dict(quarters=rows)
 
     def get_earnings_transcripts(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
         data = self._get(function="EARNINGS_CALL_TRANSCRIPT", symbol=ticker)
