@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "@/api/client";
 import MemoCard from "@/components/MemoCard";
@@ -8,6 +8,7 @@ import AnalyzeStockGate, { TierBadge } from "@/components/AnalyzeStockGate";
 import MemoVersionTimeline from "@/components/MemoVersionTimeline";
 import DCFVersionHistory from "@/components/DCFVersionHistory";
 import MemoryTrail from "@/components/MemoryTrail";
+import TickerPicker from "@/components/TickerPicker";
 import type { CompanyOut, StockMemoOut, AgentTrace as AgentTraceT } from "@/types";
 
 type FetchError = Error & { status?: number; detail?: string };
@@ -44,46 +45,6 @@ export default function Research() {
   }, []);
 
   const company = universe.find((c) => c.ticker === ticker);
-
-  // Wave 9b — typeahead-friendly ticker picker.
-  // `draft` is the live input value; we commit to the URL only when the
-  // user lands on a known ticker (via dropdown selection or Enter on a
-  // ticker-shaped string). Filters the visible options against ticker +
-  // company name so typing "app" shows AAPL.
-  const [draft, setDraft] = useState<string>(ticker);
-  useEffect(() => setDraft(ticker), [ticker]);
-  const tickerSet = useMemo(() => new Set(universe.map((c) => c.ticker)), [universe]);
-  const filteredUniverse = useMemo(() => {
-    const q = draft.trim().toLowerCase();
-    if (!q) return universe;
-    return universe.filter(
-      (c) => c.ticker.toLowerCase().includes(q) || c.company_name.toLowerCase().includes(q),
-    );
-  }, [universe, draft]);
-  const [showList, setShowList] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    function onClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setShowList(false);
-      }
-    }
-    document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
-  }, []);
-
-  function commitTicker(t: string) {
-    const upper = t.trim().toUpperCase();
-    if (!upper) {
-      setParams({});
-      setDraft("");
-      setShowList(false);
-      return;
-    }
-    setParams({ ticker: upper });
-    setDraft(upper);
-    setShowList(false);
-  }
 
   // Fetch memo. When the backend returns 409 (data_only tier without
   // ondemand=true), surface the analyze gate instead of raising.
@@ -141,74 +102,13 @@ export default function Research() {
       <h1 className="text-2xl font-semibold">Stock Research</h1>
       <div className="card-tight">
         <div className="flex flex-col md:flex-row gap-3 md:items-center">
-          <div ref={containerRef} className="relative flex-1">
-            <input
-              type="text"
-              className="input w-full"
-              value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value.toUpperCase());
-                setShowList(true);
-              }}
-              onFocus={() => setShowList(true)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  // Prefer the first filtered match; otherwise commit the
-                  // raw text (lazy-research path covers unknown tickers).
-                  const target = filteredUniverse[0]?.ticker ?? draft;
-                  commitTicker(target);
-                } else if (e.key === "Escape") {
-                  setShowList(false);
-                  setDraft(ticker);
-                }
-              }}
-              placeholder={
-                universeLoading
-                  ? "Loading tickers…"
-                  : universe.length === 0
-                  ? "No tickers available — click Reload"
-                  : "Type a ticker or company name…"
-              }
-              disabled={universeLoading}
-              spellCheck={false}
-              autoComplete="off"
-            />
-            {showList && filteredUniverse.length > 0 && (
-              <ul
-                className="absolute z-10 left-0 right-0 mt-1 max-h-72 overflow-y-auto rounded-md border border-ink-700 bg-ink-900 shadow-lg"
-                role="listbox"
-              >
-                {filteredUniverse.slice(0, 60).map((c) => (
-                  <li
-                    key={c.ticker}
-                    role="option"
-                    aria-selected={c.ticker === ticker}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      commitTicker(c.ticker);
-                    }}
-                    className={`px-3 py-1.5 cursor-pointer text-sm flex items-center gap-2 ${
-                      c.ticker === ticker
-                        ? "bg-accent-600/15 text-accent-400"
-                        : "text-slate-200 hover:bg-ink-800"
-                    }`}
-                  >
-                    <span className="font-mono w-14">{c.ticker}</span>
-                    <span className="text-slate-400 truncate">{c.company_name}</span>
-                    {c.sector && (
-                      <span className="ml-auto text-xs text-slate-500">{c.sector}</span>
-                    )}
-                  </li>
-                ))}
-                {filteredUniverse.length > 60 && (
-                  <li className="px-3 py-1 text-xs text-slate-500 border-t border-ink-800">
-                    {filteredUniverse.length - 60} more — keep typing to narrow
-                  </li>
-                )}
-              </ul>
-            )}
-          </div>
+          <TickerPicker
+            value={ticker}
+            onChange={(t) => (t ? setParams({ ticker: t }) : setParams({}))}
+            universe={universe}
+            loading={universeLoading}
+            className="flex-1"
+          />
           {(universeError || universe.length === 0) && !universeLoading && (
             <button
               type="button"
