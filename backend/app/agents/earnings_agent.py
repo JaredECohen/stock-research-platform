@@ -38,56 +38,92 @@ def run_earnings_agent(
             sources=[],
         )
 
+    # Wave 9b — pass real transcript content to the LLM. Live AV
+    # transcripts come back as 40-50 KB strings (or short blocks for
+    # demo); 2K truncation was throwing away nearly all the substance.
+    # Per-section budget so prepared remarks (where management frames
+    # the quarter) and Q&A (where analysts probe) both get airtime.
+    prepared = transcript.get("prepared_remarks") or ""
+    qa = transcript.get("qa") or ""
+    # If the upstream transcript is shape-stored as a list of blocks,
+    # join them into the same string view the LLM expects.
+    if isinstance(prepared, list):
+        prepared = "\n".join(
+            (b.get("text") if isinstance(b, dict) else str(b))
+            for b in prepared
+        )
+    if isinstance(qa, list):
+        qa = "\n".join(
+            (b.get("text") if isinstance(b, dict) else str(b))
+            for b in qa
+        )
     payload = {
         "ticker": profile.get("ticker"),
         "period": transcript.get("period"),
         "tone": transcript.get("management_tone"),
-        "prepared": (transcript.get("prepared_remarks") or "")[:2000],
-        "qa": (transcript.get("qa") or "")[:2000],
+        "prepared": str(prepared)[:10000],
+        "qa": str(qa)[:8000],
         "next_earnings": (earnings or {}).get("next_earnings_date"),
     }
-    # Wave 7C: discretionary notes tagged for the earnings agent.
     from ..services.research_notes import build_notes_block_for_agent
     notes_block = build_notes_block_for_agent(
         "earnings", profile, extra_query="guidance margins capex demand",
     )
-    # Tool-agent role — uses OPENAI_TOOL_MODEL (gpt-5.4 by default).
     llm_out = llm.chat_json(
         prompts.EARNINGS_ANALYST_PROMPT
         + _critique_block(prior_round_critique)
         + (("\n\n" + notes_block) if notes_block else "")
-        + "\n\nTranscript context:\n" + json.dumps(payload, default=str),
+        + "\n\nTranscript context:\n" + json.dumps(payload, default=str)[:32000],
         system=prompts.PM_SYSTEM, route="cheap",
         model=settings.openai_tool_model,
+        # Same truncation tax filing analyst was paying — give the
+        # response room for headline + 8-12 categorized points.
+        max_tokens=2000,
     )
     if llm_out:
+        # Same flattening defense as filing_agent — prompt-tuned models
+        # sometimes emit nested category objects instead of flat strings.
+        from .filing_agent import _flatten_key_points
         return AgentFinding(
             agent="Earnings Analyst",
             headline=llm_out.get("headline", "Earnings view"),
             summary=llm_out.get("summary", ""),
-            key_points=llm_out.get("key_points", []),
+            key_points=_flatten_key_points(llm_out.get("key_points", [])),
             confidence=float(llm_out.get("confidence", 0.7)),
             sources=[f"transcript:{transcript.get('period', '')}"],
         )
 
-    # Deterministic fallback
-    bullish = transcript.get("bullish_takeaways", []) or []
-    bearish = transcript.get("bearish_takeaways", []) or []
-    tone = transcript.get("management_tone", "constructive")
-    summary = (
-        f"Management tone read as {tone}. Prepared remarks emphasized core drivers; Q&A reinforced the framework. "
-        f"Next earnings: {(earnings or {}).get('next_earnings_date', 'TBD')}."
+    # Deterministic fallback — used only when the LLM call fails or
+    # returns nothing. Wave 9b: stripped the demo-only `management_tone`
+    # / `bullish_takeaways` / `bearish_takeaways` references; live AV
+    # transcripts don't carry those fields, which made the prior
+    # fallback render as identical canned text for every ticker. New
+    # version states the limitation honestly + surfaces the next
+    # earnings date when known.
+    period = transcript.get("period") or "the most recent quarter"
+    text_len = len(str(transcript.get("prepared_remarks") or "")) + len(
+        str(transcript.get("qa") or "")
     )
-    key_points = [
-        f"Bullish: {b}" for b in bullish[:3]
-    ] + [
-        f"Watch: {b}" for b in bearish[:2]
-    ]
+    next_date = (earnings or {}).get("next_earnings_date")
+    next_line = (
+        f" Next earnings: {next_date}." if next_date else
+        " Next earnings date TBD."
+    )
+    if text_len > 1000:
+        summary = (
+            f"Transcript for {period} is on file ({text_len:,} chars of prepared "
+            "remarks + Q&A) but the LLM analyst couldn't run a full pass on this "
+            "request — see source for details." + next_line
+        )
+    else:
+        summary = (
+            f"No substantive transcript text available for {period}." + next_line
+        )
     return AgentFinding(
         agent="Earnings Analyst",
-        headline=f"{profile.get('ticker', '')}: management tone {tone}.",
+        headline=f"{profile.get('ticker', '')}: transcript pending LLM analysis.",
         summary=summary,
-        key_points=key_points,
-        confidence=0.7,
+        key_points=[],
+        confidence=0.4,
         sources=[f"transcript:{transcript.get('period', '')}"],
     )

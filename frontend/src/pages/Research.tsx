@@ -8,6 +8,7 @@ import AnalyzeStockGate, { TierBadge } from "@/components/AnalyzeStockGate";
 import MemoVersionTimeline from "@/components/MemoVersionTimeline";
 import DCFVersionHistory from "@/components/DCFVersionHistory";
 import MemoryTrail from "@/components/MemoryTrail";
+import TickerPicker from "@/components/TickerPicker";
 import type { CompanyOut, StockMemoOut, AgentTrace as AgentTraceT } from "@/types";
 
 type FetchError = Error & { status?: number; detail?: string };
@@ -101,29 +102,13 @@ export default function Research() {
       <h1 className="text-2xl font-semibold">Stock Research</h1>
       <div className="card-tight">
         <div className="flex flex-col md:flex-row gap-3 md:items-center">
-          <select
-            className="input flex-1"
+          <TickerPicker
             value={ticker}
-            onChange={(e) => {
-              const t = e.target.value.toUpperCase();
-              if (t) setParams({ ticker: t });
-              else setParams({});
-            }}
-            disabled={universeLoading}
-          >
-            <option value="">
-              {universeLoading
-                ? "Loading tickers…"
-                : universe.length === 0
-                ? "No tickers available — click Reload"
-                : "Select a ticker…"}
-            </option>
-            {universe.map((c) => (
-              <option key={c.ticker} value={c.ticker}>
-                {c.ticker} — {c.company_name}
-              </option>
-            ))}
-          </select>
+            onChange={(t) => (t ? setParams({ ticker: t }) : setParams({}))}
+            universe={universe}
+            loading={universeLoading}
+            className="flex-1"
+          />
           {(universeError || universe.length === 0) && !universeLoading && (
             <button
               type="button"

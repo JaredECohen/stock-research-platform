@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/api/client";
+import TickerPicker from "@/components/TickerPicker";
 import type { CompanyOut, DCFAssumptions, DCFResult, DCFSensitivity } from "@/types";
 import { fmtCurrency, fmtPct } from "@/lib/format";
 
@@ -415,17 +416,12 @@ export default function DCFLab() {
               </button>
             </div>
           </div>
-          <select
-            className="input"
+          <TickerPicker
             value={ticker}
-            onChange={(e) => setTicker(e.target.value)}
-          >
-            {universe.map((c) => (
-              <option key={c.ticker} value={c.ticker}>
-                {c.ticker} — {c.company_name}
-              </option>
-            ))}
-          </select>
+            onChange={setTicker}
+            universe={universe}
+            className="w-72"
+          />
         </div>
       </div>
 

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import re
+
+from sqlalchemy import select
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import settings
@@ -259,10 +261,70 @@ def _render_dcf_answer(d: DCFResult) -> str:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+_FOLLOWUP_HINTS = (
+    "which", "why", "how", "compare", "explain", "what about",
+    "what's", "what is", "moat", "better", "worse", "cheaper",
+    "expensive", "more", "less", "vs", "versus", "differ",
+    "of these", "of those", "from above", "from the list",
+    "the screener", "the screen",
+)
+
+
+def _is_conceptual_followup(message: str, history: List[ChatMessage]) -> bool:
+    """Heuristic — should we route this through the SDK chat agent
+    instead of a workflow handler?
+
+    Returns True when:
+      • There's prior chat history (any follow-up turn).
+      • OR the message starts with / contains a conceptual cue
+        ("which", "why", "compare X and Y on …", etc.) — these
+        are usually requests to *reason over* prior context, not
+        to fire a fresh workflow.
+    """
+    if history:
+        return True
+    low = message.lower().strip()
+    if any(low.startswith(h) for h in _FOLLOWUP_HINTS):
+        return True
+    if any(f" {h} " in f" {low} " for h in _FOLLOWUP_HINTS):
+        return True
+    return False
+
+
+def _try_sdk_chat(message: str, history: Optional[List[ChatMessage]]) -> Optional[str]:
+    """Try the OpenAI Agents SDK chat agent (8 tools); return None on
+    any failure so callers can fall back to legacy handlers."""
+    if not settings.use_agents_sdk:
+        return None
+    try:
+        from .chat_sdk import answer_via_sdk
+        return answer_via_sdk(message=message, history=history or [])
+    except Exception:
+        return None
+
+
 class Orchestrator:
     def chat(self, message: str, history: Optional[List[ChatMessage]] = None) -> ChatResponse:
         intent, tickers, theme = classify_intent(message)
         trace = default_agent_trace(intent)
+
+        # Wave 9b — flexible chat routing. When the user is on a
+        # follow-up turn (history non-empty) or asking a conceptual
+        # question ("which has the best moat?", "why is META
+        # cheaper?"), prefer the SDK chat agent over the workflow
+        # handlers. The agent has tools to fetch memo/DCF/comps/macro/
+        # universe/screener/custom_screen and reasons over the result.
+        # Workflow handlers still fire for unambiguous first-message
+        # asks ("Analyze NVDA", "Compare MSFT and GOOGL") so the heavy
+        # memo path runs only when the user actually wants it.
+        if _is_conceptual_followup(message, history or []):
+            sdk_answer = _try_sdk_chat(message, history)
+            if sdk_answer:
+                return ChatResponse(
+                    intent="general_research_chat",
+                    answer=sdk_answer, agent_trace=trace,
+                )
+            # else: fall through to intent-based routing.
 
         if intent == "single_stock_analysis" and tickers:
             ticker = tickers[0]
@@ -413,44 +475,71 @@ class Orchestrator:
         # serves cached snapshots cheaply — no re-running of the graph.
         from ..services.memo_store import latest_memo, memo_to_pydantic
         memos: List[Dict[str, Any]] = []
+        # Tickers without a memo still get a "lite" company snapshot
+        # (sector, industry, business_description + screener_metrics) so
+        # the LLM can answer comparative follow-ups like "which has the
+        # strongest moat?" without us having to pre-run a full memo for
+        # every ticker the user mentions.
+        company_lites: List[Dict[str, Any]] = []
         seen: set[str] = set()
         for t in candidate_tickers:
             if t in seen:
                 continue
             seen.add(t)
             snap = latest_memo(t)
-            if snap is None:
-                continue
-            try:
-                m = memo_to_pydantic(snap)
-            except Exception:
-                continue
-            memos.append(_memo_for_chat_context(m))
-            if len(memos) >= 4:
-                break
+            if snap is not None:
+                try:
+                    m = memo_to_pydantic(snap)
+                    memos.append(_memo_for_chat_context(m))
+                    if len(memos) >= 4:
+                        break
+                    continue
+                except Exception:
+                    pass
+            lite = _company_lite_snapshot(t)
+            if lite is not None:
+                company_lites.append(lite)
+                if len(company_lites) >= 8:
+                    break
 
-        if not memos:
+        if not memos and not company_lites:
             # Nothing to ground in — let the help text fire.
             return None
 
         # Build the LLM call. System prompt frames it as a careful PM
-        # answering a follow-up using ONLY the data in the memos.
+        # answering a follow-up using the data the platform has on hand
+        # (full memos when available, lighter company snapshots when
+        # only screener-tier data exists).
         system = (
-            "You are MarketMosaic's PM. The user has already seen full "
-            "memos for the tickers listed below. They're asking a "
-            "follow-up question. Answer it directly using ONLY the memo "
-            "data provided — quote specific numbers (rating, stock "
-            "score, DCF upside, factor scores, key risks). When the user "
-            "asks 'which should I buy', give a directional answer "
+            "You are MarketMosaic's PM. The user is asking a follow-up "
+            "question about tickers from recent conversation context. "
+            "Answer directly using the data provided — quote specific "
+            "numbers (rating, scores, margins, ROIC, P/E, EV/EBITDA, "
+            "DCF upside, key risks) where they appear. For comparative "
+            "questions like 'which has the strongest moat?', reason "
+            "from durable advantages — gross / operating margins, ROIC, "
+            "scale, network effects implied by the business description "
+            "— and rank the candidates with one-sentence justifications. "
+            "When asked 'which should I buy', give a directional answer "
             "grounded in the metrics, then add ONE sentence on what "
-            "would change your view. Do NOT invent data. Always end with "
-            "the disclaimer:\n\n"
+            "would change your view. Do NOT invent data. Always end "
+            "with the disclaimer:\n\n"
             "_MarketMosaic is for research and education only and does "
             "not provide personalized financial advice._"
         )
+        context_blocks = []
+        if memos:
+            context_blocks.append(
+                "Full memos (preferred — use these first):\n"
+                + json.dumps(memos, default=str, indent=2)[:5000]
+            )
+        if company_lites:
+            context_blocks.append(
+                "Company snapshots (use when no memo is available):\n"
+                + json.dumps(company_lites, default=str, indent=2)[:5000]
+            )
         prompt = (
-            "Recent memos:\n"
-            + json.dumps(memos, default=str, indent=2)[:6000]
+            "\n\n".join(context_blocks)
             + f"\n\nConversation history (last few turns):\n"
             + "\n".join(f"- {h.role}: {(h.content or '')[:300]}" for h in history[-6:])
             + f"\n\nUser's new question:\n{message}"
@@ -475,6 +564,53 @@ class Orchestrator:
                 "does not provide personalized financial advice._"
             )
         return body
+
+
+def _company_lite_snapshot(ticker: str) -> Optional[Dict[str, Any]]:
+    """Compact dossier when no memo exists — sector / industry / market
+    cap from the `companies` table, plus screener-tier metrics (P/E,
+    margins, ROIC, growth) so the chat LLM can answer comparative
+    follow-ups (moat, valuation, growth) without us pre-running a memo
+    for every screener row."""
+    from ..database import SessionLocal
+    from ..models import Company, ScreenerMetric, ScreenerScore
+    with SessionLocal() as db:
+        c = db.get(Company, ticker.upper())
+        if c is None:
+            return None
+        m = db.get(ScreenerMetric, ticker.upper())
+        s = db.execute(
+            select(ScreenerScore).where(
+                ScreenerScore.ticker == ticker.upper(),
+                ScreenerScore.theme.is_(None),
+            )
+        ).scalar_one_or_none()
+        return {
+            "ticker": c.ticker,
+            "name": c.company_name,
+            "sector": c.sector,
+            "industry": c.industry,
+            "market_cap": c.market_cap,
+            "business": (c.business_description or "")[:600],
+            "metrics": {
+                "pe_ttm": getattr(m, "pe_ttm", None),
+                "ev_ebitda": getattr(m, "ev_ebitda", None),
+                "gross_margin": getattr(m, "gross_margin", None),
+                "op_margin": getattr(m, "op_margin", None),
+                "fcf_margin": getattr(m, "fcf_margin", None),
+                "roic": getattr(m, "roic", None),
+                "roe": getattr(m, "roe", None),
+                "debt_to_ebitda": getattr(m, "debt_to_ebitda", None),
+                "revenue_growth_yoy": getattr(m, "revenue_growth_yoy", None),
+                "beta": getattr(m, "beta", None),
+            } if m is not None else None,
+            "screener_scores": {
+                "pm_conviction": s.pm_conviction,
+                "quality": s.quality, "growth": s.growth,
+                "valuation": s.valuation, "earnings_momentum": s.earnings_momentum,
+                "risk": s.risk, "macro_fit": s.macro_fit,
+            } if s is not None else None,
+        }
 
 
 def _memo_for_chat_context(m: StockMemoOut) -> Dict[str, Any]:

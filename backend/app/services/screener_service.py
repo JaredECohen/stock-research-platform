@@ -51,9 +51,21 @@ def _one_line_thesis(profile: Dict) -> str:
 
 
 def compute_universe_scores(theme: Optional[str] = None) -> ScreenerResult:
-    """Compute scores for the entire demo universe with optional theme bias."""
-    ds = get_data_service()
-    tickers = ds.list_tickers()
+    """Compute scores for the curated screener universe (auto_analysis only).
+
+    Wave 9b — research-on-demand and demoted-class tickers stay out of
+    the screener (per the locked decision in
+    `docs/UNIVERSE_REFACTOR_PLAN.md`). They're still individually
+    researchable from the Research page.
+    """
+    from ..database import SessionLocal
+    from ..models import Company
+    with SessionLocal() as db:
+        tickers = [
+            t for (t,) in db.query(Company.ticker).filter(
+                Company.universe_tier == "auto_analysis",
+            ).all()
+        ]
     rows: List[ScreenerRow] = []
     theme_key = _theme_label(theme)
     bias = THEME_BIAS.get(theme_key or "", {})

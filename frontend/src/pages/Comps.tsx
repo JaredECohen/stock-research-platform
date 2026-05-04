@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/api/client";
+import TickerPicker from "@/components/TickerPicker";
 import type { CompanyOut, CompsResult } from "@/types";
 import { fmtMultiple, fmtPct, fmtCurrency } from "@/lib/format";
 
@@ -40,13 +41,12 @@ export default function Comps() {
           <h1 className="text-2xl font-semibold">Comps</h1>
           <p className="text-slate-400 text-sm mt-1">Peer-relative valuation, growth, margins, and quality.</p>
         </div>
-        <select className="input" value={ticker} onChange={(e) => setTicker(e.target.value)}>
-          {universe.map((c) => (
-            <option key={c.ticker} value={c.ticker}>
-              {c.ticker} — {c.company_name}
-            </option>
-          ))}
-        </select>
+        <TickerPicker
+          value={ticker}
+          onChange={setTicker}
+          universe={universe}
+          className="w-72"
+        />
       </div>
 
       {error && <div className="card-tight border-danger-500/40 text-danger-500 text-sm">{error}</div>}

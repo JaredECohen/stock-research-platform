@@ -239,35 +239,61 @@ def _ingest_filings(db: Session, ticker: str, filings: List[Dict[str, Any]]) -> 
 
 
 def _transcript_blocks(t: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
-    """Render the demo/live transcript shape into structured blocks +
-    concatenated text. Demo records use `prepared_remarks` + `qa`; live
-    providers may already supply `blocks`."""
+    """Render a transcript payload into structured blocks + concatenated text.
+
+    Accepts three shapes:
+      - `blocks`: a list of `{speaker, role, segment, text}` dicts (demo).
+      - `prepared_remarks` / `qa` as a list of dicts (legacy demo).
+      - `prepared_remarks` / `qa` as a single concatenated string (live AV).
+
+    The string-input path is the one that bit us: when AV returns
+    `prepared_remarks` as one big string, iterating it yields one char
+    per "remark" — a 50KB transcript blew up into ~68k single-char
+    blocks (5MB JSON per row). Now strings collapse to a single block.
+    """
     if isinstance(t.get("blocks"), list) and t["blocks"]:
         blocks = t["blocks"]
         text = "\n".join(
             (b.get("text") or "") for b in blocks if isinstance(b, dict)
         )
         return blocks, text
+
     blocks: List[Dict[str, Any]] = []
     parts: List[str] = []
-    for r in t.get("prepared_remarks") or []:
-        speaker = r.get("speaker") if isinstance(r, dict) else None
-        text = r.get("text") if isinstance(r, dict) else str(r)
-        blocks.append({
-            "speaker": speaker or "Management", "role": "exec",
-            "segment": "prepared_remarks", "text": text or "",
-        })
-        if text:
-            parts.append(text)
-    for r in t.get("qa") or []:
-        speaker = r.get("speaker") if isinstance(r, dict) else None
-        text = r.get("text") if isinstance(r, dict) else str(r)
-        blocks.append({
-            "speaker": speaker or "Analyst", "role": "analyst",
-            "segment": "qa", "text": text or "",
-        })
-        if text:
-            parts.append(text)
+
+    def _ingest(field: Any, *, segment: str, default_speaker: str, role: str) -> None:
+        if not field:
+            return
+        if isinstance(field, str):
+            # Single concatenated string → one block. Strip to keep the
+            # JSON payload tight; the full text is stored separately.
+            stripped = field.strip()
+            if stripped:
+                blocks.append({
+                    "speaker": default_speaker, "role": role,
+                    "segment": segment, "text": stripped,
+                })
+                parts.append(stripped)
+            return
+        if isinstance(field, list):
+            for r in field:
+                if isinstance(r, dict):
+                    speaker = r.get("speaker") or default_speaker
+                    text = r.get("text") or r.get("content") or ""
+                else:
+                    speaker = default_speaker
+                    text = str(r)
+                blocks.append({
+                    "speaker": speaker, "role": role,
+                    "segment": segment, "text": text,
+                })
+                if text:
+                    parts.append(str(text))
+
+    _ingest(t.get("prepared_remarks"), segment="prepared_remarks",
+            default_speaker="Management", role="exec")
+    _ingest(t.get("qa"), segment="qa",
+            default_speaker="Analyst", role="analyst")
     return blocks, "\n".join(parts)
 
 

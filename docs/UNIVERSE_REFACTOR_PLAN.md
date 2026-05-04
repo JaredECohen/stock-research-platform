@@ -361,6 +361,74 @@ Estimated total: ~4-6 focused days. Each phase ships independently
 behind feature flags where reasonable so the branch can be merged
 incrementally rather than as one mega-PR.
 
+## 11.5 Roadmap — social-media signal layer
+
+Out of scope for Wave 9b but tracked here so we don't re-derive it later.
+Today the news-impact agent
+([`agents/news_impact_agent.py`](../backend/app/agents/news_impact_agent.py))
+classifies whether a fresh news article is material to a memo's thesis
+and triggers an `incremental_patch` snapshot when it is. Social-media
+streams (X / Twitter, Reddit) carry a meaningfully different signal —
+faster, noisier, and dominated by retail sentiment + rumor — that
+deserves the same triage pipeline rather than a second-class summary.
+
+### Design sketch
+
+- **New providers** in `backend/app/providers/`:
+  - `x_provider.py` — X (Twitter) API v2 (`recent_search` endpoint;
+    `cashtag:NVDA` / verified-account filter; rolling 7-day window).
+    Requires a paid X API tier; key in `X_BEARER_TOKEN`.
+  - `reddit_provider.py` — Reddit OAuth + PRAW; subscribed
+    subreddits (`r/wallstreetbets`, `r/investing`, `r/stocks`,
+    `r/SecurityAnalysis`); search by ticker; sort by hot / top
+    over the last week.
+  - Stretch: StockTwits (free tier), Bluesky (free), Hacker News
+    `Algolia` search for tech-tilted stories.
+
+- **Capability extension** on `data_service`:
+  - `get_social_posts(ticker)` returning a unified `[{platform, author,
+    timestamp, text, url, engagement_score}]` shape so downstream
+    agents don't care which platform answered.
+  - Cached in `provider_cache` with a 30-min TTL (faster than news;
+    social timelines move).
+
+- **New agent** `agents/social_signal_agent.py`:
+  - Pulls the latest 50 posts per platform per ticker.
+  - Cheap-model first pass: filter spam / pumping / off-topic; classify
+    sentiment + topic.
+  - Strong-model second pass on the top 10 by engagement: write a
+    "what the crowd is saying" finding (5 bullets max), flag any
+    clearly material claims for verification against filings / news.
+
+- **Integration with the news-impact loop**: the existing
+  `news_impact_agent` triages news *articles*. Social signal lands in
+  the same loop — when a high-engagement post claims material news, it
+  triggers the same `incremental_patch` path so the memo + DCF can be
+  refreshed before traditional news catches up.
+
+### Risks worth flagging upfront
+
+- **Rate limits + cost.** X API v2 paid tier is $100/mo for 10k
+  reads/mo — caps how many tickers we can keep warm. Reddit free tier
+  is generous. Plan: only fetch social for tickers with active news
+  signals or memo refreshes today, not the full S&P 100 universe.
+- **Hallucination + manipulation surface.** Pump-and-dump, fake
+  scoops, and engagement farming are common on cashtag streams. The
+  agent must always cite the post + author, never paraphrase as fact.
+- **Compliance.** Social-derived takes need extra-prominent
+  disclaimers since rumor is not a research signal of record. Reuse
+  the existing disclaimer infrastructure in `agents/prompts.py`.
+
+### Sequencing when we pick this up
+
+1. `x_provider.py` + `reddit_provider.py` + `cached_social` cache key
+   (~half-day).
+2. `social_signal_agent.py` + Pydantic schema (~half-day).
+3. Wire into news-impact loop so material-signal posts trigger
+   `incremental_patch` (~few hours).
+4. Frontend sidebar tile on `/research` showing top 5 posts per
+   ticker with platform badges + engagement counts (~half-day).
+
 ## 12. Changelog
 
 ### 2026-05-04 — FMP `/stable/` migration (in-branch follow-up)
@@ -417,3 +485,42 @@ hit `UNIQUE` constraint conflicts when a provider returned two rows for
 the same fiscal period after a restatement (JNJ FY2023 was the
 reproducer). Now dedupes by period before iterating; the later row
 wins.
+
+### 2026-05-04 — Filing text + transcript backfill
+
+Three gaps surfaced when auditing the data pipeline post-merge:
+
+**SEC EDGAR was metadata-only.** `SECEdgarProvider.get_filings`
+returned filing date / form type / accession / URL but never fetched
+the actual document body, so `filing_docs.raw_text` was always 0 bytes
+and the Filing Analyst had nothing to extract. Wave 9b adds a primary
+document fetcher: pulls the latest 10-K and latest 10-Q per ticker,
+strips HTML via stdlib `html.parser`, sections by `Item N.` headings
+into `business_description` / `mda` / `risk_factors` /
+`legal_or_regulatory`, and caps each filing's persisted text at 250KB
+to keep the DB lean. Rate-paced at ~8 req/sec to stay under SEC's
+~10/sec ceiling.
+
+**Alpha Vantage transcripts were silently empty.** AV's
+`/EARNINGS_CALL_TRANSCRIPT` endpoint requires a `quarter=YYYYQN` param;
+without one it returns 200 + empty body. The provider now iterates the
+last 4 fiscal quarters, stitches presentation + Q&A segments, and
+falls back to "everything as prepared remarks" for plans that don't
+section-tag responses. Verified on GOOGL: 4 quarters × 40-50KB each.
+
+**Anthropic SDK ↔ httpx incompatibility.** anthropic 0.39 passed a
+`proxies` kwarg that httpx 0.28 dropped, so every Anthropic-routed
+agent call silently failed at client init and fell through to
+deterministic stubs (which is why filing / sector / earnings agents
+were producing canned filler text). Bumped to ≥0.42, smoke-tested a
+real call, pinned in `requirements.txt`. Single-character fix in
+`factor_scores.earnings_momentum_score` to drop None values from the
+surprise list (forward quarters lack `epsActual`).
+
+**Bonus.** `routes_stocks.list_stocks` was making 100+ live profile
+calls per request to render the dropdown — slow (~10s) and lossy (one
+provider miss dropped a ticker). Now reads `companies` directly:
+27ms cold, 9ms warm, 102 tickers always present. Front-end Research
+page picker swapped from `<select>` to a typeahead-filtered list so
+users can type a ticker / company name to narrow the dropdown without
+clicking.
