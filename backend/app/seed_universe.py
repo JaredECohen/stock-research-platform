@@ -154,6 +154,65 @@ def seed_universe(refresh: bool = False) -> Dict[str, int]:
     }
 
 
+def ensure_company_in_universe(ticker: str) -> Optional[Dict]:
+    """Lazy-introduce a ticker that isn't in the curated universe.
+
+    Used by the research route when the user submits an arbitrary
+    ticker (e.g., "PYPL" after the screener universe has settled on
+    the S&P 100). Behavior:
+
+    - Returns immediately when the row already exists.
+    - Otherwise hits the live profile chain. Returns None if the
+      provider chain rejects the symbol (caller should 404 the
+      request).
+    - Inserts a `companies` row tagged `analyzed_on_demand` so the
+      memo flow has the metadata it needs and the screener stays
+      curated.
+
+    The caller is responsible for kicking off the heavy backfill
+    (`history_service.backfill_ticker`); this function is fast.
+    """
+    ticker = ticker.upper()
+    with session_scope() as db:
+        existing: Optional[Company] = db.get(Company, ticker)
+        if existing is not None:
+            return _profile_to_company_kwargs(
+                {
+                    "company_name": existing.company_name,
+                    "exchange": existing.exchange,
+                    "sector": existing.sector,
+                    "industry": existing.industry,
+                    "sub_industry": existing.sub_industry,
+                    "country": existing.country,
+                    "currency": existing.currency,
+                    "market_cap": existing.market_cap,
+                    "cik": existing.cik,
+                    "business_description": existing.business_description,
+                    "fiscal_year_end": existing.fiscal_year_end,
+                    "is_active": existing.is_active,
+                    "is_etf": existing.is_etf,
+                    "beta": existing.beta,
+                    "shares_outstanding": existing.shares_outstanding,
+                    "last_price": existing.last_price,
+                },
+                ticker,
+            )
+    ds = get_data_service()
+    profile = ds.get_company_profile(ticker)
+    if not profile:
+        log.info("ensure_company_in_universe: provider rejected %s", ticker)
+        return None
+    kwargs = _profile_to_company_kwargs(profile, ticker)
+    with session_scope() as db:
+        # Re-check inside the transaction in case a concurrent request
+        # introduced the row.
+        if db.get(Company, ticker) is None:
+            db.add(Company(
+                ticker=ticker, universe_tier="analyzed_on_demand", **kwargs,
+            ))
+    return kwargs
+
+
 def recompute_screener_scores() -> int:
     """Recompute screener scores against the current `auto_analysis` set.
 
