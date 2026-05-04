@@ -544,6 +544,52 @@ class ScreenerResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Wave 9b — Custom rule-based screener (Phase 4)
+# ---------------------------------------------------------------------------
+
+ScreenerMetricName = Literal[
+    "pe_ttm", "forward_pe", "peg", "ev_ebitda", "ev_revenue",
+    "gross_margin", "op_margin", "fcf_margin", "roic", "roe",
+    "debt_to_ebitda", "revenue_growth_yoy", "dividend_yield",
+    "market_cap", "beta",
+]
+
+ScreenerOp = Literal[">", "<", ">=", "<=", "=", "between"]
+
+
+class ScreenerRule(BaseModel):
+    metric: ScreenerMetricName
+    op: ScreenerOp
+    value: float = 0.0
+    # `value2` is required only when `op == "between"`; ignored otherwise.
+    value2: Optional[float] = None
+
+
+class CustomScreenRequest(BaseModel):
+    rules: List[ScreenerRule] = Field(default_factory=list)
+    sectors: Optional[List[str]] = None
+    sort_by: ScreenerMetricName = "market_cap"
+    order: Literal["asc", "desc"] = "desc"
+    limit: int = Field(50, ge=1, le=500)
+
+
+class CustomScreenRow(BaseModel):
+    ticker: str
+    company_name: str
+    sector: str
+    pm_score: Optional[float] = None
+    rating_label: Optional[str] = None
+    metrics: Dict[str, Optional[float]] = Field(default_factory=dict)
+
+
+class CustomScreenResult(BaseModel):
+    rows: List[CustomScreenRow]
+    rule_count: int
+    matched: int
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
 # Memos
 # ---------------------------------------------------------------------------
 
