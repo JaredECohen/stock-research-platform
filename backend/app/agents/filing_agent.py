@@ -13,36 +13,83 @@ from . import llm, prompts
 def _flatten_key_points(raw: Any) -> List[str]:
     """Coerce a structured key_points payload into a flat List[str].
 
-    Modern Anthropic / OpenAI prompts sometimes return nested category
-    objects (`[{"category": "MD&A Highlights", "items": [...]}]`)
-    instead of the flat list our `AgentFinding` schema expects. Walk
-    the structure, prefix each item with its category when present,
-    and cap the total to a sensible bullet count for the UI."""
+    Recognized shapes (cumulative — any of these survives):
+      - `["bullet 1", "bullet 2", ...]` — already flat.
+      - `[{"category": ..., "items": [...]}, ...]` — categorized lists.
+      - `[{"point": "..."}]` / `[{"text": "..."}]` — single-text dicts.
+      - `[{"detail": "...", "bullet": "..."}]` — common variant keys.
+      - Plain `dict`: top-level grouping (e.g.
+        `{"highlights": [...], "risks": [...]}`) — flatten each group's
+        items with the group key as a category prefix.
+
+    Also recognizes string-only items that look like list separators
+    ("•", "*", "-") and strips them.
+    """
+    BULLET_PREFIXES = ("• ", "* ", "- ", "● ", "‣ ")
+
+    def _clean(s: str) -> str:
+        s = str(s).strip()
+        for p in BULLET_PREFIXES:
+            if s.startswith(p):
+                s = s[len(p):]
+                break
+        return s
+
     out: List[str] = []
-    if not isinstance(raw, list):
-        return out
-    for entry in raw:
+
+    def _add(cat: str, text: Any) -> None:
+        s = _clean(text)
+        if not s or len(out) >= 15:
+            return
+        out.append(f"{cat}: {s}" if cat else s)
+
+    def _walk(entry: Any, cat: str = "") -> None:
         if isinstance(entry, str):
-            if entry.strip():
-                out.append(entry.strip())
+            _add(cat, entry)
         elif isinstance(entry, dict):
-            cat = str(entry.get("category") or entry.get("title") or "").strip()
-            items = entry.get("items") or entry.get("points") or []
+            local_cat = (
+                str(entry.get("category") or entry.get("title") or
+                    entry.get("section") or "").strip()
+            ) or cat
+            items = (
+                entry.get("items") or entry.get("points") or
+                entry.get("bullets") or entry.get("highlights")
+            )
             if isinstance(items, list):
                 for item in items:
-                    text = str(item).strip()
-                    if not text:
-                        continue
-                    out.append(f"{cat}: {text}" if cat else text)
-            elif isinstance(items, str) and items.strip():
-                out.append(f"{cat}: {items.strip()}" if cat else items.strip())
-            else:
-                # Sometimes the dict itself is the bullet (no items key).
-                txt = str(entry.get("point") or entry.get("text") or "").strip()
-                if txt:
-                    out.append(f"{cat}: {txt}" if cat else txt)
-        if len(out) >= 15:
-            break
+                    _walk(item, local_cat)
+                return
+            if isinstance(items, str):
+                _add(local_cat, items)
+                return
+            # No nested list — try common single-text keys.
+            for key in ("point", "text", "detail", "bullet", "summary"):
+                if entry.get(key):
+                    _add(local_cat, entry[key])
+                    return
+            # Concatenate any string-valued fields as a last resort.
+            text = " — ".join(
+                str(v) for v in entry.values()
+                if isinstance(v, str) and 5 <= len(v) <= 240
+            )
+            if text:
+                _add(local_cat, text)
+
+    if isinstance(raw, list):
+        for entry in raw:
+            _walk(entry)
+            if len(out) >= 15:
+                break
+    elif isinstance(raw, dict):
+        # Top-level grouping — flatten each group.
+        for k, v in raw.items():
+            if isinstance(v, list):
+                for item in v:
+                    _walk(item, str(k))
+            elif isinstance(v, str):
+                _add(str(k), v)
+            if len(out) >= 15:
+                break
     return out
 
 

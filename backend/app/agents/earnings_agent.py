@@ -93,24 +93,37 @@ def run_earnings_agent(
             sources=[f"transcript:{transcript.get('period', '')}"],
         )
 
-    # Deterministic fallback
-    bullish = transcript.get("bullish_takeaways", []) or []
-    bearish = transcript.get("bearish_takeaways", []) or []
-    tone = transcript.get("management_tone", "constructive")
-    summary = (
-        f"Management tone read as {tone}. Prepared remarks emphasized core drivers; Q&A reinforced the framework. "
-        f"Next earnings: {(earnings or {}).get('next_earnings_date', 'TBD')}."
+    # Deterministic fallback — used only when the LLM call fails or
+    # returns nothing. Wave 9b: stripped the demo-only `management_tone`
+    # / `bullish_takeaways` / `bearish_takeaways` references; live AV
+    # transcripts don't carry those fields, which made the prior
+    # fallback render as identical canned text for every ticker. New
+    # version states the limitation honestly + surfaces the next
+    # earnings date when known.
+    period = transcript.get("period") or "the most recent quarter"
+    text_len = len(str(transcript.get("prepared_remarks") or "")) + len(
+        str(transcript.get("qa") or "")
     )
-    key_points = [
-        f"Bullish: {b}" for b in bullish[:3]
-    ] + [
-        f"Watch: {b}" for b in bearish[:2]
-    ]
+    next_date = (earnings or {}).get("next_earnings_date")
+    next_line = (
+        f" Next earnings: {next_date}." if next_date else
+        " Next earnings date TBD."
+    )
+    if text_len > 1000:
+        summary = (
+            f"Transcript for {period} is on file ({text_len:,} chars of prepared "
+            "remarks + Q&A) but the LLM analyst couldn't run a full pass on this "
+            "request — see source for details." + next_line
+        )
+    else:
+        summary = (
+            f"No substantive transcript text available for {period}." + next_line
+        )
     return AgentFinding(
         agent="Earnings Analyst",
-        headline=f"{profile.get('ticker', '')}: management tone {tone}.",
+        headline=f"{profile.get('ticker', '')}: transcript pending LLM analysis.",
         summary=summary,
-        key_points=key_points,
-        confidence=0.7,
+        key_points=[],
+        confidence=0.4,
         sources=[f"transcript:{transcript.get('period', '')}"],
     )

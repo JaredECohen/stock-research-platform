@@ -312,14 +312,69 @@ def _bull_bear_from_sector(sector_finding: AgentFinding) -> Optional[Dict[str, A
     return bb if isinstance(bb, dict) else None
 
 
+def _findings_signal_lines(
+    finding: Optional[AgentFinding], *, polarity: str,
+    max_items: int = 3, prefix: str = "",
+) -> List[str]:
+    """Pull the most signal-bearing key_points / signals from an agent
+    finding, scoped by polarity.
+
+    Wave 9b — replaces the demo-only `profile.drivers` / `profile.risks`
+    fallback in `_bull_case` / `_bear_case` / `_catalysts`. Live FMP
+    profiles don't carry those fields; specialist findings do.
+
+    `polarity ∈ {"bull", "bear", "neutral"}` filters lines by simple
+    keyword detection (positive: tailwind / leverage / above median /
+    accelerat; negative: pressure / headwind / risk / concentration /
+    declin). `neutral` returns the first lines unfiltered.
+    """
+    if finding is None:
+        return []
+    bull_kw = (
+        "tailwind", "leverage", "above median", "above-median",
+        "accelerat", "expansion", "outperform", "premium quality",
+        "moat", "advantage", "compounder", "growth", "top quartile",
+    )
+    bear_kw = (
+        "pressur", "headwind", "risk", "concentrat", "declin",
+        "deteriorat", "compress", "below median", "below-median",
+        "elevated", "fragile", "slip", "underperform", "regulator",
+        "antitrust", "litigation", "competit",
+    )
+    out: List[str] = []
+    candidates = list(finding.key_points or [])
+    # Also consider sentence fragments from the summary as a fallback
+    # source — lots of value lives there for short-key_points findings.
+    if finding.summary:
+        for s in finding.summary.split(". "):
+            s = s.strip()
+            if 30 <= len(s) <= 220:
+                candidates.append(s)
+    for line in candidates:
+        if not isinstance(line, str):
+            continue
+        low = line.lower()
+        if polarity == "bull" and not any(k in low for k in bull_kw):
+            continue
+        if polarity == "bear" and not any(k in low for k in bear_kw):
+            continue
+        text = (prefix + line) if prefix and not line.lower().startswith(prefix.lower().rstrip(": ")) else line
+        out.append(text[:240])
+        if len(out) >= max_items:
+            break
+    return out
+
+
 def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
-               sector_finding: Optional[AgentFinding] = None) -> BullBearCase:
+               sector_finding: Optional[AgentFinding] = None,
+               findings: Optional[Dict[str, AgentFinding]] = None) -> BullBearCase:
     """Build the memo's bull case.
 
-    Wave 3A: when the sector analyst produced a structured
-    `bull_bear_analysis`, the memo's bull case is the sector-integrated
-    one (with DCF appended as additional evidence). Otherwise we fall
-    back to the legacy template construction.
+    Preference order:
+      1. Sector analyst's structured `bull_bear_analysis` (LLM-generated).
+      2. Bull-polarity signals lifted from sector / valuation / earnings
+         findings + DCF upside.
+      3. Generic but honest "DCF says X" line.
     """
     sector_bb = _bull_bear_from_sector(sector_finding) if sector_finding else None
     if sector_bb and isinstance(sector_bb.get("bull_case"), dict):
@@ -334,25 +389,37 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
             headline=str(bull.get("headline") or "Bull case from sector synthesis."),
             key_points=points,
         )
+
     points: List[str] = []
-    drivers = profile.get("drivers") or []
-    for d in drivers[:3]:
-        points.append(f"Tailwind: {d}")
+    findings = findings or {}
+    points.extend(_findings_signal_lines(findings.get("sector"), polarity="bull", max_items=3))
+    points.extend(_findings_signal_lines(findings.get("valuation"), polarity="bull", max_items=2))
+    points.extend(_findings_signal_lines(findings.get("earnings"), polarity="bull", max_items=2))
     if dcf:
-        points.append(f"DCF bull case implies ${dcf.bull.implied_share_price:,.2f} ({dcf.bull.upside_pct:+.0%}).")
-    points.append("Quality + growth profile supports a premium versus peers.")
-    return BullBearCase(
-        headline=f"Bull case: durable execution against {drivers[0] if drivers else 'core drivers'}.",
-        key_points=points,
-    )
+        points.append(
+            f"DCF bull case implies ${dcf.bull.implied_share_price:,.2f} "
+            f"({dcf.bull.upside_pct:+.0%})."
+        )
+    if not points:
+        points.append("Quality + growth profile supports a premium versus peers.")
+
+    # Pick a headline from the strongest available signal.
+    sector_head = (sector_finding.headline if sector_finding else "") or ""
+    if "above" in sector_head.lower() or "leader" in sector_head.lower():
+        headline = sector_head[:240]
+    elif valuation and valuation.headline and "discount" in valuation.headline.lower():
+        headline = f"Bull case: {valuation.headline[:200]}"
+    else:
+        headline = "Bull case: cohort + valuation read both supportive."
+    return BullBearCase(headline=headline, key_points=points[:6])
 
 
 def _bear_case(profile: Dict, dcf: Optional[DCFResult],
-               sector_finding: Optional[AgentFinding] = None) -> BullBearCase:
-    """Build the memo's bear case (mirror of `_bull_case`).
-
-    Wave 3A: prefers the sector analyst's bear if present.
-    """
+               sector_finding: Optional[AgentFinding] = None,
+               findings: Optional[Dict[str, AgentFinding]] = None) -> BullBearCase:
+    """Build the memo's bear case. Mirror of `_bull_case` — prefers the
+    sector LLM's bear, otherwise lifts bear-polarity signals from
+    sector / risk / filing findings + DCF downside."""
     sector_bb = _bull_bear_from_sector(sector_finding) if sector_finding else None
     if sector_bb and isinstance(sector_bb.get("bear_case"), dict):
         bear = sector_bb["bear_case"]
@@ -366,32 +433,86 @@ def _bear_case(profile: Dict, dcf: Optional[DCFResult],
             headline=str(bear.get("headline") or "Bear case from sector synthesis."),
             key_points=points,
         )
+
     points: List[str] = []
-    risks = profile.get("risks") or []
-    for r in risks[:3]:
-        points.append(f"Headwind: {r}")
+    findings = findings or {}
+    points.extend(_findings_signal_lines(findings.get("risk"), polarity="bear", max_items=3))
+    points.extend(_findings_signal_lines(findings.get("filing"), polarity="bear", max_items=2, prefix="Filing: "))
+    points.extend(_findings_signal_lines(findings.get("sector"), polarity="bear", max_items=2))
     if dcf:
-        points.append(f"DCF bear case implies ${dcf.bear.implied_share_price:,.2f} ({dcf.bear.upside_pct:+.0%}).")
-    return BullBearCase(
-        headline=f"Bear case: thesis breaks on {risks[0] if risks else 'execution slip'}.",
-        key_points=points,
-    )
+        points.append(
+            f"DCF bear case implies ${dcf.bear.implied_share_price:,.2f} "
+            f"({dcf.bear.upside_pct:+.0%})."
+        )
+    if not points:
+        points.append("Cohort positioning leaves modest downside if execution slips.")
+
+    risk_head = (findings.get("risk") and findings["risk"].headline) or ""
+    if risk_head and not risk_head.lower().startswith("risk profile for"):
+        headline = f"Bear case: {risk_head[:200]}"
+    else:
+        headline = "Bear case: execution / valuation / regulatory risks if thesis cracks."
+    return BullBearCase(headline=headline, key_points=points[:6])
 
 
-def _catalysts(profile: Dict, transcript: Optional[Dict]) -> List[CatalystItem]:
+def _catalysts(
+    profile: Dict, transcript: Optional[Dict],
+    findings: Optional[Dict[str, AgentFinding]] = None,
+    earnings: Optional[Dict] = None,
+) -> List[CatalystItem]:
+    """Surface near-term + medium-term catalysts.
+
+    Wave 9b — derives catalysts from findings (earnings tone, sector
+    drivers, news themes) instead of demo-only `profile.drivers`. Adds
+    the next earnings date as a concrete near-term watch item when
+    we have it (FMP earnings endpoint or AV).
+    """
     items: List[CatalystItem] = []
-    for d in (profile.get("drivers") or [])[:3]:
+    findings = findings or {}
+
+    # Sector / news positive catalysts.
+    sector_signals = _findings_signal_lines(findings.get("sector"), polarity="bull", max_items=2)
+    for s in sector_signals:
         items.append(CatalystItem(
-            title=d[:80], detail=d,
-            horizon="medium_term", impact="medium",
+            title=s[:80], detail=s, horizon="medium_term", impact="medium",
         ))
-    if transcript and transcript.get("period"):
+    news_signals = _findings_signal_lines(findings.get("news_impact"), polarity="bull", max_items=1)
+    for s in news_signals:
+        items.append(CatalystItem(
+            title=s[:80], detail=s, horizon="near_term", impact="medium",
+        ))
+
+    # Concrete next-earnings date when known.
+    next_date = None
+    if earnings and isinstance(earnings, dict):
+        # FMP /stable/earnings returns forward rows with epsActual=null;
+        # take the first one with a future-looking date.
+        quarters = earnings.get("quarters") or []
+        for q in quarters:
+            if q.get("eps_actual") is None and q.get("report_date"):
+                next_date = q["report_date"]
+                break
+    if next_date:
+        items.append(CatalystItem(
+            title=f"Next earnings: {next_date}",
+            detail=f"Quarterly print expected on {next_date}; tone + guidance the swing factor.",
+            horizon="near_term", impact="medium",
+        ))
+    elif transcript and transcript.get("period"):
         items.append(CatalystItem(
             title="Next earnings update",
             detail=f"Watch for follow-on commentary on themes from {transcript['period']}.",
             horizon="near_term", impact="medium",
         ))
-    return items
+
+    # Profile-driven catalysts (demo only — kept for fixture tests).
+    if not items:
+        for d in (profile.get("drivers") or [])[:3]:
+            items.append(CatalystItem(
+                title=d[:80], detail=d, horizon="medium_term", impact="medium",
+            ))
+
+    return items[:6]
 
 
 def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optional[DCFResult]) -> Dict:
@@ -847,13 +968,14 @@ def _run_stock_memo_inner(
                 # factor scoring all see the PM-adjusted version.
                 dcf = adjusted_dcf
 
-    bull = safe_call(_bull_case, profile, valuation_finding, dcf, sector_finding,
+    bull = safe_call(_bull_case, profile, valuation_finding, dcf, sector_finding, findings,
                      fallback=BullBearCase(headline="Bull case unavailable.", key_points=[]),
                      name="Bull Case Builder", log_to=degradation)
-    bear = safe_call(_bear_case, profile, dcf, sector_finding,
+    bear = safe_call(_bear_case, profile, dcf, sector_finding, findings,
                      fallback=BullBearCase(headline="Bear case unavailable.", key_points=[]),
                      name="Bear Case Builder", log_to=degradation)
-    catalysts = safe_call(_catalysts, profile, transcript, fallback=[],
+    catalysts = safe_call(_catalysts, profile, transcript, findings, earnings,
+                          fallback=[],
                           name="Catalyst Builder", log_to=degradation)
     risks = safe_call(derive_risk_items, profile, fallback=[],
                       name="Risk Item Builder", log_to=degradation)

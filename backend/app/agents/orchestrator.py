@@ -261,10 +261,70 @@ def _render_dcf_answer(d: DCFResult) -> str:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+_FOLLOWUP_HINTS = (
+    "which", "why", "how", "compare", "explain", "what about",
+    "what's", "what is", "moat", "better", "worse", "cheaper",
+    "expensive", "more", "less", "vs", "versus", "differ",
+    "of these", "of those", "from above", "from the list",
+    "the screener", "the screen",
+)
+
+
+def _is_conceptual_followup(message: str, history: List[ChatMessage]) -> bool:
+    """Heuristic — should we route this through the SDK chat agent
+    instead of a workflow handler?
+
+    Returns True when:
+      • There's prior chat history (any follow-up turn).
+      • OR the message starts with / contains a conceptual cue
+        ("which", "why", "compare X and Y on …", etc.) — these
+        are usually requests to *reason over* prior context, not
+        to fire a fresh workflow.
+    """
+    if history:
+        return True
+    low = message.lower().strip()
+    if any(low.startswith(h) for h in _FOLLOWUP_HINTS):
+        return True
+    if any(f" {h} " in f" {low} " for h in _FOLLOWUP_HINTS):
+        return True
+    return False
+
+
+def _try_sdk_chat(message: str, history: Optional[List[ChatMessage]]) -> Optional[str]:
+    """Try the OpenAI Agents SDK chat agent (8 tools); return None on
+    any failure so callers can fall back to legacy handlers."""
+    if not settings.use_agents_sdk:
+        return None
+    try:
+        from .chat_sdk import answer_via_sdk
+        return answer_via_sdk(message=message, history=history or [])
+    except Exception:
+        return None
+
+
 class Orchestrator:
     def chat(self, message: str, history: Optional[List[ChatMessage]] = None) -> ChatResponse:
         intent, tickers, theme = classify_intent(message)
         trace = default_agent_trace(intent)
+
+        # Wave 9b — flexible chat routing. When the user is on a
+        # follow-up turn (history non-empty) or asking a conceptual
+        # question ("which has the best moat?", "why is META
+        # cheaper?"), prefer the SDK chat agent over the workflow
+        # handlers. The agent has tools to fetch memo/DCF/comps/macro/
+        # universe/screener/custom_screen and reasons over the result.
+        # Workflow handlers still fire for unambiguous first-message
+        # asks ("Analyze NVDA", "Compare MSFT and GOOGL") so the heavy
+        # memo path runs only when the user actually wants it.
+        if _is_conceptual_followup(message, history or []):
+            sdk_answer = _try_sdk_chat(message, history)
+            if sdk_answer:
+                return ChatResponse(
+                    intent="general_research_chat",
+                    answer=sdk_answer, agent_trace=trace,
+                )
+            # else: fall through to intent-based routing.
 
         if intent == "single_stock_analysis" and tickers:
             ticker = tickers[0]
