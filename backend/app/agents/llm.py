@@ -463,6 +463,16 @@ def _openai_token_kwarg(model: str, n: int) -> Dict[str, int]:
     return {"max_tokens": int(n)}
 
 
+def _openai_supports_custom_temp(model: str) -> bool:
+    """GPT-5.x and o-series reasoning models reject `temperature` other
+    than the default (1). Older chat models accept it. Verified
+    empirically 2026-05-03 — gpt-5.5 returns 400 on temperature=0.3."""
+    m = (model or "").lower().strip()
+    if m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+        return False
+    return True
+
+
 def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[Dict[str, Any]]:
     import time as _time
     messages = []
@@ -471,13 +481,15 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
     messages.append({"role": "user", "content": user + "\n\nReturn ONLY valid JSON."})
     t0 = _time.perf_counter()
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.3,
+        kwargs = {
+            "model": model,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
             **_openai_token_kwarg(model, max_tokens),
-        )
+        }
+        if _openai_supports_custom_temp(model):
+            kwargs["temperature"] = 0.3
+        resp = client.chat.completions.create(**kwargs)
         dur = int((_time.perf_counter() - t0) * 1000)
         in_tok, out_tok = _usage_from_openai(resp)
         content = resp.choices[0].message.content
@@ -501,10 +513,14 @@ def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_to
     messages.append({"role": "user", "content": user})
     t0 = _time.perf_counter()
     try:
-        resp = client.chat.completions.create(
-            model=model, messages=messages, temperature=0.3,
+        kwargs = {
+            "model": model,
+            "messages": messages,
             **_openai_token_kwarg(model, max_tokens),
-        )
+        }
+        if _openai_supports_custom_temp(model):
+            kwargs["temperature"] = 0.3
+        resp = client.chat.completions.create(**kwargs)
         dur = int((_time.perf_counter() - t0) * 1000)
         in_tok, out_tok = _usage_from_openai(resp)
         out = resp.choices[0].message.content

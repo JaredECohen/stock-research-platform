@@ -5,8 +5,10 @@ Wires up middleware, routers, and startup tasks (init DB + seed demo data).
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import (
@@ -26,6 +28,50 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("marketmosaic")
 
 
+# Paths that don't deserve a UILog row (very noisy + low signal).
+_HTTP_LOG_SKIP_PATHS = {"/api/admin/ui-log"}
+
+
+async def _http_logging_middleware(request: Request, call_next):
+    """Append a `UILog` row + a `marketmosaic.http` log line for every
+    backend request. Errors in the logging path are swallowed so they
+    never break the actual request."""
+    started = time.perf_counter()
+    response = None
+    error_str = ""
+    try:
+        response = await call_next(request)
+        return response
+    except Exception as exc:
+        error_str = repr(exc)
+        raise
+    finally:
+        try:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            status = response.status_code if response is not None else 500
+            path = request.url.path
+            method = request.method
+            log.info("HTTP %s %s -> %s in %dms", method, path, status, duration_ms)
+            if path not in _HTTP_LOG_SKIP_PATHS:
+                from .database import SessionLocal
+                from .models import UILog
+                with SessionLocal() as db:
+                    UILog.__table__.create(bind=db.get_bind(), checkfirst=True)
+                    db.add(UILog(
+                        ts=datetime.utcnow(), source="backend", kind="http",
+                        path=path, method=method, status_code=status,
+                        duration_ms=duration_ms,
+                        session_id=request.headers.get("x-session-id"),
+                        payload={
+                            "query": dict(request.query_params),
+                            "error": error_str or None,
+                        },
+                    ))
+                    db.commit()
+        except Exception as exc:  # pragma: no cover — logging must never raise
+            log.debug("ui-log write failed: %s", exc)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MarketMosaic API",
@@ -43,6 +89,11 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Wave 8G — HTTP request tracing. Every API call emits a structured
+    # log line + a UILog row so frontend traces and backend traces sit
+    # in one timeline.
+    app.middleware("http")(_http_logging_middleware)
 
     app.include_router(routes_health.router, tags=["system"])
     app.include_router(routes_stocks.router, tags=["stocks"])

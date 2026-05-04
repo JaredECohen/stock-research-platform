@@ -31,15 +31,22 @@ export function fmtMultiple(v?: number | null): string {
 }
 
 export function ratingBadgeClass(rating: string): string {
+  // Wave 8P — five-label rating ladder driven by the quant Stock Score.
   switch (rating) {
+    case "Very Bullish":
+      return "badge-bull";
     case "Bullish":
       return "badge-bull";
+    case "Bearish":
+      return "badge-bear";
+    case "Very Bearish":
+      return "badge-bear";
+    // Legacy labels kept for back-compat with cached memos.
     case "Mixed Positive":
       return "badge-bull";
     case "Mixed Negative":
       return "badge-mixed";
-    case "Bearish":
-      return "badge-bear";
+    case "Neutral":
     default:
       return "badge-neutral";
   }

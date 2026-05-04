@@ -1,6 +1,7 @@
 import React from "react";
 import { Route, Routes } from "react-router-dom";
 import Layout from "@/components/Layout";
+import RouteTracker from "@/components/RouteTracker";
 import Dashboard from "@/pages/Dashboard";
 import Chat from "@/pages/Chat";
 import Research from "@/pages/Research";
@@ -14,8 +15,10 @@ import TrackRecord from "@/pages/TrackRecord";
 
 export default function App() {
   return (
-    <Routes>
-      <Route element={<Layout />}>
+    <>
+      <RouteTracker />
+      <Routes>
+        <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/chat" element={<Chat />} />
         <Route path="/research" element={<Research />} />
@@ -29,5 +32,6 @@ export default function App() {
         <Route path="*" element={<Dashboard />} />
       </Route>
     </Routes>
+    </>
   );
 }

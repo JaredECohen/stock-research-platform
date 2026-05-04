@@ -352,7 +352,16 @@ class Orchestrator:
                 agent_trace=trace, macro=scenario,
             )
 
-        # general_research_chat fallback — explain capabilities
+        # Wave 8S — general_research_chat now actually answers when there's
+        # prior context to reason from. Pull the most-recently-discussed
+        # tickers from `history` + this message, fetch their latest memos,
+        # and ask the LLM to answer the user's question grounded in that
+        # data. Falls back to the help-text path only when NO usable
+        # context exists (cold start with a vague question).
+        contextual = self._answer_with_memo_context(message, history or [])
+        if contextual is not None:
+            return ChatResponse(intent=intent, answer=contextual, agent_trace=trace)
+
         snapshot = macro_snapshot()
         snapshot_str = ", ".join(f"{k}: {v}" for k, v in snapshot.items())
         ans = (
@@ -369,3 +378,135 @@ class Orchestrator:
             "_MarketMosaic is for research and education only and does not provide personalized financial advice._"
         )
         return ChatResponse(intent=intent, answer=ans, agent_trace=trace)
+
+    def _answer_with_memo_context(
+        self, message: str, history: List[ChatMessage],
+    ) -> Optional[str]:
+        """Wave 8S — answer a free-form follow-up question using the
+        memos already produced in this conversation.
+
+        Returns the answer string (markdown, with the disclaimer
+        appended) when there's enough context to reason from, or None
+        when the conversation has no prior memo to anchor on (so the
+        caller falls through to the help text).
+
+        Wave 10: when `USE_AGENTS_SDK=true` + the SDK is installed +
+        `OPENAI_API_KEY` is set, route through a real `Agent` with
+        `function_tool` access to memo / DCF / comps / macro fetchers.
+        The agent decides what to fetch. Falls through to the legacy
+        single-shot path on any failure so the chat handler is robust.
+        """
+        if settings.use_agents_sdk:
+            from .chat_sdk import answer_via_sdk
+            sdk_answer = answer_via_sdk(message=message, history=history)
+            if sdk_answer:
+                return sdk_answer
+            # else: fall through to legacy single-shot path
+        # Pull tickers mentioned anywhere in the recent transcript.
+        all_text = "\n".join([m.content or "" for m in history[-8:]] + [message])
+        candidate_tickers = _extract_tickers(all_text)
+        # Also pick up tickers from a previous comparison answer (e.g.,
+        # "MSFT — Bullish" / "GOOGL — Bullish"). _extract_tickers already
+        # handles uppercase symbols.
+
+        # Pull the latest snapshot memos for each candidate. memo_store
+        # serves cached snapshots cheaply — no re-running of the graph.
+        from ..services.memo_store import latest_memo, memo_to_pydantic
+        memos: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for t in candidate_tickers:
+            if t in seen:
+                continue
+            seen.add(t)
+            snap = latest_memo(t)
+            if snap is None:
+                continue
+            try:
+                m = memo_to_pydantic(snap)
+            except Exception:
+                continue
+            memos.append(_memo_for_chat_context(m))
+            if len(memos) >= 4:
+                break
+
+        if not memos:
+            # Nothing to ground in — let the help text fire.
+            return None
+
+        # Build the LLM call. System prompt frames it as a careful PM
+        # answering a follow-up using ONLY the data in the memos.
+        system = (
+            "You are MarketMosaic's PM. The user has already seen full "
+            "memos for the tickers listed below. They're asking a "
+            "follow-up question. Answer it directly using ONLY the memo "
+            "data provided — quote specific numbers (rating, stock "
+            "score, DCF upside, factor scores, key risks). When the user "
+            "asks 'which should I buy', give a directional answer "
+            "grounded in the metrics, then add ONE sentence on what "
+            "would change your view. Do NOT invent data. Always end with "
+            "the disclaimer:\n\n"
+            "_MarketMosaic is for research and education only and does "
+            "not provide personalized financial advice._"
+        )
+        prompt = (
+            "Recent memos:\n"
+            + json.dumps(memos, default=str, indent=2)[:6000]
+            + f"\n\nConversation history (last few turns):\n"
+            + "\n".join(f"- {h.role}: {(h.content or '')[:300]}" for h in history[-6:])
+            + f"\n\nUser's new question:\n{message}"
+        )
+        # Force OpenAI here. The default `active_llm_provider` is
+        # whichever the user configured (often Anthropic in this
+        # environment), but the bundled Anthropic SDK has a `proxies`
+        # kwarg incompat that surfaces at init time. The intent
+        # classifier already proved OpenAI is reachable.
+        text = llm.chat_text(
+            prompt, system=system, route="strong",
+            model=settings.openai_pm_model,
+            provider_override="openai",
+        )
+        if not text or not text.strip():
+            return None
+        # Belt-and-suspenders: ensure the disclaimer is present.
+        body = text.strip()
+        if "research and education only" not in body.lower():
+            body += (
+                "\n\n_MarketMosaic is for research and education only and "
+                "does not provide personalized financial advice._"
+            )
+        return body
+
+
+def _memo_for_chat_context(m: StockMemoOut) -> Dict[str, Any]:
+    """Compact memo projection for the free-form chat prompt. Includes
+    the dimensions a PM would actually cite when answering 'which is
+    the better investment' — rating, stock score, DCF deltas, key
+    risks, valuation read."""
+    scores = m.scores or {}
+    dcf = m.dcf_summary or {}
+    return {
+        "ticker": m.ticker,
+        "name": m.company_name,
+        "sector": m.sector,
+        "rating": m.rating_label,
+        "stock_score": scores.get("factor_pm_score"),
+        "confidence": int(m.confidence_score),
+        "thesis": m.one_sentence_thesis,
+        "factor_scores": {
+            k.replace("factor_", ""): v for k, v in scores.items()
+            if k.startswith("factor_") and k != "factor_pm_score"
+        },
+        "dcf": {
+            "current_price": dcf.get("current_price"),
+            "base_implied": dcf.get("base_implied_price"),
+            "base_upside": dcf.get("base_upside"),
+            "bull_upside": dcf.get("bull_upside"),
+            "bear_upside": dcf.get("bear_upside"),
+            "wacc": dcf.get("wacc"),
+        },
+        "valuation_summary": (m.valuation_agent_view.summary or "")[:240],
+        "key_risks": [r.title for r in m.key_risks][:5],
+        "thesis_breakers": [r.title for r in m.thesis_breakers][:3],
+        "bull_case": [p for p in m.bull_case.key_points][:4],
+        "bear_case": [p for p in m.bear_case.key_points][:4],
+    }

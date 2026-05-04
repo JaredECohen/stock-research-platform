@@ -946,5 +946,179 @@
       "Competition from MSFT",
       "Macro deal cycles"
     ]
+  },
+  "PLTR": {
+    "ticker": "PLTR",
+    "company_name": "Palantir Technologies Inc.",
+    "exchange": "NASDAQ",
+    "sector": "Technology",
+    "industry": "Software",
+    "sub_industry": "AIP / Analytics Platform",
+    "country": "US",
+    "currency": "USD",
+    "market_cap": 180000000000.0,
+    "cik": "0001321655",
+    "business_description": "AIP and Foundry data-integration platforms for government and commercial customers; AI-ops focus.",
+    "fiscal_year_end": "December",
+    "is_active": true,
+    "is_etf": false,
+    "beta": 2.4,
+    "shares_outstanding": 2300000000.0,
+    "last_price": 78.0,
+    "segments": [
+      "Government",
+      "Commercial"
+    ],
+    "drivers": [
+      "AIP commercial bootcamps converting to ACV",
+      "Government renewals + new awards",
+      "Operating leverage on FCF"
+    ],
+    "risks": [
+      "Multiple-driven valuation",
+      "Government budget cycles",
+      "Concentration in large customers"
+    ]
+  },
+  "NFLX": {
+    "ticker": "NFLX",
+    "company_name": "Netflix, Inc.",
+    "exchange": "NASDAQ",
+    "sector": "Communication Services",
+    "industry": "Entertainment",
+    "sub_industry": "Streaming",
+    "country": "US",
+    "currency": "USD",
+    "market_cap": 370000000000.0,
+    "cik": "0001065280",
+    "business_description": "Subscription streaming service with a content library, ads tier, and growing live-event programming.",
+    "fiscal_year_end": "December",
+    "is_active": true,
+    "is_etf": false,
+    "beta": 1.3,
+    "shares_outstanding": 430000000.0,
+    "last_price": 860.0,
+    "segments": [
+      "UCAN",
+      "EMEA",
+      "LATAM",
+      "APAC"
+    ],
+    "drivers": [
+      "Ads-tier ARPU ramp",
+      "Password-sharing crackdown durability",
+      "Live + games optionality"
+    ],
+    "risks": [
+      "Content cost inflation",
+      "Subscriber saturation in mature markets",
+      "FX translation"
+    ]
+  },
+  "TSLA": {
+    "ticker": "TSLA",
+    "company_name": "Tesla, Inc.",
+    "exchange": "NASDAQ",
+    "sector": "Consumer Discretionary",
+    "industry": "Automobiles",
+    "sub_industry": "Electric Vehicles",
+    "country": "US",
+    "currency": "USD",
+    "market_cap": 900000000000.0,
+    "cik": "0001318605",
+    "business_description": "Designs and manufactures EVs, battery storage (Powerwall, Megapack), and develops Full-Self-Driving software.",
+    "fiscal_year_end": "December",
+    "is_active": true,
+    "is_etf": false,
+    "beta": 2.1,
+    "shares_outstanding": 3180000000.0,
+    "last_price": 283.0,
+    "segments": [
+      "Automotive",
+      "Energy Generation & Storage",
+      "Services & Other"
+    ],
+    "drivers": [
+      "Robotaxi / FSD monetization",
+      "Energy storage growth",
+      "Lower-priced model launches"
+    ],
+    "risks": [
+      "Auto gross margin compression",
+      "FSD timeline / regulatory",
+      "EV demand cyclicality + China competition"
+    ]
+  },
+  "LIN": {
+    "ticker": "LIN",
+    "company_name": "Linde plc",
+    "exchange": "NYSE",
+    "sector": "Materials",
+    "industry": "Chemicals",
+    "sub_industry": "Industrial Gases",
+    "country": "US",
+    "currency": "USD",
+    "market_cap": 215000000000.0,
+    "cik": "0001707925",
+    "business_description": "Global leader in industrial gases (oxygen, nitrogen, hydrogen, argon) sold under long-dated, take-or-pay contracts to industrial, electronics, healthcare, and energy customers.",
+    "fiscal_year_end": "December",
+    "is_active": true,
+    "is_etf": false,
+    "beta": 0.85,
+    "shares_outstanding": 475000000.0,
+    "last_price": 455.0,
+    "segments": [
+      "Americas",
+      "EMEA",
+      "APAC",
+      "Engineering"
+    ],
+    "drivers": [
+      "On-site project backlog ramp",
+      "Decarbonization / clean-hydrogen contracts",
+      "Pricing flow-through + volume leverage"
+    ],
+    "risks": [
+      "European industrial-gas demand weakness",
+      "Project execution delays",
+      "FX translation"
+    ]
+  },
+  "AMT": {
+    "ticker": "AMT",
+    "company_name": "American Tower Corporation",
+    "exchange": "NYSE",
+    "sector": "Real Estate",
+    "industry": "REITs",
+    "sub_industry": "Cell Tower REIT",
+    "country": "US",
+    "currency": "USD",
+    "market_cap": 100000000000.0,
+    "cik": "0001053507",
+    "business_description": "Global owner-operator of cell towers and a US data-center portfolio (CoreSite); revenue is recurring lease income with built-in escalators.",
+    "fiscal_year_end": "December",
+    "is_active": true,
+    "is_etf": false,
+    "beta": 0.8,
+    "shares_outstanding": 467000000.0,
+    "last_price": 215.0,
+    "segments": [
+      "U.S. & Canada",
+      "Asia-Pacific",
+      "Africa",
+      "Europe",
+      "Latin America",
+      "Data Centers"
+    ],
+    "drivers": [
+      "5G mid-band densification",
+      "International tenancy growth",
+      "CoreSite data-center expansion"
+    ],
+    "risks": [
+      "Customer concentration in big-3 US carriers",
+      "FX translation in EM markets",
+      "Long-end rate sensitivity for REIT multiples"
+    ]
   }
 }

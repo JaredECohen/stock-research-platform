@@ -3,7 +3,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001045810",
       "business_description": "Designs GPUs and accelerated computing platforms for AI training and inference, gaming, professional visualization, and data center workloads.",
@@ -38,7 +38,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Designs GPUs and accelerated computing platforms for AI training and inference, gaming, professional visualization, and data center workloads.",
@@ -47,7 +47,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -57,7 +57,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000789019",
       "business_description": "Cloud, productivity, and platform software with Azure, Microsoft 365, Dynamics, GitHub, LinkedIn, and Windows.",
@@ -88,7 +88,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Cloud, productivity, and platform software with Azure, Microsoft 365, Dynamics, GitHub, LinkedIn, and Windows.",
@@ -97,7 +97,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -107,7 +107,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001652044",
       "business_description": "Search, YouTube, Android, Google Cloud, and a portfolio of Other Bets including Waymo.",
@@ -138,7 +138,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Search, YouTube, Android, Google Cloud, and a portfolio of Other Bets including Waymo.",
@@ -147,7 +147,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -157,7 +157,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001326801",
       "business_description": "Family of apps (Facebook, Instagram, WhatsApp, Threads), Reality Labs hardware, and AI infrastructure.",
@@ -184,7 +184,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Family of apps (Facebook, Instagram, WhatsApp, Threads), Reality Labs hardware, and AI infrastructure.",
@@ -193,7 +193,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -203,7 +203,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001018724",
       "business_description": "Online retail platform, AWS cloud computing, advertising, and a network of fulfillment infrastructure.",
@@ -234,7 +234,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Online retail platform, AWS cloud computing, advertising, and a network of fulfillment infrastructure.",
@@ -243,7 +243,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -253,7 +253,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001730168",
       "business_description": "Networking, broadband, wireless, and infrastructure software (post-VMware) with AI ASIC custom-silicon exposure.",
@@ -280,7 +280,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Networking, broadband, wireless, and infrastructure software (post-VMware) with AI ASIC custom-silicon exposure.",
@@ -289,7 +289,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -299,7 +299,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000002488",
       "business_description": "x86 server and client CPUs, gaming and data center GPUs (Instinct MI series), and adaptive compute.",
@@ -334,7 +334,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "x86 server and client CPUs, gaming and data center GPUs (Instinct MI series), and adaptive compute.",
@@ -343,7 +343,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -353,7 +353,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000320193",
       "business_description": "iPhone, Mac, iPad, wearables, and a high-margin services business that is the centerpiece of margin expansion.",
@@ -392,7 +392,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "iPhone, Mac, iPad, wearables, and a high-margin services business that is the centerpiece of margin expansion.",
@@ -401,7 +401,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -411,7 +411,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000019617",
       "business_description": "Global universal bank with leadership in IB, markets, asset management, and consumer banking.",
@@ -446,7 +446,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Global universal bank with leadership in IB, markets, asset management, and consumer banking.",
@@ -455,7 +455,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -465,7 +465,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000070858",
       "business_description": "Large U.S. consumer + commercial bank with a global markets and wealth management franchise.",
@@ -500,7 +500,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Large U.S. consumer + commercial bank with a global markets and wealth management franchise.",
@@ -509,7 +509,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -519,7 +519,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000886982",
       "business_description": "Investment bank with Global Banking & Markets and Asset & Wealth Management franchises.",
@@ -550,7 +550,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Investment bank with Global Banking & Markets and Asset & Wealth Management franchises.",
@@ -559,7 +559,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -569,7 +569,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000895421",
       "business_description": "Wealth management franchise scaled by E*TRADE, with markets and investment banking businesses.",
@@ -599,7 +599,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Wealth management franchise scaled by E*TRADE, with markets and investment banking businesses.",
@@ -608,7 +608,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -618,7 +618,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001403161",
       "business_description": "Global payments network connecting issuers, acquirers, and merchants.",
@@ -648,7 +648,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Global payments network connecting issuers, acquirers, and merchants.",
@@ -657,7 +657,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -667,7 +667,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001141391",
       "business_description": "Global payments network with strong cross-border and value-added services exposure.",
@@ -693,7 +693,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Global payments network with strong cross-border and value-added services exposure.",
@@ -702,7 +702,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -712,7 +712,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000909832",
       "business_description": "Membership-based warehouse retailer with predictable membership economics.",
@@ -743,7 +743,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Membership-based warehouse retailer with predictable membership economics.",
@@ -752,7 +752,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -762,7 +762,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000104169",
       "business_description": "Mass retailer with growing advertising, marketplace, and Walmart+ businesses.",
@@ -793,7 +793,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Mass retailer with growing advertising, marketplace, and Walmart+ businesses.",
@@ -802,7 +802,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -812,7 +812,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000354950",
       "business_description": "Largest home-improvement retailer, leveraged to housing turnover and Pro contractor spend.",
@@ -838,7 +838,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Largest home-improvement retailer, leveraged to housing turnover and Pro contractor spend.",
@@ -847,7 +847,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -857,7 +857,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000063908",
       "business_description": "Global QSR franchisor with ~95% franchised mix and rent-stream economics.",
@@ -888,7 +888,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Global QSR franchisor with ~95% franchised mix and rent-stream economics.",
@@ -897,7 +897,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -907,7 +907,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000320187",
       "business_description": "Global athletic apparel and footwear brand with DTC + wholesale mix repositioning.",
@@ -934,7 +934,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Global athletic apparel and footwear brand with DTC + wholesale mix repositioning.",
@@ -943,7 +943,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -953,7 +953,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000829224",
       "business_description": "Global premium coffee retailer with ~38k stores, mobile order/pay, and rewards economics.",
@@ -984,7 +984,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Global premium coffee retailer with ~38k stores, mobile order/pay, and rewards economics.",
@@ -993,7 +993,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -1003,7 +1003,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000059478",
       "business_description": "Pharmaceutical company centered on incretins (Mounjaro, Zepbound), oncology, and immunology.",
@@ -1038,7 +1038,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Pharmaceutical company centered on incretins (Mounjaro, Zepbound), oncology, and immunology.",
@@ -1047,7 +1047,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -1057,7 +1057,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000731766",
       "business_description": "Largest U.S. managed care organization with UnitedHealthcare insurance and Optum services.",
@@ -1092,7 +1092,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Largest U.S. managed care organization with UnitedHealthcare insurance and Optum services.",
@@ -1101,7 +1101,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -1111,7 +1111,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000200406",
       "business_description": "Diversified pharma + medtech post-Kenvue spin, with oncology, immunology, and surgical platforms.",
@@ -1138,7 +1138,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Diversified pharma + medtech post-Kenvue spin, with oncology, immunology, and surgical platforms.",
@@ -1147,7 +1147,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -1157,7 +1157,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000310158",
       "business_description": "Pharmaceutical company anchored by Keytruda, with growing animal health and oncology pipeline.",
@@ -1183,7 +1183,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Pharmaceutical company anchored by Keytruda, with growing animal health and oncology pipeline.",
@@ -1192,7 +1192,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -1202,7 +1202,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000034088",
       "business_description": "Integrated super-major with Permian + Guyana growth and downstream/chemicals exposure.",
@@ -1237,7 +1237,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Integrated super-major with Permian + Guyana growth and downstream/chemicals exposure.",
@@ -1246,7 +1246,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -1256,7 +1256,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000753308",
       "business_description": "Florida regulated utility (FPL) plus Energy Resources, the largest U.S. renewables developer.",
@@ -1283,7 +1283,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Florida regulated utility (FPL) plus Energy Resources, the largest U.S. renewables developer.",
@@ -1292,7 +1292,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -1302,7 +1302,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000018230",
       "business_description": "Global heavy-equipment OEM with construction, resource industries, and energy & transportation segments.",
@@ -1333,7 +1333,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Global heavy-equipment OEM with construction, resource industries, and energy & transportation segments.",
@@ -1342,7 +1342,7 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."
@@ -1352,7 +1352,7 @@
     {
       "type": "10-K",
       "period_end": "2024-12-31",
-      "filing_date": "2025-12-29",
+      "filing_date": "2026-01-03",
       "accession_number": "0001-DEMO-10K",
       "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001108524",
       "business_description": "Customer relationship management platform with Data Cloud and Agentforce as the AI growth vector.",
@@ -1387,7 +1387,7 @@
     {
       "type": "10-Q",
       "period_end": "2024-09-30",
-      "filing_date": "2025-10-10",
+      "filing_date": "2025-10-15",
       "accession_number": "0001-DEMO-10Q",
       "url": "https://www.sec.gov/",
       "business_description": "Customer relationship management platform with Data Cloud and Agentforce as the AI growth vector.",
@@ -1396,7 +1396,273 @@
     {
       "type": "8-K",
       "period_end": "2024-11-15",
-      "filing_date": "2025-11-19",
+      "filing_date": "2025-11-24",
+      "accession_number": "0001-DEMO-8K",
+      "url": "https://www.sec.gov/",
+      "description": "Material announcement regarding capital allocation framework."
+    }
+  ],
+  "PLTR": [
+    {
+      "type": "10-K",
+      "period_end": "2024-12-31",
+      "filing_date": "2026-01-03",
+      "accession_number": "0001-DEMO-10K",
+      "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001321655",
+      "business_description": "AIP and Foundry data-integration platforms for government and commercial customers; AI-ops focus.",
+      "risk_factors": [
+        "Risk factor: Multiple-driven valuation",
+        "Risk factor: Government budget cycles",
+        "Risk factor: Concentration in large customers"
+      ],
+      "mda": "Management discussed AIP commercial bootcamps converting to ACV as the most important growth vector. Operating margin moved consistent with 18%. Liquidity remains strong; capital priorities are stable.",
+      "segments": [
+        {
+          "name": "Government",
+          "revenue_share": 0.5
+        },
+        {
+          "name": "Commercial",
+          "revenue_share": 0.5
+        }
+      ],
+      "legal_or_regulatory": [
+        "Routine legal proceedings; no material disclosed exposure beyond filings."
+      ]
+    },
+    {
+      "type": "10-Q",
+      "period_end": "2024-09-30",
+      "filing_date": "2025-10-15",
+      "accession_number": "0001-DEMO-10Q",
+      "url": "https://www.sec.gov/",
+      "business_description": "AIP and Foundry data-integration platforms for government and commercial customers; AI-ops focus.",
+      "mda": "Quarterly results consistent with full-year framework, driven by AIP commercial bootcamps converting to ACV. Watch items include Multiple-driven valuation."
+    },
+    {
+      "type": "8-K",
+      "period_end": "2024-11-15",
+      "filing_date": "2025-11-24",
+      "accession_number": "0001-DEMO-8K",
+      "url": "https://www.sec.gov/",
+      "description": "Material announcement regarding capital allocation framework."
+    }
+  ],
+  "NFLX": [
+    {
+      "type": "10-K",
+      "period_end": "2024-12-31",
+      "filing_date": "2026-01-03",
+      "accession_number": "0001-DEMO-10K",
+      "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001065280",
+      "business_description": "Subscription streaming service with a content library, ads tier, and growing live-event programming.",
+      "risk_factors": [
+        "Risk factor: Content cost inflation",
+        "Risk factor: Subscriber saturation in mature markets",
+        "Risk factor: FX translation"
+      ],
+      "mda": "Management discussed Ads-tier ARPU ramp as the most important growth vector. Operating margin moved consistent with 27%. Liquidity remains strong; capital priorities are stable.",
+      "segments": [
+        {
+          "name": "UCAN",
+          "revenue_share": 0.25
+        },
+        {
+          "name": "EMEA",
+          "revenue_share": 0.25
+        },
+        {
+          "name": "LATAM",
+          "revenue_share": 0.25
+        },
+        {
+          "name": "APAC",
+          "revenue_share": 0.25
+        }
+      ],
+      "legal_or_regulatory": [
+        "Routine legal proceedings; no material disclosed exposure beyond filings."
+      ]
+    },
+    {
+      "type": "10-Q",
+      "period_end": "2024-09-30",
+      "filing_date": "2025-10-15",
+      "accession_number": "0001-DEMO-10Q",
+      "url": "https://www.sec.gov/",
+      "business_description": "Subscription streaming service with a content library, ads tier, and growing live-event programming.",
+      "mda": "Quarterly results consistent with full-year framework, driven by Ads-tier ARPU ramp. Watch items include Content cost inflation."
+    },
+    {
+      "type": "8-K",
+      "period_end": "2024-11-15",
+      "filing_date": "2025-11-24",
+      "accession_number": "0001-DEMO-8K",
+      "url": "https://www.sec.gov/",
+      "description": "Material announcement regarding capital allocation framework."
+    }
+  ],
+  "TSLA": [
+    {
+      "type": "10-K",
+      "period_end": "2024-12-31",
+      "filing_date": "2026-01-03",
+      "accession_number": "0001-DEMO-10K",
+      "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001318605",
+      "business_description": "Designs and manufactures EVs, battery storage (Powerwall, Megapack), and develops Full-Self-Driving software.",
+      "risk_factors": [
+        "Risk factor: Auto gross margin compression",
+        "Risk factor: FSD timeline / regulatory",
+        "Risk factor: EV demand cyclicality + China competition"
+      ],
+      "mda": "Management discussed Robotaxi / FSD monetization as the most important growth vector. Operating margin moved consistent with 8%. Liquidity remains strong; capital priorities are stable.",
+      "segments": [
+        {
+          "name": "Automotive",
+          "revenue_share": 0.33
+        },
+        {
+          "name": "Energy Generation & Storage",
+          "revenue_share": 0.33
+        },
+        {
+          "name": "Services & Other",
+          "revenue_share": 0.33
+        }
+      ],
+      "legal_or_regulatory": [
+        "Routine legal proceedings; no material disclosed exposure beyond filings."
+      ]
+    },
+    {
+      "type": "10-Q",
+      "period_end": "2024-09-30",
+      "filing_date": "2025-10-15",
+      "accession_number": "0001-DEMO-10Q",
+      "url": "https://www.sec.gov/",
+      "business_description": "Designs and manufactures EVs, battery storage (Powerwall, Megapack), and develops Full-Self-Driving software.",
+      "mda": "Quarterly results consistent with full-year framework, driven by Robotaxi / FSD monetization. Watch items include Auto gross margin compression."
+    },
+    {
+      "type": "8-K",
+      "period_end": "2024-11-15",
+      "filing_date": "2025-11-24",
+      "accession_number": "0001-DEMO-8K",
+      "url": "https://www.sec.gov/",
+      "description": "Material announcement regarding capital allocation framework."
+    }
+  ],
+  "LIN": [
+    {
+      "type": "10-K",
+      "period_end": "2024-12-31",
+      "filing_date": "2026-01-03",
+      "accession_number": "0001-DEMO-10K",
+      "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001707925",
+      "business_description": "Global leader in industrial gases (oxygen, nitrogen, hydrogen, argon) sold under long-dated, take-or-pay contracts to industrial, electronics, healthcare, and energy customers.",
+      "risk_factors": [
+        "Risk factor: European industrial-gas demand weakness",
+        "Risk factor: Project execution delays",
+        "Risk factor: FX translation"
+      ],
+      "mda": "Management discussed On-site project backlog ramp as the most important growth vector. Operating margin moved consistent with 27%. Liquidity remains strong; capital priorities are stable.",
+      "segments": [
+        {
+          "name": "Americas",
+          "revenue_share": 0.25
+        },
+        {
+          "name": "EMEA",
+          "revenue_share": 0.25
+        },
+        {
+          "name": "APAC",
+          "revenue_share": 0.25
+        },
+        {
+          "name": "Engineering",
+          "revenue_share": 0.25
+        }
+      ],
+      "legal_or_regulatory": [
+        "Routine legal proceedings; no material disclosed exposure beyond filings."
+      ]
+    },
+    {
+      "type": "10-Q",
+      "period_end": "2024-09-30",
+      "filing_date": "2025-10-15",
+      "accession_number": "0001-DEMO-10Q",
+      "url": "https://www.sec.gov/",
+      "business_description": "Global leader in industrial gases (oxygen, nitrogen, hydrogen, argon) sold under long-dated, take-or-pay contracts to industrial, electronics, healthcare, and energy customers.",
+      "mda": "Quarterly results consistent with full-year framework, driven by On-site project backlog ramp. Watch items include European industrial-gas demand weakness."
+    },
+    {
+      "type": "8-K",
+      "period_end": "2024-11-15",
+      "filing_date": "2025-11-24",
+      "accession_number": "0001-DEMO-8K",
+      "url": "https://www.sec.gov/",
+      "description": "Material announcement regarding capital allocation framework."
+    }
+  ],
+  "AMT": [
+    {
+      "type": "10-K",
+      "period_end": "2024-12-31",
+      "filing_date": "2026-01-03",
+      "accession_number": "0001-DEMO-10K",
+      "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001053507",
+      "business_description": "Global owner-operator of cell towers and a US data-center portfolio (CoreSite); revenue is recurring lease income with built-in escalators.",
+      "risk_factors": [
+        "Risk factor: Customer concentration in big-3 US carriers",
+        "Risk factor: FX translation in EM markets",
+        "Risk factor: Long-end rate sensitivity for REIT multiples"
+      ],
+      "mda": "Management discussed 5G mid-band densification as the most important growth vector. Operating margin moved consistent with 32%. Liquidity remains strong; capital priorities are stable.",
+      "segments": [
+        {
+          "name": "U.S. & Canada",
+          "revenue_share": 0.17
+        },
+        {
+          "name": "Asia-Pacific",
+          "revenue_share": 0.17
+        },
+        {
+          "name": "Africa",
+          "revenue_share": 0.17
+        },
+        {
+          "name": "Europe",
+          "revenue_share": 0.17
+        },
+        {
+          "name": "Latin America",
+          "revenue_share": 0.17
+        },
+        {
+          "name": "Data Centers",
+          "revenue_share": 0.17
+        }
+      ],
+      "legal_or_regulatory": [
+        "Routine legal proceedings; no material disclosed exposure beyond filings."
+      ]
+    },
+    {
+      "type": "10-Q",
+      "period_end": "2024-09-30",
+      "filing_date": "2025-10-15",
+      "accession_number": "0001-DEMO-10Q",
+      "url": "https://www.sec.gov/",
+      "business_description": "Global owner-operator of cell towers and a US data-center portfolio (CoreSite); revenue is recurring lease income with built-in escalators.",
+      "mda": "Quarterly results consistent with full-year framework, driven by 5G mid-band densification. Watch items include Customer concentration in big-3 US carriers."
+    },
+    {
+      "type": "8-K",
+      "period_end": "2024-11-15",
+      "filing_date": "2025-11-24",
       "accession_number": "0001-DEMO-8K",
       "url": "https://www.sec.gov/",
       "description": "Material announcement regarding capital allocation framework."

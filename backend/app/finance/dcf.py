@@ -7,7 +7,7 @@ exercised both by the /api/dcf endpoint and the valuation agent.
 from __future__ import annotations
 
 import copy
-from typing import Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 from ..schemas import (
     DCFAssumptions,
@@ -52,6 +52,66 @@ def _trend(values: List[float]) -> float:
     return sum(last) / len(last)
 
 
+def _consensus_growth_path(estimates: Optional[Dict]) -> Optional[List[float]]:
+    """Wave 8I — derive a 5-year revenue-growth path from analyst
+    consensus estimates when present. Returns None when the estimates
+    payload doesn't carry usable revenue rows.
+
+    Accepts a few common shapes:
+    - `estimates["revenue"]` as a list of {period, value} (chronological).
+    - `estimates["revenue_growth"]` as a list of floats (already deltas).
+    - `estimates["analyst_growth"]` (single float) — used as a flat path.
+    Falls through to None on anything else; caller fades historical
+    trend instead.
+    """
+    if not isinstance(estimates, dict):
+        return None
+    # Direct growth list — easiest case.
+    rg = estimates.get("revenue_growth")
+    if isinstance(rg, list) and rg:
+        out: List[float] = []
+        for v in rg[:5]:
+            try:
+                out.append(round(max(-0.20, min(0.50, float(v))), 4))
+            except (TypeError, ValueError):
+                continue
+        if len(out) >= 1:
+            # Pad with the last value if fewer than 5 periods.
+            while len(out) < 5:
+                out.append(out[-1])
+            return out
+    # Single analyst growth number — apply as flat path.
+    g = estimates.get("analyst_growth")
+    if isinstance(g, (int, float)):
+        gv = round(max(-0.20, min(0.50, float(g))), 4)
+        return [gv] * 5
+    # Revenue-level estimates → derive YoY deltas.
+    rev_rows = estimates.get("revenue")
+    if isinstance(rev_rows, list) and len(rev_rows) >= 2:
+        vals: List[float] = []
+        for r in rev_rows:
+            if isinstance(r, dict):
+                v = r.get("value") or r.get("revenue")
+            else:
+                v = r
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            vals.append(v)
+        if len(vals) >= 2:
+            deltas = []
+            for i in range(1, min(6, len(vals))):
+                prev, cur = vals[i - 1], vals[i]
+                if prev:
+                    deltas.append(round(max(-0.20, min(0.50, (cur - prev) / abs(prev))), 4))
+            if deltas:
+                while len(deltas) < 5:
+                    deltas.append(deltas[-1])
+                return deltas[:5]
+    return None
+
+
 def derive_default_assumptions(
     income_statements: List[dict],
     cash_flows: List[dict],
@@ -64,8 +124,17 @@ def derive_default_assumptions(
     beta: float = 1.0,
     pretax_cost_of_debt: float = 0.055,
     target_debt_weight: float = 0.15,
+    analyst_estimates: Optional[Dict] = None,
 ) -> DCFAssumptions:
-    """Build sane base-case assumptions from a few years of statements."""
+    """Build sane base-case assumptions from a few years of statements.
+
+    Wave 8I: when `analyst_estimates` is supplied, the consensus growth
+    path is the *starting point* for `revenue_growth` instead of the
+    historical-trend extrapolation. Locked decision: the AI agent
+    layer (Wave 5A `dcf_updater`) is responsible for diverging from
+    consensus and must justify each change with a rationale (per-cycle
+    delta still capped at ±20%). The default builder defers to consensus.
+    """
     # Sort oldest -> newest
     income_statements = sorted(income_statements, key=lambda r: r.get("period", ""))
     cash_flows = sorted(cash_flows, key=lambda r: r.get("period", ""))
@@ -81,21 +150,32 @@ def derive_default_assumptions(
     nwc_vals = [r.get("change_in_working_capital", 0.0) or 0.0 for r in cash_flows]
 
     base_revenue = revenues[-1] if revenues else 0.0
-    growth_trend = _trend(revenues)
-    # Cap growth between -5% and 30% to avoid runaway extrapolation
-    growth_trend = max(-0.05, min(0.30, growth_trend))
 
-    # Fade growth toward terminal over 5 years
-    base_growth: List[float] = []
-    for i in range(5):
-        weight = (5 - i) / 5
-        g = growth_trend * weight + 0.04 * (1 - weight)
-        base_growth.append(round(g, 4))
+    # Wave 8I: consensus first, historical fallback.
+    consensus_path = _consensus_growth_path(analyst_estimates)
+    if consensus_path is not None:
+        base_growth = consensus_path
+    else:
+        growth_trend = _trend(revenues)
+        # Cap growth between -5% and 30% to avoid runaway extrapolation
+        growth_trend = max(-0.05, min(0.30, growth_trend))
+        # Fade growth toward terminal over 5 years
+        base_growth = []
+        for i in range(5):
+            weight = (5 - i) / 5
+            g = growth_trend * weight + 0.04 * (1 - weight)
+            base_growth.append(round(g, 4))
 
+    # Wave 8Q — default-preserve current profitability. Previously baked
+    # +50bps/yr expansion into every base margin which produced
+    # systematically bearish DCFs (later years' FCFs got higher implied
+    # margins than reality, so the discount applied to current price felt
+    # too large). Now hold the trailing 3-yr average flat across the
+    # explicit forecast; the LLM updater (Wave 5A) is the only thing
+    # allowed to diverge, and only with a per-field rationale.
     op_margin_recent = _avg([_safe_div(o, r) for o, r in zip(op_incomes[-3:], revenues[-3:]) if r])
-    op_margin_recent = max(0.02, min(0.55, op_margin_recent or 0.18))
-    base_margin = [round(op_margin_recent + (0.005 * i), 4) for i in range(5)]
-    base_margin = [min(m, 0.60) for m in base_margin]
+    op_margin_recent = max(0.02, min(0.65, op_margin_recent or 0.18))
+    base_margin = [round(op_margin_recent, 4)] * 5
 
     eff_tax = _avg([_safe_div(t, p) for t, p in zip(tax_exp[-3:], pretax[-3:]) if p])
     eff_tax = max(0.10, min(0.30, eff_tax or 0.21))

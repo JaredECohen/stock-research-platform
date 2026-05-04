@@ -73,14 +73,21 @@ def seed_universe_tiers() -> Dict[str, int]:
     Idempotent. Safe to re-run after edits to `universe_tier1.json` — every
     company's tier is reset on each pass except for `analyzed_on_demand`,
     which we preserve as runtime state set by the on-demand-analysis flow.
+
+    Wave 8K — also scaffolds an empty memory file for every `auto_analysis`
+    ticker so the long-term memory directory is fully hooked up to the
+    universe from day one (rather than waiting for a delta event to
+    lazily create the file). Existing memory files are left alone.
     """
     tier1 = _load_tier1_universe()
     counts: Dict[str, int] = {"auto_analysis": 0, "data_only": 0, "analyzed_on_demand": 0}
+    auto_tickers: List[str] = []
     with session_scope() as db:
         for row in db.query(Company).all():
             current = row.universe_tier or "data_only"
             if row.ticker in tier1:
                 row.universe_tier = "auto_analysis"
+                auto_tickers.append(row.ticker)
             elif current == "analyzed_on_demand":
                 # Keep on-demand promotion intact across seeds — that's
                 # runtime state set by the UI, not config.
@@ -88,6 +95,18 @@ def seed_universe_tiers() -> Dict[str, int]:
             else:
                 row.universe_tier = "data_only"
             counts[row.universe_tier] = counts.get(row.universe_tier, 0) + 1
+    # Scaffold memory files for fresh tier-1 names. Defensive — a disk
+    # hiccup must never block startup seeding.
+    try:
+        from .config import settings
+        if settings.enable_long_term_memory:
+            from .memory import CompanyMemory
+            for t in auto_tickers:
+                cm = CompanyMemory.for_ticker(t)
+                if not cm.path.exists():
+                    cm.save()  # writes a well-formed but empty file
+    except Exception:  # pragma: no cover — diagnostic only
+        log.debug("memory scaffold skipped during universe seed")
     return counts
 
 

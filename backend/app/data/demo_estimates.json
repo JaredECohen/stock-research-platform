@@ -558,5 +558,105 @@
       "low": 233.75
     },
     "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "PLTR": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 3770000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 4731350000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 85.80000000000001,
+      "high": 101.4,
+      "low": 66.3
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "NFLX": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 44850000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 50568375000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 946.0000000000001,
+      "high": 1118.0,
+      "low": 731.0
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "TSLA": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 101850000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 106178625000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 311.3,
+      "high": 367.90000000000003,
+      "low": 240.54999999999998
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "LIN": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 34320000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 35486880000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 500.50000000000006,
+      "high": 591.5,
+      "low": 386.75
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
+  },
+  "AMT": {
+    "revenue_estimates": [
+      {
+        "period": "FY+1",
+        "value": 11550000000.0
+      },
+      {
+        "period": "FY+2",
+        "value": 12040875000.0
+      }
+    ],
+    "eps_estimates": [],
+    "ebitda_estimates": [],
+    "price_targets": {
+      "median": 236.50000000000003,
+      "high": 279.5,
+      "low": 182.75
+    },
+    "recommendation_consensus": "Buy / Hold blend (illustrative)."
   }
 }

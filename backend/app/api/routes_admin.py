@@ -6,13 +6,18 @@ governance, bull/bear lopsidedness audit. None of these add new
 business logic; they expose what's already in the DB / service layer
 so a UI or admin script can reason about platform state without
 SQL-level access.
+
+Wave 8G: UI-trace ingest + read endpoints. Frontend posts route
+changes / API calls / clicks / errors; backend HTTP middleware writes
+its own rows; one timeline I can query.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from ..monitoring import status_snapshot
 from ..seed_demo_data import run_full_seed
@@ -51,6 +56,88 @@ def llm_metrics_endpoint(
         "by_provider": llm_metrics.cost_per_provider(since=since),
         "slowest": llm_metrics.slowest_calls(since=since, n=10),
     }
+
+
+@router.get("/api/admin/sdk-traces")
+def list_sdk_traces(
+    ticker: Optional[str] = None,
+    surface: Optional[str] = Query(None, description="memo|chat"),
+    limit: int = Query(20, ge=1, le=200),
+) -> Dict[str, Any]:
+    """Wave 10 — list recent SDK exchange traces.
+
+    Use this to spot-check whether the SDK is firing as expected and
+    pull a `run_id` to deep-link into `/api/admin/sdk-traces/{run_id}`
+    for the joined trace + LLM-call view.
+    """
+    from ..database import SessionLocal
+    from ..models import SDKTrace
+    with SessionLocal() as session:
+        q = session.query(SDKTrace).order_by(SDKTrace.generated_at.desc())
+        if ticker:
+            q = q.filter(SDKTrace.ticker == ticker.upper())
+        if surface:
+            q = q.filter(SDKTrace.surface == surface)
+        rows = q.limit(limit).all()
+        return {
+            "count": len(rows),
+            "traces": [
+                {
+                    "run_id": r.run_id,
+                    "ticker": r.ticker,
+                    "surface": r.surface,
+                    "duration_ms": r.duration_ms,
+                    "items_count": len(r.new_items or []),
+                    "final_output_preview": (r.final_output or "")[:200],
+                    "error": r.error or None,
+                    "generated_at": r.generated_at.isoformat() + "Z",
+                }
+                for r in rows
+            ],
+        }
+
+
+@router.get("/api/admin/sdk-traces/{run_id}")
+def get_sdk_trace(run_id: str) -> Dict[str, Any]:
+    """Wave 10 — joined view: SDK exchange trace + the legacy graph's
+    LLMCallLog rows for the same `run_id`.
+
+    The SDK runs in parallel with the graph; both share `run_id` so
+    reviewers can see both timelines side-by-side and diff "what the
+    SDK did" vs "what the graph did" on the same input.
+
+    Returns 404 if no SDK trace exists for the run_id (it may still
+    have LLMCallLog rows from a graph-only run; query that endpoint
+    directly via `/api/admin/llm-metrics?run_id=...`).
+    """
+    from ..database import SessionLocal
+    from ..models import SDKTrace
+    with SessionLocal() as session:
+        trace = session.query(SDKTrace).filter(
+            SDKTrace.run_id == run_id,
+        ).order_by(SDKTrace.generated_at.desc()).first()
+        if trace is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No SDK trace found for run_id={run_id}",
+            )
+        # Joined LLMCallLog rows — same shape as `/api/admin/llm-metrics`
+        # so the frontend can reuse one renderer for both.
+        llm_calls = llm_metrics.cost_per_run(run_id)
+        return {
+            "run_id": run_id,
+            "trace": {
+                "id": trace.id,
+                "ticker": trace.ticker,
+                "surface": trace.surface,
+                "duration_ms": trace.duration_ms,
+                "final_output": trace.final_output,
+                "new_items": trace.new_items,
+                "error": trace.error or None,
+                "generated_at": trace.generated_at.isoformat() + "Z",
+            },
+            "llm_calls": llm_calls,
+        }
 
 
 @router.get("/api/admin/track-record")
@@ -155,6 +242,121 @@ def reload_news_domains() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Wave 8C — Bull/bear lopsidedness audit
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Wave 8G — UI trace ingest + read
+# ---------------------------------------------------------------------------
+
+class UILogEvent(BaseModel):
+    """Single trace event from the frontend.
+
+    `kind` is the high-level category: route / api_call / click / error.
+    Everything else lives in `payload` so we can ship new event types
+    without bumping the schema.
+    """
+    kind: str
+    path: Optional[str] = None
+    method: Optional[str] = None
+    status_code: Optional[int] = None
+    duration_ms: Optional[int] = None
+    session_id: Optional[str] = None
+    ts: Optional[str] = None  # client wall-clock; not authoritative
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class UILogBatch(BaseModel):
+    events: List[UILogEvent]
+
+
+@router.post("/api/admin/ui-log")
+def post_ui_log(batch: UILogBatch) -> Dict[str, Any]:
+    """Ingest a batch of UI trace events. Always returns 200 — logging
+    must never block the user."""
+    from ..database import SessionLocal
+    from ..models import UILog
+    written = 0
+    try:
+        with SessionLocal() as db:
+            UILog.__table__.create(bind=db.get_bind(), checkfirst=True)
+            for e in batch.events:
+                db.add(UILog(
+                    ts=datetime.utcnow(),
+                    source="frontend",
+                    kind=e.kind[:32],
+                    path=(e.path or "")[:256] or None,
+                    method=(e.method or "")[:8] or None,
+                    status_code=e.status_code,
+                    duration_ms=e.duration_ms,
+                    session_id=(e.session_id or "")[:64] or None,
+                    payload=e.payload or {},
+                ))
+                written += 1
+            db.commit()
+    except Exception:
+        return {"written": written, "ok": False}
+    return {"written": written, "ok": True}
+
+
+@router.get("/api/admin/ui-log")
+def get_ui_log(
+    limit: int = Query(200, ge=1, le=2000),
+    since_minutes: int = Query(60, ge=1, le=1440),
+    source: Optional[str] = None,
+    kind: Optional[str] = None,
+    path_contains: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Read recent UI trace events newest-first. Use this to see what a
+    user was doing in the UI."""
+    from ..database import SessionLocal
+    from ..models import UILog
+    from sqlalchemy import select
+    cutoff = datetime.utcnow() - timedelta(minutes=since_minutes)
+    with SessionLocal() as db:
+        UILog.__table__.create(bind=db.get_bind(), checkfirst=True)
+        stmt = select(UILog).where(UILog.ts >= cutoff)
+        if source:
+            stmt = stmt.where(UILog.source == source)
+        if kind:
+            stmt = stmt.where(UILog.kind == kind)
+        if session_id:
+            stmt = stmt.where(UILog.session_id == session_id)
+        if path_contains:
+            stmt = stmt.where(UILog.path.like(f"%{path_contains}%"))
+        stmt = stmt.order_by(UILog.ts.desc()).limit(limit)
+        rows = db.execute(stmt).scalars().all()
+    return {
+        "since_minutes": since_minutes,
+        "n": len(rows),
+        "events": [
+            {
+                "id": r.id,
+                "ts": r.ts.isoformat() if r.ts else None,
+                "source": r.source,
+                "kind": r.kind,
+                "path": r.path,
+                "method": r.method,
+                "status_code": r.status_code,
+                "duration_ms": r.duration_ms,
+                "session_id": r.session_id,
+                "payload": r.payload,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.delete("/api/admin/ui-log")
+def clear_ui_log() -> Dict[str, Any]:
+    """Wipe the trace table. Useful before starting a fresh test session."""
+    from ..database import SessionLocal
+    from ..models import UILog
+    with SessionLocal() as db:
+        UILog.__table__.create(bind=db.get_bind(), checkfirst=True)
+        n = db.query(UILog).delete()
+        db.commit()
+    return {"deleted": n}
+
 
 @router.get("/api/admin/lopsidedness-audit")
 def lopsidedness_audit(

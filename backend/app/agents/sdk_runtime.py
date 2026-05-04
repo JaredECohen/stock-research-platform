@@ -387,7 +387,57 @@ def get_agents() -> Dict[str, Agent]:
     return _AGENT_CACHE
 
 
-def _run_via_real_sdk(ticker: str) -> Optional[Dict[str, Any]]:
+def _persist_sdk_trace(
+    *, run_id: str, ticker: Optional[str], surface: str,
+    final_output: str, new_items: Any, error: str = "",
+    duration_ms: int = 0,
+) -> None:
+    """Wave 10 — write a `SDKTrace` row keyed by `run_id`.
+
+    Best-effort: never raises. The SDK exchange is informational, so
+    losing one trace row to a DB hiccup must not affect the memo build.
+    `new_items` is whatever shape the SDK emitted (a list of provider
+    item dicts) — we serialize as-is and let the admin viewer interpret.
+    """
+    try:
+        from ..db import SessionLocal
+        from ..models import SDKTrace
+        # Coerce SDK item objects → JSON-serializable dicts. Most have a
+        # `.model_dump()` (Pydantic) or `__dict__`; fall back to repr.
+        items_payload: list = []
+        for item in (new_items or []):
+            if hasattr(item, "model_dump"):
+                try:
+                    items_payload.append(item.model_dump())
+                    continue
+                except Exception:
+                    pass
+            if hasattr(item, "__dict__"):
+                try:
+                    items_payload.append({
+                        k: v for k, v in vars(item).items()
+                        if not k.startswith("_")
+                    })
+                    continue
+                except Exception:
+                    pass
+            items_payload.append({"repr": repr(item)[:500]})
+        with SessionLocal() as session:
+            session.add(SDKTrace(
+                run_id=run_id, ticker=ticker, surface=surface,
+                final_output=str(final_output or "")[:8000],
+                new_items=items_payload[:200],  # hard cap on payload size
+                error=str(error or "")[:2000],
+                duration_ms=int(duration_ms),
+            ))
+            session.commit()
+    except Exception as exc:  # pragma: no cover — telemetry must never block
+        log.debug("SDKTrace persistence failed (non-fatal): %s", exc)
+
+
+def _run_via_real_sdk(
+    ticker: str, *, run_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Real OpenAI Agents SDK exchange.
 
     Builds a real `agents.Agent` for the PM with sector-handoff agents and
@@ -402,6 +452,8 @@ def _run_via_real_sdk(ticker: str) -> Optional[Dict[str, Any]]:
     """
     if not _can_use_real_sdk():
         return None
+    import time as _time
+    started = _time.perf_counter()
     try:
         from agents import Agent as RealAgent, Runner as RealRunner, function_tool as real_function_tool
 
@@ -443,12 +495,28 @@ def _run_via_real_sdk(ticker: str) -> Optional[Dict[str, Any]]:
         result = RealRunner.run_sync(
             pm, f"Analyze {ticker} as a long-term investment.",
         )
+        elapsed_ms = int((_time.perf_counter() - started) * 1000)
+        final_output = getattr(result, "final_output", None)
+        new_items = getattr(result, "new_items", None)
+        if run_id:
+            _persist_sdk_trace(
+                run_id=run_id, ticker=ticker, surface="memo",
+                final_output=final_output or "", new_items=new_items,
+                duration_ms=elapsed_ms,
+            )
         return {
-            "final_output": getattr(result, "final_output", None),
-            "new_items": getattr(result, "new_items", None),
+            "final_output": final_output,
+            "new_items": new_items,
         }
     except Exception as exc:
         log.warning("real Agents SDK exchange failed for %s: %s", ticker, exc)
+        if run_id:
+            elapsed_ms = int((_time.perf_counter() - started) * 1000)
+            _persist_sdk_trace(
+                run_id=run_id, ticker=ticker, surface="memo",
+                final_output="", new_items=None,
+                error=str(exc), duration_ms=elapsed_ms,
+            )
         return None
 
 
@@ -462,10 +530,15 @@ def run_stock_memo_via_sdk(ticker: str) -> StockMemoOut:
     the legacy graph runs — the SDK shim's topology stays observable via
     `get_agents()` for tests + introspection.
     """
+    # Generate a run_id up-front so the SDK trace + the legacy graph's
+    # LLMCallLog rows share the same key. The admin viewer joins on it.
+    import uuid as _uuid
+    run_id = str(_uuid.uuid4())
+
     # Real-SDK exchange (no-op if keys missing or package unavailable).
-    sdk_trace = _run_via_real_sdk(ticker)
+    sdk_trace = _run_via_real_sdk(ticker, run_id=run_id)
     if sdk_trace is not None:
-        log.info("Agents SDK trace for %s: %s", ticker,
+        log.info("Agents SDK trace for %s (run %s): %s", ticker, run_id,
                  (sdk_trace.get("final_output") or "")[:200])
 
     # Shim path: keep the topology callable so tests / introspection see it.
@@ -475,6 +548,8 @@ def run_stock_memo_via_sdk(ticker: str) -> StockMemoOut:
     if result.final_output is not None:
         return result.final_output
 
-    # Last-resort fallback so demo mode never returns empty.
+    # Last-resort fallback so demo mode never returns empty. Pass the
+    # same run_id so SDKTrace + LLMCallLog rows are joinable in the
+    # admin viewer.
     from .graph import run_stock_memo
-    return run_stock_memo(ticker)
+    return run_stock_memo(ticker, run_id=run_id)

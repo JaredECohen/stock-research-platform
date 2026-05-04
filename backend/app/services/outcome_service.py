@@ -87,11 +87,13 @@ def _close_on_or_after(rows: List[Dict[str, Any]], target: str) -> Optional[floa
 def _thesis_held(rating: str, return_signed: float) -> Optional[bool]:
     """Did the recommendation pay off?
 
-    - Bullish / Mixed Positive expect positive return → held if ≥ 0.
-    - Bearish / Mixed Negative expect negative return → held if ≤ 0.
+    - Very Bullish / Bullish expect positive return → held if ≥ 0.
+    - Very Bearish / Bearish expect negative return → held if ≤ 0.
     - Neutral has no directional bet — return None (no judgment).
     """
     r = (rating or "").strip().lower()
+    # "very bullish" matches "bullish" too; "very bearish" matches "bearish";
+    # plus the legacy "mixed positive/negative" labels for cached snapshots.
     if "bullish" in r or "mixed positive" in r:
         return return_signed >= 0
     if "bearish" in r or "mixed negative" in r:

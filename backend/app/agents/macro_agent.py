@@ -234,7 +234,10 @@ def run_macro_scenario(scenario: str) -> MacroScenarioResult:
     return base
 
 
-def run_macro_agent(profile: Dict, scenario: str = "soft_landing") -> AgentFinding:
+def run_macro_agent(
+    profile: Dict, scenario: str = "soft_landing",
+    *, prior_round_critique: Optional[str] = None,
+) -> AgentFinding:
     """Per-company macro `AgentFinding` for the memo.
 
     LLM-driven: prompt carries the regime + snapshot + the target company's
@@ -247,6 +250,7 @@ def run_macro_agent(profile: Dict, scenario: str = "soft_landing") -> AgentFindi
     sector_view = s.sector_impacts.get(sector, "Macro impact mapped via sector framework.")
 
     if settings.has_llm:
+        from .earnings_agent import _critique_block as _q
         snapshot = macro_snapshot()
         prompt = (
             "Given the regime read and live macro snapshot, write a 4-6 sentence "
@@ -259,6 +263,7 @@ def run_macro_agent(profile: Dict, scenario: str = "soft_landing") -> AgentFindi
             f"Live snapshot: {json.dumps(snapshot, default=str)}\n"
             f"Company profile: {json.dumps({'ticker': profile.get('ticker'), 'sector': sector, 'industry': profile.get('industry'), 'drivers': profile.get('drivers'), 'risks': profile.get('risks')}, default=str)}\n\n"
             "Return JSON: {headline, summary, key_points (list of strings), confidence (0-1)}."
+            + _q(prior_round_critique)
         )
         out = llm.chat_json(
             prompt, system=prompts.MACRO_ANALYST_PROMPT, route="cheap",

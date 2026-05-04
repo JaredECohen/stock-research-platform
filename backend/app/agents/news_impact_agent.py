@@ -42,8 +42,7 @@ _PROMPT = (
     "- Re-tellings of facts already in the memo's sources_used.\n\n"
     "If material, propose a PATCH — only the fields that should change. "
     "Do NOT touch fields the news doesn't actually inform. Allowed:\n"
-    "- rating_label: one of {Bullish, Mixed Positive, Neutral, Mixed "
-    "Negative, Bearish}\n"
+    "- rating_label: one of {Very Bullish, Bullish, Neutral, Bearish, Very Bearish}\n"
     "- confidence_score: 0-100, change by at most 15 points per patch\n"
     "- one_sentence_thesis: rewrite if the thesis itself shifted\n"
     "- bull_case / bear_case: append a single key_point if relevant\n"
@@ -77,7 +76,7 @@ def _clamp_patch(memo: StockMemoOut, patch: Dict[str, Any]) -> Dict[str, Any]:
         "final_pm_view", "bull_case", "bear_case", "key_risks",
     }
     allowed_ratings = {
-        "Bullish", "Mixed Positive", "Neutral", "Mixed Negative", "Bearish",
+        "Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish",
     }
     cleaned: Dict[str, Any] = {}
     for k, v in (patch or {}).items():

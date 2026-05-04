@@ -102,32 +102,34 @@ def test_latest_memo_returns_none_for_unknown_ticker():
 # ---------------------------------------------------------------------------
 
 def test_tier1_universe_marked_auto_analysis_after_seed():
-    # The startup hook in app.main ran the seeder, which calls
-    # `seed_universe_tiers`. Tier-1 names from the JSON config should be
-    # promoted; everyone else stays data_only.
+    # Wave 8K: tier-1 was expanded to cover the full demo universe so
+    # the screener, memo path, and memory directory all align on one
+    # set. Every ticker the demo provider exposes should now be
+    # auto_analysis after seeding.
     _ensure_started()
-    tier1 = (
-        # Tech (4) + Comm Services (3) + Consumer Disc (2)
-        "NVDA", "AAPL", "MSFT", "PLTR",
+    expected_tier1 = {
+        # Technology
+        "NVDA", "AAPL", "MSFT", "PLTR", "AVGO", "AMD", "CRM",
+        # Communication Services
         "GOOGL", "META", "NFLX",
-        "AMZN", "TSLA",
-        # one representative per remaining sector (8)
-        "JPM", "COST", "LLY", "XOM", "CAT", "NEE", "LIN", "AMT",
-    )
+        # Consumer Discretionary
+        "AMZN", "TSLA", "HD", "MCD", "NKE", "SBUX",
+        # Consumer Staples
+        "COST", "WMT",
+        # Financials
+        "JPM", "V", "MA", "BAC", "GS", "MS",
+        # Healthcare
+        "LLY", "JNJ", "MRK", "UNH",
+        # Other sectors
+        "XOM", "CAT", "NEE", "LIN", "AMT",
+    }
     with SessionLocal() as db:
-        for ticker in tier1:
+        for ticker in expected_tier1:
             row = db.get(Company, ticker)
-            assert row is not None, f"missing tier-1 ticker {ticker} in demo dataset"
+            assert row is not None, f"missing canonical ticker {ticker} in demo dataset"
             assert row.universe_tier == "auto_analysis", (
-                f"{ticker} should be tier-1 but is {row.universe_tier}"
+                f"{ticker} should be auto_analysis but is {row.universe_tier}"
             )
-        # Names known to be in the demo set but explicitly NOT tier-1 should be data_only.
-        for ticker in ("BAC", "GS", "MS", "MA", "V", "WMT", "MRK", "JNJ", "UNH"):
-            row = db.get(Company, ticker)
-            if row is not None:
-                assert row.universe_tier == "data_only", (
-                    f"{ticker} should be data_only but is {row.universe_tier}"
-                )
 
 
 # ---------------------------------------------------------------------------

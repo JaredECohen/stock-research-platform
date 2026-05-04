@@ -1,12 +1,12 @@
 {
-  "_doc": "Tier-1 watch list: names that get the full memo + auto-refresh on filings/earnings deltas. Everyone else stays `data_only` until the UI explicitly asks for an analysis (which then promotes them to `analyzed_on_demand`). One representative name per remaining sector — picked for visibility, public coverage depth, and clean alignment to that sector's core archetype.",
+  "_doc": "Canonical universe — every ticker the demo dataset supports is tier-1 `auto_analysis`. Aligned to the demo provider's `list_tickers()` output so the screener, the memo path, and the long-term memory directory all cover the same set of names. Data-only tier still exists in the schema as runtime state for any ticker the on-demand UI eventually pulls in from outside this list, but the demo seeder no longer leaves any seeded ticker stuck on data_only.",
   "sectors": {
-    "Technology": ["NVDA", "AAPL", "MSFT", "PLTR"],
+    "Technology": ["NVDA", "AAPL", "MSFT", "PLTR", "AVGO", "AMD", "CRM"],
     "Communication Services": ["GOOGL", "META", "NFLX"],
-    "Consumer Discretionary": ["AMZN", "TSLA"],
-    "Financials": ["JPM"],
-    "Consumer Staples": ["COST"],
-    "Healthcare": ["LLY"],
+    "Consumer Discretionary": ["AMZN", "TSLA", "HD", "MCD", "NKE", "SBUX"],
+    "Consumer Staples": ["COST", "WMT"],
+    "Financials": ["JPM", "V", "MA", "BAC", "GS", "MS"],
+    "Healthcare": ["LLY", "JNJ", "MRK", "UNH"],
     "Energy": ["XOM"],
     "Industrials": ["CAT"],
     "Utilities": ["NEE"],

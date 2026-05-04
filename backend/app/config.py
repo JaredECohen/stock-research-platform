@@ -118,6 +118,15 @@ class Settings(BaseSettings):
     # ~$0.02-0.04 per-memo token cost is small relative to the user-visible
     # value; toggle off via env if smoke runtime spikes.
     enable_long_form_reports: bool = True
+    # Wave 9: deep-research iterative PM↔sector dialog. After the parallel
+    # fan-out, the PM critique step asks 0-3 follow-up questions and has the
+    # targeted specialists re-run with the question as additional prompt
+    # context. Hard cap on rounds + questions per round bounds cost.
+    # Default-off — flip on per `docs/DEEP_RESEARCH_PLAN.md` Phase A
+    # eyeball-then-rollout sequence.
+    enable_deep_research: bool = False
+    deep_research_max_rounds: int = 3
+    deep_research_max_questions_per_round: int = 3
     # When entry count crosses this cap, the oldest entries are condensed
     # into a "Historical context" block rather than discarded outright.
     memory_max_entries: int = 50
@@ -140,6 +149,15 @@ class Settings(BaseSettings):
     backend_port: int = 8000
     frontend_url: str = "http://localhost:5173"
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
+
+    # PM rating blend (Option A). The final rating label is derived from a
+    # weighted mix of the LLM's directional call and the deterministic
+    # factor_pm_score: `final = w * llm_score + (1 - w) * factor_pm_score`,
+    # where llm_score is the bucket center of the PM's rating_label
+    # (Very Bullish=90 … Very Bearish=10). 0.0 reproduces pre-blend
+    # behavior (factor score is dispositive); 1.0 gives the LLM full
+    # authority. Clamped to [0.0, 1.0] at use site.
+    llm_rating_weight: float = 0.4
 
     # Runtime
     cache_ttl_seconds: int = 3600

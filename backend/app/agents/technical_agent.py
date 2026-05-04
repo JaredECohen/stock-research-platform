@@ -80,7 +80,10 @@ def _deterministic_summary(profile: Dict[str, Any], sig: TechnicalSignals) -> Di
     }
 
 
-def run_technical_agent(profile: Dict[str, Any], days: int = 300) -> AgentFinding:
+def run_technical_agent(
+    profile: Dict[str, Any], days: int = 300,
+    *, prior_round_critique: Optional[str] = None,
+) -> AgentFinding:
     """Produce the Technical Analyst finding for `profile`.
 
     `days` is the number of trailing daily bars to request. 300 gives the
@@ -119,12 +122,14 @@ def run_technical_agent(profile: Dict[str, Any], days: int = 300) -> AgentFindin
     # LLM narrative pass (uses the dedicated tool model). The prompt makes
     # the no-trade-signal framing explicit so the model doesn't drift into
     # buy/sell language. Falls back deterministically if the call fails.
+    from .earnings_agent import _critique_block as _q
     payload_for_prompt = signals.model_dump()
     user_prompt = (
         prompts.TECHNICAL_ANALYST_PROMPT.format(
             ticker=ticker,
             sector=profile.get("sector", ""),
         )
+        + _q(prior_round_critique)
         + "\n\nTechnical indicators (already computed; do NOT recompute):\n"
         + json.dumps(payload_for_prompt, default=str)[:2000]
     )

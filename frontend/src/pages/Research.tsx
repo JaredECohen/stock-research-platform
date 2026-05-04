@@ -16,14 +16,31 @@ export default function Research() {
   const [params, setParams] = useSearchParams();
   const ticker = params.get("ticker") || "";
   const [universe, setUniverse] = useState<CompanyOut[]>([]);
+  const [universeError, setUniverseError] = useState<string | null>(null);
+  const [universeLoading, setUniverseLoading] = useState(false);
   const [memo, setMemo] = useState<StockMemoOut | null>(null);
   const [loading, setLoading] = useState(false);
   const [needsGate, setNeedsGate] = useState(false);   // 409 from backend
   const [error, setError] = useState<string | null>(null);
   const [trace, setTrace] = useState<AgentTraceT[]>([]);
 
+  const loadUniverse = React.useCallback(() => {
+    setUniverseLoading(true);
+    setUniverseError(null);
+    api
+      .listStocks()
+      .then((rows) => {
+        setUniverse(rows);
+        setUniverseLoading(false);
+      })
+      .catch((e: Error) => {
+        setUniverseError(e.message || "Failed to load tickers");
+        setUniverseLoading(false);
+      });
+  }, []);
+
   useEffect(() => {
-    api.listStocks().then(setUniverse).catch(() => {});
+    loadUniverse();
   }, []);
 
   const company = universe.find((c) => c.ticker === ticker);
@@ -76,7 +93,7 @@ export default function Research() {
   // to `analyzed_on_demand`; refresh the universe list so the badge updates.
   function onAnalyzed(m: StockMemoOut) {
     setMemo(m);
-    api.listStocks().then(setUniverse).catch(() => {});
+    loadUniverse();
   }
 
   return (
@@ -92,14 +109,31 @@ export default function Research() {
               if (t) setParams({ ticker: t });
               else setParams({});
             }}
+            disabled={universeLoading}
           >
-            <option value="">Select a ticker…</option>
+            <option value="">
+              {universeLoading
+                ? "Loading tickers…"
+                : universe.length === 0
+                ? "No tickers available — click Reload"
+                : "Select a ticker…"}
+            </option>
             {universe.map((c) => (
               <option key={c.ticker} value={c.ticker}>
-                {c.ticker} — {c.company_name} [{c.universe_tier || "data_only"}]
+                {c.ticker} — {c.company_name}
               </option>
             ))}
           </select>
+          {(universeError || universe.length === 0) && !universeLoading && (
+            <button
+              type="button"
+              onClick={loadUniverse}
+              className="px-3 py-1.5 text-sm rounded-md bg-ink-800 border border-ink-700 text-slate-200 hover:bg-ink-700"
+              title={universeError || ""}
+            >
+              Reload tickers
+            </button>
+          )}
           <button
             type="button"
             disabled={!ticker || loading}

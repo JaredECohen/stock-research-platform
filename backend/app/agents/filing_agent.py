@@ -10,7 +10,10 @@ from ..services import retrieval_service
 from . import llm, prompts
 
 
-def run_filing_agent(profile: Dict, filings: List[Dict]) -> AgentFinding:
+def run_filing_agent(
+    profile: Dict, filings: List[Dict],
+    *, prior_round_critique: Optional[str] = None,
+) -> AgentFinding:
     ticker = profile.get("ticker", "")
     if not filings:
         return AgentFinding(
@@ -43,8 +46,10 @@ def run_filing_agent(profile: Dict, filings: List[Dict]) -> AgentFinding:
     )
     # Long-doc analyst — uses OPENAI_TOOL_MODEL today; GEMINI_LONGDOC_MODEL
     # is documented as a future Gemini override but not yet routed here.
+    from .earnings_agent import _critique_block as _q  # share the helper
     llm_out = llm.chat_json(
         prompts.FILING_ANALYST_PROMPT
+        + _q(prior_round_critique)
         + (("\n\n" + notes_block) if notes_block else "")
         + "\n\nFiling context:\n" + json.dumps(payload, default=str)[:3500],
         system=prompts.PM_SYSTEM, route="cheap",

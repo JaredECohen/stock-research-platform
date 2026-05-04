@@ -10,7 +10,10 @@ from ..services.valuation_service import build_dcf
 from . import llm, prompts
 
 
-def run_valuation_agent(profile: Dict, ratios: Dict, dcf: Optional[DCFResult]) -> AgentFinding:
+def run_valuation_agent(
+    profile: Dict, ratios: Dict, dcf: Optional[DCFResult],
+    *, prior_round_critique: Optional[str] = None,
+) -> AgentFinding:
     payload = {
         "ticker": profile.get("ticker"),
         "current_price": profile.get("last_price"),
@@ -31,9 +34,11 @@ def run_valuation_agent(profile: Dict, ratios: Dict, dcf: Optional[DCFResult]) -
     notes_block = build_notes_block_for_agent(
         "valuation", profile, extra_query="DCF terminal growth WACC multiple",
     )
+    from .earnings_agent import _critique_block as _q
     # Tool-agent role — uses OPENAI_TOOL_MODEL (gpt-5.4 by default).
     llm_out = llm.chat_json(
         prompts.VALUATION_ANALYST_PROMPT
+        + _q(prior_round_critique)
         + (("\n\n" + notes_block) if notes_block else "")
         + "\n\nContext:\n" + json.dumps(payload, default=str),
         system=prompts.PM_SYSTEM, route="strong",

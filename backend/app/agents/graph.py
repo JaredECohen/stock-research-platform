@@ -74,6 +74,233 @@ from .valuation_agent import run_valuation_agent
 # Memo construction
 # ---------------------------------------------------------------------------
 
+def _market_gap_clause(
+    profile: Dict, dcf: Optional[DCFResult], ticker: str,
+) -> str:
+    """Wave 8R — write the "what the market is missing" sentence.
+
+    Compares model growth vs. analyst consensus growth (5y avg). When
+    the gap is material (≥2pp), names which side is leaning + why
+    (driven by the company's first-line driver / risk).
+    Returns the empty string when no meaningful gap exists.
+    """
+    if dcf is None:
+        return ""
+    try:
+        model_growths = list(dcf.base.assumptions.revenue_growth)
+        if not model_growths:
+            return ""
+        model_avg = sum(model_growths) / len(model_growths)
+    except Exception:
+        return ""
+
+    # Pull consensus from the data service via the same helper the engine uses.
+    consensus_avg = None
+    try:
+        from ..finance.dcf import _consensus_growth_path
+        from ..services.data_service import get_data_service
+        estimates = get_data_service().get_estimates(ticker)
+        consensus = _consensus_growth_path(estimates)
+        if consensus:
+            consensus_avg = sum(consensus) / len(consensus)
+    except Exception:
+        consensus_avg = None
+
+    drivers = profile.get("drivers") or []
+    risks = profile.get("risks") or []
+
+    if consensus_avg is None:
+        # No consensus visible — make a softer "vs. trend" framing instead.
+        return ""
+
+    gap = model_avg - consensus_avg
+    if abs(gap) < 0.02:  # within 2pp — not material
+        return ""
+
+    if gap > 0:
+        # Model is more bullish than the Street.
+        driver = drivers[0] if drivers else "core driver execution"
+        return (
+            f"Model sees ~{model_avg * 100:.0f}% revenue growth vs. consensus "
+            f"~{consensus_avg * 100:.0f}% — the **upside the market may be "
+            f"missing** is durability of {driver}."
+        )
+    # Model is more cautious than the Street.
+    risk = risks[0] if risks else "execution slip on the dominant driver"
+    return (
+        f"Model sees ~{model_avg * 100:.0f}% revenue growth vs. consensus "
+        f"~{consensus_avg * 100:.0f}% — the **downside the market may be "
+        f"underweighting** is {risk}."
+    )
+
+
+def _build_scores_dict(
+    *, blended_confidence: float, raw_confidence: float, ev_q: float,
+    sector_finding: AgentFinding, valuation_finding: AgentFinding,
+    risk_finding: AgentFinding, profile: Dict, ratios: Dict, earnings: Dict,
+) -> Dict[str, float]:
+    """Wave 8M — assemble `memo.scores` so the UI can render every
+    category score next to the headline confidence number.
+
+    Three groups of fields ride here:
+      - Headline + agent-confidence numbers (existing behavior).
+      - `factor_*` — the same seven factor scores the screener uses,
+        recomputed from the same ratios/profile inputs so memo and
+        screener can't disagree on a name's quality / growth / valuation /
+        momentum / risk / macro_fit / catalyst.
+      - `factor_pm_score` — the screener's composite (0-100) for
+        side-by-side comparison with the LLM-driven confidence.
+    """
+    from ..finance import factor_scores as fs
+    rev_growth = ratios.get("revenue_growth")
+    op_margin = ratios.get("operating_margin")
+    gross_margin = ratios.get("gross_margin")
+    roic = ratios.get("ROIC")
+    ev_ebitda = ratios.get("EV_EBITDA")
+    p_fcf = ratios.get("PFCF")
+    fcf_y = ratios.get("FCF_yield")
+    debt_to_ebitda = ratios.get("debt_to_ebitda")
+    beta = profile.get("beta")
+
+    quality = fs.quality_score(roic, op_margin, gross_margin)
+    growth = fs.growth_score(rev_growth)
+    valuation = fs.valuation_score(ev_ebitda, p_fcf, fcf_y)
+    surprises = [q.get("surprise_pct", 0) for q in (earnings or {}).get("quarters", [])]
+    earnings_momentum = fs.earnings_momentum_score(surprises)
+    risk = fs.risk_score(beta, debt_to_ebitda, drawdown=-0.20)
+
+    macro_fit = 60.0  # untilled-theme baseline; theme bias only applies on the screener path
+    catalyst = 65.0 if "AI" in (profile.get("description") or "") else 50.0
+
+    pm_score = round(
+        quality * 0.25 + growth * 0.20 + valuation * 0.15
+        + earnings_momentum * 0.10 + macro_fit * 0.15
+        + risk * 0.10 + catalyst * 0.05,
+        1,
+    )
+
+    return {
+        # Headline / agent confidences (existing).
+        "confidence": blended_confidence,
+        "raw_confidence": raw_confidence,
+        "evidence_quality": round(ev_q * 100, 1),
+        "sector_confidence": sector_finding.confidence * 100,
+        "valuation_confidence": valuation_finding.confidence * 100,
+        "risk_confidence": risk_finding.confidence * 100,
+        # Wave 8M — quant factor scores (same math as the screener).
+        "factor_quality": quality,
+        "factor_growth": growth,
+        "factor_valuation": valuation,
+        "factor_earnings_momentum": earnings_momentum,
+        "factor_macro_fit": macro_fit,
+        "factor_risk": risk,
+        "factor_catalyst": catalyst,
+        "factor_pm_score": pm_score,
+    }
+
+
+def _apply_risk_recommendations(
+    memo: StockMemoOut, risk_finding: AgentFinding,
+) -> List[Dict[str, Any]]:
+    """Wave 8H — deterministic enforcement of risk-agent recommendations.
+
+    The PM synthesis prompt is one channel for the risk lens to influence
+    the memo (LLM reads the recommendations); this is the second, harder
+    channel. For each rec we mutate the memo in place:
+
+    - `target=confidence` direction=lower → clamp confidence_score down
+      by 5/10/15 (small/medium/large).
+    - `target=rating` direction=lower → shift rating one notch down the
+      Bullish→Mixed Positive→Neutral→Mixed Negative→Bearish ladder.
+    - `target=thesis_breakers` direction=flag → ensure a matching
+      RiskItem is in `memo.thesis_breakers` (severity=high).
+    - `target=bear_case` direction=flag → append `detail` to
+      `memo.bear_case.key_points` if not already present (this is how
+      risk findings actually augment the sector-built bear case).
+
+    Returns the list of recs that were applied so the caller can add an
+    audit trail to the memo.
+    """
+    if not isinstance(risk_finding.data, dict):
+        return []
+    raw = risk_finding.data.get("recommendations") or []
+    if not isinstance(raw, list):
+        return []
+    applied: List[Dict[str, Any]] = []
+
+    rating_ladder = [
+        "Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish",
+    ]
+    confidence_step = {"small": 5.0, "medium": 10.0, "large": 15.0}
+
+    for rec in raw:
+        if not isinstance(rec, dict):
+            continue
+        target = rec.get("target")
+        direction = rec.get("direction")
+        magnitude = rec.get("magnitude") or "medium"
+        detail = (rec.get("detail") or "").strip()
+        rationale = (rec.get("rationale") or "").strip()
+        # Discipline — recs without a rationale don't apply.
+        if not detail or not rationale:
+            continue
+
+        if target == "confidence" and direction == "lower":
+            delta = confidence_step.get(magnitude, 10.0)
+            old = float(memo.confidence_score or 0)
+            new = max(20.0, old - delta)
+            if new != old:
+                memo.confidence_score = new
+                applied.append({**rec, "applied_change": {
+                    "field": "confidence_score", "from": old, "to": new,
+                }})
+
+        elif target == "rating" and direction == "lower":
+            current = (memo.rating_label or "").strip()
+            if current in rating_ladder:
+                idx = rating_ladder.index(current)
+                step = {"small": 1, "medium": 1, "large": 2}.get(magnitude, 1)
+                new_idx = min(len(rating_ladder) - 1, idx + step)
+                if new_idx != idx:
+                    new_rating = rating_ladder[new_idx]
+                    memo.rating_label = new_rating  # type: ignore[assignment]
+                    applied.append({**rec, "applied_change": {
+                        "field": "rating_label",
+                        "from": current, "to": new_rating,
+                    }})
+
+        elif target == "thesis_breakers" and direction == "flag":
+            already = any(
+                detail.lower()[:60] in (item.title or "").lower()
+                for item in memo.thesis_breakers
+            )
+            if not already:
+                memo.thesis_breakers = list(memo.thesis_breakers) + [
+                    RiskItem(
+                        title=detail[:80],
+                        detail=rationale,
+                        severity="high",
+                        type="thesis_breaker",
+                    ),
+                ]
+                applied.append({**rec, "applied_change": {
+                    "field": "thesis_breakers", "appended": detail[:80],
+                }})
+
+        elif target == "bear_case" and direction == "flag":
+            existing = [p.lower() for p in memo.bear_case.key_points]
+            if not any(detail.lower()[:60] in p for p in existing):
+                memo.bear_case.key_points = list(memo.bear_case.key_points) + [
+                    f"Risk lens: {detail}",
+                ]
+                applied.append({**rec, "applied_change": {
+                    "field": "bear_case.key_points",
+                    "appended": f"Risk lens: {detail}",
+                }})
+
+    return applied
+
+
 def _bull_bear_from_sector(sector_finding: AgentFinding) -> Optional[Dict[str, Any]]:
     """Wave 3A: pluck the structured bull_bear_analysis out of the sector
     finding's data payload, if present. Returns the dict (not the Pydantic
@@ -186,16 +413,20 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
     neg_signals = sum(1 for f in findings.values() if any(k in (f.headline + f.summary).lower()
                                                           for k in ("pressured", "underperform", "elevated", "compress")))
     score = pos_signals - neg_signals + (1 if upside > 0.10 else (-1 if upside < -0.10 else 0))
+    # Wave 8P — five-label scheme tied to the deterministic Stock-Score
+    # mapping. The actual rating gets *overridden* later by
+    # `rating_from_stock_score` once the factor blend is computed; this
+    # local provides a sensible fallback for the LLM-disabled path.
     if score >= 2:
-        rating = "Bullish"
+        rating = "Very Bullish"
     elif score == 1:
-        rating = "Mixed Positive"
+        rating = "Bullish"
     elif score == 0:
         rating = "Neutral"
     elif score == -1:
-        rating = "Mixed Negative"
-    else:
         rating = "Bearish"
+    else:
+        rating = "Very Bearish"
     confidence = max(40, min(85, 55 + 5 * abs(score)))
 
     drivers = profile.get("drivers") or []
@@ -434,6 +665,85 @@ def _run_stock_memo_inner(
         "technical": technical_finding,
     }
 
+    # Wave 9 — PM↔specialist deep-research dialog. Round 0 is the fan-out
+    # above; rounds 1+ critique + re-fire targeted specialists with the
+    # PM's question prepended to their prompt. Skipped on backtests
+    # (`as_of_date` set) so we don't burn LLM budget retroactively.
+    round_findings: List[Any] = []
+    if settings.enable_deep_research and as_of_date is None:
+        from .deep_research import run_dialog_loop
+
+        def _refire_sector(q: str) -> AgentFinding:
+            return run_sector_agent(profile, ratios, prior_round_critique=q)
+
+        def _refire_earnings(q: str) -> AgentFinding:
+            return run_earnings_agent(
+                profile, transcript, earnings, prior_round_critique=q,
+            )
+
+        def _refire_filing(q: str) -> AgentFinding:
+            return run_filing_agent(profile, filings, prior_round_critique=q)
+
+        def _refire_valuation(q: str) -> AgentFinding:
+            return run_valuation_agent(profile, ratios, dcf, prior_round_critique=q)
+
+        def _refire_comps(q: str) -> AgentFinding:
+            return run_comps_agent(profile, comps, prior_round_critique=q)
+
+        def _refire_macro(q: str) -> AgentFinding:
+            return run_macro_agent(profile, scenario, prior_round_critique=q)
+
+        def _refire_risk(q: str) -> AgentFinding:
+            return run_risk_agent(
+                profile, ratios, (dcf.summary if dcf else None),
+                prior_round_critique=q,
+            )
+
+        def _refire_technical(q: str) -> AgentFinding:
+            return run_technical_agent(profile, prior_round_critique=q)
+
+        re_fire = {
+            "sector": _refire_sector,
+            "earnings": _refire_earnings,
+            "filing": _refire_filing,
+            "valuation": _refire_valuation,
+            "comps": _refire_comps,
+            "macro": _refire_macro,
+            "risk": _refire_risk,
+            "technical": _refire_technical,
+        }
+
+        # Loop reads `findings` keyed by short agent name — same as the
+        # `re_fire` map. Returns the latest-per-agent findings dict + the
+        # full round-by-round audit trail for persistence.
+        def _run_loop():
+            return run_dialog_loop(
+                run_id=run_id,
+                initial_findings=findings,
+                re_fire=re_fire,
+            )
+
+        loop_out = safe_call(
+            _run_loop,
+            fallback=(findings, []),
+            name="Deep Research Loop", log_to=degradation,
+        )
+        if loop_out:
+            current, rounds = loop_out
+            round_findings = rounds
+            # Replace each agent's finding with the latest-round version so
+            # downstream synthesis (PM, critic) sees the freshest read.
+            for name, finding in current.items():
+                findings[name] = finding
+            sector_finding = findings["sector"]
+            earnings_finding = findings["earnings"]
+            filing_finding = findings["filing"]
+            valuation_finding = findings["valuation"]
+            comps_finding = findings["comps"]
+            macro_finding = findings["macro"]
+            risk_finding = findings["risk"]
+            technical_finding = findings["technical"]
+
     # Wave 3C: drill-down long-form reports. The deterministic build is
     # cheap and always populates the field; LLM enrichment runs only when
     # ENABLE_LONG_FORM_REPORTS=true. safe_call wraps so a failure never
@@ -456,6 +766,29 @@ def _run_stock_memo_inner(
               profile=profile, fallback=None, name="Long-form (Risk)", log_to=degradation)
     safe_call(attach_long_form, technical_finding, ticker=_t, agent_name="Technical Analyst",
               profile=profile, fallback=None, name="Long-form (Technical)", log_to=degradation)
+
+    # Wave 10 — PM-driven DCF assumption adjustment. The PM has the team's
+    # full read at this point (round 0 + Wave 9 dialog rounds). Now is when
+    # the model should reflect the team's view, not just consensus defaults.
+    # Skipped on backtests so retroactive runs use period-appropriate DCF.
+    initial_dcf = dcf
+    pm_dcf_adjustments: List[Dict[str, Any]] = []
+    pm_dcf_headline = ""
+    if dcf is not None and as_of_date is None and settings.has_llm:
+        from .dcf_pm_adjuster import adjust_dcf_for_pm_view
+        adj_out = safe_call(
+            adjust_dcf_for_pm_view,
+            ticker=_t, initial_dcf=dcf,
+            findings=findings, run_id=run_id,
+            fallback=(None, [], ""),
+            name="PM DCF Adjuster", log_to=degradation,
+        )
+        if adj_out:
+            adjusted_dcf, pm_dcf_adjustments, pm_dcf_headline = adj_out
+            if adjusted_dcf is not None and pm_dcf_adjustments:
+                # Replace the working DCF — downstream synthesis, bull/bear,
+                # factor scoring all see the PM-adjusted version.
+                dcf = adjusted_dcf
 
     bull = safe_call(_bull_case, profile, valuation_finding, dcf, sector_finding,
                      fallback=BullBearCase(headline="Bull case unavailable.", key_points=[]),
@@ -483,17 +816,29 @@ def _run_stock_memo_inner(
     rating = synth.get("rating_label", "Neutral")
     raw_confidence = float(synth.get("confidence_score", 60))
 
-    dcf_summary = {}
-    if dcf:
-        dcf_summary = dict(
-            base_implied_price=dcf.base.implied_share_price,
-            bull_implied_price=dcf.bull.implied_share_price,
-            bear_implied_price=dcf.bear.implied_share_price,
-            base_upside=dcf.base.upside_pct,
-            wacc=dcf.base.assumptions.wacc,
-            terminal_growth=dcf.base.assumptions.terminal_growth,
-            summary=dcf.summary,
+    def _summarize_dcf(d: Optional[DCFResult]) -> Dict[str, Any]:
+        if d is None:
+            return {}
+        return dict(
+            current_price=d.current_price,
+            base_implied_price=d.base.implied_share_price,
+            bull_implied_price=d.bull.implied_share_price,
+            bear_implied_price=d.bear.implied_share_price,
+            base_upside=d.base.upside_pct,
+            bull_upside=d.bull.upside_pct,
+            bear_upside=d.bear.upside_pct,
+            wacc=d.base.assumptions.wacc,
+            terminal_growth=d.base.assumptions.terminal_growth,
+            summary=d.summary,
         )
+
+    dcf_summary = _summarize_dcf(dcf)
+    # Wave 10 — keep the consensus-anchored ("initial") DCF on the memo
+    # alongside the PM-adjusted version, when they differ. Empty when no
+    # PM adjustments fired.
+    initial_dcf_summary = (
+        _summarize_dcf(initial_dcf) if pm_dcf_adjustments and initial_dcf is not dcf else {}
+    )
 
     sources = [
         f"profile:{profile.get('ticker')}",
@@ -537,6 +882,9 @@ def _run_stock_memo_inner(
         key_risks=risks,
         thesis_breakers=thesis_breakers,
         dcf_summary=dcf_summary,
+        dcf_initial_summary=initial_dcf_summary,
+        dcf_pm_adjustments=pm_dcf_adjustments,
+        dcf_pm_adjustment_headline=pm_dcf_headline,
         portfolio_fit=_portfolio_fit(profile, rating),
         # Stub critic seeded here, then replaced by the real critic call below.
         # safe_critic guarantees a typed CriticReview even if the stub raises.
@@ -544,19 +892,36 @@ def _run_stock_memo_inner(
             overall_assessment="Pending critic review.",
         ),
         final_verdict="",
-        scores=dict(
-            confidence=blended_confidence,
+        scores=_build_scores_dict(
+            blended_confidence=blended_confidence,
             raw_confidence=raw_confidence,
-            evidence_quality=round(ev_q * 100, 1),
-            sector_confidence=sector_finding.confidence * 100,
-            valuation_confidence=valuation_finding.confidence * 100,
-            risk_confidence=risk_finding.confidence * 100,
+            ev_q=ev_q,
+            sector_finding=sector_finding,
+            valuation_finding=valuation_finding,
+            risk_finding=risk_finding,
+            profile=profile, ratios=ratios, earnings=earnings,
         ),
         sources_used=sources,
         generated_at=datetime.utcnow(),
         generation_mode="live" if settings.has_llm and settings.enable_live_data else "demo",
         degraded_agents=degradation.degraded_agents(),
+        round_findings=round_findings,
     )
+
+    # Wave 9 — surface deep-research counters on `memo.scores` so the
+    # admin dashboard can chart how often the dialog converges vs. caps
+    # out. Round 0 is the fan-out and is always present when the loop
+    # ran; rounds 1+ are the PM critique passes.
+    if round_findings and isinstance(memo.scores, dict):
+        memo.scores = {
+            **memo.scores,
+            "deep_research_rounds": float(
+                max((r.round for r in round_findings), default=0)
+            ),
+            "deep_research_questions": float(sum(
+                len(r.pm_questions) for r in round_findings
+            )),
+        }
 
     # Run critic on a draft of the memo (pass dict to avoid recursion).
     # safe_critic upgrades exceptions into a typed "critic unavailable" review
@@ -584,6 +949,66 @@ def _run_stock_memo_inner(
             name="Reflection (long-term memory)", log_to=degradation,
         )
         memo.degraded_agents = degradation.degraded_agents()
+
+    # Wave 8H — apply the risk analyst's structured recommendations.
+    # Runs AFTER the memo body is assembled but BEFORE final_verdict +
+    # persistence so confidence cap / rating downshift / thesis_breaker
+    # propagation / bear-case augmentation all flow through to the
+    # downstream UI + cache. `applied_recs` rides on the memo's `scores`
+    # for transparency.
+    applied_risk_recs = _apply_risk_recommendations(memo, risk_finding)
+    if applied_risk_recs and isinstance(memo.scores, dict):
+        memo.scores = {
+            **memo.scores,
+            "risk_recs_applied": float(len(applied_risk_recs)),
+        }
+    # Stash the audit trail on the risk finding's data block so the
+    # frontend can render a "Risk recs applied" panel + the long-form
+    # report can quote them verbatim.
+    if isinstance(risk_finding.data, dict):
+        risk_finding.data["applied_recommendations"] = applied_risk_recs
+
+    # Rating blend (Option A) — mix the PM LLM's directional call with
+    # the quant factor_pm_score. Weight is `LLM_RATING_WEIGHT` in
+    # config.env (default 0.4). At weight=0 this collapses to the
+    # prior Wave 8P behavior (factor score is dispositive); at
+    # weight=1 the LLM call wins outright. The LLM rating read here
+    # is post-risk-rec, so risk_agent downgrades flow into the blend.
+    from ..schemas import rating_from_stock_score, score_from_rating_label
+    from ..config import settings as _settings
+    factor_pm = (memo.scores or {}).get("factor_pm_score")
+    if factor_pm is not None:
+        w = max(0.0, min(1.0, float(_settings.llm_rating_weight)))
+        llm_score = score_from_rating_label(memo.rating_label)
+        blended = w * llm_score + (1.0 - w) * float(factor_pm)
+        memo.rating_label = rating_from_stock_score(blended)  # type: ignore[assignment]
+        if isinstance(memo.scores, dict):
+            memo.scores = {
+                **memo.scores,
+                "llm_rating_score": float(llm_score),
+                "llm_rating_weight": float(w),
+                "blended_pm_score": round(float(blended), 1),
+            }
+
+    # Wave 8R — thesis augmentation. Surface where the model diverges
+    # from analyst consensus (the actual *what is the market missing*
+    # framing). Compares the DCF's 5-year growth path average against
+    # the consensus 5-year average; appends a clause when the gap is
+    # material. No-ops cleanly when consensus isn't available.
+    try:
+        delta_clause = _market_gap_clause(profile, dcf, ticker)
+        if delta_clause:
+            memo.one_sentence_thesis = (
+                memo.one_sentence_thesis.rstrip(".")
+                + ". " + delta_clause
+            )
+    except Exception:  # pragma: no cover — never break a memo on thesis polish
+        pass
+
+    # Refresh the rating/confidence-derived locals after enforcement.
+    rating = memo.rating_label
+    # thesis_breakers may have grown; rebuild the local view used below.
+    thesis_breakers = list(memo.thesis_breakers)
 
     # Phase 6: pull through cross-sector relevance from the sector agent's
     # finding into the PM memo so users see related-name implications without
