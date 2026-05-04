@@ -45,3 +45,8 @@ pytest-asyncio>=0.24.0
 # run with ENABLE_MONITORING=false so this dependency is not exercised
 # unless the runtime explicitly opts in.
 apscheduler>=3.10.4
+
+# Per-IP rate limiting on the expensive endpoints (memo / chat / analyze).
+# Default backend is in-memory, which is fine for a single-replica deploy.
+# Set `RATE_LIMIT_STORAGE_URL=redis://...` to share state across replicas.
+slowapi>=0.1.9

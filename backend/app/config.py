@@ -150,6 +150,13 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
+    # Per-IP rate limiting (slowapi). `memory://` works for a single
+    # replica; switch to `redis://...` when scaling out so all instances
+    # share counters. Set ENABLED=false in tests so TestClient runs
+    # don't pollute production counters.
+    rate_limit_enabled: bool = True
+    rate_limit_storage_url: str = "memory://"
+
     # PM rating blend (Option A). The final rating label is derived from a
     # weighted mix of the LLM's directional call and the deterministic
     # factor_pm_score: `final = w * llm_score + (1 - w) * factor_pm_score`,

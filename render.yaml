@@ -37,6 +37,25 @@ services:
       - key: CORS_ORIGINS
         value: https://marketmosaic.ai,https://www.marketmosaic.ai
 
+      # Production-mode toggles (Wave 9b).
+      # Nightly cron jobs: history backfill (03:15 UTC), EDGAR poller,
+      # outcome tracking, LLM-log GC. Without this, memos go stale and
+      # the screener stops auto-refreshing.
+      - key: ENABLE_MONITORING
+        value: "true"
+      # Per-IP rate limits on /api/chat, /api/stocks/*/memo,
+      # /api/stocks/*/analyze, /api/screener/custom, /api/seed-universe,
+      # /api/admin/run-backfill. In-memory store is fine for one
+      # replica; set RATE_LIMIT_STORAGE_URL=redis://… when scaling out.
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      # Long-term agent memory writes to memory/companies/<TICKER>.md.
+      # Render's container disk is ephemeral — disable by default to
+      # avoid silently losing entries on every redeploy. Set "true"
+      # only after mounting a persistent disk for memory/.
+      - key: ENABLE_LONG_TERM_MEMORY
+        value: "false"
+
       # Secrets — set values in the Render dashboard, not in this file.
       - key: SEC_USER_AGENT
         sync: false

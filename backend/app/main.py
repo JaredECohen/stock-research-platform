@@ -10,6 +10,9 @@ from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from .api import (
     routes_admin,
@@ -23,6 +26,7 @@ from .api import (
     routes_stocks,
 )
 from .config import settings
+from .rate_limit import limiter
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("marketmosaic")
@@ -89,6 +93,13 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Per-IP rate limiting. `state.limiter` is the canonical pointer
+    # slowapi looks up at request time; `SlowAPIMiddleware` is what
+    # actually evaluates the configured per-route limits.
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
 
     # Wave 8G — HTTP request tracing. Every API call emits a structured
     # log line + a UILog row so frontend traces and backend traces sit

@@ -16,10 +16,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from ..monitoring import status_snapshot
+from ..rate_limit import LIMITS, limiter
 from ..seed_universe import run_full_seed
 from ..services import dcf_store, llm_metrics, memo_store, outcome_service, update_orchestrator
 
@@ -27,7 +28,10 @@ router = APIRouter()
 
 
 @router.post("/api/seed-universe")
-def seed_universe_endpoint(refresh: bool = False) -> Dict:
+@limiter.limit(LIMITS["seed_universe"])
+def seed_universe_endpoint(
+    request: Request, response: Response, refresh: bool = False,
+) -> Dict:
     """Re-seed the S&P 100 screener universe from FMP.
 
     `refresh=true` re-fetches every profile (slower; use after FMP data
@@ -35,6 +39,28 @@ def seed_universe_endpoint(refresh: bool = False) -> Dict:
     and is cheap to call.
     """
     return run_full_seed(refresh=refresh)
+
+
+@router.post("/api/admin/run-backfill")
+@limiter.limit(LIMITS["admin_backfill"])
+def run_backfill_endpoint(
+    request: Request,
+    response: Response,
+    ticker: Optional[str] = Query(None, description="Single ticker; omit for full universe"),
+) -> Dict:
+    """Trigger the heavy history backfill on demand.
+
+    Synchronous — for the curated S&P 100 this is ~3-5 minutes (~600
+    provider calls). For a single ticker (`?ticker=NVDA`) it's ~5
+    seconds. Idempotent.
+
+    Use this after a fresh deploy when the database is empty (Postgres
+    on first boot has 0 financial_periods rows; the `seed_universe`
+    that runs at startup only fills `companies`). Without this call,
+    the screener stays empty until the nightly cron at 03:15 UTC.
+    """
+    from ..monitoring.history_backfill import run_once
+    return run_once(ticker=ticker)
 
 
 @router.get("/api/admin/monitoring/status")

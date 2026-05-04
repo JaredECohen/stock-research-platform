@@ -4,12 +4,13 @@ from __future__ import annotations
 from datetime import date as _date
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from sqlalchemy import select
 
 from ..agents.graph import run_stock_memo
 from ..database import SessionLocal
 from ..models import Company
+from ..rate_limit import LIMITS, limiter
 from ..schemas import CompanyOut, StockMemoOut
 from ..seed_universe import ensure_company_in_universe
 from ..services import memo_store
@@ -132,7 +133,9 @@ def _parse_as_of(as_of: Optional[str]) -> Optional[_date]:
 
 
 @router.get("/api/stocks/{ticker}/memo", response_model=StockMemoOut)
+@limiter.limit(LIMITS["memo_read"])
 def get_stock_memo(
+    request: Request,
     ticker: str,
     response: Response,
     scenario: str = "soft_landing",
@@ -268,7 +271,9 @@ def get_stock_memo_history(ticker: str, limit: int = 25) -> List[Dict[str, Any]]
 
 
 @router.post("/api/stocks/{ticker}/analyze", response_model=StockMemoOut)
+@limiter.limit(LIMITS["memo_analyze"])
 def analyze_stock(
+    request: Request,
     ticker: str,
     response: Response,
     scenario: Optional[str] = None,

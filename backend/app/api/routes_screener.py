@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 from sqlalchemy import select
 
 from ..database import SessionLocal
 from ..models import Company, ScreenerMetric, ScreenerScore
+from ..rate_limit import LIMITS, limiter
 from ..schemas import (
     CustomScreenRequest,
     CustomScreenResult,
@@ -86,18 +87,10 @@ _OP_TO_FN = {
 }
 
 
-@router.post("/api/screener/custom", response_model=CustomScreenResult)
-def run_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
-    """Filter the curated S&P 100 against a user-defined rule set.
-
-    Each rule is `{metric, op, value}` (or `{op: "between", value, value2}`).
-    Rules are AND-combined. Tickers are restricted to the curated
-    `auto_analysis` universe so research-on-demand names don't leak in
-    (per the locked decision in `docs/UNIVERSE_REFACTOR_PLAN.md`).
-
-    Rows with NULL metrics fail the rule (rather than being dropped or
-    treated as 0). Sort order is configurable; default = market_cap desc.
-    """
+def _execute_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
+    """Pure business logic for the custom screen — used by both the
+    HTTP route (which adds rate limiting) and the chat-SDK tool (which
+    invokes it directly without a Request object)."""
     metric_names: List[str] = list({r.metric for r in req.rules})
     metric_names.append(req.sort_by)
 
@@ -183,3 +176,19 @@ def run_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
         rule_count=len(req.rules),
         matched=len(rows),
     )
+
+
+@router.post("/api/screener/custom", response_model=CustomScreenResult)
+@limiter.limit(LIMITS["custom_screen"])
+def run_custom_screen(
+    request: Request, response: Response, req: CustomScreenRequest,
+) -> CustomScreenResult:
+    """Filter the curated S&P 100 against a user-defined rule set.
+
+    Each rule is `{metric, op, value}` (or `{op: "between", value, value2}`).
+    Rules are AND-combined. Tickers are restricted to the curated
+    `auto_analysis` universe so research-on-demand names don't leak in.
+    Rows with NULL metrics fail the rule explicitly. Sort order is
+    configurable; default = market_cap desc.
+    """
+    return _execute_custom_screen(req)

@@ -238,10 +238,10 @@ def _build_chat_agent() -> Optional[Any]:
             except Exception as exc:
                 return {"error": f"rules_json must be a JSON list: {exc}"}
             from ..schemas import CustomScreenRequest
-            from ..api.routes_screener import run_custom_screen
+            from ..api.routes_screener import _execute_custom_screen
             try:
                 req = CustomScreenRequest(rules=rules, limit=limit)
-                result = run_custom_screen(req)
+                result = _execute_custom_screen(req)
             except Exception as exc:
                 return {"error": f"custom_screen failed: {exc}"}
             return {
