@@ -82,10 +82,14 @@ def valuation_score(ev_ebitda: Optional[float], p_fcf: Optional[float], fcf_yiel
     return round(sum(parts) / len(parts), 1) if parts else 50.0
 
 
-def earnings_momentum_score(surprise_history: List[float]) -> float:
-    if not surprise_history:
+def earnings_momentum_score(surprise_history: List[Optional[float]]) -> float:
+    # Live providers (FMP /stable/, AV) emit None for forward quarters
+    # whose actuals haven't reported yet. Drop those before averaging so
+    # `statistics.mean` doesn't crash on a NoneType numerator.
+    cleaned = [s for s in (surprise_history or []) if s is not None]
+    if not cleaned:
         return 50.0
-    avg = mean(surprise_history)
+    avg = mean(cleaned)
     return round(min(100, max(0, 50 + avg * 10)), 1)
 
 

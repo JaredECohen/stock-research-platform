@@ -64,19 +64,30 @@ def _company_tier(ticker: str) -> str:
 
 @router.get("/api/stocks", response_model=List[CompanyOut])
 def list_stocks() -> List[CompanyOut]:
-    ds = get_data_service()
-    # Single bulk-fetch of tier values so we don't run N queries.
-    tiers: Dict[str, str] = {}
+    """Return every ticker the platform knows about.
+
+    Wave 9b — reads the `companies` table directly so the dropdown gets
+    all S&P 100 + analyzed_on_demand entries in one query. The previous
+    implementation iterated `data_service.list_tickers()` and made one
+    live `get_company_profile` call per ticker; with 100+ universe size
+    that was both slow (~10s) and lossy (a single provider miss dropped
+    the ticker from the list). The companies row already has every
+    field `CompanyOut` exposes, so no provider round-trip is needed.
+    """
+    fields = (
+        "ticker", "company_name", "exchange", "sector", "industry",
+        "sub_industry", "country", "currency", "market_cap",
+        "business_description", "last_price", "is_etf", "beta",
+        "shares_outstanding", "universe_tier",
+    )
     with SessionLocal() as db:
-        for tkr, tier in db.execute(select(Company.ticker, Company.universe_tier)).all():
-            tiers[tkr] = tier or "data_only"
-    out: List[CompanyOut] = []
-    for ticker in ds.list_tickers():
-        profile = ds.get_company_profile(ticker)
-        if profile:
-            payload = {k: profile.get(k) for k in CompanyOut.model_fields.keys() if k in profile}
-            payload["universe_tier"] = tiers.get(ticker, "data_only")
+        rows = db.execute(select(Company)).scalars().all()
+        out: List[CompanyOut] = []
+        for row in rows:
+            payload = {f: getattr(row, f, None) for f in fields}
+            payload["universe_tier"] = payload.get("universe_tier") or "data_only"
             out.append(CompanyOut(**payload))
+    out.sort(key=lambda c: c.ticker)
     return out
 
 

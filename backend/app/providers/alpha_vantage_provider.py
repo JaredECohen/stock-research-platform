@@ -195,19 +195,73 @@ class AlphaVantageProvider:
             ))
         return dict(quarters=rows)
 
+    @staticmethod
+    def _recent_quarters(n: int = 4) -> List[str]:
+        """Return the last `n` fiscal quarters as `YYYYQM` strings,
+        most-recent first. AV's `EARNINGS_CALL_TRANSCRIPT` requires a
+        specific quarter; without one it 200s with no transcript."""
+        from datetime import date
+        today = date.today()
+        # Most-recent *completed* quarter — current calendar quarter
+        # almost never has a transcript yet.
+        cur_q = (today.month - 1) // 3 + 1
+        year, q = today.year, cur_q
+        # Step back one full quarter to start at the latest reported one.
+        q -= 1
+        if q == 0:
+            q, year = 4, year - 1
+        out: List[str] = []
+        for _ in range(n):
+            out.append(f"{year}Q{q}")
+            q -= 1
+            if q == 0:
+                q, year = 4, year - 1
+        return out
+
     def get_earnings_transcripts(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
-        data = self._get(function="EARNINGS_CALL_TRANSCRIPT", symbol=ticker)
-        if not data or "transcript" not in data:
-            return None
-        return [
-            dict(
-                ticker=ticker,
-                period=data.get("quarter"),
-                speakers=[item.get("speaker") for item in data.get("transcript", [])],
-                prepared_remarks=" ".join(item.get("content", "") for item in data.get("transcript", []) if item.get("type") == "presentation"),
-                qa=" ".join(item.get("content", "") for item in data.get("transcript", []) if item.get("type") == "qa"),
+        """Pull up to 4 recent quarterly transcripts. AV requires the
+        `quarter=YYYYQN` param; without it the endpoint returns 200 with
+        an empty body, which is why our backfill was getting nothing.
+        Iterate the last 4 fiscal quarters and stitch together what
+        comes back."""
+        out: List[Dict[str, Any]] = []
+        for quarter in self._recent_quarters(4):
+            data = self._get(
+                function="EARNINGS_CALL_TRANSCRIPT",
+                symbol=ticker, quarter=quarter,
             )
-        ]
+            if not data:
+                continue
+            transcript = data.get("transcript")
+            # AV returns either a list of {speaker, content, ...} dicts
+            # or an empty/missing field for quarters without a transcript.
+            if not isinstance(transcript, list) or not transcript:
+                continue
+            prepared = " ".join(
+                str(item.get("content", "")) for item in transcript
+                if item.get("type") == "presentation" or item.get("section") == "Prepared Remarks"
+            ).strip()
+            qa = " ".join(
+                str(item.get("content", "")) for item in transcript
+                if item.get("type") == "qa" or item.get("section") in ("Q&A", "Q & A", "Question and Answer")
+            ).strip()
+            # Some AV plans return one big list with no section tag — fall
+            # back to using the whole thing as prepared remarks so the
+            # filing/earnings analysts still get content.
+            if not prepared and not qa:
+                prepared = " ".join(
+                    str(item.get("content", "")) for item in transcript
+                ).strip()
+            speakers = [item.get("speaker") for item in transcript if item.get("speaker")]
+            out.append(dict(
+                ticker=ticker,
+                period=data.get("quarter") or quarter,
+                date=data.get("date"),  # may be None depending on tier
+                speakers=speakers,
+                prepared_remarks=prepared,
+                qa=qa,
+            ))
+        return out or None
 
     def get_filings(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
         return None

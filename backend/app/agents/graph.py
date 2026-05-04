@@ -429,11 +429,27 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
         rating = "Very Bearish"
     confidence = max(40, min(85, 55 + 5 * abs(score)))
 
+    # Build a concrete deterministic thesis: company → sector / industry →
+    # primary growth driver → DCF upside (only when meaningfully signed).
+    # Avoids empty filler like "valuation triangulates around the DCF
+    # base" that doesn't actually communicate anything to the reader.
     drivers = profile.get("drivers") or []
-    thesis = (
-        f"{profile.get('company_name', profile.get('ticker', ''))} is leveraged to "
-        f"{drivers[0] if drivers else 'core sector tailwinds'} with valuation that triangulates around the DCF base."
-    )
+    sector = (profile.get("sector") or "").strip()
+    industry = (profile.get("industry") or "").strip()
+    name = profile.get("company_name") or profile.get("ticker", "")
+    if sector and industry:
+        sector_phrase = f"{sector} / {industry.lower()}"
+    else:
+        sector_phrase = (industry or sector or "core").lower()
+    if drivers:
+        head = f"{name} — {sector_phrase} name with leverage to {drivers[0]}"
+    else:
+        head = f"{name} — {sector_phrase} compounder"
+    upside = dcf.base.upside_pct if dcf and dcf.base else None
+    if upside is not None and abs(upside) >= 0.05:
+        sign = "+" if upside > 0 else ""
+        head += f"; DCF base case {sign}{upside * 100:.0f}% to fair value"
+    thesis = head + "."
     pm_view = (
         f"Research view: {rating}. {thesis} "
         f"Sector framing supports the cohort thesis; valuation-relative read is the main swing factor. "
