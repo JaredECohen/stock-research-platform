@@ -102,13 +102,27 @@ export const api = {
       `/api/stocks/${ticker}/prices?days=${days}`,
     ),
 
-  screener: (params?: { theme?: string; sector?: string; limit?: number }) => {
+  screener: (params?: {
+    theme?: string;
+    sector?: string;
+    sort_by?: string;
+    order?: "asc" | "desc";
+    limit?: number;
+  }) => {
     const q = new URLSearchParams();
     if (params?.theme) q.set("theme", params.theme);
     if (params?.sector) q.set("sector", params.sector);
+    if (params?.sort_by) q.set("sort_by", params.sort_by);
+    if (params?.order) q.set("order", params.order);
     if (params?.limit) q.set("limit", String(params.limit));
     return request<ScreenerResult>(`/api/screener?${q.toString()}`);
   },
+
+  customScreener: (req: import("@/types").CustomScreenRequest) =>
+    request<import("@/types").CustomScreenResult>("/api/screener/custom", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
 
   chat: (message: string) =>
     request<ChatResponse>("/api/chat", {

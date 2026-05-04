@@ -308,6 +308,46 @@ export interface ScreenerResult {
   generated_at: string;
 }
 
+// Wave 9b — Custom rule-based screen
+export type ScreenerMetricName =
+  | "pe_ttm" | "forward_pe" | "peg" | "ev_ebitda" | "ev_revenue"
+  | "gross_margin" | "op_margin" | "fcf_margin" | "roic" | "roe"
+  | "debt_to_ebitda" | "revenue_growth_yoy" | "dividend_yield"
+  | "market_cap" | "beta";
+
+export type ScreenerOp = ">" | "<" | ">=" | "<=" | "=" | "between";
+
+export interface ScreenerRule {
+  metric: ScreenerMetricName;
+  op: ScreenerOp;
+  value: number;
+  value2?: number | null;
+}
+
+export interface CustomScreenRequest {
+  rules: ScreenerRule[];
+  sectors?: string[];
+  sort_by?: ScreenerMetricName;
+  order?: "asc" | "desc";
+  limit?: number;
+}
+
+export interface CustomScreenRow {
+  ticker: string;
+  company_name: string;
+  sector: string;
+  pm_score?: number | null;
+  rating_label?: string | null;
+  metrics: Partial<Record<ScreenerMetricName, number | null>>;
+}
+
+export interface CustomScreenResult {
+  rows: CustomScreenRow[];
+  rule_count: number;
+  matched: number;
+  generated_at: string;
+}
+
 export interface StockMemoOut {
   ticker: string;
   company_name: string;
