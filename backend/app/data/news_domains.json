@@ -1,5 +1,5 @@
 {
-  "_comment": "Wave 6C — governance file for the news agent's grounded-source filter. Edit + commit; news_agent reloads on startup. Keep curation conservative — better to drop a low-quality source than cite it.",
+  "_comment": "Wave 6C — governance file for the news agent's grounded-source filter. Edit + commit; news_agent reloads on startup. Keep curation conservative — better to drop a low-quality source than cite it. `vertexaisearch.cloud.google.com` is the Gemini grounding redirect domain (the underlying source URL is masked behind a privacy-preserving Google redirect); allowing it means we trust Gemini's `google_search` curation + the per-item relevance filter to keep off-topic items out.",
   "allowed": [
     "reuters.com",
     "bloomberg.com",
@@ -18,7 +18,8 @@
     "seekingalpha.com",
     "investors.com",
     "techcrunch.com",
-    "stratechery.com"
+    "stratechery.com",
+    "vertexaisearch.cloud.google.com"
   ],
   "blocked": [
     "msn.com",
