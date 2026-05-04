@@ -20,15 +20,21 @@ from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..monitoring import status_snapshot
-from ..seed_demo_data import run_full_seed
+from ..seed_universe import run_full_seed
 from ..services import dcf_store, llm_metrics, memo_store, outcome_service, update_orchestrator
 
 router = APIRouter()
 
 
-@router.post("/api/seed-demo-data")
-def seed_demo_data() -> Dict:
-    return run_full_seed()
+@router.post("/api/seed-universe")
+def seed_universe_endpoint(refresh: bool = False) -> Dict:
+    """Re-seed the S&P 100 screener universe from FMP.
+
+    `refresh=true` re-fetches every profile (slower; use after FMP data
+    corrections). `refresh=false` (default) only inserts missing rows
+    and is cheap to call.
+    """
+    return run_full_seed(refresh=refresh)
 
 
 @router.get("/api/admin/monitoring/status")

@@ -34,7 +34,7 @@ def _ensure_started() -> TestClient:
     startup events on first request, so we call the seeder directly. Safe to
     call repeatedly — `run_full_seed` is idempotent."""
     from app.database import init_db
-    from app.seed_demo_data import run_full_seed
+    from app.tests.fixtures.seed_demo_data import run_full_seed
     init_db()
     run_full_seed()
     return TestClient(app)

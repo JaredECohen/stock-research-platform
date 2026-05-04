@@ -108,7 +108,7 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def _startup() -> None:
         try:
-            from .seed_demo_data import run_full_seed
+            from .seed_universe import run_full_seed
             summary = run_full_seed()
             log.info("MarketMosaic seeded: %s", summary)
         except Exception as exc:  # pragma: no cover - startup hardening

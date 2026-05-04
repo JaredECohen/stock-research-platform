@@ -1,10 +1,14 @@
 """Provider-aware data service.
 
-A single facade in front of the providers. It tries the configured live
-providers first (when ENABLE_LIVE_DATA=true) and gracefully falls back to
-DemoProvider for any method that returns None or raises. All callers go
-through this service so they never need to know whether data came from a
-live API or local fixtures.
+A single facade in front of the live providers (FMP, Alpha Vantage,
+FRED, SEC EDGAR, Polygon, Tiingo). All callers go through this service
+so they never need to know which provider answered.
+
+Wave 9b — runtime is live-only. `DemoProvider` has been moved to
+`tests/fixtures/` and is wired in only by `conftest.py` for unit tests.
+Production never serves synthetic data: when no provider can satisfy a
+call, methods return `None` / `[]` and callers handle the empty state
+explicitly.
 
 Wave 1C: an `as_of_date` ContextVar lets `run_stock_memo` mark the entire
 call tree as a backtest for a specific historical date. Provider methods
@@ -21,10 +25,8 @@ from datetime import date as _date
 from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional
 
-from ..config import settings
 from ..providers.alpha_vantage_provider import AlphaVantageProvider
 from ..providers.base import ProviderStatus
-from ..providers.demo_provider import DemoProvider
 from ..providers.fmp_provider import FMPProvider
 from ..providers.fred_provider import FREDProvider
 from ..providers.polygon_provider import PolygonProvider
@@ -167,8 +169,7 @@ def _ratios_from_clipped_statements(
 ) -> Optional[Dict[str, Any]]:
     """Compute ratios from clipped statements so the historical view's
     ratios reflect data observable at `current_as_of_date()` rather than
-    today's snapshot. Falls back to demo ratios when the clipped income
-    statement is missing inputs."""
+    today's snapshot."""
     if not isinstance(statements, dict):
         return None
     income = (statements.get("income") or [])
@@ -196,24 +197,40 @@ def _ratios_from_clipped_statements(
 
 
 class DataService:
-    """Facade over all providers with demo fallback."""
+    """Facade over the live provider chain.
+
+    Wave 9b: no demo fallback at runtime. When all configured providers
+    miss for a capability, the method returns `None` / `[]` and callers
+    decide how to handle the empty state.
+
+    Tests inject a `DemoProvider` via `register_test_provider` to drive
+    deterministic responses without hitting any network.
+    """
 
     def __init__(self) -> None:
-        self.demo = DemoProvider()
         self.fmp = FMPProvider()
         self.alpha = AlphaVantageProvider()
         self.fred = FREDProvider()
         self.polygon = PolygonProvider()
         self.tiingo = TiingoProvider()
         self.sec = SECEdgarProvider()
+        # Optional test override (wired by `tests/conftest.py`).
+        self._test_provider: Optional[Any] = None
 
     # ------------------------------------------------------------------
     # Provider selection
     # ------------------------------------------------------------------
 
+    def register_test_provider(self, provider: Optional[Any]) -> None:
+        """Inject a fixture provider for tests. Pass None to clear.
+
+        When set, the fixture sits at the **head** of every capability
+        chain so it answers first; the live chain still runs as a
+        fallback for tests that exercise both paths.
+        """
+        self._test_provider = provider
+
     def _live_chain(self, capability: str) -> List[Any]:
-        if settings.use_demo_data_only:
-            return []
         chains: Dict[str, List[Any]] = {
             "profile": [self.fmp, self.alpha],
             "prices": [self.fmp, self.tiingo, self.polygon],
@@ -227,7 +244,10 @@ class DataService:
             "estimates": [self.fmp],
             "macro": [self.fred],
         }
-        return chains.get(capability, [])
+        chain = chains.get(capability, [])
+        if self._test_provider is not None:
+            return [self._test_provider, *chain]
+        return chain
 
     def _try_chain(self, capability: str, fn_name: str, *args, **kwargs) -> Optional[Any]:
         for provider in self._live_chain(capability):
@@ -249,32 +269,39 @@ class DataService:
     def status(self) -> Dict[str, ProviderStatus]:
         return {
             p.name: p.status() for p in (
-                self.demo, self.fmp, self.alpha, self.fred, self.polygon, self.tiingo, self.sec
+                self.fmp, self.alpha, self.fred, self.polygon, self.tiingo, self.sec
             )
         }
 
     def mode(self) -> str:
-        return "demo" if settings.use_demo_data_only or not settings.enable_live_data else "live"
+        return "live"
 
     # ------------------------------------------------------------------
-    # Endpoints (with fallback)
+    # Endpoints
     # ------------------------------------------------------------------
 
     def list_tickers(self) -> List[str]:
-        return self.demo.list_tickers()
+        """Return every ticker the platform has ever touched.
+
+        Reads the `companies` table directly — covers both the curated
+        S&P 100 (`auto_analysis`) and any ticker the user has researched
+        on demand (`analyzed_on_demand`). Empty on cold start before the
+        seeder runs.
+        """
+        from ..database import SessionLocal
+        from ..models import Company
+        with SessionLocal() as db:
+            return [t for (t,) in db.query(Company.ticker).all()]
 
     def get_company_profile(self, ticker: str) -> Optional[Dict[str, Any]]:
-        live = self._try_chain("profile", "get_company_profile", ticker)
-        return live or self.demo.get_company_profile(ticker)
+        return self._try_chain("profile", "get_company_profile", ticker)
 
     def get_price_history(self, ticker: str, days: int = 252) -> Optional[List[Dict[str, Any]]]:
-        live = self._try_chain("prices", "get_price_history", ticker, days)
-        rows = live or self.demo.get_price_history(ticker, days)
+        rows = self._try_chain("prices", "get_price_history", ticker, days)
         return _clip_dated_rows(rows, "date")
 
     def get_financial_statements(self, ticker: str) -> Optional[Dict[str, Any]]:
-        live = self._try_chain("financials", "get_financial_statements", ticker)
-        statements = live or self.demo.get_financial_statements(ticker)
+        statements = self._try_chain("financials", "get_financial_statements", ticker)
         return _clip_statements(statements)
 
     def get_ratios(self, ticker: str) -> Optional[Dict[str, Any]]:
@@ -286,43 +313,50 @@ class DataService:
             return _ratios_from_clipped_statements(
                 self.get_financial_statements(ticker),
             )
-        live = self._try_chain("ratios", "get_ratios", ticker)
-        return live or self.demo.get_ratios(ticker)
+        return self._try_chain("ratios", "get_ratios", ticker)
 
     def get_key_metrics(self, ticker: str) -> Optional[Dict[str, Any]]:
-        live = self._try_chain("key_metrics", "get_key_metrics", ticker)
-        return live or self.demo.get_key_metrics(ticker)
+        return self._try_chain("key_metrics", "get_key_metrics", ticker)
 
     def get_earnings(self, ticker: str) -> Optional[Dict[str, Any]]:
-        live = self._try_chain("earnings", "get_earnings", ticker)
-        return live or self.demo.get_earnings(ticker)
+        return self._try_chain("earnings", "get_earnings", ticker)
 
     def get_earnings_transcripts(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
-        live = self._try_chain("transcripts", "get_earnings_transcripts", ticker)
-        rows = live or self.demo.get_earnings_transcripts(ticker)
+        rows = self._try_chain("transcripts", "get_earnings_transcripts", ticker)
         return _clip_dated_rows(rows, "date", fallback_key="period")
 
     def get_filings(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
-        cik = (self.demo.get_company_profile(ticker) or {}).get("cik")
-        live = self._try_chain("filings", "get_filings", ticker, cik=cik) if cik else None
-        rows = live or self.demo.get_filings(ticker)
+        cik = self._lookup_cik(ticker)
+        if not cik:
+            return None
+        rows = self._try_chain("filings", "get_filings", ticker, cik=cik)
         return _clip_dated_rows(rows, "filing_date", fallback_key="period_end")
 
+    def _lookup_cik(self, ticker: str) -> Optional[str]:
+        """Resolve a ticker's CIK. Reads the `companies` table first to
+        avoid an extra FMP call; falls back to a live profile fetch (and
+        backfills the row) for tickers not yet seeded."""
+        from ..database import SessionLocal
+        from ..models import Company
+        with SessionLocal() as db:
+            row = db.get(Company, ticker.upper())
+            if row and row.cik:
+                return row.cik
+        profile = self.get_company_profile(ticker) or {}
+        return profile.get("cik")
+
     def get_news(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
-        live = self._try_chain("news", "get_news", ticker)
-        rows = live or self.demo.get_news(ticker)
+        rows = self._try_chain("news", "get_news", ticker)
         return _clip_dated_rows(rows, "published_at")
 
     def get_estimates(self, ticker: str) -> Optional[Dict[str, Any]]:
-        live = self._try_chain("estimates", "get_estimates", ticker)
-        return live or self.demo.get_estimates(ticker)
+        return self._try_chain("estimates", "get_estimates", ticker)
 
     def get_macro_series(self, series_id: str) -> Optional[Dict[str, Any]]:
-        live = self._try_chain("macro", "get_macro_series", series_id)
-        return live or self.demo.get_macro_series(series_id)
+        return self._try_chain("macro", "get_macro_series", series_id)
 
     def list_macro_series(self) -> List[Dict[str, Any]]:
-        return self.demo.list_macro_series()
+        return self.fred.list_macro_series()
 
 
 @lru_cache(maxsize=1)

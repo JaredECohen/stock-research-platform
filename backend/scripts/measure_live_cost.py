@@ -66,7 +66,10 @@ def main() -> int:
     init_db()
 
     # Seed before timing so seed cost doesn't pollute the measurement.
-    from app.seed_demo_data import run_full_seed
+    # Wave 9b — production seeder is the S&P 100 path; this measurement
+    # script always runs against the demo dataset so cost numbers stay
+    # comparable across runs.
+    from app.tests.fixtures.seed_demo_data import run_full_seed
     run_full_seed()
 
     # Lazy import smoke so the seed runs first.

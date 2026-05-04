@@ -16,8 +16,11 @@ def test_providers_status_lists_providers_and_mode():
     r = c.get("/api/providers/status")
     assert r.status_code == 200
     data = r.json()
-    assert data["mode"] in ("demo", "live")
-    assert "demo" in data["providers"]
+    # Wave 9b: runtime is live-only; demo has been retired from
+    # `data_service.status()`. Live providers must always be reported.
+    assert data["mode"] == "live"
+    for provider in ("fmp", "alpha_vantage", "fred", "sec_edgar"):
+        assert provider in data["providers"]
 
 
 def test_list_stocks_includes_seed_universe():

@@ -15,7 +15,7 @@ from app.models import Company
 def _ensure_started():
     """conftest sets ENABLE_LIVE_DATA=false. Hit /health to fire startup."""
     from app.database import init_db
-    from app.seed_demo_data import run_full_seed
+    from app.tests.fixtures.seed_demo_data import run_full_seed
     init_db()
     run_full_seed()
     return TestClient(app)
