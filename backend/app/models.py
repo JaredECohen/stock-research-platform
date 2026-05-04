@@ -118,6 +118,37 @@ class CachedDocument(Base):
 Index("ix_doc_ticker_source", CachedDocument.ticker, CachedDocument.source_type)
 
 
+class ProviderCache(Base):
+    """Read-through cache for raw provider responses (Wave 9b).
+
+    A capability-keyed JSON store that sits between `data_service` and
+    the live provider chain. Each row caches one response (`profile`
+    for AAPL, `prices:252` for NVDA, `news` for MSFT, etc.) with a
+    fetched_at timestamp; consumers apply per-capability TTLs at read
+    time.
+
+    Stale rows are kept after expiry — `data_service` will serve them
+    when a refetch fails so the platform degrades gracefully when
+    providers are unavailable. A separate GC job can prune very-old
+    rows once we have history depth.
+    """
+
+    __tablename__ = "provider_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    capability: Mapped[str] = mapped_column(String(32), index=True)
+    key: Mapped[str] = mapped_column(String(128), index=True)
+    payload_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+Index(
+    "ix_provider_cache_capability_key",
+    ProviderCache.capability, ProviderCache.key,
+    unique=True,
+)
+
+
 class MemoSnapshot(Base):
     """Versioned, lineage-aware persistence of every generated memo.
 

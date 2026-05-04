@@ -296,18 +296,68 @@ class DataService:
         with SessionLocal() as db:
             return [t for (t,) in db.query(Company.ticker).all()]
 
-    def get_company_profile(self, ticker: str) -> Optional[Dict[str, Any]]:
-        return self._try_chain("profile", "get_company_profile", ticker)
+    # ------------------------------------------------------------------
+    # Read-through cache (Wave 9b Phase 2b)
+    # ------------------------------------------------------------------
+    # Each `get_X` method delegates to `_cached(capability, key, fn)`
+    # which checks `provider_cache` first, falls through to the live
+    # chain on miss / expiry, persists the response, and serves stale
+    # rows when the provider also misses. Tests bypass the cache so
+    # fixtures stay deterministic.
 
-    def get_price_history(self, ticker: str, days: int = 252) -> Optional[List[Dict[str, Any]]]:
-        rows = self._try_chain("prices", "get_price_history", ticker, days)
+    def _cached(
+        self, capability: str, key: str,
+        fetcher: Callable[[], Any],
+        *, force_refresh: bool = False,
+        ttl_override: Optional[int] = None,
+    ) -> Optional[Any]:
+        # Skip cache when a test fixture is registered or an as-of
+        # context is active — both want deterministic, point-in-time
+        # responses, not yesterday's snapshot.
+        if self._test_provider is not None or current_as_of_date() is not None:
+            return fetcher()
+        from . import provider_cache
+        return provider_cache.cached_call(
+            capability, key, fetcher,
+            ttl_seconds=ttl_override,
+            force_refresh=force_refresh,
+        )
+
+    def get_company_profile(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        return self._cached(
+            "profile", ticker.upper(),
+            lambda: self._try_chain("profile", "get_company_profile", ticker),
+            force_refresh=force_refresh,
+        )
+
+    def get_price_history(
+        self, ticker: str, days: int = 252, *, force_refresh: bool = False,
+    ) -> Optional[List[Dict[str, Any]]]:
+        rows = self._cached(
+            "prices", f"{ticker.upper()}:{days}",
+            lambda: self._try_chain("prices", "get_price_history", ticker, days),
+            force_refresh=force_refresh,
+        )
         return _clip_dated_rows(rows, "date")
 
-    def get_financial_statements(self, ticker: str) -> Optional[Dict[str, Any]]:
-        statements = self._try_chain("financials", "get_financial_statements", ticker)
+    def get_financial_statements(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        # Financials roll over only when a new 10-Q/K lands. Long TTL
+        # is fine; force_refresh covers manual recomputes.
+        statements = self._cached(
+            "financials", ticker.upper(),
+            lambda: self._try_chain("financials", "get_financial_statements", ticker),
+            force_refresh=force_refresh,
+            ttl_override=86400 * 7,
+        )
         return _clip_statements(statements)
 
-    def get_ratios(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_ratios(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         # Ratios are derived from latest statements; if a clip drops the
         # latest period, the ratio is no longer "as of" the historical
         # date. Trigger a recompute from the clipped statements when an
@@ -316,23 +366,51 @@ class DataService:
             return _ratios_from_clipped_statements(
                 self.get_financial_statements(ticker),
             )
-        return self._try_chain("ratios", "get_ratios", ticker)
+        return self._cached(
+            "ratios", ticker.upper(),
+            lambda: self._try_chain("ratios", "get_ratios", ticker),
+            force_refresh=force_refresh,
+        )
 
-    def get_key_metrics(self, ticker: str) -> Optional[Dict[str, Any]]:
-        return self._try_chain("key_metrics", "get_key_metrics", ticker)
+    def get_key_metrics(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        return self._cached(
+            "key_metrics", ticker.upper(),
+            lambda: self._try_chain("key_metrics", "get_key_metrics", ticker),
+            force_refresh=force_refresh,
+        )
 
-    def get_earnings(self, ticker: str) -> Optional[Dict[str, Any]]:
-        return self._try_chain("earnings", "get_earnings", ticker)
+    def get_earnings(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        return self._cached(
+            "earnings", ticker.upper(),
+            lambda: self._try_chain("earnings", "get_earnings", ticker),
+            force_refresh=force_refresh,
+        )
 
-    def get_earnings_transcripts(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
-        rows = self._try_chain("transcripts", "get_earnings_transcripts", ticker)
+    def get_earnings_transcripts(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> Optional[List[Dict[str, Any]]]:
+        rows = self._cached(
+            "transcripts", ticker.upper(),
+            lambda: self._try_chain("transcripts", "get_earnings_transcripts", ticker),
+            force_refresh=force_refresh,
+        )
         return _clip_dated_rows(rows, "date", fallback_key="period")
 
-    def get_filings(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
+    def get_filings(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> Optional[List[Dict[str, Any]]]:
         cik = self._lookup_cik(ticker)
         if not cik:
             return None
-        rows = self._try_chain("filings", "get_filings", ticker, cik=cik)
+        rows = self._cached(
+            "filings", ticker.upper(),
+            lambda: self._try_chain("filings", "get_filings", ticker, cik=cik),
+            force_refresh=force_refresh,
+        )
         return _clip_dated_rows(rows, "filing_date", fallback_key="period_end")
 
     def _lookup_cik(self, ticker: str) -> Optional[str]:
@@ -371,15 +449,33 @@ class DataService:
                 log.debug("CIK persist failed for %s", ticker_up)
         return cik
 
-    def get_news(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
-        rows = self._try_chain("news", "get_news", ticker)
+    def get_news(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> Optional[List[Dict[str, Any]]]:
+        rows = self._cached(
+            "news", ticker.upper(),
+            lambda: self._try_chain("news", "get_news", ticker),
+            force_refresh=force_refresh,
+        )
         return _clip_dated_rows(rows, "published_at")
 
-    def get_estimates(self, ticker: str) -> Optional[Dict[str, Any]]:
-        return self._try_chain("estimates", "get_estimates", ticker)
+    def get_estimates(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        return self._cached(
+            "estimates", ticker.upper(),
+            lambda: self._try_chain("estimates", "get_estimates", ticker),
+            force_refresh=force_refresh,
+        )
 
-    def get_macro_series(self, series_id: str) -> Optional[Dict[str, Any]]:
-        return self._try_chain("macro", "get_macro_series", series_id)
+    def get_macro_series(
+        self, series_id: str, *, force_refresh: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        return self._cached(
+            "macro", series_id,
+            lambda: self._try_chain("macro", "get_macro_series", series_id),
+            force_refresh=force_refresh,
+        )
 
     def list_macro_series(self) -> List[Dict[str, Any]]:
         return self.fred.list_macro_series()
