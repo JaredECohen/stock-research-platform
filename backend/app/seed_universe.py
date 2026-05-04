@@ -104,7 +104,11 @@ def seed_universe(refresh: bool = False) -> Dict[str, int]:
                 continue
             kwargs = _profile_to_company_kwargs(profile, ticker)
             if existing is None:
-                db.add(Company(ticker=ticker, universe_tier="auto_analysis", **kwargs))
+                # S&P 100 ticker freshly resolved from FMP/AV → curated
+                # screener universe.
+                db.add(Company(
+                    ticker=ticker, universe_tier="auto_analysis", **kwargs,
+                ))
                 inserted += 1
             else:
                 for k, v in kwargs.items():
@@ -124,7 +128,9 @@ def seed_universe(refresh: bool = False) -> Dict[str, int]:
             if row.universe_tier == "auto_analysis":
                 row.universe_tier = "data_only"
 
-        # Final count for the response.
+        # Flush so the in-progress inserts are visible to the count
+        # below; otherwise (autoflush=False) the count under-reports.
+        db.flush()
         auto_count = db.query(Company).filter(
             Company.universe_tier == "auto_analysis"
         ).count()
@@ -249,9 +255,11 @@ def run_full_seed(refresh: bool = False) -> dict:
     Order:
       1. `init_db` — create any missing tables.
       2. `seed_universe` — upsert S&P 100 profiles from FMP.
-      3. `recompute_screener_scores` — refresh scores from whatever's
-         currently in the history tables (will be empty on first boot
-         until history_backfill has run).
+      3. `recompute_screener_scores` — refresh AI-composite scores
+         from whatever's currently in the history tables (will be
+         empty on first boot until history_backfill has run).
+      4. `snapshot_screener_metrics` — refresh the raw-metric snapshot
+         used by the rule-based custom screener.
 
     Heavy work (financial backfill across all 100 names) is NOT done
     here — call `monitoring.history_backfill.run_once()` from the admin
@@ -260,7 +268,9 @@ def run_full_seed(refresh: bool = False) -> dict:
     init_db()
     universe = seed_universe(refresh=refresh)
     n_scores = recompute_screener_scores()
-    return dict(universe=universe, screener_rows=n_scores)
+    from .services.screener_metrics_service import snapshot_universe as snap_metrics
+    metrics = snap_metrics()
+    return dict(universe=universe, screener_rows=n_scores, screener_metrics=metrics)
 
 
 if __name__ == "__main__":  # pragma: no cover

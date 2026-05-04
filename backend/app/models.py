@@ -149,6 +149,40 @@ Index(
 )
 
 
+class ScreenerMetric(Base):
+    """Per-ticker raw metrics for rule-based screening (Wave 9b Phase 4).
+
+    Snapshot-style table — one row per ticker, refreshed nightly along
+    with `screener_scores`. Columns are deliberately concrete (P/E, EV/
+    EBITDA, gross margin, …) so the custom-screen endpoint can WHERE
+    against them with simple SQL rather than reaching into long-format
+    `financial_periods` for every rule.
+
+    All numeric values may be NULL when underlying data is missing
+    (e.g. forward_pe before estimates land); callers must handle None.
+    """
+
+    __tablename__ = "screener_metrics"
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    pe_ttm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    forward_pe: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    peg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ev_ebitda: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ev_revenue: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    gross_margin: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    op_margin: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    fcf_margin: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    roic: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    roe: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    debt_to_ebitda: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    revenue_growth_yoy: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    dividend_yield: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    market_cap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    beta: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class MemoSnapshot(Base):
     """Versioned, lineage-aware persistence of every generated memo.
 
