@@ -599,6 +599,30 @@ def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_to
 # Public surface
 # ---------------------------------------------------------------------------
 
+def _model_matches_provider(model: Optional[str], provider: str) -> bool:
+    """True iff `model` is named for the given provider's family.
+
+    Wave 9b — agents pass per-role model envs that were originally
+    OpenAI-shaped (`OPENAI_TOOL_MODEL`, `OPENAI_SECTOR_MODEL`, …).
+    When the active provider is Anthropic or Gemini, those names 404
+    and every LLM call silently fails through to the deterministic
+    stub. We treat a mismatch as "no override" so the route default
+    for the active provider kicks in.
+    """
+    if not model:
+        return True
+    m = model.lower().strip()
+    if not m:
+        return True
+    if provider == "openai":
+        return m.startswith(("gpt-", "o1-", "o3-", "o4-", "openai/"))
+    if provider == "anthropic":
+        return m.startswith(("claude-", "anthropic/"))
+    if provider in ("gemini", "vertex"):
+        return m.startswith(("gemini-", "models/gemini", "publishers/google"))
+    return True  # unknown provider — pass through unchanged
+
+
 def chat_json(
     prompt: str,
     *,
@@ -627,6 +651,11 @@ def chat_json(
         return None
     if _breaker_open(provider):
         return None
+
+    # Drop any provider-foreign model override so the route default
+    # for the active provider is used.
+    if not _model_matches_provider(model, provider):
+        model = None
 
     if provider == "anthropic":
         client = _anthropic_client()
@@ -672,6 +701,10 @@ def chat_text(
         return None
     if _breaker_open(provider):
         return None
+
+    # Drop any provider-foreign model override (see chat_json comment).
+    if not _model_matches_provider(model, provider):
+        model = None
 
     if provider == "anthropic":
         client = _anthropic_client()
