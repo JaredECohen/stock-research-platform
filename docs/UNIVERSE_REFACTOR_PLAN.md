@@ -360,3 +360,60 @@ relied on `data_service` returning demo data wrap with the
 Estimated total: ~4-6 focused days. Each phase ships independently
 behind feature flags where reasonable so the branch can be merged
 incrementally rather than as one mega-PR.
+
+## 12. Changelog
+
+### 2026-05-04 — FMP `/stable/` migration (in-branch follow-up)
+
+**What broke.** Mid-branch we discovered that every `/api/v3/...` request
+returned HTTP 403 with `"Legacy Endpoint : Due to Legacy endpoints
+being no longer supported"` — *not* a rate-limit, *not* a tier issue.
+FMP retired both `/api/v3/` and `/api/v4/` on 2025-08-31. The keys are
+fine; our URLs were stale.
+
+**What we changed.** Rewrote
+[`fmp_provider.py`](../backend/app/providers/fmp_provider.py) to hit the
+current `/stable/` namespace. URL shape changed from
+`/api/v3/{path}/{ticker}` to `/stable/{path}?symbol={ticker}`. Field
+names mostly stable; the deltas:
+
+- `mktCap` → `marketCap`
+- `priceEarningsRatio` → `priceToEarningsRatio`
+- `priceToFreeCashFlow` → `priceToFreeCashFlowRatio`
+- `evToEbitda` → `evToEBITDA`
+- `weightedAverageShsOutDil` (now camelCase consistent)
+- profile no longer carries `sharesOutstanding` — pulled from
+  `/stable/shares-float?symbol=…` and merged into the profile payload
+  so consumers get the same shape they had before
+- `/profile` now does include `sector`, `industry`, `country`, `ceo`
+  (better than v3)
+
+**New capabilities the migration unlocks.** With FMP back online:
+
+- Live ratios (PE, EV/EBITDA, ROIC, gross/op/ebitda margins, debt/EBITDA)
+- Analyst estimates → `forward_pe`, `peg`, eventually `price_target`
+  (still NULL in `screener_metrics` until the metrics service consumes
+  the estimates feed; the plumbing is ready)
+- Real EOD prices for `cached_prices_eod`
+- Earnings calendar with surprise %
+
+**Re-run.** Cleared the provider cache, re-seeded all 100 S&P 100 names
+with FMP `/stable/` profiles, re-ran `history_service.backfill_ticker`
+across the universe, and re-snapshotted `screener_metrics`. Final
+counts:
+
+```
+financial_periods : 25,824 rows / 100 tickers (all source=live, FMP)
+filing_docs       :    993 rows / SEC EDGAR
+screener_metrics  :    100 rows (full coverage)
+```
+
+Spot-checks: AAPL FY2025 revenue $416.2B (matches 10-K filed Oct 31).
+NVDA ROIC 67%, gross margin 71%. AAPL P/E 36.7 / EV/EBITDA 28.8 — all
+match published values.
+
+**Bug fix in passing.** `history_service._ingest_statement_rows` would
+hit `UNIQUE` constraint conflicts when a provider returned two rows for
+the same fiscal period after a restatement (JNJ FY2023 was the
+reproducer). Now dedupes by period before iterating; the later row
+wins.

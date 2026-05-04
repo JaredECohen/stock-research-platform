@@ -147,11 +147,19 @@ def _ingest_statement_rows(
     db: Session, ticker: str, statement: str, rows: Iterable[Dict[str, Any]],
     line_whitelist: Tuple[str, ...], source: str,
 ) -> int:
-    written = 0
+    # Dedupe by period — providers occasionally return two rows for the
+    # same fiscal period after a restatement (e.g., JNJ FY2023). The
+    # later row wins; the earlier one would otherwise collide on the
+    # `(ticker, period, statement, line_item)` unique index because we
+    # haven't flushed yet inside this transaction.
+    by_period: Dict[str, Dict[str, Any]] = {}
     for row in rows or []:
         period = str(row.get("period") or row.get("date") or "").strip()
         if not period:
             continue
+        by_period[period] = row
+    written = 0
+    for period, row in by_period.items():
         period_end = _coerce_date(row.get("period_end") or row.get("date") or row.get("period"))
         fy, fq = _parse_period(period)
         for line in line_whitelist:
