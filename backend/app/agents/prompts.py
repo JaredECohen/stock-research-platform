@@ -182,7 +182,7 @@ Output:
 - a paragraph for the PM view (acknowledge sector lean + your divergence
   if any),
 - a one-sentence thesis,
-- a rating label (Bullish / Mixed Positive / Neutral / Mixed Negative / Bearish),
+- a rating label (Very Bullish / Bullish / Neutral / Bearish / Very Bearish),
 - a confidence score 0-100.
 
 Return JSON with keys: final_pm_view, one_sentence_thesis, rating_label, confidence_score."""

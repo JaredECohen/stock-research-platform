@@ -2,11 +2,11 @@
 // Keep these in sync with backend/app/schemas.py.
 
 export type RatingLabel =
+  | "Very Bullish"
   | "Bullish"
-  | "Mixed Positive"
   | "Neutral"
-  | "Mixed Negative"
-  | "Bearish";
+  | "Bearish"
+  | "Very Bearish";
 
 export type IntentType =
   | "single_stock_analysis"
@@ -308,6 +308,46 @@ export interface ScreenerResult {
   generated_at: string;
 }
 
+// Wave 9b — Custom rule-based screen
+export type ScreenerMetricName =
+  | "pe_ttm" | "forward_pe" | "peg" | "ev_ebitda" | "ev_revenue"
+  | "gross_margin" | "op_margin" | "fcf_margin" | "roic" | "roe"
+  | "debt_to_ebitda" | "revenue_growth_yoy" | "dividend_yield"
+  | "market_cap" | "beta";
+
+export type ScreenerOp = ">" | "<" | ">=" | "<=" | "=" | "between";
+
+export interface ScreenerRule {
+  metric: ScreenerMetricName;
+  op: ScreenerOp;
+  value: number;
+  value2?: number | null;
+}
+
+export interface CustomScreenRequest {
+  rules: ScreenerRule[];
+  sectors?: string[];
+  sort_by?: ScreenerMetricName;
+  order?: "asc" | "desc";
+  limit?: number;
+}
+
+export interface CustomScreenRow {
+  ticker: string;
+  company_name: string;
+  sector: string;
+  pm_score?: number | null;
+  rating_label?: string | null;
+  metrics: Partial<Record<ScreenerMetricName, number | null>>;
+}
+
+export interface CustomScreenResult {
+  rows: CustomScreenRow[];
+  rule_count: number;
+  matched: number;
+  generated_at: string;
+}
+
 export interface StockMemoOut {
   ticker: string;
   company_name: string;
@@ -331,6 +371,17 @@ export interface StockMemoOut {
   key_risks: RiskItem[];
   thesis_breakers: RiskItem[];
   dcf_summary: Record<string, unknown>;
+  // Wave 10 — consensus-anchored DCF kept alongside the PM-adjusted view
+  // (in `dcf_summary`). Empty object when the PM made no adjustments or
+  // no LLM was available.
+  dcf_initial_summary?: Record<string, unknown>;
+  dcf_pm_adjustments?: Array<{
+    field: string;
+    from: number | string | null;
+    to: number | string | null;
+    rationale: string;
+  }>;
+  dcf_pm_adjustment_headline?: string;
   portfolio_fit: string;
   risk_committee_challenge: CriticReview;
   final_verdict: string;
@@ -342,7 +393,34 @@ export interface StockMemoOut {
   // everything ran normally; populated by the backend safe-runner so the UI
   // can surface "X analyst unavailable" instead of dropping the memo.
   degraded_agents?: string[];
+  // Wave 9 — PM↔specialist deep-research dialog. Empty when the loop is
+  // disabled (default) or the memo is from a backtest run.
+  round_findings?: RoundFindings[];
   disclaimer: string;
+}
+
+export type DeepResearchTarget =
+  | "sector"
+  | "earnings"
+  | "valuation"
+  | "comps"
+  | "risk"
+  | "filing"
+  | "macro"
+  | "technical";
+
+export interface CritiqueQuestion {
+  target_agent: DeepResearchTarget;
+  question: string;
+  why_it_matters?: string;
+}
+
+export interface RoundFindings {
+  round: number;
+  pm_questions: CritiqueQuestion[];
+  findings: Record<string, AgentFinding>;
+  early_exit?: boolean;
+  pm_rationale?: string;
 }
 
 export interface AgentTrace {

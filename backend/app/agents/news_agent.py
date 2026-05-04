@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -103,6 +104,49 @@ def _domain_of(url: str) -> str:
         return ""
 
 
+_NAME_SUFFIX_RE = re.compile(
+    r"\b(inc|inc\.|incorporated|corp|corp\.|corporation|company|co\.|"
+    r"ltd|ltd\.|limited|plc|holdings|group|the)\b\.?",
+    re.IGNORECASE,
+)
+
+
+def _company_name(ticker: str) -> str:
+    """Look up the company display name. Lazy import — `data_service` pulls
+    in the provider chain, which we don't want loaded at module import time."""
+    try:
+        from ..services.data_service import get_data_service
+        profile = get_data_service().get_company_profile(ticker) or {}
+        return str(profile.get("company_name") or "").strip()
+    except Exception:
+        return ""
+
+
+def _name_tokens(name: str) -> List[str]:
+    """Lowercase tokens from a company name with corporate suffixes stripped.
+    Used to decide whether a grounded item is actually about the company."""
+    cleaned = _NAME_SUFFIX_RE.sub(" ", name or "")
+    return [t for t in re.split(r"[^a-z0-9&]+", cleaned.lower()) if len(t) >= 4]
+
+
+def _is_about_company(item: Dict[str, Any], ticker: str, name_tokens: List[str]) -> bool:
+    """Drop grounded items that don't mention the ticker or any significant
+    token of the company name. Gemini's `google_search` tool sometimes
+    returns sector roundups or peer-comparison articles where the target
+    ticker is barely a footnote — those are noise for a per-ticker alert.
+
+    We only check the title and the URL slug. Summary-text mentions are too
+    permissive: dividend-list articles like "Cardinal Health Among 9 Companies
+    …" cite Apple in the body but aren't *about* Apple. Headlines and URL
+    slugs reflect the article's primary subject."""
+    title = (item.get("title") or item.get("headline") or "").lower()
+    url = (item.get("url") or item.get("source_url") or "").lower()
+    text = f"{title} {url}"
+    if len(ticker) >= 3 and ticker.lower() in text:
+        return True
+    return any(tok in text for tok in name_tokens)
+
+
 def _filter_grounded_sources(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     allowed = allowed_domains()
     blocked = blocked_domains()
@@ -149,26 +193,52 @@ def run(ticker: str, *, force_refresh: bool = False) -> List[NewsAlert]:
 
     # Try Gemini-grounded path first; fall back to deterministic news_service.
     items: List[Dict[str, Any]] = []
+    name = _company_name(ticker)
+    name_tokens = _name_tokens(name)
+    used_gemini = False
     if settings.has_gemini:
+        company_clause = f"{name} ({ticker})" if name else ticker
         prompt = (
-            f"Find the 5 most material news items about {ticker} since "
-            f"{_since_window(ticker).isoformat()}. Return JSON list of "
-            f"{{title, summary, url, published_at}} objects."
+            f"Find the 5 most material news items PRIMARILY about {company_clause} "
+            f"since {_since_window(ticker).isoformat()}. Each item must be a story "
+            f"whose main subject is {company_clause} — exclude sector roundups, "
+            f"peer-comparison articles, dividend lists, or pieces where {ticker} "
+            f"is only mentioned in passing. Keep each summary under 200 characters. "
+            f"Return a JSON object "
+            f'{{"items": [{{title, summary, url, published_at}}, ...]}}.'
         )
+        # Grounded responses include citations + thinking-token overhead, so
+        # the budget needs to comfortably fit 5 items + grounding metadata.
+        # 900 tokens truncates mid-JSON on 2.5-flash with `google_search`.
         out = llm.gemini_chat_json(
             prompt,
             model=settings.gemini_news_model,
             enable_search_grounding=True,
-            max_tokens=900,
+            max_tokens=2500,
         )
         if isinstance(out, dict) and isinstance(out.get("items"), list):
             items = list(out["items"])
         elif isinstance(out, list):
             items = list(out)
+        if items:
+            used_gemini = True
+            relevant = [it for it in items if _is_about_company(it, ticker, name_tokens)]
+            if not relevant:
+                log.info(
+                    "news_agent: all %d Gemini items for %s failed relevance filter; "
+                    "falling back to news_service", len(items), ticker,
+                )
+                items = []
+                used_gemini = False
+            else:
+                items = relevant
 
     if not items:
-        # Fallback: existing news_service
-        items = list(news_service.get_news(ticker) or [])
+        # Fallback: existing news_service. Re-apply the relevance filter — the
+        # underlying providers (Alpha Vantage NEWS_SENTIMENT, etc.) often
+        # return sector or peer items keyed off the requested ticker.
+        raw = list(news_service.get_news(ticker) or [])
+        items = [it for it in raw if _is_about_company(it, ticker, name_tokens)] if name_tokens else raw
 
     items = _filter_grounded_sources(items)
 
@@ -186,7 +256,7 @@ def run(ticker: str, *, force_refresh: bool = False) -> List[NewsAlert]:
             url=url,
             severity=sev,
             published_at=str(published_at) if published_at else None,
-            source="gemini" if settings.has_gemini else "news_service",
+            source="gemini" if used_gemini else "news_service",
         ))
 
     # Persist to hot cache (today's bucket + canonical bucket)

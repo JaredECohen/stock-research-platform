@@ -56,7 +56,8 @@ def test_deterministic_long_form_includes_all_expected_sections():
     assert "Cross-sector pull-through" in md
     assert "Sector synthesis" in md
     assert "Sources" in md
-    assert "Confidence" in md
+    # Wave 8O renamed the trailer to "Analyst confidence" + 0-100 scale.
+    assert "confidence" in md.lower()
 
 
 def test_deterministic_long_form_handles_empty_data():

@@ -15,8 +15,59 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 RatingLabel = Literal[
-    "Bullish", "Mixed Positive", "Neutral", "Mixed Negative", "Bearish"
+    "Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish"
 ]
+
+
+def rating_from_stock_score(score: float) -> str:
+    """Wave 8P — deterministic mapping from quant Stock Score → rating label.
+
+    Locked decision: rating is now a function of the Stock Score (the
+    quantitative factor blend) rather than the LLM's PM synthesis. The
+    LLM's `confidence_score` separately reflects the agents' conviction
+    in the directional call.
+
+      80–100 → Very Bullish
+      60–80  → Bullish
+      40–60  → Neutral
+      20–40  → Bearish
+       0–20  → Very Bearish
+    """
+    try:
+        s = float(score)
+    except (TypeError, ValueError):
+        return "Neutral"
+    if s >= 80:
+        return "Very Bullish"
+    if s >= 60:
+        return "Bullish"
+    if s >= 40:
+        return "Neutral"
+    if s >= 20:
+        return "Bearish"
+    return "Very Bearish"
+
+
+_RATING_LABEL_TO_SCORE: Dict[str, float] = {
+    "Very Bullish": 90.0,
+    "Bullish": 70.0,
+    "Neutral": 50.0,
+    "Bearish": 30.0,
+    "Very Bearish": 10.0,
+}
+
+
+def score_from_rating_label(label: Optional[str]) -> float:
+    """Inverse of `rating_from_stock_score` — bucket centers on 0-100.
+
+    Used by the PM rating-blend (Option A) so the LLM's directional call
+    can be mixed with the quant factor score before label assignment.
+    Unknown / missing labels collapse to Neutral (50).
+    """
+    if not label:
+        return 50.0
+    return _RATING_LABEL_TO_SCORE.get(str(label).strip(), 50.0)
+
 
 IntentType = Literal[
     "single_stock_analysis",
@@ -69,6 +120,72 @@ class RiskItem(BaseModel):
 class BullBearCase(BaseModel):
     headline: str
     key_points: List[str] = Field(default_factory=list)
+
+
+class CritiqueQuestion(BaseModel):
+    """Wave 9 — one follow-up question the PM emits during deep research.
+
+    `target_agent` names which specialist's runner re-fires with this
+    question as additional prompt context. `why_it_matters` is captured
+    in the audit trail so reviewers can see *why* the PM dug in.
+    """
+    target_agent: Literal[
+        "sector", "earnings", "valuation", "comps",
+        "risk", "filing", "macro", "technical",
+    ]
+    question: str
+    why_it_matters: str = ""
+
+
+class CritiqueOutput(BaseModel):
+    """PM critique step's structured output. `no_further_questions`
+    is the explicit early-exit signal the loop respects so the PM can
+    end the dialog before the round budget runs out."""
+    questions: List[CritiqueQuestion] = Field(default_factory=list)
+    no_further_questions: bool = False
+    rationale: str = ""
+
+
+class RoundFindings(BaseModel):
+    """Wave 9 — one round of the deep-research dialog.
+
+    `round=0` is the initial parallel fan-out (no PM questions). Rounds
+    1+ each carry the PM's questions (`pm_questions`) and the
+    re-fired agents' new findings (`findings`, keyed by agent_name).
+    `early_exit` is set when the PM declared no further questions on
+    THIS round, so reviewers know whether the loop terminated by
+    consensus or by hitting the round cap.
+    """
+    round: int
+    pm_questions: List[CritiqueQuestion] = Field(default_factory=list)
+    findings: Dict[str, AgentFinding] = Field(default_factory=dict)
+    early_exit: bool = False
+    pm_rationale: str = ""
+
+
+class RiskRecommendation(BaseModel):
+    """Wave 8H — actionable rec from the risk analyst.
+
+    The graph applies a deterministic enforcement step that REALLY
+    moves these into the memo (confidence cap, rating downshift, bear
+    augmentation, thesis-breaker propagation) so risk findings aren't
+    just notes — they shape the final memo. The PM synthesis prompt
+    also receives them so the LLM-written narrative acknowledges what
+    the risk lens demanded.
+
+    `target` — what part of the memo this rec touches.
+    `direction` — which way to push.
+    `magnitude` — how hard. Confidence deltas: small=5, medium=10, large=15.
+    `detail` — short title shown in UI / prose.
+    `rationale` — why; required so reviewers can audit why a rec moved.
+    """
+    target: Literal[
+        "confidence", "rating", "thesis_breakers", "sizing", "bear_case",
+    ]
+    direction: Literal["raise", "lower", "flag", "neutral"]
+    magnitude: Literal["small", "medium", "large"] = "medium"
+    detail: str
+    rationale: str
 
 
 class FalsifiableTest(BaseModel):
@@ -427,6 +544,52 @@ class ScreenerResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Wave 9b — Custom rule-based screener (Phase 4)
+# ---------------------------------------------------------------------------
+
+ScreenerMetricName = Literal[
+    "pe_ttm", "forward_pe", "peg", "ev_ebitda", "ev_revenue",
+    "gross_margin", "op_margin", "fcf_margin", "roic", "roe",
+    "debt_to_ebitda", "revenue_growth_yoy", "dividend_yield",
+    "market_cap", "beta",
+]
+
+ScreenerOp = Literal[">", "<", ">=", "<=", "=", "between"]
+
+
+class ScreenerRule(BaseModel):
+    metric: ScreenerMetricName
+    op: ScreenerOp
+    value: float = 0.0
+    # `value2` is required only when `op == "between"`; ignored otherwise.
+    value2: Optional[float] = None
+
+
+class CustomScreenRequest(BaseModel):
+    rules: List[ScreenerRule] = Field(default_factory=list)
+    sectors: Optional[List[str]] = None
+    sort_by: ScreenerMetricName = "market_cap"
+    order: Literal["asc", "desc"] = "desc"
+    limit: int = Field(50, ge=1, le=500)
+
+
+class CustomScreenRow(BaseModel):
+    ticker: str
+    company_name: str
+    sector: str
+    pm_score: Optional[float] = None
+    rating_label: Optional[str] = None
+    metrics: Dict[str, Optional[float]] = Field(default_factory=dict)
+
+
+class CustomScreenResult(BaseModel):
+    rows: List[CustomScreenRow]
+    rule_count: int
+    matched: int
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
 # Memos
 # ---------------------------------------------------------------------------
 
@@ -486,6 +649,13 @@ class StockMemoOut(BaseModel):
     key_risks: List[RiskItem]
     thesis_breakers: List[RiskItem]
     dcf_summary: Dict[str, Any] = Field(default_factory=dict)
+    # Wave 10 — initial (consensus-anchored) DCF kept alongside the
+    # PM-adjusted view in `dcf_summary`. Empty when the PM made no
+    # adjustments or no LLM was available. Lets the UI show "what the
+    # team's research changed about the model".
+    dcf_initial_summary: Dict[str, Any] = Field(default_factory=dict)
+    dcf_pm_adjustments: List[Dict[str, Any]] = Field(default_factory=list)
+    dcf_pm_adjustment_headline: str = ""
     portfolio_fit: str = ""
     risk_committee_challenge: CriticReview
     final_verdict: str
@@ -493,6 +663,10 @@ class StockMemoOut(BaseModel):
     sources_used: List[str] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     generation_mode: Literal["demo", "live"] = "demo"
+    # Wave 9 — full diligence-dialog audit trail. `round=0` is the
+    # initial parallel fan-out; rounds 1+ are PM↔specialist
+    # critique-and-revise turns. Empty list when deep_research is off.
+    round_findings: List[RoundFindings] = Field(default_factory=list)
     # List of agents that failed during this memo's generation. Empty when
     # everything ran normally; populated by the safe-runner so the UI can
     # show "X analyst was unavailable" rather than dropping the memo.

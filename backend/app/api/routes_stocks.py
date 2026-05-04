@@ -11,12 +11,46 @@ from ..agents.graph import run_stock_memo
 from ..database import SessionLocal
 from ..models import Company
 from ..schemas import CompanyOut, StockMemoOut
+from ..seed_universe import ensure_company_in_universe
 from ..services import memo_store
 from ..services.data_service import get_data_service
 from ..services.fundamentals_service import get_full_financials
+from ..services.history_service import backfill_ticker
 from ..services.market_data_service import get_basic_stats, get_price_series
 
 router = APIRouter()
+
+
+def _ensure_lazy_universe(ticker: str) -> str:
+    """Resolve `ticker` into the universe.
+
+    Returns the company's tier. Inserts a fresh `analyzed_on_demand`
+    row + kicks off a synchronous backfill when the ticker is brand
+    new. Raises HTTPException(404) when the live provider chain
+    rejects the symbol entirely.
+    """
+    t = ticker.upper()
+    with SessionLocal() as db:
+        existing = db.execute(
+            select(Company.universe_tier).where(Company.ticker == t)
+        ).first()
+    if existing:
+        return (existing[0] or "data_only")
+    # New symbol — try to introduce it.
+    profile = ensure_company_in_universe(t)
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{t}: provider chain rejected this symbol.",
+        )
+    # Heavy load (5yr financials + filings + transcripts) so the agent
+    # graph has data to work with. Best-effort — if a single capability
+    # 403s, we still return the memo using whatever did land.
+    try:
+        backfill_ticker(t)
+    except Exception:  # pragma: no cover
+        pass
+    return "analyzed_on_demand"
 
 
 def _company_tier(ticker: str) -> str:
@@ -116,12 +150,26 @@ def get_stock_memo(
     if as_of_date is None:
         snap = memo_store.latest_memo(t)
         if snap is not None:
-            response.headers["X-Memo-Version"] = str(snap.version)
-            response.headers["X-Memo-Trigger"] = snap.trigger
-            response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
-            return memo_store.memo_to_pydantic(snap)
+            # Wave 9b — Phase 2d. Check if a 10-Q/K or earnings call has
+            # landed since this memo was generated; if so, recompute
+            # rather than serve a stale cached version.
+            freshness = memo_store.memo_freshness(snap)
+            if not freshness["stale"]:
+                response.headers["X-Memo-Version"] = str(snap.version)
+                response.headers["X-Memo-Trigger"] = snap.trigger
+                response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
+                response.headers["X-Memo-Source"] = "cache"
+                return memo_store.memo_to_pydantic(snap)
+            # Stale — fall through to a fresh run, advertising why.
+            response.headers["X-Memo-Stale-Reason"] = freshness["reason"]
+            response.headers["X-Memo-Stale-Trigger"] = freshness["trigger"] or ""
 
-    tier = _company_tier(t)
+    # Wave 9b — lazy ticker introduction. If `t` isn't in the
+    # `companies` table at all, this resolves it via the live profile
+    # chain, inserts it as `analyzed_on_demand`, and backfills 5yr of
+    # financials so the agent graph has data to work with. Raises 404
+    # when the symbol is genuinely unknown.
+    tier = _ensure_lazy_universe(t)
     if as_of_date is None and tier == "data_only" and not ondemand:
         raise HTTPException(
             status_code=409,
@@ -216,6 +264,7 @@ def analyze_stock(
 ) -> StockMemoOut:
     """Force a fresh full reanalysis. Always creates a new memo version."""
     t = ticker.upper()
+    _ensure_lazy_universe(t)  # introduce + backfill if brand new
     try:
         memo = run_stock_memo(t, scenario=scenario or "soft_landing", force_refresh=True)
     except ValueError as exc:

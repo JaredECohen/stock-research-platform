@@ -1,16 +1,17 @@
-"""DemoProvider — always-on data backend that satisfies the BaseProvider contract.
+"""DemoProvider — test fixture (Wave 9b).
 
-It builds the dataset on first access (in-memory) and exposes the same
-endpoints as live providers, so any consumer that goes through the service
-layer is provider-agnostic.
+Synthesizes a deterministic dataset for the legacy 33-ticker universe so
+unit tests don't need network access. Wired into `data_service` only by
+`tests/conftest.py::demo_provider` autouse fixture; production never
+imports from this module.
 """
 from __future__ import annotations
 
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
-from ..data.demo_dataset import build_dataset
-from .base import ProviderStatus
+from ...providers.base import ProviderStatus
+from .demo_dataset import build_dataset
 
 
 @lru_cache(maxsize=1)
@@ -69,7 +70,7 @@ class DemoProvider:
         d = _dataset().get(ticker.upper())
         return d["transcripts"] if d else None
 
-    def get_filings(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
+    def get_filings(self, ticker: str, *, cik: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         d = _dataset().get(ticker.upper())
         return d["filings"] if d else None
 

@@ -116,17 +116,43 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
 
 
 def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
+    """Default DCF assumptions for `ticker`.
+
+    Wave 8I: pulls analyst consensus revenue estimates (when the
+    provider chain has them) and feeds them to the DCF engine as the
+    starting point for the 5-year growth path. The agent layer
+    (`agents/dcf_updater.py`) is the only thing allowed to diverge
+    from consensus, and only with a per-field rationale + ±20% cap.
+    """
     fin = get_full_financials(ticker)
     if not fin.get("income"):
         return None
     profile = fin["profile"]
+    estimates = None
+    try:
+        from .data_service import get_data_service
+        estimates = get_data_service().get_estimates(ticker)
+    except Exception:  # pragma: no cover — estimates are optional
+        estimates = None
+    # Wave 8L: when the profile doesn't carry `last_price` (FMP 403, demo
+    # data without a price field), derive it from market_cap / shares.
+    # Without this fallback every upside_pct in the DCF is 0% which makes
+    # the snapshot useless.
+    last_price = profile.get("last_price") or 0.0
+    diluted_shares = profile.get("shares_outstanding") or 0.0
+    if not last_price and diluted_shares and profile.get("market_cap"):
+        try:
+            last_price = float(profile["market_cap"]) / float(diluted_shares)
+        except (TypeError, ValueError, ZeroDivisionError):
+            last_price = 0.0
     return dcf_engine.derive_default_assumptions(
         income_statements=fin["income"],
         cash_flows=fin["cash"],
         balance_sheets=fin["balance"],
-        current_price=profile.get("last_price") or 0.0,
-        diluted_shares=profile.get("shares_outstanding") or 0.0,
+        current_price=last_price,
+        diluted_shares=diluted_shares,
         beta=profile.get("beta") or 1.0,
+        analyst_estimates=estimates,
     )
 
 

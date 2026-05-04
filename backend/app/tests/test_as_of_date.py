@@ -34,7 +34,7 @@ from app.services.data_service import as_of_context, current_as_of_date
 
 def _ensure_started() -> TestClient:
     from app.database import init_db
-    from app.seed_demo_data import run_full_seed
+    from app.tests.fixtures.seed_demo_data import run_full_seed
     init_db()
     run_full_seed()
     return TestClient(app)

@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..config import settings
 
@@ -382,22 +382,48 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
-    """Best-effort JSON extraction from a model response."""
+    """Best-effort JSON extraction from a model response.
+
+    Handles three failure modes seen in the wild:
+      1. Plain JSON wrapped in a ```json fence.
+      2. Gemini's grounded responses occasionally emit two copies of the
+         JSON prefix back-to-back (a tool-use retry artifact). Walk every
+         '{' offset and accept the first one that parses.
+      3. Truncated JSON arrays — the model stopped mid-string. Trim the
+         trailing partial item and close the array/object so we recover
+         what was emitted.
+    """
     if not text:
         return None
-    # Direct parse
     try:
         return json.loads(text)
     except Exception:
         pass
-    # Fenced block
     m = _JSON_FENCE_RE.search(text)
     if m:
         try:
             return json.loads(m.group(1))
         except Exception:
             pass
-    # First {...} block
+    # Truncated-or-duplicated `{"items": [ ... ]}` recovery. Walk every
+    # `"items": [` occurrence and salvage the complete objects inside —
+    # this handles both Gemini's grounded duplicate-prefix artifact
+    # (later copy is more complete) and outright truncation. We pick
+    # whichever pass yields the most items.
+    best: Optional[List[Dict[str, Any]]] = None
+    for items_match in re.finditer(r'"items"\s*:\s*\[', text):
+        complete = _walk_array_objects(text, items_match.end())
+        if not complete:
+            continue
+        try:
+            parsed = [json.loads(o) for o in complete]
+        except Exception:
+            continue
+        if best is None or len(parsed) > len(best):
+            best = parsed
+    if best is not None:
+        return {"items": best}
+    # Last resort: greedy first {...} block.
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end > start:
@@ -406,6 +432,40 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         except Exception:
             return None
     return None
+
+
+def _walk_array_objects(text: str, start_idx: int) -> List[str]:
+    """Return raw text of every top-level `{...}` inside the array beginning
+    at `start_idx` (which should point just past the opening `[`). Stops at
+    the array's closing `]` or end-of-string."""
+    out: List[str] = []
+    depth = 0
+    in_str = False
+    esc = False
+    obj_start = -1
+    i = start_idx
+    while i < len(text):
+        ch = text[i]
+        if esc:
+            esc = False
+        elif ch == "\\":
+            esc = True
+        elif ch == '"':
+            in_str = not in_str
+        elif not in_str:
+            if ch == "{":
+                if depth == 0:
+                    obj_start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and obj_start >= 0:
+                    out.append(text[obj_start : i + 1])
+                    obj_start = -1
+            elif ch == "]" and depth == 0:
+                break
+        i += 1
+    return out
 
 
 def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[str]:
@@ -463,6 +523,16 @@ def _openai_token_kwarg(model: str, n: int) -> Dict[str, int]:
     return {"max_tokens": int(n)}
 
 
+def _openai_supports_custom_temp(model: str) -> bool:
+    """GPT-5.x and o-series reasoning models reject `temperature` other
+    than the default (1). Older chat models accept it. Verified
+    empirically 2026-05-03 — gpt-5.5 returns 400 on temperature=0.3."""
+    m = (model or "").lower().strip()
+    if m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+        return False
+    return True
+
+
 def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[Dict[str, Any]]:
     import time as _time
     messages = []
@@ -471,13 +541,15 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
     messages.append({"role": "user", "content": user + "\n\nReturn ONLY valid JSON."})
     t0 = _time.perf_counter()
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.3,
+        kwargs = {
+            "model": model,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
             **_openai_token_kwarg(model, max_tokens),
-        )
+        }
+        if _openai_supports_custom_temp(model):
+            kwargs["temperature"] = 0.3
+        resp = client.chat.completions.create(**kwargs)
         dur = int((_time.perf_counter() - t0) * 1000)
         in_tok, out_tok = _usage_from_openai(resp)
         content = resp.choices[0].message.content
@@ -501,10 +573,14 @@ def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_to
     messages.append({"role": "user", "content": user})
     t0 = _time.perf_counter()
     try:
-        resp = client.chat.completions.create(
-            model=model, messages=messages, temperature=0.3,
+        kwargs = {
+            "model": model,
+            "messages": messages,
             **_openai_token_kwarg(model, max_tokens),
-        )
+        }
+        if _openai_supports_custom_temp(model):
+            kwargs["temperature"] = 0.3
+        resp = client.chat.completions.create(**kwargs)
         dur = int((_time.perf_counter() - t0) * 1000)
         in_tok, out_tok = _usage_from_openai(resp)
         out = resp.choices[0].message.content

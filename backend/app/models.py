@@ -118,6 +118,71 @@ class CachedDocument(Base):
 Index("ix_doc_ticker_source", CachedDocument.ticker, CachedDocument.source_type)
 
 
+class ProviderCache(Base):
+    """Read-through cache for raw provider responses (Wave 9b).
+
+    A capability-keyed JSON store that sits between `data_service` and
+    the live provider chain. Each row caches one response (`profile`
+    for AAPL, `prices:252` for NVDA, `news` for MSFT, etc.) with a
+    fetched_at timestamp; consumers apply per-capability TTLs at read
+    time.
+
+    Stale rows are kept after expiry — `data_service` will serve them
+    when a refetch fails so the platform degrades gracefully when
+    providers are unavailable. A separate GC job can prune very-old
+    rows once we have history depth.
+    """
+
+    __tablename__ = "provider_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    capability: Mapped[str] = mapped_column(String(32), index=True)
+    key: Mapped[str] = mapped_column(String(128), index=True)
+    payload_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+Index(
+    "ix_provider_cache_capability_key",
+    ProviderCache.capability, ProviderCache.key,
+    unique=True,
+)
+
+
+class ScreenerMetric(Base):
+    """Per-ticker raw metrics for rule-based screening (Wave 9b Phase 4).
+
+    Snapshot-style table — one row per ticker, refreshed nightly along
+    with `screener_scores`. Columns are deliberately concrete (P/E, EV/
+    EBITDA, gross margin, …) so the custom-screen endpoint can WHERE
+    against them with simple SQL rather than reaching into long-format
+    `financial_periods` for every rule.
+
+    All numeric values may be NULL when underlying data is missing
+    (e.g. forward_pe before estimates land); callers must handle None.
+    """
+
+    __tablename__ = "screener_metrics"
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    pe_ttm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    forward_pe: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    peg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ev_ebitda: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ev_revenue: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    gross_margin: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    op_margin: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    fcf_margin: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    roic: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    roe: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    debt_to_ebitda: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    revenue_growth_yoy: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    dividend_yield: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    market_cap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    beta: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class MemoSnapshot(Base):
     """Versioned, lineage-aware persistence of every generated memo.
 
@@ -198,6 +263,78 @@ class LLMCallLog(Base):
 
 
 Index("ix_llm_call_run", LLMCallLog.run_id, LLMCallLog.generated_at)
+
+
+class SDKTrace(Base):
+    """Wave 10 — persisted OpenAI Agents SDK exchange trace.
+
+    When `USE_AGENTS_SDK=true` and the official `openai-agents` package +
+    `OPENAI_API_KEY` are present, every memo run kicks off a parallel
+    SDK exchange (real LLM-driven handoffs / tool calls). The trace is
+    informational — the canonical `StockMemoOut` still comes from the
+    legacy graph — but it's load-bearing for evals + debugging memos
+    that look wrong + tool-gap discovery.
+
+    One row per memo run (or per chat turn that routes through the SDK).
+    `new_items` carries the raw SDK item stream (handoffs, tool calls,
+    reasoning steps); the admin trace viewer joins this against
+    `LLMCallLog` rows by `run_id` so reviewers can see SDK reasoning + the
+    deterministic graph's calls in the same timeline.
+
+    GC: rows older than 90 days are deleted by the same daily monitoring
+    job that cleans `LLMCallLog`. Rows are bigger (`new_items` JSON), so
+    don't keep them forever.
+    """
+    __tablename__ = "sdk_traces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    ticker: Mapped[Optional[str]] = mapped_column(String(16), index=True, nullable=True)
+    # Source surface: "memo" (run_stock_memo path) or "chat" (freeform Q&A).
+    surface: Mapped[str] = mapped_column(String(16), default="memo", index=True)
+    final_output: Mapped[str] = mapped_column(Text, default="")
+    # Raw SDK item stream serialized to JSON. Format is provider-defined; we
+    # don't constrain it here so model upgrades that add fields don't require
+    # a migration.
+    new_items: Mapped[list] = mapped_column(JSON, default=list)
+    error: Mapped[str] = mapped_column(Text, default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True,
+    )
+
+
+Index("ix_sdk_trace_run", SDKTrace.run_id, SDKTrace.generated_at)
+
+
+class UILog(Base):
+    """Append-only trace of UI activity + backend HTTP requests.
+
+    Frontend posts route changes, API calls (with duration + status),
+    button clicks, and uncaught errors here via `POST /api/admin/ui-log`.
+    Backend middleware also writes a row per request so server-side
+    traces and client-side actions sit in one queryable timeline.
+
+    Schema is intentionally loose — `payload` carries arbitrary JSON
+    so new event kinds can ship without migrations.
+    """
+    __tablename__ = "ui_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    source: Mapped[str] = mapped_column(String(16), default="frontend")  # frontend | backend
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    # Common dimensions surfaced as columns for cheap filtering; everything
+    # else (request body, error stack, etc.) rides in `payload`.
+    path: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, index=True)
+    method: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    status_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+Index("ix_ui_log_ts_kind", UILog.ts, UILog.kind)
 
 
 # ---------------------------------------------------------------------------

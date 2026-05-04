@@ -15,6 +15,7 @@ from .base import ProviderStatus
 
 log = logging.getLogger(__name__)
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+TICKER_LOOKUP_URL = "https://www.sec.gov/files/company_tickers.json"
 TIMEOUT = 10.0
 
 
@@ -23,6 +24,10 @@ class SECEdgarProvider:
 
     def __init__(self) -> None:
         self.user_agent = settings.sec_user_agent
+        # Cache the ticker→CIK map for the lifetime of the process. SEC
+        # publishes one big JSON of every registered ticker; one fetch
+        # serves the whole S&P 100 lookup.
+        self._ticker_cik_map: Optional[Dict[str, str]] = None
 
     def status(self) -> ProviderStatus:
         return ProviderStatus(
@@ -36,7 +41,35 @@ class SECEdgarProvider:
     def _headers(self) -> Dict[str, str]:
         return {"User-Agent": self.user_agent, "Accept": "application/json"}
 
+    def lookup_cik(self, ticker: str) -> Optional[str]:
+        """Resolve a ticker to its CIK via SEC's public ticker map.
+
+        First call hits the network; subsequent calls hit an in-process
+        cache. Returns the 10-digit zero-padded CIK string, or None if
+        the ticker isn't registered with the SEC.
+        """
+        ticker = ticker.upper().replace(".", "-")  # SEC uses BRK-B format
+        if self._ticker_cik_map is None:
+            try:
+                with httpx.Client(timeout=TIMEOUT, headers=self._headers()) as client:
+                    r = client.get(TICKER_LOOKUP_URL)
+                    if r.status_code != 200:
+                        log.warning("SEC ticker lookup -> %s", r.status_code)
+                        return None
+                    data = r.json()
+                # Shape: {"0": {"cik_str": 320193, "ticker": "AAPL", "title": "..."}, ...}
+                self._ticker_cik_map = {
+                    str(row["ticker"]).upper(): str(row["cik_str"]).zfill(10)
+                    for row in data.values()
+                }
+            except Exception as exc:  # pragma: no cover
+                log.warning("SEC ticker map fetch failed: %s", exc)
+                return None
+        return self._ticker_cik_map.get(ticker)
+
     def get_filings(self, ticker: str, *, cik: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+        if not cik:
+            cik = self.lookup_cik(ticker)
         if not cik:
             return None
         try:

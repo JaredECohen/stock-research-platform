@@ -13,6 +13,25 @@ log = logging.getLogger(__name__)
 BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 TIMEOUT = 10.0
 
+# Curated macro catalog. Editable here without touching consumers.
+# Each entry: (series_id, display_name, units). Points are fetched
+# on demand via `get_macro_series(series_id)`.
+_MACRO_CATALOG: List[Dict[str, str]] = [
+    {"series_id": "FEDFUNDS", "name": "Federal Funds Rate", "units": "%"},
+    {"series_id": "DGS2", "name": "2-Year Treasury", "units": "%"},
+    {"series_id": "DGS10", "name": "10-Year Treasury", "units": "%"},
+    {"series_id": "DGS30", "name": "30-Year Treasury", "units": "%"},
+    {"series_id": "CPIAUCSL", "name": "Headline CPI YoY", "units": "%"},
+    {"series_id": "CORESTICKM159SFRBATL", "name": "Sticky Core CPI YoY", "units": "%"},
+    {"series_id": "PCEPI", "name": "PCE Inflation YoY", "units": "%"},
+    {"series_id": "UNRATE", "name": "Unemployment Rate", "units": "%"},
+    {"series_id": "PAYEMS", "name": "Nonfarm Payrolls", "units": "thousand"},
+    {"series_id": "GDPC1", "name": "Real GDP YoY", "units": "%"},
+    {"series_id": "RSAFS", "name": "Retail Sales YoY", "units": "%"},
+    {"series_id": "BAMLH0A0HYM2", "name": "High-Yield Spread", "units": "%"},
+    {"series_id": "DCOILWTICO", "name": "Oil Price (WTI)", "units": "$/bbl"},
+]
+
 
 class FREDProvider:
     name: str = "fred"
@@ -52,6 +71,10 @@ class FREDProvider:
         except Exception as exc:  # pragma: no cover
             log.warning("FRED fetch failed: %s", exc)
             return None
+
+    def list_macro_series(self) -> List[Dict[str, Any]]:
+        """Return the curated catalog metadata. Points fetched per series."""
+        return [dict(c, points=[]) for c in _MACRO_CATALOG]
 
     # Stubs for other BaseProvider methods
     def get_company_profile(self, ticker: str): return None

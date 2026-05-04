@@ -9,7 +9,25 @@ from ..schemas import AgentFinding
 from . import llm, prompts
 
 
-def run_earnings_agent(profile: Dict, transcript: Optional[Dict], earnings: Optional[Dict]) -> AgentFinding:
+def _critique_block(question: Optional[str]) -> str:
+    """Wave 9 — prepend this to a specialist's user prompt when the
+    deep-research loop is asking a follow-up question."""
+    if not question:
+        return ""
+    return (
+        "\n\n## PM FOLLOW-UP (deep-research round)\n"
+        "A senior PM reviewed your prior round and asked: "
+        f"{question}\n"
+        "Address it directly with specific evidence (numbers, "
+        "filing/transcript quotes). Do NOT contradict your prior "
+        "finding without articulating what changed your read.\n"
+    )
+
+
+def run_earnings_agent(
+    profile: Dict, transcript: Optional[Dict], earnings: Optional[Dict],
+    *, prior_round_critique: Optional[str] = None,
+) -> AgentFinding:
     if not transcript:
         return AgentFinding(
             agent="Earnings Analyst",
@@ -36,6 +54,7 @@ def run_earnings_agent(profile: Dict, transcript: Optional[Dict], earnings: Opti
     # Tool-agent role — uses OPENAI_TOOL_MODEL (gpt-5.4 by default).
     llm_out = llm.chat_json(
         prompts.EARNINGS_ANALYST_PROMPT
+        + _critique_block(prior_round_critique)
         + (("\n\n" + notes_block) if notes_block else "")
         + "\n\nTranscript context:\n" + json.dumps(payload, default=str),
         system=prompts.PM_SYSTEM, route="cheap",

@@ -14,14 +14,42 @@ import type {
   ScreenerResult,
   StockMemoOut,
 } from "@/types";
+import { getSessionId, logEvent } from "@/lib/logger";
 
 const BASE = (import.meta.env.VITE_BACKEND_URL as string | undefined) || "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
+  const method = (init?.method || "GET").toUpperCase();
+  // Don't trace the trace endpoint — would self-recurse on every flush.
+  const trace = !path.startsWith("/api/admin/ui-log");
+  const started = performance.now();
+  let res: Response | null = null;
+  let errorMsg: string | undefined;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      headers: {
+        "Content-Type": "application/json",
+        // Match the session header the backend middleware reads.
+        "X-Session-Id": getSessionId(),
+      },
+      ...init,
+    });
+  } catch (e) {
+    errorMsg = (e as Error).message;
+    throw e;
+  } finally {
+    if (trace) {
+      const duration_ms = Math.round(performance.now() - started);
+      logEvent({
+        kind: "api_call",
+        path,
+        method,
+        status_code: res?.status,
+        duration_ms,
+        payload: errorMsg ? { network_error: errorMsg } : {},
+      });
+    }
+  }
   if (!res.ok) {
     const text = await res.text();
     // Tag 409 (data-only ticker requires ondemand) so callers can detect it
@@ -74,13 +102,27 @@ export const api = {
       `/api/stocks/${ticker}/prices?days=${days}`,
     ),
 
-  screener: (params?: { theme?: string; sector?: string; limit?: number }) => {
+  screener: (params?: {
+    theme?: string;
+    sector?: string;
+    sort_by?: string;
+    order?: "asc" | "desc";
+    limit?: number;
+  }) => {
     const q = new URLSearchParams();
     if (params?.theme) q.set("theme", params.theme);
     if (params?.sector) q.set("sector", params.sector);
+    if (params?.sort_by) q.set("sort_by", params.sort_by);
+    if (params?.order) q.set("order", params.order);
     if (params?.limit) q.set("limit", String(params.limit));
     return request<ScreenerResult>(`/api/screener?${q.toString()}`);
   },
+
+  customScreener: (req: import("@/types").CustomScreenRequest) =>
+    request<import("@/types").CustomScreenResult>("/api/screener/custom", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
 
   chat: (message: string) =>
     request<ChatResponse>("/api/chat", {
@@ -90,6 +132,29 @@ export const api = {
 
   dcfDefaults: (ticker: string) =>
     request<DCFAssumptions>(`/api/dcf/${ticker}/default-assumptions`),
+  dcfConsensus: (ticker: string) =>
+    request<{
+      ticker: string;
+      consensus_revenue_growth: number[] | null;
+      trailing_op_margin: number | null;
+      has_consensus: boolean;
+    }>(`/api/dcf/${ticker}/consensus`),
+  dcfSaved: (ticker: string) =>
+    request<{
+      has_saved: boolean;
+      ticker: string;
+      version?: number;
+      trigger?: string;
+      parent_version?: number | null;
+      generated_at?: string;
+      assumption_changes?: Array<{
+        field: string;
+        from: unknown;
+        to: unknown;
+        rationale: string;
+      }>;
+      assumptions?: DCFAssumptions;
+    }>(`/api/dcf/${ticker}/saved`),
   runDCF: (ticker: string, assumptions: DCFAssumptions) =>
     request<DCFResult>(`/api/dcf/${ticker}`, { method: "POST", body: JSON.stringify(assumptions) }),
 

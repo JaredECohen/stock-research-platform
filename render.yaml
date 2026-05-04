@@ -1,0 +1,58 @@
+databases:
+  - name: marketmosaic-db
+    plan: basic-256mb
+    databaseName: marketmosaic
+    user: marketmosaic
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: marketmosaic
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    autoDeploy: true
+    domains:
+      - marketmosaic.ai
+      - www.marketmosaic.ai
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marketmosaic-db
+          property: connectionString
+
+      - key: APP_ENV
+        value: production
+      - key: USE_DEMO_DATA
+        value: "false"
+      - key: BACKEND_HOST
+        value: 0.0.0.0
+      - key: BACKEND_PORT
+        value: "8000"
+      - key: PORT
+        value: "8000"
+      - key: FRONTEND_URL
+        value: https://marketmosaic.ai
+      - key: CORS_ORIGINS
+        value: https://marketmosaic.ai,https://www.marketmosaic.ai
+
+      # Secrets — set values in the Render dashboard, not in this file.
+      - key: SEC_USER_AGENT
+        sync: false
+      - key: FMP_API_KEY
+        sync: false
+      - key: FRED_API_KEY
+        sync: false
+      - key: ALPHA_VANTAGE_API_KEY
+        sync: false
+      - key: POLYGON_API_KEY
+        sync: false
+      - key: TIINGO_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

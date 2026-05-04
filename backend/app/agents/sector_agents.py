@@ -281,7 +281,10 @@ def _deterministic_bull_bear_analysis(
     )
 
 
-def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
+def run_sector_agent(
+    profile: Dict, ratios: Dict, *,
+    prior_round_critique: Optional[str] = None,
+) -> AgentFinding:
     """Produce a deeply researched sector view.
 
     Phase 6: subscribes to the latest MacroBroadcast and pending NewsAlerts,
@@ -364,6 +367,22 @@ def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
         "sector", profile, extra_query=regime,
     )
 
+    # Wave 9: PM follow-up question (when this is a critique-loop re-fire).
+    # Prepended to the prompt so the LLM addresses it directly while still
+    # producing a complete sector finding.
+    critique_block = ""
+    if prior_round_critique:
+        critique_block = (
+            "\n\n## PM FOLLOW-UP (deep-research round)\n"
+            "A senior PM has reviewed your prior round's finding and "
+            "asked for additional depth on this specific question. "
+            "Address it directly with cohort math, ratio references, or "
+            "filing/transcript quotes. Do NOT contradict the prior "
+            "finding without articulating exactly what changed your "
+            "read.\n\n"
+            f"PM follow-up: {prior_round_critique}\n"
+        )
+
     user_prompt = (
         prompts.SECTOR_ANALYST_PROMPT.format(
             sector=sector,
@@ -374,6 +393,7 @@ def run_sector_agent(profile: Dict, ratios: Dict) -> AgentFinding:
             macro_broadcast=json.dumps(macro_broadcast, default=str)[:600] or "{}",
             news_alerts=json.dumps(news_alerts, default=str)[:600] or "[]",
         )
+        + critique_block
         + ("\n\nPrior context from long-term memory (use to inform but do not over-anchor):\n"
            + memory_context if memory_context else "")
         + (("\n\n" + research_notes_block) if research_notes_block else "")
