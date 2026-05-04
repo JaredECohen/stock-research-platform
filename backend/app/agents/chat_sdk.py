@@ -142,32 +142,166 @@ def _build_chat_agent() -> Optional[Any]:
                 ),
             }
 
+        @function_tool
+        def get_company_lite(ticker: str) -> Dict[str, Any]:
+            """Return a compact company dossier — sector / industry /
+            market cap / business description plus screener-tier metrics
+            (P/E, ROIC, margins, growth) and AI-ranked factor scores.
+            Use this when the user asks about a name we DON'T have a
+            full memo for yet, or when answering comparative questions
+            ('which has the best margins?', 'what's the moat?'). This
+            doesn't trigger an analysis run — purely a database read."""
+            from .orchestrator import _company_lite_snapshot
+            snap = _company_lite_snapshot((ticker or "").upper())
+            if snap is None:
+                return {"error": f"{ticker} not in companies table — outside curated universe."}
+            return snap
+
+        @function_tool
+        def list_universe(sector: Optional[str] = None) -> Dict[str, Any]:
+            """List the curated screener universe (S&P 100). Optionally
+            filter by sector ('Technology', 'Healthcare', etc.). Use
+            when the user asks "what stocks does the platform cover" or
+            "show me tech names available"."""
+            from ..database import SessionLocal
+            from ..models import Company
+            with SessionLocal() as db:
+                query = db.query(Company).filter(Company.universe_tier == "auto_analysis")
+                if sector:
+                    from sqlalchemy import func as _f
+                    query = query.filter(_f.lower(Company.sector) == sector.lower())
+                rows = query.all()
+                return {
+                    "count": len(rows),
+                    "tickers": [
+                        {"ticker": c.ticker, "company_name": c.company_name, "sector": c.sector}
+                        for c in rows
+                    ],
+                }
+
+        @function_tool
+        def screener_query(
+            sort_by: Optional[str] = None,
+            sector: Optional[str] = None,
+            theme: Optional[str] = None,
+            limit: int = 10,
+        ) -> Dict[str, Any]:
+            """Fetch the AI-ranked screener results. `sort_by` ∈ {pm_score,
+            quality, growth, valuation, earnings_momentum, risk,
+            macro_fit}; default pm_score. Use when the user asks for
+            'top compounders', 'cheapest names', 'highest growth in
+            tech', etc. Returns up to `limit` rows with the full factor
+            score breakdown for each."""
+            from ..services.screener_service import compute_universe_scores
+            try:
+                result = compute_universe_scores(theme=theme)
+            except Exception as exc:
+                return {"error": f"screener failed: {exc}"}
+            rows = result.rows
+            if sector:
+                rows = [r for r in rows if sector.lower() in (r.sector or "").lower()]
+            allowed = {
+                "pm_score", "quality", "growth", "valuation",
+                "earnings_momentum", "risk", "macro_fit",
+            }
+            key = sort_by if sort_by in allowed else "pm_score"
+            rows = sorted(rows, key=lambda r: getattr(r, key, 0) or 0, reverse=True)
+            return {
+                "sort_by": key,
+                "sector_filter": sector,
+                "theme": theme,
+                "count": len(rows),
+                "rows": [
+                    {
+                        "ticker": r.ticker, "name": r.company_name, "sector": r.sector,
+                        "pm_score": r.pm_score, "quality": r.quality, "growth": r.growth,
+                        "valuation": r.valuation, "risk": r.risk,
+                        "thesis": r.one_line_thesis,
+                    }
+                    for r in rows[:limit]
+                ],
+            }
+
+        @function_tool
+        def custom_screen(rules_json: str, limit: int = 10) -> Dict[str, Any]:
+            """Run a rule-based custom screen against the 15-metric raw
+            snapshot table. `rules_json` is a JSON-encoded list of
+            `{"metric": "...", "op": "...", "value": ...}` rules
+            (AND-combined). Metrics: pe_ttm, ev_ebitda, ev_revenue,
+            gross_margin, op_margin, fcf_margin, roic, roe,
+            debt_to_ebitda, revenue_growth_yoy, market_cap, beta. Ops:
+            >, <, >=, <=, =, between (with value2). Use when the user
+            asks for stocks meeting numeric thresholds ('gross margin
+            > 70% and P/E < 25')."""
+            try:
+                rules = json.loads(rules_json) if isinstance(rules_json, str) else rules_json
+            except Exception as exc:
+                return {"error": f"rules_json must be a JSON list: {exc}"}
+            from ..schemas import CustomScreenRequest
+            from ..api.routes_screener import run_custom_screen
+            try:
+                req = CustomScreenRequest(rules=rules, limit=limit)
+                result = run_custom_screen(req)
+            except Exception as exc:
+                return {"error": f"custom_screen failed: {exc}"}
+            return {
+                "matched": result.matched,
+                "rule_count": result.rule_count,
+                "rows": [r.model_dump() for r in result.rows],
+            }
+
         return Agent(
             name="chat-pm",
             instructions=(
-                "You are MarketMosaic's PM answering a follow-up question "
-                "from a research user who has already seen full memos for "
-                "the tickers they're discussing. You have four tools — "
-                "call them as needed to fetch the data you cite. "
-                "Discipline:\n"
-                "1. ALWAYS call `get_memo(ticker)` first for any name "
-                "   the user asks about — that's where rating, score, "
-                "   thesis, and key risks live.\n"
-                "2. Reach for `get_dcf_summary` when the user asks "
-                "   valuation mechanics; `get_comps` for peer-relative; "
-                "   `get_macro_snapshot` for regime / rate questions.\n"
-                "3. Quote SPECIFIC NUMBERS (rating, stock score, DCF "
-                "   upside, factor scores). Do NOT invent data.\n"
-                "4. When the user asks 'which should I buy' on multiple "
-                "   names, give a directional answer grounded in the "
-                "   metrics, then add ONE sentence on what would change "
-                "   your view.\n"
-                "5. Always end with the disclaimer: '_MarketMosaic is "
-                "   for research and education only and does not provide "
-                "   personalized financial advice._'"
+                "You are MarketMosaic's PM. The user is doing equity "
+                "research and may ask anything from 'analyze NVDA' to "
+                "'which software names have the strongest moats' to "
+                "'what changed for ADBE in the latest 10-K'. You have "
+                "tools — call them aggressively to fetch grounding "
+                "data, then reason out loud over the numbers. "
+                "Tool playbook:\n"
+                "  • `get_memo(ticker)` — full memo with rating, score, "
+                "    DCF, factor scores, key risks. Try first when the "
+                "    user names a specific ticker.\n"
+                "  • `get_company_lite(ticker)` — fast dossier when no "
+                "    memo exists yet (sector, business desc, raw "
+                "    metrics, factor scores). Good for comparative "
+                "    questions across many names.\n"
+                "  • `get_dcf_summary(ticker)` — bull/base/bear prices "
+                "    + assumptions + PM adjustments.\n"
+                "  • `get_comps(ticker)` — peer set, target vs peer "
+                "    median, premium/discount on each multiple.\n"
+                "  • `get_macro_snapshot()` — current FRED macro + "
+                "    regime broadcast.\n"
+                "  • `list_universe(sector?)` — what tickers are "
+                "    available, optionally filtered by sector.\n"
+                "  • `screener_query(sort_by, sector?, theme?, limit)` — "
+                "    AI-ranked list. Use for 'top compounders', "
+                "    'cheapest software', 'highest growth healthcare'.\n"
+                "  • `custom_screen(rules_json, limit)` — strict "
+                "    rule-based filter on raw metrics. Use when the "
+                "    user gives numeric thresholds ('gross margin > "
+                "    70% and P/E < 25').\n"
+                "Style:\n"
+                "  • Quote SPECIFIC numbers (rating, stock score, DCF "
+                "    upside, factor scores, margins, growth). Don't "
+                "    invent.\n"
+                "  • For comparative questions, rank candidates with "
+                "    one-sentence justifications grounded in the data.\n"
+                "  • For 'which should I buy', give a directional "
+                "    answer grounded in metrics + one sentence on "
+                "    what would change your view.\n"
+                "  • If a tool returns `error`, briefly explain the "
+                "    limitation and proceed with what you have.\n"
+                "  • Always end: '_MarketMosaic is for research and "
+                "    education only and does not provide personalized "
+                "    financial advice._'"
             ),
             model=settings.openai_pm_model,
-            tools=[get_memo, get_dcf_summary, get_comps, get_macro_snapshot],
+            tools=[
+                get_memo, get_dcf_summary, get_comps, get_macro_snapshot,
+                get_company_lite, list_universe, screener_query, custom_screen,
+            ],
         )
     except Exception as exc:
         log.warning("chat-SDK agent build failed: %s", exc)
