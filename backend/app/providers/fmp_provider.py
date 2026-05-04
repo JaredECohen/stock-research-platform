@@ -308,18 +308,32 @@ class FMPProvider:
         """`/stable/analyst-estimates?symbol=…&period=annual` — sell-side
         consensus for the next few fiscal years (revenue + EPS Avg/Low/High
         + analyst counts). Plus `/price-target-consensus` for target-price
-        averages."""
+        averages.
+
+        Output includes both the rich `annual` rows and the legacy
+        `revenue` / `revenue_growth` keys consumed by
+        `finance.dcf._consensus_growth_path`, so DCF defaults pick up
+        consensus growth without per-call bridging.
+        """
         data = self._get(
             "/analyst-estimates",
-            symbol=ticker.upper(), period="annual", limit=4,
+            symbol=ticker.upper(), period="annual", limit=6,
         )
         if not isinstance(data, list):
             data = []
+        # FMP returns most-recent-first; flip to chronological so YoY
+        # deltas land in order downstream.
+        ascending = list(reversed(data))
         years: List[Dict[str, Any]] = []
-        for r in data:
+        revenue_rows: List[Dict[str, Any]] = []
+        revenue_growth: List[float] = []
+        prev_rev: Optional[float] = None
+        for r in ascending:
+            period = r.get("date") or ""
+            rev_avg = _to_float(r.get("revenueAvg"))
             years.append(dict(
-                period=r.get("date") or "",
-                revenue_avg=_to_float(r.get("revenueAvg")),
+                period=period,
+                revenue_avg=rev_avg,
                 revenue_low=_to_float(r.get("revenueLow")),
                 revenue_high=_to_float(r.get("revenueHigh")),
                 eps_avg=_to_float(r.get("epsAvg")),
@@ -328,6 +342,11 @@ class FMPProvider:
                 num_analysts_revenue=r.get("numAnalystsRevenue"),
                 num_analysts_eps=r.get("numAnalystsEps"),
             ))
+            if rev_avg is not None:
+                revenue_rows.append(dict(period=period, value=rev_avg))
+                if prev_rev is not None and prev_rev > 0:
+                    revenue_growth.append((rev_avg - prev_rev) / prev_rev)
+                prev_rev = rev_avg
         # Consensus target price.
         ptc_data = self._get("/price-target-consensus", symbol=ticker.upper())
         target = None
@@ -340,7 +359,12 @@ class FMPProvider:
             )
         if not years and not target:
             return None
-        return dict(annual=years, price_target=target)
+        return dict(
+            annual=years,
+            revenue=revenue_rows,             # legacy shape: dcf._consensus_growth_path reads this
+            revenue_growth=revenue_growth,    # already-derived YoY deltas
+            price_target=target,
+        )
 
     # ------------------------------------------------------------------
     # News

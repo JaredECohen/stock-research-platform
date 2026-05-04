@@ -78,25 +78,41 @@ def get(
 
 
 def put(capability: str, key: str, payload: Any) -> None:
-    """Upsert a cache row. No-op when payload is empty (None / [] / {})."""
+    """Upsert a cache row. No-op when payload is empty (None / [] / {}).
+
+    Race-safe: when two callers miss the cache simultaneously and both
+    try to INSERT, the second one would otherwise blow up the unique
+    index on `(capability, key)`. We retry as an UPDATE on
+    IntegrityError so concurrent screener / memo runs don't 500.
+    """
     if payload in (None, [], {}):
         return
-    with SessionLocal() as db:
-        existing = db.execute(
-            select(ProviderCache).where(
-                ProviderCache.capability == capability,
-                ProviderCache.key == key,
-            )
-        ).scalar_one_or_none()
-        if existing is None:
-            db.add(ProviderCache(
-                capability=capability, key=key,
-                payload_json=payload, fetched_at=datetime.utcnow(),
-            ))
-        else:
-            existing.payload_json = payload
-            existing.fetched_at = datetime.utcnow()
-        db.commit()
+    from sqlalchemy.exc import IntegrityError
+    for attempt in range(2):
+        try:
+            with SessionLocal() as db:
+                existing = db.execute(
+                    select(ProviderCache).where(
+                        ProviderCache.capability == capability,
+                        ProviderCache.key == key,
+                    )
+                ).scalar_one_or_none()
+                if existing is None:
+                    db.add(ProviderCache(
+                        capability=capability, key=key,
+                        payload_json=payload, fetched_at=datetime.utcnow(),
+                    ))
+                else:
+                    existing.payload_json = payload
+                    existing.fetched_at = datetime.utcnow()
+                db.commit()
+            return
+        except IntegrityError:
+            # Second insert lost the race — fall through to retry as
+            # update. One retry is enough; if it fails again, surface.
+            if attempt == 1:
+                raise
+            continue
 
 
 def invalidate(capability: str, key: Optional[str] = None) -> int:

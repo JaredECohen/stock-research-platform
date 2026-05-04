@@ -1,17 +1,17 @@
 {
   "_doc": "S&P 100 (OEX) constituents — the curated screener universe. Every ticker here is pre-analyzed nightly so the screener returns instant results. Researched-but-not-listed tickers live on the Research page only and do not appear in the screener. List is a static snapshot; review and update periodically (S&P revises constituents a few times per year). Last reviewed: 2026-05.",
+  "_dual_class_policy": "When a company has multiple share classes in the index (Alphabet GOOG/GOOGL, Berkshire BRK.A/BRK.B), we list only one ticker per company. FMP's per-class market_cap is inconsistent for these (GOOG returns ~2x GOOGL's market cap despite identical fundamentals), which would distort every price-derived metric. Picked GOOGL (Class A, voting) and BRK.B (lower-priced, more retail-tradeable) as the canonical tickers.",
   "as_of": "2026-05",
   "tickers": [
     "AAPL", "ABBV", "ABT", "ACN", "ADBE", "AIG", "AMD", "AMGN", "AMT", "AMZN",
     "AVGO", "AXP", "BA", "BAC", "BK", "BKNG", "BLK", "BMY", "BRK.B", "C",
     "CAT", "CHTR", "CL", "CMCSA", "COF", "COP", "COST", "CRM", "CSCO", "CVS",
     "CVX", "DE", "DHR", "DIS", "DUK", "EMR", "EXC", "F", "FDX", "GD",
-    "GE", "GILD", "GM", "GOOG", "GOOGL", "GS", "HD", "HON", "IBM", "INTC",
-    "ISRG", "JNJ", "JPM", "KHC", "KO", "LIN", "LLY", "LMT", "LOW", "MA",
-    "MCD", "MDLZ", "MDT", "MET", "META", "MMM", "MO", "MRK", "MS", "MSFT",
-    "NEE", "NFLX", "NKE", "NOW", "NVDA", "ORCL", "PEP", "PFE", "PG", "PM",
-    "PYPL", "QCOM", "RTX", "SBUX", "SCHW", "SO", "T", "TGT", "TMO", "TMUS",
-    "TSLA", "TXN", "UNH", "UNP", "UPS", "USB", "V", "VZ", "WFC", "WMT",
-    "XOM"
+    "GE", "GILD", "GM", "GOOGL", "GS", "HD", "HON", "IBM", "INTC", "ISRG",
+    "JNJ", "JPM", "KHC", "KO", "LIN", "LLY", "LMT", "LOW", "MA", "MCD",
+    "MDLZ", "MDT", "MET", "META", "MMM", "MO", "MRK", "MS", "MSFT", "NEE",
+    "NFLX", "NKE", "NOW", "NVDA", "ORCL", "PEP", "PFE", "PG", "PM", "PYPL",
+    "QCOM", "RTX", "SBUX", "SCHW", "SO", "T", "TGT", "TMO", "TMUS", "TSLA",
+    "TXN", "UNH", "UNP", "UPS", "USB", "V", "VZ", "WFC", "WMT", "XOM"
   ]
 }
