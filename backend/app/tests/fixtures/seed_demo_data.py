@@ -1,23 +1,45 @@
-"""Seeder: write demo dataset to JSON + database tables.
+"""Test-fixture seeder (Wave 9b — moved out of production).
 
-Idempotent — safe to run repeatedly. Used at app startup so the SQLite/Postgres
-instance has the company universe and pre-computed screener scores ready
-even on a cold start.
+Populates the SQLite DB with the deterministic demo dataset for unit
+tests. Production seeding lives in `app.seed_universe`. Tests that
+need pre-populated companies / screener scores / tier markings call
+`run_full_seed()` from this module after the `demo_provider` autouse
+fixture has registered the in-memory provider with `data_service`.
+
+Idempotent. The legacy `universe_tier1.json` was inlined as
+`_LEGACY_TIER1` so this fixture has no on-disk dependencies.
 """
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from .data.demo_dataset import build_dataset, export_to_disk
-from .database import init_db, session_scope
-from .models import Company, ScreenerScore
-from .services.screener_service import compute_universe_scores
+from ...database import init_db, session_scope
+from ...models import Company, ScreenerScore
+from ...services.screener_service import compute_universe_scores
+from .demo_dataset import build_dataset
 
 log = logging.getLogger(__name__)
+
+
+# Inlined from the retired `data/universe_tier1.json`. The 32-ticker
+# legacy universe used by the demo dataset; matches `COMPANY_PROFILES`
+# in `demo_dataset.py`. Tests that assert tier-1 membership read from
+# this constant.
+_LEGACY_TIER1: Set[str] = {
+    "NVDA", "AAPL", "MSFT", "PLTR", "AVGO", "AMD", "CRM",
+    "GOOGL", "META", "NFLX",
+    "AMZN", "TSLA", "HD", "MCD", "NKE", "SBUX",
+    "COST", "WMT",
+    "JPM", "V", "MA", "BAC", "GS", "MS",
+    "LLY", "JNJ", "MRK", "UNH",
+    "XOM",
+    "CAT",
+    "NEE",
+    "LIN",
+    "AMT",
+}
 
 
 def seed_companies(refresh: bool = False) -> int:
@@ -54,66 +76,41 @@ def seed_companies(refresh: bool = False) -> int:
     return n_written
 
 
-def _load_tier1_universe() -> Set[str]:
-    """Read the curated tier-1 watch list (sectors → tickers) into a flat set."""
-    path = Path(__file__).resolve().parent / "data" / "universe_tier1.json"
-    if not path.exists():
-        return set()
-    cfg = json.loads(path.read_text())
-    out: Set[str] = set()
-    for tickers in (cfg.get("sectors") or {}).values():
-        for t in tickers or []:
-            out.add(t.upper())
-    return out
-
-
 def seed_universe_tiers() -> Dict[str, int]:
-    """Mark tier-1 names as `auto_analysis`; everyone else stays `data_only`.
+    """Mark legacy tier-1 names as `auto_analysis`.
 
-    Idempotent. Safe to re-run after edits to `universe_tier1.json` — every
-    company's tier is reset on each pass except for `analyzed_on_demand`,
-    which we preserve as runtime state set by the on-demand-analysis flow.
-
-    Wave 8K — also scaffolds an empty memory file for every `auto_analysis`
-    ticker so the long-term memory directory is fully hooked up to the
-    universe from day one (rather than waiting for a delta event to
-    lazily create the file). Existing memory files are left alone.
+    Idempotent. `analyzed_on_demand` is preserved across calls (runtime
+    state set by the on-demand-analysis flow, not by this fixture).
     """
-    tier1 = _load_tier1_universe()
     counts: Dict[str, int] = {"auto_analysis": 0, "data_only": 0, "analyzed_on_demand": 0}
     auto_tickers: List[str] = []
     with session_scope() as db:
         for row in db.query(Company).all():
             current = row.universe_tier or "data_only"
-            if row.ticker in tier1:
+            if row.ticker in _LEGACY_TIER1:
                 row.universe_tier = "auto_analysis"
                 auto_tickers.append(row.ticker)
             elif current == "analyzed_on_demand":
-                # Keep on-demand promotion intact across seeds — that's
-                # runtime state set by the UI, not config.
                 pass
             else:
                 row.universe_tier = "data_only"
             counts[row.universe_tier] = counts.get(row.universe_tier, 0) + 1
-    # Scaffold memory files for fresh tier-1 names. Defensive — a disk
-    # hiccup must never block startup seeding.
     try:
-        from .config import settings
+        from ...config import settings
         if settings.enable_long_term_memory:
-            from .memory import CompanyMemory
+            from ...memory import CompanyMemory
             for t in auto_tickers:
                 cm = CompanyMemory.for_ticker(t)
                 if not cm.path.exists():
-                    cm.save()  # writes a well-formed but empty file
-    except Exception:  # pragma: no cover — diagnostic only
-        log.debug("memory scaffold skipped during universe seed")
+                    cm.save()
+    except Exception:  # pragma: no cover
+        log.debug("memory scaffold skipped during fixture seed")
     return counts
 
 
 def seed_screener_scores() -> int:
     result = compute_universe_scores(theme=None)
     with session_scope() as db:
-        # Wipe prior un-themed scores for cleanliness
         db.query(ScreenerScore).filter(ScreenerScore.theme.is_(None)).delete()
         for row in result.rows:
             db.add(ScreenerScore(
@@ -136,7 +133,6 @@ def seed_screener_scores() -> int:
 
 def run_full_seed() -> dict:
     init_db()
-    paths = export_to_disk()
     n_companies = seed_companies(refresh=True)
     tier_counts = seed_universe_tiers()
     n_scores = seed_screener_scores()
@@ -144,12 +140,11 @@ def run_full_seed() -> dict:
         companies=n_companies,
         universe_tiers=tier_counts,
         screener_rows=n_scores,
-        json_files=[str(p) for p in paths.values()],
     )
 
 
 if __name__ == "__main__":  # pragma: no cover
     logging.basicConfig(level=logging.INFO)
     summary = run_full_seed()
-    log.info("Seeded: %s", summary)
+    log.info("Test-fixture seeded: %s", summary)
     print(summary)
