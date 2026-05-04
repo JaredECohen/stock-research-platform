@@ -37,7 +37,12 @@ class Company(Base):
     isin: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     cusip: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     business_description: Mapped[str] = mapped_column(Text, default="")
-    fiscal_year_end: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    # String(16) — covers month names ("September" is 9 chars, longest is
+    # "September"). Earlier String(8) fit the demo dataset's abbreviated
+    # values but overflowed in Postgres for AAPL/V/SBUX (live FMP
+    # profiles emit the full month name). SQLite was tolerant; Postgres
+    # rejects with "value too long for type character varying(8)".
+    fiscal_year_end: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_etf: Mapped[bool] = mapped_column(Boolean, default=False)
     beta: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
