@@ -150,10 +150,19 @@ def get_stock_memo(
     if as_of_date is None:
         snap = memo_store.latest_memo(t)
         if snap is not None:
-            response.headers["X-Memo-Version"] = str(snap.version)
-            response.headers["X-Memo-Trigger"] = snap.trigger
-            response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
-            return memo_store.memo_to_pydantic(snap)
+            # Wave 9b — Phase 2d. Check if a 10-Q/K or earnings call has
+            # landed since this memo was generated; if so, recompute
+            # rather than serve a stale cached version.
+            freshness = memo_store.memo_freshness(snap)
+            if not freshness["stale"]:
+                response.headers["X-Memo-Version"] = str(snap.version)
+                response.headers["X-Memo-Trigger"] = snap.trigger
+                response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
+                response.headers["X-Memo-Source"] = "cache"
+                return memo_store.memo_to_pydantic(snap)
+            # Stale — fall through to a fresh run, advertising why.
+            response.headers["X-Memo-Stale-Reason"] = freshness["reason"]
+            response.headers["X-Memo-Stale-Trigger"] = freshness["trigger"] or ""
 
     # Wave 9b — lazy ticker introduction. If `t` isn't in the
     # `companies` table at all, this resolves it via the live profile

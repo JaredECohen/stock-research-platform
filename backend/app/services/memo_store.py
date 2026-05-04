@@ -166,6 +166,73 @@ def latest_memo(
             db.close()
 
 
+def memo_freshness(
+    memo: MemoSnapshot, *, db: Optional[Session] = None,
+) -> Dict[str, Any]:
+    """Return staleness verdict for `memo` (Wave 9b Phase 2d).
+
+    A memo is considered stale when a 10-Q / 10-K / 8-K filing has been
+    posted (`filing_date`) or a quarterly earnings call held
+    (`call_date`) after the memo was generated. The user-facing
+    "Re-run research" button bypasses this check; this function exists
+    for the auto-refresh path on memo reads.
+
+    Output:
+        {
+          "stale": bool,
+          "reason": str,           # human-readable trigger label
+          "trigger": Optional[str] # "new_filing" | "new_transcript" | None
+        }
+    """
+    from ..models import EarningsTranscript, FilingDoc
+    own = db is None
+    if own:
+        db = SessionLocal()
+    try:
+        cutoff = memo.generated_at
+        cutoff_date = cutoff.date() if hasattr(cutoff, "date") else cutoff
+        latest_filing = db.execute(
+            select(FilingDoc.filing_date, FilingDoc.filing_type, FilingDoc.accession_number)
+            .where(
+                FilingDoc.ticker == memo.ticker,
+                FilingDoc.filing_date.is_not(None),
+                FilingDoc.filing_date > cutoff_date,
+            )
+            .order_by(FilingDoc.filing_date.desc())
+            .limit(1)
+        ).first()
+        if latest_filing:
+            d, ftype, acc = latest_filing
+            return {
+                "stale": True,
+                "reason": f"new {ftype} on {d.isoformat()}",
+                "trigger": "new_filing",
+                "trigger_id": acc,
+            }
+        latest_transcript = db.execute(
+            select(EarningsTranscript.call_date, EarningsTranscript.period)
+            .where(
+                EarningsTranscript.ticker == memo.ticker,
+                EarningsTranscript.call_date.is_not(None),
+                EarningsTranscript.call_date > cutoff_date,
+            )
+            .order_by(EarningsTranscript.call_date.desc())
+            .limit(1)
+        ).first()
+        if latest_transcript:
+            d, period = latest_transcript
+            return {
+                "stale": True,
+                "reason": f"new transcript for {period} on {d.isoformat()}",
+                "trigger": "new_transcript",
+                "trigger_id": period,
+            }
+        return {"stale": False, "reason": "", "trigger": None, "trigger_id": None}
+    finally:
+        if own:
+            db.close()
+
+
 def memo_history(
     ticker: str, *, limit: int = 50, db: Optional[Session] = None,
 ) -> List[MemoSnapshot]:
