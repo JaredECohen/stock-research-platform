@@ -628,7 +628,12 @@ def chat_json(
     *,
     system: str = "",
     route: str = "cheap",
-    max_tokens: int = 800,
+    # Wave 9b — bumped from 800 → 1600. Specialist agents routinely
+    # emit 4-6KB of JSON (headline + multi-paragraph summary + 8-12
+    # key_points). 800 tokens was truncating responses mid-string,
+    # which `_extract_json` couldn't parse → caller fell through to
+    # deterministic stub. Per-call overrides still apply.
+    max_tokens: int = 1600,
     provider_override: Optional[str] = None,
     model: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:

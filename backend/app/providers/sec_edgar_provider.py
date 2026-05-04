@@ -208,10 +208,17 @@ class SECEdgarProvider:
         self, ticker: str, *, cik: Optional[str] = None,
         fetch_text: bool = True,
     ) -> Optional[List[Dict[str, Any]]]:
-        """Return the latest 10-K/10-Q/8-K metadata, with text body for
-        the latest 10-K and latest 10-Q (the highest-leverage forms for
-        agent context). 8-Ks stay metadata-only — they're short, plentiful,
-        and rarely thesis-relevant unless the news agent flags one.
+        """Return up to 10 recent filings with full text body.
+
+        Wave 9b — fetches the document body for every form returned
+        (latest 10-K, latest 10-Q, and recent 8-Ks). Earlier passes
+        skipped 8-K text on the assumption they were rarely thesis-
+        relevant; in practice they carry material disclosures
+        (M&A, executive changes, dividend / buyback announcements,
+        Regulation FD updates) that the news-impact agent cares about.
+
+        SEC limits to ~10 req/sec per User-Agent, so we pace at
+        RATE_LIMIT_SLEEP between document fetches. ~10 docs/ticker max.
 
         Pass `fetch_text=False` to skip the slow per-document fetches
         (used by `data_service._lookup_cik` which only needs the
@@ -257,19 +264,22 @@ class SECEdgarProvider:
         if not fetch_text:
             return results
 
-        # Fetch document body for the latest 10-K + latest 10-Q only —
-        # those are the high-leverage docs for memo context. SEC limits
-        # to ~10 req/sec; sleep between calls to stay under.
-        latest_10k = next((f for f in results if f["type"] == "10-K"), None)
-        latest_10q = next((f for f in results if f["type"] == "10-Q"), None)
-        for filing in (latest_10k, latest_10q):
-            if filing is None:
-                continue
+        # Fetch document body for every filing in the list. SEC limits
+        # to ~10 req/sec per User-Agent; sleep between calls to stay
+        # under. With max 10 filings × ~0.12s pacing = ~1.5s overhead
+        # per ticker on cold load (cached after that via provider_cache).
+        for filing in results:
             time.sleep(RATE_LIMIT_SLEEP)
             text = self.fetch_filing_text(filing["url"])
             if not text:
                 continue
             filing["raw_text"] = text
+            # Section extraction targets 10-K/10-Q Item-N headers; 8-Ks
+            # use a different structure (Item 2.02, Item 7.01, etc.)
+            # without long bodies, so the section dict will mostly stay
+            # empty and the agent reads `raw_text` directly. The Item
+            # headers for 8-Ks (e.g., "Item 8.01 Other Events") still
+            # land in the generic `item_*` keys for retrieval.
             sections, risks = _extract_sections(text)
             if sections.get("business_description"):
                 filing["business_description"] = sections["business_description"][:4000]

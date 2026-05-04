@@ -429,10 +429,11 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
         rating = "Very Bearish"
     confidence = max(40, min(85, 55 + 5 * abs(score)))
 
-    # Build a concrete deterministic thesis: company → sector / industry →
-    # primary growth driver → DCF upside (only when meaningfully signed).
-    # Avoids empty filler like "valuation triangulates around the DCF
-    # base" that doesn't actually communicate anything to the reader.
+    # Build a substantive deterministic thesis. Lead with company +
+    # sector, then weave in the dominant signal from the agent findings
+    # (cohort regime, valuation framing, narrative tension), and anchor
+    # with DCF upside. Avoids hollow filler like "compounder; DCF +X%"
+    # which says nothing about *why* the rating is what it is.
     drivers = profile.get("drivers") or []
     sector = (profile.get("sector") or "").strip()
     industry = (profile.get("industry") or "").strip()
@@ -441,14 +442,54 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
         sector_phrase = f"{sector} / {industry.lower()}"
     else:
         sector_phrase = (industry or sector or "core").lower()
-    if drivers:
-        head = f"{name} — {sector_phrase} name with leverage to {drivers[0]}"
+
+    # Pull a "why" hook from the agent findings. Order of preference:
+    #   sector regime → valuation framing → news/risk narrative → driver.
+    # Each finding's headline tends to lead with the punchy take; we
+    # extract the most distinctive phrase and stitch it in.
+    def _hook_from_finding(f: Optional[AgentFinding]) -> Optional[str]:
+        if f is None:
+            return None
+        head = (f.headline or "").strip()
+        # Sector headlines look like "<industry> cohort, regime: <X>".
+        # Strip the cohort prefix so the regime fragment lands cleanly.
+        if "regime:" in head.lower():
+            piece = head.split("regime:", 1)[1].strip()
+            piece = piece.split("·")[0].strip()  # drop concentration HHI
+            if piece:
+                return piece.rstrip(".,;").lower()
+        # Other findings: keep the headline if it looks substantive.
+        if 12 <= len(head) <= 140 and not head.endswith("highlights"):
+            return head.rstrip(".,;")
+        return None
+
+    hook = (
+        _hook_from_finding(findings.get("sector"))
+        or _hook_from_finding(findings.get("valuation"))
+        or _hook_from_finding(findings.get("news_impact"))
+        or _hook_from_finding(findings.get("risk"))
+    )
+
+    if drivers and hook:
+        head = f"{name} — {sector_phrase}, {hook}; key driver: {drivers[0]}"
+    elif drivers:
+        head = f"{name} — {sector_phrase} with leverage to {drivers[0]}"
+    elif hook:
+        head = f"{name} — {sector_phrase}, {hook}"
     else:
-        head = f"{name} — {sector_phrase} compounder"
+        head = f"{name} — {sector_phrase}"
+
+    # Anchor with DCF upside when meaningful.
     upside = dcf.base.upside_pct if dcf and dcf.base else None
     if upside is not None and abs(upside) >= 0.05:
         sign = "+" if upside > 0 else ""
-        head += f"; DCF base case {sign}{upside * 100:.0f}% to fair value"
+        if upside >= 0.20:
+            tail = f"DCF base case {sign}{upside * 100:.0f}% suggests material upside"
+        elif upside <= -0.20:
+            tail = f"DCF base case {upside * 100:.0f}% suggests material downside"
+        else:
+            tail = f"DCF base case {sign}{upside * 100:.0f}% to fair value"
+        head += f"; {tail}"
     thesis = head + "."
     pm_view = (
         f"Research view: {rating}. {thesis} "
