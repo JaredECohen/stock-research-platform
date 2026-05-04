@@ -16,19 +16,26 @@
 
 | Workflow | Page | Backed by |
 |---|---|---|
-| Single-stock memo (any ticker) | `/research` | `agents/graph.py::run_stock_memo` |
+| Single-stock memo (any ticker, with typeahead picker) | `/research` | `agents/graph.py::run_stock_memo` |
 | Three screener views — AI rank · factor rank · custom rule builder | `/screener` | `services/screener_service.py` + `services/screener_metrics_service.py` |
 | Editable DCF lab + sensitivity tables | `/dcf` | `finance/dcf.py` + `services/dcf_store.py` |
 | Comps with self-historical lens | `/comps` | `finance/comps.py` + `finance/comps_history.py` |
 | Macro scenario analysis | `/macro` | `agents/macro_agent.py` |
-| Conversational PM | `/chat` | `agents/orchestrator.py` |
+| Conversational PM (8 tools — memo / DCF / comps / macro / universe / screener / custom screen) | `/chat` | `agents/orchestrator.py` + `agents/chat_sdk.py` |
 | Scenario-based portfolio builder | `/portfolio` | `finance/portfolio_construction.py` |
 
-The **curated screener universe** is the S&P 100 (101 tickers including GOOG / GOOGL),
-pre-analyzed nightly. Any ticker outside it is researchable on demand: typing it into
-`/research` triggers a profile lookup, a 5-year financial backfill, and a full agent run.
-Subsequent reads are served from cache until a new 10-K / 10-Q / 8-K filing or earnings
-transcript invalidates the memo.
+The **curated screener universe** is the S&P 100, pre-analyzed nightly. Any ticker outside
+it is researchable on demand: typing it into `/research` triggers a profile lookup, a
+5-year financial backfill (including 10-K + 10-Q + 8-K body text from SEC EDGAR and four
+quarters of transcripts from Alpha Vantage), and a full agent run. Subsequent reads are
+served from cache until a new filing or earnings transcript invalidates the memo.
+
+The **PM chat** routes follow-up turns and conceptual questions ("which has the strongest
+moat?", "show me cheap software with margins above 70%") through an OpenAI Agents SDK
+agent with eight tools — `get_memo`, `get_dcf_summary`, `get_comps`, `get_macro_snapshot`,
+`get_company_lite`, `list_universe`, `screener_query`, `custom_screen`. Workflow handlers
+still fire for unambiguous first-message asks ("Analyze NVDA", "Build a 10-stock
+portfolio") so the heavy memo path runs only when the user wants it.
 
 ---
 
@@ -102,20 +109,27 @@ flowchart TB
 ### How a memo run flows end-to-end
 
 1. **Resolve.** User submits ticker `T`. If `T` already exists in `companies`, skip ahead.
-   Otherwise the route hits the live profile chain (FMP → AV → SEC for CIK), inserts an
-   `analyzed_on_demand` row, and runs `history_service.backfill_ticker(T)` so financials,
-   filings, and transcripts are loaded before any agent fires.
+   Otherwise the route hits the live profile chain (FMP `/stable/profile` → Alpha Vantage
+   `OVERVIEW` → SEC ticker map for CIK), inserts an `analyzed_on_demand` row, and runs
+   `history_service.backfill_ticker(T)` so financials (FMP `/stable/income-statement` etc.,
+   AV `INCOME_STATEMENT` fallback), filings (10-K + 10-Q + 8-K body text from SEC EDGAR;
+   `Item N` headers parsed into `business_description` / `mda` / `risk_factors`), and four
+   quarters of earnings call transcripts (AV `EARNINGS_CALL_TRANSCRIPT`) are loaded before
+   any agent fires.
 2. **Cached?** Existing memo + freshness check (`memo_store.memo_freshness`). A memo is
    **stale** iff a 10-K / 10-Q / 8-K filing or earnings transcript has landed since it was
    generated. Fresh memos return immediately with `X-Memo-Source: cache` headers.
 3. **Fan-out.** The orchestrator dispatches the eight specialist agents in parallel. Each
    emits a Pydantic-validated finding (headline, summary, signals, confidence, citations).
+   The filing analyst reads up to 12K chars of MD&A + 6K of risk factors per filing; the
+   earnings analyst reads up to 10K of prepared remarks + 8K of Q&A.
 4. **Critic.** Anthropic Opus 4.7 (cross-family critic) reviews the draft, surfaces
    challenges, and proposes targeted revisions. Specialists may re-fire when deep-research
    mode is on (`ENABLE_DEEP_RESEARCH=true`).
 5. **Synthesize.** The PM produces the final memo (rating, thesis, scenarios, risks). DCF is
    rebuilt and persisted as a new `dcf_models` version with an `assumption_changes` audit
-   trail.
+   trail. Bull / bear case fallbacks lift signal lines from agent findings rather than
+   demo-only profile fields, so live-data memos render real Tailwind / Headwind points.
 6. **Persist + reflect.** A new versioned `memo_snapshots` row is tagged with the trigger
    (`first_run` / `full_reanalysis` / `incremental_patch` / `force_refresh` / `scheduled`).
    Reflection writes deltas into `memory/companies/<TICKER>.md` for future runs to read.
@@ -171,7 +185,12 @@ schema (used in tests; production always has keys configured).
 
 ## Universe model
 
-Three tiers in the `companies.universe_tier` column:
+Three tiers in the `companies.universe_tier` column. Dual-class names (Alphabet GOOG /
+GOOGL, Berkshire BRK.A / BRK.B) are listed once — FMP returns inconsistent per-class
+market caps for the two classes, which would distort every price-derived metric. Picked
+GOOGL (Class A, voting) and BRK.B (lower-priced, more retail-tradeable) as the canonical
+tickers. See [`backend/app/data/sp100.json`](backend/app/data/sp100.json)
+`_dual_class_policy` for the rationale.
 
 | Tier | Population | How it's used |
 |---|---|---|
