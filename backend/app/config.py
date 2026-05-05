@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     # fan-out, the PM critique step asks 0-3 follow-up questions and has the
     # targeted specialists re-run with the question as additional prompt
     # context. Hard cap on rounds + questions per round bounds cost.
-    # Default-off — flip on per `docs/DEEP_RESEARCH_PLAN.md` Phase A
+    # Default-off — flip on per `docs/DEEP_RESEARCH_DESIGN.md` Phase A
     # eyeball-then-rollout sequence.
     enable_deep_research: bool = False
     deep_research_max_rounds: int = 3

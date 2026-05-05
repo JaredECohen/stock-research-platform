@@ -55,7 +55,7 @@ def compute_universe_scores(theme: Optional[str] = None) -> ScreenerResult:
 
     Wave 9b — research-on-demand and demoted-class tickers stay out of
     the screener (per the locked decision in
-    `docs/UNIVERSE_REFACTOR_PLAN.md`). They're still individually
+    `docs/UNIVERSE_DESIGN.md`). They're still individually
     researchable from the Research page.
     """
     from ..database import SessionLocal

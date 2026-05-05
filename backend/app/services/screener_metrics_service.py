@@ -1,7 +1,7 @@
 """Compute + persist per-ticker raw metrics for rule-based screening.
 
-Wave 9b Phase 4a. Snapshots the 15-metric vocabulary chosen in the plan
-(`docs/UNIVERSE_REFACTOR_PLAN.md` §6.3) into the `screener_metrics`
+Wave 9b Phase 4a. Snapshots the 15-metric vocabulary chosen in
+`docs/UNIVERSE_DESIGN.md` §6.3 into the `screener_metrics`
 table. Run nightly alongside `recompute_screener_scores()`; the custom
 screen endpoint reads directly from this table.
 

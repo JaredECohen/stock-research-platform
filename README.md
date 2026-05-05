@@ -294,8 +294,8 @@ curl localhost:8000/api/providers/status | jq .
 ```
 .
 ├── docs/
-│   ├── UNIVERSE_REFACTOR_PLAN.md   # latest plan + changelog
-│   ├── DEEP_RESEARCH_PLAN.md
+│   ├── UNIVERSE_DESIGN.md          # universe refactor design + changelog
+│   ├── DEEP_RESEARCH_DESIGN.md
 │   └── …
 ├── config.env                      # committed defaults
 ├── example.env                     # template for .env
@@ -373,8 +373,8 @@ timestamps via `/api/admin/monitoring/status`.
 
 ## Further reading
 
-- Plan + changelog for the universe refactor: [`docs/UNIVERSE_REFACTOR_PLAN.md`](docs/UNIVERSE_REFACTOR_PLAN.md)
-- Deep-research design: [`docs/DEEP_RESEARCH_PLAN.md`](docs/DEEP_RESEARCH_PLAN.md)
+- Universe refactor design + changelog: [`docs/UNIVERSE_DESIGN.md`](docs/UNIVERSE_DESIGN.md)
+- Deep-research design: [`docs/DEEP_RESEARCH_DESIGN.md`](docs/DEEP_RESEARCH_DESIGN.md)
 - Business / target-user framing: [`BUSINESS_ONE_PAGER.md`](BUSINESS_ONE_PAGER.md)
 
 ---

@@ -7,7 +7,7 @@ targeted specialist re-fires its runner with the question prepended
 to its prompt. Loop until the PM declares "no further questions" OR
 the round/question budget is exhausted.
 
-Design points (locked in `docs/DEEP_RESEARCH_PLAN.md`):
+Design points (locked in `docs/DEEP_RESEARCH_DESIGN.md`):
 - Round 0 is the existing fan-out — Wave 9 is strictly additive.
 - Re-fired agents make REAL LLM calls (no PM imagining their answers).
 - PM acts as senior analyst (asking dig-deeper questions), not adversarial
