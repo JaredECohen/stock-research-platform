@@ -6,6 +6,8 @@
 > lineage-aware memos with persistent DCF models, structured screening, and a long-term
 > memory that learns across runs.
 
+**Live at [marketmosaic.onrender.com](https://marketmosaic.onrender.com/).**
+
 > **Disclaimer.** Research and education only. No personalized financial / investment /
 > legal / tax advice. Model portfolios and stock analyses are illustrative and
 > scenario-based. Conduct your own diligence or consult a qualified advisor before acting.
