@@ -239,6 +239,47 @@ class AgentFinding(BaseModel):
     long_form_report: Optional[str] = None
 
 
+# Wave 10 — earnings structured extraction.
+
+class GuidanceChange(BaseModel):
+    metric: str  # e.g. "FY revenue", "Q4 op margin", "FY FCF"
+    prior: Optional[str] = None
+    current: Optional[str] = None
+    direction: Literal["raised", "lowered", "reaffirmed", "introduced", "withdrawn", "unclear"] = "unclear"
+    rationale: str = ""
+
+
+class ToneSignal(BaseModel):
+    speaker: str = ""  # e.g. "CEO", "CFO", "VP Finance"
+    segment: str = ""  # e.g. "AWS", "Search", "Auto"
+    classification: Literal["constructive", "measured", "cautious", "defensive", "evasive"] = "measured"
+    evidence: str = ""  # short transcript quote
+
+
+class QAThemeAnalysis(BaseModel):
+    theme: str
+    analyst: str = ""
+    response_quality: Literal["clear", "partial", "deflected", "evasive"] = "clear"
+
+
+class EarningsStructured(BaseModel):
+    """Wave 10 — typed extraction over the transcript.
+
+    Replaces the freeform `key_points` with a structure the UI can
+    render as cards (guidance timeline, tone trends, Q&A heatmap).
+    All fields default to empty so a partial LLM response still
+    validates.
+    """
+    period: str = ""
+    overall_tone: Literal["constructive", "measured", "cautious"] = "measured"
+    guidance_changes: List[GuidanceChange] = Field(default_factory=list)
+    tone_signals: List[ToneSignal] = Field(default_factory=list)
+    qa_themes: List[QAThemeAnalysis] = Field(default_factory=list)
+    most_defended_segment: Dict[str, str] = Field(default_factory=dict)  # {name, why}
+    most_pressed_segment: Dict[str, str] = Field(default_factory=dict)
+    forward_catalysts: List[Dict[str, str]] = Field(default_factory=list)  # [{event, expected_quarter, materiality}]
+
+
 class CriticReview(BaseModel):
     overall_assessment: str
     challenges: List[str] = Field(default_factory=list)
@@ -434,6 +475,12 @@ class CompsResult(BaseModel):
     # enough usable history for any metric (typical for a recent IPO or a
     # sparse demo dataset).
     history: Optional[CompsHistoryStats] = None
+    # Wave 10 — Track B exposure peers. Cross-sector names that share
+    # the target's key exposures (AI capex, China consumer, long-rate
+    # sensitivity, etc.) — picked at runtime by an LLM with theme-
+    # exposure fallback. Empty when no such peers were identified.
+    exposure_peers: List[CompsRow] = Field(default_factory=list)
+    exposure_rationale: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +527,28 @@ class PortfolioRequest(BaseModel):
     excluded_tickers: List[str] = Field(default_factory=list)
     desired_sectors: List[str] = Field(default_factory=list)
     horizon: Literal["short", "medium", "long"] = "medium"
+
+
+class PortfolioBrief(BaseModel):
+    """Wave 10 — structured brief extracted from a free-form market_view.
+
+    The user's prompt drives portfolio composition. Today's
+    `build_portfolio` only flexes via a 5-key scenario tag, which is
+    why two different prompts that hit the same scenario produce
+    nearly identical portfolios. This brief carries the *real* signal
+    in the prompt so the scoring weights, factor tilts, sector
+    targets, and constraints all flow from it.
+    """
+    horizon_years: int = 5  # 1, 3, 5, 10
+    risk: Literal["conservative", "balanced", "aggressive"] = "balanced"
+    themes: List[str] = Field(default_factory=list)
+    factor_tilts: Dict[str, float] = Field(default_factory=dict)  # 0-1 weights
+    sector_targets: Dict[str, float] = Field(default_factory=dict)  # sector → bias multiplier
+    exclusions: Dict[str, List[str]] = Field(default_factory=dict)  # {tickers: [...], sectors: [...]}
+    beta_target: Optional[float] = None
+    yield_target: Optional[float] = None
+    constraints: List[str] = Field(default_factory=list)  # e.g. "tax-efficient", "ESG-aware"
+    rationale: str = ""  # LLM's explanation of how it read the prompt
 
 
 class PortfolioHolding(BaseModel):
@@ -625,6 +694,20 @@ class TechnicalSignals(BaseModel):
     notes: List[str] = Field(default_factory=list)
 
 
+class MispricingThesis(BaseModel):
+    """The 'why is the market wrong' field — required output of the PM.
+
+    Wave 10. A serious retail user pays for the *mispricing* call, not
+    a metric recap. PM is required to fill these on every memo. Empty
+    strings are allowed (the PM can say 'no mispricing — fairly priced
+    on our work') but the structure must be present.
+    """
+    consensus_view: str = ""
+    our_view: str = ""
+    gap: str = ""
+    falsifiers: List[str] = Field(default_factory=list)
+
+
 class StockMemoOut(BaseModel):
     ticker: str
     company_name: str
@@ -633,6 +716,9 @@ class StockMemoOut(BaseModel):
     rating_label: RatingLabel
     confidence_score: float
     one_sentence_thesis: str
+    # Wave 10 — mispricing-first synthesis. Empty Mispricing() means the
+    # memo predates the schema or the PM declined to commit a view.
+    mispricing_thesis: MispricingThesis = Field(default_factory=MispricingThesis)
     business_summary: str
     sector_agent_view: AgentFinding
     earnings_agent_view: AgentFinding

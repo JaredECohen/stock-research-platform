@@ -74,6 +74,26 @@ def sector_memory_path(sector: str) -> Path:
     return _root() / "sectors" / f"{sector_slug(sector)}.md"
 
 
+def pm_memory_path() -> Path:
+    """Path to the PM's own brain file (`memory/pm/notes.md`).
+
+    Wave 10. The PM reads this on every synthesis + chat turn. Unlike
+    company / sector memory, this is a single shared file curated by
+    the PM agent itself across runs (investing principles, recent
+    macro takes, lessons from prior calls). Created lazily.
+    """
+    return _root() / "pm" / "notes.md"
+
+
+def macro_memory_path() -> Path:
+    """Path to the macro analyst's running notes (`memory/macro/notes.md`).
+
+    Wave 10. Per-week macro memory: dated entries summarizing the
+    regime view, key data releases, Fed-speech takeaways, confidence.
+    """
+    return _root() / "macro" / "notes.md"
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -444,6 +464,35 @@ class CompanyMemory(_MemoryFile):
         path = company_memory_path(ticker)
         loaded = cls.load(path, ticker.upper(), "company")
         # mypy/pylance: cast to CompanyMemory since load returns _MemoryFile
+        return loaded  # type: ignore[return-value]
+
+
+class PMMemory(_MemoryFile):
+    """The PM's own brain file (`memory/pm/notes.md`).
+
+    Wave 10. Read on every PM call (synthesis + chat). Sections:
+    investing principles, recent macro takes, lessons from prior
+    calls, theses currently in conviction. The PM agent is allowed
+    to *append* to this file — at session end, an "today I learned X"
+    entry. Long-term memory for the PM, not just for the companies.
+
+    Created lazily; an empty file is fine (caller injects nothing).
+    """
+
+    @classmethod
+    def load_pm(cls) -> "PMMemory":
+        path = pm_memory_path()
+        loaded = cls.load(path, "PM", "pm")
+        return loaded  # type: ignore[return-value]
+
+
+class MacroMemory(_MemoryFile):
+    """The macro analyst's running notes (`memory/macro/notes.md`)."""
+
+    @classmethod
+    def load_macro(cls) -> "MacroMemory":
+        path = macro_memory_path()
+        loaded = cls.load(path, "Macro", "macro")
         return loaded  # type: ignore[return-value]
 
 

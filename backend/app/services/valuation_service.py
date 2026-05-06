@@ -13,6 +13,7 @@ from .fundamentals_service import get_full_financials
 
 
 _PEERS_CACHE: Optional[Dict[str, List[str]]] = None
+_EXPOSURE_PEERS_TTL_SECONDS = 30 * 24 * 3600  # Wave 10 — refresh monthly
 
 
 def _peer_groups() -> Dict[str, List[str]]:
@@ -25,7 +26,126 @@ def _peer_groups() -> Dict[str, List[str]]:
 
 
 def get_peers(ticker: str) -> List[str]:
+    """Direct competitors — Track A in the two-track design.
+
+    Curated `peer_groups.json` (sub-industry / direct-competitor
+    style: biotech same-therapy peers, semis same-sub-segment, etc.).
+    """
     return _peer_groups().get(ticker.upper(), [])
+
+
+def get_exposure_peers(ticker: str, *, force_refresh: bool = False) -> List[str]:
+    """Cross-sector exposure peers — Track B in the two-track design.
+
+    Wave 10. The user's specific request: AMZN / GOOGL / MSFT all
+    share AI capex exposure even though they live in different GICS
+    sectors. This function asks an LLM "name 3-5 companies that share
+    material exposure to {ticker}'s key drivers, regardless of sector"
+    and caches the answer with a 30-day TTL on the company-warm cache
+    surface.
+
+    LLM-optional: when no API key is configured, returns the
+    intersection of `top_for_theme` for the ticker's strongest themes.
+    """
+    cache_key = "company_warm:exposure_peers"
+    if not force_refresh:
+        cached = cache_get(ticker.upper(), cache_key, max_age_seconds=_EXPOSURE_PEERS_TTL_SECONDS)
+        if cached and isinstance(cached.payload, dict):
+            peers = cached.payload.get("peers") or []
+            if isinstance(peers, list):
+                return [str(p).upper() for p in peers]
+
+    # Try the LLM path first.
+    peers: List[str] = _llm_exposure_peers(ticker.upper()) or []
+    if not peers:
+        peers = _theme_exposure_peers(ticker.upper())
+
+    cache_put(
+        ticker.upper(), cache_key,
+        payload={"peers": peers},
+        sources_used=[f"target:{ticker.upper()}"],
+        generated_by="valuation_service.get_exposure_peers",
+        cost_tokens=resolved_cost_tokens(15),
+        parent_snapshots=[],
+        ttl_seconds=_EXPOSURE_PEERS_TTL_SECONDS,
+    )
+    return peers
+
+
+def _llm_exposure_peers(ticker: str) -> List[str]:
+    """Ask the LLM to nominate 3-5 cross-sector exposure peers."""
+    try:
+        from ..config import settings as _settings
+        if not getattr(_settings, "openai_api_key", None):
+            return []
+        target = get_full_financials(ticker)
+        profile = target.get("profile") or {}
+        if not profile:
+            return []
+        from ..agents import llm
+        from ..database import SessionLocal
+        from ..models import Company
+        with SessionLocal() as db:
+            universe = [t for (t,) in db.query(Company.ticker).all()]
+        prompt = (
+            f"Target: {ticker} ({profile.get('company_name', '')}, "
+            f"{profile.get('sector', '')} / {profile.get('industry', '')}).\n"
+            f"Business: {(profile.get('business_description') or '')[:600]}\n\n"
+            "Name 3-5 companies that share material EXPOSURE with the "
+            "target — same key drivers (e.g. AI capex, China consumer, "
+            "long-rate sensitivity, GLP-1 disruption, energy "
+            "transition) — REGARDLESS of GICS sector. These should be "
+            "DIFFERENT from typical sub-industry peers and chosen "
+            "because they will be moved by the same forces. Pick "
+            "tickers from this universe only:\n"
+            f"{', '.join(universe)}\n\n"
+            "Return JSON: { \"peers\": [\"TICKER\", ...], \"rationale\": "
+            "\"<one sentence explaining the shared exposure thesis>\" }."
+        )
+        out = llm.chat_json(
+            prompt,
+            system="You are a buy-side PM. Pick non-obvious peers that share underlying drivers.",
+            route="cheap",
+        )
+        peers = (out or {}).get("peers") or []
+        return [
+            str(p).upper() for p in peers
+            if isinstance(p, str) and p.upper() != ticker
+        ][:5]
+    except Exception:  # pragma: no cover
+        return []
+
+
+def _theme_exposure_peers(ticker: str) -> List[str]:
+    """Fallback: pull peers via the theme_exposure table.
+
+    Take this ticker's top-3 themes; collect the top scorers in each;
+    return the unique set excluding self.
+    """
+    try:
+        from sqlalchemy import select
+        from ..database import SessionLocal
+        from ..models import ThemeExposure
+        from .theme_exposure_service import top_for_theme
+        with SessionLocal() as db:
+            rows = db.execute(
+                select(ThemeExposure)
+                .where(ThemeExposure.ticker == ticker.upper())
+                .order_by(ThemeExposure.score.desc())
+                .limit(3)
+            ).scalars().all()
+        peers: List[str] = []
+        for r in rows:
+            if r.score < 25.0:
+                continue
+            for top in top_for_theme(r.theme, min_score=25.0, limit=8):
+                if top["ticker"] != ticker.upper() and top["ticker"] not in peers:
+                    peers.append(top["ticker"])
+                if len(peers) >= 5:
+                    return peers
+        return peers
+    except Exception:  # pragma: no cover
+        return []
 
 
 def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[CompsResult]:
@@ -92,6 +212,36 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
         result.history = build_history_stats(target_ticker, target_row)
     except Exception:  # pragma: no cover — defensive
         result.history = None
+
+    # Wave 10 — Track B exposure peers. Cross-sector names that share
+    # the target's key exposures. Resolved from a 30-day-cached LLM
+    # call (or theme_exposure fallback); we then build CompsRow for
+    # each one so the same UI / chat surfaces can render them.
+    try:
+        exposure_tickers = get_exposure_peers(target_ticker)
+        for peer in exposure_tickers:
+            if peer in {p.ticker for p in result.peers}:
+                continue
+            p = get_full_financials(peer)
+            if not p.get("income"):
+                continue
+            p_inc = sorted(p["income"], key=lambda r: r.get("period", ""))[-1]
+            p_bs = sorted(p["balance"], key=lambda r: r.get("period", ""))[-1]
+            p_cf = sorted(p["cash"], key=lambda r: r.get("period", ""))[-1]
+            p_prior = sorted(p["income"], key=lambda r: r.get("period", ""))[-2] if len(p["income"]) >= 2 else None
+            result.exposure_peers.append(comps_engine.build_row(
+                peer, p["profile"].get("company_name", peer),
+                p["profile"].get("market_cap"),
+                p_inc, p_bs, p_cf, p_prior,
+            ))
+        if result.exposure_peers:
+            result.exposure_rationale = (
+                "Cross-sector names that share the target's key drivers. "
+                "Selected at runtime — sector-mechanical comps still "
+                "live in the `peers` list above."
+            )
+    except Exception:  # pragma: no cover
+        pass
 
     # Snapshot for re-use; lineage = each peer's company_cold so a peer-side
     # 10-K refresh stales us.

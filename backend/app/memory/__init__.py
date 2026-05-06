@@ -15,18 +15,26 @@ agent can still reason over its own past mistakes.
 """
 from .longterm import (
     CompanyMemory,
+    MacroMemory,
     MemoryEntry,
+    PMMemory,
     SectorMemory,
     company_memory_path,
+    macro_memory_path,
+    pm_memory_path,
     sector_memory_path,
     sector_slug,
 )
 
 __all__ = [
     "CompanyMemory",
+    "MacroMemory",
     "MemoryEntry",
+    "PMMemory",
     "SectorMemory",
     "company_memory_path",
+    "macro_memory_path",
+    "pm_memory_path",
     "sector_memory_path",
     "sector_slug",
 ]

@@ -538,8 +538,21 @@ class Orchestrator:
                 "Company snapshots (use when no memo is available):\n"
                 + json.dumps(company_lites, default=str, indent=2)[:5000]
             )
+        # Wave 10 — pull the PM brain + memory + research_notes into the
+        # context. Picks the first memo's ticker / sector for memory
+        # routing; PM brain + research_notes are always loaded.
+        from .pm_context import build_pm_context
+        first_ticker = (memos[0].get("ticker") if memos else
+                        (company_lites[0].get("ticker") if company_lites else None))
+        first_sector = (memos[0].get("sector") if memos else
+                        (company_lites[0].get("sector") if company_lites else None))
+        pm_ctx = build_pm_context(
+            ticker=first_ticker, sector=first_sector,
+            profile={"ticker": first_ticker, "sector": first_sector},
+        )
         prompt = (
-            "\n\n".join(context_blocks)
+            ((pm_ctx + "\n\n") if pm_ctx else "")
+            + "\n\n".join(context_blocks)
             + f"\n\nConversation history (last few turns):\n"
             + "\n".join(f"- {h.role}: {(h.content or '')[:300]}" for h in history[-6:])
             + f"\n\nUser's new question:\n{message}"

@@ -84,6 +84,26 @@ def run_earnings_agent(
         # Same flattening defense as filing_agent — prompt-tuned models
         # sometimes emit nested category objects instead of flat strings.
         from .filing_agent import _flatten_key_points
+        # Wave 10 — structured extraction lives on `data.structured`.
+        # Validate via the typed schema so a partial / malformed LLM
+        # response still serializes (Pydantic drops bad fields).
+        structured_payload: Dict = {}
+        raw_struct = llm_out.get("structured")
+        if isinstance(raw_struct, dict):
+            try:
+                from ..schemas import EarningsStructured
+                structured_payload = EarningsStructured(
+                    period=str(raw_struct.get("period") or transcript.get("period") or ""),
+                    overall_tone=raw_struct.get("overall_tone") or "measured",
+                    guidance_changes=raw_struct.get("guidance_changes") or [],
+                    tone_signals=raw_struct.get("tone_signals") or [],
+                    qa_themes=raw_struct.get("qa_themes") or [],
+                    most_defended_segment=raw_struct.get("most_defended_segment") or {},
+                    most_pressed_segment=raw_struct.get("most_pressed_segment") or {},
+                    forward_catalysts=raw_struct.get("forward_catalysts") or [],
+                ).model_dump()
+            except Exception:  # pragma: no cover — drop the structure rather than fail
+                structured_payload = {}
         return AgentFinding(
             agent="Earnings Analyst",
             headline=llm_out.get("headline", "Earnings view"),
@@ -91,6 +111,7 @@ def run_earnings_agent(
             key_points=_flatten_key_points(llm_out.get("key_points", [])),
             confidence=float(llm_out.get("confidence", 0.7)),
             sources=[f"transcript:{transcript.get('period', '')}"],
+            data={"structured": structured_payload} if structured_payload else {},
         )
 
     # Deterministic fallback — used only when the LLM call fails or

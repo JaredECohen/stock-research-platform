@@ -195,7 +195,15 @@ def _filing_word_count(sections: Dict[str, Any], raw: str) -> int:
 
 def _ingest_filings(db: Session, ticker: str, filings: List[Dict[str, Any]]) -> int:
     """Idempotently store filings. Existing rows are updated; new rows are
-    inserted. Returns count of net writes."""
+    inserted. Returns count of net writes.
+
+    Wave 10 — after a NEW filing row is inserted (not on updates), we
+    fire `filing_memory.post_pass` to (a) index its chunks into the
+    vector store and (b) write the diff against the prior filing of
+    the same type into company / sector memory. Failures are swallowed
+    — memory updates are non-critical to the ingest pipeline.
+    """
+    new_filing_ids: List[int] = []
     written = 0
     for f in filings or []:
         accession = f.get("accession_number") or f.get("accession") or ""
@@ -228,13 +236,29 @@ def _ingest_filings(db: Session, ticker: str, filings: List[Dict[str, Any]]) -> 
             existing.fetched_at = datetime.utcnow()
             written += 1
             continue
-        db.add(FilingDoc(
+        new_row = FilingDoc(
             ticker=ticker, accession_number=accession, filing_type=filing_type,
             filing_date=filing_date, period_end=period_end,
             raw_text=raw_text, sections=sections, word_count=wc, url=url,
             fetched_at=datetime.utcnow(),
-        ))
+        )
+        db.add(new_row)
+        db.flush()  # populate new_row.id without committing the outer txn
+        new_filing_ids.append(new_row.id)
         written += 1
+    if new_filing_ids:
+        # Defer the post-pass until after the outer commit — running it
+        # here would happen inside the same session. We just stash the
+        # IDs on the session via a hook and fire after commit.
+        try:
+            from . import filing_memory
+            db.flush()
+            for fid in new_filing_ids:
+                row = db.get(FilingDoc, fid)
+                if row is not None:
+                    filing_memory.post_pass(row)
+        except Exception as exc:  # pragma: no cover — never block ingest
+            log.warning("filing_memory post_pass failed: %s", exc)
     return written
 
 

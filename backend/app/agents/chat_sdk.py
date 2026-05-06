@@ -250,6 +250,145 @@ def _build_chat_agent() -> Optional[Any]:
                 "rows": [r.model_dump() for r in result.rows],
             }
 
+        # Wave 10 — specialists as live tools. Each `ask_*` re-fires the
+        # corresponding specialist with the user's question routed
+        # through the existing `prior_round_critique` channel. Bounded
+        # at the agent level (the SDK enforces per-turn tool budgets);
+        # individually, each tool is one LLM call against a specialist.
+
+        @function_tool
+        def ask_sector(ticker: str, question: str) -> Dict[str, Any]:
+            """Re-fire the sector analyst on `ticker` with a follow-up
+            question. Use when you need a sector-grounded view that
+            isn't in the cached memo (e.g. "what would change if rates
+            fell 100bps?", "is the cohort margin trend reversing?").
+            Returns the analyst's headline + key_points."""
+            from .sector_agents import run_sector_agent
+            from ..services.fundamentals_service import get_full_financials
+            try:
+                fin = get_full_financials((ticker or "").upper())
+                profile = fin.get("profile") or {}
+                ratios = fin.get("ratios") or {}
+                finding = run_sector_agent(profile, ratios, prior_round_critique=question)
+            except Exception as exc:
+                return {"error": f"sector specialist failed: {exc}"}
+            return {
+                "agent": "sector", "ticker": ticker.upper(),
+                "headline": finding.headline, "summary": finding.summary,
+                "key_points": finding.key_points, "confidence": finding.confidence,
+            }
+
+        @function_tool
+        def ask_earnings(ticker: str, question: str) -> Dict[str, Any]:
+            """Re-fire the earnings analyst on `ticker` with a follow-up
+            question grounded in the latest transcript ("what did the
+            CEO defend most?", "did guidance change tone QoQ?"). Returns
+            the analyst's headline + key_points."""
+            from .earnings_agent import run_earnings_agent
+            from ..services.fundamentals_service import get_full_financials
+            from ..services.data_service import get_data_service
+            try:
+                fin = get_full_financials((ticker or "").upper())
+                profile = fin.get("profile") or {}
+                transcripts = get_data_service().get_earnings_transcripts(ticker.upper()) or []
+                latest = transcripts[-1] if transcripts else {}
+                finding = run_earnings_agent(
+                    profile=profile, transcript=latest,
+                    earnings=fin.get("earnings") or {},
+                    prior_round_critique=question,
+                )
+            except Exception as exc:
+                return {"error": f"earnings specialist failed: {exc}"}
+            return {
+                "agent": "earnings", "ticker": ticker.upper(),
+                "headline": finding.headline, "summary": finding.summary,
+                "key_points": finding.key_points, "confidence": finding.confidence,
+            }
+
+        @function_tool
+        def ask_filings(ticker: str, question: str) -> Dict[str, Any]:
+            """Re-fire the filings analyst on `ticker` with a follow-up
+            grounded in the most recent 10-K/Q ("what's the new risk
+            factor?", "did segment X get more disclosure this year?")."""
+            from .filing_agent import run_filing_agent
+            from ..services.fundamentals_service import get_full_financials
+            from ..services.data_service import get_data_service
+            try:
+                fin = get_full_financials((ticker or "").upper())
+                profile = fin.get("profile") or {}
+                filings = get_data_service().get_filings(ticker.upper()) or []
+                finding = run_filing_agent(
+                    profile=profile, filings=filings,
+                    prior_round_critique=question,
+                )
+            except Exception as exc:
+                return {"error": f"filings specialist failed: {exc}"}
+            return {
+                "agent": "filings", "ticker": ticker.upper(),
+                "headline": finding.headline, "summary": finding.summary,
+                "key_points": finding.key_points, "confidence": finding.confidence,
+            }
+
+        @function_tool
+        def ask_valuation(ticker: str, question: str) -> Dict[str, Any]:
+            """Re-fire the valuation analyst on `ticker` with a follow-up
+            question grounded in the live DCF + ratios ("why is the
+            terminal multiple at 15x?", "what would a 50bps WACC change
+            do to the implied price?")."""
+            from .valuation_agent import run_valuation_agent
+            from ..services.fundamentals_service import get_full_financials
+            from ..services.valuation_service import build_dcf
+            try:
+                fin = get_full_financials((ticker or "").upper())
+                profile = fin.get("profile") or {}
+                ratios = fin.get("ratios") or {}
+                dcf = build_dcf((ticker or "").upper())
+                finding = run_valuation_agent(
+                    profile=profile, ratios=ratios, dcf=dcf,
+                    prior_round_critique=question,
+                )
+            except Exception as exc:
+                return {"error": f"valuation specialist failed: {exc}"}
+            return {
+                "agent": "valuation", "ticker": ticker.upper(),
+                "headline": finding.headline, "summary": finding.summary,
+                "key_points": finding.key_points, "confidence": finding.confidence,
+            }
+
+        @function_tool
+        def ask_macro(question: str, ticker: Optional[str] = None) -> Dict[str, Any]:
+            """Re-fire the macro analyst with a follow-up. If `ticker`
+            is supplied, run the per-company macro pass (sensitivity to
+            current regime); otherwise run the scenario pass."""
+            try:
+                if ticker:
+                    from .macro_agent import run_macro_agent
+                    from ..services.fundamentals_service import get_full_financials
+                    fin = get_full_financials((ticker or "").upper())
+                    profile = fin.get("profile") or {}
+                    finding = run_macro_agent(
+                        profile=profile, scenario=question,
+                        prior_round_critique=question,
+                    )
+                    return {
+                        "agent": "macro", "ticker": ticker.upper(),
+                        "headline": finding.headline, "summary": finding.summary,
+                        "key_points": finding.key_points,
+                        "confidence": finding.confidence,
+                    }
+                from .macro_agent import run_macro_scenario
+                scenario = run_macro_scenario(question)
+                return {
+                    "agent": "macro",
+                    "scenario": scenario.scenario,
+                    "narrative": scenario.narrative,
+                    "favored_sectors": scenario.favored_sectors,
+                    "pressured_sectors": scenario.pressured_sectors,
+                    "risks": scenario.risks,
+                }
+            except Exception as exc:
+                return {"error": f"macro specialist failed: {exc}"}
+
         return Agent(
             name="chat-pm",
             instructions=(
@@ -282,10 +421,26 @@ def _build_chat_agent() -> Optional[Any]:
                 "    rule-based filter on raw metrics. Use when the "
                 "    user gives numeric thresholds ('gross margin > "
                 "    70% and P/E < 25').\n"
+                "Live specialist follow-ups (use sparingly — ~$0.05 "
+                "each, max 2 per turn):\n"
+                "  • `ask_sector(ticker, question)` — re-fire the "
+                "    sector analyst on a specific question.\n"
+                "  • `ask_earnings(ticker, question)` — earnings "
+                "    analyst with a follow-up.\n"
+                "  • `ask_filings(ticker, question)` — filings analyst "
+                "    with a follow-up.\n"
+                "  • `ask_valuation(ticker, question)` — valuation "
+                "    analyst with a follow-up.\n"
+                "  • `ask_macro(question, ticker?)` — macro analyst.\n"
                 "Style:\n"
                 "  • Quote SPECIFIC numbers (rating, stock score, DCF "
                 "    upside, factor scores, margins, growth). Don't "
                 "    invent.\n"
+                "  • For open-ended questions, structure the answer "
+                "    as: theses you'd defend, theses you'd reject, "
+                "    where you're uncertain. Show the working.\n"
+                "  • For mispricing questions, structure as: "
+                "    consensus view → our view → gap → falsifiers.\n"
                 "  • For comparative questions, rank candidates with "
                 "    one-sentence justifications grounded in the data.\n"
                 "  • For 'which should I buy', give a directional "
@@ -301,6 +456,7 @@ def _build_chat_agent() -> Optional[Any]:
             tools=[
                 get_memo, get_dcf_summary, get_comps, get_macro_snapshot,
                 get_company_lite, list_universe, screener_query, custom_screen,
+                ask_sector, ask_earnings, ask_filings, ask_valuation, ask_macro,
             ],
         )
     except Exception as exc:
@@ -334,8 +490,34 @@ def answer_via_sdk(
         f"{((h.content if hasattr(h, 'content') else h.get('content', '')) or '')[:300]}"
         for h in history[-6:]
     )
+    # Wave 10 — inject PM brain + research_notes into the seed so the
+    # SDK agent has the same context the legacy path gets. Tickers /
+    # sectors mentioned in the message drive memory routing; the PM
+    # brain + research_notes load unconditionally.
+    pm_ctx = ""
+    try:
+        from .pm_context import build_pm_context
+        from .orchestrator import _extract_tickers
+        ticks = _extract_tickers(message + " " + history_block)
+        first_ticker = ticks[0] if ticks else None
+        first_sector = None
+        if first_ticker:
+            from ..database import SessionLocal
+            from ..models import Company
+            with SessionLocal() as db:
+                c = db.get(Company, first_ticker)
+                if c is not None:
+                    first_sector = c.sector
+        pm_ctx = build_pm_context(
+            ticker=first_ticker, sector=first_sector,
+            profile={"ticker": first_ticker, "sector": first_sector},
+        )
+    except Exception as exc:  # pragma: no cover — never block chat
+        log.debug("PM context for SDK seed failed: %s", exc)
+
     seed = (
-        f"Conversation so far:\n{history_block}\n\n"
+        ((pm_ctx + "\n\n---\n\n") if pm_ctx else "")
+        + f"Conversation so far:\n{history_block}\n\n"
         f"User's new question:\n{message}"
     )
 

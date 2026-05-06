@@ -535,3 +535,129 @@ class EarningsTranscript(Base):
     __table_args__ = (
         UniqueConstraint("ticker", "period", name="uq_earnings_transcript_ticker_period"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Wave 10 — vector chunks, postmortems, theme exposure, catalysts
+# ---------------------------------------------------------------------------
+
+class DocChunk(Base):
+    """A retrievable chunk from a filing / transcript / memo.
+
+    Wave 10. The vector index for RAG over the corpus. Embeddings are
+    stored as JSON-serialized lists of floats (Postgres + sqlite both
+    support this) — when pgvector is enabled in production, an out-of-
+    band migration converts the column to `vector(<dim>)` and adds an
+    HNSW index. Until then, retrieval falls back to BM25 over `text`.
+
+    `source_type` ∈ {filing, transcript, memo, news}. `source_id` is
+    the foreign-key into the originating table (FilingDoc.id,
+    EarningsTranscript.id, MemoSnapshot.id) — kept loose (no FK) so a
+    chunk survives source deletion (we'd rather have an orphan than a
+    broken constraint). `meta` holds source-specific keys (section,
+    accession, period, etc.).
+    """
+    __tablename__ = "doc_chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[Optional[str]] = mapped_column(String(16), index=True, nullable=True)
+    source_type: Mapped[str] = mapped_column(String(16), index=True)
+    source_id: Mapped[Optional[int]] = mapped_column(Integer, index=True, nullable=True)
+    section: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
+    period_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    text: Mapped[str] = mapped_column(Text, default="")
+    token_count: Mapped[int] = mapped_column(Integer, default=0)
+    embedding_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    embedding_dim: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    embedding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_doc_chunks_ticker_source", "ticker", "source_type"),
+    )
+
+
+class MemoPostmortem(Base):
+    """Wave 10 — what a memo actually got right or wrong.
+
+    Two cadences fire per memo: a 30-day "early read" (drift signal)
+    and a 90-day "full postmortem" (calibration lesson). Each carries
+    a per-agent attribution dict so per-specialist accuracy can be
+    tracked over time. The `lesson` is the markdown body that gets
+    appended to the company / sector / PM memory files.
+    """
+    __tablename__ = "memo_postmortems"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    memo_snapshot_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("memo_snapshots.id"), index=True,
+    )
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    horizon_days: Mapped[int] = mapped_column(Integer, index=True)
+    verdict: Mapped[str] = mapped_column(String(32), default="")  # right / wrong / mixed / pending
+    lesson: Mapped[str] = mapped_column(Text, default="")
+    agent_attribution: Mapped[dict] = mapped_column(JSON, default=dict)
+    realized_return: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    benchmark_return: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    regime_at_memo: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    written_to_memory: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "memo_snapshot_id", "horizon_days",
+            name="uq_memo_postmortem_snapshot_horizon",
+        ),
+    )
+
+
+class ThemeExposure(Base):
+    """Wave 10 — per-company exposure to investable themes.
+
+    Drives the natural-language screener and the cross-sector exposure
+    peers in the comps agent. Refreshed monthly from a corpus pass over
+    business descriptions + earnings transcripts. `evidence` carries
+    short citations so the user can audit a score.
+    """
+    __tablename__ = "theme_exposure"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    theme: Mapped[str] = mapped_column(String(64), index=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0)  # 0-100
+    evidence: Mapped[list] = mapped_column(JSON, default=list)  # list[str]
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("ticker", "theme", name="uq_theme_exposure_ticker_theme"),
+    )
+
+
+class CatalystEvent(Base):
+    """Wave 10 — known forward catalysts (earnings, FDA, conferences).
+
+    Surfaced on the memo + chat. Sources: FMP earnings calendar (always
+    populated), plus optional FDA calendar / conference scrapes (Phase F
+    of the design review). `materiality` ∈ {low, medium, high} — set by
+    the source or by an LLM-judged pass.
+    """
+    __tablename__ = "catalyst_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    event_type: Mapped[str] = mapped_column(String(32))  # earnings / fda / conference / investor_day / other
+    event_date: Mapped[date] = mapped_column(Date, index=True)
+    title: Mapped[str] = mapped_column(String(256), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    materiality: Mapped[str] = mapped_column(String(16), default="medium")
+    source: Mapped[str] = mapped_column(String(32), default="fmp")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "ticker", "event_type", "event_date", "title",
+            name="uq_catalyst_event_natkey",
+        ),
+        Index("ix_catalyst_events_ticker_date", "ticker", "event_date"),
+    )

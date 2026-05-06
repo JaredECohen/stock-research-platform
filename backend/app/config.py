@@ -122,11 +122,13 @@ class Settings(BaseSettings):
     # fan-out, the PM critique step asks 0-3 follow-up questions and has the
     # targeted specialists re-run with the question as additional prompt
     # context. Hard cap on rounds + questions per round bounds cost.
-    # Default-off — flip on per `docs/DEEP_RESEARCH_DESIGN.md` Phase A
-    # eyeball-then-rollout sequence.
-    enable_deep_research: bool = False
-    deep_research_max_rounds: int = 3
-    deep_research_max_questions_per_round: int = 3
+    # Default-on — Wave 10 flipped this from off → on per
+    # PRODUCT_DESIGN_REVIEW.md §1.2. Capped at 1 round / 2 questions
+    # to keep memo cost increase to ~15-25%; raise the cap if the
+    # platform tier supports it.
+    enable_deep_research: bool = True
+    deep_research_max_rounds: int = 1
+    deep_research_max_questions_per_round: int = 2
     # When entry count crosses this cap, the oldest entries are condensed
     # into a "Historical context" block rather than discarded outright.
     memory_max_entries: int = 50
