@@ -98,8 +98,15 @@ def get_stock(ticker: str) -> Dict[str, Any]:
     if not fin.get("profile"):
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     stats = get_basic_stats(ticker.upper())
+    # Overlay a live quote on the profile so the Research page shows
+    # an intraday price, not the 7-day-cached profile.last_price.
+    profile = dict(fin["profile"])
+    quote = get_data_service().get_quote(ticker.upper())
+    if quote and quote.get("price") is not None:
+        profile["last_price"] = quote["price"]
     return dict(
-        profile=fin["profile"],
+        profile=profile,
+        quote=quote,
         ratios=fin["ratios"],
         income=fin["income"],
         balance=fin["balance"],

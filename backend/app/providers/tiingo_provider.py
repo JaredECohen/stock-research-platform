@@ -26,11 +26,41 @@ class TiingoProvider:
             configured=bool(self.api_key),
             healthy=bool(self.api_key),
             notes="" if self.api_key else "Set TIINGO_API_KEY to enable.",
-            capabilities=["prices", "news"],
+            capabilities=["prices", "quote", "news"],
         )
 
     def _headers(self) -> Dict[str, str]:
         return {"Content-Type": "application/json", "Authorization": f"Token {self.api_key}"}
+
+    def get_quote(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """`/iex/{ticker}` — IEX real-time last trade during market hours."""
+        if not self.api_key:
+            return None
+        try:
+            with httpx.Client(timeout=TIMEOUT, headers=self._headers()) as client:
+                r = client.get(f"{BASE}/iex/{ticker.upper()}")
+                if r.status_code != 200:
+                    return None
+                rows = r.json()
+        except Exception as exc:  # pragma: no cover
+            log.warning("Tiingo quote failed: %s", exc)
+            return None
+        if not isinstance(rows, list) or not rows:
+            return None
+        item = rows[0]
+        price = item.get("last") or item.get("tngoLast")
+        prev_close = item.get("prevClose")
+        return dict(
+            ticker=item.get("ticker"),
+            price=price,
+            previous_close=prev_close,
+            change=(price - prev_close) if (price is not None and prev_close is not None) else None,
+            change_pct=((price - prev_close) / prev_close * 100.0) if (price is not None and prev_close) else None,
+            day_low=item.get("low"),
+            day_high=item.get("high"),
+            volume=item.get("volume"),
+            timestamp=item.get("timestamp"),
+        )
 
     def get_price_history(self, ticker: str, days: int = 252) -> Optional[List[Dict[str, Any]]]:
         if not self.api_key:

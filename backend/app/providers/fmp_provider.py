@@ -46,7 +46,7 @@ class FMPProvider:
             healthy=bool(self.api_key),
             notes="" if self.api_key else "Set FMP_API_KEY to enable.",
             capabilities=[
-                "profile", "prices", "financials", "ratios",
+                "profile", "prices", "quote", "financials", "ratios",
                 "key_metrics", "earnings", "estimates", "news",
             ],
         )
@@ -109,6 +109,30 @@ class FMPProvider:
     # ------------------------------------------------------------------
     # Prices
     # ------------------------------------------------------------------
+
+    def get_quote(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """`/stable/quote?symbol=…` — near-real-time intraday price.
+
+        FMP returns ~15-min-delayed prices on Starter, real-time on
+        Premium. Either way, far fresher than reading `last_price` off
+        the 7-day-cached `/profile` blob, which is what the DCF
+        comparison drifted on for fast movers like NVDA.
+        """
+        data = self._get("/quote", symbol=ticker.upper())
+        if not isinstance(data, list) or not data:
+            return None
+        item = data[0]
+        return dict(
+            ticker=item.get("symbol"),
+            price=_to_float(item.get("price")),
+            previous_close=_to_float(item.get("previousClose")),
+            change=_to_float(item.get("change")),
+            change_pct=_to_float(item.get("changesPercentage")),
+            day_low=_to_float(item.get("dayLow")),
+            day_high=_to_float(item.get("dayHigh")),
+            volume=_to_float(item.get("volume")),
+            timestamp=item.get("timestamp"),
+        )
 
     def get_price_history(self, ticker: str, days: int = 252) -> Optional[List[Dict[str, Any]]]:
         """`/stable/historical-price-eod/full?symbol=…`. Returns OHLCV bars

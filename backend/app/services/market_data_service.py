@@ -16,6 +16,21 @@ def get_close_series(ticker: str, days: int = 252) -> List[float]:
     return [r.get("close") or r.get("adjusted_close") for r in rows if r.get("close") is not None]
 
 
+def get_current_price(ticker: str) -> Optional[float]:
+    """Live intraday price with EOD-close fallback.
+
+    Returns the freshest price available: a 60s-cached quote during
+    market hours, or yesterday's close if the quote chain misses (or
+    when an as-of backtest is active and `get_quote` short-circuits
+    to None).
+    """
+    quote = get_data_service().get_quote(ticker)
+    if quote and quote.get("price") is not None:
+        return float(quote["price"])
+    closes = get_close_series(ticker, days=5)
+    return closes[-1] if closes else None
+
+
 def get_basic_stats(ticker: str) -> Dict:
     closes = get_close_series(ticker)
     if not closes:

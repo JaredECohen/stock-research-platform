@@ -134,11 +134,13 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
         estimates = get_data_service().get_estimates(ticker)
     except Exception:  # pragma: no cover — estimates are optional
         estimates = None
-    # Wave 8L: when the profile doesn't carry `last_price` (FMP 403, demo
-    # data without a price field), derive it from market_cap / shares.
-    # Without this fallback every upside_pct in the DCF is 0% which makes
-    # the snapshot useless.
-    last_price = profile.get("last_price") or 0.0
+    # Live intraday quote (60s TTL) feeds the DCF's `current_price`
+    # so `upside_pct` reflects today's tape, not the 7-day-cached
+    # `profile.last_price`. Falls back to profile, then to
+    # market_cap/shares (Wave 8L) if neither chain has a quote.
+    from .market_data_service import get_current_price
+    live_price = get_current_price(ticker)
+    last_price = live_price or profile.get("last_price") or 0.0
     diluted_shares = profile.get("shares_outstanding") or 0.0
     if not last_price and diluted_shares and profile.get("market_cap"):
         try:

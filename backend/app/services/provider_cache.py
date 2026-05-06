@@ -13,6 +13,9 @@ actually changes:
                           market cap drifts but doesn't justify daily
                           refetch on every research call)
     prices      1 day    (full daily history; refresh after each close)
+    quote       60 s     (intraday last-trade price for valuation
+                          comparison; profile's last_price is stale
+                          for fast movers like NVDA)
     ratios      1 day    (price-dependent metrics)
     estimates   1 day    (sell-side updates frequently but not
                           intra-day for most names)
@@ -38,6 +41,7 @@ log = logging.getLogger(__name__)
 TTL_BY_CAPABILITY: Dict[str, int] = {
     "profile":   7 * 86400,
     "prices":         86400,
+    "quote":             60,
     "ratios":         86400,
     "estimates":      86400,
     "earnings":       86400,

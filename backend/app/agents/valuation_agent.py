@@ -6,6 +6,7 @@ from typing import Dict, Optional
 
 from ..config import settings
 from ..schemas import AgentFinding, DCFResult
+from ..services.market_data_service import get_current_price
 from ..services.valuation_service import build_dcf
 from . import llm, prompts
 
@@ -14,9 +15,14 @@ def run_valuation_agent(
     profile: Dict, ratios: Dict, dcf: Optional[DCFResult],
     *, prior_round_critique: Optional[str] = None,
 ) -> AgentFinding:
+    # Pull a fresh intraday quote rather than the 7-day-cached
+    # `profile.last_price`. Falls back to last close if the quote
+    # chain is unavailable (e.g., backtest as-of context).
+    ticker = profile.get("ticker")
+    live_price = get_current_price(ticker) if ticker else None
     payload = {
-        "ticker": profile.get("ticker"),
-        "current_price": profile.get("last_price"),
+        "ticker": ticker,
+        "current_price": live_price if live_price is not None else profile.get("last_price"),
         "PE": ratios.get("PE"),
         "EV_EBITDA": ratios.get("EV_EBITDA"),
         "EV_Revenue": ratios.get("EV_Revenue"),

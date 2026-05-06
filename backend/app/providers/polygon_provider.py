@@ -27,7 +27,7 @@ class PolygonProvider:
             configured=bool(self.api_key),
             healthy=bool(self.api_key),
             notes="" if self.api_key else "Set POLYGON_API_KEY to enable.",
-            capabilities=["prices", "news"],
+            capabilities=["prices", "quote", "news"],
         )
 
     def _get(self, path: str, **params: Any) -> Optional[Any]:
@@ -43,6 +43,32 @@ class PolygonProvider:
         except Exception as exc:  # pragma: no cover
             log.warning("Polygon fetch failed: %s", exc)
             return None
+
+    def get_quote(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Snapshot endpoint — last trade + previous-day close.
+
+        Free tier limits to 5 calls/min; paid tiers are real-time.
+        """
+        data = self._get(f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker.upper()}")
+        if not data or "ticker" not in data:
+            return None
+        snap = data["ticker"]
+        last_trade = (snap.get("lastTrade") or {})
+        prev_day = (snap.get("prevDay") or {})
+        day = (snap.get("day") or {})
+        price = last_trade.get("p") or day.get("c")
+        prev_close = prev_day.get("c")
+        return dict(
+            ticker=snap.get("ticker"),
+            price=price,
+            previous_close=prev_close,
+            change=(price - prev_close) if (price is not None and prev_close) else None,
+            change_pct=snap.get("todaysChangePerc"),
+            day_low=day.get("l"),
+            day_high=day.get("h"),
+            volume=day.get("v"),
+            timestamp=last_trade.get("t"),
+        )
 
     def get_price_history(self, ticker: str, days: int = 252) -> Optional[List[Dict[str, Any]]]:
         end = date.today()

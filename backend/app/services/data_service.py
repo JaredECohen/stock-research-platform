@@ -234,6 +234,7 @@ class DataService:
         chains: Dict[str, List[Any]] = {
             "profile": [self.fmp, self.alpha],
             "prices": [self.fmp, self.tiingo, self.polygon],
+            "quote": [self.fmp, self.tiingo, self.polygon],
             # Wave 9b — Alpha Vantage as a financials fallback. FMP's
             # Starter tier returns 403 on most fundamentals endpoints;
             # AV Premium covers the same vocabulary.
@@ -341,6 +342,24 @@ class DataService:
             force_refresh=force_refresh,
         )
         return _clip_dated_rows(rows, "date")
+
+    def get_quote(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Intraday last-trade quote with a 60s TTL.
+
+        Bypassed during as-of backtests — historical runs read closes
+        from `get_price_history` clipped to the as-of date, never live
+        quotes. Live mode: provider chain returns a normalized dict
+        with `price`, `previous_close`, `change_pct`, `timestamp`.
+        """
+        if current_as_of_date() is not None:
+            return None
+        return self._cached(
+            "quote", ticker.upper(),
+            lambda: self._try_chain("quote", "get_quote", ticker),
+            force_refresh=force_refresh,
+        )
 
     def get_financial_statements(
         self, ticker: str, *, force_refresh: bool = False,
