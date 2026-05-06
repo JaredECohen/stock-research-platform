@@ -43,10 +43,80 @@ log = logging.getLogger(__name__)
 # Picking memos to postmortem
 # ---------------------------------------------------------------------------
 
+_DEDUPE_WINDOW_DAYS = 14  # rate-limit: 1 postmortem per (ticker, horizon) per window
+
+
+def _rating_of(snap: MemoSnapshot) -> str:
+    """Pull the rating label out of a snapshot's memo_json defensively."""
+    memo = snap.memo_json or {}
+    if not isinstance(memo, dict):
+        return ""
+    return str(memo.get("rating_label") or "").strip()
+
+
+def _prior_snapshot(db, ticker: str, version: int) -> Optional[MemoSnapshot]:
+    """The most recent prior version for this ticker (version < current)."""
+    return db.execute(
+        select(MemoSnapshot)
+        .where(MemoSnapshot.ticker == ticker, MemoSnapshot.version < version)
+        .order_by(MemoSnapshot.version.desc())
+        .limit(1)
+    ).scalars().first()
+
+
+def _recent_postmortem_within(
+    db, ticker: str, horizon_days: int, window_days: int,
+) -> Optional[MemoPostmortem]:
+    """Most recent postmortem for (ticker, horizon) within `window_days`."""
+    cutoff = datetime.utcnow() - timedelta(days=window_days)
+    return db.execute(
+        select(MemoPostmortem)
+        .where(
+            MemoPostmortem.ticker == ticker,
+            MemoPostmortem.horizon_days == horizon_days,
+            MemoPostmortem.created_at >= cutoff,
+        )
+        .order_by(MemoPostmortem.created_at.desc())
+        .limit(1)
+    ).scalars().first()
+
+
+def _should_postmortem(
+    db, snap: MemoSnapshot, horizon_days: int,
+) -> tuple[bool, str]:
+    """Dedupe + rate-limit guard.
+
+    Returns (proceed, reason). Skip when:
+    1. The prior snapshot has the same rating_label (a memo refresh
+       that didn't change the call isn't a new thesis to postmortem).
+    2. A postmortem for (ticker, horizon) was written in the last
+       `_DEDUPE_WINDOW_DAYS` days (noise cap on high-throughput names).
+    """
+    # Rating-change skip — only when there IS a prior snapshot to
+    # compare against (first memo for the ticker always proceeds).
+    prior = _prior_snapshot(db, snap.ticker, snap.version)
+    if prior is not None:
+        prior_rating = _rating_of(prior)
+        new_rating = _rating_of(snap)
+        if prior_rating and new_rating and prior_rating == new_rating:
+            return False, f"rating unchanged ({new_rating}) vs v{prior.version}"
+    # Rate-limit per (ticker, horizon).
+    recent = _recent_postmortem_within(
+        db, snap.ticker, horizon_days, _DEDUPE_WINDOW_DAYS,
+    )
+    if recent is not None:
+        return False, (
+            f"recent postmortem exists "
+            f"({recent.created_at.date().isoformat()}, within {_DEDUPE_WINDOW_DAYS}d)"
+        )
+    return True, "ok"
+
+
 def _due_memos(horizon_days: int, *, limit: int = 50) -> List[Dict[str, Any]]:
-    """Memos with an outcome at this horizon and no postmortem yet."""
-    cutoff = date.today() - timedelta(days=horizon_days)
+    """Memos with an outcome at this horizon and no postmortem yet, after
+    dedupe (rating-change + 14d rate-limit) is applied."""
     out: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
     with SessionLocal() as db:
         stmt = (
             select(MemoOutcome, MemoSnapshot)
@@ -63,9 +133,15 @@ def _due_memos(horizon_days: int, *, limit: int = 50) -> List[Dict[str, Any]]:
             ).scalars().first()
             if existing is not None:
                 continue
+            proceed, reason = _should_postmortem(db, snap, horizon_days)
+            if not proceed:
+                skipped.append({"ticker": snap.ticker, "reason": reason})
+                continue
             out.append({"outcome": outcome, "snapshot": snap})
             if len(out) >= limit:
                 break
+    if skipped:
+        log.debug("postmortem dedupe skipped %d memos: %s", len(skipped), skipped[:5])
     return out
 
 
