@@ -252,6 +252,24 @@ def run_macro_agent(
     if settings.has_llm:
         from .earnings_agent import _critique_block as _q
         snapshot = macro_snapshot()
+        # Wave 10 — load the macro primer (anchors and operating
+        # principles) + the macro analyst's running notes file as
+        # context so the agent reasons like a serious macro PM
+        # instead of a textbook.
+        from ..prompts import load_prompt
+        primer = load_prompt("macro_primer") or ""
+        macro_memory_block = ""
+        try:
+            from ..memory import MacroMemory
+            mm = MacroMemory.load_macro()
+            macro_memory_block = mm.as_prompt_context(max_chars=2500)
+        except Exception:
+            macro_memory_block = ""
+        primer_block = (("\n\n## PRIMER\n\n" + primer) if primer else "")
+        memory_block = (
+            ("\n\n## MACRO MEMORY (your running notes)\n\n" + macro_memory_block)
+            if macro_memory_block.strip() else ""
+        )
         prompt = (
             "Given the regime read and live macro snapshot, write a 4-6 sentence "
             "view focused on THIS COMPANY: how the regime helps or hurts its "
@@ -263,6 +281,8 @@ def run_macro_agent(
             f"Live snapshot: {json.dumps(snapshot, default=str)}\n"
             f"Company profile: {json.dumps({'ticker': profile.get('ticker'), 'sector': sector, 'industry': profile.get('industry'), 'drivers': profile.get('drivers'), 'risks': profile.get('risks')}, default=str)}\n\n"
             "Return JSON: {headline, summary, key_points (list of strings), confidence (0-1)}."
+            + primer_block
+            + memory_block
             + _q(prior_round_critique)
         )
         out = llm.chat_json(

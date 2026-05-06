@@ -517,8 +517,16 @@ def _catalysts(
 
 def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optional[DCFResult]) -> Dict:
     # PM uses its dedicated model (OPENAI_PM_MODEL — gpt-5.5-pro by default).
+    # Wave 10 — read PM brain + company / sector memory + research_notes.
+    from .pm_context import build_pm_context
+    pm_ctx = build_pm_context(
+        ticker=profile.get("ticker"),
+        sector=profile.get("sector"),
+        profile=profile,
+    )
     llm_out = llm.chat_json(
         prompts.PM_SYNTHESIS_PROMPT
+        + ((("\n\n" + pm_ctx) if pm_ctx else ""))
         + "\n\nFindings:\n"
         + json.dumps({k: v.model_dump() for k, v in findings.items()}, default=str)[: settings.max_agent_context_chars],
         system=prompts.PM_SYSTEM, route="strong",
@@ -1039,6 +1047,19 @@ def _run_stock_memo_inner(
     ev_q = evidence_quality(sources)
     blended_confidence = max(20.0, min(95.0, raw_confidence * (0.6 + 0.4 * ev_q)))
 
+    # Wave 10 — pull the mispricing thesis off the PM's structured
+    # output (PM_SYNTHESIS_PROMPT now requires it). Empty fallback when
+    # the deterministic path ran (no LLM) or the PM declined.
+    from ..schemas import MispricingThesis
+    raw_misp = synth.get("mispricing_thesis") or {}
+    if not isinstance(raw_misp, dict):
+        raw_misp = {}
+    mispricing = MispricingThesis(
+        consensus_view=str(raw_misp.get("consensus_view") or "")[:1000],
+        our_view=str(raw_misp.get("our_view") or "")[:1000],
+        gap=str(raw_misp.get("gap") or "")[:1000],
+        falsifiers=[str(x)[:300] for x in (raw_misp.get("falsifiers") or [])][:5],
+    )
     memo = StockMemoOut(
         ticker=profile.get("ticker"),
         company_name=profile.get("company_name", ticker),
@@ -1047,6 +1068,7 @@ def _run_stock_memo_inner(
         rating_label=rating,
         confidence_score=blended_confidence,
         one_sentence_thesis=synth.get("one_sentence_thesis", ""),
+        mispricing_thesis=mispricing,
         business_summary=profile.get("business_description", ""),
         sector_agent_view=sector_finding,
         earnings_agent_view=earnings_finding,

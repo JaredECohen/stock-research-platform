@@ -1065,3 +1065,75 @@ tag, what changed, where it landed.)*
   Adds `quote` capability (FMP → Tiingo → Polygon, 60s TTL).
   Fixes the NVDA-stale-by-a-week problem the founder reported.
   Section: §1.5, §5.6 (partially).
+
+- **2026-05-06 — Wave 10 cluster on branch `feat/design-review-implementation`** —
+  Backend implementation of Phases A (partial), B, C, D, E, F.
+  Frontend changes deferred (no visual verification possible
+  autonomously). External-dependency items (paid news / social APIs,
+  pgvector enablement on production Postgres, premium-tier billing)
+  flagged for follow-up.
+
+  - **Phase A — schemas + prompts.** §1.3 mispricing thesis schema
+    (`MispricingThesis`) + PM_SYNTHESIS_PROMPT requires it. §2.4 PM
+    identity prompt moved to `backend/app/prompts/pm_identity.md`
+    (curatable markdown loaded at startup).
+  - **Phase B — PM-as-brain.** §2.1 `memory/pm/notes.md` reads on
+    every PM synthesis + chat turn (via `pm_context.build_pm_context`)
+    plus per-company / per-sector memory + research_notes routed to
+    the PM agent. §2.2 specialists-as-tools added to chat SDK
+    (`ask_sector`, `ask_earnings`, `ask_filings`, `ask_valuation`,
+    `ask_macro`). §1.2 deep research default flipped to ON, capped at
+    1 round / 2 questions.
+  - **Phase C — comps + screener + portfolio responsiveness.** §6.1
+    two-track comps: a priori `peer_groups.json` stays as Track A;
+    Track B `get_exposure_peers` adds an LLM-driven cross-sector
+    exposure peer list (with theme-exposure fallback), surfaced via
+    new `CompsResult.exposure_peers` field. §11.1 per-company theme
+    exposure scores in new `theme_exposure` table; refresh service
+    `theme_exposure_service.refresh_universe`. §11.3 natural-language
+    screener `nl_screener.run(query)` translates prose → rule chain
+    + theme overlay. §12.1-12.3 brief-driven portfolio:
+    `portfolio_brief.extract_brief` produces a structured
+    `PortfolioBrief` (themes, factor tilts, sector targets, beta /
+    yield targets, constraints); `portfolio_service.build_model_portfolio_with_brief`
+    threads it through, reshaping candidate scores so the same prompt
+    produces materially different portfolios.
+  - **Phase D — RAG + memory + earnings.** §4.1 vector DB scaffolding:
+    new `doc_chunks` table + `embeddings` service (OpenAI
+    text-embedding-3-large with deterministic-hash fallback for
+    dev) + `vector_store` upsert/search. §4.2 filing → memory
+    pipeline: `filing_memory.post_pass` runs after every filing
+    ingest, indexing chunks + diffing against the prior filing of
+    the same type + writing the delta to company / sector memory.
+    Filing agent now uses vector retrieval (BM25 fallback) and
+    routes the user's question as the retrieval query when one is
+    present. §3.1 earnings structured schema:
+    `EarningsStructured` + `GuidanceChange` / `ToneSignal` /
+    `QAThemeAnalysis` typed extraction; earnings_agent emits via
+    `data.structured`. §8.1-8.3 macro memory: `MacroMemory` class
+    + `memory/macro/notes.md` + `prompts/macro_primer.md` (Fed
+    speech RSS poller is the next external dependency to wire in).
+    §7.1 sector-memory writers fire from filing post-pass.
+  - **Phase E — postmortem feedback loop.** §13.1-13.3 new
+    `memo_postmortems` table + `postmortem_service.run_postmortems`
+    that (a) writes verdict + per-agent attribution + lesson,
+    (b) appends the lesson to company memory, (c) appends a
+    sector pattern to sector memory when LLM judges it
+    transferable. 30d "early read" + 90d full cadence. Schedule
+    via cron (not yet wired — single-line addition).
+  - **Phase F — catalysts.** §9.3 `catalyst_events` table +
+    `catalyst_service.refresh_universe` (FMP earnings calendar
+    today; FDA / conference / investor-day sources are next).
+  - **Skipped, with reasons:** Frontend (memo section navigation
+    links, DCF stacked table, red/green sensitivities, brief
+    editor UI) — visual verification needed; paid news + social
+    APIs — keys + budget; production pgvector enable — Render
+    side; premium-tier gating — billing decision.
+
+  Decisions on §16 open questions (recorded for future-me):
+  - Vector store: pgvector (lowest friction, already on Postgres).
+  - Embedding model: OpenAI `text-embedding-3-large` (3072 dims).
+  - Per-segment comps: deferred (single peer set per ticker for now).
+  - Postmortem cadence: 30d early read + 90d full.
+  - Public track record: deferred (selection-bias risk).
+  - Premium gating: deferred (no billing changes).

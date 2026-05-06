@@ -108,8 +108,27 @@ def run_filing_agent(
             sources=[],
         )
 
-    # Use retrieval to grab the most thesis-relevant filing chunks
-    retrieved = retrieval_service.search(ticker, "risk factors growth strategy thesis", limit=4)
+    # Wave 10 — vector retrieval first (when chunks exist), BM25 as a
+    # belt-and-suspenders fallback. Question-specific query: when a
+    # PM follow-up is supplied, use that as the retrieval query so the
+    # chunks line up with the question; otherwise stay on the static
+    # thesis-relevance prompt.
+    retrieval_query = (
+        prior_round_critique
+        if prior_round_critique and len(prior_round_critique) > 8
+        else "risk factors growth strategy thesis"
+    )
+    retrieved: List[Dict] = []
+    try:
+        from ..services import vector_store
+        vec_hits = vector_store.search(
+            retrieval_query, ticker=ticker, source_types=["filing"], top_k=4,
+        )
+        retrieved = [{"text": h["text"], "section": h.get("section")} for h in vec_hits]
+    except Exception:
+        retrieved = []
+    if not retrieved:
+        retrieved = retrieval_service.search(ticker, retrieval_query, limit=4) or []
     primary = next((f for f in filings if f.get("type") == "10-K"), filings[0])
 
     # Wave 9b — pass real filing content to the LLM. SEC EDGAR returns
