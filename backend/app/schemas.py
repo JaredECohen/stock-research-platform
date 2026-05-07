@@ -410,6 +410,19 @@ class DCFSensitivity(BaseModel):
     cells: List[SensitivityCell]
 
 
+class DCFGuardrail(BaseModel):
+    """Wave 10 — sanity-check flag emitted by `check_dcf_realism`.
+
+    `severity`: warn | error. Warn = 'consider revising'; error =
+    'the model is internally inconsistent'.
+    """
+    severity: Literal["warn", "error"] = "warn"
+    message: str = ""
+    metric: str = ""  # e.g. "implied_y5_ev_ebitda", "terminal_disagreement"
+    value: Optional[float] = None
+    cohort_p90: Optional[float] = None
+
+
 class DCFResult(BaseModel):
     ticker: str
     current_price: float
@@ -418,6 +431,10 @@ class DCFResult(BaseModel):
     bear: DCFScenario
     sensitivities: List[DCFSensitivity] = Field(default_factory=list)
     summary: str = ""
+    # Wave 10 — reality-check flags. Empty list when nothing tripped.
+    # The PM sees these and decides whether to defend or revise the
+    # model; the UI surfaces them as a "model warnings" block.
+    guardrails: List[DCFGuardrail] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -512,6 +529,13 @@ class MacroScenarioResult(BaseModel):
     pressured_sectors: List[str]
     suggested_research_views: List[str]
     risks: List[str]
+    # Wave 10 — continuous regime probabilities. Real macro states are
+    # mixtures (e.g., 0.55 soft / 0.30 sticky / 0.15 recession). The
+    # `scenario` field carries the modal regime label for backward
+    # compat; downstream consumers (sector tilts, memo invalidation
+    # triggers) blend across regimes weighted by these probabilities.
+    # Empty dict on memos that pre-date the field.
+    regime_probabilities: Dict[str, float] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -719,6 +743,12 @@ class StockMemoOut(BaseModel):
     # Wave 10 — mispricing-first synthesis. Empty Mispricing() means the
     # memo predates the schema or the PM declined to commit a view.
     mispricing_thesis: MispricingThesis = Field(default_factory=MispricingThesis)
+    # Wave 10 — memo-time price snapshot. Frozen at memo creation so a
+    # later live-overlay can show drift ("memo wrote DCF vs $145; current
+    # $158, +9% since memo"). Null on memos that pre-date the field or
+    # ran without quote chain access.
+    price_at_memo: Optional[float] = None
+    price_at_memo_at: Optional[datetime] = None
     business_summary: str
     sector_agent_view: AgentFinding
     earnings_agent_view: AgentFinding
@@ -753,6 +783,18 @@ class StockMemoOut(BaseModel):
     # initial parallel fan-out; rounds 1+ are PM↔specialist
     # critique-and-revise turns. Empty list when deep_research is off.
     round_findings: List[RoundFindings] = Field(default_factory=list)
+    # Wave 10 — forward catalysts (next 90d) populated from
+    # `catalyst_events`. Each item: {ticker, event_type, event_date,
+    # title, description, materiality, source}.
+    forward_catalysts: List[Dict[str, Any]] = Field(default_factory=list)
+    # Wave 10 — earnings quarter-over-quarter delta (separate finding;
+    # rendered as its own UI tile). Optional — None when prior-quarter
+    # data isn't available yet.
+    earnings_qoq_delta: Optional[AgentFinding] = None
+    # Wave 10 — PM intake decision (which specialists were skipped and
+    # why). `{skipped: List[str], rationale: str}`. Empty dict when
+    # all 8 ran (the default). Audit trail for cost-aware memo runs.
+    intake_decision: Dict[str, Any] = Field(default_factory=dict)
     # List of agents that failed during this memo's generation. Empty when
     # everything ran normally; populated by the safe-runner so the UI can
     # show "X analyst was unavailable" rather than dropping the memo.

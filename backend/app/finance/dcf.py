@@ -11,6 +11,7 @@ from typing import Dict, Iterable, List, Optional
 
 from ..schemas import (
     DCFAssumptions,
+    DCFGuardrail,
     DCFResult,
     DCFScenario,
     DCFSensitivity,
@@ -125,6 +126,8 @@ def derive_default_assumptions(
     pretax_cost_of_debt: float = 0.055,
     target_debt_weight: float = 0.15,
     analyst_estimates: Optional[Dict] = None,
+    margin_mean_reversion: bool = False,
+    cohort_op_margin: Optional[float] = None,
 ) -> DCFAssumptions:
     """Build sane base-case assumptions from a few years of statements.
 
@@ -134,6 +137,13 @@ def derive_default_assumptions(
     layer (Wave 5A `dcf_updater`) is responsible for diverging from
     consensus and must justify each change with a rationale (per-cycle
     delta still capped at ±20%). The default builder defers to consensus.
+
+    Wave 10 — `margin_mean_reversion=True` swaps the held-flat margin
+    path for a glide that reverts the trailing-3yr operating margin
+    toward `cohort_op_margin` (or 18% as a generic fallback) over the
+    5-year forecast. Recommended for cyclicals at peak — without
+    this the DCF systematically over-values names whose trailing-3yr
+    margin happens to be the cycle high.
     """
     # Sort oldest -> newest
     income_statements = sorted(income_statements, key=lambda r: r.get("period", ""))
@@ -175,7 +185,19 @@ def derive_default_assumptions(
     # allowed to diverge, and only with a per-field rationale.
     op_margin_recent = _avg([_safe_div(o, r) for o, r in zip(op_incomes[-3:], revenues[-3:]) if r])
     op_margin_recent = max(0.02, min(0.65, op_margin_recent or 0.18))
-    base_margin = [round(op_margin_recent, 4)] * 5
+    if margin_mean_reversion:
+        # Glide from trailing margin → cohort/ secular norm over 5y.
+        # Cohort target supplied by caller (sector_research) when
+        # available; else 18% as a "typical mature US large-cap"
+        # anchor that's mid-pack across the S&P 500.
+        target = max(0.05, min(0.45, cohort_op_margin or 0.18))
+        base_margin = []
+        for i in range(5):
+            weight = (5 - i) / 5  # 1.0 → 0.2 over 5 years
+            m = op_margin_recent * weight + target * (1 - weight)
+            base_margin.append(round(m, 4))
+    else:
+        base_margin = [round(op_margin_recent, 4)] * 5
 
     eff_tax = _avg([_safe_div(t, p) for t, p in zip(tax_exp[-3:], pretax[-3:]) if p])
     eff_tax = max(0.10, min(0.30, eff_tax or 0.21))
@@ -412,12 +434,150 @@ def build_default_sensitivities(base: DCFAssumptions) -> List[DCFSensitivity]:
 # Top-level convenience
 # ---------------------------------------------------------------------------
 
+def check_dcf_realism(
+    base: DCFScenario, *, ticker: str = "",
+) -> List[DCFGuardrail]:
+    """Wave 10 — sanity-check the DCF against cohort distribution.
+
+    The user's frustration: "valuations seem off." This guardrail
+    surfaces the most common failure modes so the PM (and the user)
+    can audit the model before trusting the implied price.
+
+    Checks:
+    1. **Terminal-value disagreement.** When Gordon and exit-multiple
+       blended-50/50 disagree by >25%, the model's two terminal
+       methods are talking past each other — the assumptions haven't
+       been thought through. Flagged at WARN.
+    2. **Implied Y5 EV/EBITDA outside cohort.** When the year-5
+       implied EV/EBITDA exceeds the comps cohort 90th percentile,
+       the model is implicitly pricing the company as a category
+       outlier. Flagged at WARN.
+    3. **Negative or absurd implied price.** Implied share price
+       <= 0, or > 10x current price (likely a units / share count
+       error). Flagged at ERROR.
+    4. **Operating margin > 60%.** If the projected steady-state
+       margin tops 60%, that's an extraordinary claim — flagged at
+       WARN unless it's a software / payments name (caller can
+       suppress via business-context if needed).
+    """
+    guardrails: List[DCFGuardrail] = []
+
+    # 1) Terminal value disagreement
+    if base.enterprise_value_gordon and base.enterprise_value_exit:
+        a = base.enterprise_value_gordon
+        b = base.enterprise_value_exit
+        denom = (abs(a) + abs(b)) / 2 or 1.0
+        disagreement = abs(a - b) / denom
+        if disagreement > 0.25:
+            guardrails.append(DCFGuardrail(
+                severity="warn",
+                metric="terminal_disagreement",
+                message=(
+                    f"Gordon vs exit-multiple terminal values disagree "
+                    f"{disagreement:.0%}. Reconsider terminal growth or "
+                    f"exit EBITDA multiple — model is internally split."
+                ),
+                value=disagreement,
+            ))
+
+    # 2) Implied Y5 EV/EBITDA vs cohort
+    try:
+        if base.projections and ticker:
+            last_proj = base.projections[-1]
+            final_ebitda = last_proj.ebit + last_proj.da
+            if final_ebitda > 0:
+                implied_y5_multiple = (
+                    base.enterprise_value_blended / final_ebitda
+                )
+                cohort_p90 = _cohort_p90_ev_ebitda(ticker)
+                if cohort_p90 and implied_y5_multiple > cohort_p90:
+                    guardrails.append(DCFGuardrail(
+                        severity="warn",
+                        metric="implied_y5_ev_ebitda",
+                        message=(
+                            f"Year-5 implied EV/EBITDA {implied_y5_multiple:.1f}x "
+                            f"exceeds cohort 90th percentile ({cohort_p90:.1f}x). "
+                            f"Model is pricing this as a category outlier."
+                        ),
+                        value=implied_y5_multiple,
+                        cohort_p90=cohort_p90,
+                    ))
+    except Exception:  # pragma: no cover — guardrails never fail loudly
+        pass
+
+    # 3) Absurd implied price
+    if base.implied_share_price <= 0:
+        guardrails.append(DCFGuardrail(
+            severity="error",
+            metric="implied_share_price",
+            message="Implied share price is non-positive — check net debt and share count inputs.",
+            value=base.implied_share_price,
+        ))
+    elif (
+        base.assumptions.current_price
+        and base.implied_share_price > base.assumptions.current_price * 10
+    ):
+        guardrails.append(DCFGuardrail(
+            severity="error",
+            metric="implied_share_price_runaway",
+            message=(
+                f"Implied share price ${base.implied_share_price:,.0f} is >10x current "
+                f"${base.assumptions.current_price:,.0f}. Likely a units or share-count "
+                f"input error."
+            ),
+            value=base.implied_share_price,
+        ))
+
+    # 4) Operating margin > 60% steady-state
+    if base.assumptions.operating_margin:
+        peak_margin = max(base.assumptions.operating_margin)
+        if peak_margin > 0.60:
+            guardrails.append(DCFGuardrail(
+                severity="warn",
+                metric="peak_operating_margin",
+                message=(
+                    f"Peak projected operating margin {peak_margin:.0%} is unusual — "
+                    f"defensible for top-tier software/payments names; flag for "
+                    f"others."
+                ),
+                value=peak_margin,
+            ))
+
+    return guardrails
+
+
+def _cohort_p90_ev_ebitda(ticker: str) -> Optional[float]:
+    """Pull the cohort 90th-percentile EV/EBITDA from comps.
+
+    Returns None when comps are unavailable (bare ticker, sparse
+    universe). Defensive — never raises.
+    """
+    try:
+        from ..services.valuation_service import build_comps
+        comps = build_comps(ticker)
+        if comps is None:
+            return None
+        peer_multiples = sorted(
+            p.ev_ebitda for p in comps.peers if p.ev_ebitda and p.ev_ebitda > 0
+        )
+        if len(peer_multiples) < 3:
+            return None
+        # 90th percentile via linear interpolation
+        idx = 0.9 * (len(peer_multiples) - 1)
+        lo, hi = int(idx), min(int(idx) + 1, len(peer_multiples) - 1)
+        frac = idx - lo
+        return peer_multiples[lo] * (1 - frac) + peer_multiples[hi] * frac
+    except Exception:
+        return None
+
+
 def build_full_dcf(ticker: str, base_assumptions: DCFAssumptions) -> DCFResult:
     """Run base/bull/bear scenarios + sensitivities and synthesize a summary."""
     base = run_dcf(base_assumptions, scenario_name="base", label="Base case")
     bull = run_dcf(_bull_assumptions(base_assumptions), scenario_name="bull", label="Bull case")
     bear = run_dcf(_bear_assumptions(base_assumptions), scenario_name="bear", label="Bear case")
     sens = build_default_sensitivities(base_assumptions)
+    guardrails = check_dcf_realism(base, ticker=ticker)
 
     summary_parts: List[str] = []
     if base_assumptions.current_price:
@@ -430,6 +590,10 @@ def build_full_dcf(ticker: str, base_assumptions: DCFAssumptions) -> DCFResult:
         f"Bull ${bull.implied_share_price:,.2f} ({bull.upside_pct:+.1%}) | "
         f"Bear ${bear.implied_share_price:,.2f} ({bear.upside_pct:+.1%})"
     )
+    if guardrails:
+        n_warn = sum(1 for g in guardrails if g.severity == "warn")
+        n_err = sum(1 for g in guardrails if g.severity == "error")
+        summary_parts.append(f"⚠ Model warnings: {n_err} errors, {n_warn} warns")
     return DCFResult(
         ticker=ticker,
         current_price=base_assumptions.current_price,
@@ -438,4 +602,5 @@ def build_full_dcf(ticker: str, base_assumptions: DCFAssumptions) -> DCFResult:
         bear=bear,
         sensitivities=sens,
         summary=". ".join(summary_parts),
+        guardrails=guardrails,
     )

@@ -805,40 +805,71 @@ def _run_stock_memo_inner(
     comps = safe_call(_checkpointed_comps, ticker, force_refresh=force_refresh, fallback=None,
                       name="Comps Engine", log_to=degradation)
 
+    # Wave 10 — PM intake step. Lets the PM deprioritize up to 3
+    # specialists for this memo (e.g., skip technicals on a regulated
+    # bank, skip filings re-pass when nothing material has changed).
+    # Default = run all 8. Decision is logged on the memo for audit.
+    from .intake import run_intake, stub_finding
+    intake = run_intake(profile)
+
     # Each specialist runs with its own llm_call_context so any LLM calls it
     # makes get tagged with the right agent_name in LLMCallLog (Wave 1A).
     from .llm import llm_call_context
-    with llm_call_context(agent_name="Sector Analyst", run_id=run_id):
-        sector_finding = safe_finding("Sector Analyst", _checkpointed_sector,
-                                      profile, ratios, log_to=degradation)
-    with llm_call_context(agent_name="Earnings Analyst", run_id=run_id):
-        earnings_finding = safe_finding("Earnings Analyst", _checkpointed_earnings,
-                                        profile, transcript, earnings, log_to=degradation)
-    with llm_call_context(agent_name="Filing Analyst", run_id=run_id):
-        filing_finding = safe_finding("Filing Analyst", _checkpointed_filing,
-                                      profile, filings, log_to=degradation)
-    with llm_call_context(agent_name="Valuation Analyst", run_id=run_id):
-        valuation_finding = safe_finding("Valuation Analyst", _checkpointed_valuation,
-                                         profile, ratios, dcf, log_to=degradation)
-    with llm_call_context(agent_name="Comps Analyst", run_id=run_id):
-        comps_finding = safe_finding("Comps Analyst", _checkpointed_comps_agent,
-                                     profile, comps, log_to=degradation)
-    with llm_call_context(agent_name="Macro Analyst", run_id=run_id):
-        macro_finding = safe_finding("Macro Analyst", _checkpointed_macro,
-                                     profile, scenario, log_to=degradation)
-    with llm_call_context(agent_name="Risk Analyst", run_id=run_id):
-        risk_finding = safe_finding(
-            "Risk Analyst", _checkpointed_risk,
-            profile, ratios, (dcf.summary if dcf else None), log_to=degradation,
-        )
+    if intake.runs("sector"):
+        with llm_call_context(agent_name="Sector Analyst", run_id=run_id):
+            sector_finding = safe_finding("Sector Analyst", _checkpointed_sector,
+                                          profile, ratios, log_to=degradation)
+    else:
+        sector_finding = AgentFinding(**stub_finding("sector", intake.rationale))
+    if intake.runs("earnings"):
+        with llm_call_context(agent_name="Earnings Analyst", run_id=run_id):
+            earnings_finding = safe_finding("Earnings Analyst", _checkpointed_earnings,
+                                            profile, transcript, earnings, log_to=degradation)
+    else:
+        earnings_finding = AgentFinding(**stub_finding("earnings", intake.rationale))
+    if intake.runs("filing"):
+        with llm_call_context(agent_name="Filing Analyst", run_id=run_id):
+            filing_finding = safe_finding("Filing Analyst", _checkpointed_filing,
+                                          profile, filings, log_to=degradation)
+    else:
+        filing_finding = AgentFinding(**stub_finding("filing", intake.rationale))
+    if intake.runs("valuation"):
+        with llm_call_context(agent_name="Valuation Analyst", run_id=run_id):
+            valuation_finding = safe_finding("Valuation Analyst", _checkpointed_valuation,
+                                             profile, ratios, dcf, log_to=degradation)
+    else:
+        valuation_finding = AgentFinding(**stub_finding("valuation", intake.rationale))
+    if intake.runs("comps"):
+        with llm_call_context(agent_name="Comps Analyst", run_id=run_id):
+            comps_finding = safe_finding("Comps Analyst", _checkpointed_comps_agent,
+                                         profile, comps, log_to=degradation)
+    else:
+        comps_finding = AgentFinding(**stub_finding("comps", intake.rationale))
+    if intake.runs("macro"):
+        with llm_call_context(agent_name="Macro Analyst", run_id=run_id):
+            macro_finding = safe_finding("Macro Analyst", _checkpointed_macro,
+                                         profile, scenario, log_to=degradation)
+    else:
+        macro_finding = AgentFinding(**stub_finding("macro", intake.rationale))
+    if intake.runs("risk"):
+        with llm_call_context(agent_name="Risk Analyst", run_id=run_id):
+            risk_finding = safe_finding(
+                "Risk Analyst", _checkpointed_risk,
+                profile, ratios, (dcf.summary if dcf else None), log_to=degradation,
+            )
+    else:
+        risk_finding = AgentFinding(**stub_finding("risk", intake.rationale))
     # Wave 3B — Technical Analyst. By design technicals do NOT influence
     # the rating; they're positioning context only. The agent gets its own
     # llm_call_context so the LLM narrative pass is attributed correctly.
-    with llm_call_context(agent_name="Technical Analyst", run_id=run_id):
-        technical_finding = safe_finding(
-            "Technical Analyst", _checkpointed_technical, profile,
-            log_to=degradation,
-        )
+    if intake.runs("technical"):
+        with llm_call_context(agent_name="Technical Analyst", run_id=run_id):
+            technical_finding = safe_finding(
+                "Technical Analyst", _checkpointed_technical, profile,
+                log_to=degradation,
+            )
+    else:
+        technical_finding = AgentFinding(**stub_finding("technical", intake.rationale))
 
     findings = {
         "sector": sector_finding,
@@ -1060,6 +1091,39 @@ def _run_stock_memo_inner(
         gap=str(raw_misp.get("gap") or "")[:1000],
         falsifiers=[str(x)[:300] for x in (raw_misp.get("falsifiers") or [])][:5],
     )
+
+    # Wave 10 — freeze the memo-time price so the UI can later overlay
+    # the live quote and show drift. Best-effort: null when the quote
+    # chain misses (the live-overlay path then has nothing to compare
+    # against, which is fine).
+    price_at_memo: Optional[float] = None
+    try:
+        from ..services.market_data_service import get_current_price
+        price_at_memo = get_current_price(profile.get("ticker", ticker))
+    except Exception as exc:  # pragma: no cover — never block a memo
+        log.debug("price_at_memo capture failed: %s", exc)
+
+    # Wave 10 — forward catalyst calendar (next 90d). Best-effort —
+    # the table may be empty until the cron has run at least once.
+    forward_catalysts: List[Dict[str, Any]] = []
+    try:
+        from ..services.catalyst_service import get_upcoming
+        forward_catalysts = get_upcoming(profile.get("ticker", ticker), days_ahead=90)
+    except Exception as exc:  # pragma: no cover
+        log.debug("forward_catalysts fetch failed: %s", exc)
+
+    # Wave 10 — earnings quarter-over-quarter delta. Reads the
+    # earnings agent's structured payload and walks back through the
+    # memo history for prior-quarter context. None when no prior data.
+    earnings_qoq: Optional[AgentFinding] = None
+    try:
+        from .earnings_qoq import run_earnings_qoq_delta
+        earnings_struct = (earnings_finding.data or {}).get("structured") if earnings_finding else None
+        earnings_qoq = run_earnings_qoq_delta(
+            profile.get("ticker", ticker), earnings_struct,
+        )
+    except Exception as exc:  # pragma: no cover
+        log.debug("earnings QoQ delta failed: %s", exc)
     memo = StockMemoOut(
         ticker=profile.get("ticker"),
         company_name=profile.get("company_name", ticker),
@@ -1069,6 +1133,8 @@ def _run_stock_memo_inner(
         confidence_score=blended_confidence,
         one_sentence_thesis=synth.get("one_sentence_thesis", ""),
         mispricing_thesis=mispricing,
+        price_at_memo=price_at_memo,
+        price_at_memo_at=(datetime.utcnow() if price_at_memo is not None else None),
         business_summary=profile.get("business_description", ""),
         sector_agent_view=sector_finding,
         earnings_agent_view=earnings_finding,
@@ -1107,6 +1173,9 @@ def _run_stock_memo_inner(
         generation_mode="live" if settings.has_llm and settings.enable_live_data else "demo",
         degraded_agents=degradation.degraded_agents(),
         round_findings=round_findings,
+        forward_catalysts=forward_catalysts,
+        earnings_qoq_delta=earnings_qoq,
+        intake_decision=intake.model_dump() if intake.skipped else {},
     )
 
     # Wave 9 — surface deep-research counters on `memo.scores` so the
