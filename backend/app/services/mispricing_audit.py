@@ -150,6 +150,56 @@ def _clamp_int(v: Any, lo: int, hi: int) -> Optional[int]:
         return None
 
 
+def persist_audit(audit: Dict[str, Any], aggregate: Dict[str, Any]) -> Optional[int]:
+    """Wave 10 — write an audit run to `mispricing_audits` so the PM can
+    later read the most-recent `pattern_observation` from its prompt
+    context. Returns the new row id, or None on failure (the audit is
+    still useful for the API response in that case)."""
+    try:
+        from datetime import datetime
+        from ..database import SessionLocal
+        from ..models import MispricingAudit
+        with SessionLocal() as db:
+            row = MispricingAudit(
+                audited_at=datetime.utcnow(),
+                n_memos=int(audit.get("audited") or 0),
+                pattern_observation=str(audit.get("pattern_observation") or "")[:2000],
+                per_memo_scores=audit.get("per_memo") or [],
+                aggregate_means=aggregate or {},
+                weak_memo_count=int((aggregate or {}).get("weak_memo_count") or 0),
+            )
+            db.add(row)
+            db.commit()
+            return row.id
+    except Exception as exc:  # pragma: no cover — never block the audit response
+        log.warning("mispricing audit persist failed: %s", exc)
+        return None
+
+
+def latest_pattern_observation(*, max_age_days: int = 14) -> str:
+    """Read the most-recent `pattern_observation` for PM self-improvement
+    context. Returns empty string when no recent audit exists or the
+    observation is empty.
+    """
+    try:
+        from datetime import datetime, timedelta
+        from sqlalchemy import select
+        from ..database import SessionLocal
+        from ..models import MispricingAudit
+        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        with SessionLocal() as db:
+            row = db.execute(
+                select(MispricingAudit)
+                .where(MispricingAudit.audited_at >= cutoff)
+                .where(MispricingAudit.pattern_observation != "")
+                .order_by(MispricingAudit.audited_at.desc())
+                .limit(1)
+            ).scalars().first()
+            return (row.pattern_observation or "") if row else ""
+    except Exception:  # pragma: no cover
+        return ""
+
+
 def aggregate_scores(audit: Dict[str, Any]) -> Dict[str, Any]:
     """Summary stats across an audit run — mean specificity /
     differentiation / falsifiability, count of "weak" memos

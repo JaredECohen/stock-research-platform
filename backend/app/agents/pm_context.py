@@ -85,6 +85,52 @@ def build_pm_context(
     except Exception as exc:  # pragma: no cover
         log.debug("research_notes read failed for pm: %s", exc)
 
+    # 5) Wave 10 — PM self-improvement signals. Latest audit pattern
+    # observation tells the PM what failure mode is most common in
+    # recent memos (e.g. "you tend to write vague consensus_view
+    # fields"). Regime-conditional accuracy tells the PM if the
+    # current regime is one where it has historically been wrong
+    # ("you've been wrong in recessions; be more cautious").
+    try:
+        from ..services.mispricing_audit import latest_pattern_observation
+        obs = latest_pattern_observation(max_age_days=14)
+        if obs and obs.strip():
+            blocks.append(
+                "## PM self-improvement (most recent audit)\n\n"
+                f"_The most common failure mode in your recent memos:_ {obs.strip()}\n\n"
+                "_Apply this lesson on the current memo. If the audit is "
+                "wrong, you may explicitly disagree — but acknowledge it._"
+            )
+    except Exception as exc:  # pragma: no cover
+        log.debug("mispricing audit read failed: %s", exc)
+
+    try:
+        from ..services.calibration_service import regime_conditional_accuracy
+        # Only inject when there's a current regime tag worth conditioning on.
+        from ..cache import cache_get
+        broadcast = cache_get("macro:global", "macro_broadcast")
+        current_regime = (
+            (broadcast.payload or {}).get("regime")
+            if broadcast and isinstance(broadcast.payload, dict) else None
+        )
+        if current_regime:
+            stats = regime_conditional_accuracy(horizon_days=90)
+            entry = (stats.get("regimes") or {}).get(current_regime.lower())
+            if entry and entry.get("n", 0) >= 3:
+                accuracy_pct = (entry.get("accuracy") or 0.0) * 100
+                blocks.append(
+                    "## PM track-record under current regime\n\n"
+                    f"Current macro regime: **{current_regime}**.\n"
+                    f"In this regime, your last {entry['n']} memo(s) had "
+                    f"a **{accuracy_pct:.0f}%** hit rate at 90d "
+                    f"(mean alpha: {(entry.get('mean_alpha') or 0.0)*100:+.1f}%).\n\n"
+                    "_Use this calibration: if your regime accuracy is "
+                    "low, lean toward lower-confidence ratings or more "
+                    "explicit thesis-breakers._"
+                )
+    except Exception as exc:  # pragma: no cover
+        log.debug("regime accuracy read failed: %s", exc)
+
     if not blocks:
         return ""
     header = (

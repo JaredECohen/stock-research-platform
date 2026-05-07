@@ -661,3 +661,23 @@ class CatalystEvent(Base):
         ),
         Index("ix_catalyst_events_ticker_date", "ticker", "event_date"),
     )
+
+
+class MispricingAudit(Base):
+    """Wave 10 — periodic LLM-judged audit of PM mispricing theses.
+
+    Each row is one audit run. The latest row's `pattern_observation`
+    is fed into the PM synthesis prompt as a self-improvement signal —
+    the PM reads "your most common failure mode lately is X" and is
+    expected to avoid it on the next memo. Closes the loop on PM
+    self-improvement.
+    """
+    __tablename__ = "mispricing_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    audited_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    n_memos: Mapped[int] = mapped_column(Integer, default=0)
+    pattern_observation: Mapped[str] = mapped_column(Text, default="")
+    per_memo_scores: Mapped[list] = mapped_column(JSON, default=list)
+    aggregate_means: Mapped[dict] = mapped_column(JSON, default=dict)
+    weak_memo_count: Mapped[int] = mapped_column(Integer, default=0)

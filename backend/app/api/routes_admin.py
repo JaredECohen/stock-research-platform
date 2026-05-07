@@ -258,17 +258,92 @@ def run_postmortems_endpoint(
     return run_postmortems(horizon_days=horizon_days, limit=limit)
 
 
+@router.get("/api/admin/postmortems/{ticker}")
+def latest_postmortems_endpoint(ticker: str, limit: int = Query(5, ge=1, le=50)) -> Dict[str, Any]:
+    """Wave 10 — latest postmortems for a ticker. Powers the memo page's
+    "we got this {right/wrong} last time" callout. Returns most recent
+    first.
+    """
+    from sqlalchemy import select
+    from ..database import SessionLocal
+    from ..models import MemoPostmortem
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(MemoPostmortem)
+            .where(MemoPostmortem.ticker == ticker.upper())
+            .order_by(MemoPostmortem.created_at.desc())
+            .limit(limit)
+        ).scalars().all()
+    return {
+        "ticker": ticker.upper(),
+        "postmortems": [
+            {
+                "id": r.id,
+                "horizon_days": r.horizon_days,
+                "verdict": r.verdict,
+                "lesson": r.lesson,
+                "agent_attribution": r.agent_attribution or {},
+                "realized_return": r.realized_return,
+                "benchmark_return": r.benchmark_return,
+                "regime_at_memo": r.regime_at_memo,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.post("/api/admin/rerun-memos")
+def rerun_memos_endpoint(tickers: List[str]) -> Dict[str, Any]:
+    """Wave 10 — admin bulk rerun. Useful when a Wave shipped that
+    materially changes memo outputs (new schema field, prompt update,
+    DCF default change) and you want to refresh a curated subset
+    without waiting for organic triggers.
+
+    Throttled by the on_filing_event path, which is the same
+    full-reanalysis route the EDGAR poller uses.
+    """
+    from ..services.update_orchestrator import on_filing_event
+    if not tickers:
+        raise HTTPException(status_code=400, detail="tickers list cannot be empty")
+    if len(tickers) > 50:
+        raise HTTPException(
+            status_code=400, detail="cap of 50 tickers per request",
+        )
+    results: List[Dict[str, Any]] = []
+    for raw in tickers:
+        ticker = (raw or "").strip().upper()
+        if not ticker:
+            continue
+        try:
+            results.append(on_filing_event(ticker))
+        except Exception as exc:  # pragma: no cover
+            results.append({"ticker": ticker, "error": str(exc)})
+    return {"requested": len(tickers), "results": results}
+
+
 @router.post("/api/admin/mispricing-audit")
 def mispricing_audit_endpoint(
     limit: int = Query(20, ge=1, le=50),
+    persist: bool = Query(True),
 ) -> Dict[str, Any]:
     """Wave 10 — audit the quality of the PM's mispricing theses
     across recent memos. Returns per-memo scores (specificity /
     differentiation / falsifiability) + a corpus-wide failure-
-    mode observation. Feeds PM prompt iteration."""
-    from ..services.mispricing_audit import aggregate_scores, run_audit
+    mode observation. Feeds PM prompt iteration.
+
+    When `persist=true` (default) the run is written to
+    `mispricing_audits` so the PM can read the most-recent
+    `pattern_observation` from its self-improvement context block.
+    """
+    from ..services.mispricing_audit import (
+        aggregate_scores, persist_audit, run_audit,
+    )
     audit = run_audit(limit=limit)
     audit["aggregate"] = aggregate_scores(audit)
+    if persist:
+        row_id = persist_audit(audit, audit["aggregate"])
+        audit["audit_id"] = row_id
     return audit
 
 

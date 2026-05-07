@@ -347,7 +347,18 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
             last_price = 0.0
 
     # Wave 10 — cyclical sector → margin mean reversion default ON.
+    # Also flip on for ANY ticker classified as at-peak by cycle
+    # fingerprinting (peak earnings → margin reverts), regardless of
+    # sector. A software name at unprecedented operating leverage
+    # benefits from the same cohort-median anchor.
     use_reversion = _is_cyclical(profile)
+    try:
+        from .cycle_position import cycle_position
+        pos = cycle_position(ticker)
+        if pos.get("position") == "peak":
+            use_reversion = True
+    except Exception:  # pragma: no cover — defensive
+        pass
     cohort_target = _cohort_op_margin(ticker) if use_reversion else None
 
     return dcf_engine.derive_default_assumptions(
