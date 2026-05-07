@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..config import settings
 from ..schemas import AgentFinding
@@ -179,6 +179,27 @@ def run_earnings_agent(
                 ).model_dump()
             except Exception:  # pragma: no cover — drop the structure rather than fail
                 structured_payload = {}
+        # Wave 10 — emit citations for the prepared remarks + Q&A
+        # sections + back-half multi-pass when we ran one.
+        from ..schemas import Citation
+        period = str(transcript.get("period") or "")
+        evidence: List[Citation] = []
+        if period and prepared:
+            evidence.append(Citation(
+                kind="transcript", ref=period, section="prepared_remarks",
+                excerpt=str(prepared)[:300],
+            ))
+        if period and qa:
+            evidence.append(Citation(
+                kind="transcript", ref=period, section="qa",
+                excerpt=str(qa)[:300],
+            ))
+        if multipass_addendum:
+            for theme in (multipass_addendum.get("hard_questions") or [])[:2]:
+                evidence.append(Citation(
+                    kind="transcript", ref=period, section="qa_back_half",
+                    excerpt=str(theme)[:300],
+                ))
         return AgentFinding(
             agent="Earnings Analyst",
             headline=llm_out.get("headline", "Earnings view"),
@@ -186,6 +207,7 @@ def run_earnings_agent(
             key_points=_flatten_key_points(llm_out.get("key_points", [])),
             confidence=float(llm_out.get("confidence", 0.7)),
             sources=[f"transcript:{transcript.get('period', '')}"],
+            evidence=evidence[:6],
             data={"structured": structured_payload} if structured_payload else {},
         )
 

@@ -46,6 +46,7 @@ def _audit_one(ticker: str, *, mean_reversion: bool) -> dict:
     from app.finance.dcf import build_full_dcf, derive_default_assumptions
     from app.services.fundamentals_service import get_full_financials
     from app.services.market_data_service import get_current_price
+    from app.services.cycle_position import cycle_position
 
     fin = get_full_financials(ticker)
     if not fin.get("income"):
@@ -63,12 +64,15 @@ def _audit_one(ticker: str, *, mean_reversion: bool) -> dict:
     diluted_shares = profile.get("shares_outstanding") or 0.0
     cohort_op_margin = None
     try:
-        from app.services.sector_research_service import sector_cohort_metrics
-        cohort = sector_cohort_metrics(ticker)
-        if isinstance(cohort, dict):
-            cohort_op_margin = cohort.get("median_operating_margin")
+        from app.services.valuation_service import _cohort_op_margin
+        cohort_op_margin = _cohort_op_margin(ticker)
     except Exception:
         cohort_op_margin = None
+
+    cycle = cycle_position(ticker)
+    # Auto-flip mean reversion when peak cycle detected, mirroring the
+    # production default in default_dcf_assumptions.
+    use_reversion = mean_reversion or (cycle.get("position") == "peak")
 
     try:
         ass = derive_default_assumptions(
@@ -79,7 +83,7 @@ def _audit_one(ticker: str, *, mean_reversion: bool) -> dict:
             diluted_shares=diluted_shares,
             beta=profile.get("beta") or 1.0,
             analyst_estimates=estimates,
-            margin_mean_reversion=mean_reversion,
+            margin_mean_reversion=use_reversion,
             cohort_op_margin=cohort_op_margin,
         )
         result = build_full_dcf(ticker, ass)
@@ -94,6 +98,8 @@ def _audit_one(ticker: str, *, mean_reversion: bool) -> dict:
         "upside_pct": upside_pct,
         "wacc": result.base.assumptions.wacc,
         "terminal_growth": result.base.assumptions.terminal_growth,
+        "cycle": cycle.get("position", "unknown"),
+        "use_reversion": use_reversion,
         "guardrails": result.guardrails,
     }
 
@@ -139,16 +145,16 @@ def main() -> int:
     )
     print(
         f"{'Ticker':<8} {'Current':>10} {'Implied':>10} {'Upside%':>8} "
-        f"{'WACC':>6} {'Tg':>5}  Flags / errors"
+        f"{'WACC':>6} {'Tg':>5} {'Cycle':>8}  Flags / errors"
     )
-    print("-" * 96)
+    print("-" * 110)
     outliers = 0
     errors = 0
     audited = 0
     for t in tickers:
         row = _audit_one(t, mean_reversion=args.mean_reversion)
         if row.get("error"):
-            print(f"{t:<8} {'-':>10} {'-':>10} {'-':>8} {'-':>6} {'-':>5}  ERROR: {row['error']}")
+            print(f"{t:<8} {'-':>10} {'-':>10} {'-':>8} {'-':>6} {'-':>5} {'-':>8}  ERROR: {row['error']}")
             errors += 1
             continue
         audited += 1
@@ -166,10 +172,14 @@ def main() -> int:
                 "  ⚠ "
                 + ", ".join(f"{k}={v}" for k, v in counts.items() if v)
             )
+        cycle_label = row.get("cycle", "—")
+        if row.get("use_reversion"):
+            cycle_label = f"{cycle_label}↓"  # ↓ marks margin-revert ON
         print(
             f"{t:<8} {row['current_price']:>10,.2f} "
             f"{row['implied_price']:>10,.2f} {upside:>+7.1f}%{flag} "
-            f"{row['wacc']*100:>5.1f}% {row['terminal_growth']*100:>4.1f}%"
+            f"{row['wacc']*100:>5.1f}% {row['terminal_growth']*100:>4.1f}% "
+            f"{cycle_label:>8}"
             f"{guard_summary}"
         )
     print("-" * 96)

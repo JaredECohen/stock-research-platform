@@ -180,13 +180,45 @@ def run_filing_agent(
         # dicts (e.g. `[{"category": "MD&A Highlights", "items":
         # [...]}]`) instead of flat strings. Flatten so
         # `AgentFinding.key_points: List[str]` doesn't reject.
+        # Wave 10 — emit citations for retrieved filing chunks +
+        # the primary filing's risk_factors / mda sections.
+        from ..schemas import Citation
+        accession = primary.get("accession_number", "")
+        evidence: List[Citation] = []
+        if accession and primary.get("mda"):
+            evidence.append(Citation(
+                kind="filing", ref=accession, section="mda",
+                excerpt=str(primary.get("mda") or "")[:300],
+            ))
+        if accession and primary.get("risk_factors"):
+            risks_list = primary.get("risk_factors") or []
+            if isinstance(risks_list, list) and risks_list:
+                evidence.append(Citation(
+                    kind="filing", ref=accession, section="risk_factors",
+                    excerpt=str(risks_list[0])[:300],
+                ))
+        for chunk in (retrieved or [])[:4]:
+            chunk_section = (
+                chunk.get("section") if isinstance(chunk, dict) else None
+            )
+            chunk_text = (
+                chunk.get("text") if isinstance(chunk, dict) else str(chunk)
+            )
+            if chunk_text:
+                evidence.append(Citation(
+                    kind="filing",
+                    ref=accession or ticker,
+                    section=chunk_section,
+                    excerpt=str(chunk_text)[:300],
+                ))
         return AgentFinding(
             agent="Filing Analyst",
             headline=llm_out.get("headline", "Filing view"),
             summary=llm_out.get("summary", ""),
             key_points=_flatten_key_points(llm_out.get("key_points", [])),
             confidence=float(llm_out.get("confidence", 0.7)),
-            sources=[f"filing:{primary.get('accession_number', '')}"],
+            sources=[f"filing:{accession}"],
+            evidence=evidence[:6],
         )
 
     # Deterministic fallback

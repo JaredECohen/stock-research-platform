@@ -205,6 +205,29 @@ def run_comps_agent(
         except Exception:  # pragma: no cover — narrative is best-effort
             pass
 
+    # Wave 10 — typed citations for peer rows + own-history.
+    from ..schemas import Citation
+    evidence: List[Citation] = []
+    for p in comps.peers[:8]:
+        evidence.append(Citation(
+            kind="peer", ref=p.ticker,
+            excerpt=(
+                f"{p.company_name}: EV/EBITDA "
+                f"{(p.ev_ebitda or 0):.1f}x, op margin "
+                f"{(p.operating_margin or 0)*100:.0f}%."
+            ),
+        ))
+    if history is not None:
+        evidence.append(Citation(
+            kind="ratio", ref=f"history:{ticker}",
+            excerpt=(history.interpretation or "Self-historical comps")[:300],
+        ))
+    for p in (comps.exposure_peers or [])[:4]:
+        evidence.append(Citation(
+            kind="peer", ref=p.ticker, section="exposure",
+            excerpt=f"Cross-sector exposure peer: {p.company_name}.",
+        ))
+
     finding = AgentFinding(
         agent="Comps Analyst",
         headline=headline,
@@ -213,6 +236,7 @@ def run_comps_agent(
         confidence=confidence,
         sources=[f"peer:{p.ticker}" for p in comps.peers]
         + ([f"history:{ticker}"] if history is not None else []),
+        evidence=evidence[:10],
         data=finding_data,
     )
 

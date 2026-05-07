@@ -1124,6 +1124,36 @@ def _run_stock_memo_inner(
         )
     except Exception as exc:  # pragma: no cover
         log.debug("earnings QoQ delta failed: %s", exc)
+
+    # Wave 10 — per-agent influence on the rating. Computed from each
+    # finding's confidence + tone; deterministic, no extra LLM cost.
+    # Powers per-agent attribution dashboards + the PM's eventual
+    # "discount this specialist" feedback loop.
+    agent_influence: Dict[str, float] = {}
+    try:
+        from .influence import compute_influence
+        agent_influence = compute_influence(findings)
+    except Exception as exc:  # pragma: no cover
+        log.debug("agent influence computation failed: %s", exc)
+
+    # Wave 10 — freeze the macro context that produced this rating.
+    # Lets postmortem regime-conditional bucketing work even after
+    # the macro broadcast cache rolls over.
+    macro_snapshot_at_memo: Dict[str, float] = {}
+    macro_regime_at_memo: str = ""
+    try:
+        from ..cache import cache_get
+        broadcast = cache_get("macro:global", "macro_broadcast")
+        if broadcast and isinstance(broadcast.payload, dict):
+            macro_regime_at_memo = str(broadcast.payload.get("regime") or "")
+            snap = broadcast.payload.get("snapshot") or {}
+            if isinstance(snap, dict):
+                macro_snapshot_at_memo = {
+                    str(k): float(v) for k, v in snap.items()
+                    if isinstance(v, (int, float))
+                }
+    except Exception as exc:  # pragma: no cover
+        log.debug("macro snapshot freeze failed: %s", exc)
     memo = StockMemoOut(
         ticker=profile.get("ticker"),
         company_name=profile.get("company_name", ticker),
@@ -1176,6 +1206,9 @@ def _run_stock_memo_inner(
         forward_catalysts=forward_catalysts,
         earnings_qoq_delta=earnings_qoq,
         intake_decision=intake.model_dump() if intake.skipped else {},
+        agent_influence=agent_influence,
+        macro_snapshot_at_memo=macro_snapshot_at_memo,
+        macro_regime_at_memo=macro_regime_at_memo,
     )
 
     # Wave 9 — surface deep-research counters on `memo.scores` so the

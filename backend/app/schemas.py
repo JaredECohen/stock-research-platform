@@ -215,6 +215,24 @@ class BullBearAnalysis(BaseModel):
     sector_lean: Literal["bull", "bear", "balanced"] = "balanced"
 
 
+class Citation(BaseModel):
+    """Wave 10 — typed citation for an evidence chain entry.
+
+    `kind` is the source type — filing, transcript, ratio, peer,
+    macro, dcf — so the UI can render an appropriate link / drawer.
+    `ref` is the stable identifier (accession, period, ticker, etc.).
+    `excerpt` is an optional short quote (≤300 chars) that the agent
+    pulled into its prompt; we cap to keep the memo payload compact.
+    """
+    kind: Literal[
+        "filing", "transcript", "ratio", "peer", "macro", "dcf",
+        "news", "research_note", "other",
+    ] = "other"
+    ref: str = ""
+    excerpt: str = ""
+    section: Optional[str] = None
+
+
 class AgentFinding(BaseModel):
     """One agent's contribution to a memo.
 
@@ -228,6 +246,12 @@ class AgentFinding(BaseModel):
     fields above; when `ENABLE_LONG_FORM_REPORTS=true`, enriched with an
     LLM expansion per agent. Frontend renders it in a collapsible drawer
     on each agent tile.
+
+    Wave 10 — `evidence` is the typed citation list (one entry per
+    citable claim or chunk). Empty when the agent didn't emit
+    citations; backwards-compatible with memos that pre-date the
+    field. Frontend renders this as "View sources" expander on the
+    agent tile.
     """
     agent: str
     headline: str
@@ -235,6 +259,7 @@ class AgentFinding(BaseModel):
     key_points: List[str] = Field(default_factory=list)
     confidence: float = 0.7
     sources: List[str] = Field(default_factory=list)
+    evidence: List[Citation] = Field(default_factory=list)
     data: Dict[str, Any] = Field(default_factory=dict)
     long_form_report: Optional[str] = None
 
@@ -795,6 +820,18 @@ class StockMemoOut(BaseModel):
     # why). `{skipped: List[str], rationale: str}`. Empty dict when
     # all 8 ran (the default). Audit trail for cost-aware memo runs.
     intake_decision: Dict[str, Any] = Field(default_factory=dict)
+    # Wave 10 — per-agent influence on the rating. Computed post-PM
+    # synthesis from each agent's confidence + tone; values are signed
+    # contributions (positive = bullish pull, negative = bearish pull),
+    # roughly normalized so the largest |value| is the most-influential
+    # agent on this memo. Empty on memos that pre-date the field.
+    agent_influence: Dict[str, float] = Field(default_factory=dict)
+    # Wave 10 — macro context frozen at memo creation. Lets the
+    # postmortem regime-conditional dashboards bucket memos by the
+    # regime that was active when they were written, even if the macro
+    # broadcast cache has rolled over by the time outcomes evaluate.
+    macro_snapshot_at_memo: Dict[str, float] = Field(default_factory=dict)
+    macro_regime_at_memo: str = ""
     # List of agents that failed during this memo's generation. Empty when
     # everything ran normally; populated by the safe-runner so the UI can
     # show "X analyst was unavailable" rather than dropping the memo.
