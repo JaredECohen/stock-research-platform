@@ -143,8 +143,19 @@ def _deterministic_diff(prior: FilingDoc, new: FilingDoc) -> List[str]:
 def _llm_diff(prior: FilingDoc, new: FilingDoc) -> Optional[Dict[str, Any]]:
     """Ask the LLM for a structured what-changed summary.
 
-    Output: { bullets: [str], sector_relevant: bool, sector_pattern: str }.
-    Returns None on any failure; caller falls back to deterministic.
+    Wave 10 — output now includes structured risk-factor add / remove /
+    expand lists in addition to the freeform bullets. Risk-factor
+    *additions* and *removals* are extremely high-signal events that
+    deserve their own surface area in the memory file (and eventually
+    the memo).
+
+    Output:
+      { bullets: [str up to 5],
+        risk_additions: [str up to 4],
+        risk_removals: [str up to 4],
+        risk_expanded: [str up to 4],
+        sector_relevant: bool,
+        sector_pattern: str }
     """
     if not getattr(settings, "openai_api_key", None):
         return None
@@ -166,14 +177,20 @@ def _llm_diff(prior: FilingDoc, new: FilingDoc) -> Optional[Dict[str, Any]]:
     out = llm.chat_json(
         "Two filings of the same type for the same company. "
         "Identify what is materially different in the NEW vs the PRIOR. "
-        "Focus on: new risk factors, removed risk factors, MD&A tone "
-        "shifts, segment / customer / geographic disclosure changes, "
-        "guidance changes. Each bullet must be specific and citation-"
-        "worthy (no fluff). Then judge whether the delta represents a "
-        "SECTOR pattern (something that would also matter for peers) — "
-        "if yes, write a short generalizable lesson.\n\n"
-        "Return JSON: { bullets: [str up to 5], sector_relevant: bool, "
-        "sector_pattern: str }.\n\n"
+        "PRIORITIZE risk-factor changes — companies don't add or remove "
+        "risk factors casually; each one is a deliberate signal.\n\n"
+        "1. List risk factors that APPEARED in NEW (not in PRIOR).\n"
+        "2. List risk factors that DISAPPEARED from NEW (were in PRIOR).\n"
+        "3. List risk factors that EXPANDED materially (more disclosure "
+        "   in NEW vs PRIOR).\n"
+        "4. List 0-5 other material differences (MD&A tone shifts, "
+        "   segment / customer / geographic disclosure changes).\n"
+        "5. Judge whether the delta is a SECTOR pattern; if yes, write "
+        "   one generalizable lesson.\n\n"
+        "Each item must be specific and citation-worthy. No fluff.\n\n"
+        "Return JSON: { bullets: [str up to 5], risk_additions: [str "
+        "up to 4], risk_removals: [str up to 4], risk_expanded: [str "
+        "up to 4], sector_relevant: bool, sector_pattern: str }.\n\n"
         "Filings:\n" + json.dumps(payload, default=str)[: settings.max_agent_context_chars],
         system="You are an experienced filings analyst. Be concise and specific.",
         route="strong",
@@ -264,14 +281,35 @@ def post_pass(filing: FilingDoc, profile: Optional[Dict[str, Any]] = None) -> Di
     llm_out = _llm_diff(prior, filing)
     bullets: List[str] = []
     sector_pattern = ""
+    risk_additions: List[str] = []
+    risk_removals: List[str] = []
+    risk_expanded: List[str] = []
     if llm_out:
         bullets = [str(b) for b in (llm_out.get("bullets") or []) if str(b).strip()][:5]
+        risk_additions = [str(b)[:300] for b in (llm_out.get("risk_additions") or []) if str(b).strip()][:4]
+        risk_removals = [str(b)[:300] for b in (llm_out.get("risk_removals") or []) if str(b).strip()][:4]
+        risk_expanded = [str(b)[:300] for b in (llm_out.get("risk_expanded") or []) if str(b).strip()][:4]
         if llm_out.get("sector_relevant"):
             sector_pattern = str(llm_out.get("sector_pattern") or "")
+
+    # Wave 10 — fold risk-factor adds/drops/expansions into the bullets
+    # written to memory so they're searchable in the company file.
+    # Keep the labels distinct so a future reader can tell at a glance
+    # which kind of risk change happened.
+    if risk_additions:
+        bullets.extend(f"➕ Risk added: {r}" for r in risk_additions)
+    if risk_removals:
+        bullets.extend(f"➖ Risk removed: {r}" for r in risk_removals)
+    if risk_expanded:
+        bullets.extend(f"↗ Risk expanded: {r}" for r in risk_expanded)
+
     if not bullets:
         bullets = _deterministic_diff(prior, filing)
 
     report["delta_bullets"] = bullets
+    report["risk_additions"] = risk_additions
+    report["risk_removals"] = risk_removals
+    report["risk_expanded"] = risk_expanded
     _write_to_company_memory(filing.ticker, filing, bullets)
     if sector_pattern:
         sector = (profile or {}).get("sector") or ""

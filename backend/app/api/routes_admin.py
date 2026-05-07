@@ -197,6 +197,68 @@ def evaluate_outcomes_now() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Wave 10 — calibration + per-agent attribution + regime-conditional accuracy
+# ---------------------------------------------------------------------------
+
+@router.get("/api/admin/calibration")
+def calibration_endpoint(
+    horizon_days: int = Query(90, ge=1, le=365),
+) -> Dict[str, Any]:
+    """Wave 10 — calibration plot data: per-rating realized excess
+    return distribution. A well-calibrated PM has Strong-Buy realizations
+    clearly higher than Buy realizations. Powers the upcoming
+    track-record dashboard."""
+    from ..services.calibration_service import calibration_by_rating
+    return calibration_by_rating(horizon_days=horizon_days)
+
+
+@router.get("/api/admin/per-agent-attribution")
+def per_agent_attribution_endpoint(
+    horizon_days: int = Query(90, ge=1, le=365),
+) -> Dict[str, Any]:
+    """Wave 10 — per-specialist attribution stats from `memo_postmortems`.
+    Surfaces systematic strengths and weaknesses ('our valuation analyst
+    consistently picks the right names; our macro is pulling the wrong
+    direction')."""
+    from ..services.calibration_service import per_agent_attribution
+    return per_agent_attribution(horizon_days=horizon_days)
+
+
+@router.get("/api/admin/regime-accuracy")
+def regime_accuracy_endpoint(
+    horizon_days: int = Query(90, ge=1, le=365),
+) -> Dict[str, Any]:
+    """Wave 10 — accuracy bucketed by macro regime at memo creation.
+    Catches regime-specific blind spots ('we're great in soft-landing
+    regimes, terrible in recessions')."""
+    from ..services.calibration_service import regime_conditional_accuracy
+    return regime_conditional_accuracy(horizon_days=horizon_days)
+
+
+@router.get("/api/admin/calibration-summary")
+def calibration_summary_endpoint(
+    horizon_days: int = Query(90, ge=1, le=365),
+) -> Dict[str, Any]:
+    """Wave 10 — one-call aggregator returning calibration + per-agent
+    + regime stats. Powers the upcoming track-record dashboard with a
+    single fetch."""
+    from ..services.calibration_service import summary
+    return summary(horizon_days=horizon_days)
+
+
+@router.post("/api/admin/run-postmortems")
+def run_postmortems_endpoint(
+    horizon_days: int = Query(90, ge=1, le=365),
+    limit: int = Query(25, ge=1, le=200),
+) -> Dict[str, Any]:
+    """Wave 10 — manual trigger for postmortem_loop; equivalent to
+    running `python -m scripts.postmortem_backfill`. Useful for
+    seeding the system or recovering after a cron outage."""
+    from ..services.postmortem_service import run_postmortems
+    return run_postmortems(horizon_days=horizon_days, limit=limit)
+
+
+# ---------------------------------------------------------------------------
 # Wave 8C — DCF version history
 # ---------------------------------------------------------------------------
 

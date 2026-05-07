@@ -164,6 +164,47 @@ def run_comps_agent(
     if notes_block:
         finding_data["research_notes"] = notes_block
 
+    # Wave 10 — LLM-driven one-paragraph narrative on top of the
+    # structured percentile prose. The structured output reads like a
+    # spreadsheet ("EV/EBITDA: target 18.0x vs peer median 16.0x");
+    # the narrative says what an investor should *do* with it. Cheap
+    # (1 call, ~150 tokens out) but high leverage on memo readability.
+    # Surfaced via data["narrative"] so callers can render it as a
+    # prose summary above the structured tile.
+    from ..config import settings
+    if settings.has_llm:
+        try:
+            from . import llm
+            import json as _json
+            narr_payload = {
+                "ticker": ticker,
+                "peer_set": [p.ticker for p in comps.peers],
+                "target": comps.target.model_dump(),
+                "peer_median": comps.median.model_dump(),
+                "premium_discount": comps.premium_discount,
+                "history": history.model_dump() if history else None,
+                "exposure_peers": [p.ticker for p in (comps.exposure_peers or [])],
+            }
+            narr = llm.chat_json(
+                "Below is a comps payload. Write ONE paragraph (3-4 "
+                "sentences) summarizing the comparable valuation read "
+                "for an investor: where this name sits vs peers AND "
+                "vs its own history; the most consequential premium "
+                "or discount; and what the divergence (if any) "
+                "between the two lenses implies. Specific numbers, "
+                "no filler.\n\n"
+                "Return JSON: {narrative: \"<one paragraph>\"}\n\n"
+                + _json.dumps(narr_payload, default=str)[:3500],
+                system="You are a buy-side analyst. Be concrete.",
+                route="cheap",
+                model=settings.openai_tool_model,
+                max_tokens=300,
+            )
+            if isinstance(narr, dict) and narr.get("narrative"):
+                finding_data["narrative"] = str(narr["narrative"]).strip()
+        except Exception:  # pragma: no cover — narrative is best-effort
+            pass
+
     finding = AgentFinding(
         agent="Comps Analyst",
         headline=headline,

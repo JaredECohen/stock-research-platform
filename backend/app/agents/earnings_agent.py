@@ -2,11 +2,72 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from ..config import settings
 from ..schemas import AgentFinding
 from . import llm, prompts
+
+
+def _multi_pass_qa_addendum(
+    *, ticker: str, prepared: str, qa: str,
+) -> Dict[str, Any]:
+    """Wave 10 — chunked second pass over long transcripts.
+
+    The first-pass prompt budgets 10KB prepared + 8KB Q&A. When the
+    Q&A alone exceeds 8KB we run a focused second pass over the
+    *back half* of Q&A and ask specifically for new themes / unique
+    analyst pushback / management deflections not captured by the
+    first pass. Returns a dict the main pass can incorporate.
+
+    Returns an empty dict when the transcript fits comfortably or
+    when the LLM is unavailable.
+    """
+    if not settings.has_llm:
+        return {}
+    qa_text = str(qa or "")
+    if len(qa_text) <= 8000:
+        return {}
+    # Chunk the back half of Q&A — that's where pushback questions
+    # tend to land that get truncated by the 8KB budget.
+    back_half = qa_text[len(qa_text) // 2:]
+    if not back_half.strip():
+        return {}
+    try:
+        out = llm.chat_json(
+            "Below is the BACK HALF of an earnings Q&A. The first "
+            "pass over this transcript only saw the front half. "
+            "Identify themes, reversals, or pushback questions that "
+            "appear UNIQUELY in this back half. Be terse — bullet "
+            "points only.\n\n"
+            "Return JSON: {\n"
+            "  back_half_themes: [str, ...],   // 0-4 unique themes\n"
+            "  hard_questions: [str, ...],     // analyst pushback "
+            "    not addressed earlier\n"
+            "  management_deflections: [str, ...]  // questions where "
+            "    management dodged or hedged\n}\n\n"
+            f"Ticker: {ticker}\n\n"
+            f"Back-half Q&A:\n{back_half[:14000]}",
+            system="You are an earnings call analyst.",
+            route="cheap",
+            model=settings.openai_tool_model,
+            max_tokens=600,
+        )
+        if not isinstance(out, dict):
+            return {}
+        return {
+            "back_half_themes": [
+                str(t)[:240] for t in (out.get("back_half_themes") or [])
+            ][:4],
+            "hard_questions": [
+                str(t)[:240] for t in (out.get("hard_questions") or [])
+            ][:4],
+            "management_deflections": [
+                str(t)[:240] for t in (out.get("management_deflections") or [])
+            ][:4],
+        }
+    except Exception:  # pragma: no cover — never block the main pass
+        return {}
 
 
 def _critique_block(question: Optional[str]) -> str:
@@ -57,6 +118,19 @@ def run_earnings_agent(
             (b.get("text") if isinstance(b, dict) else str(b))
             for b in qa
         )
+    # Wave 10 — multi-pass over long transcripts. The single-pass cap
+    # (10KB prepared + 8KB Q&A = ~18KB total) silently dropped the
+    # back half of long calls. When the transcript is materially
+    # longer than the budget, we run an additional Q&A-chunk pass
+    # that asks specifically for new themes / reversals not yet
+    # captured, then merge into the first-pass extraction. Costs ~1
+    # extra cheap-tier call for transcripts >20KB; cheaper than
+    # missing what an analyst pressed management on at minute 45.
+    multipass_addendum = _multi_pass_qa_addendum(
+        ticker=profile.get("ticker", ""),
+        prepared=str(prepared),
+        qa=str(qa),
+    )
     payload = {
         "ticker": profile.get("ticker"),
         "period": transcript.get("period"),
@@ -64,6 +138,7 @@ def run_earnings_agent(
         "prepared": str(prepared)[:10000],
         "qa": str(qa)[:8000],
         "next_earnings": (earnings or {}).get("next_earnings_date"),
+        "multi_pass_addendum": multipass_addendum,
     }
     from ..services.research_notes import build_notes_block_for_agent
     notes_block = build_notes_block_for_agent(
