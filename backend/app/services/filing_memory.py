@@ -1,4 +1,4 @@
-"""Wave 10 — filing → memory + chunk-ingest pipeline.
+"""Wave 10 — filing → memory + chunk-ingest pipeline (+ weekly digest).
 
 When a new SEC filing lands (or any time the filing agent runs), this
 post-pass:
@@ -316,3 +316,141 @@ def post_pass(filing: FilingDoc, profile: Optional[Dict[str, Any]] = None) -> Di
         _write_to_sector_memory(sector, filing, sector_pattern)
         report["sector_pattern_written"] = True
     return report
+
+
+# ---------------------------------------------------------------------------
+# Weekly digest (Wave 10)
+# ---------------------------------------------------------------------------
+
+def weekly_digest(
+    ticker: str,
+    *,
+    days_back: int = 7,
+    write_memory: bool = True,
+) -> Dict[str, Any]:
+    """Wave 10 — consolidate the week's filings into a single memory
+    entry per ticker.
+
+    Why: filings + news triggers can fire individual memory writes
+    faster than the company-memory reader can absorb. A weekly
+    digest gives the reader a single "what happened this week"
+    paragraph in addition to the per-event entries (which still
+    fire). Idempotent on (ticker, ISO week) — re-running mid-week
+    overwrites the prior digest for that week rather than appending.
+
+    LLM-optional: deterministic fallback joins the per-filing
+    bullets the reader already saw.
+    """
+    from datetime import timedelta
+    cutoff = date.today() - timedelta(days=days_back)
+    with SessionLocal() as db:
+        filings = db.execute(
+            select(FilingDoc)
+            .where(
+                FilingDoc.ticker == ticker.upper(),
+                FilingDoc.filing_date >= cutoff,
+            )
+            .order_by(FilingDoc.filing_date.desc())
+        ).scalars().all()
+    if not filings:
+        return {
+            "ticker": ticker.upper(),
+            "filings_in_window": 0,
+            "wrote_memory": False,
+            "summary": "",
+        }
+
+    payload = {
+        "ticker": ticker.upper(),
+        "window_days": days_back,
+        "filings": [
+            {
+                "filing_type": f.filing_type,
+                "filing_date": f.filing_date.isoformat() if f.filing_date else None,
+                "sections_present": list((f.sections or {}).keys())[:6],
+                "word_count": f.word_count,
+            }
+            for f in filings
+        ],
+    }
+
+    summary = ""
+    if getattr(settings, "openai_api_key", None):
+        try:
+            from ..agents import llm
+            out = llm.chat_json(
+                "Summarize this week's filing activity for one company "
+                "in 2-3 sentences. Highlight what actually changed; "
+                "skip routine 8-K confirmations. Cite filing types + "
+                "dates. No filler.\n\n"
+                "Return JSON: { summary: \"<2-3 sentences>\" }\n\n"
+                + json.dumps(payload, default=str)[:6000],
+                system="You are a buy-side analyst. Be concise.",
+                route="cheap",
+                max_tokens=300,
+            )
+            if isinstance(out, dict):
+                summary = str(out.get("summary") or "")[:1000]
+        except Exception:  # pragma: no cover
+            summary = ""
+    if not summary:
+        # Deterministic fallback: list the filings.
+        lines = [
+            f"- {f.filing_type} on {f.filing_date}"
+            for f in filings if f.filing_date
+        ]
+        summary = (
+            f"{len(filings)} filing(s) in the past {days_back} days.\n\n"
+            + "\n".join(lines)
+        )
+
+    wrote = False
+    if write_memory:
+        try:
+            from ..memory import CompanyMemory, MemoryEntry
+            cm = CompanyMemory.for_ticker(ticker)
+            cm.append_entry(MemoryEntry(
+                date=date.today().isoformat(),
+                trigger="weekly_digest",
+                body=f"**Weekly digest ({days_back}d):**\n\n{summary}",
+            ))
+            cm.save()
+            wrote = True
+        except Exception as exc:  # pragma: no cover
+            log.warning("weekly digest memory write failed for %s: %s", ticker, exc)
+
+    return {
+        "ticker": ticker.upper(),
+        "filings_in_window": len(filings),
+        "wrote_memory": wrote,
+        "summary": summary,
+    }
+
+
+def weekly_digest_universe(*, days_back: int = 7) -> Dict[str, int]:
+    """Run `weekly_digest` over the curated universe. Suitable for a
+    weekly cron (Sundays 05:00 UTC). Returns small summary dict."""
+    from sqlalchemy import select as _select
+    from ..models import Company
+    with SessionLocal() as db:
+        tickers = [
+            t for (t,) in db.execute(
+                _select(Company.ticker)
+                .where(Company.universe_tier == "auto_analysis")
+            ).all()
+        ]
+    written = 0
+    seen_filings = 0
+    for t in tickers:
+        try:
+            res = weekly_digest(t, days_back=days_back, write_memory=True)
+            if res.get("wrote_memory"):
+                written += 1
+            seen_filings += int(res.get("filings_in_window") or 0)
+        except Exception as exc:  # pragma: no cover
+            log.debug("weekly digest failed for %s: %s", t, exc)
+    return {
+        "tickers_checked": len(tickers),
+        "digests_written": written,
+        "total_filings_in_window": seen_filings,
+    }

@@ -265,6 +265,48 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
     return result
 
 
+# Wave 10 — sectors flagged as cyclical for default-margin reversion.
+# A cyclical company at peak earnings has a trailing-3yr margin that
+# overstates the steady-state margin a DCF should bake in. For these
+# names the DCF defaults to the mean-reversion glide rather than the
+# hold-flat default. Software / staples / utilities stay on hold-flat
+# because their margin profiles are more stable.
+_CYCLICAL_SECTORS: set[str] = {
+    "Energy", "Materials", "Industrials",
+    "Consumer Discretionary",  # autos + housing-driven; high-beta cyclicals
+    "Real Estate",  # cyclical re: interest rates / occupancy
+    "Financials",  # NIM cyclicality
+}
+
+
+def _is_cyclical(profile: dict) -> bool:
+    sector = (profile.get("sector") or "").strip()
+    return sector in _CYCLICAL_SECTORS
+
+
+def _cohort_op_margin(ticker: str) -> Optional[float]:
+    """Pull the cohort median operating margin used as the mean-
+    reversion target for cyclical names.
+
+    Reads the cached `company_warm:comps` snapshot (already populated
+    on memo runs) so we don't pay an extra peer-financials walk just
+    to compute the target. Returns None when no cached comps exist
+    or the cohort lacks operating margins; caller falls back to
+    dcf_engine's 0.18 generic anchor.
+    """
+    try:
+        cached = cache_get(ticker, "company_warm:comps", max_age_seconds=14 * 24 * 3600)
+        if not cached or not isinstance(cached.payload, dict):
+            return None
+        median = cached.payload.get("median") or {}
+        v = median.get("operating_margin")
+        if isinstance(v, (int, float)) and 0.0 < v < 1.0:
+            return float(v)
+    except Exception:  # pragma: no cover — never block default DCF
+        pass
+    return None
+
+
 def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
     """Default DCF assumptions for `ticker`.
 
@@ -273,6 +315,12 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
     starting point for the 5-year growth path. The agent layer
     (`agents/dcf_updater.py`) is the only thing allowed to diverge
     from consensus, and only with a per-field rationale + ±20% cap.
+
+    Wave 10 — for cyclical sectors (Energy, Materials, Industrials,
+    Cons-Disc, Real Estate, Financials) auto-enable the margin
+    mean-reversion glide using the cohort median operating margin as
+    the target. Without this, the trailing-3yr-flat default
+    systematically over-values cyclicals at peak earnings.
     """
     fin = get_full_financials(ticker)
     if not fin.get("income"):
@@ -297,6 +345,11 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
             last_price = float(profile["market_cap"]) / float(diluted_shares)
         except (TypeError, ValueError, ZeroDivisionError):
             last_price = 0.0
+
+    # Wave 10 — cyclical sector → margin mean reversion default ON.
+    use_reversion = _is_cyclical(profile)
+    cohort_target = _cohort_op_margin(ticker) if use_reversion else None
+
     return dcf_engine.derive_default_assumptions(
         income_statements=fin["income"],
         cash_flows=fin["cash"],
@@ -305,6 +358,8 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
         diluted_shares=diluted_shares,
         beta=profile.get("beta") or 1.0,
         analyst_estimates=estimates,
+        margin_mean_reversion=use_reversion,
+        cohort_op_margin=cohort_target,
     )
 
 

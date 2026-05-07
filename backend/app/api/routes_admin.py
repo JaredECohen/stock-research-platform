@@ -258,6 +258,20 @@ def run_postmortems_endpoint(
     return run_postmortems(horizon_days=horizon_days, limit=limit)
 
 
+@router.post("/api/admin/mispricing-audit")
+def mispricing_audit_endpoint(
+    limit: int = Query(20, ge=1, le=50),
+) -> Dict[str, Any]:
+    """Wave 10 — audit the quality of the PM's mispricing theses
+    across recent memos. Returns per-memo scores (specificity /
+    differentiation / falsifiability) + a corpus-wide failure-
+    mode observation. Feeds PM prompt iteration."""
+    from ..services.mispricing_audit import aggregate_scores, run_audit
+    audit = run_audit(limit=limit)
+    audit["aggregate"] = aggregate_scores(audit)
+    return audit
+
+
 # ---------------------------------------------------------------------------
 # Wave 8C — DCF version history
 # ---------------------------------------------------------------------------

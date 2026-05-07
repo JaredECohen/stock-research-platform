@@ -77,6 +77,42 @@ def detect_scenario(market_view: str) -> str:
     return "soft_landing"
 
 
+def blended_sector_weights(market_view: str) -> Dict[str, float]:
+    """Wave 10 — sector multipliers blended across the regime mixture.
+
+    Real macro states are mixtures (e.g. 0.55 soft / 0.30 sticky /
+    0.15 recession), not single tags. Blending the per-regime sector
+    multipliers weighted by probability gives a portfolio that
+    responds smoothly when the regime read shifts, instead of
+    snapping between presets.
+
+    Falls back to single-regime tilts when probabilities are
+    unavailable (LLM off / regex one-hot).
+    """
+    try:
+        from ..agents.macro_agent import detect_regime_probabilities
+        probs = detect_regime_probabilities(market_view) or {}
+    except Exception:  # pragma: no cover — defensive
+        probs = {}
+    if not probs:
+        # Fallback: full weight on the modal regime.
+        key = detect_scenario(market_view)
+        return dict(SCENARIO_KEYWORDS.get(key, {}))
+    # Weighted average across regimes for each sector bucket.
+    blended: Dict[str, float] = {}
+    seen_buckets: set[str] = set()
+    for regime, weight in probs.items():
+        for bucket in SCENARIO_KEYWORDS.get(regime, {}):
+            seen_buckets.add(bucket)
+    for bucket in seen_buckets:
+        weighted = 0.0
+        for regime, prob in probs.items():
+            mult = SCENARIO_KEYWORDS.get(regime, {}).get(bucket, 1.0)
+            weighted += float(prob) * mult
+        blended[bucket] = weighted
+    return blended
+
+
 def build_portfolio(
     request: PortfolioRequest,
     candidates: List[dict],
@@ -88,8 +124,15 @@ def build_portfolio(
     Each candidate must have at least: ticker, company_name, sector, pm_score,
     quality, growth, valuation, risk, macro_fit.
     """
+    # Wave 10 — blend sector tilts across the regime probability
+    # mixture instead of snapping to a single regime. Two prompts
+    # that lean on different regimes (e.g. "we're in a soft-landing
+    # but inflation is sticky" vs "soft landing into AI boom") now
+    # produce different sector tilt vectors.
     scenario_key = detect_scenario(request.market_view)
-    sector_weights = SCENARIO_KEYWORDS.get(scenario_key, {})
+    sector_weights = blended_sector_weights(request.market_view)
+    if not sector_weights:
+        sector_weights = SCENARIO_KEYWORDS.get(scenario_key, {})
 
     # Filter exclusions
     excluded_sectors = {s.lower() for s in request.excluded_sectors}
