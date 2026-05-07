@@ -29,15 +29,16 @@ def status_snapshot() -> dict:
 
 from . import (  # noqa: E402,F401
     catalyst_loop, checkpoint_gc, edgar_poller, history_backfill, llm_log_gc,
-    macro_loop, news_loop, outcome_loop, postmortem_loop, social_loop,
+    macro_loop, mispricing_audit_loop, news_loop, outcome_loop,
+    postmortem_loop, sector_digest_loop, social_loop,
     theme_exposure_loop, weekly_digest_loop,
 )
 
 __all__ = [
     "catalyst_loop", "checkpoint_gc", "edgar_poller", "history_backfill",
-    "llm_log_gc", "macro_loop", "news_loop", "outcome_loop",
-    "postmortem_loop", "social_loop", "theme_exposure_loop",
-    "weekly_digest_loop",
+    "llm_log_gc", "macro_loop", "mispricing_audit_loop", "news_loop",
+    "outcome_loop", "postmortem_loop", "sector_digest_loop", "social_loop",
+    "theme_exposure_loop", "weekly_digest_loop",
     "register_all", "record_run", "status_snapshot",
 ]
 
@@ -53,8 +54,10 @@ def register_all(scheduler) -> None:
     outcome_loop.register(scheduler)
     checkpoint_gc.register(scheduler)
     # Wave 10 — postmortem feedback loop, catalyst refresh, theme exposure,
-    # weekly filing digest.
+    # weekly filing digest, sector cohort digest, mispricing-audit nightly.
     postmortem_loop.register(scheduler)
     catalyst_loop.register(scheduler)
     theme_exposure_loop.register(scheduler)
     weekly_digest_loop.register(scheduler)
+    sector_digest_loop.register(scheduler)
+    mispricing_audit_loop.register(scheduler)

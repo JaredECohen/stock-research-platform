@@ -116,6 +116,30 @@ def compute_universe_scores(theme: Optional[str] = None) -> ScreenerResult:
             1,
         )
 
+        # Wave 10 — when a theme filter is active, join the
+        # theme_exposure score so the row carries an honest "this
+        # name is actually exposed to that theme" number alongside
+        # the sector-level macro_fit multiplier.
+        theme_exposure_score: Optional[float] = None
+        if theme_key:
+            try:
+                from sqlalchemy import select as _select
+                from ..models import ThemeExposure
+                from ..database import SessionLocal
+                with SessionLocal() as _db:
+                    te = _db.execute(
+                        _select(ThemeExposure)
+                        .where(
+                            ThemeExposure.ticker == ticker.upper(),
+                            ThemeExposure.theme == theme_key,
+                        )
+                        .limit(1)
+                    ).scalars().first()
+                    if te is not None:
+                        theme_exposure_score = te.score
+            except Exception:  # pragma: no cover — score is best-effort
+                theme_exposure_score = None
+
         rows.append(ScreenerRow(
             rank=0,  # filled later
             ticker=ticker,
@@ -132,6 +156,7 @@ def compute_universe_scores(theme: Optional[str] = None) -> ScreenerResult:
             main_catalyst=(profile.get("drivers") or ["—"])[0],
             main_risk=(profile.get("risks") or ["—"])[0],
             theme=theme_key,
+            theme_exposure_score=theme_exposure_score,
         ))
 
     rows.sort(key=lambda r: r.pm_score, reverse=True)

@@ -646,6 +646,11 @@ class ScreenerRow(BaseModel):
     main_catalyst: str
     main_risk: str
     theme: Optional[str] = None
+    # Wave 10 — exposure score for the requested theme (0-100). None
+    # when no theme filter was supplied or the ticker has no exposure
+    # row computed yet. Powers the AI-rank screener's "this name is
+    # actually exposed to your theme" affordance.
+    theme_exposure_score: Optional[float] = None
 
 
 class ScreenerRequest(BaseModel):

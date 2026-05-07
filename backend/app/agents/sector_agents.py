@@ -426,6 +426,19 @@ def run_sector_agent(
         if bb is None:
             bb = _deterministic_bull_bear_analysis(profile, research)
         finding_data["bull_bear_analysis"] = bb.model_dump()
+        # Wave 10 — typed citations for cohort peers + sector regime.
+        from ..schemas import Citation
+        evidence: List[Citation] = []
+        for peer in cohort.get("peers", [])[:6]:
+            evidence.append(Citation(
+                kind="peer", ref=str(peer),
+                excerpt=f"Cohort peer in {sub_industry}.",
+            ))
+        if regime:
+            evidence.append(Citation(
+                kind="macro", ref=f"regime:{regime}",
+                excerpt=(macro_broadcast.get("note") or regime)[:300],
+            ))
         finding = AgentFinding(
             agent="Sector Analyst",
             headline=llm_out.get("headline", f"{sub_industry} cohort placement"),
@@ -437,6 +450,7 @@ def run_sector_agent(
                 *[f"peer:{p}" for p in cohort["peers"][:6]],
                 *[f"filing:{p}" for p in cohort["peers"][:3]],
             ],
+            evidence=evidence[:8],
             data=finding_data,
         )
         return finding

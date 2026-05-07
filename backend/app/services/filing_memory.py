@@ -427,6 +427,149 @@ def weekly_digest(
     }
 
 
+def weekly_sector_digest(sector: str, *, days_back: int = 7) -> Dict[str, Any]:
+    """Wave 10 — weekly digest at the SECTOR level.
+
+    Aggregates all filings landed for the sector's universe in the
+    past week, plus any postmortems written, and writes a single
+    sector memory entry. Lets the sector analyst see "what happened
+    across the cohort this week" rather than just per-name events.
+
+    LLM-optional: when no API key, the deterministic body lists each
+    company's filing types + counts. Idempotent: parser dedupes on
+    (date, body) so re-running mid-week collapses duplicates.
+    """
+    from datetime import timedelta
+    from sqlalchemy import select as _select
+    from ..models import Company
+    cutoff = date.today() - timedelta(days=days_back)
+    with SessionLocal() as db:
+        ticker_rows = db.execute(
+            _select(Company.ticker, Company.sector)
+            .where(Company.sector == sector)
+            .where(Company.universe_tier == "auto_analysis")
+        ).all()
+        sector_tickers = [t for (t, _s) in ticker_rows]
+        if not sector_tickers:
+            return {
+                "sector": sector,
+                "tickers_in_sector": 0,
+                "filings_in_window": 0,
+                "wrote_memory": False,
+            }
+        filings = db.execute(
+            _select(FilingDoc)
+            .where(FilingDoc.ticker.in_(sector_tickers))
+            .where(FilingDoc.filing_date >= cutoff)
+            .order_by(FilingDoc.filing_date.desc())
+        ).scalars().all()
+
+    if not filings:
+        return {
+            "sector": sector,
+            "tickers_in_sector": len(sector_tickers),
+            "filings_in_window": 0,
+            "wrote_memory": False,
+        }
+
+    grouped: Dict[str, list] = {}
+    for f in filings:
+        grouped.setdefault(f.ticker, []).append(f)
+
+    payload = {
+        "sector": sector,
+        "window_days": days_back,
+        "filings_by_ticker": {
+            t: [
+                {
+                    "filing_type": f.filing_type,
+                    "filing_date": f.filing_date.isoformat() if f.filing_date else None,
+                }
+                for f in fs
+            ]
+            for t, fs in grouped.items()
+        },
+    }
+    summary = ""
+    if getattr(settings, "openai_api_key", None):
+        try:
+            from ..agents import llm
+            out = llm.chat_json(
+                f"Summarize this week's filing activity across the "
+                f"{sector} sector for an institutional cohort view. "
+                "Identify cross-cohort patterns (multiple companies "
+                "talking about the same trend, common new risk "
+                "factors, segment-level disclosures). Skip routine "
+                "8-K confirmations. 3-4 sentences total.\n\n"
+                "Return JSON: { summary: \"<3-4 sentences>\" }\n\n"
+                + json.dumps(payload, default=str)[:8000],
+                system="You are a buy-side sector analyst.",
+                route="cheap",
+                max_tokens=400,
+            )
+            if isinstance(out, dict):
+                summary = str(out.get("summary") or "")[:1500]
+        except Exception:  # pragma: no cover
+            summary = ""
+    if not summary:
+        bullets = []
+        for t, fs in grouped.items():
+            types = ", ".join(f.filing_type for f in fs)
+            bullets.append(f"- {t}: {types}")
+        summary = (
+            f"{len(filings)} filing(s) across {len(grouped)} companies "
+            f"in the past {days_back} days.\n\n"
+            + "\n".join(bullets)
+        )
+
+    wrote = False
+    try:
+        from ..memory import CrossCompanyPattern, SectorMemory
+        sm = SectorMemory.for_sector(sector)
+        sm.add_pattern(CrossCompanyPattern(
+            date=date.today().isoformat(),
+            source_company="(weekly_digest)",
+            applies_to=[],
+            lesson=f"**Weekly cohort digest ({days_back}d):**\n\n{summary}",
+        ))
+        sm.save()
+        wrote = True
+    except Exception as exc:  # pragma: no cover
+        log.warning("weekly sector digest write failed for %s: %s", sector, exc)
+
+    return {
+        "sector": sector,
+        "tickers_in_sector": len(sector_tickers),
+        "filings_in_window": len(filings),
+        "wrote_memory": wrote,
+        "summary": summary,
+    }
+
+
+def weekly_sector_digest_all(*, days_back: int = 7) -> Dict[str, Any]:
+    """Run the sector-level digest across every distinct sector in
+    the curated universe."""
+    from sqlalchemy import select as _select
+    from ..models import Company
+    with SessionLocal() as db:
+        sector_rows = db.execute(
+            _select(Company.sector).where(
+                Company.universe_tier == "auto_analysis",
+                Company.sector.isnot(None),
+            ).distinct()
+        ).all()
+        sectors = sorted({s for (s,) in sector_rows if s})
+    written = 0
+    for sector in sectors:
+        try:
+            res = weekly_sector_digest(sector, days_back=days_back)
+            if res.get("wrote_memory"):
+                written += 1
+        except Exception as exc:  # pragma: no cover
+            log.debug("sector digest failed for %s: %s", sector, exc)
+    return {"sectors_checked": len(sectors), "digests_written": written}
+
+
 def weekly_digest_universe(*, days_back: int = 7) -> Dict[str, int]:
     """Run `weekly_digest` over the curated universe. Suitable for a
     weekly cron (Sundays 05:00 UTC). Returns small summary dict."""

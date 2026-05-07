@@ -176,6 +176,74 @@ def persist_audit(audit: Dict[str, Any], aggregate: Dict[str, Any]) -> Optional[
         return None
 
 
+def latest_aggregate(*, max_age_days: int = 14) -> Optional[Dict[str, Any]]:
+    """Fetch the most-recent persisted audit's aggregate stats.
+
+    Returns the dict written via `persist_audit` (mean specificity /
+    differentiation / falsifiability + weak_memo_count + n) or None
+    when no recent audit exists.
+    """
+    try:
+        from datetime import datetime, timedelta
+        from sqlalchemy import select
+        from ..database import SessionLocal
+        from ..models import MispricingAudit
+        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        with SessionLocal() as db:
+            row = db.execute(
+                select(MispricingAudit)
+                .where(MispricingAudit.audited_at >= cutoff)
+                .order_by(MispricingAudit.audited_at.desc())
+                .limit(1)
+            ).scalars().first()
+            if row is None:
+                return None
+            return row.aggregate_means or {}
+    except Exception:  # pragma: no cover
+        return None
+
+
+def prompt_fragment(*, max_age_days: int = 14) -> str:
+    """Render a *targeted* PM prompt fragment based on the most-recent
+    audit's WEAKEST dimension. Sharper than just dumping the
+    pattern_observation — the PM gets concrete guidance on what to
+    fix on the current memo.
+
+    Returns empty string when no recent audit exists or all
+    dimensions score adequately.
+    """
+    agg = latest_aggregate(max_age_days=max_age_days)
+    if not agg:
+        return ""
+    candidates = [
+        ("specificity", agg.get("mean_specificity"),
+         "Be SPECIFIC. Cite a precise number, segment, or catalyst the "
+         "market is missing. Generic metric recaps will not pass."),
+        ("differentiation", agg.get("mean_differentiation"),
+         "Make `our_view` materially DIFFERENT from `consensus_view`. "
+         "If you can't, write 'fairly priced on our work' rather than "
+         "padding with a near-duplicate of consensus."),
+        ("falsifiability", agg.get("mean_falsifiability"),
+         "Falsifiers must be CONCRETE observations (metric thresholds, "
+         "guidance changes, regulatory rulings). Tautologies do not "
+         "count."),
+    ]
+    # Pick the lowest-scoring dimension where data exists.
+    weak = [
+        (label, score, guidance) for label, score, guidance in candidates
+        if isinstance(score, (int, float)) and score < 4.0
+    ]
+    if not weak:
+        return ""
+    weak.sort(key=lambda x: x[1])
+    label, score, guidance = weak[0]
+    return (
+        f"## Sharpen this memo's mispricing thesis "
+        f"(audit: weakest dimension = `{label}`, mean {score:.1f}/5)\n\n"
+        f"{guidance}"
+    )
+
+
 def latest_pattern_observation(*, max_age_days: int = 14) -> str:
     """Read the most-recent `pattern_observation` for PM self-improvement
     context. Returns empty string when no recent audit exists or the

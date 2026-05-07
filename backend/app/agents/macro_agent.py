@@ -327,6 +327,20 @@ def run_macro_agent(
             prompt, system=prompts.MACRO_ANALYST_PROMPT, route="cheap",
             model=settings.openai_macro_model, max_tokens=600,
         )
+        # Wave 10 — typed citations for FRED snapshot values + scenario.
+        from ..schemas import Citation
+        evidence = [Citation(
+            kind="macro", ref=f"regime:{s.scenario}",
+            excerpt=(s.narrative or "")[:300],
+        )]
+        for k, v in (snapshot or {}).items():
+            if isinstance(v, (int, float)):
+                evidence.append(Citation(
+                    kind="macro", ref=f"fred:{k}",
+                    excerpt=f"{k}={v}",
+                ))
+                if len(evidence) >= 6:
+                    break
         if isinstance(out, dict) and out.get("summary"):
             return AgentFinding(
                 agent="Macro Analyst",
@@ -335,6 +349,7 @@ def run_macro_agent(
                 key_points=list(out.get("key_points") or []),
                 confidence=float(out.get("confidence", 0.75)),
                 sources=["macro_scenario_framework", "fred_snapshot"],
+                evidence=evidence,
             )
 
     # Deterministic fallback
@@ -344,6 +359,11 @@ def run_macro_agent(
         f"Pressured sectors: {', '.join(s.pressured_sectors)}.",
         f"Top scenario risks: {'; '.join(s.risks[:3])}.",
     ]
+    from ..schemas import Citation
+    evidence = [Citation(
+        kind="macro", ref=f"regime:{s.scenario}",
+        excerpt=(s.narrative or "")[:300],
+    )]
     return AgentFinding(
         agent="Macro Analyst",
         headline=f"Macro scenario: {s.scenario}",
@@ -351,4 +371,5 @@ def run_macro_agent(
         key_points=key_points,
         confidence=0.75,
         sources=["macro_scenario_framework"],
+        evidence=evidence,
     )

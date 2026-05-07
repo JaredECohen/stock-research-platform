@@ -51,6 +51,22 @@ def run_valuation_agent(
         model=settings.openai_tool_model,
     )
     if llm_out:
+        # Wave 10 — typed citations for the DCF + ratio-based claims.
+        from ..schemas import Citation
+        evidence: list = []
+        if dcf and dcf.summary:
+            evidence.append(Citation(
+                kind="dcf", ref=str(ticker or ""),
+                excerpt=str(dcf.summary)[:300],
+            ))
+        if ratios:
+            for k in ("PE", "EV_EBITDA", "FCF_yield", "ROIC"):
+                v = ratios.get(k)
+                if isinstance(v, (int, float)):
+                    evidence.append(Citation(
+                        kind="ratio", ref=k,
+                        excerpt=f"{k}={v:.2f}",
+                    ))
         return AgentFinding(
             agent="Valuation Analyst",
             headline=llm_out.get("headline", "Valuation view"),
@@ -58,6 +74,7 @@ def run_valuation_agent(
             key_points=llm_out.get("key_points", []),
             confidence=float(llm_out.get("confidence", 0.7)),
             sources=["dcf", "ratios"],
+            evidence=evidence[:6],
         )
 
     # Deterministic fallback

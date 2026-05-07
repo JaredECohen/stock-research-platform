@@ -503,6 +503,11 @@ class MemoOutcome(Base):
     alpha: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     thesis_held: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
+    # Wave 10 — macro regime at memo creation, copied from
+    # `MemoSnapshot.memo_json["macro_regime_at_memo"]` at evaluate
+    # time. Lets calibration's regime-conditional dashboards bucket
+    # outcomes without joining through the snapshot blob.
+    regime_at_memo: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
 
     __table_args__ = (
         UniqueConstraint(

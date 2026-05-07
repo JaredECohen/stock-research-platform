@@ -92,7 +92,9 @@ def build_pm_context(
     # current regime is one where it has historically been wrong
     # ("you've been wrong in recessions; be more cautious").
     try:
-        from ..services.mispricing_audit import latest_pattern_observation
+        from ..services.mispricing_audit import (
+            latest_pattern_observation, prompt_fragment as _audit_fragment,
+        )
         obs = latest_pattern_observation(max_age_days=14)
         if obs and obs.strip():
             blocks.append(
@@ -101,8 +103,27 @@ def build_pm_context(
                 "_Apply this lesson on the current memo. If the audit is "
                 "wrong, you may explicitly disagree — but acknowledge it._"
             )
+        # Wave 10 — also surface a targeted dimension-specific
+        # guidance fragment so the PM gets concrete instruction
+        # ("be specific" / "differentiate from consensus" /
+        # "falsifiers must be concrete") tied to the weakest dimension
+        # in the latest audit.
+        frag = _audit_fragment(max_age_days=14)
+        if frag and frag.strip():
+            blocks.append(frag.strip())
     except Exception as exc:  # pragma: no cover
         log.debug("mispricing audit read failed: %s", exc)
+
+    # Specialist reliability — flagged specialists whose historical
+    # pull has been correlated with WRONG calls. PM should demand
+    # stronger evidence when their pull dominates the rating.
+    try:
+        from ..services.influence_feedback import reliability_prompt_block
+        rel = reliability_prompt_block(lookback=30, threshold=-0.2)
+        if rel and rel.strip():
+            blocks.append(rel.strip())
+    except Exception as exc:  # pragma: no cover
+        log.debug("specialist reliability read failed: %s", exc)
 
     try:
         from ..services.calibration_service import regime_conditional_accuracy

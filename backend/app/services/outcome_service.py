@@ -161,9 +161,17 @@ def _evaluate_one(
         bench_return = (bench_at_target - bench_at_memo) / bench_at_memo
         alpha = forward_return - bench_return
 
-    rating = (snap.memo_json or {}).get("rating_label") or ""
-    confidence = float((snap.memo_json or {}).get("confidence_score") or 0.0)
+    memo_dict = snap.memo_json or {}
+    rating = memo_dict.get("rating_label") or ""
+    confidence = float(memo_dict.get("confidence_score") or 0.0)
     held = _thesis_held(rating, forward_return)
+    # Wave 10 — copy the macro regime that was active at memo creation
+    # so calibration's regime-conditional dashboards can bucket without
+    # re-reading the snapshot blob.
+    regime_at_memo = (
+        str(memo_dict.get("macro_regime_at_memo") or "").strip()
+        or None
+    )
 
     note_parts: List[str] = [
         f"horizon={horizon_days}d",
@@ -188,6 +196,7 @@ def _evaluate_one(
         alpha=alpha,
         thesis_held=held,
         note=note,
+        regime_at_memo=regime_at_memo,
     )
     db.add(row)
     return row

@@ -179,6 +179,27 @@ def run_risk_agent(
         except Exception:  # pragma: no cover — narrative is best-effort
             pass
 
+    # Wave 10 — typed citations for the structural risks + ratio
+    # signals the agent is grounding its read on.
+    from ..schemas import Citation
+    evidence: List[Citation] = []
+    for r in (profile.get("risks") or [])[:4]:
+        evidence.append(Citation(
+            kind="other", ref="profile.risks", excerpt=str(r)[:300],
+        ))
+    for metric in ("debt_to_ebitda", "EV_EBITDA", "FCF_yield"):
+        v = ratios.get(metric)
+        if isinstance(v, (int, float)):
+            evidence.append(Citation(
+                kind="ratio", ref=metric,
+                excerpt=f"{metric}={v:.2f}",
+            ))
+    if dcf_summary:
+        evidence.append(Citation(
+            kind="dcf", ref=str(profile.get("ticker", "")),
+            excerpt=str(dcf_summary)[:300],
+        ))
+
     finding = AgentFinding(
         agent="Risk Analyst",
         headline=f"Risk profile for {profile.get('ticker', '')}",
@@ -186,6 +207,7 @@ def run_risk_agent(
         key_points=key_points,
         confidence=0.7,
         sources=[],
+        evidence=evidence[:8],
         data=finding_data,
     )
 

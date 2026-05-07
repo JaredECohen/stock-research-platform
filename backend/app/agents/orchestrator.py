@@ -598,6 +598,17 @@ def _company_lite_snapshot(ticker: str) -> Optional[Dict[str, Any]]:
                 ScreenerScore.theme.is_(None),
             )
         ).scalar_one_or_none()
+        # Wave 10 — overlay the live intraday quote so the chat
+        # agent's company-lite carries an honest current price, not
+        # the 7-day-cached `companies.last_price`.
+        live_price: Optional[float] = c.last_price
+        try:
+            from ..services.market_data_service import get_current_price
+            live = get_current_price(c.ticker)
+            if live is not None:
+                live_price = live
+        except Exception:  # pragma: no cover — best-effort overlay
+            pass
         return {
             "ticker": c.ticker,
             "name": c.company_name,
@@ -605,6 +616,7 @@ def _company_lite_snapshot(ticker: str) -> Optional[Dict[str, Any]]:
             "industry": c.industry,
             "market_cap": c.market_cap,
             "business": (c.business_description or "")[:600],
+            "last_price": live_price,
             "metrics": {
                 "pe_ttm": getattr(m, "pe_ttm", None),
                 "ev_ebitda": getattr(m, "ev_ebitda", None),
@@ -658,4 +670,21 @@ def _memo_for_chat_context(m: StockMemoOut) -> Dict[str, Any]:
         "thesis_breakers": [r.title for r in m.thesis_breakers][:3],
         "bull_case": [p for p in m.bull_case.key_points][:4],
         "bear_case": [p for p in m.bear_case.key_points][:4],
+        # Wave 10 — surface the new memo fields to the chat agent so
+        # follow-up questions can quote them.
+        "mispricing_thesis": (
+            m.mispricing_thesis.model_dump() if m.mispricing_thesis else {}
+        ),
+        "forward_catalysts": [
+            {
+                "type": c.get("event_type"),
+                "date": c.get("event_date"),
+                "title": c.get("title"),
+                "materiality": c.get("materiality"),
+            }
+            for c in (m.forward_catalysts or [])[:5]
+        ],
+        "agent_influence": m.agent_influence or {},
+        "macro_regime_at_memo": m.macro_regime_at_memo or "",
+        "price_at_memo": m.price_at_memo,
     }

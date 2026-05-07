@@ -258,6 +258,81 @@ def run_postmortems_endpoint(
     return run_postmortems(horizon_days=horizon_days, limit=limit)
 
 
+@router.get("/api/admin/cron-health")
+def cron_health_endpoint() -> Dict[str, Any]:
+    """Wave 10 — aggregated cron health.
+
+    Returns each registered loop's last-run timestamp + freshness flag.
+    A loop that hasn't reported in >24h is flagged as stale (32h for
+    weekly loops). Powers the operational dashboard for surfacing
+    silent cron failures.
+    """
+    snap = status_snapshot()
+    out_loops: List[Dict[str, Any]] = []
+    now = datetime.utcnow()
+    weekly_loops = {"weekly_digest_loop", "sector_digest_loop"}
+    monthly_loops = {"theme_exposure_loop"}
+    for loop_name, info in snap.items():
+        last_run_str = info.get("last_run_at") if isinstance(info, dict) else None
+        stale = True
+        age_seconds = None
+        if last_run_str:
+            try:
+                last_run = datetime.fromisoformat(last_run_str)
+                age_seconds = (now - last_run).total_seconds()
+                if loop_name in monthly_loops:
+                    stale = age_seconds > 32 * 24 * 3600
+                elif loop_name in weekly_loops:
+                    stale = age_seconds > 8 * 24 * 3600
+                else:
+                    stale = age_seconds > 26 * 3600  # daily loops + slack
+            except Exception:
+                stale = True
+        out_loops.append({
+            "loop": loop_name,
+            "last_run_at": last_run_str,
+            "age_seconds": age_seconds,
+            "success": (info or {}).get("success"),
+            "note": (info or {}).get("note"),
+            "stale": stale,
+        })
+    out_loops.sort(key=lambda r: r["loop"])
+    n_stale = sum(1 for r in out_loops if r["stale"])
+    return {"loops": out_loops, "stale_count": n_stale}
+
+
+@router.post("/api/admin/run-weekly-digest")
+def run_weekly_digest_endpoint(
+    ticker: Optional[str] = Query(None),
+    sector: Optional[str] = Query(None),
+    days_back: int = Query(7, ge=1, le=30),
+) -> Dict[str, Any]:
+    """Wave 10 — manual trigger for the weekly digest pipeline.
+    `ticker` runs the per-name digest; `sector` runs the sector
+    cohort digest. Both blank runs the full universe."""
+    from ..services import filing_memory
+    if ticker:
+        return filing_memory.weekly_digest(ticker.upper(), days_back=days_back)
+    if sector:
+        return filing_memory.weekly_sector_digest(sector, days_back=days_back)
+    return {
+        "tickers": filing_memory.weekly_digest_universe(days_back=days_back),
+        "sectors": filing_memory.weekly_sector_digest_all(days_back=days_back),
+    }
+
+
+@router.get("/api/admin/specialist-reliability")
+def specialist_reliability_endpoint(
+    lookback: int = Query(30, ge=5, le=200),
+) -> Dict[str, Any]:
+    """Wave 10 — per-specialist reliability over the last N
+    postmortemmed memos. Identifies specialists whose pulls have
+    correlated with WRONG calls. Surfaces the same data the PM's
+    self-improvement context now reads."""
+    from ..services.influence_feedback import specialist_reliability
+    return specialist_reliability(lookback=lookback)
+
+
 @router.get("/api/admin/postmortems/{ticker}")
 def latest_postmortems_endpoint(ticker: str, limit: int = Query(5, ge=1, le=50)) -> Dict[str, Any]:
     """Wave 10 — latest postmortems for a ticker. Powers the memo page's

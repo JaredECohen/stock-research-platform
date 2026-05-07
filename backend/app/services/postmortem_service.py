@@ -303,7 +303,12 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> Dict[str, Any
         )
         attribution = (llm_out or {}).get("agent_attribution") or {}
         sector_lesson = (llm_out or {}).get("sector_lesson") or ""
-        regime = (llm_out or {}).get("regime_at_memo") or ""
+        # Wave 10 — prefer the authoritative `macro_regime_at_memo`
+        # captured on the memo at creation; fall back to LLM guess.
+        regime = (
+            str(memo.get("macro_regime_at_memo") or "").strip()
+            or (llm_out or {}).get("regime_at_memo") or ""
+        )
         try:
             with SessionLocal() as db:
                 pm_row = MemoPostmortem(
