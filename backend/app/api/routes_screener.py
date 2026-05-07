@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ..database import SessionLocal
@@ -192,3 +193,31 @@ def run_custom_screen(
     configurable; default = market_cap desc.
     """
     return _execute_custom_screen(req)
+
+
+# ---------------------------------------------------------------------------
+# Wave 10 — natural-language screener
+# ---------------------------------------------------------------------------
+
+class NLScreenerRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500)
+
+
+@router.post("/api/screener/nl")
+@limiter.limit(LIMITS["custom_screen"])
+def run_nl_screener(
+    request: Request, response: Response, req: "NLScreenerRequest",
+) -> Dict:
+    """Wave 10 — natural-language screener.
+
+    User types free-form prose ("show me profitable AI-exposed semis
+    with beta under 1.5"); we translate to a structured rule chain
+    over `screener_metrics` plus an optional theme overlay against
+    `theme_exposure`. Returns the inferred request alongside the
+    matching rows so the user can audit / refine the translation
+    before re-running.
+    """
+    if not (req.query or "").strip():
+        raise HTTPException(status_code=400, detail="query is required")
+    from ..services import nl_screener
+    return nl_screener.run(req.query)

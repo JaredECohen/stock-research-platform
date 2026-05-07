@@ -132,6 +132,53 @@ def run_risk_agent(
     if notes_block:
         finding_data["research_notes"] = notes_block
 
+    # Wave 10 — optional LLM thesis-breaker narrative on top of the
+    # deterministic numbers. Asks the model to name the SINGLE
+    # observation that would invalidate the thesis. Cheap (1 call,
+    # <300 tokens) but high-leverage for the user reading the memo:
+    # the deterministic risk list is "what's elevated"; this is "what
+    # would change my mind." Surfaced via data["narrative"] so the
+    # UI can render it as a thesis-breaker callout.
+    if settings.has_llm:
+        try:
+            from . import llm
+            payload = {
+                "ticker": profile.get("ticker"),
+                "sector": profile.get("sector"),
+                "industry": profile.get("industry"),
+                "key_metrics": {k: ratios.get(k) for k in (
+                    "debt_to_ebitda", "EV_EBITDA", "FCF_yield", "ROIC", "PE",
+                ) if ratios.get(k) is not None},
+                "structural_risks": (profile.get("risks") or [])[:5],
+                "dcf_summary": dcf_summary,
+                "deterministic_summary": " ".join(summary_lines),
+            }
+            narr = llm.chat_json(
+                "You are the Risk Analyst. The deterministic checks "
+                "are already done. Now answer in plain English: what "
+                "is the SINGLE observation that would most change "
+                "your mind about this thesis? Be specific (cite a "
+                "metric, segment, or event) and concise (1-2 "
+                "sentences). Return JSON: {thesis_breaker: \"<one "
+                "sentence>\", watch_for: [\"<observation 1>\", "
+                "\"<observation 2>\", ...]} (up to 3 watch_for items).\n\n"
+                + json.dumps(payload, default=str)[:6000],
+                system="You are a senior risk analyst. No filler.",
+                route="cheap",
+                model=settings.openai_tool_model,
+                max_tokens=300,
+            )
+            if isinstance(narr, dict):
+                tb = str(narr.get("thesis_breaker") or "").strip()
+                wf = [str(w).strip() for w in (narr.get("watch_for") or []) if str(w).strip()][:3]
+                if tb or wf:
+                    finding_data["narrative"] = {
+                        "thesis_breaker": tb,
+                        "watch_for": wf,
+                    }
+        except Exception:  # pragma: no cover — narrative is best-effort
+            pass
+
     finding = AgentFinding(
         agent="Risk Analyst",
         headline=f"Risk profile for {profile.get('ticker', '')}",

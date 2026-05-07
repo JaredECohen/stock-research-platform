@@ -153,3 +153,102 @@ def queue_depth(ticker: Optional[str] = None) -> Dict[str, int]:
     if ticker:
         return {ticker.upper(): len(_QUEUES.get(ticker.upper(), []))}
     return {t: len(q) for t, q in _QUEUES.items() if q}
+
+
+# ---------------------------------------------------------------------------
+# Wave 10 — macro regime shift trigger
+# ---------------------------------------------------------------------------
+
+# Regime shifts can move a lot of names at once; cap how many memos
+# we'll re-run per event to keep cost predictable. Names selected =
+# the most rate-sensitive (theme_exposure) names whose sector flipped
+# from favored → pressured (or vice versa) under the new regime.
+MAX_TICKERS_PER_REGIME_SHIFT = 10
+
+
+def _affected_tickers_for_regime_shift(
+    prior_regime: str, new_regime: str,
+) -> List[str]:
+    """Pick tickers most likely to need a memo refresh after the
+    regime flipped from `prior_regime` → `new_regime`.
+
+    Strategy:
+    1. Tickers with high `long_rates_sensitivity` theme exposure are
+       always candidates (rate-regime shifts hit these first).
+    2. Tickers in sectors that flipped between favored/pressured
+       under the new vs. prior regime are also candidates.
+
+    Cross-references the macro_loop's `_REGIME_FAVORED` /
+    `_REGIME_PRESSURED` maps via a deferred import to avoid circular
+    imports at module load.
+    """
+    try:
+        from ..monitoring.macro_loop import _REGIME_FAVORED, _REGIME_PRESSURED
+    except Exception:  # pragma: no cover
+        _REGIME_FAVORED, _REGIME_PRESSURED = {}, {}
+
+    # Sectors that meaningfully changed status.
+    prior_set = set(_REGIME_FAVORED.get(prior_regime, []) + _REGIME_PRESSURED.get(prior_regime, []))
+    new_set = set(_REGIME_FAVORED.get(new_regime, []) + _REGIME_PRESSURED.get(new_regime, []))
+    affected_sectors = (prior_set - new_set) | (new_set - prior_set)
+
+    candidates: List[str] = []
+
+    # 1) Long-rates-sensitive names — the first to feel a regime change.
+    try:
+        from .theme_exposure_service import top_for_theme
+        for row in top_for_theme("long_rates_sensitivity", min_score=20.0, limit=15):
+            t = row.get("ticker")
+            if t and t not in candidates:
+                candidates.append(t)
+    except Exception as exc:  # pragma: no cover
+        log.debug("theme_exposure read failed for regime shift: %s", exc)
+
+    # 2) Sector flippers — tickers in sectors that crossed favored/pressured.
+    if affected_sectors:
+        try:
+            from sqlalchemy import select
+            from ..database import SessionLocal
+            from ..models import Company
+            with SessionLocal() as db:
+                rows = db.execute(
+                    select(Company.ticker, Company.sector)
+                    .where(Company.universe_tier == "auto_analysis")
+                ).all()
+                for ticker, sector in rows:
+                    if sector and sector in affected_sectors and ticker not in candidates:
+                        candidates.append(ticker)
+                    if len(candidates) >= MAX_TICKERS_PER_REGIME_SHIFT * 3:
+                        break
+        except Exception as exc:  # pragma: no cover
+            log.debug("companies read failed for regime shift: %s", exc)
+
+    return candidates[:MAX_TICKERS_PER_REGIME_SHIFT]
+
+
+def on_regime_shift(prior_regime: str, new_regime: str) -> Dict[str, Any]:
+    """Wave 10 — fire when macro_loop detects the regime classification
+    changed. Re-runs memos for the most affected names.
+
+    Strategy: full_reanalysis for the top N by exposure (forces fresh
+    valuation + rating; light patches wouldn't reflect the regime
+    change properly). Bounded by `MAX_TICKERS_PER_REGIME_SHIFT` so a
+    single regime flip can't blow the budget.
+
+    Returns {prior, new, refreshed: List[str]} for cron logging.
+    """
+    if prior_regime == new_regime:
+        return {"prior": prior_regime, "new": new_regime, "refreshed": []}
+    affected = _affected_tickers_for_regime_shift(prior_regime, new_regime)
+    refreshed: List[str] = []
+    for ticker in affected:
+        try:
+            on_filing_event(ticker)  # reuses the full_reanalysis path
+            refreshed.append(ticker)
+        except Exception as exc:  # pragma: no cover
+            log.warning("regime-shift refresh failed for %s: %s", ticker, exc)
+    log.info(
+        "regime shift %s → %s: refreshed %d ticker(s) — %s",
+        prior_regime, new_regime, len(refreshed), refreshed,
+    )
+    return {"prior": prior_regime, "new": new_regime, "refreshed": refreshed}

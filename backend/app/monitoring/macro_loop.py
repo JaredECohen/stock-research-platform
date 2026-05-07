@@ -71,8 +71,31 @@ def run_once() -> Dict:
         generated_by="macro_loop", cost_tokens=10,
         ttl_seconds=2 * 3600,
     )
-    record_run("macro_loop", note=f"regime={regime}")
-    return {"regime": regime, "regime_changed": prior_regime != regime, "snapshot": snapshot}
+    # Wave 10 — fire memo invalidation when the regime classification
+    # changes. Bounded at MAX_TICKERS_PER_REGIME_SHIFT (10 by default)
+    # so a flip can't run away on cost. Skipped on cold start
+    # (prior_regime is None) so first-boot doesn't refresh the
+    # universe.
+    refreshed: List[str] = []
+    if prior_regime and prior_regime != regime:
+        try:
+            from ..services.update_orchestrator import on_regime_shift
+            res = on_regime_shift(prior_regime, regime)
+            refreshed = res.get("refreshed") or []
+        except Exception as exc:  # pragma: no cover
+            log.warning("regime-shift trigger failed: %s", exc)
+
+    note = f"regime={regime}" + (
+        f" (shifted from {prior_regime}; refreshed {len(refreshed)})"
+        if refreshed else ""
+    )
+    record_run("macro_loop", note=note)
+    return {
+        "regime": regime,
+        "regime_changed": prior_regime != regime,
+        "refreshed_tickers": refreshed,
+        "snapshot": snapshot,
+    }
 
 
 def register(scheduler) -> None:
