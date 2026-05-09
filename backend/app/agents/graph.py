@@ -377,9 +377,18 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
       3. Generic but honest "DCF says X" line.
     """
     sector_bb = _bull_bear_from_sector(sector_finding) if sector_finding else None
+    # Wave 10k — pull DCF scenario drivers (LLM-named) so the prose
+    # tile cites the same drivers the assumption changes baked in.
+    dcf_drivers: List[str] = []
+    if dcf and dcf.bull and dcf.bull.drivers:
+        dcf_drivers = [
+            f"DCF driver — {d.name}: {d.rationale}".rstrip(": ")
+            for d in dcf.bull.drivers if d.name or d.rationale
+        ][:3]
     if sector_bb and isinstance(sector_bb.get("bull_case"), dict):
         bull = sector_bb["bull_case"]
         points = list(bull.get("key_points") or [])
+        points.extend(dcf_drivers)
         if dcf:
             points.append(
                 f"DCF bull case implies ${dcf.bull.implied_share_price:,.2f} "
@@ -395,6 +404,8 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
     points.extend(_findings_signal_lines(findings.get("sector"), polarity="bull", max_items=3))
     points.extend(_findings_signal_lines(findings.get("valuation"), polarity="bull", max_items=2))
     points.extend(_findings_signal_lines(findings.get("earnings"), polarity="bull", max_items=2))
+    # Wave 10k — DCF-named drivers from the scenario builder.
+    points.extend(dcf_drivers)
     if dcf:
         points.append(
             f"DCF bull case implies ${dcf.bull.implied_share_price:,.2f} "
@@ -421,9 +432,17 @@ def _bear_case(profile: Dict, dcf: Optional[DCFResult],
     sector LLM's bear, otherwise lifts bear-polarity signals from
     sector / risk / filing findings + DCF downside."""
     sector_bb = _bull_bear_from_sector(sector_finding) if sector_finding else None
+    # Wave 10k — DCF bear-case drivers from the scenario builder.
+    dcf_drivers: List[str] = []
+    if dcf and dcf.bear and dcf.bear.drivers:
+        dcf_drivers = [
+            f"DCF driver — {d.name}: {d.rationale}".rstrip(": ")
+            for d in dcf.bear.drivers if d.name or d.rationale
+        ][:3]
     if sector_bb and isinstance(sector_bb.get("bear_case"), dict):
         bear = sector_bb["bear_case"]
         points = list(bear.get("key_points") or [])
+        points.extend(dcf_drivers)
         if dcf:
             points.append(
                 f"DCF bear case implies ${dcf.bear.implied_share_price:,.2f} "
@@ -439,6 +458,8 @@ def _bear_case(profile: Dict, dcf: Optional[DCFResult],
     points.extend(_findings_signal_lines(findings.get("risk"), polarity="bear", max_items=3))
     points.extend(_findings_signal_lines(findings.get("filing"), polarity="bear", max_items=2, prefix="Filing: "))
     points.extend(_findings_signal_lines(findings.get("sector"), polarity="bear", max_items=2))
+    # Wave 10k — DCF-named drivers from the scenario builder.
+    points.extend(dcf_drivers)
     if dcf:
         points.append(
             f"DCF bear case implies ${dcf.bear.implied_share_price:,.2f} "

@@ -414,7 +414,16 @@ def build_dcf(
         assumptions = default_dcf_assumptions(ticker)
     if assumptions is None:
         return None
-    result = dcf_engine.build_full_dcf(ticker, assumptions)
+    # Wave 10k — pass profile through so bull/bear scenarios run with
+    # LLM-driven sector-aware drivers + assumption changes (instead
+    # of the prior symmetric ±400bp mechanical bumps).
+    profile_for_dcf: Optional[Dict] = None
+    try:
+        fin = get_full_financials(ticker)
+        profile_for_dcf = fin.get("profile")
+    except Exception:  # pragma: no cover — defensive
+        profile_for_dcf = None
+    result = dcf_engine.build_full_dcf(ticker, assumptions, profile=profile_for_dcf)
 
     if assumptions is not None and result is not None:
         # Only cache the default-assumption build to avoid per-call thrash.

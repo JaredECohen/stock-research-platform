@@ -334,24 +334,17 @@ def run_dcf(assumptions: DCFAssumptions, *, scenario_name: str = "base", label: 
     )
 
 
-def _bull_assumptions(base: DCFAssumptions) -> DCFAssumptions:
-    a = copy.deepcopy(base)
-    a.revenue_growth = [min(0.40, g + 0.04) for g in a.revenue_growth]
-    a.operating_margin = [min(0.65, m + 0.02) for m in a.operating_margin]
-    a.terminal_growth = min(0.04, a.terminal_growth + 0.005)
-    a.exit_ebitda_multiple = a.exit_ebitda_multiple + 3.0
-    a.wacc = max(0.05, a.wacc - 0.005)
-    return a
-
-
-def _bear_assumptions(base: DCFAssumptions) -> DCFAssumptions:
-    a = copy.deepcopy(base)
-    a.revenue_growth = [max(-0.10, g - 0.04) for g in a.revenue_growth]
-    a.operating_margin = [max(0.01, m - 0.03) for m in a.operating_margin]
-    a.terminal_growth = max(0.01, a.terminal_growth - 0.005)
-    a.exit_ebitda_multiple = max(5.0, a.exit_ebitda_multiple - 3.0)
-    a.wacc = a.wacc + 0.01
-    return a
+# Wave 10k — bull / bear assumption builders moved to
+# `services/scenario_assumptions.py` so they can run an LLM pass
+# tied to NAMED drivers per company (and fall back to a sector-aware
+# deterministic builder when no LLM is available). The prior
+# symmetric ±400bps mechanical bumps are gone — different sectors
+# get different bump magnitudes, and bull/bear scenarios carry the
+# named drivers that justify each assumption change.
+#
+# `exit_ebitda_multiple` bumps were dead code under Gordon-only
+# (Wave 10j) — removed entirely. Exit multiple now only feeds the
+# cross-check sensitivity table.
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +416,9 @@ def _scenario_with_exit_terminal(
 
 def build_exit_multiple_sensitivity(
     base: DCFAssumptions,
+    *,
+    bull: Optional[DCFAssumptions] = None,
+    bear: Optional[DCFAssumptions] = None,
 ) -> DCFSensitivity:
     """Wave 10j — what would the implied price be under exit-multiple
     terminal across a range of multiples × bear/base/bull?
@@ -432,9 +428,19 @@ def build_exit_multiple_sensitivity(
     bracketed ±5x) × 3 scenarios (bear / base / bull). Lets the user
     see the dispersion an exit-multiple framing would produce without
     contaminating the core DCF with the multiple assumption.
+
+    Wave 10k — bull / bear assumptions are provided by the caller
+    (`build_full_dcf`) so the sensitivity uses the SAME scenario
+    assumption sets the headline DCF used (LLM-driven or sector-
+    aware fallback). When called standalone (e.g., in a unit test),
+    falls back to a generic ±300bp deterministic bump.
     """
-    bull = _bull_assumptions(base)
-    bear = _bear_assumptions(base)
+    if bull is None or bear is None:
+        # Standalone-call fallback: light bumps just to populate the
+        # grid. Real callers (build_full_dcf) provide the same
+        # bull/bear assumption sets the headline scenarios used.
+        from ..services.scenario_assumptions import _deterministic_fallback
+        bull, _, bear, _ = _deterministic_fallback({}, base)
 
     # Five multiples centered on user input, bracketed.
     base_m = max(5.0, float(base.exit_ebitda_multiple))
@@ -468,7 +474,16 @@ def build_exit_multiple_sensitivity(
     )
 
 
-def build_default_sensitivities(base: DCFAssumptions) -> List[DCFSensitivity]:
+def build_default_sensitivities(
+    base: DCFAssumptions,
+    *,
+    bull: Optional[DCFAssumptions] = None,
+    bear: Optional[DCFAssumptions] = None,
+) -> List[DCFSensitivity]:
+    """Wave 10k — bull / bear assumptions thread through to the
+    exit-multiple sensitivity so the cross-check uses the SAME
+    scenario assumption sets as the headline DCF (LLM-driven or
+    sector-aware fallback)."""
     sens: List[DCFSensitivity] = []
 
     def set_wacc_terminal(a: DCFAssumptions, w: float, g: float) -> None:
@@ -519,7 +534,7 @@ def build_default_sensitivities(base: DCFAssumptions) -> List[DCFSensitivity]:
     # The core DCF uses Gordon Growth; this surface tells the user
     # "if you preferred exit-multiple terminal, the dispersion would
     # look like this." Replaces the prior 50/50 blend.
-    sens.append(build_exit_multiple_sensitivity(base))
+    sens.append(build_exit_multiple_sensitivity(base, bull=bull, bear=bear))
 
     return sens
 
@@ -665,12 +680,36 @@ def _cohort_p90_ev_ebitda(ticker: str) -> Optional[float]:
         return None
 
 
-def build_full_dcf(ticker: str, base_assumptions: DCFAssumptions) -> DCFResult:
-    """Run base/bull/bear scenarios + sensitivities and synthesize a summary."""
+def build_full_dcf(
+    ticker: str,
+    base_assumptions: DCFAssumptions,
+    *,
+    profile: Optional[Dict] = None,
+) -> DCFResult:
+    """Run base/bull/bear scenarios + sensitivities and synthesize a summary.
+
+    Wave 10k — `profile` enables the LLM-driven sector-aware bull /
+    bear scenario builder. When profile is None or no API key is
+    configured, falls back to the sector-classified deterministic
+    bumps in `services/scenario_assumptions._deterministic_fallback`
+    (still better than the prior one-size-fits-all symmetric bumps).
+    """
+    from ..services.scenario_assumptions import build_bull_bear
+
     base = run_dcf(base_assumptions, scenario_name="base", label="Base case")
-    bull = run_dcf(_bull_assumptions(base_assumptions), scenario_name="bull", label="Bull case")
-    bear = run_dcf(_bear_assumptions(base_assumptions), scenario_name="bear", label="Bear case")
-    sens = build_default_sensitivities(base_assumptions)
+    bull_assumptions, bull_drivers, bear_assumptions, bear_drivers = build_bull_bear(
+        profile or {"ticker": ticker}, base_assumptions,
+    )
+    bull = run_dcf(bull_assumptions, scenario_name="bull", label="Bull case")
+    bear = run_dcf(bear_assumptions, scenario_name="bear", label="Bear case")
+    # Attach the named drivers to each scenario so the memo / UI can
+    # cite them alongside the implied price.
+    bull = bull.model_copy(update={"drivers": bull_drivers})
+    bear = bear.model_copy(update={"drivers": bear_drivers})
+
+    sens = build_default_sensitivities(
+        base_assumptions, bull=bull_assumptions, bear=bear_assumptions,
+    )
     guardrails = check_dcf_realism(base, ticker=ticker)
 
     summary_parts: List[str] = []

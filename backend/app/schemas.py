@@ -402,6 +402,20 @@ class DCFYearProjection(BaseModel):
     pv_fcff: float
 
 
+class ScenarioDriver(BaseModel):
+    """Wave 10k — a concrete bull / bear driver for a DCF scenario.
+
+    `name` is short ("AI revenue ramps", "China consumer slowdown");
+    `assumption_changes` is the list of fields that this driver
+    moved (e.g. ["revenue_growth", "operating_margin"]); `rationale`
+    is one sentence explaining why this driver belongs in the
+    scenario.
+    """
+    name: str = ""
+    rationale: str = ""
+    assumption_changes: List[str] = Field(default_factory=list)
+
+
 class DCFScenario(BaseModel):
     name: Literal["base", "bull", "bear"]
     label: str
@@ -418,6 +432,12 @@ class DCFScenario(BaseModel):
     equity_value: float
     implied_share_price: float
     upside_pct: float
+    # Wave 10k — named drivers for bull / bear scenarios. Empty for
+    # the base case + on memos that pre-date the field. Bull / bear
+    # scenarios populated via `services/scenario_assumptions.py` so
+    # the prose drivers and the assumption changes are tied — no more
+    # symmetric ±400bps bumps with no narrative connection.
+    drivers: List[ScenarioDriver] = Field(default_factory=list)
 
 
 class SensitivityCell(BaseModel):
