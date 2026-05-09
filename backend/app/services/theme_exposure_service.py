@@ -14,9 +14,12 @@ Source signals:
 - News headlines tagged to the ticker (when `EnableNewsThemeTagging`
   is on; today defers to keyword scan).
 
-Scoring is intentionally simple — keyword + LLM-ranked match against
-a curated theme vocabulary. The LLM judge runs once per (ticker,
-theme) and caches; the curated vocabulary is the lever.
+Wave 10i — scoring is now LLM-judged across the full theme
+vocabulary in a single call per ticker. Keyword matching is kept
+as a deterministic fallback (no API key, network error). The LLM
+returns a score 0-100 per theme + a 1-sentence evidence excerpt;
+the deterministic fallback uses keyword hit ratios + raw matches
+as evidence.
 
 Output lands in `theme_exposure(ticker, theme, score, evidence)`.
 A monthly cron refreshes the universe.
@@ -115,17 +118,100 @@ def _gather_text(ticker: str, char_cap: int = 30000) -> str:
     return text[:char_cap]
 
 
+def _llm_theme_scores(
+    ticker: str, text: str,
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Score the ticker against the full theme vocabulary in one
+    LLM call. Returns `{theme: {"score": float, "evidence": str}}`
+    or None on any failure."""
+    from ..config import settings
+    if not getattr(settings, "openai_api_key", None) or not text.strip():
+        return None
+    schema_hint = {
+        theme: {
+            "score": "0-100 — material exposure (revenue, capex, "
+                     "earnings sensitivity, or strategic identity)",
+            "evidence": "1 sentence with a specific phrase / segment / "
+                        "metric from the text supporting the score",
+        }
+        for theme in THEME_KEYWORDS.keys()
+    }
+    prompt = (
+        f"Score the company {ticker.upper()}'s material exposure to each "
+        "theme below on a 0-100 scale. Score reflects revenue / capex / "
+        "earnings sensitivity OR strategic identity — not just keyword "
+        "mentions.\n\n"
+        "Reading rules:\n"
+        "- 0-15: incidental / no exposure (a software firm mentioning "
+        "  'AI' once in passing).\n"
+        "- 30-50: partial exposure (one segment or driver tied to the "
+        "  theme).\n"
+        "- 60-80: material exposure (the theme moves earnings or is "
+        "  central to capital allocation).\n"
+        "- 85-100: defining exposure (the theme IS the company's "
+        "  strategic identity, e.g. NVDA ↔ AI infrastructure).\n\n"
+        f"Theme vocabulary + return shape:\n{json.dumps(schema_hint, indent=2)}\n\n"
+        "Return strict JSON exactly matching the keys above. Each "
+        "theme value must be `{score, evidence}`. If exposure is "
+        "near-zero, score 0-10 and evidence 'no material exposure'.\n\n"
+        f"Source text (business description + recent transcripts):\n{text[:18000]}"
+    )
+    try:
+        from ..agents import llm
+        out = llm.chat_json(
+            prompt,
+            system="You are a buy-side analyst. Be specific and honest.",
+            route="cheap",
+            model=getattr(settings, "openai_tool_model", None),
+            max_tokens=1200,
+        )
+    except Exception as exc:  # pragma: no cover
+        log.warning("theme_exposure LLM call failed for %s: %s", ticker, exc)
+        return None
+    if not isinstance(out, dict):
+        return None
+    cleaned: Dict[str, Dict[str, Any]] = {}
+    for theme in THEME_KEYWORDS.keys():
+        raw = out.get(theme)
+        if not isinstance(raw, dict):
+            continue
+        score = raw.get("score")
+        if not isinstance(score, (int, float)):
+            continue
+        cleaned[theme] = {
+            "score": max(0.0, min(100.0, float(score))),
+            "evidence": str(raw.get("evidence") or "")[:300],
+        }
+    return cleaned or None
+
+
 def compute_for_ticker(ticker: str) -> Dict[str, Any]:
     """Compute exposure scores across the theme vocabulary for one
-    ticker. Persists to `theme_exposure`. Returns a summary dict."""
+    ticker. Persists to `theme_exposure`. Returns a summary dict.
+
+    Wave 10i — LLM-judged scoring across all themes in a single call
+    when an API key is available; falls back to keyword matching
+    deterministically when not. Single LLM call per ticker × ~10
+    themes scored ≈ ~$0.002-0.004 per ticker.
+    """
     text = _gather_text(ticker)
     if not text.strip():
         return {"ticker": ticker.upper(), "themes_written": 0, "reason": "no_text"}
+
+    llm_scores = _llm_theme_scores(ticker, text)
+    used_llm = llm_scores is not None
     written = 0
     with SessionLocal() as db:
         for theme, keywords in THEME_KEYWORDS.items():
-            score, hits = _keyword_score(text, keywords)
-            evidence = [f"keyword: {h}" for h in hits[:5]]
+            if used_llm and theme in llm_scores:
+                payload = llm_scores[theme]
+                score = float(payload["score"])
+                evidence = [
+                    str(payload.get("evidence") or "no material exposure")
+                ]
+            else:
+                score, hits = _keyword_score(text, keywords)
+                evidence = [f"keyword: {h}" for h in hits[:5]] or ["no material exposure"]
             existing = db.execute(
                 select(ThemeExposure).where(
                     ThemeExposure.ticker == ticker.upper(),
@@ -146,7 +232,11 @@ def compute_for_ticker(ticker: str) -> Dict[str, Any]:
                 existing.refreshed_at = datetime.utcnow()
             written += 1
         db.commit()
-    return {"ticker": ticker.upper(), "themes_written": written}
+    return {
+        "ticker": ticker.upper(),
+        "themes_written": written,
+        "scoring": "llm" if used_llm else "keyword_fallback",
+    }
 
 
 def refresh_universe(*, limit: Optional[int] = None) -> Dict[str, int]:

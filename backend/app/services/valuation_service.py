@@ -352,16 +352,18 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
     # sector. A software name at unprecedented operating leverage
     # benefits from the same cohort-median anchor.
     use_reversion = _is_cyclical(profile)
+    cycle_pos: Optional[str] = None
     try:
         from .cycle_position import cycle_position
         pos = cycle_position(ticker)
-        if pos.get("position") == "peak":
+        cycle_pos = pos.get("position")
+        if cycle_pos == "peak":
             use_reversion = True
     except Exception:  # pragma: no cover — defensive
         pass
     cohort_target = _cohort_op_margin(ticker) if use_reversion else None
 
-    return dcf_engine.derive_default_assumptions(
+    baseline = dcf_engine.derive_default_assumptions(
         income_statements=fin["income"],
         cash_flows=fin["cash"],
         balance_sheets=fin["balance"],
@@ -372,6 +374,17 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
         margin_mean_reversion=use_reversion,
         cohort_op_margin=cohort_target,
     )
+
+    # Wave 10i — layer LLM-judged sector / company overrides on top of
+    # the deterministic baseline. Adjusts exit_ebitda_multiple,
+    # terminal_growth, capex / D&A / NWC, and WACC adjustment to the
+    # company's sector + business model. Falls back to the baseline
+    # when no API key or LLM error.
+    try:
+        from .sector_dcf_defaults import apply_sector_overrides
+        return apply_sector_overrides(profile, baseline, cycle_position=cycle_pos)
+    except Exception:  # pragma: no cover — never block DCF
+        return baseline
 
 
 def build_dcf(
