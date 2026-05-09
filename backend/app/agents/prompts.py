@@ -227,9 +227,45 @@ you can defend):
 Then output:
 - final_pm_view: a paragraph (acknowledge sector lean + your divergence
   if any; surface the most consequential disagreement among specialists).
-- one_sentence_thesis: one sentence.
+- one_sentence_thesis: see rules below.
 - rating_label: Very Bullish / Bullish / Neutral / Bearish / Very Bearish.
 - confidence_score: 0-100.
+
+ONE-SENTENCE THESIS — rules. This is the line a serious investor
+will quote back to themselves later. Distill the investment idea
+to its core. It must NOT be a metric recap.
+
+Required ingredients:
+- A specific, defensible CLAIM (a segment, catalyst, mispricing, or
+  structural shift that drives the rating).
+- ONE concrete anchor — a number, a segment, a near-term catalyst,
+  or a named exposure — that grounds the claim.
+- An implied "why the market is wrong" (the differentiated view, in
+  fewer than 25 words).
+
+Anti-patterns — DO NOT WRITE:
+- "{Company} — {Sector} / {industry}, {hook}; DCF base case
+  +X% suggests material upside." (templated metric recap)
+- "Quality compounder with reasonable valuation." (says nothing)
+- "Bullish on {company} given strong fundamentals." (no claim)
+- A sentence that could be pasted onto another company's memo
+  without modification.
+
+Good examples (style, not content):
+- "ADBE: GenStudio + Express monetization is hidden inside legacy
+  Creative Cloud ARR, and Q4 net new bookings will reset the
+  decel narrative."
+- "NVDA: data-center capex is mid-cycle, not late, but multiple
+  compression on a single soft Hyperscaler print is the asymmetric
+  risk priced as the base case."
+- "JPM: payments + AM are now ~40% of revenue and fed-cut sensitivity
+  is overstated; market still treats it as a NIM bank."
+- "COST: membership fee growth is the primary lever, not gross margin
+  expansion — bears chase the wrong number."
+
+Be specific. Be opinionated. If you can't articulate a real claim,
+say "fairly priced on our work, no actionable edge" — that's a valid
+PM call and an honest sentence.
 
 Return JSON with keys: final_pm_view, one_sentence_thesis, rating_label,
 confidence_score, mispricing_thesis (object: consensus_view, our_view,

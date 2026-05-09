@@ -28,6 +28,68 @@ function NumInput(props: { label: string; value: number; onChange: (v: number) =
   );
 }
 
+function ExitMultipleSensitivityTable({
+  s,
+  currentPrice,
+}: {
+  s: DCFSensitivity;
+  currentPrice: number;
+}) {
+  // Wave 10j — dedicated renderer for the exit-multiple cross-check
+  // (headline DCF uses Gordon Growth). Rows are multiples (9x, 12x,
+  // ...), columns are Bear / Base / Bull, cells are implied price.
+  const scenarios = ["bear", "base", "bull"];
+  const cellMap = new Map<string, number>();
+  s.cells.forEach((c) => cellMap.set(`${c.row_label}|${c.col_label}`, c.value));
+  const multiples = Array.from(new Set(s.cells.map((c) => c.row_label)));
+
+  return (
+    <div className="card-tight overflow-x-auto">
+      <div className="section-title mb-1">Exit-multiple cross-check</div>
+      <div className="text-xs text-slate-500 mb-2">
+        Headline DCF uses Gordon Growth (terminal-growth-rate method).
+        This table shows what the implied price would be under
+        exit-multiple terminal across 5 multiples × bear/base/bull —
+        for cross-check only; it does not feed the core DCF.
+      </div>
+      <table className="w-full text-xs font-mono">
+        <thead>
+          <tr>
+            <th className="text-left text-slate-500 p-1">Exit EBITDA \ Scenario</th>
+            {scenarios.map((c) => (
+              <th key={c} className="text-right p-1 text-slate-400 capitalize">
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {multiples.map((m) => (
+            <tr key={m} className="border-t border-ink-800">
+              <td className="text-slate-400 p-1">{m}</td>
+              {scenarios.map((sc) => {
+                const v = cellMap.get(`${m}|${sc}`) ?? 0;
+                const above = currentPrice && v > currentPrice;
+                const below = currentPrice && v < currentPrice;
+                const cls = above
+                  ? "text-emerald-400"
+                  : below
+                  ? "text-rose-400"
+                  : "";
+                return (
+                  <td key={`${m}-${sc}`} className={`text-right p-1 ${cls}`}>
+                    ${v.toFixed(2)}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function SensitivityTable({ s }: { s: DCFSensitivity }) {
   const cols = s.cols;
   const rows = s.rows;
@@ -477,34 +539,54 @@ export default function DCFLab() {
               <NumInput label="NWC % Revenue" value={a.nwc_pct_revenue} onChange={(v) => update({ nwc_pct_revenue: v })} pct />
             </div>
             <div className="section-title mt-4 mb-2">Year-by-year</div>
-            <div className="grid grid-cols-2 gap-3">
-              {a.revenue_growth.map((g, i) => (
-                <NumInput
-                  key={`g${i}`}
-                  label={`Y${i + 1} Rev Growth`}
-                  value={g}
-                  onChange={(v) => {
-                    const next = [...a.revenue_growth];
-                    next[i] = v;
-                    update({ revenue_growth: next });
-                  }}
-                  pct
-                />
-              ))}
-              {a.operating_margin.map((m, i) => (
-                <NumInput
-                  key={`m${i}`}
-                  label={`Y${i + 1} Op Margin`}
-                  value={m}
-                  onChange={(v) => {
-                    const next = [...a.operating_margin];
-                    next[i] = v;
-                    update({ operating_margin: next });
-                  }}
-                  pct
-                />
-              ))}
-            </div>
+            <table className="w-full text-sm">
+              <thead className="text-xs text-slate-400 border-b border-ink-700">
+                <tr>
+                  <th className="text-left py-2 pr-3 font-medium w-12">Year</th>
+                  <th className="text-left py-2 pr-3 font-medium">Revenue growth</th>
+                  <th className="text-left py-2 font-medium">Op margin</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({
+                  length: Math.max(
+                    a.revenue_growth.length,
+                    a.operating_margin.length,
+                  ),
+                }).map((_, i) => (
+                  <tr
+                    key={`year-${i}`}
+                    className="border-b border-ink-800 last:border-b-0"
+                  >
+                    <td className="py-2 pr-3 text-slate-400">Y{i + 1}</td>
+                    <td className="py-2 pr-3">
+                      <NumInput
+                        label=""
+                        value={a.revenue_growth[i] ?? 0}
+                        onChange={(v) => {
+                          const next = [...a.revenue_growth];
+                          next[i] = v;
+                          update({ revenue_growth: next });
+                        }}
+                        pct
+                      />
+                    </td>
+                    <td className="py-2">
+                      <NumInput
+                        label=""
+                        value={a.operating_margin[i] ?? 0}
+                        onChange={(v) => {
+                          const next = [...a.operating_margin];
+                          next[i] = v;
+                          update({ operating_margin: next });
+                        }}
+                        pct
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
             <div className="flex gap-2 mt-4">
               <button
                 className="btn-primary flex-1"
@@ -599,9 +681,17 @@ export default function DCFLab() {
                 </div>
 
                 <div className="grid lg:grid-cols-2 gap-3">
-                  {result.sensitivities.map((s) => (
-                    <SensitivityTable key={s.name} s={s} />
-                  ))}
+                  {result.sensitivities.map((s) =>
+                    s.name.toLowerCase().startsWith("exit multiple sensitivity") ? (
+                      <ExitMultipleSensitivityTable
+                        key={s.name}
+                        s={s}
+                        currentPrice={result.current_price}
+                      />
+                    ) : (
+                      <SensitivityTable key={s.name} s={s} />
+                    ),
+                  )}
                 </div>
               </>
             )}

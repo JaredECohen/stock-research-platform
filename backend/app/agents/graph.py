@@ -558,68 +558,83 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
         rating = "Very Bearish"
     confidence = max(40, min(85, 55 + 5 * abs(score)))
 
-    # Build a substantive deterministic thesis. Lead with company +
-    # sector, then weave in the dominant signal from the agent findings
-    # (cohort regime, valuation framing, narrative tension), and anchor
-    # with DCF upside. Avoids hollow filler like "compounder; DCF +X%"
-    # which says nothing about *why* the rating is what it is.
+    # Build a thesis that distills the actual claim — not a metric
+    # recap. Order of preference for the "claim" portion:
+    #   1. Bull case headline (specialist's punchiest defensible take)
+    #   2. Sector cohort outliers / regime narrative
+    #   3. Valuation analyst's headline if substantive
+    #   4. Drivers fallback
+    # Anchor with a meaningful number ONLY when the claim doesn't
+    # already include one. Avoid the templated "{Sector}; DCF +X%
+    # upside" pattern the LLM prompt explicitly forbids.
     drivers = profile.get("drivers") or []
-    sector = (profile.get("sector") or "").strip()
-    industry = (profile.get("industry") or "").strip()
-    name = profile.get("company_name") or profile.get("ticker", "")
-    if sector and industry:
-        sector_phrase = f"{sector} / {industry.lower()}"
-    else:
-        sector_phrase = (industry or sector or "core").lower()
+    ticker_sym = profile.get("ticker") or ""
 
-    # Pull a "why" hook from the agent findings. Order of preference:
-    #   sector regime → valuation framing → news/risk narrative → driver.
-    # Each finding's headline tends to lead with the punchy take; we
-    # extract the most distinctive phrase and stitch it in.
-    def _hook_from_finding(f: Optional[AgentFinding]) -> Optional[str]:
+    def _claim_from_finding(f: Optional[AgentFinding]) -> Optional[str]:
         if f is None:
             return None
-        head = (f.headline or "").strip()
-        # Sector headlines look like "<industry> cohort, regime: <X>".
-        # Strip the cohort prefix so the regime fragment lands cleanly.
-        if "regime:" in head.lower():
-            piece = head.split("regime:", 1)[1].strip()
-            piece = piece.split("·")[0].strip()  # drop concentration HHI
-            if piece:
-                return piece.rstrip(".,;").lower()
-        # Other findings: keep the headline if it looks substantive.
-        if 12 <= len(head) <= 140 and not head.endswith("highlights"):
-            return head.rstrip(".,;")
-        return None
+        head = (f.headline or "").strip().rstrip(".,;:")
+        if not head or len(head) < 12:
+            return None
+        # Skip generic / template-y headlines.
+        skip_patterns = (
+            "highlights", "view", "profile", "view for", "scenario:",
+            "regime:", "cohort placement", "skipped per pm intake",
+        )
+        low = head.lower()
+        if any(p in low for p in skip_patterns):
+            return None
+        return head
 
-    hook = (
-        _hook_from_finding(findings.get("sector"))
-        or _hook_from_finding(findings.get("valuation"))
-        or _hook_from_finding(findings.get("news_impact"))
-        or _hook_from_finding(findings.get("risk"))
+    # Try the bull-case sub-finding first when sector_finding has the
+    # structured bull/bear payload. That's the specialist's actual
+    # punchiest claim, not a cohort label.
+    sector_finding = findings.get("sector")
+    bull_headline: Optional[str] = None
+    if sector_finding is not None and isinstance(sector_finding.data, dict):
+        bb = sector_finding.data.get("bull_bear_analysis") or {}
+        if isinstance(bb, dict):
+            bull_case = bb.get("bull_case") or {}
+            if isinstance(bull_case, dict):
+                bh = (bull_case.get("headline") or "").strip().rstrip(".,;:")
+                if 12 <= len(bh) <= 180:
+                    bull_headline = bh
+
+    claim = (
+        bull_headline
+        or _claim_from_finding(findings.get("valuation"))
+        or _claim_from_finding(sector_finding)
+        or _claim_from_finding(findings.get("earnings"))
+        or _claim_from_finding(findings.get("filing"))
+        or (drivers[0] if drivers else None)
     )
 
-    if drivers and hook:
-        head = f"{name} — {sector_phrase}, {hook}; key driver: {drivers[0]}"
-    elif drivers:
-        head = f"{name} — {sector_phrase} with leverage to {drivers[0]}"
-    elif hook:
-        head = f"{name} — {sector_phrase}, {hook}"
-    else:
-        head = f"{name} — {sector_phrase}"
-
-    # Anchor with DCF upside when meaningful.
     upside = dcf.base.upside_pct if dcf and dcf.base else None
-    if upside is not None and abs(upside) >= 0.05:
-        sign = "+" if upside > 0 else ""
-        if upside >= 0.20:
-            tail = f"DCF base case {sign}{upside * 100:.0f}% suggests material upside"
-        elif upside <= -0.20:
-            tail = f"DCF base case {upside * 100:.0f}% suggests material downside"
+    have_anchor_in_claim = (
+        bool(claim)
+        and any(c.isdigit() for c in claim)
+    )
+
+    if claim:
+        # Lead with the ticker + claim; tail with a number ONLY if the
+        # claim doesn't already carry one.
+        if ticker_sym:
+            head = f"{ticker_sym}: {claim}"
         else:
-            tail = f"DCF base case {sign}{upside * 100:.0f}% to fair value"
-        head += f"; {tail}"
-    thesis = head + "."
+            head = claim
+        if (
+            upside is not None and abs(upside) >= 0.10
+            and not have_anchor_in_claim
+        ):
+            sign = "+" if upside > 0 else ""
+            head += f" — base-case DCF implies {sign}{upside * 100:.0f}% to fair value"
+    else:
+        # No usable claim — emit an honest "no edge" sentence rather
+        # than a hollow template.
+        sector = (profile.get("sector") or "core").strip().lower()
+        head = f"{ticker_sym}: fairly priced on our work — no actionable edge in {sector}"
+
+    thesis = head.rstrip(".") + "."
     pm_view = (
         f"Research view: {rating}. {thesis} "
         f"Sector framing supports the cohort thesis; valuation-relative read is the main swing factor. "

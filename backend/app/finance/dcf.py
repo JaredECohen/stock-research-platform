@@ -295,7 +295,16 @@ def run_dcf(assumptions: DCFAssumptions, *, scenario_name: str = "base", label: 
 
     ev_gordon = pv_explicit + pv_terminal_gordon
     ev_exit = pv_explicit + pv_terminal_exit
-    ev_blended = (ev_gordon + ev_exit) / 2
+    # Wave 10j — terminal value uses Gordon Growth as the headline.
+    # The exit-multiple value is still computed for transparency + the
+    # exit-multiple sensitivity table, but it does NOT influence the
+    # core implied price. Per Damodaran: exit multiples smuggle a
+    # market-cycle assumption into a fundamentals model and shouldn't
+    # be averaged with Gordon. The user's `exit_ebitda_multiple`
+    # assumption now only feeds the sensitivity table downstream.
+    # `enterprise_value_blended` is kept as a field name for backward
+    # compatibility, but its value is now Gordon (not a 50/50 blend).
+    ev_blended = ev_gordon
 
     equity_value = ev_blended - assumptions.net_debt
     if assumptions.diluted_shares and assumptions.diluted_shares > 0:
@@ -380,6 +389,85 @@ def _build_sensitivity(
     )
 
 
+def _scenario_with_exit_terminal(
+    assumptions: DCFAssumptions, exit_multiple: float,
+) -> float:
+    """Run a single DCF scenario but use the *exit-multiple terminal*
+    instead of Gordon Growth. Returns the implied share price.
+
+    Wave 10j — used by `build_exit_multiple_sensitivity` to show what
+    the implied price would be if the user picked exit-multiple
+    terminal instead of the default Gordon. This is the *only* place
+    `exit_ebitda_multiple` actually moves the implied price.
+    """
+    a = copy.deepcopy(assumptions)
+    a.exit_ebitda_multiple = exit_multiple
+    years = max(len(a.revenue_growth), len(a.operating_margin)) or 5
+    projections: List[DCFYearProjection] = []
+    prev_revenue = a.base_revenue or 1.0
+    for year in range(1, years + 1):
+        proj = _project_year(prev_revenue, year, a)
+        projections.append(proj)
+        prev_revenue = proj.revenue
+    pv_explicit = sum(p.pv_fcff for p in projections)
+    last = projections[-1]
+    final_ebitda = last.ebit + last.da
+    tv_exit = final_ebitda * exit_multiple
+    pv_terminal_exit = tv_exit / ((1 + a.wacc) ** years)
+    ev = pv_explicit + pv_terminal_exit
+    equity_value = ev - a.net_debt
+    if a.diluted_shares and a.diluted_shares > 0:
+        return equity_value / a.diluted_shares
+    return 0.0
+
+
+def build_exit_multiple_sensitivity(
+    base: DCFAssumptions,
+) -> DCFSensitivity:
+    """Wave 10j — what would the implied price be under exit-multiple
+    terminal across a range of multiples × bear/base/bull?
+
+    Headline DCF uses Gordon Growth (Wave 10j). This sensitivity is
+    the cross-check: 5 multiples (centered on the user's input,
+    bracketed ±5x) × 3 scenarios (bear / base / bull). Lets the user
+    see the dispersion an exit-multiple framing would produce without
+    contaminating the core DCF with the multiple assumption.
+    """
+    bull = _bull_assumptions(base)
+    bear = _bear_assumptions(base)
+
+    # Five multiples centered on user input, bracketed.
+    base_m = max(5.0, float(base.exit_ebitda_multiple))
+    half_span = max(2.5, base_m * 0.4)
+    multiples: List[float] = [
+        round(max(3.0, base_m + (i - 2) * (half_span / 2)), 1)
+        for i in range(5)
+    ]
+
+    cells: List[SensitivityCell] = []
+    scenarios = [
+        ("bear", bear),
+        ("base", base),
+        ("bull", bull),
+    ]
+    for m in multiples:
+        for col_label, scen in scenarios:
+            implied = _scenario_with_exit_terminal(scen, m)
+            cells.append(SensitivityCell(
+                row_label=f"{m:.1f}x",
+                col_label=col_label,
+                value=implied,
+            ))
+    return DCFSensitivity(
+        name="Exit Multiple Sensitivity (cross-check vs Gordon headline)",
+        row_axis="Exit EBITDA",
+        col_axis="Scenario",
+        rows=multiples,
+        cols=[0.0, 1.0, 2.0],  # placeholder numeric for legacy schema
+        cells=cells,
+    )
+
+
 def build_default_sensitivities(base: DCFAssumptions) -> List[DCFSensitivity]:
     sens: List[DCFSensitivity] = []
 
@@ -426,6 +514,12 @@ def build_default_sensitivities(base: DCFAssumptions) -> List[DCFSensitivity]:
         cols=[round(max(0.01, base_m_last - 0.04 + 0.02 * i), 4) for i in range(5)],
         setter=set_growth_margin,
     ))
+
+    # Wave 10j — exit-multiple cross-check (5 multiples × bear/base/bull).
+    # The core DCF uses Gordon Growth; this surface tells the user
+    # "if you preferred exit-multiple terminal, the dispersion would
+    # look like this." Replaces the prior 50/50 blend.
+    sens.append(build_exit_multiple_sensitivity(base))
 
     return sens
 
