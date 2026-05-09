@@ -42,5 +42,19 @@ def test_dcf_projections_have_explicit_horizon():
 def test_sensitivity_tables_built():
     a = _msft_assumptions()
     res = build_full_dcf("MSFT", a)
-    assert len(res.sensitivities) == 3
-    assert all(len(s.cells) == 25 for s in res.sensitivities)
+    # Wave 10j — added the exit-multiple cross-check (5 multiples × 3
+    # scenarios = 15 cells), bringing the total to 4 sensitivities.
+    # The original 3 still produce 25 cells (5×5 grids); the new one
+    # produces 15.
+    assert len(res.sensitivities) == 4
+    grid_counts = sorted(len(s.cells) for s in res.sensitivities)
+    assert grid_counts == [15, 25, 25, 25]
+    exit_check = next(
+        s for s in res.sensitivities
+        if s.name.lower().startswith("exit multiple sensitivity")
+    )
+    # The cross-check spans 5 multiples × 3 scenarios. Cell labels
+    # carry the multiple ("9.0x") and scenario ("bear" / "base" /
+    # "bull"); the renderer keys off these directly.
+    assert {c.col_label for c in exit_check.cells} == {"bear", "base", "bull"}
+    assert len({c.row_label for c in exit_check.cells}) == 5
