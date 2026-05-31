@@ -43,44 +43,67 @@ router = APIRouter()
 # frontend polls `/analyze/status` for completion.
 _REGEN_JOBS: Dict[str, datetime] = {}
 _REGEN_FAILURES: Dict[str, Dict[str, Any]] = {}
+# Progress trace per ticker — `[(step_name, timestamp), ...]`. Cleared
+# at the start of each regen, appended to as the regen progresses,
+# preserved after the regen finishes. The status endpoint exposes the
+# tail so we can see exactly where a silent failure happens.
+_REGEN_PROGRESS: Dict[str, List[Dict[str, str]]] = {}
 _REGEN_LOCK = Lock()
+
+
+def _trace(ticker: str, step: str) -> None:
+    """Record a progress step for the active regen. No-op safe."""
+    try:
+        with _REGEN_LOCK:
+            steps = _REGEN_PROGRESS.setdefault(ticker, [])
+            steps.append({
+                "step": step,
+                "at": datetime.utcnow().isoformat(),
+            })
+            # Cap at 50 entries so a runaway loop doesn't bloat memory.
+            if len(steps) > 50:
+                _REGEN_PROGRESS[ticker] = steps[-50:]
+    except Exception:  # pragma: no cover — never break the regen on trace
+        pass
 
 
 def _run_regen_job(ticker: str, scenario: str) -> None:
     """Background worker — runs `run_stock_memo` and clears the job
     entry whether or not it succeeded.
 
-    Catches `BaseException` (not just `Exception`) so we capture
-    asyncio.CancelledError too — when FastAPI's response coroutine
-    ends, Starlette can cancel the BackgroundTask chain even though
-    the threadpool thread keeps running for a moment. The earlier
-    `except Exception` missed those, leading to the silent-failure
-    pattern where in_progress clears with no failure record and no
-    memo. Re-raises SystemExit / KeyboardInterrupt as required.
+    Catches BaseException (not just Exception) to surface asyncio
+    cancellation; re-raises SystemExit / KeyboardInterrupt.
 
-    Persists failure details (error type + message + duration) to
-    `_REGEN_FAILURES[ticker]` so a subsequent /analyze/status call
-    can surface what went wrong. Successful runs clear the failure
-    entry.
+    Writes step traces to `_REGEN_PROGRESS[ticker]` at every major
+    waypoint (thread-start, before/after run_stock_memo, post-clear).
+    The status endpoint exposes the trace so silent failures (process
+    killed at OS level, function returned without persisting, etc.)
+    show their last known step.
     """
     import traceback
     started = datetime.utcnow()
+    # Reset trace at the start of each regen.
+    with _REGEN_LOCK:
+        _REGEN_PROGRESS[ticker] = []
+    _trace(ticker, "thread_started")
     log.info("background memo regen STARTING for %s (scenario=%s)", ticker, scenario)
     try:
-        run_stock_memo(ticker, scenario=scenario, force_refresh=True)
-        # Success — drop any prior failure record so the status
-        # endpoint reflects the green state.
+        _trace(ticker, "calling_run_stock_memo")
+        memo = run_stock_memo(ticker, scenario=scenario, force_refresh=True)
+        _trace(ticker, f"run_stock_memo_returned rating={memo.rating_label}")
         with _REGEN_LOCK:
             _REGEN_FAILURES.pop(ticker, None)
+        _trace(ticker, "cleared_failure_record")
         log.info(
             "background memo regen SUCCEEDED for %s in %.1fs",
             ticker, (datetime.utcnow() - started).total_seconds(),
         )
     except (SystemExit, KeyboardInterrupt):
-        # These are intentional process-exit signals — never swallow.
+        _trace(ticker, "process_exit_signal")
         raise
     except BaseException as exc:
         tb = traceback.format_exc()
+        _trace(ticker, f"exception_caught {type(exc).__name__}: {str(exc)[:200]}")
         log.error(
             "background memo regen FAILED for %s after %.1fs: %s: %s\n%s",
             ticker, (datetime.utcnow() - started).total_seconds(),
@@ -97,6 +120,7 @@ def _run_regen_job(ticker: str, scenario: str) -> None:
                 "duration_seconds": (datetime.utcnow() - started).total_seconds(),
             }
     finally:
+        _trace(ticker, "finally_clearing_job")
         with _REGEN_LOCK:
             _REGEN_JOBS.pop(ticker, None)
 
@@ -458,6 +482,7 @@ def analyze_status(ticker: str) -> Dict[str, Any]:
     with _REGEN_LOCK:
         running_started_at = _REGEN_JOBS.get(t)
         last_failure = _REGEN_FAILURES.get(t)
+        progress = list(_REGEN_PROGRESS.get(t, []))
     snap = memo_store.latest_memo(t)
     return {
         "ticker": t,
@@ -468,4 +493,7 @@ def analyze_status(ticker: str) -> Dict[str, Any]:
         ),
         "latest_version": snap.version if snap else None,
         "last_failure": last_failure,
+        # Step-by-step trace of the most recent regen for diagnostics.
+        # Shows which step the regen reached when it died (or finished).
+        "last_progress": progress[-20:],  # last 20 entries
     }
