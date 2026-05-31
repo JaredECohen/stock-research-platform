@@ -1499,12 +1499,27 @@ def _run_stock_memo_inner(
     # Phase F: persist a versioned snapshot. `first_run` only fires when no
     # prior version exists for this ticker; otherwise this is a
     # `full_reanalysis` (the news-driven `incremental_patch` path is owned
-    # by the future update-orchestrator, not this code path). safe_call so
-    # a DB hiccup never prevents the memo from being returned to the caller.
-    safe_call(
-        _persist_memo_snapshot, memo, as_of_date,
-        fallback=None, name="Memo store", log_to=degradation,
-    )
+    # by the future update-orchestrator, not this code path).
+    #
+    # Persistence used to be wrapped in safe_call so a DB hiccup wouldn't
+    # block the in-memory return value — but for the async regen path
+    # that's a silent disaster: the regen looks "successful" while the
+    # memo never reaches the database. The user clicks Refresh, sees
+    # spinning, then the old memo. Now we let persistence errors raise.
+    # The _run_regen_job handler catches BaseException and records the
+    # traceback in _REGEN_FAILURES, surfaced via /analyze/status.
+    try:
+        _persist_memo_snapshot(memo, as_of_date)
+    except Exception as exc:
+        log.error(
+            "memo persistence FAILED for %s: %s: %s",
+            ticker, type(exc).__name__, exc,
+        )
+        # Record on the degradation log so synchronous callers (sync=true
+        # path) can still see what happened via memo.degraded_agents.
+        degradation.record("Memo store", exc)
+        memo.degraded_agents = degradation.degraded_agents()
+        raise
     memo.degraded_agents = degradation.degraded_agents()
     return memo
 
