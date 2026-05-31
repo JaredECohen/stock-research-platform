@@ -93,6 +93,70 @@ def index_latest_filing_for(ticker: str) -> int:
         return index_filing(row)
 
 
+def index_transcript(transcript) -> int:
+    """Chunk + embed an earnings transcript into `doc_chunks`.
+
+    Splits by speaker block when available so retrieval can target the
+    CEO's prepared remarks separately from an analyst's pressure-test
+    question. Falls back to `chunk_text` over `full_text` when blocks
+    aren't populated.
+
+    Returns the count of chunks written. Idempotent — re-indexing the
+    same `(ticker, period)` replaces its prior chunks via the
+    `(source_type='transcript', source_id=transcript.id)` key.
+    """
+    from ..models import EarningsTranscript
+    if not isinstance(transcript, EarningsTranscript):
+        return 0
+    chunks: List[Dict[str, Any]] = []
+    period_end: Optional[date] = None
+    if transcript.call_date:
+        period_end = transcript.call_date
+    blocks = transcript.blocks or []
+    if isinstance(blocks, list) and blocks:
+        # Block-level chunks let the earnings agent retrieve "what the
+        # CFO said about gross margin" without grepping the whole call.
+        for i, block in enumerate(blocks):
+            if not isinstance(block, dict):
+                continue
+            text = (block.get("text") or "").strip()
+            if not text:
+                continue
+            # Block may itself be too large for one embed call; subchunk.
+            for j, piece in enumerate(emb_svc.chunk_text(text)):
+                chunks.append({
+                    "text": piece,
+                    "section": block.get("segment") or block.get("section") or "qa",
+                    "period_end": period_end,
+                    "meta": {
+                        "period": transcript.period,
+                        "speaker": block.get("speaker") or "",
+                        "role": block.get("role") or "",
+                        "block_index": i,
+                        "sub_index": j,
+                    },
+                })
+    else:
+        # No blocks → chunk the flat full_text. Still useful for retrieval
+        # but loses speaker attribution.
+        text = (transcript.full_text or "").strip()
+        for piece in emb_svc.chunk_text(text):
+            chunks.append({
+                "text": piece,
+                "section": "transcript",
+                "period_end": period_end,
+                "meta": {"period": transcript.period},
+            })
+    if not chunks:
+        return 0
+    return vector_store.upsert_source(
+        ticker=transcript.ticker,
+        source_type="transcript",
+        source_id=transcript.id,
+        chunks=chunks,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Diffing
 # ---------------------------------------------------------------------------

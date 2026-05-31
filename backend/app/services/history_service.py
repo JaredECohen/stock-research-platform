@@ -324,7 +324,15 @@ def _transcript_blocks(t: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
 def _ingest_transcripts(
     db: Session, ticker: str, transcripts: List[Dict[str, Any]],
 ) -> int:
+    """Persist transcripts → EarningsTranscript table. New rows are
+    embedded into `doc_chunks` via `filing_memory.index_transcript`
+    so the earnings analyst can retrieve speaker-attributed Q&A
+    without re-fetching the call. Re-ingest of existing periods
+    refreshes the row but skips re-indexing (idempotent — the same
+    period yields the same chunks).
+    """
     written = 0
+    new_transcript_ids: List[int] = []
     for t in transcripts or []:
         period = str(t.get("period") or "").strip()
         if not period:
@@ -349,12 +357,24 @@ def _ingest_transcripts(
             existing.fetched_at = datetime.utcnow()
             written += 1
             continue
-        db.add(EarningsTranscript(
+        row = EarningsTranscript(
             ticker=ticker, period=period, fiscal_year=fy, fiscal_quarter=fq,
             call_date=call_date, blocks=blocks, full_text=full_text,
             word_count=wc, fetched_at=datetime.utcnow(),
-        ))
+        )
+        db.add(row)
+        db.flush()  # populate row.id without committing
+        new_transcript_ids.append(row.id)
         written += 1
+    if new_transcript_ids:
+        try:
+            from . import filing_memory
+            for tid in new_transcript_ids:
+                t_row = db.get(EarningsTranscript, tid)
+                if t_row is not None:
+                    filing_memory.index_transcript(t_row)
+        except Exception as exc:  # pragma: no cover — never block ingest
+            log.warning("filing_memory.index_transcript failed: %s", exc)
     return written
 
 

@@ -131,6 +131,38 @@ def run_earnings_agent(
         prepared=str(prepared),
         qa=str(qa),
     )
+    # Semantic retrieval over the indexed transcript. When a PM follow-up
+    # question is supplied, use it as the query so the most relevant
+    # blocks float up; otherwise fall back to a general guidance /
+    # margin / demand query. Filing analyst already does the same
+    # pattern. Cheap (1 embed call); no-op when no chunks indexed yet.
+    retrieved_chunks: List[Dict] = []
+    try:
+        from ..services import vector_store
+        retrieval_query = (
+            prior_round_critique
+            if prior_round_critique and len(prior_round_critique) > 8
+            else "guidance margin segment demand capex commentary"
+        )
+        vec_hits = vector_store.search(
+            retrieval_query,
+            ticker=profile.get("ticker"),
+            source_types=["transcript"],
+            top_k=5,
+        )
+        retrieved_chunks = [
+            {
+                "text": (h.get("text") or "")[:1200],
+                "section": h.get("section"),
+                "speaker": (h.get("meta") or {}).get("speaker", ""),
+                "period": (h.get("meta") or {}).get("period", ""),
+                "score": round(float(h.get("score") or 0.0), 3),
+            }
+            for h in vec_hits
+        ]
+    except Exception:  # pragma: no cover — retrieval is best-effort
+        retrieved_chunks = []
+
     payload = {
         "ticker": profile.get("ticker"),
         "period": transcript.get("period"),
@@ -139,6 +171,12 @@ def run_earnings_agent(
         "qa": str(qa)[:8000],
         "next_earnings": (earnings or {}).get("next_earnings_date"),
         "multi_pass_addendum": multipass_addendum,
+        # When a PM follow-up question is in play, these chunks line up
+        # with the question. When this is the first pass, they surface
+        # the most generally-thesis-relevant blocks. Either way the LLM
+        # sees BOTH the front-of-call text (which carries the framing)
+        # AND the high-relevance specific blocks.
+        "retrieved_chunks": retrieved_chunks,
     }
     from ..services.research_notes import build_notes_block_for_agent
     notes_block = build_notes_block_for_agent(
