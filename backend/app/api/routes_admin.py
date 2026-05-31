@@ -790,6 +790,44 @@ def reset_llm_breakers(provider: Optional[str] = Query(None)) -> Dict[str, Any]:
     return {"reset": provider or "all", "state": get_breaker_state()}
 
 
+@router.get("/api/admin/llm-recent-failures")
+def get_recent_llm_failures(
+    limit: int = Query(20, ge=1, le=200),
+) -> List[Dict[str, Any]]:
+    """Return the most recent LLM call failures from LLMCallLog.
+
+    Surfaces the actual provider error message — needed to diagnose
+    "regen completes silently with no memo work done" cases where the
+    breaker trips because of repeated provider errors but the user
+    never sees the underlying reason (e.g., bad model name, auth
+    rejection, rate limit).
+    """
+    from ..database import SessionLocal
+    from ..models import LLMCallLog
+    from sqlalchemy import desc
+    with SessionLocal() as db:
+        LLMCallLog.__table__.create(bind=db.get_bind(), checkfirst=True)
+        rows = (
+            db.query(LLMCallLog)
+            .filter(LLMCallLog.success == False)  # noqa: E712
+            .order_by(desc(LLMCallLog.generated_at))
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "generated_at": r.generated_at.isoformat() if r.generated_at else None,
+                "agent_name": r.agent_name,
+                "provider": r.provider,
+                "model": r.model,
+                "duration_ms": r.duration_ms,
+                "error": (r.error or "")[:500],
+                "run_id": r.run_id,
+            }
+            for r in rows
+        ]
+
+
 # ---------------------------------------------------------------------------
 # Postgres sequence repair
 # ---------------------------------------------------------------------------
