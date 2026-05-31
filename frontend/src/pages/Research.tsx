@@ -212,6 +212,26 @@ export default function Research() {
 
       {error && <div className="card-tight border-danger-500/40 text-danger-500 text-sm">{error}</div>}
 
+      {universeError && !universeLoading && (
+        <div className="card-tight border-warn-500/40 bg-warn-500/5 text-sm">
+          <div className="text-warn-500 font-medium">Ticker universe failed to load</div>
+          <div className="text-xs text-slate-300 mt-1 leading-relaxed">
+            {universeError}
+            <br />
+            The picker is empty until this resolves. Try the{" "}
+            <button
+              type="button"
+              onClick={loadUniverse}
+              className="underline text-accent-400 hover:text-accent-300"
+            >
+              Reload tickers
+            </button>{" "}
+            button above. If the failure persists, the backend may be deploying
+            a schema migration — wait 1-2 minutes and reload.
+          </div>
+        </div>
+      )}
+
       {regenStartedAt && (
         <div className="card-tight border-accent-600/30 bg-accent-600/[0.04] text-sm text-slate-200">
           <div className="font-medium text-accent-400">
@@ -233,8 +253,17 @@ export default function Research() {
 
       {ticker && !memo && !error && !needsGate && loading && (
         <div className="grid lg:grid-cols-[1fr_280px] gap-4">
-          <div className="card">
-            <div className="text-sm text-slate-400">Generating memo for {ticker}…</div>
+          <div className="card flex items-center gap-3 py-8">
+            <span
+              aria-hidden
+              className="inline-block h-5 w-5 rounded-full border-2 border-accent-500 border-t-transparent animate-spin"
+            />
+            <div className="text-sm text-slate-200">
+              Loading memo for <span className="font-semibold">{ticker}</span>…
+              <div className="text-xs text-slate-500 mt-0.5">
+                Fetching the latest cached analysis. If this is a fresh ticker the first load can take ~30 seconds.
+              </div>
+            </div>
           </div>
           <AgentTrace trace={trace} />
         </div>

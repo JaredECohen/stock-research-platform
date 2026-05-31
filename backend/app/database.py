@@ -62,36 +62,55 @@ def init_db() -> None:
 
 # Lightweight in-place migrations. We don't run Alembic — instead each
 # new column lands here as an idempotent ALTER TABLE that no-ops when
-# the column already exists. Sufficient for the current additive-only
-# schema evolution; revisit when we need rename / type-change support.
+# the column already exists. The DDL templates use `{bool_false}` /
+# `{bool_true}` placeholders so the per-dialect renderer below can emit
+# `false` (Postgres) or `0` (SQLite) — Postgres rejects integer literals
+# as BOOLEAN defaults and the failure silently no-ops the migration,
+# leaving the column missing while the ORM thinks it exists.
 _ADDITIVE_COLUMNS = [
-    # (table, column, ddl_fragment) — DDL is the column part of ALTER
-    # TABLE, not the full statement. Both SQLite and Postgres accept it.
+    # (table, column, ddl_template) — DDL is the column part of ALTER
+    # TABLE, not the full statement.
     ("companies", "auto_update_memo",
-     "BOOLEAN NOT NULL DEFAULT 0"),
+     "BOOLEAN NOT NULL DEFAULT {bool_false}"),
 ]
 
 
 def _ensure_added_columns() -> None:
     """Apply any additive ALTER TABLE migrations the model expects.
 
-    Catches both 'column already exists' (re-run, normal) and 'table
-    does not exist' (initial boot before create_all races) — neither is
-    fatal. Anything else propagates so a real schema error surfaces."""
+    Per-dialect DDL rendering — Postgres BOOLEAN columns need `false`
+    as the default literal; SQLite accepts `0`. Catches both 'column
+    already exists' (re-run, normal) and 'table does not exist'
+    (initial boot before create_all races) — neither is fatal. Real
+    schema errors are logged at ERROR level (not warning) so prod log
+    scraping catches them.
+    """
     import logging
     from sqlalchemy import text
     log = logging.getLogger(__name__)
+    dialect = engine.dialect.name  # "postgresql", "sqlite", "mysql", ...
+    if dialect == "postgresql":
+        params = {"bool_false": "false", "bool_true": "true"}
+    else:
+        params = {"bool_false": "0", "bool_true": "1"}
     with engine.begin() as conn:
-        for table, column, ddl in _ADDITIVE_COLUMNS:
+        for table, column, ddl_template in _ADDITIVE_COLUMNS:
+            ddl = ddl_template.format(**params)
             stmt = f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
             try:
                 conn.execute(text(stmt))
-                log.info("init_db: added column %s.%s", table, column)
-            except Exception as exc:  # pragma: no cover — varies by backend
+                log.info("init_db: added column %s.%s (%s)", table, column, dialect)
+            except Exception as exc:
                 msg = str(exc).lower()
                 # SQLite: "duplicate column name"; Postgres: "already exists"
                 if "duplicate column" in msg or "already exists" in msg:
                     continue
                 if "no such table" in msg or "does not exist" in msg:
                     continue
-                log.warning("init_db: ALTER TABLE %s failed: %s", table, exc)
+                # Anything else IS a real problem — log at ERROR so it
+                # surfaces in prod monitoring instead of silently leaving
+                # the column unmigrated.
+                log.error(
+                    "init_db: ALTER TABLE %s.%s failed (%s): %s",
+                    table, column, dialect, exc,
+                )
