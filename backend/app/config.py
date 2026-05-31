@@ -143,6 +143,11 @@ class Settings(BaseSettings):
     finnhub_api_key: str = ""
     intrinio_api_key: str = ""
     nasdaq_data_link_api_key: str = ""
+    # Sector-overlay providers. All three work without a key against
+    # public endpoints; supplying a key lifts the daily rate cap.
+    eia_api_key: str = ""
+    bls_api_key: str = ""
+    census_api_key: str = ""
     sec_user_agent: str = "MarketMosaic contact@example.com"
 
     # App / server

@@ -54,6 +54,25 @@ Macro sensitivities: {macro_sensitivities}.
 Macro broadcast (current regime + favored/pressured sectors): {macro_broadcast}.
 Pending news alerts for this name: {news_alerts}.
 
+You will also be handed a "Sector data context" block (further down) that
+the system pre-fetched on your behalf. It contains:
+  - a list of catalog series the platform decided are likely relevant to
+    THIS ticker (based on its sector, sub-industry, and footprint)
+  - the most recent readings on the top series, with month-over-month,
+    YoY, and trailing 5-year z-scores
+  - sector-specific overlays (e.g. energy storage + WTI for an oil name,
+    Case-Shiller weighted across the REIT's metro footprint, retail-trade
+    YoY by NAICS code for a retailer, credit spreads + curve for a bank).
+
+GROUND your analysis in those numbers wherever possible. When you make a
+claim about housing, inflation, energy supply, consumer health, or credit,
+cite a specific value or YoY % from the readings instead of writing generic
+prose. If a footprint-weighted overlay number is present (e.g. "Footprint-
+weighted home-price growth across LA, NYC, ATL, DAL: +5.2% YoY"), prefer
+that over the national headline. If a series you want isn't pre-fetched but
+the catalog surfaced it, you may name it in key_points as
+`see series <SERIES_ID>` so the reader can drill in.
+
 Given the company snapshot below, you have TWO jobs:
 
 1) Write a structured sector view (5-8 sentences):

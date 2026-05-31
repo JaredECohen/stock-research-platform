@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "@/api/client";
 import MemoCard from "@/components/MemoCard";
 import { AgentTrace } from "@/components/AgentTrace";
+import FullInvestmentMemo from "@/components/FullInvestmentMemo";
 import NewsAlertPanel from "@/components/NewsAlertPanel";
 import AnalyzeStockGate, { TierBadge } from "@/components/AnalyzeStockGate";
 import MemoVersionTimeline from "@/components/MemoVersionTimeline";
@@ -24,6 +25,7 @@ export default function Research() {
   const [needsGate, setNeedsGate] = useState(false);   // 409 from backend
   const [error, setError] = useState<string | null>(null);
   const [trace, setTrace] = useState<AgentTraceT[]>([]);
+  const [fullMemoOpen, setFullMemoOpen] = useState(false);
 
   const loadUniverse = React.useCallback(() => {
     setUniverseLoading(true);
@@ -166,7 +168,19 @@ export default function Research() {
 
       {memo && (
         <div className="grid lg:grid-cols-[1fr_280px] gap-4">
-          <MemoCard memo={memo} />
+          <div className="space-y-3">
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="px-3 py-1.5 text-sm rounded-md bg-accent-600 hover:bg-accent-500 text-white font-medium shadow"
+                onClick={() => setFullMemoOpen(true)}
+                title="Open the full structured investment memo (with PDF download)"
+              >
+                View Full Investment Memo
+              </button>
+            </div>
+            <MemoCard memo={memo} />
+          </div>
           <div className="space-y-4">
             <AgentTrace trace={trace} />
             <NewsAlertPanel alerts={memo.sector_agent_view.data?.pending_news_alerts} />
@@ -181,6 +195,14 @@ export default function Research() {
             </div>
           </div>
         </div>
+      )}
+
+      {memo && (
+        <FullInvestmentMemo
+          memo={memo}
+          open={fullMemoOpen}
+          onClose={() => setFullMemoOpen(false)}
+        />
       )}
     </div>
   );

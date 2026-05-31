@@ -27,6 +27,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..providers.alpha_vantage_provider import AlphaVantageProvider
 from ..providers.base import ProviderStatus
+from ..providers.bls_provider import BLSProvider
+from ..providers.census_provider import CensusProvider
+from ..providers.eia_provider import EIAProvider
 from ..providers.fmp_provider import FMPProvider
 from ..providers.fred_provider import FREDProvider
 from ..providers.polygon_provider import PolygonProvider
@@ -214,6 +217,11 @@ class DataService:
         self.polygon = PolygonProvider()
         self.tiingo = TiingoProvider()
         self.sec = SECEdgarProvider()
+        # Sector-overlay providers (Phase: smart sector analyst).
+        # Each works without an API key against the public endpoints.
+        self.eia = EIAProvider()
+        self.bls = BLSProvider()
+        self.census = CensusProvider()
         # Optional test override (wired by `tests/conftest.py`).
         self._test_provider: Optional[Any] = None
 
@@ -246,7 +254,12 @@ class DataService:
             "filings": [self.sec],
             "news": [self.alpha, self.polygon],
             "estimates": [self.fmp],
-            "macro": [self.fred],
+            "macro": [self.fred, self.eia, self.bls, self.census],
+            "energy": [self.eia],
+            "inflation": [self.bls, self.fred],
+            "labor": [self.bls, self.fred],
+            "retail": [self.census, self.fred],
+            "construction": [self.census, self.fred],
         }
         chain = chains.get(capability, [])
         if self._test_provider is not None:
@@ -273,7 +286,8 @@ class DataService:
     def status(self) -> Dict[str, ProviderStatus]:
         return {
             p.name: p.status() for p in (
-                self.fmp, self.alpha, self.fred, self.polygon, self.tiingo, self.sec
+                self.fmp, self.alpha, self.fred, self.polygon, self.tiingo, self.sec,
+                self.eia, self.bls, self.census,
             )
         }
 
@@ -497,7 +511,26 @@ class DataService:
         )
 
     def list_macro_series(self) -> List[Dict[str, Any]]:
-        return self.fred.list_macro_series()
+        """Catalog metadata across every macro-shaped provider.
+
+        Returns the union of FRED + EIA + BLS + Census catalog rows,
+        deduplicated by series_id. Used by `/api/data-catalog` and by
+        any caller that wants to browse what's available before fetching.
+        """
+        seen: set[str] = set()
+        out: List[Dict[str, Any]] = []
+        for provider in (self.fred, self.eia, self.bls, self.census):
+            try:
+                rows = provider.list_macro_series() or []
+            except Exception:
+                rows = []
+            for row in rows:
+                sid = row.get("series_id")
+                if not sid or sid in seen:
+                    continue
+                seen.add(sid)
+                out.append(row)
+        return out
 
 
 @lru_cache(maxsize=1)

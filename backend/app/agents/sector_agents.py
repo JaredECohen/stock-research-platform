@@ -26,7 +26,7 @@ from ..schemas import (
 )
 from ..services.data_service import get_data_service
 from ..services.sector_research_service import run_sector_research
-from . import llm, prompts
+from . import llm, prompts, sector_tools
 
 
 def _format_kpi_summary(placements: Dict) -> List[str]:
@@ -303,6 +303,20 @@ def run_sector_agent(
     macro_broadcast = _macro_broadcast_payload()
     news_alerts = _pending_news_alerts(ticker)
 
+    # ------------------------------------------------------------------
+    # Smart sector context — discover & pre-fetch the data series that
+    # are likely relevant for THIS ticker (catalog routing by GICS sector
+    # / sub-industry + footprint geography), then run the sector-
+    # appropriate overlays (energy / consumer / real_estate / inflation
+    # / credit). Everything is defensive: a failed snapshot or missing
+    # provider key returns an empty bundle rather than throwing, so the
+    # downstream prompt always gets *some* context.
+    # ------------------------------------------------------------------
+    sector_context = sector_tools.prepare_sector_context(
+        ticker, profile=profile,
+    )
+    sector_context_block = sector_tools.render_prompt_block(sector_context)
+
     # Long-term agent memory (gated by ENABLE_LONG_TERM_MEMORY). Read both
     # files: the company-specific notebook and the sector-wide self-reflection
     # journal (with cross-company patterns filtered to this ticker).
@@ -397,6 +411,13 @@ def run_sector_agent(
         + ("\n\nPrior context from long-term memory (use to inform but do not over-anchor):\n"
            + memory_context if memory_context else "")
         + (("\n\n" + research_notes_block) if research_notes_block else "")
+        + (("\n\n" + sector_context_block
+            + "\n\nUse the readings above as concrete evidence in the summary and "
+              "bull/bear cases. If a footprint-weighted overlay number (e.g. weighted "
+              "metro HPI for a REIT) is available, cite it directly. If the catalog "
+              "surfaces a relevant series you want to reference, you may name it by "
+              "series_id in key_points so a reader can drill in.")
+           if sector_context_block else "")
         + "\n\nDeep research payload (cohort math + regime + filing themes):\n"
         + json.dumps(research_for_prompt, default=str)[:4500]
     )
@@ -418,6 +439,7 @@ def run_sector_agent(
         finding_data["macro_alignment"] = llm_out.get("macro_alignment", "")
         finding_data["macro_broadcast"] = macro_broadcast
         finding_data["pending_news_alerts"] = news_alerts
+        finding_data["sector_data_context"] = sector_context
         # Wave 3A: pull through the structured bull/bear analysis. If the
         # LLM didn't produce a parseable block, fall back to the
         # cohort-grounded deterministic builder so this contract is
@@ -505,10 +527,23 @@ def run_sector_agent(
     finding_data["macro_alignment"] = macro_alignment
     finding_data["macro_broadcast"] = macro_broadcast
     finding_data["pending_news_alerts"] = news_alerts
+    finding_data["sector_data_context"] = sector_context
     # Wave 3A: contract-satisfying bull/bear analysis even on the no-LLM path.
     finding_data["bull_bear_analysis"] = (
         _deterministic_bull_bear_analysis(profile, research).model_dump()
     )
+
+    # Pull a handful of overlay narrative hints into key_points so even
+    # the no-LLM path surfaces concrete numbers (footprint-weighted HPI,
+    # WTI, retail YoY, etc) rather than only cohort-quartile text.
+    overlay_bundles = (sector_context.get("overlays") or {}).get("bundles") or {}
+    overlay_hints: List[str] = []
+    for bundle in overlay_bundles.values():
+        if not bundle.get("available"):
+            continue
+        overlay_hints.extend(bundle.get("narrative_hints") or [])
+    if overlay_hints:
+        key_points = list(key_points) + overlay_hints[:4]
 
     return AgentFinding(
         agent="Sector Analyst",

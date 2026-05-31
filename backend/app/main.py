@@ -18,6 +18,7 @@ from .api import (
     routes_admin,
     routes_chat,
     routes_comps,
+    routes_data_catalog,
     routes_dcf,
     routes_health,
     routes_macro,
@@ -114,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_comps.router, tags=["comps"])
     app.include_router(routes_portfolio.router, tags=["portfolio"])
     app.include_router(routes_macro.router, tags=["macro"])
+    app.include_router(routes_data_catalog.router, tags=["data-catalog"])
     app.include_router(routes_admin.router, tags=["admin"])
 
     @app.on_event("startup")
