@@ -10,7 +10,17 @@ services:
     name: marketmosaic
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: starter
+    # Bumped from `starter` (0.5 CPU, 512MB RAM, $7/mo) to `standard`
+    # (1 CPU, 2GB RAM, $25/mo). Memo regen on the expanded SP500-ish
+    # universe routinely OOM-killed the worker mid-task: 26+ LLM calls,
+    # full filing-body cache (~250KB × 10 filings/ticker), and
+    # vector_store loading all chunk embeddings (1536 floats each)
+    # into Python for cosine similarity, plus the universe seed in
+    # memory, blew past 512MB. SIGKILL bypasses Python, so failures
+    # were invisible: in-memory _REGEN_JOBS / _REGEN_FAILURES vanished
+    # with the process, no exception ever fired through the try/except
+    # in _run_regen_job. 4× the RAM resolves it.
+    plan: standard
     healthCheckPath: /health
     autoDeploy: true
     domains:
