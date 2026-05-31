@@ -74,6 +74,132 @@ from .valuation_agent import run_valuation_agent
 # Memo construction
 # ---------------------------------------------------------------------------
 
+_THESIS_ANTI_PATTERN = re.compile(
+    r"""^                       # start
+        (?P<co>[^—:]{2,80})     # company / ticker prefix
+        \s+[—–-]\s+             # em / en / hyphen dash
+        (?P<sector>[A-Za-z][\w &/]{2,40})
+        \s*/\s*                 # sector / industry slash
+        .{2,200}                # industry + regime + any inline clauses
+        DCF\ base\ case          # the giveaway phrase
+        """,
+    re.VERBOSE | re.IGNORECASE | re.DOTALL,
+)
+
+
+def _looks_like_anti_pattern_thesis(text: str) -> bool:
+    """True when `text` matches the explicit anti-pattern the PM prompt
+    forbids ("{Company} — {Sector} / {industry}, {hook}; DCF base case
+    +X% suggests material upside.").
+
+    We use this to detect when the LLM ignored the prompt OR the
+    deterministic fallback regressed to the templated form, so we can
+    rewrite the sentence before it ships into the memo.
+    """
+    if not text:
+        return False
+    return bool(_THESIS_ANTI_PATTERN.match(text.strip()))
+
+
+def _build_thesis_from_findings(
+    profile: Dict,
+    findings: Dict[str, "AgentFinding"],
+    dcf: Optional[DCFResult],
+    ticker: str,
+) -> str:
+    """Compose a one-sentence thesis from the specialists' findings.
+
+    Order of operations:
+      1. Pick the punchiest defensible claim — the sector analyst's
+         bull-case headline if present, else valuation / sector /
+         earnings / filing headline, else first profile driver.
+      2. Anchor with one concrete number (DCF base upside) ONLY if the
+         claim doesn't already carry a number.
+      3. Append the "what the market is missing" clause if the model
+         disagrees with consensus by ≥2pp.
+
+    Used by both the post-LLM anti-pattern rewrite and the deterministic
+    fallback in `_pm_synthesis` — keeps the logic in one place so the
+    two paths can't drift.
+    """
+    drivers = profile.get("drivers") or []
+    risks = profile.get("risks") or []
+    ticker_sym = (profile.get("ticker") or ticker or "").upper()
+
+    def _claim_from_finding(f: "Optional[AgentFinding]") -> Optional[str]:
+        if f is None:
+            return None
+        head = (getattr(f, "headline", "") or "").strip().rstrip(".,;:")
+        if not head or len(head) < 12:
+            return None
+        low = head.lower()
+        # Reject cohort labels, scenario tags, intake-skip headlines, and
+        # the very anti-pattern we're trying to escape — none of these
+        # state a claim a reader can defend.
+        skip_patterns = (
+            "highlights", "view", "profile", "view for", "scenario:",
+            "regime:", "cohort placement", "skipped per pm intake",
+            "dcf base case", " — ",
+        )
+        if any(p in low for p in skip_patterns):
+            return None
+        return head
+
+    sector_finding = findings.get("sector")
+    bull_headline: Optional[str] = None
+    if sector_finding is not None and isinstance(sector_finding.data, dict):
+        bb = sector_finding.data.get("bull_bear_analysis") or {}
+        if isinstance(bb, dict):
+            bull_case = bb.get("bull_case") or {}
+            if isinstance(bull_case, dict):
+                bh = (bull_case.get("headline") or "").strip().rstrip(".,;:")
+                if 12 <= len(bh) <= 180 and "dcf base case" not in bh.lower():
+                    bull_headline = bh
+
+    claim = (
+        bull_headline
+        or _claim_from_finding(findings.get("valuation"))
+        or _claim_from_finding(sector_finding)
+        or _claim_from_finding(findings.get("earnings"))
+        or _claim_from_finding(findings.get("filing"))
+        or (drivers[0] if drivers else None)
+    )
+
+    upside = dcf.base.upside_pct if dcf and dcf.base else None
+    claim_has_number = bool(claim) and any(c.isdigit() for c in (claim or ""))
+
+    if claim:
+        head = f"{ticker_sym}: {claim}" if ticker_sym else claim
+        if (
+            upside is not None and abs(upside) >= 0.10
+            and not claim_has_number
+        ):
+            sign = "+" if upside > 0 else ""
+            head += (
+                f" — base-case DCF implies {sign}{upside * 100:.0f}% to fair value"
+            )
+    else:
+        sector = (profile.get("sector") or "core").strip().lower()
+        head = (
+            f"{ticker_sym}: fairly priced on our work — no actionable edge in {sector}"
+            if ticker_sym
+            else f"Fairly priced on our work — no actionable edge in {sector}"
+        )
+
+    sentence = head.rstrip(".") + "."
+
+    # Append the "market-gap" clause when we have one. Keep it on the
+    # same sentence so the thesis remains a one-liner.
+    try:
+        gap = _market_gap_clause(profile, dcf, ticker_sym)
+    except Exception:  # pragma: no cover — never break thesis on gap calc
+        gap = ""
+    if gap:
+        sentence = sentence.rstrip(".") + ". " + gap
+
+    return sentence
+
+
 def _market_gap_clause(
     profile: Dict, dcf: Optional[DCFResult], ticker: str,
 ) -> str:
@@ -137,7 +263,8 @@ def _market_gap_clause(
 def _build_scores_dict(
     *, blended_confidence: float, raw_confidence: float, ev_q: float,
     sector_finding: AgentFinding, valuation_finding: AgentFinding,
-    risk_finding: AgentFinding, profile: Dict, ratios: Dict, earnings: Dict,
+    risk_finding: AgentFinding, earnings_finding: Optional[AgentFinding] = None,
+    profile: Dict, ratios: Dict, earnings: Dict,
 ) -> Dict[str, float]:
     """Wave 8M — assemble `memo.scores` so the UI can render every
     category score next to the headline confidence number.
@@ -166,7 +293,21 @@ def _build_scores_dict(
     growth = fs.growth_score(rev_growth)
     valuation = fs.valuation_score(ev_ebitda, p_fcf, fcf_y)
     surprises = [q.get("surprise_pct", 0) for q in (earnings or {}).get("quarters", [])]
-    earnings_momentum = fs.earnings_momentum_score(surprises)
+    # Pull the LLM-extracted latest guidance changes so beat-AND-raise
+    # registers as a momentum bonus. Falls back to surprise-only when
+    # the earnings analyst didn't emit structured output.
+    latest_guidance: List[Dict[str, Any]] = []
+    if earnings_finding is not None and isinstance(earnings_finding.data, dict):
+        structured = earnings_finding.data.get("structured")
+        if isinstance(structured, dict):
+            raw_changes = structured.get("guidance_changes") or []
+            if isinstance(raw_changes, list):
+                latest_guidance = raw_changes
+    earnings_momentum = fs.earnings_momentum_score(
+        surprises, latest_guidance_changes=latest_guidance,
+    )
+    streak = fs.beat_streak(surprises)
+    guidance_net = fs.guidance_net_direction(latest_guidance)
     risk = fs.risk_score(beta, debt_to_ebitda, drawdown=-0.20)
 
     macro_fit = 60.0  # untilled-theme baseline; theme bias only applies on the screener path
@@ -196,6 +337,13 @@ def _build_scores_dict(
         "factor_risk": risk,
         "factor_catalyst": catalyst,
         "factor_pm_score": pm_score,
+        # Beat-and-raise transparency. `beat_streak` = consecutive
+        # recent EPS beats; `guidance_net` = (raised - lowered) from
+        # the latest call's structured guidance changes. UI uses these
+        # to render the "🔥 beat & raise" badge on the earnings card
+        # when the combination triggers the momentum bonus.
+        "beat_streak": float(streak),
+        "guidance_net_direction": float(guidance_net),
     }
 
 
@@ -580,82 +728,12 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
     confidence = max(40, min(85, 55 + 5 * abs(score)))
 
     # Build a thesis that distills the actual claim — not a metric
-    # recap. Order of preference for the "claim" portion:
-    #   1. Bull case headline (specialist's punchiest defensible take)
-    #   2. Sector cohort outliers / regime narrative
-    #   3. Valuation analyst's headline if substantive
-    #   4. Drivers fallback
-    # Anchor with a meaningful number ONLY when the claim doesn't
-    # already include one. Avoid the templated "{Sector}; DCF +X%
-    # upside" pattern the LLM prompt explicitly forbids.
-    drivers = profile.get("drivers") or []
-    ticker_sym = profile.get("ticker") or ""
-
-    def _claim_from_finding(f: Optional[AgentFinding]) -> Optional[str]:
-        if f is None:
-            return None
-        head = (f.headline or "").strip().rstrip(".,;:")
-        if not head or len(head) < 12:
-            return None
-        # Skip generic / template-y headlines.
-        skip_patterns = (
-            "highlights", "view", "profile", "view for", "scenario:",
-            "regime:", "cohort placement", "skipped per pm intake",
-        )
-        low = head.lower()
-        if any(p in low for p in skip_patterns):
-            return None
-        return head
-
-    # Try the bull-case sub-finding first when sector_finding has the
-    # structured bull/bear payload. That's the specialist's actual
-    # punchiest claim, not a cohort label.
-    sector_finding = findings.get("sector")
-    bull_headline: Optional[str] = None
-    if sector_finding is not None and isinstance(sector_finding.data, dict):
-        bb = sector_finding.data.get("bull_bear_analysis") or {}
-        if isinstance(bb, dict):
-            bull_case = bb.get("bull_case") or {}
-            if isinstance(bull_case, dict):
-                bh = (bull_case.get("headline") or "").strip().rstrip(".,;:")
-                if 12 <= len(bh) <= 180:
-                    bull_headline = bh
-
-    claim = (
-        bull_headline
-        or _claim_from_finding(findings.get("valuation"))
-        or _claim_from_finding(sector_finding)
-        or _claim_from_finding(findings.get("earnings"))
-        or _claim_from_finding(findings.get("filing"))
-        or (drivers[0] if drivers else None)
+    # recap. Centralized in `_build_thesis_from_findings` so the
+    # deterministic fallback and the post-LLM anti-pattern rewrite share
+    # one source of truth.
+    thesis = _build_thesis_from_findings(
+        profile, findings, dcf, profile.get("ticker") or "",
     )
-
-    upside = dcf.base.upside_pct if dcf and dcf.base else None
-    have_anchor_in_claim = (
-        bool(claim)
-        and any(c.isdigit() for c in claim)
-    )
-
-    if claim:
-        # Lead with the ticker + claim; tail with a number ONLY if the
-        # claim doesn't already carry one.
-        if ticker_sym:
-            head = f"{ticker_sym}: {claim}"
-        else:
-            head = claim
-        if (
-            upside is not None and abs(upside) >= 0.10
-            and not have_anchor_in_claim
-        ):
-            sign = "+" if upside > 0 else ""
-            head += f" — base-case DCF implies {sign}{upside * 100:.0f}% to fair value"
-    else:
-        # No usable claim — emit an honest "no edge" sentence rather
-        # than a hollow template.
-        sector = (profile.get("sector") or "core").strip().lower()
-        head = f"{ticker_sym}: fairly priced on our work — no actionable edge in {sector}"
-
-    thesis = head.rstrip(".") + "."
     pm_view = (
         f"Research view: {rating}. {thesis} "
         f"Sector framing supports the cohort thesis; valuation-relative read is the main swing factor. "
@@ -1232,6 +1310,7 @@ def _run_stock_memo_inner(
             sector_finding=sector_finding,
             valuation_finding=valuation_finding,
             risk_finding=risk_finding,
+            earnings_finding=earnings_finding,
             profile=profile, ratios=ratios, earnings=earnings,
         ),
         sources_used=sources,
@@ -1329,14 +1408,30 @@ def _run_stock_memo_inner(
                 "blended_pm_score": round(float(blended), 1),
             }
 
+    # Anti-pattern guard. The PM prompt explicitly forbids the
+    # "{Company} — {Sector} / {industry}, {hook}; DCF base case +X%"
+    # templated form, but in practice the LLM sometimes ignores it (or
+    # the deterministic fallback historically emitted it). Detect and
+    # rewrite from the richer specialist findings before the thesis
+    # ships into the memo and is persisted to memory.
+    if _looks_like_anti_pattern_thesis(memo.one_sentence_thesis):
+        try:
+            rewritten = _build_thesis_from_findings(profile, findings, dcf, ticker)
+            if rewritten and not _looks_like_anti_pattern_thesis(rewritten):
+                memo.one_sentence_thesis = rewritten
+        except Exception:  # pragma: no cover — never break the memo
+            pass
+
     # Wave 8R — thesis augmentation. Surface where the model diverges
     # from analyst consensus (the actual *what is the market missing*
     # framing). Compares the DCF's 5-year growth path average against
     # the consensus 5-year average; appends a clause when the gap is
-    # material. No-ops cleanly when consensus isn't available.
+    # material. No-ops cleanly when consensus isn't available. Skip
+    # when the thesis already carries the clause (the deterministic
+    # path bakes it in via `_build_thesis_from_findings`).
     try:
         delta_clause = _market_gap_clause(profile, dcf, ticker)
-        if delta_clause:
+        if delta_clause and delta_clause not in memo.one_sentence_thesis:
             memo.one_sentence_thesis = (
                 memo.one_sentence_thesis.rstrip(".")
                 + ". " + delta_clause

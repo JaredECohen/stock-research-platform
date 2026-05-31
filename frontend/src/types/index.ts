@@ -89,6 +89,53 @@ export interface SectorFindingData {
   [key: string]: unknown;
 }
 
+export interface GuidanceChange {
+  metric: string;
+  prior: string;
+  current: string;
+  direction:
+    | "raised"
+    | "lowered"
+    | "reaffirmed"
+    | "introduced"
+    | "withdrawn"
+    | "unclear";
+  rationale: string;
+}
+
+export interface ToneSignal {
+  speaker: string;
+  segment: string;
+  classification:
+    | "constructive"
+    | "measured"
+    | "cautious"
+    | "defensive"
+    | "evasive";
+  evidence: string;
+}
+
+export interface QAThemeAnalysis {
+  theme: string;
+  analyst?: string;
+  response_quality: "clear" | "partial" | "deflected" | "evasive";
+}
+
+export interface EarningsStructured {
+  period: string;
+  overall_tone: "constructive" | "measured" | "cautious";
+  guidance_changes: GuidanceChange[];
+  tone_signals: ToneSignal[];
+  qa_themes: QAThemeAnalysis[];
+  most_defended_segment: { name?: string; why?: string };
+  most_pressed_segment: { name?: string; why?: string };
+  forward_catalysts: Array<{
+    event?: string;
+    expected_quarter?: string;
+    materiality?: string;
+  }>;
+}
+
 export interface AgentFinding {
   agent: string;
   headline: string;
@@ -96,7 +143,7 @@ export interface AgentFinding {
   key_points: string[];
   confidence: number;
   sources: string[];
-  data?: SectorFindingData;
+  data?: SectorFindingData & { structured?: EarningsStructured };
   // Wave 3C — drill-down report (markdown). Optional; older memos won't carry it.
   long_form_report?: string | null;
 }

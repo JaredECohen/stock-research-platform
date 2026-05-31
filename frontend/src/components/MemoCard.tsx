@@ -3,9 +3,11 @@ import type { AgentFinding, BullBearAnalysis, StockMemoOut } from "@/types";
 import { fmtCurrency, fmtPct, ratingBadgeClass } from "@/lib/format";
 import CrossSectorChips from "./CrossSectorChips";
 import DiligenceDialog from "./DiligenceDialog";
+import EarningsBreakdown from "./EarningsBreakdown";
 import MacroRegimeBanner from "./MacroRegimeBanner";
 import { Markdown } from "./Markdown";
 import PMDCFAdjustments from "./PMDCFAdjustments";
+import type { EarningsStructured } from "@/types";
 
 /**
  * Wave 8N — explicit two-card scorecard so users can't conflate the
@@ -278,10 +280,12 @@ function FindingBlock({
   title,
   body,
   footer,
+  extra,
 }: {
   title: string;
   body: AgentFinding | { headline: string; summary: string; key_points?: string[] };
   footer?: React.ReactNode;
+  extra?: React.ReactNode;
 }) {
   const [showFull, setShowFull] = React.useState(false);
   // Long-form report only present on AgentFinding shape; the structurally-typed
@@ -299,6 +303,7 @@ function FindingBlock({
           ))}
         </ul>
       )}
+      {extra}
       {longForm && (
         <div className="mt-2">
           <button
@@ -400,7 +405,20 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
             crossSector.length > 0 ? <CrossSectorChips tickers={crossSector} /> : undefined
           }
         />
-        <FindingBlock title="Earnings Analyst" body={memo.earnings_agent_view} />
+        <FindingBlock
+          title="Earnings Analyst"
+          body={memo.earnings_agent_view}
+          extra={
+            memo.earnings_agent_view.data &&
+            (memo.earnings_agent_view.data as { structured?: EarningsStructured }).structured ? (
+              <EarningsBreakdown
+                structured={
+                  (memo.earnings_agent_view.data as { structured: EarningsStructured }).structured
+                }
+              />
+            ) : undefined
+          }
+        />
         <FindingBlock title="Filing Analyst" body={memo.filing_agent_view} />
         <FindingBlock title="Valuation Analyst" body={memo.valuation_agent_view} />
         <FindingBlock title="Comps Analyst" body={memo.comps_agent_view} />

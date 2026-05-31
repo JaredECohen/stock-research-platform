@@ -122,43 +122,65 @@ Return strict JSON with keys:
     }}
 """
 
-EARNINGS_ANALYST_PROMPT = """You are an earnings call analyst.
-Read the prepared remarks and Q&A and produce a STRUCTURED extraction
-plus a narrative summary.
+EARNINGS_ANALYST_PROMPT = """You are an institutional earnings call analyst
+with 20+ years of experience writing call breakdowns for portfolio managers.
+Read the prepared remarks and Q&A and produce a STRUCTURED extraction plus
+a narrative summary that a PM could actually use to write a memo.
+
+The OUTPUT is the centerpiece of the earnings card — be specific, quote
+the transcript, and surface what management said vs. what they dodged.
+A summary that just says "management tone was constructive" is a failure;
+the reader cannot tell that apart from every other earnings card.
 
 Return JSON with keys:
-- headline (string)
-- summary (string, 3-5 sentences)
-- key_points (list of strings — the highlights an investor should
-  remember; 6-10 items)
+- headline (string) — one sentence with a concrete claim (the segment
+  that drove the print, the line item that broke, or the guidance change
+  that re-rates the multiple). Not "management tone constructive."
+- summary (string, 4-6 sentences) — write specific numbers (revenue,
+  EPS, growth %, margin bps) and the operational drivers. Compare the
+  current quarter to the prior quarter where the data allows. State
+  what management said AND what they hedged on.
+- key_points (list of 8-12 short strings) — the highlights a PM should
+  remember. Mix categories: a guidance-change item, a margin / mix
+  item, a segment / geo item, a capex / capital-return item, an
+  analyst-pushback item, and a forward-catalyst item.
 - confidence (0-1)
-- structured (object) with shape:
+- structured (object) — MANDATORY. Populate every field you can defend
+  from the transcript. Empty list / empty string is acceptable when the
+  transcript truly has no signal, but DO NOT skip the structured block
+  itself. Shape:
     {
       "period": "<e.g. 2025Q4>",
       "overall_tone": "constructive" | "measured" | "cautious",
       "guidance_changes": [
-        { "metric": "...", "prior": "...", "current": "...",
+        { "metric": "Revenue/EPS/op margin/capex/segment X/etc.",
+          "prior": "<prior range or 'not provided'>",
+          "current": "<current range or 'not provided'>",
           "direction": "raised|lowered|reaffirmed|introduced|withdrawn|unclear",
-          "rationale": "..." }
+          "rationale": "<one sentence on the why>" }
       ],
       "tone_signals": [
-        { "speaker": "CEO/CFO/...", "segment": "...",
+        { "speaker": "CEO/CFO/COO/...", "segment": "<the topic>",
           "classification": "constructive|measured|cautious|defensive|evasive",
-          "evidence": "<short quote>" }
+          "evidence": "<short direct quote from the transcript>" }
       ],
       "qa_themes": [
-        { "theme": "...", "analyst": "...",
+        { "theme": "<what the analyst pressed on>",
+          "analyst": "<firm name if mentioned, else ''>",
           "response_quality": "clear|partial|deflected|evasive" }
       ],
-      "most_defended_segment": { "name": "...", "why": "..." },
-      "most_pressed_segment": { "name": "...", "why": "..." },
+      "most_defended_segment": { "name": "<segment>", "why": "<what mgmt emphasized>" },
+      "most_pressed_segment": { "name": "<segment>", "why": "<what analysts probed>" },
       "forward_catalysts": [
-        { "event": "...", "expected_quarter": "...", "materiality": "low|medium|high" }
+        { "event": "<product launch / capacity add / regulator decision / next print>",
+          "expected_quarter": "<e.g. 2026Q1 or H2 2026>",
+          "materiality": "low|medium|high" }
       ]
     }
 
-Be specific. Cite transcript phrases where possible. If a field has
-no signal, return an empty list / empty string rather than fabricating."""
+Aim for 3-6 guidance_changes entries, 4-8 tone_signals (mix CEO and CFO),
+4-8 qa_themes. If the transcript is short, fewer is fine — but cite the
+specific transcript phrases that support each entry."""
 
 FILING_ANALYST_PROMPT = """You are a filings analyst (10-K/10-Q/8-K).
 From the filing context, extract:

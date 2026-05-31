@@ -671,6 +671,12 @@ class ScreenerRow(BaseModel):
     # row computed yet. Powers the AI-rank screener's "this name is
     # actually exposed to your theme" affordance.
     theme_exposure_score: Optional[float] = None
+    # Consecutive EPS beats (most-recent quarters, surprise > 2%).
+    # Surfaces the "beat & raise" intuition: companies that string
+    # together beats are a documented momentum signal. The screener
+    # only has surprise history (no LLM guidance extraction), so this
+    # is a "beat-only" streak; the memo path adds the guidance side.
+    beat_streak: int = 0
 
 
 class ScreenerRequest(BaseModel):
