@@ -124,11 +124,25 @@ def run_filing_agent(
         vec_hits = vector_store.search(
             retrieval_query, ticker=ticker, source_types=["filing"], top_k=4,
         )
-        retrieved = [{"text": h["text"], "section": h.get("section")} for h in vec_hits]
+        retrieved = [
+            {
+                "text": h["text"],
+                "section": h.get("section"),
+                "source_type": "filing",
+            }
+            for h in vec_hits
+        ]
     except Exception:
         retrieved = []
     if not retrieved:
-        retrieved = retrieval_service.search(ticker, retrieval_query, limit=4) or []
+        # BM25 fallback returns filings + transcripts + news in one
+        # scored list (see retrieval_service._chunks_for_ticker). A
+        # high-scoring news article would otherwise leak in as a fake
+        # MD&A snippet — observed in prod with MSTR news appearing in
+        # an ADBE memo. Filter at the call site so downstream code
+        # never sees off-source chunks.
+        raw = retrieval_service.search(ticker, retrieval_query, limit=8) or []
+        retrieved = [c for c in raw if _is_filing_chunk(c)][:4]
     primary = next((f for f in filings if f.get("type") == "10-K"), filings[0])
 
     # Wave 9b — pass real filing content to the LLM. SEC EDGAR returns
@@ -279,6 +293,40 @@ _RISK_GENERIC_PREFIXES = (
 )
 
 
+# Sections that legitimately belong in a "MD&A snippet" — everything
+# else (news articles, transcript chunks) gets filtered out before the
+# snippet picker runs. Without this, the BM25 fallback in
+# retrieval_service.search mixes filing/transcript/news chunks into one
+# scored list, and a high-scoring news article would surface as
+# "MD&A: <wrong-ticker headline>" (seen in prod: MSTR news leaking
+# into an ADBE memo).
+_FILING_SECTIONS = frozenset({
+    "mda", "business_description", "risk_factors",
+    "legal_or_regulatory", "financial_highlights",
+    # SEC Item 1-N headers (Item 1, Item 1A, Item 7, etc.) — produced
+    # by sec_edgar_provider's section extractor.
+    *(f"item_{i}" for i in range(1, 17)),
+})
+
+
+def _is_filing_chunk(chunk: Dict) -> bool:
+    """True iff `chunk` is sourced from a filing (10-K / 10-Q / 8-K)
+    rather than a transcript or news article. Two signals are
+    available depending on which retriever produced the chunk:
+      - `source_type` (vector_store path): "filing" / "transcript" / "news"
+      - `section` (BM25 path): "mda" / "risk_factors" / "article" / ...
+    """
+    src = (chunk.get("source_type") or "").lower()
+    if src and src != "filing":
+        return False
+    section = (chunk.get("section") or "").lower()
+    if section and section in _FILING_SECTIONS:
+        return True
+    # If neither signal is present, treat as filing (vector_store path
+    # already filtered by source_types=["filing"]).
+    return src == "filing" or not section
+
+
 def _substantive_filing_snippet(
     mda_text: str, retrieved_chunks: List[Dict],
 ) -> str:
@@ -286,14 +334,18 @@ def _substantive_filing_snippet(
 
     Preference:
       1. The highest-scoring retrieved chunk that doesn't start with
-         boilerplate. Vector retrieval already lands semantically near
-         the thesis query, so this is usually the substantive content.
+         boilerplate AND is from a filing (not a news article or
+         transcript). Vector retrieval already lands semantically
+         near the thesis query, so this is usually the substantive
+         content.
       2. Fall back to scanning past boilerplate prefixes in the raw
          MD&A — split on "Results of Operations" / "Liquidity" / similar
          section markers and pull the next 280 chars.
       3. Last resort: empty string (handled by caller).
     """
     for chunk in retrieved_chunks or []:
+        if not _is_filing_chunk(chunk):
+            continue
         text = (chunk.get("text") or "").strip()
         if not text:
             continue
