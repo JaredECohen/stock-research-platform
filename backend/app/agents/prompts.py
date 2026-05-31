@@ -272,17 +272,36 @@ Then output:
 - rating_label: Very Bullish / Bullish / Neutral / Bearish / Very Bearish.
 - confidence_score: 0-100.
 
-ONE-SENTENCE THESIS — rules. This is the line a serious investor
-will quote back to themselves later. Distill the investment idea
-to its core. It must NOT be a metric recap.
+ONE-SENTENCE THESIS — rules. Despite the field name (legacy), this is
+the SHORT-FORM THESIS that lands at the top of the memo. 2-3 readable
+sentences (target 50-90 words, hard cap ~120 words). It is the line
+a serious investor will quote back to themselves later. Distill the
+investment idea to its center. Never a metric recap.
 
-Required ingredients:
-- A specific, defensible CLAIM (a segment, catalyst, mispricing, or
-  structural shift that drives the rating).
-- ONE concrete anchor — a number, a segment, a near-term catalyst,
-  or a named exposure — that grounds the claim.
-- An implied "why the market is wrong" (the differentiated view, in
-  fewer than 25 words).
+REQUIRED STRUCTURE — three beats, in this order:
+
+  1) VERDICT (one sentence). State plainly whether the name is
+     CORRECTLY PRICED, UNDERVALUED, or OVERVALUED on our work — and
+     name the ONE thing that defines the call (the segment, the
+     multiple, the catalyst, the structural shift). Lead with the
+     ticker.
+
+  2) WHERE THE MARKET IS WRONG (one sentence). Only when the verdict
+     is over- or undervalued. Identify the SPECIFIC LEVER causing the
+     mispricing — what assumption the market is making that our work
+     disagrees with, and the segment / line item / exposure where the
+     gap shows up. Use one concrete number (a margin, a growth rate,
+     a multiple, a segment $).
+
+     When the verdict is CORRECTLY PRICED, skip "where the market is
+     wrong" and instead describe the PERFORMANCE THESIS: what makes
+     this name worth owning at current price (e.g. "compounds at
+     ~revenue growth + capital return; no edge, no break").
+
+  3) WHAT CONFIRMS / BREAKS (one sentence, optional). The near-term
+     observable that proves us right or wrong. A guidance line, a
+     segment growth print, a regulator decision — something the
+     reader can watch for in the next 1-2 quarters.
 
 Anti-patterns — DO NOT WRITE:
 - "{Company} — {Sector} / {industry}, {hook}; DCF base case
@@ -291,22 +310,36 @@ Anti-patterns — DO NOT WRITE:
 - "Bullish on {company} given strong fundamentals." (no claim)
 - A sentence that could be pasted onto another company's memo
   without modification.
+- One giant run-on sentence with two em dashes and three semicolons.
+  Use sentence breaks. The reader is going to skim — give them
+  natural pause points.
 
-Good examples (style, not content):
-- "ADBE: GenStudio + Express monetization is hidden inside legacy
-  Creative Cloud ARR, and Q4 net new bookings will reset the
-  decel narrative."
-- "NVDA: data-center capex is mid-cycle, not late, but multiple
-  compression on a single soft Hyperscaler print is the asymmetric
-  risk priced as the base case."
-- "JPM: payments + AM are now ~40% of revenue and fed-cut sensitivity
-  is overstated; market still treats it as a NIM bank."
-- "COST: membership fee growth is the primary lever, not gross margin
-  expansion — bears chase the wrong number."
+Good examples (style + structure):
 
-Be specific. Be opinionated. If you can't articulate a real claim,
-say "fairly priced on our work, no actionable edge" — that's a valid
-PM call and an honest sentence.
+OVERVALUED:
+"AAPL is overvalued at 34x P/E. Services growth (+12%) is real but
+the market is paying for hardware re-acceleration that won't come —
+iPhone has stabilized at +2% and the deferred Siri rollout removes
+the only catalyst that could fix the 16e mix problem. Watch FY25Q4
+iPhone units: another flat print breaks the multiple."
+
+UNDERVALUED:
+"JPM is undervalued — the market still treats it as a NIM bank.
+Payments + Asset Management are now ~40% of revenue and grow
+mid-teens regardless of the rate path; the gap is the Street's
+2026 fee-income line, which is too low by ~$3B. A clean fee print
+next quarter should reset the multiple."
+
+CORRECTLY PRICED:
+"COST is correctly priced at 47x. The performance thesis is
+membership fee growth + buyback compounding at ~9% — no break,
+no edge, but the floor is hard. Watch renewal rates on the
+$5 fee hike; below 92.5% would be the first crack."
+
+If you genuinely cannot articulate the call, say "fairly priced on
+our work, no actionable edge" — that is a valid PM call. But do not
+hedge by writing a vague claim. Pick one of the three structures and
+commit.
 
 Return JSON with keys: final_pm_view, one_sentence_thesis, rating_label,
 confidence_score, mispricing_thesis (object: consensus_view, our_view,

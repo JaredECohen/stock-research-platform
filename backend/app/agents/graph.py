@@ -107,16 +107,15 @@ def _build_thesis_from_findings(
     dcf: Optional[DCFResult],
     ticker: str,
 ) -> str:
-    """Compose a one-sentence thesis from the specialists' findings.
+    """Compose a short-form thesis (2-3 sentences) from the specialists'
+    findings. Mirrors the structure required by PM_SYNTHESIS_PROMPT so
+    the deterministic fallback reads the same as the LLM happy path:
 
-    Order of operations:
-      1. Pick the punchiest defensible claim — the sector analyst's
-         bull-case headline if present, else valuation / sector /
-         earnings / filing headline, else first profile driver.
-      2. Anchor with one concrete number (DCF base upside) ONLY if the
-         claim doesn't already carry a number.
-      3. Append the "what the market is missing" clause if the model
-         disagrees with consensus by ≥2pp.
+        Sentence 1 — VERDICT: ticker + correctly priced / over / under,
+                     and the ONE thing that defines the call.
+        Sentence 2 — LEVER / PERFORMANCE: if mispriced, the segment or
+                     metric where the gap shows up; if correctly priced,
+                     what makes it worth owning at current price.
 
     Used by both the post-LLM anti-pattern rewrite and the deterministic
     fallback in `_pm_synthesis` — keeps the logic in one place so the
@@ -166,38 +165,51 @@ def _build_thesis_from_findings(
     )
 
     upside = dcf.base.upside_pct if dcf and dcf.base else None
-    claim_has_number = bool(claim) and any(c.isdigit() for c in (claim or ""))
+
+    # --- Sentence 1: VERDICT ---
+    if upside is None or abs(upside) < 0.10:
+        verdict_word = "fairly priced"
+    elif upside > 0:
+        verdict_word = "undervalued"
+    else:
+        verdict_word = "overvalued"
 
     if claim:
-        head = f"{ticker_sym}: {claim}" if ticker_sym else claim
-        if (
-            upside is not None and abs(upside) >= 0.10
-            and not claim_has_number
-        ):
-            sign = "+" if upside > 0 else ""
-            head += (
-                f" — base-case DCF implies {sign}{upside * 100:.0f}% to fair value"
-            )
+        sentence_1 = f"{ticker_sym} is {verdict_word} — {claim}." if ticker_sym else f"{verdict_word.capitalize()} — {claim}."
     else:
         sector = (profile.get("sector") or "core").strip().lower()
-        head = (
-            f"{ticker_sym}: fairly priced on our work — no actionable edge in {sector}"
+        sentence_1 = (
+            f"{ticker_sym} is fairly priced on our work — no actionable edge in {sector}."
             if ticker_sym
-            else f"Fairly priced on our work — no actionable edge in {sector}"
+            else f"Fairly priced on our work — no actionable edge in {sector}."
         )
 
-    sentence = head.rstrip(".") + "."
-
-    # Append the "market-gap" clause when we have one. Keep it on the
-    # same sentence so the thesis remains a one-liner.
+    # --- Sentence 2: LEVER (if mispriced) or PERFORMANCE PATH (if not) ---
+    sentence_2 = ""
     try:
-        gap = _market_gap_clause(profile, dcf, ticker_sym)
-    except Exception:  # pragma: no cover — never break thesis on gap calc
-        gap = ""
-    if gap:
-        sentence = sentence.rstrip(".") + ". " + gap
+        gap_clause = _market_gap_clause(profile, dcf, ticker_sym)
+    except Exception:  # pragma: no cover
+        gap_clause = ""
 
-    return sentence
+    if verdict_word in ("undervalued", "overvalued"):
+        if gap_clause:
+            sentence_2 = gap_clause
+        else:
+            sign = "+" if (upside or 0) > 0 else ""
+            sentence_2 = (
+                f"DCF base case implies {sign}{(upside or 0) * 100:.0f}% to fair value; "
+                f"the gap rests on {drivers[0] if drivers else 'core driver execution'} "
+                f"vs. {risks[0] if risks else 'the dominant risk'}."
+            )
+    else:
+        # Correctly priced — describe the performance path.
+        driver_line = drivers[0] if drivers else "compounding fundamentals"
+        sentence_2 = (
+            f"Performance thesis is {driver_line.lower()} compounding at trend; "
+            f"no edge, no break — own the floor, not the multiple."
+        )
+
+    return f"{sentence_1} {sentence_2}".strip()
 
 
 def _market_gap_clause(
