@@ -557,15 +557,13 @@ class Orchestrator:
             + "\n".join(f"- {h.role}: {(h.content or '')[:300]}" for h in history[-6:])
             + f"\n\nUser's new question:\n{message}"
         )
-        # Force OpenAI here. The default `active_llm_provider` is
-        # whichever the user configured (often Anthropic in this
-        # environment), but the bundled Anthropic SDK has a `proxies`
-        # kwarg incompat that surfaces at init time. The intent
-        # classifier already proved OpenAI is reachable.
+        # Use whatever provider is active. The earlier comment here
+        # cited an Anthropic SDK `proxies` kwarg bug; that was fixed
+        # by pinning anthropic>=0.42 in requirements.txt, so forcing
+        # OpenAI now just hard-fails on deployments configured with
+        # only an Anthropic key.
         text = llm.chat_text(
             prompt, system=system, route="strong",
-            model=settings.openai_pm_model,
-            provider_override="openai",
         )
         if not text or not text.strip():
             return None

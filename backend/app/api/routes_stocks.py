@@ -27,9 +27,13 @@ router = APIRouter()
 
 
 # In-memory job registry for async memo regeneration. Process-local
-# (single-replica only — switch to Redis when scaling out). Records
-# `{ticker: started_at_utc}` while a regen is in flight; entries clear
-# when the background task finishes (success OR failure).
+# (single-replica only — switch to Redis when scaling out).
+#
+# `_REGEN_JOBS` tracks live regens: {ticker: started_at_utc}; cleared
+# on completion (success OR failure).
+# `_REGEN_FAILURES` retains the last failure per ticker so the status
+# endpoint can surface it after the job clears. Otherwise a failed
+# BackgroundTask silently disappears and the frontend just spins.
 #
 # Why this exists: a full memo regen takes 5-9 minutes synchronously,
 # but Render's HTTP proxy timeout is ~100 seconds. Returning the memo
@@ -37,17 +41,45 @@ router = APIRouter()
 # analyze endpoint fires-and-returns a 202 with the start time; the
 # frontend polls `/analyze/status` for completion.
 _REGEN_JOBS: Dict[str, datetime] = {}
+_REGEN_FAILURES: Dict[str, Dict[str, Any]] = {}
 _REGEN_LOCK = Lock()
 
 
 def _run_regen_job(ticker: str, scenario: str) -> None:
     """Background worker — runs `run_stock_memo` and clears the job
-    entry whether or not it succeeded. Exceptions are logged but not
-    re-raised (BackgroundTasks would swallow them anyway)."""
+    entry whether or not it succeeded.
+
+    Persists failure details (error type + message + duration) to
+    `_REGEN_FAILURES[ticker]` so a subsequent /analyze/status call
+    can surface what went wrong. Successful runs clear the failure
+    entry. Without this, BackgroundTasks errors are silent and the
+    frontend has no way to distinguish "regen failed silently" from
+    "regen still running".
+    """
+    import traceback
+    started = datetime.utcnow()
     try:
         run_stock_memo(ticker, scenario=scenario, force_refresh=True)
-    except Exception as exc:  # pragma: no cover — diagnostic only
-        log.warning("background memo regen failed for %s: %s", ticker, exc)
+        # Success — drop any prior failure record so the status
+        # endpoint reflects the green state.
+        with _REGEN_LOCK:
+            _REGEN_FAILURES.pop(ticker, None)
+    except Exception as exc:
+        tb = traceback.format_exc()
+        log.error(
+            "background memo regen FAILED for %s: %s\n%s",
+            ticker, exc, tb,
+        )
+        with _REGEN_LOCK:
+            _REGEN_FAILURES[ticker] = {
+                "ticker": ticker,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc)[:500],
+                "traceback_tail": tb[-1500:],
+                "started_at": started.isoformat(),
+                "failed_at": datetime.utcnow().isoformat(),
+                "duration_seconds": (datetime.utcnow() - started).total_seconds(),
+            }
     finally:
         with _REGEN_LOCK:
             _REGEN_JOBS.pop(ticker, None)
@@ -388,10 +420,15 @@ def analyze_status(ticker: str) -> Dict[str, Any]:
         — once `latest_memo_at > your_started_at`, the new memo is
         ready to fetch.
       - `latest_version`: memo version for cache busting.
+      - `last_failure`: the most recent regen failure for this ticker,
+        if any. Cleared on next success. Includes error_type, message,
+        and a truncated traceback so a 502/silent-failure is visible
+        rather than spinning forever on the frontend.
     """
     t = ticker.upper()
     with _REGEN_LOCK:
         running_started_at = _REGEN_JOBS.get(t)
+        last_failure = _REGEN_FAILURES.get(t)
     snap = memo_store.latest_memo(t)
     return {
         "ticker": t,
@@ -401,4 +438,5 @@ def analyze_status(ticker: str) -> Dict[str, Any]:
             snap.generated_at.isoformat() if snap and snap.generated_at else None
         ),
         "latest_version": snap.version if snap else None,
+        "last_failure": last_failure,
     }
