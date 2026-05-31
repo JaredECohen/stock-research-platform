@@ -57,3 +57,41 @@ def init_db() -> None:
     """Create tables from imported models. Called at app startup."""
     from . import models  # noqa: F401  -- ensures models register on Base
     Base.metadata.create_all(bind=engine)
+    _ensure_added_columns()
+
+
+# Lightweight in-place migrations. We don't run Alembic — instead each
+# new column lands here as an idempotent ALTER TABLE that no-ops when
+# the column already exists. Sufficient for the current additive-only
+# schema evolution; revisit when we need rename / type-change support.
+_ADDITIVE_COLUMNS = [
+    # (table, column, ddl_fragment) — DDL is the column part of ALTER
+    # TABLE, not the full statement. Both SQLite and Postgres accept it.
+    ("companies", "auto_update_memo",
+     "BOOLEAN NOT NULL DEFAULT 0"),
+]
+
+
+def _ensure_added_columns() -> None:
+    """Apply any additive ALTER TABLE migrations the model expects.
+
+    Catches both 'column already exists' (re-run, normal) and 'table
+    does not exist' (initial boot before create_all races) — neither is
+    fatal. Anything else propagates so a real schema error surfaces."""
+    import logging
+    from sqlalchemy import text
+    log = logging.getLogger(__name__)
+    with engine.begin() as conn:
+        for table, column, ddl in _ADDITIVE_COLUMNS:
+            stmt = f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
+            try:
+                conn.execute(text(stmt))
+                log.info("init_db: added column %s.%s", table, column)
+            except Exception as exc:  # pragma: no cover — varies by backend
+                msg = str(exc).lower()
+                # SQLite: "duplicate column name"; Postgres: "already exists"
+                if "duplicate column" in msg or "already exists" in msg:
+                    continue
+                if "no such table" in msg or "does not exist" in msg:
+                    continue
+                log.warning("init_db: ALTER TABLE %s failed: %s", table, exc)

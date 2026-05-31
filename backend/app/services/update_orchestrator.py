@@ -37,6 +37,13 @@ log = logging.getLogger(__name__)
 # Locked policy: max patches per ticker per UTC day.
 MAX_PATCHES_PER_DAY = 2
 
+# How recently a memo must have been generated/viewed for new
+# filings/transcripts to trigger automatic regeneration. Outside this
+# window, the polling jobs still ingest + persist the raw data, but
+# memo regen waits for a user request. Configurable via env;
+# essentially the cost ceiling on the universe expansion.
+AUTO_REGEN_RECENCY_DAYS = 30
+
 # Per-ticker FIFO queue (singleton). Process state — for production
 # multi-process deployments we'd back this with Redis; for now the
 # in-process queue is enough for the demo + tests.
@@ -69,17 +76,149 @@ def _patch_count_today(ticker: str) -> int:
 # Event handlers
 # ---------------------------------------------------------------------------
 
+def should_auto_regen(
+    ticker: str, *, window_days: int = AUTO_REGEN_RECENCY_DAYS,
+) -> Dict[str, Any]:
+    """Decide whether a polling event should trigger memo regeneration.
+
+    Two conditions, OR'd together:
+      1. `Company.auto_update_memo` is True (explicit pin — top mega-caps
+         by default, user-curable via the admin endpoint).
+      2. A memo exists for this ticker and was generated within the
+         last `window_days` days (proxy for "user is actively watching").
+
+    Returns a dict with the decision + the reason so callers can log
+    without re-implementing the logic. Never raises — DB failure
+    returns `{should: False, reason: 'db_error'}` (fail-safe — better
+    to skip a regen than to over-spend).
+    """
+    ticker = ticker.upper()
+    try:
+        from . import memo_store
+        from ..database import SessionLocal
+        from ..models import Company
+        with SessionLocal() as db:
+            company = db.get(Company, ticker)
+            if company is not None and company.auto_update_memo:
+                return {"should": True, "reason": "auto_update_pinned"}
+        snap = memo_store.latest_memo(ticker)
+        if snap is None or snap.generated_at is None:
+            return {"should": False, "reason": "no_memo_on_file"}
+        gen_at = snap.generated_at
+        if isinstance(gen_at, datetime):
+            age_days = (datetime.utcnow() - gen_at).total_seconds() / 86400.0
+        else:
+            return {"should": False, "reason": "no_generated_at"}
+        if age_days <= window_days:
+            return {
+                "should": True,
+                "reason": f"within_window_{int(age_days)}d",
+            }
+        return {
+            "should": False,
+            "reason": f"stale_memo_{int(age_days)}d_old",
+        }
+    except Exception as exc:  # pragma: no cover — fail-safe to no-regen
+        log.warning("should_auto_regen failed for %s: %s", ticker, exc)
+        return {"should": False, "reason": "db_error"}
+
+
+def _persist_raw_data_only(ticker: str) -> Dict[str, int]:
+    """Ingest fresh filings + transcripts into FilingDoc / EarningsTranscript
+    + the vector store, WITHOUT running the LLM memo synthesis.
+
+    Used by the polling event handlers when the auto-regen gate
+    decides "no memo yet" — we still want the raw data in the DB
+    + indexed for future on-demand retrieval. Cheap (no LLM calls
+    on this path; filing_memory.post_pass DOES use the LLM for the
+    diff bullets, but that's a separate gate inside that function).
+    """
+    counts = {"filings": 0, "transcripts": 0}
+    try:
+        from ..database import SessionLocal
+        from .data_service import get_data_service
+        from . import history_service
+        ds = get_data_service()
+        filings = ds.get_filings(ticker) or []
+        transcripts = ds.get_earnings_transcripts(ticker) or []
+        with SessionLocal() as db:
+            history_service._ensure_tables(db)
+            counts["filings"] = history_service._ingest_filings(db, ticker, filings)
+            counts["transcripts"] = history_service._ingest_transcripts(
+                db, ticker, transcripts,
+            )
+            db.commit()
+    except Exception as exc:  # pragma: no cover — never block the poller
+        log.warning("_persist_raw_data_only failed for %s: %s", ticker, exc)
+    return counts
+
+
+def on_transcript_event(ticker: str, *, period: str = "") -> Dict[str, Any]:
+    """A new earnings transcript landed → maybe regenerate the memo.
+
+    Two-phase:
+      1. Always persist+index the raw transcript (so future memo runs
+         can retrieve it). Cheap; no LLM call beyond the embed batch.
+      2. Conditionally fire a full memo regen, gated by
+         `should_auto_regen` (auto_update pin + recency window).
+    """
+    ticker = ticker.upper()
+    persist_counts = _persist_raw_data_only(ticker)
+    decision = should_auto_regen(ticker)
+    if not decision["should"]:
+        return {
+            "ticker": ticker, "period": period, "kind": "skipped",
+            "reason": decision["reason"],
+            "persisted": persist_counts,
+        }
+
+    _QUEUES[ticker].append({
+        "kind": "full_reanalysis", "ticker": ticker, "period": period,
+        "enqueued_at": datetime.utcnow().isoformat(),
+        "trigger_reason": decision["reason"], "source": "transcript",
+    })
+    try:
+        from ..agents.graph import run_stock_memo
+        memo = run_stock_memo(ticker, force_refresh=True)
+        return {
+            "ticker": ticker, "period": period,
+            "kind": "full_reanalysis",
+            "rating_label": memo.rating_label,
+            "trigger_reason": decision["reason"],
+            "persisted": persist_counts,
+        }
+    finally:
+        if _QUEUES[ticker]:
+            _QUEUES[ticker].popleft()
+
+
 def on_filing_event(ticker: str) -> Dict[str, Any]:
-    """A new filing was observed → enqueue a `full_reanalysis(ticker)`.
+    """A new filing was observed → persist + index, then maybe memo regen.
+
+    Two-phase:
+      1. Always persist+index the raw filing (so future on-demand memo
+         runs can retrieve it). Cheap; ~$0.02 in embed cost per 10-K.
+      2. Conditionally fire a full memo regen, gated by
+         `should_auto_regen` (auto_update pin + recency window).
 
     Synchronous re-run is fine at our scale (one ticker per call from
     the EDGAR poller); a future async worker can pop these off the
     FIFO queue.
     """
     ticker = ticker.upper()
+    persist_counts = _persist_raw_data_only(ticker)
+    decision = should_auto_regen(ticker)
+    if not decision["should"]:
+        return {
+            "ticker": ticker, "kind": "skipped",
+            "reason": decision["reason"],
+            "persisted": persist_counts,
+        }
+
     _QUEUES[ticker].append({
         "kind": "full_reanalysis", "ticker": ticker,
         "enqueued_at": datetime.utcnow().isoformat(),
+        "trigger_reason": decision["reason"],
     })
     try:
         from ..agents.graph import run_stock_memo
@@ -87,6 +226,8 @@ def on_filing_event(ticker: str) -> Dict[str, Any]:
         return {
             "ticker": ticker, "kind": "full_reanalysis",
             "rating_label": memo.rating_label,
+            "trigger_reason": decision["reason"],
+            "persisted": persist_counts,
         }
     finally:
         if _QUEUES[ticker]:

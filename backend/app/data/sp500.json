@@ -1,0 +1,28 @@
+{
+  "_doc": "S&P 500 constituents — the curated screener universe (expanded from SP100). Refresh via `python -m app.scripts.refresh_universe_lists` to pull the live FMP list. This starter file ships the SP100 + a strategic peer extension (foreign-listed ADRs + sub-industry semis) so the screener / comps work immediately without an FMP Premium key. Last refreshed: 2026-05-30.",
+  "_dual_class_policy": "When a company has multiple share classes in the index (Alphabet GOOG/GOOGL, Berkshire BRK.A/BRK.B), we list only one ticker per company. Picked GOOGL (Class A, voting) and BRK.B (lower-priced, more retail-tradeable) as the canonical tickers.",
+  "_starter_note": "This is a 163-ticker starter list (SP100 + 63 strategic extensions: foreign-listed ADRs + sub-industry semis + high-conviction large caps), NOT the full SP500. Run `python -m app.scripts.refresh_universe_lists` with FMP Premium to populate the remaining ~340 names. Until then, screener + comps work over this subset; lazy `analyzed_on_demand` loading covers any ticker the user researches directly.",
+  "as_of": "2026-05-30",
+  "tickers": [
+    "AAPL", "ABBV", "ABT", "ACN", "ADBE", "AIG", "AMD", "AMGN", "AMT", "AMZN",
+    "AVGO", "AXP", "BA", "BAC", "BK", "BKNG", "BLK", "BMY", "BRK.B", "C",
+    "CAT", "CHTR", "CL", "CMCSA", "COF", "COP", "COST", "CRM", "CSCO", "CVS",
+    "CVX", "DE", "DHR", "DIS", "DUK", "EMR", "EXC", "F", "FDX", "GD",
+    "GE", "GILD", "GM", "GOOGL", "GS", "HD", "HON", "IBM", "INTC", "ISRG",
+    "JNJ", "JPM", "KHC", "KO", "LIN", "LLY", "LMT", "LOW", "MA", "MCD",
+    "MDLZ", "MDT", "MET", "META", "MMM", "MO", "MRK", "MS", "MSFT", "NEE",
+    "NFLX", "NKE", "NOW", "NVDA", "ORCL", "PEP", "PFE", "PG", "PM", "PYPL",
+    "QCOM", "RTX", "SBUX", "SCHW", "SO", "T", "TGT", "TMO", "TMUS", "TSLA",
+    "TXN", "UNH", "UNP", "UPS", "USB", "V", "VZ", "WFC", "WMT", "XOM",
+    "ADI", "AMAT", "ANET", "ARM", "ASML", "AVB", "BIIB", "BSX", "CDNS",
+    "CI", "CRWD", "DDOG", "DELL", "DXCM", "EA", "EOG", "EQIX", "EW", "FTNT",
+    "GLW", "HCA", "ICE", "IDXX", "JCI", "KLAC", "LRCX", "LULU", "MAR", "MCHP",
+    "MCO", "MNST", "MPWR", "MRNA", "MRVL", "MU", "NEM", "NOC", "NSC", "NXPI",
+    "ON", "OXY", "PANW", "PLD", "PLTR", "REGN", "RMD", "ROK", "SHW", "SLB",
+    "SMCI", "SNOW", "SNPS", "SPGI", "SYK", "TDG", "TER", "TJX", "TSM", "VRTX",
+    "WBD", "WDAY", "ZS", "ZTS"
+  ],
+  "_top_10_by_market_cap_2026_05": [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "BRK.B", "TSLA", "AVGO", "LLY"
+  ]
+}

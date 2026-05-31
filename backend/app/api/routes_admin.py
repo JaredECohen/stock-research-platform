@@ -696,3 +696,69 @@ def lopsidedness_audit(
         ),
         "rows": rows,
     }
+
+
+# ---------------------------------------------------------------------------
+# Auto-update memo gating (Phase A — universe expansion cost control)
+# ---------------------------------------------------------------------------
+
+class AutoUpdateToggle(BaseModel):
+    auto_update_memo: bool = Field(
+        ..., description="True = regenerate memo automatically on new filings / transcripts."
+    )
+
+
+@router.get("/api/admin/auto-update")
+def list_auto_update_tickers() -> Dict[str, Any]:
+    """List tickers eligible for automatic memo regeneration.
+
+    A ticker is eligible when its `Company.auto_update_memo` is True
+    OR a memo was generated/viewed within the recency window (currently
+    30 days — see `update_orchestrator.AUTO_REGEN_RECENCY_DAYS`). The
+    `pinned` list is the explicit subset that always auto-regens
+    regardless of recency. Users curate this list to keep the marginal
+    LLM spend of the SP500 expansion predictable.
+    """
+    from ..database import SessionLocal
+    from ..models import Company
+    with SessionLocal() as db:
+        rows = db.query(Company.ticker, Company.company_name).filter(
+            Company.auto_update_memo == True,  # noqa: E712 — sqlalchemy
+        ).order_by(Company.ticker).all()
+    return {
+        "pinned": [{"ticker": t, "company_name": n} for (t, n) in rows],
+        "recency_window_days": update_orchestrator.AUTO_REGEN_RECENCY_DAYS,
+        "note": (
+            "Pinned tickers always auto-regen on new filings/transcripts. "
+            "Other tickers auto-regen only if their memo was generated "
+            "or viewed within the recency window."
+        ),
+    }
+
+
+@router.put("/api/admin/auto-update/{ticker}")
+def set_auto_update_memo(ticker: str, payload: AutoUpdateToggle) -> Dict[str, Any]:
+    """Pin or unpin a ticker for automatic memo regeneration.
+
+    Returns 404 when the ticker isn't in the companies table. Idempotent.
+    """
+    from ..database import session_scope
+    from ..models import Company
+    ticker = ticker.upper()
+    with session_scope() as db:
+        company = db.get(Company, ticker)
+        if company is None:
+            raise HTTPException(404, f"Ticker {ticker} not in universe")
+        company.auto_update_memo = payload.auto_update_memo
+        return {
+            "ticker": ticker,
+            "auto_update_memo": company.auto_update_memo,
+        }
+
+
+@router.post("/api/admin/auto-update/check/{ticker}")
+def check_auto_regen_decision(ticker: str) -> Dict[str, Any]:
+    """Dry-run the gating logic for a specific ticker — useful for
+    debugging when a filing landed but no memo regenerated."""
+    return update_orchestrator.should_auto_regen(ticker)
+

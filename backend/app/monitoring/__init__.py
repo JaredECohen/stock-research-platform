@@ -31,14 +31,14 @@ from . import (  # noqa: E402,F401
     catalyst_loop, checkpoint_gc, edgar_poller, history_backfill, llm_log_gc,
     macro_loop, mispricing_audit_loop, news_loop, outcome_loop,
     postmortem_loop, sector_digest_loop, social_loop,
-    theme_exposure_loop, weekly_digest_loop,
+    theme_exposure_loop, transcripts_poller, weekly_digest_loop,
 )
 
 __all__ = [
     "catalyst_loop", "checkpoint_gc", "edgar_poller", "history_backfill",
     "llm_log_gc", "macro_loop", "mispricing_audit_loop", "news_loop",
     "outcome_loop", "postmortem_loop", "sector_digest_loop", "social_loop",
-    "theme_exposure_loop", "weekly_digest_loop",
+    "theme_exposure_loop", "transcripts_poller", "weekly_digest_loop",
     "register_all", "record_run", "status_snapshot",
 ]
 
@@ -46,6 +46,7 @@ __all__ = [
 def register_all(scheduler) -> None:
     """Register every monitoring loop with an APScheduler instance."""
     edgar_poller.register(scheduler)
+    transcripts_poller.register(scheduler)
     news_loop.register(scheduler)
     social_loop.register(scheduler)
     macro_loop.register(scheduler)

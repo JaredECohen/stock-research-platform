@@ -70,6 +70,26 @@ class FMPProvider:
     # Profile
     # ------------------------------------------------------------------
 
+    def get_sp500_constituents(self) -> Optional[List[str]]:
+        """`/stable/sp500-constituent` — current S&P 500 ticker list.
+
+        Used by the universe seeder + `scripts/refresh_universe_lists.py`
+        to keep `data/sp500.json` in sync. Returns None on auth failure
+        so callers can fall back to whatever's already on disk.
+        """
+        data = self._get("/sp500-constituent")
+        if not isinstance(data, list):
+            return None
+        tickers: List[str] = []
+        for row in data:
+            if isinstance(row, dict):
+                sym = row.get("symbol") or row.get("ticker")
+            else:
+                sym = row
+            if isinstance(sym, str) and sym:
+                tickers.append(sym.upper())
+        return tickers or None
+
     def get_company_profile(self, ticker: str) -> Optional[Dict[str, Any]]:
         """`/stable/profile?symbol=…`. Includes sector / industry / CIK /
         market cap / beta / price / description. Shares outstanding lives

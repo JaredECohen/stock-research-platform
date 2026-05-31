@@ -63,6 +63,19 @@ class Company(Base):
     universe_tier: Mapped[str] = mapped_column(
         String(24), default="data_only", index=True
     )
+    # When True, new EDGAR filings / earnings transcripts trigger an
+    # automatic memo regeneration (`full_reanalysis(ticker)`) for this
+    # ticker. When False, the polling jobs still ingest + persist the
+    # raw data, but memo regen waits for a user request. Seeded `True`
+    # only for the top-10-by-market-cap list defined in sp500.json
+    # (`_top_10_by_market_cap_*`). Orthogonal to `universe_tier` —
+    # a ticker can be `auto_analysis` (in the screener) without being
+    # `auto_update_memo` (no auto-regen). Combined with the recency
+    # window in `update_orchestrator.should_auto_regen`, this controls
+    # the marginal LLM spend of the SP500 expansion.
+    auto_update_memo: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="0",
+    )
 
     memos: Mapped[list["StockMemo"]] = relationship(back_populates="company")
 

@@ -222,13 +222,41 @@ def test_daily_patch_cap_blocks_further_patches():
 
 
 def test_on_filing_event_runs_full_reanalysis():
-    """Just verify the entry point reaches `run_stock_memo(force_refresh=True)`."""
-    with patch("app.agents.graph.run_stock_memo") as m:
+    """The entry point reaches `run_stock_memo(force_refresh=True)` when
+    the auto-regen gate allows it. With the new gating policy that
+    means the ticker must be pinned OR have a recent memo on file —
+    we stub `should_auto_regen` to True to keep this test focused on
+    the dispatch path, not the gating policy itself."""
+    with patch.object(
+        update_orchestrator, "should_auto_regen",
+        return_value={"should": True, "reason": "test_stub"},
+    ), patch.object(
+        update_orchestrator, "_persist_raw_data_only",
+        return_value={"filings": 0, "transcripts": 0},
+    ), patch("app.agents.graph.run_stock_memo") as m:
         m.return_value = _stub_memo("TSTFE")
         out = update_orchestrator.on_filing_event("TSTFE")
     assert out["kind"] == "full_reanalysis"
     assert out["ticker"] == "TSTFE"
     m.assert_called_once_with("TSTFE", force_refresh=True)
+
+
+def test_on_filing_event_skips_when_gate_says_no():
+    """When the auto-regen gate denies, we still persist the raw data
+    but skip the LLM memo regen — the universe-expansion cost control."""
+    with patch.object(
+        update_orchestrator, "should_auto_regen",
+        return_value={"should": False, "reason": "stale_memo_60d_old"},
+    ), patch.object(
+        update_orchestrator, "_persist_raw_data_only",
+        return_value={"filings": 1, "transcripts": 0},
+    ) as persist, patch("app.agents.graph.run_stock_memo") as m:
+        out = update_orchestrator.on_filing_event("TSTSK")
+    assert out["kind"] == "skipped"
+    assert out["reason"] == "stale_memo_60d_old"
+    assert out["persisted"] == {"filings": 1, "transcripts": 0}
+    persist.assert_called_once_with("TSTSK")
+    m.assert_not_called()
 
 
 def test_queue_depth_reports_in_flight_events():
