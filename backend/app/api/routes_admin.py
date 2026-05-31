@@ -762,3 +762,80 @@ def check_auto_regen_decision(ticker: str) -> Dict[str, Any]:
     debugging when a filing landed but no memo regenerated."""
     return update_orchestrator.should_auto_regen(ticker)
 
+
+# ---------------------------------------------------------------------------
+# Postgres sequence repair
+# ---------------------------------------------------------------------------
+
+@router.post("/api/admin/fix-sequences")
+def fix_postgres_sequences() -> Dict[str, Any]:
+    """Reset Postgres autoincrement sequences to MAX(id)+1 for every
+    table that has an `id` primary key.
+
+    Why this exists: a Postgres sequence falls behind the table's
+    actual MAX(id) when rows are inserted with EXPLICIT id values
+    (bulk seed, SQLite-to-Postgres migration, manual SQL inserts).
+    Postgres' nextval() then returns ids that already exist, and
+    every INSERT hits `UniqueViolation` on the primary key. Seen
+    on prod's `memo_snapshots` table — id=48 conflict was blocking
+    every memo regen from persisting.
+
+    Idempotent and SQLite-safe (SQLite has no sequences; the function
+    returns an empty diff there).
+
+    Returns `{fixed: [{table, sequence, old_value, new_value}, ...]}`.
+    Run after any bulk import or after observing UniqueViolation on
+    a `_pkey` constraint.
+    """
+    from sqlalchemy import inspect, text
+    from ..database import engine
+
+    if engine.dialect.name != "postgresql":
+        return {"fixed": [], "note": f"no-op on {engine.dialect.name} (sequences are Postgres-only)"}
+
+    fixed: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table_name in inspector.get_table_names():
+            cols = inspector.get_columns(table_name)
+            id_col = next((c for c in cols if c["name"] == "id"), None)
+            if id_col is None or not id_col.get("autoincrement"):
+                continue
+            # Probe for the sequence — typically `{table}_id_seq`
+            seq_name = f"{table_name}_id_seq"
+            try:
+                # Check sequence exists
+                seq_exists = conn.execute(text(
+                    "SELECT 1 FROM information_schema.sequences "
+                    "WHERE sequence_name = :seq"
+                ), {"seq": seq_name}).first()
+                if not seq_exists:
+                    skipped.append({"table": table_name, "reason": "no sequence found"})
+                    continue
+                max_id = conn.execute(text(
+                    f"SELECT COALESCE(MAX(id), 0) FROM {table_name}"
+                )).scalar() or 0
+                old_val = conn.execute(text(
+                    f"SELECT last_value FROM {seq_name}"
+                )).scalar()
+                # is_called=true tells Postgres "advance past this value
+                # before returning it"; setting it to false plus value=N
+                # means nextval() returns exactly N. We want nextval()
+                # to return max_id+1, so set with is_called=true and
+                # value=max_id.
+                new_val = max_id + 1
+                conn.execute(text(
+                    f"SELECT setval(:seq, :val, false)"
+                ), {"seq": seq_name, "val": new_val})
+                fixed.append({
+                    "table": table_name,
+                    "sequence": seq_name,
+                    "old_value": int(old_val) if old_val is not None else None,
+                    "max_id": int(max_id),
+                    "new_value": int(new_val),
+                })
+            except Exception as exc:
+                skipped.append({"table": table_name, "reason": str(exc)[:200]})
+    return {"fixed": fixed, "skipped": skipped}
+
