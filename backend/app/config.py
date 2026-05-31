@@ -67,9 +67,9 @@ class Settings(BaseSettings):
     # by setting OPENAI_MACRO_MODEL="" + GEMINI_API_KEY in the agent code path.
     openai_macro_model: str = "gpt-5.4"
     anthropic_api_key: str = ""
-    anthropic_strong_model: str = "claude-opus-4-7"
+    anthropic_strong_model: str = "claude-opus-4-8"
     anthropic_cheap_model: str = "claude-haiku-4-5"
-    anthropic_critic_model: str = "claude-opus-4-7"
+    anthropic_critic_model: str = "claude-opus-4-8"
     # Gemini (Google GenAI) — used for news/social/long-doc analysts.
     # Two access paths:
     #   - Direct API: set GEMINI_API_KEY. Quick setup; generous free tier.

@@ -36,6 +36,7 @@ MODEL_PRICES_PER_MTOK: Dict[str, Tuple[float, float]] = {
     # Anthropic
     "claude-haiku-4-5":  (0.50, 2.50),
     "claude-opus-4-7":   (15.00, 75.00),
+    "claude-opus-4-8":   (15.00, 75.00),  # placeholder — update when pricing publishes
     "claude-sonnet-4-6": (3.00, 15.00),
     # Google / Vertex
     "gemini-2.5-flash":  (0.30, 1.25),

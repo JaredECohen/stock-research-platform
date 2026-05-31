@@ -70,6 +70,64 @@ def _multi_pass_qa_addendum(
         return {}
 
 
+def _coerce_structured_enums(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Map LLM-creative enum values onto the schema whitelist.
+
+    The EarningsStructured Pydantic model uses `Literal[...]` for
+    `overall_tone`, guidance `direction`, tone-signal `classification`,
+    and Q&A `response_quality`. Pydantic v2 fails the entire validation
+    on any unknown literal — and the LLM occasionally drifts (e.g.
+    "not_addressed_in_prepared_remarks", "clear_but_non_committal").
+    Rather than loosening the schema, normalize each off-list value to
+    the nearest in-list value before validation. Pure prefix / keyword
+    mapping; conservative ("partial" / "measured" when nothing fits).
+    """
+    if not isinstance(raw, dict):
+        return raw
+    raw = dict(raw)  # shallow copy so we don't mutate the LLM payload
+
+    def _coerce_one(value: Any, whitelist: tuple[str, ...], default: str) -> str:
+        if not isinstance(value, str):
+            return default
+        v = value.lower().strip()
+        if v in whitelist:
+            return v
+        # Prefix / containment fallback — "clear_but_non_committal" → "clear",
+        # "not_addressed_in_prepared_remarks" → "partial" (the closest
+        # neutral bucket).
+        for allowed in whitelist:
+            if v.startswith(allowed) or allowed in v:
+                return allowed
+        return default
+
+    raw["overall_tone"] = _coerce_one(
+        raw.get("overall_tone"), ("constructive", "measured", "cautious"), "measured",
+    )
+
+    direction_wl = (
+        "raised", "lowered", "reaffirmed", "introduced", "withdrawn", "unclear",
+    )
+    raw["guidance_changes"] = [
+        {**g, "direction": _coerce_one(g.get("direction"), direction_wl, "unclear")}
+        for g in (raw.get("guidance_changes") or []) if isinstance(g, dict)
+    ]
+
+    classification_wl = (
+        "constructive", "measured", "cautious", "defensive", "evasive",
+    )
+    raw["tone_signals"] = [
+        {**t, "classification": _coerce_one(t.get("classification"), classification_wl, "measured")}
+        for t in (raw.get("tone_signals") or []) if isinstance(t, dict)
+    ]
+
+    qa_wl = ("clear", "partial", "deflected", "evasive")
+    raw["qa_themes"] = [
+        {**q, "response_quality": _coerce_one(q.get("response_quality"), qa_wl, "partial")}
+        for q in (raw.get("qa_themes") or []) if isinstance(q, dict)
+    ]
+    return raw
+
+
 def _critique_block(question: Optional[str]) -> str:
     """Wave 9 — prepend this to a specialist's user prompt when the
     deep-research loop is asking a follow-up question."""
@@ -189,9 +247,15 @@ def run_earnings_agent(
         + "\n\nTranscript context:\n" + json.dumps(payload, default=str)[:32000],
         system=prompts.PM_SYSTEM, route="cheap",
         model=settings.openai_tool_model,
-        # Same truncation tax filing analyst was paying — give the
-        # response room for headline + 8-12 categorized points.
-        max_tokens=2000,
+        # Earnings response is the largest of any agent's: 4-6 sentence
+        # summary + 8-12 key_points + structured block (3-6 guidance
+        # changes, 4-8 tone_signals with quoted evidence, 4-8 qa_themes,
+        # 2 segment objects, forward catalysts). Empirically a real
+        # AAPL run hits 4000 tokens dead-on (full structured payload
+        # with quoted evidence per tone_signal) which truncates mid-
+        # JSON and silently drops the structured block. 6000 gives
+        # ~50% headroom; cost impact ~$0.005/memo.
+        max_tokens=6000,
     )
     if llm_out:
         # Same flattening defense as filing_agent — prompt-tuned models
@@ -203,6 +267,13 @@ def run_earnings_agent(
         structured_payload: Dict = {}
         raw_struct = llm_out.get("structured")
         if isinstance(raw_struct, dict):
+            # Coerce LLM-creative enum values into the whitelist before
+            # Pydantic validation — otherwise one off-schema response
+            # (e.g. response_quality="not_addressed_in_prepared_remarks")
+            # nukes the entire structured block via cascading literal
+            # errors. Empirically the LLM mostly sticks to the allowed
+            # values but ~10% of qa_themes drift.
+            raw_struct = _coerce_structured_enums(raw_struct)
             try:
                 from ..schemas import EarningsStructured
                 structured_payload = EarningsStructured(

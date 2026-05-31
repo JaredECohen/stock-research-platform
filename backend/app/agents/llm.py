@@ -468,17 +468,37 @@ def _walk_array_objects(text: str, start_idx: int) -> List[str]:
     return out
 
 
+def _anthropic_supports_custom_temp(model: str) -> bool:
+    """Newer Anthropic models (Opus 4.7+, Sonnet 4.6+, Haiku 4.5+) reject
+    `temperature` other than the default and return HTTP 400 with
+    `temperature is deprecated for this model`. Empirically observed
+    2026-05-30 against claude-opus-4-7 and claude-haiku-4-5. Older
+    Claude 3.x models accept it. We gate the parameter rather than
+    pinning a fixed default so the call works across the supported
+    model fleet."""
+    m = (model or "").lower().strip()
+    if not m.startswith("claude-"):
+        return True
+    # The "4-x" generation deprecates the parameter. Pattern: "claude-
+    # {opus,sonnet,haiku}-4-N" or "claude-{family}-4-N-YYYYMMDD".
+    if "-4-" in m or m.endswith("-4"):
+        return False
+    return True
+
+
 def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[str]:
     import time as _time
     t0 = _time.perf_counter()
     try:
-        msg = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            temperature=0.3,
-            system=system or "You are a helpful assistant.",
-            messages=[{"role": "user", "content": user}],
-        )
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system or "You are a helpful assistant.",
+            "messages": [{"role": "user", "content": user}],
+        }
+        if _anthropic_supports_custom_temp(model):
+            kwargs["temperature"] = 0.3
+        msg = client.messages.create(**kwargs)
         dur = int((_time.perf_counter() - t0) * 1000)
         # Capture real token usage for cost accounting (Phase C) + log row (Wave 1A).
         in_tok, out_tok = _usage_from_anthropic(msg)
