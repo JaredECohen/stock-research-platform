@@ -221,21 +221,131 @@ def run_filing_agent(
             evidence=evidence[:6],
         )
 
-    # Deterministic fallback
-    risks = (primary.get("risk_factors") or [])[:3]
+    # Deterministic fallback. Skip past SEC boilerplate openers and
+    # prefer retrieved chunks (when the vector store has indexed this
+    # filing) over the front-of-section truncation, which routinely
+    # serves the "The following discussion should be read in conjunction
+    # with our Consolidated Financial Statements..." legalese.
     segments = primary.get("segments", []) or profile.get("segments", []) or []
     seg_text = ", ".join(s if isinstance(s, str) else s.get("name", "") for s in segments)[:200]
-    summary = (
-        f"{primary.get('type', '10-K')} dated {primary.get('filing_date', '—')}: "
-        f"business spans {seg_text or 'core segments'}. "
-        f"MD&A reads as: {primary.get('mda', '')[:280]}"
-    )
-    key_points = [f"Risk: {r}" for r in risks]
+
+    mda_snippet = _substantive_filing_snippet(primary.get("mda", ""), retrieved)
+    risks = _substantive_risk_factors(primary.get("risk_factors") or [], top_n=3)
+
+    summary_parts = [
+        f"{primary.get('type', '10-K')} dated {primary.get('filing_date', '—')}.",
+    ]
+    if seg_text:
+        summary_parts.append(f"Segments: {seg_text}.")
+    if mda_snippet:
+        summary_parts.append(f"MD&A: {mda_snippet}")
+    else:
+        summary_parts.append(
+            "LLM analyst couldn't run; filing body indexed for retrieval but "
+            "no substantive MD&A snippet was extracted in the deterministic path."
+        )
+    summary = " ".join(summary_parts)
+
+    key_points = [f"Risk: {r}" for r in risks] or ["See filing for detail."]
     return AgentFinding(
         agent="Filing Analyst",
         headline=f"{ticker} {primary.get('type', '10-K')} highlights",
         summary=summary,
-        key_points=key_points or ["See filing for detail."],
+        key_points=key_points,
         confidence=0.6,
         sources=[f"filing:{primary.get('accession_number', '')}"],
     )
+
+
+# Phrases used to filter out SEC boilerplate from MD&A and Risk Factor
+# extracts. These appear verbatim across every 10-K and crowd out any
+# real signal when we naively take the first N characters of a section.
+_FILING_BOILERPLATE_PREFIXES = (
+    "the following discussion should be read in conjunction",
+    "discussion regarding our financial condition and results of operations",
+    "as previously discussed, our actual results could differ materially",
+    "you should carefully consider the risks",
+    "the risks and uncertainties described below",
+    "in addition to the other information set forth in this report",
+    "investing in our common stock involves a high degree of risk",
+)
+
+_RISK_GENERIC_PREFIXES = (
+    "as previously discussed, our actual results",
+    "you should carefully consider the risks",
+    "the risks and uncertainties described below",
+    "investing in our common stock involves",
+    "many factors affect more than one category",
+)
+
+
+def _substantive_filing_snippet(
+    mda_text: str, retrieved_chunks: List[Dict],
+) -> str:
+    """Pick a snippet of MD&A worth showing.
+
+    Preference:
+      1. The highest-scoring retrieved chunk that doesn't start with
+         boilerplate. Vector retrieval already lands semantically near
+         the thesis query, so this is usually the substantive content.
+      2. Fall back to scanning past boilerplate prefixes in the raw
+         MD&A — split on "Results of Operations" / "Liquidity" / similar
+         section markers and pull the next 280 chars.
+      3. Last resort: empty string (handled by caller).
+    """
+    for chunk in retrieved_chunks or []:
+        text = (chunk.get("text") or "").strip()
+        if not text:
+            continue
+        low = text.lower()[:200]
+        if any(low.startswith(p) for p in _FILING_BOILERPLATE_PREFIXES):
+            continue
+        return text[:400]
+
+    if not mda_text:
+        return ""
+
+    # Try to skip past the standard MD&A intro by anchoring on
+    # substantive headers; pull the next 280 chars after the first hit.
+    markers = (
+        "Results of Operations",
+        "Liquidity and Capital Resources",
+        "Revenue", "Operating Income", "Segment",
+    )
+    for marker in markers:
+        idx = mda_text.find(marker)
+        if idx > 0:
+            return mda_text[idx : idx + 360].strip()
+
+    # No marker hit — just strip leading boilerplate paragraphs and
+    # take whatever's left.
+    paragraphs = [p.strip() for p in mda_text.split("\n") if p.strip()]
+    for p in paragraphs:
+        low = p.lower()[:200]
+        if not any(low.startswith(b) for b in _FILING_BOILERPLATE_PREFIXES):
+            return p[:360]
+    return ""
+
+
+def _substantive_risk_factors(
+    raw_risks: List[Any], *, top_n: int = 3,
+) -> List[str]:
+    """Filter out generic risk-section boilerplate.
+
+    The Risk Factors section in every 10-K opens with several paragraphs
+    of "you should carefully consider..." legalese before the actual
+    named risks. We skip rows that start with those phrases and prefer
+    ones that name a specific business risk.
+    """
+    keep: List[str] = []
+    for r in raw_risks:
+        text = (str(r) or "").strip()
+        if not text:
+            continue
+        low = text.lower()[:200]
+        if any(low.startswith(p) for p in _RISK_GENERIC_PREFIXES):
+            continue
+        keep.append(text)
+        if len(keep) >= top_n:
+            break
+    return keep
