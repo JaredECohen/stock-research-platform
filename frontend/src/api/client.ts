@@ -95,8 +95,37 @@ export const api = {
     const suffix = qs.length ? `?${qs.join("&")}` : "";
     return request<StockMemoOut>(`/api/stocks/${ticker}/memo${suffix}`);
   },
+  /** Kick off an async memo regeneration. Returns 202 immediately with
+   *  the job's `started_at`. Poll `analyzeStatus` to detect completion;
+   *  when `latest_memo_at > started_at`, the new memo is ready and can
+   *  be fetched via `getStockMemo`. */
   analyzeStock: (ticker: string) =>
-    request<StockMemoOut>(`/api/stocks/${ticker}/analyze`, { method: "POST", body: "{}" }),
+    request<{
+      ticker: string;
+      status: "started" | "in_progress";
+      started_at: string;
+      current_version: number | null;
+      current_generated_at: string | null;
+      note: string;
+    }>(`/api/stocks/${ticker}/analyze`, { method: "POST", body: "{}" }),
+  /** Poll for async memo regen completion. Returns the in-flight flag
+   *  + the latest persisted memo's timestamp. */
+  analyzeStatus: (ticker: string) =>
+    request<{
+      ticker: string;
+      in_progress: boolean;
+      started_at: string | null;
+      latest_memo_at: string | null;
+      latest_version: number | null;
+    }>(`/api/stocks/${ticker}/analyze/status`),
+  /** Synchronous escape hatch for dev — returns the memo inline. Will
+   *  504 on Render (HTTP timeout ~100s). Use `analyzeStock` + polling
+   *  in production. */
+  analyzeStockSync: (ticker: string) =>
+    request<StockMemoOut>(`/api/stocks/${ticker}/analyze?sync=true`, {
+      method: "POST",
+      body: "{}",
+    }),
   getStockPrices: (ticker: string, days = 252) =>
     request<Array<{ date: string; close: number; volume?: number }>>(
       `/api/stocks/${ticker}/prices?days=${days}`,

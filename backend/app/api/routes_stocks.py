@@ -1,10 +1,12 @@
 """Stock endpoints — list, detail, memo generation."""
 from __future__ import annotations
 
-from datetime import date as _date
+import logging
+from datetime import date as _date, datetime
+from threading import Lock
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 from sqlalchemy import select
 
 from ..agents.graph import run_stock_memo
@@ -19,7 +21,36 @@ from ..services.fundamentals_service import get_full_financials
 from ..services.history_service import backfill_ticker
 from ..services.market_data_service import get_basic_stats, get_price_series
 
+log = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+# In-memory job registry for async memo regeneration. Process-local
+# (single-replica only — switch to Redis when scaling out). Records
+# `{ticker: started_at_utc}` while a regen is in flight; entries clear
+# when the background task finishes (success OR failure).
+#
+# Why this exists: a full memo regen takes 5-9 minutes synchronously,
+# but Render's HTTP proxy timeout is ~100 seconds. Returning the memo
+# inline would always 504 from the user's perspective. Instead the
+# analyze endpoint fires-and-returns a 202 with the start time; the
+# frontend polls `/analyze/status` for completion.
+_REGEN_JOBS: Dict[str, datetime] = {}
+_REGEN_LOCK = Lock()
+
+
+def _run_regen_job(ticker: str, scenario: str) -> None:
+    """Background worker — runs `run_stock_memo` and clears the job
+    entry whether or not it succeeded. Exceptions are logged but not
+    re-raised (BackgroundTasks would swallow them anyway)."""
+    try:
+        run_stock_memo(ticker, scenario=scenario, force_refresh=True)
+    except Exception as exc:  # pragma: no cover — diagnostic only
+        log.warning("background memo regen failed for %s: %s", ticker, exc)
+    finally:
+        with _REGEN_LOCK:
+            _REGEN_JOBS.pop(ticker, None)
 
 
 def _ensure_lazy_universe(ticker: str) -> str:
@@ -277,24 +308,97 @@ def get_stock_memo_history(ticker: str, limit: int = 25) -> List[Dict[str, Any]]
     ]
 
 
-@router.post("/api/stocks/{ticker}/analyze", response_model=StockMemoOut)
+@router.post("/api/stocks/{ticker}/analyze", status_code=202)
 @limiter.limit(LIMITS["memo_analyze"])
 def analyze_stock(
     request: Request,
-    ticker: str,
     response: Response,
+    ticker: str,
+    background_tasks: BackgroundTasks,
     scenario: Optional[str] = None,
-) -> StockMemoOut:
-    """Force a fresh full reanalysis. Always creates a new memo version."""
+    sync: bool = Query(False, description="If True, run synchronously and return the memo (will 504 on prod for full memos > 100s)."),
+) -> Dict[str, Any]:
+    """Trigger a fresh full memo regeneration.
+
+    Returns 202 immediately by default; the regen runs in a
+    BackgroundTasks worker. Frontend polls
+    `GET /api/stocks/{ticker}/analyze/status` for completion (or just
+    polls `/api/stocks/{ticker}/memo` and watches for the timestamp
+    to advance — `latest_memo_at` in the status response is the same
+    field).
+
+    Pass `?sync=true` to run inline and return the StockMemoOut.
+    Only useful in dev or behind a long-timeout proxy; on Render this
+    will 504 after ~100s and the frontend will lose the response (the
+    backend may still complete the work; check the status endpoint).
+    """
     t = ticker.upper()
-    _ensure_lazy_universe(t)  # introduce + backfill if brand new
-    try:
-        memo = run_stock_memo(t, scenario=scenario or "soft_landing", force_refresh=True)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    _ensure_lazy_universe(t)
+    sc = scenario or "soft_landing"
+
+    if sync:
+        try:
+            memo = run_stock_memo(t, scenario=sc, force_refresh=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        snap = memo_store.latest_memo(t)
+        if snap is not None:
+            response.headers["X-Memo-Version"] = str(snap.version)
+            response.headers["X-Memo-Trigger"] = snap.trigger
+            response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
+        # FastAPI's response_model coercion is bypassed because we
+        # declared the return type as Dict; serialize via model_dump.
+        return memo.model_dump()
+
+    # Async path. Coalesce duplicate requests against the same ticker
+    # so a frantic-click double-fire doesn't spawn two regens.
+    with _REGEN_LOCK:
+        already_running = t in _REGEN_JOBS
+        if not already_running:
+            _REGEN_JOBS[t] = datetime.utcnow()
+        started_at = _REGEN_JOBS[t]
+
+    if not already_running:
+        background_tasks.add_task(_run_regen_job, t, sc)
+
     snap = memo_store.latest_memo(t)
-    if snap is not None:
-        response.headers["X-Memo-Version"] = str(snap.version)
-        response.headers["X-Memo-Trigger"] = snap.trigger
-        response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
-    return memo
+    return {
+        "ticker": t,
+        "status": "in_progress" if already_running else "started",
+        "started_at": started_at.isoformat(),
+        "current_version": snap.version if snap else None,
+        "current_generated_at": snap.generated_at.isoformat() if snap and snap.generated_at else None,
+        "note": (
+            "Memo regeneration runs in the background (5-9 min typical). "
+            "Poll GET /api/stocks/{ticker}/analyze/status for completion."
+        ),
+    }
+
+
+@router.get("/api/stocks/{ticker}/analyze/status")
+def analyze_status(ticker: str) -> Dict[str, Any]:
+    """Poll target for the async analyze flow.
+
+    Returns:
+      - `in_progress`: True while a background regen for this ticker
+        is still running.
+      - `started_at`: when the in-flight regen began (None when idle).
+      - `latest_memo_at`: timestamp of the most recent persisted memo.
+        Compare against the `started_at` you got from POST /analyze
+        — once `latest_memo_at > your_started_at`, the new memo is
+        ready to fetch.
+      - `latest_version`: memo version for cache busting.
+    """
+    t = ticker.upper()
+    with _REGEN_LOCK:
+        running_started_at = _REGEN_JOBS.get(t)
+    snap = memo_store.latest_memo(t)
+    return {
+        "ticker": t,
+        "in_progress": running_started_at is not None,
+        "started_at": running_started_at.isoformat() if running_started_at else None,
+        "latest_memo_at": (
+            snap.generated_at.isoformat() if snap and snap.generated_at else None
+        ),
+        "latest_version": snap.version if snap else None,
+    }

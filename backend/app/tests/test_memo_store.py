@@ -150,9 +150,12 @@ def test_get_memo_returns_versioned_headers():
 
 def test_get_memo_history_lists_versions():
     c = _ensure_started()
-    # Force two analyses so history has at least 2 versions.
-    c.post("/api/stocks/NVDA/analyze")
-    c.post("/api/stocks/NVDA/analyze")
+    # Force two analyses so history has at least 2 versions. `sync=true`
+    # makes analyze run inline + return the memo; default async path
+    # returns 202 + spawns a BackgroundTask and isn't suitable here
+    # because the test wants both versions persisted before assertions.
+    c.post("/api/stocks/NVDA/analyze?sync=true")
+    c.post("/api/stocks/NVDA/analyze?sync=true")
     r = c.get("/api/stocks/NVDA/memos")
     assert r.status_code == 200
     rows = r.json()
@@ -202,8 +205,29 @@ def test_ondemand_flag_promotes_data_only_to_analyzed_on_demand():
 
 def test_analyze_endpoint_creates_new_version():
     c = _ensure_started()
-    r1 = c.post("/api/stocks/MSFT/analyze")
+    r1 = c.post("/api/stocks/MSFT/analyze?sync=true")
     v1 = int(r1.headers.get("X-Memo-Version", "0"))
-    r2 = c.post("/api/stocks/MSFT/analyze")
+    r2 = c.post("/api/stocks/MSFT/analyze?sync=true")
     v2 = int(r2.headers.get("X-Memo-Version", "0"))
     assert v2 == v1 + 1
+
+
+def test_analyze_endpoint_async_returns_202_with_status_payload():
+    """Default (async) analyze returns 202 + a started_at timestamp,
+    runs the regen in the background. Status endpoint reflects the
+    in-flight state until the BackgroundTask completes."""
+    c = _ensure_started()
+    r = c.post("/api/stocks/MSFT/analyze")
+    assert r.status_code == 202
+    body = r.json()
+    assert body["status"] in {"started", "in_progress"}
+    assert body["started_at"]  # ISO timestamp
+    # TestClient runs background tasks synchronously after the response,
+    # so by the time we hit /status the regen is done and the job has
+    # cleared from the registry.
+    s = c.get("/api/stocks/MSFT/analyze/status")
+    assert s.status_code == 200
+    sbody = s.json()
+    assert sbody["in_progress"] is False
+    assert sbody["latest_memo_at"]  # newly persisted memo
+    assert sbody["latest_version"] >= 1
