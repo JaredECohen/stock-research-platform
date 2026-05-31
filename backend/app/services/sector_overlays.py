@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from . import data_catalog_service, company_geography
+from . import data_catalog_service, company_geography, factor_analytics
 
 log = logging.getLogger(__name__)
 
@@ -350,17 +350,17 @@ def compute_credit_overlay(
 # ---------------------------------------------------------------------------
 
 _OVERLAY_PRIORITY_BY_SECTOR: Dict[str, List[str]] = {
-    "Real Estate":              ["real_estate", "credit", "inflation"],
-    "Energy":                   ["energy", "inflation", "credit"],
-    "Utilities":                ["energy", "real_estate", "credit"],
-    "Financials":               ["credit", "real_estate", "consumer"],
-    "Consumer Discretionary":   ["consumer", "credit", "inflation"],
-    "Consumer Staples":         ["consumer", "inflation"],
-    "Materials":                ["real_estate", "energy", "credit"],
-    "Industrials":              ["energy", "real_estate", "credit"],
-    "Health Care":              ["inflation", "credit"],
-    "Information Technology":   ["credit", "inflation"],
-    "Communication Services":   ["consumer", "credit"],
+    "Real Estate":              ["real_estate", "credit", "factor"],
+    "Energy":                   ["energy", "credit", "factor"],
+    "Utilities":                ["energy", "credit", "factor"],
+    "Financials":               ["credit", "real_estate", "factor"],
+    "Consumer Discretionary":   ["consumer", "credit", "factor"],
+    "Consumer Staples":         ["consumer", "inflation", "factor"],
+    "Materials":                ["real_estate", "energy", "factor"],
+    "Industrials":              ["energy", "real_estate", "factor"],
+    "Health Care":              ["inflation", "credit", "factor"],
+    "Information Technology":   ["credit", "factor", "inflation"],
+    "Communication Services":   ["consumer", "credit", "factor"],
 }
 
 
@@ -398,10 +398,43 @@ def compute_sector_overlays(
     }
 
 
+def compute_factor_overlay(
+    ticker: str, *, profile: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Fama-French 5 + momentum decomposition of the ticker's recent excess returns.
+
+    Returns the same dict shape every other overlay does so the sector
+    agent can lift `narrative_hints` straight into key_points. Falls
+    back to `available: False` when Ken French data hasn't been fetched
+    yet or the price history overlap is too short.
+    """
+    sector = (profile or {}).get("sector") or ""
+    sub_industry = (profile or {}).get("sub_industry") or ""
+    try:
+        result = factor_analytics.compute_for_ticker(ticker)
+    except Exception as exc:
+        log.warning("Factor overlay failed for %s: %s", ticker, exc)
+        return {"available": False, "reason": str(exc)}
+    if result is None:
+        return {
+            "available": False,
+            "reason": "Insufficient price history or Fama-French factor data unavailable.",
+        }
+    return {
+        "available": True,
+        "ticker": ticker,
+        "sector": sector,
+        "sub_industry": sub_industry,
+        "factor_profile": result,
+        "narrative_hints": result.get("narrative_hints", []),
+    }
+
+
 _OVERLAY_FUNCS = {
     "real_estate": compute_real_estate_overlay,
     "energy": compute_energy_overlay,
     "consumer": compute_consumer_overlay,
     "inflation": compute_inflation_overlay,
     "credit": compute_credit_overlay,
+    "factor": compute_factor_overlay,
 }

@@ -470,6 +470,70 @@ _CENSUS_SERIES: tuple[SeriesSpec, ...] = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Ken French — Fama-French 5-factor + momentum (academic return factors)
+# ---------------------------------------------------------------------------
+
+_FACTOR_SERIES: tuple[SeriesSpec, ...] = (
+    SeriesSpec("KFR.MKT_RF.D", "Fama-French Market Excess Return (Daily)",
+               "Ken French", "factor_returns", "decimal_return", "daily",
+               "Daily market excess return (CRSP value-weighted minus 1m T-bill). The single most important academic factor.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.SMB.D", "Fama-French SMB Size Factor (Daily)",
+               "Ken French", "factor_returns", "decimal_return", "daily",
+               "Daily small-minus-big return. Long small caps, short large caps.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.HML.D", "Fama-French HML Value Factor (Daily)",
+               "Ken French", "factor_returns", "decimal_return", "daily",
+               "Daily high-minus-low (book-to-market) return. Long value, short growth.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.RMW.D", "Fama-French RMW Profitability Factor (Daily)",
+               "Ken French", "factor_returns", "decimal_return", "daily",
+               "Daily robust-minus-weak (profitability) return. Long high-profitability, short low.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.CMA.D", "Fama-French CMA Investment Factor (Daily)",
+               "Ken French", "factor_returns", "decimal_return", "daily",
+               "Daily conservative-minus-aggressive (investment) return.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.MOM.D", "Fama-French Momentum Factor (Daily)",
+               "Ken French", "factor_returns", "decimal_return", "daily",
+               "Daily momentum (12m-2m) cross-sectional return.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.RF.D", "Fama-French Risk-Free Rate (Daily)",
+               "Ken French", "factor_returns", "decimal_return", "daily",
+               "Daily 1-month Treasury bill return.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.MKT_RF.M", "Fama-French Market Excess Return (Monthly)",
+               "Ken French", "factor_returns", "decimal_return", "monthly",
+               "Monthly market excess return (CRSP value-weighted minus 1m T-bill).",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.SMB.M", "Fama-French SMB Size Factor (Monthly)",
+               "Ken French", "factor_returns", "decimal_return", "monthly",
+               "Monthly small-minus-big return.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.HML.M", "Fama-French HML Value Factor (Monthly)",
+               "Ken French", "factor_returns", "decimal_return", "monthly",
+               "Monthly high-minus-low return.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.RMW.M", "Fama-French RMW Profitability Factor (Monthly)",
+               "Ken French", "factor_returns", "decimal_return", "monthly",
+               "Monthly robust-minus-weak return.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.CMA.M", "Fama-French CMA Investment Factor (Monthly)",
+               "Ken French", "factor_returns", "decimal_return", "monthly",
+               "Monthly conservative-minus-aggressive return.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.MOM.M", "Fama-French Momentum Factor (Monthly)",
+               "Ken French", "factor_returns", "decimal_return", "monthly",
+               "Monthly momentum return.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+    SeriesSpec("KFR.RF.M", "Fama-French Risk-Free Rate (Monthly)",
+               "Ken French", "factor_returns", "decimal_return", "monthly",
+               "Monthly 1-month Treasury bill return.",
+               documentation_url="https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html"),
+)
+
+
 SERIES_REGISTRY: tuple[SeriesSpec, ...] = (
     *_FRED_CORE,
     *_FRED_HOUSING,
@@ -477,6 +541,7 @@ SERIES_REGISTRY: tuple[SeriesSpec, ...] = (
     *_EIA_ENERGY,
     *_BLS_SERIES,
     *_CENSUS_SERIES,
+    *_FACTOR_SERIES,
 )
 
 

@@ -32,6 +32,8 @@ from ..providers.census_provider import CensusProvider
 from ..providers.eia_provider import EIAProvider
 from ..providers.fmp_provider import FMPProvider
 from ..providers.fred_provider import FREDProvider
+from ..providers.gdelt_provider import GDELTProvider
+from ..providers.ken_french_provider import KenFrenchProvider
 from ..providers.polygon_provider import PolygonProvider
 from ..providers.sec_edgar_provider import SECEdgarProvider
 from ..providers.tiingo_provider import TiingoProvider
@@ -222,6 +224,11 @@ class DataService:
         self.eia = EIAProvider()
         self.bls = BLSProvider()
         self.census = CensusProvider()
+        # Academic factor returns provider (Fama-French + momentum).
+        # No key required — pulls from the Tuck data library.
+        self.ken_french = KenFrenchProvider()
+        # GDELT — broad international news coverage, no key.
+        self.gdelt = GDELTProvider()
         # Optional test override (wired by `tests/conftest.py`).
         self._test_provider: Optional[Any] = None
 
@@ -252,14 +259,15 @@ class DataService:
             "earnings": [self.fmp, self.alpha],
             "transcripts": [self.alpha],
             "filings": [self.sec],
-            "news": [self.alpha, self.polygon],
+            "news": [self.alpha, self.polygon, self.gdelt],
             "estimates": [self.fmp],
-            "macro": [self.fred, self.eia, self.bls, self.census],
+            "macro": [self.fred, self.eia, self.bls, self.census, self.ken_french],
             "energy": [self.eia],
             "inflation": [self.bls, self.fred],
             "labor": [self.bls, self.fred],
             "retail": [self.census, self.fred],
             "construction": [self.census, self.fred],
+            "factor_returns": [self.ken_french],
         }
         chain = chains.get(capability, [])
         if self._test_provider is not None:
@@ -287,7 +295,7 @@ class DataService:
         return {
             p.name: p.status() for p in (
                 self.fmp, self.alpha, self.fred, self.polygon, self.tiingo, self.sec,
-                self.eia, self.bls, self.census,
+                self.eia, self.bls, self.census, self.ken_french, self.gdelt,
             )
         }
 
@@ -519,7 +527,7 @@ class DataService:
         """
         seen: set[str] = set()
         out: List[Dict[str, Any]] = []
-        for provider in (self.fred, self.eia, self.bls, self.census):
+        for provider in (self.fred, self.eia, self.bls, self.census, self.ken_french):
             try:
                 rows = provider.list_macro_series() or []
             except Exception:
