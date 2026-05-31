@@ -764,6 +764,33 @@ def check_auto_regen_decision(ticker: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# LLM circuit-breaker ops surface
+# ---------------------------------------------------------------------------
+
+@router.get("/api/admin/llm-breakers")
+def get_llm_breakers() -> Dict[str, Any]:
+    """Inspect the current circuit-breaker state for each LLM provider.
+
+    Three failures in a row open the breaker — subsequent calls return
+    None instantly until the cooldown elapses or the breaker is reset.
+    Use this to debug "everything's silently failing" — if a provider
+    shows `is_open: true`, that's the cause.
+    """
+    from ..agents.llm import get_breaker_state
+    return get_breaker_state()
+
+
+@router.post("/api/admin/llm-breakers/reset")
+def reset_llm_breakers(provider: Optional[str] = Query(None)) -> Dict[str, Any]:
+    """Manually reset LLM circuit breakers. Pass `?provider=openai|anthropic|
+    gemini` to reset one; omit for all. Useful after fixing a transient
+    issue (auth, model swap, etc.) to skip the auto-reset cooldown."""
+    from ..agents.llm import reset_circuit_breaker, get_breaker_state
+    reset_circuit_breaker(provider)
+    return {"reset": provider or "all", "state": get_breaker_state()}
+
+
+# ---------------------------------------------------------------------------
 # Postgres sequence repair
 # ---------------------------------------------------------------------------
 
