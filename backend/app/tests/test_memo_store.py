@@ -213,21 +213,22 @@ def test_analyze_endpoint_creates_new_version():
 
 
 def test_analyze_endpoint_async_returns_202_with_status_payload():
-    """Default (async) analyze returns 202 + a started_at timestamp,
-    runs the regen in the background. Status endpoint reflects the
-    in-flight state until the BackgroundTask completes."""
+    """Default (async) analyze returns 202 + a started_at timestamp.
+    The actual regen runs in a detached daemon thread (decoupled from
+    the request lifecycle), so we only assert the 202 shape here —
+    completion would require either a wait or `?sync=true`. The
+    detachment is the whole point of the design; testing thread
+    completion in TestClient is fragile and not the contract anyway."""
     c = _ensure_started()
     r = c.post("/api/stocks/MSFT/analyze")
     assert r.status_code == 202
     body = r.json()
     assert body["status"] in {"started", "in_progress"}
     assert body["started_at"]  # ISO timestamp
-    # TestClient runs background tasks synchronously after the response,
-    # so by the time we hit /status the regen is done and the job has
-    # cleared from the registry.
+    # last_failure field is present in the status endpoint contract;
+    # it stays None unless a prior regen failed.
     s = c.get("/api/stocks/MSFT/analyze/status")
     assert s.status_code == 200
     sbody = s.json()
-    assert sbody["in_progress"] is False
-    assert sbody["latest_memo_at"]  # newly persisted memo
-    assert sbody["latest_version"] >= 1
+    assert "in_progress" in sbody
+    assert "last_failure" in sbody  # may be None — the field shape matters

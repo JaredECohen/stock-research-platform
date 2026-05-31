@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import date as _date, datetime
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from sqlalchemy import select
 
 from ..agents.graph import run_stock_memo
@@ -361,7 +362,6 @@ def analyze_stock(
     request: Request,
     response: Response,
     ticker: str,
-    background_tasks: BackgroundTasks,
     scenario: Optional[str] = None,
     sync: bool = Query(False, description="If True, run synchronously and return the memo (will 504 on prod for full memos > 100s)."),
 ) -> Dict[str, Any]:
@@ -406,7 +406,21 @@ def analyze_stock(
         started_at = _REGEN_JOBS[t]
 
     if not already_running:
-        background_tasks.add_task(_run_regen_job, t, sc)
+        # Spawn a detached daemon thread instead of FastAPI's
+        # BackgroundTasks. BackgroundTasks runs inside the response
+        # lifecycle (Starlette awaits them in Response.__call__),
+        # which means if uvicorn / the proxy cancels the long-running
+        # response handler, the task dies along with it — observed
+        # in prod as in_progress flipping True→False in 20s with no
+        # exception captured (the threadpool was being torn down).
+        # A daemon thread is fully detached: response returns 202
+        # immediately and the thread keeps running independently
+        # until the process itself exits.
+        thread = threading.Thread(
+            target=_run_regen_job, args=(t, sc),
+            name=f"memo-regen-{t}", daemon=True,
+        )
+        thread.start()
 
     snap = memo_store.latest_memo(t)
     return {
