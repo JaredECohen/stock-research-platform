@@ -49,26 +49,41 @@ def _run_regen_job(ticker: str, scenario: str) -> None:
     """Background worker — runs `run_stock_memo` and clears the job
     entry whether or not it succeeded.
 
+    Catches `BaseException` (not just `Exception`) so we capture
+    asyncio.CancelledError too — when FastAPI's response coroutine
+    ends, Starlette can cancel the BackgroundTask chain even though
+    the threadpool thread keeps running for a moment. The earlier
+    `except Exception` missed those, leading to the silent-failure
+    pattern where in_progress clears with no failure record and no
+    memo. Re-raises SystemExit / KeyboardInterrupt as required.
+
     Persists failure details (error type + message + duration) to
     `_REGEN_FAILURES[ticker]` so a subsequent /analyze/status call
     can surface what went wrong. Successful runs clear the failure
-    entry. Without this, BackgroundTasks errors are silent and the
-    frontend has no way to distinguish "regen failed silently" from
-    "regen still running".
+    entry.
     """
     import traceback
     started = datetime.utcnow()
+    log.info("background memo regen STARTING for %s (scenario=%s)", ticker, scenario)
     try:
         run_stock_memo(ticker, scenario=scenario, force_refresh=True)
         # Success — drop any prior failure record so the status
         # endpoint reflects the green state.
         with _REGEN_LOCK:
             _REGEN_FAILURES.pop(ticker, None)
-    except Exception as exc:
+        log.info(
+            "background memo regen SUCCEEDED for %s in %.1fs",
+            ticker, (datetime.utcnow() - started).total_seconds(),
+        )
+    except (SystemExit, KeyboardInterrupt):
+        # These are intentional process-exit signals — never swallow.
+        raise
+    except BaseException as exc:
         tb = traceback.format_exc()
         log.error(
-            "background memo regen FAILED for %s: %s\n%s",
-            ticker, exc, tb,
+            "background memo regen FAILED for %s after %.1fs: %s: %s\n%s",
+            ticker, (datetime.utcnow() - started).total_seconds(),
+            type(exc).__name__, exc, tb,
         )
         with _REGEN_LOCK:
             _REGEN_FAILURES[ticker] = {
