@@ -104,11 +104,88 @@ def _looks_like_anti_pattern_thesis(text: str) -> bool:
     return bool(_THESIS_ANTI_PATTERN.match(text.strip()))
 
 
+def _verdict_word(rating: Optional[str], upside: Optional[float]) -> str:
+    """Map the memo's headline rating to the thesis verdict word so the
+    one-liner can never contradict the rating badge the reader sees.
+
+    DCF and the multiples/comps read routinely disagree on premium
+    compounders (COST: DCF cheap, multiple rich). The prior logic took the
+    verdict straight off the DCF base upside in isolation, so the thesis
+    could say "undervalued" while the rating badge and the whole valuation
+    section said overvalued. Anchoring on the rating fixes that.
+
+    Falls back to the DCF upside sign ONLY when no rating is available —
+    the LLM-disabled deterministic path, before the factor blend runs.
+    """
+    label = (rating or "").strip().lower()
+    if "bull" in label:
+        return "undervalued"
+    if "bear" in label:
+        return "overvalued"
+    if label:  # explicit "Neutral" (or any other named rating)
+        return "fairly priced"
+    if upside is None or abs(upside) < 0.10:
+        return "fairly priced"
+    return "undervalued" if upside > 0 else "overvalued"
+
+
+def _mispricing_lever_clause(
+    verdict_word: str,
+    upside: Optional[float],
+    drivers: List[str],
+    risks: List[str],
+) -> str:
+    """Sentence-2 lever clause for a mispriced name.
+
+    Cites the DCF number only when its sign agrees with the verdict (else
+    it contradicts the call). Names a real driver / risk when we have one,
+    and degrades to a clean single clause — never the "core driver
+    execution vs. the dominant risk" placeholder — when we don't.
+    """
+    driver = (drivers[0] if drivers else "").strip()
+    risk = (risks[0] if risks else "").strip()
+    dcf_agrees = upside is not None and (
+        (verdict_word == "undervalued" and upside > 0)
+        or (verdict_word == "overvalued" and upside < 0)
+    )
+    if dcf_agrees:
+        sign = "+" if (upside or 0) > 0 else ""
+        lead = f"DCF base case implies {sign}{(upside or 0) * 100:.0f}% to fair value"
+    elif verdict_word == "overvalued":
+        lead = "The multiple already prices in the bull case"
+    else:  # undervalued, but the DCF doesn't corroborate the call
+        lead = "The market is under-pricing the durable part of the franchise"
+
+    if driver and risk:
+        return f"{lead}; the swing factor is {driver} against {risk}."
+    if driver:
+        return f"{lead}; the swing factor is {driver}."
+    if risk:
+        return f"{lead}; the key risk is {risk}."
+    return f"{lead}."
+
+
+def _gap_clause_agrees(gap_clause: str, verdict_word: str) -> bool:
+    """True when the consensus-gap clause points the same way as the
+    verdict. `_market_gap_clause` phrases upside as "upside the market may
+    be missing" and downside as "downside the market may be
+    underweighting" — keep it from carrying sentence 2 in the direction
+    that contradicts the verdict word.
+    """
+    low = gap_clause.lower()
+    if verdict_word == "undervalued":
+        return "upside" in low
+    if verdict_word == "overvalued":
+        return "downside" in low
+    return True
+
+
 def _build_thesis_from_findings(
     profile: Dict,
     findings: Dict[str, "AgentFinding"],
     dcf: Optional[DCFResult],
     ticker: str,
+    rating: Optional[str] = None,
 ) -> str:
     """Compose a short-form thesis (2-3 sentences) from the specialists'
     findings. Mirrors the structure required by PM_SYNTHESIS_PROMPT so
@@ -167,24 +244,40 @@ def _build_thesis_from_findings(
         or (drivers[0] if drivers else None)
     )
 
+    # Drop a leading scenario label ("Bull case:", "Bear case:", …). It
+    # reads oddly once the verdict word precedes the claim and can flatly
+    # contradict it (a bull-case headline behind an "overvalued" verdict).
+    if claim:
+        claim = re.sub(
+            r"^\s*(bull|bear|base)[\s-]*case\s*[:\-—–]\s*", "", claim,
+            flags=re.IGNORECASE,
+        ).strip()
+
     upside = dcf.base.upside_pct if dcf and dcf.base else None
 
     # --- Sentence 1: VERDICT ---
-    if upside is None or abs(upside) < 0.10:
-        verdict_word = "fairly priced"
-    elif upside > 0:
-        verdict_word = "undervalued"
-    else:
-        verdict_word = "overvalued"
+    # Verdict follows the memo's headline rating, not the DCF base upside
+    # in isolation — see `_verdict_word`.
+    verdict_word = _verdict_word(rating, upside)
 
     if claim:
         sentence_1 = f"{ticker_sym} is {verdict_word} — {claim}." if ticker_sym else f"{verdict_word.capitalize()} — {claim}."
-    else:
+    elif verdict_word == "fairly priced":
         sector = (profile.get("sector") or "core").strip().lower()
         sentence_1 = (
             f"{ticker_sym} is fairly priced on our work — no actionable edge in {sector}."
             if ticker_sym
             else f"Fairly priced on our work — no actionable edge in {sector}."
+        )
+    else:
+        # Mispriced per the blended read, but no specialist headline
+        # carries the call — stay consistent with the verdict word.
+        sentence_1 = (
+            f"{ticker_sym} screens {verdict_word} on the blended read, "
+            f"though no single specialist headline defines the call."
+            if ticker_sym
+            else f"Screens {verdict_word} on the blended read, "
+            f"though no single specialist headline defines the call."
         )
 
     # --- Sentence 2: LEVER (if mispriced) or PERFORMANCE PATH (if not) ---
@@ -195,22 +288,27 @@ def _build_thesis_from_findings(
         gap_clause = ""
 
     if verdict_word in ("undervalued", "overvalued"):
-        if gap_clause:
+        # Only let the consensus-gap clause carry sentence 2 when its
+        # direction agrees with the verdict — otherwise it reintroduces
+        # the very contradiction we're fixing.
+        if gap_clause and _gap_clause_agrees(gap_clause, verdict_word):
             sentence_2 = gap_clause
         else:
-            sign = "+" if (upside or 0) > 0 else ""
-            sentence_2 = (
-                f"DCF base case implies {sign}{(upside or 0) * 100:.0f}% to fair value; "
-                f"the gap rests on {drivers[0] if drivers else 'core driver execution'} "
-                f"vs. {risks[0] if risks else 'the dominant risk'}."
-            )
+            sentence_2 = _mispricing_lever_clause(verdict_word, upside, drivers, risks)
     else:
-        # Correctly priced — describe the performance path.
-        driver_line = drivers[0] if drivers else "compounding fundamentals"
-        sentence_2 = (
-            f"Performance thesis is {driver_line.lower()} compounding at trend; "
-            f"no edge, no break — own the floor, not the multiple."
-        )
+        # Correctly priced — describe the performance path. Degrades
+        # cleanly with no named driver (no "compounding fundamentals
+        # compounding" stutter, no template filler).
+        if drivers:
+            sentence_2 = (
+                f"At this price the return comes from {drivers[0].lower()} "
+                f"compounding at trend, not a re-rating — own the floor, not the multiple."
+            )
+        else:
+            sentence_2 = (
+                "At this price the return comes from steady compounding, "
+                "not a re-rating — own the floor, not the multiple."
+            )
 
     return f"{sentence_1} {sentence_2}".strip()
 
@@ -747,7 +845,7 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
     # deterministic fallback and the post-LLM anti-pattern rewrite share
     # one source of truth.
     thesis = _build_thesis_from_findings(
-        profile, findings, dcf, profile.get("ticker") or "",
+        profile, findings, dcf, profile.get("ticker") or "", rating=rating,
     )
     pm_view = (
         f"Research view: {rating}. {thesis} "
@@ -1431,7 +1529,9 @@ def _run_stock_memo_inner(
     # ships into the memo and is persisted to memory.
     if _looks_like_anti_pattern_thesis(memo.one_sentence_thesis):
         try:
-            rewritten = _build_thesis_from_findings(profile, findings, dcf, ticker)
+            rewritten = _build_thesis_from_findings(
+                profile, findings, dcf, ticker, rating=memo.rating_label,
+            )
             if rewritten and not _looks_like_anti_pattern_thesis(rewritten):
                 memo.one_sentence_thesis = rewritten
         except Exception:  # pragma: no cover — never break the memo
@@ -1446,7 +1546,15 @@ def _run_stock_memo_inner(
     # path bakes it in via `_build_thesis_from_findings`).
     try:
         delta_clause = _market_gap_clause(profile, dcf, ticker)
-        if delta_clause and delta_clause not in memo.one_sentence_thesis:
+        # Only append when it agrees with the verdict word implied by the
+        # headline rating — an "upside the market is missing" clause behind
+        # an overvalued call would contradict the thesis.
+        _verdict = _verdict_word(memo.rating_label, dcf.base.upside_pct if dcf and dcf.base else None)
+        if (
+            delta_clause
+            and delta_clause not in memo.one_sentence_thesis
+            and _gap_clause_agrees(delta_clause, _verdict)
+        ):
             memo.one_sentence_thesis = (
                 memo.one_sentence_thesis.rstrip(".")
                 + ". " + delta_clause
