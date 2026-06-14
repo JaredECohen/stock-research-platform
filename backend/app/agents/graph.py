@@ -46,8 +46,10 @@ from ..schemas import (
     CompsResult,
     CriticReview,
     DCFResult,
+    MispricingThesis,
     RiskItem,
     StockMemoOut,
+    ValuationVerdict,
 )  # CriticReview imported for the safe-runner fallback path  # noqa: F401
 from ..services.fundamentals_service import get_full_financials
 from ..services.market_data_service import get_basic_stats
@@ -60,7 +62,7 @@ from .critic_agent import run_critic
 from .earnings_agent import run_earnings_agent
 from .filing_agent import run_filing_agent
 from .macro_agent import run_macro_agent
-from .risk_agent import derive_risk_items, run_risk_agent
+from .risk_agent import derive_risk_items, risk_item_from_text, run_risk_agent
 from .safe_runner import (
     DegradationLog,
     safe_call,
@@ -127,6 +129,206 @@ def _verdict_word(rating: Optional[str], upside: Optional[float]) -> str:
     if upside is None or abs(upside) < 0.10:
         return "fairly priced"
     return "undervalued" if upside > 0 else "overvalued"
+
+
+def _refresh_dcf_references(
+    finding: Optional[AgentFinding],
+    old: Optional[DCFResult],
+    new: Optional[DCFResult],
+) -> None:
+    """Rewrite stale DCF numbers baked into an agent finding's prose (B2).
+
+    The valuation agent runs inside the agent rounds on the original DCF
+    and formats its numbers into headline/summary/key_points. The PM DCF
+    Adjuster then replaces the working DCF, so without this pass the memo
+    prints two different DCF base upsides (e.g. +49% in the valuation
+    card, +17% in the DCF section). We substitute every formatted variant
+    of the old scenario numbers with the new ones, in place, and append a
+    transparency note so the reader knows the figures are PM-adjusted.
+    """
+    if finding is None or old is None or new is None or old is new:
+        return
+
+    def _pct_strs(x: float) -> tuple:
+        # Signed forms first (what the deterministic path emits), then the
+        # one-decimal unsigned form LLM prose tends to use. The unsigned
+        # integer form ("49%") is deliberately excluded — too collision-
+        # prone with margins/percentages that aren't DCF upside.
+        return (f"{x:+.0%}", f"{x:+.1%}", f"{x * 100:+.0f}%",
+                f"{x * 100:+.1f}%", f"{x * 100:.1f}%")
+
+    def _usd_strs(x: float) -> tuple:
+        return (f"${x:,.2f}", f"${x:,.0f}")
+
+    pairs: List[tuple] = []
+    for o_s, n_s in ((old.base, new.base), (old.bull, new.bull), (old.bear, new.bear)):
+        if o_s is None or n_s is None:
+            continue
+        for o_str, n_str in zip(_pct_strs(o_s.upside_pct), _pct_strs(n_s.upside_pct)):
+            if o_str != n_str:
+                pairs.append((o_str, n_str))
+        for o_str, n_str in zip(_usd_strs(o_s.implied_share_price),
+                                _usd_strs(n_s.implied_share_price)):
+            if o_str != n_str:
+                pairs.append((o_str, n_str))
+    if not pairs:
+        return
+
+    def _sub(text: str) -> str:
+        for o_str, n_str in pairs:
+            text = text.replace(o_str, n_str)
+        return text
+
+    finding.headline = _sub(finding.headline or "")
+    finding.summary = _sub(finding.summary or "")
+    finding.key_points = [_sub(p) for p in (finding.key_points or [])]
+    for ev in (getattr(finding, "evidence", None) or []):
+        try:
+            ev.excerpt = _sub(ev.excerpt or "")
+        except Exception:  # pragma: no cover — citations are best-effort
+            pass
+    note = (
+        f"DCF figures reflect PM-adjusted assumptions "
+        f"(base case {new.base.upside_pct:+.0%} vs current)."
+    )
+    if note not in finding.key_points:
+        finding.key_points = list(finding.key_points) + [note]
+
+
+def _risk_items_from_bear_case(bear: Optional[BullBearCase]) -> List[RiskItem]:
+    """Backfill `key_risks` from the bear case when profile-driven risk
+    extraction returned nothing (B4).
+
+    Live FMP profiles carry no `risks` field, so `derive_risk_items`
+    routinely comes back empty — which both ships a memo with no risk
+    section and starves the thesis builder into template filler. The bear
+    case is built from real bear-polarity specialist findings, so its key
+    points are the de-facto risk list. The pure price-target line is
+    skipped (a DCF bear print is not a risk statement).
+    """
+    if bear is None:
+        return []
+    items: List[RiskItem] = []
+    seen: set = set()
+    for point in bear.key_points or []:
+        text = (point or "").strip()
+        low = text.lower()
+        if not text or low.startswith("dcf bear case implies"):
+            continue
+        if low[:60] in seen:
+            continue
+        seen.add(low[:60])
+        items.append(risk_item_from_text(text))
+        if len(items) >= 4:
+            break
+    return items
+
+
+def _build_valuation_verdict(
+    memo: StockMemoOut, comps: Optional[CompsResult],
+) -> ValuationVerdict:
+    """Theme 1 — compute the memo's single reconciled valuation call.
+
+    Runs after the PM DCF adjustment and the final rating blend, so it
+    reads the same `dcf_summary` and `rating_label` the reader sees. The
+    verdict word follows the rating (via `_verdict_word`); the summary
+    names each underlying signal and flags when they disagree instead of
+    letting each section assert its own answer.
+    """
+    dcf_up = (memo.dcf_summary or {}).get("base_upside")
+    prem = (comps.premium_discount or {}).get("ev_ebitda") if comps is not None else None
+    factor_val = (memo.scores or {}).get("factor_valuation")
+
+    word = _verdict_word(memo.rating_label, dcf_up)
+    verdict = {"undervalued": "undervalued", "overvalued": "overvalued"}.get(
+        word, "fairly_priced",
+    )
+
+    parts: List[str] = []
+    if dcf_up is not None:
+        parts.append(f"DCF base case {dcf_up:+.0%} to fair value")
+    if prem is not None:
+        parts.append(
+            f"EV/EBITDA {abs(prem):.0%} "
+            f"{'premium' if prem > 0 else 'discount'} vs peers"
+        )
+    if factor_val is not None:
+        parts.append(f"quant valuation factor {factor_val:.0f}/100")
+
+    # Name the tension explicitly when DCF and the multiple disagree —
+    # that divergence is why the memo used to contradict itself.
+    tension = ""
+    if dcf_up is not None and prem is not None:
+        if (dcf_up > 0.10 and prem > 0.05) or (dcf_up < -0.10 and prem < -0.05):
+            tension = (
+                " DCF and the peer multiple point in opposite directions; "
+                "the blended rating arbitrates."
+            )
+    summary = f"Net read: {word}"
+    if parts:
+        summary += f" ({'; '.join(parts)})."
+    else:
+        summary += "."
+    summary += tension
+
+    return ValuationVerdict(
+        verdict=verdict,
+        dcf_base_upside=dcf_up,
+        comps_ev_ebitda_premium=prem,
+        factor_valuation=factor_val,
+        summary=summary,
+    )
+
+
+def _build_mispricing_fallback(memo: StockMemoOut) -> MispricingThesis:
+    """Deterministic mispricing thesis when the PM left the structure
+    blank (B6 — no LLM, LLM failure, or the PM declined).
+
+    Built from the reconciled `valuation_verdict` plus the final thesis
+    and risk list, so it can never contradict the rest of the memo. When
+    the verdict is fairly_priced it says so explicitly rather than
+    rendering an empty card.
+    """
+    vv = memo.valuation_verdict
+    ticker = memo.ticker
+
+    consensus_bits: List[str] = []
+    if vv.comps_ev_ebitda_premium is not None:
+        d = "premium" if vv.comps_ev_ebitda_premium > 0 else "discount"
+        consensus_bits.append(
+            f"pays a {abs(vv.comps_ev_ebitda_premium):.0%} EV/EBITDA {d} "
+            f"versus peers"
+        )
+    consensus_view = (
+        f"The market {' and '.join(consensus_bits)} for {ticker}."
+        if consensus_bits
+        else f"Consensus pricing for {ticker} embeds steady execution at the current multiple."
+    )
+
+    our_view = memo.one_sentence_thesis or f"See the {ticker} thesis above."
+
+    if vv.verdict == "fairly_priced":
+        gap = (
+            "No material mispricing on our work — the signals offset and "
+            "the blended rating lands at fair value."
+        )
+    elif vv.dcf_base_upside is not None:
+        gap = (
+            f"Our DCF base case implies {vv.dcf_base_upside:+.0%} to fair "
+            f"value; the blended read calls the name {vv.verdict.replace('_', ' ')}."
+        )
+    else:
+        gap = f"The blended read calls the name {vv.verdict.replace('_', ' ')}."
+
+    falsifiers = [
+        r.title for r in (memo.thesis_breakers or memo.key_risks or [])[:3]
+    ]
+    return MispricingThesis(
+        consensus_view=consensus_view[:1000],
+        our_view=our_view[:1000],
+        gap=gap[:1000],
+        falsifiers=falsifiers,
+    )
 
 
 def _mispricing_lever_clause(
@@ -1188,6 +1390,17 @@ def _run_stock_memo_inner(
             risk_finding = findings["risk"]
             technical_finding = findings["technical"]
 
+    # B3 / Theme 2 — promote silent deterministic fallbacks into the
+    # degradation log. An agent whose LLM call returned nothing usable
+    # ships boilerplate while presenting as a real analyst view; that is
+    # a degradation event the UI must surface, same as a crash. Only when
+    # an LLM was supposed to run — in deterministic mode (no keys) the
+    # fallback IS the expected path, not a degradation.
+    if settings.has_llm:
+        for _f in findings.values():
+            if isinstance(_f.data, dict) and _f.data.get("deterministic_fallback"):
+                degradation.record_soft(_f.agent, str(_f.data["deterministic_fallback"]))
+
     # Wave 3C: drill-down long-form reports. The deterministic build is
     # cheap and always populates the field; LLM enrichment runs only when
     # ENABLE_LONG_FORM_REPORTS=true. safe_call wraps so a failure never
@@ -1233,6 +1446,10 @@ def _run_stock_memo_inner(
                 # Replace the working DCF — downstream synthesis, bull/bear,
                 # factor scoring all see the PM-adjusted version.
                 dcf = adjusted_dcf
+                # B2 — the valuation agent already ran on the pre-adjustment
+                # DCF and baked those numbers into its prose. Rewrite the
+                # stale references so ONE DCF appears everywhere in the memo.
+                _refresh_dcf_references(valuation_finding, initial_dcf, dcf)
 
     bull = safe_call(_bull_case, profile, valuation_finding, dcf, sector_finding, findings,
                      fallback=BullBearCase(headline="Bull case unavailable.", key_points=[]),
@@ -1245,6 +1462,17 @@ def _run_stock_memo_inner(
                           name="Catalyst Builder", log_to=degradation)
     risks = safe_call(derive_risk_items, profile, fallback=[],
                       name="Risk Item Builder", log_to=degradation)
+    # B4 — live profiles carry no `risks` field, so the profile-driven
+    # extraction routinely returns nothing. The bear case is built from
+    # real bear-polarity findings; backfill from it so the memo never
+    # ships an empty risk section while a populated bear case exists.
+    if not risks:
+        risks = _risk_items_from_bear_case(bear)
+        if risks and not profile.get("risks"):
+            # The thesis builder reads profile["risks"] for its lever
+            # clause — feed it the same list so it names a real risk
+            # instead of degrading to template filler.
+            profile["risks"] = [r.detail for r in risks]
     thesis_breakers = [r for r in risks if r.severity == "high"][:3]
 
     with llm_call_context(agent_name="PM Synthesis", run_id=run_id, route="strong"):
@@ -1428,7 +1656,11 @@ def _run_stock_memo_inner(
         ),
         sources_used=sources,
         generated_at=datetime.utcnow(),
-        generation_mode="live" if settings.has_llm and settings.enable_live_data else "demo",
+        # Label follows the SAME flag that gates the data path
+        # (`use_demo_data_only`), not `enable_live_data` alone. Production
+        # sets USE_DEMO_DATA=false without ENABLE_LIVE_DATA, which made the
+        # old check label genuinely live-data memos as "demo" (Theme 3).
+        generation_mode="live" if settings.has_llm and not settings.use_demo_data_only else "demo",
         degraded_agents=degradation.degraded_agents(),
         round_findings=round_findings,
         forward_catalysts=forward_catalysts,
@@ -1521,13 +1753,40 @@ def _run_stock_memo_inner(
                 "blended_pm_score": round(float(blended), 1),
             }
 
-    # Anti-pattern guard. The PM prompt explicitly forbids the
-    # "{Company} — {Sector} / {industry}, {hook}; DCF base case +X%"
-    # templated form, but in practice the LLM sometimes ignores it (or
-    # the deterministic fallback historically emitted it). Detect and
-    # rewrite from the richer specialist findings before the thesis
-    # ships into the memo and is persisted to memory.
-    if _looks_like_anti_pattern_thesis(memo.one_sentence_thesis):
+    # Theme 1 — compute the memo's single reconciled valuation call now
+    # that the rating blend is final. Everything downstream (thesis
+    # consistency guard, mispricing fallback, UI valuation card) reads it.
+    memo.valuation_verdict = safe_call(
+        _build_valuation_verdict, memo, comps,
+        fallback=ValuationVerdict(), name="Valuation Verdict", log_to=None,
+    )
+
+    # Anti-pattern guard + verdict-consistency guard. The PM prompt forbids
+    # the "{Company} — {Sector} / {industry}, {hook}; DCF base case +X%"
+    # templated form, but in practice the LLM sometimes ignores it (or the
+    # deterministic fallback historically emitted it). Additionally, the
+    # thesis was written against the PRE-blend rating — the factor blend or
+    # a risk-rec downgrade may have moved the rating since, leaving the
+    # verdict word contradicting the badge. Both cases trigger a rewrite
+    # from the specialist findings using the final rating.
+    _is_anti_pattern = _looks_like_anti_pattern_thesis(memo.one_sentence_thesis)
+    _expected_word = _verdict_word(
+        memo.rating_label, dcf.base.upside_pct if dcf and dcf.base else None,
+    )
+    _stated_word = next(
+        (w for w in ("undervalued", "overvalued", "fairly priced")
+         if w in (memo.one_sentence_thesis or "").lower()),
+        None,
+    )
+    if _is_anti_pattern or (_stated_word is not None and _stated_word != _expected_word):
+        # B7 — log every rewrite with the original thesis so the
+        # false-positive rate of this guard is measurable in prod logs.
+        log.info(
+            "thesis rewrite fired for %s (anti_pattern=%s, stated=%r, "
+            "expected=%r); original=%r",
+            ticker, _is_anti_pattern, _stated_word, _expected_word,
+            memo.one_sentence_thesis,
+        )
         try:
             rewritten = _build_thesis_from_findings(
                 profile, findings, dcf, ticker, rating=memo.rating_label,
@@ -1561,6 +1820,21 @@ def _run_stock_memo_inner(
             )
     except Exception:  # pragma: no cover — never break a memo on thesis polish
         pass
+
+    # B6 — never ship an empty mispricing card. When the PM declined (or
+    # the deterministic path ran), build the consensus-vs-us structure
+    # from the reconciled verdict + final thesis + risk list. Runs after
+    # the thesis guards so `our_view` quotes the final thesis.
+    if not (
+        memo.mispricing_thesis.consensus_view
+        or memo.mispricing_thesis.our_view
+        or memo.mispricing_thesis.gap
+    ):
+        memo.mispricing_thesis = safe_call(
+            _build_mispricing_fallback, memo,
+            fallback=memo.mispricing_thesis,
+            name="Mispricing Fallback", log_to=None,
+        )
 
     # Refresh the rating/confidence-derived locals after enforcement.
     rating = memo.rating_label
@@ -1617,8 +1891,9 @@ def _run_stock_memo_inner(
     # that's a silent disaster: the regen looks "successful" while the
     # memo never reaches the database. The user clicks Refresh, sees
     # spinning, then the old memo. Now we let persistence errors raise.
-    # The _run_regen_job handler catches BaseException and records the
-    # traceback in _REGEN_FAILURES, surfaced via /analyze/status.
+    # The regen worker (services/regen_worker.py) catches BaseException
+    # and records the traceback on the RegenJob row, surfaced via
+    # /analyze/status and /api/admin/regen-jobs.
     try:
         _persist_memo_snapshot(memo, as_of_date)
     except Exception as exc:

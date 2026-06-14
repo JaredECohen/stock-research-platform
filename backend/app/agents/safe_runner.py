@@ -45,6 +45,24 @@ class DegradationLog:
             "message": str(exc)[:300],
         })
 
+    def record_soft(self, agent: str, reason: str,
+                    kind: str = "DeterministicFallback") -> None:
+        """Record a degradation that wasn't an exception.
+
+        An LLM call that succeeds structurally but returns nothing usable
+        (so the agent shipped its deterministic fallback) degrades the memo
+        just as much as a crash — the section renders as boilerplate while
+        presenting as a real analyst view. Same record shape as `record`
+        so the memo banner treats both alike.
+        """
+        if any(f["agent"] == agent for f in self.failures):
+            return
+        self.failures.append({
+            "agent": agent,
+            "error_type": kind,
+            "message": reason[:300],
+        })
+
     def degraded_agents(self) -> List[str]:
         return [f["agent"] for f in self.failures]
 

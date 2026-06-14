@@ -114,6 +114,17 @@ def run_valuation_agent(
         headline=headline,
         summary=summary,
         key_points=key_points or ["See DCF and comps for detail."],
-        confidence=0.7,
+        # Lower than the LLM path's default — a multiples recap with no
+        # interpretation is thinner evidence than a real analyst view.
+        confidence=0.5,
         sources=["dcf", "ratios"],
+        # The graph promotes this flag into `degraded_agents` so the UI
+        # can tell readers the section is a deterministic snapshot, not
+        # an analyst read (B3).
+        data={
+            "deterministic_fallback": (
+                "Valuation LLM returned no usable output; deterministic "
+                "multiples/DCF snapshot shipped instead."
+            ),
+        },
     )
