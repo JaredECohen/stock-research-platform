@@ -15,7 +15,9 @@ on:
 jobs:
   live-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Two full live memo runs now: test_live_integration's AAPL memo +
+    # the Theme 5 regen-queue smoke on MSFT (~5-9 min each).
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -46,4 +48,7 @@ jobs:
           SEC_EDGAR_USER_AGENT: ${{ secrets.SEC_EDGAR_USER_AGENT }}
         run: |
           rm -f marketmosaic.db
-          python -m pytest -q app/tests/test_live_integration.py
+          # test_regen_smoke exercises the full production regen path:
+          # POST /analyze → durable RegenJob → worker → persisted memo
+          # → /analyze/status completion contract.
+          python -m pytest -q app/tests/test_live_integration.py app/tests/test_regen_smoke.py

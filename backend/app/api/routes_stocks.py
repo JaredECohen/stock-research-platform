@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import logging
-import threading
-from datetime import date as _date, datetime
-from threading import Lock
+from datetime import date as _date
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -16,7 +14,7 @@ from ..models import Company
 from ..rate_limit import LIMITS, limiter
 from ..schemas import CompanyOut, StockMemoOut
 from ..seed_universe import ensure_company_in_universe
-from ..services import memo_store
+from ..services import memo_store, regen_worker
 from ..services.data_service import get_data_service
 from ..services.fundamentals_service import get_full_financials
 from ..services.history_service import backfill_ticker
@@ -27,102 +25,18 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# In-memory job registry for async memo regeneration. Process-local
-# (single-replica only — switch to Redis when scaling out).
+# Async memo regeneration (Theme 5). A full memo regen takes 5-9 minutes
+# but Render's HTTP proxy timeout is ~100 seconds, so the analyze
+# endpoint enqueues a durable `RegenJob` row and returns 202; a worker
+# thread (services/regen_worker.py, started at app startup) drains the
+# queue, and the frontend polls `/analyze/status` for completion.
 #
-# `_REGEN_JOBS` tracks live regens: {ticker: started_at_utc}; cleared
-# on completion (success OR failure).
-# `_REGEN_FAILURES` retains the last failure per ticker so the status
-# endpoint can surface it after the job clears. Otherwise a failed
-# BackgroundTask silently disappears and the frontend just spins.
-#
-# Why this exists: a full memo regen takes 5-9 minutes synchronously,
-# but Render's HTTP proxy timeout is ~100 seconds. Returning the memo
-# inline would always 504 from the user's perspective. Instead the
-# analyze endpoint fires-and-returns a 202 with the start time; the
-# frontend polls `/analyze/status` for completion.
-_REGEN_JOBS: Dict[str, datetime] = {}
-_REGEN_FAILURES: Dict[str, Dict[str, Any]] = {}
-# Progress trace per ticker — `[(step_name, timestamp), ...]`. Cleared
-# at the start of each regen, appended to as the regen progresses,
-# preserved after the regen finishes. The status endpoint exposes the
-# tail so we can see exactly where a silent failure happens.
-_REGEN_PROGRESS: Dict[str, List[Dict[str, str]]] = {}
-_REGEN_LOCK = Lock()
-
-
-def _trace(ticker: str, step: str) -> None:
-    """Record a progress step for the active regen. No-op safe."""
-    try:
-        with _REGEN_LOCK:
-            steps = _REGEN_PROGRESS.setdefault(ticker, [])
-            steps.append({
-                "step": step,
-                "at": datetime.utcnow().isoformat(),
-            })
-            # Cap at 50 entries so a runaway loop doesn't bloat memory.
-            if len(steps) > 50:
-                _REGEN_PROGRESS[ticker] = steps[-50:]
-    except Exception:  # pragma: no cover — never break the regen on trace
-        pass
-
-
-def _run_regen_job(ticker: str, scenario: str) -> None:
-    """Background worker — runs `run_stock_memo` and clears the job
-    entry whether or not it succeeded.
-
-    Catches BaseException (not just Exception) to surface asyncio
-    cancellation; re-raises SystemExit / KeyboardInterrupt.
-
-    Writes step traces to `_REGEN_PROGRESS[ticker]` at every major
-    waypoint (thread-start, before/after run_stock_memo, post-clear).
-    The status endpoint exposes the trace so silent failures (process
-    killed at OS level, function returned without persisting, etc.)
-    show their last known step.
-    """
-    import traceback
-    started = datetime.utcnow()
-    # Reset trace at the start of each regen.
-    with _REGEN_LOCK:
-        _REGEN_PROGRESS[ticker] = []
-    _trace(ticker, "thread_started")
-    log.info("background memo regen STARTING for %s (scenario=%s)", ticker, scenario)
-    try:
-        _trace(ticker, "calling_run_stock_memo")
-        memo = run_stock_memo(ticker, scenario=scenario, force_refresh=True)
-        _trace(ticker, f"run_stock_memo_returned rating={memo.rating_label}")
-        with _REGEN_LOCK:
-            _REGEN_FAILURES.pop(ticker, None)
-        _trace(ticker, "cleared_failure_record")
-        log.info(
-            "background memo regen SUCCEEDED for %s in %.1fs",
-            ticker, (datetime.utcnow() - started).total_seconds(),
-        )
-    except (SystemExit, KeyboardInterrupt):
-        _trace(ticker, "process_exit_signal")
-        raise
-    except BaseException as exc:
-        tb = traceback.format_exc()
-        _trace(ticker, f"exception_caught {type(exc).__name__}: {str(exc)[:200]}")
-        log.error(
-            "background memo regen FAILED for %s after %.1fs: %s: %s\n%s",
-            ticker, (datetime.utcnow() - started).total_seconds(),
-            type(exc).__name__, exc, tb,
-        )
-        with _REGEN_LOCK:
-            _REGEN_FAILURES[ticker] = {
-                "ticker": ticker,
-                "error_type": type(exc).__name__,
-                "error_message": str(exc)[:500],
-                "traceback_tail": tb[-1500:],
-                "started_at": started.isoformat(),
-                "failed_at": datetime.utcnow().isoformat(),
-                "duration_seconds": (datetime.utcnow() - started).total_seconds(),
-            }
-    finally:
-        _trace(ticker, "finally_clearing_job")
-        with _REGEN_LOCK:
-            _REGEN_JOBS.pop(ticker, None)
+# This replaced the in-memory `_REGEN_JOBS` / `_REGEN_FAILURES` dicts +
+# request-scoped daemon thread: those died with the process, so OOM
+# kills and deploys mid-regen left no trace and the frontend spun
+# forever. Job rows survive restarts, orphaned runs are requeued once
+# (resuming from MemoRunCheckpoint), and failures persist until the
+# next success.
 
 
 def _ensure_lazy_universe(ticker: str) -> str:
@@ -391,8 +305,8 @@ def analyze_stock(
 ) -> Dict[str, Any]:
     """Trigger a fresh full memo regeneration.
 
-    Returns 202 immediately by default; the regen runs in a
-    BackgroundTasks worker. Frontend polls
+    Returns 202 immediately by default after enqueuing a durable
+    `RegenJob`; the worker thread picks it up. Frontend polls
     `GET /api/stocks/{ticker}/analyze/status` for completion (or just
     polls `/api/stocks/{ticker}/memo` and watches for the timestamp
     to advance — `latest_memo_at` in the status response is the same
@@ -421,36 +335,21 @@ def analyze_stock(
         # declared the return type as Dict; serialize via model_dump.
         return memo.model_dump()
 
-    # Async path. Coalesce duplicate requests against the same ticker
-    # so a frantic-click double-fire doesn't spawn two regens.
-    with _REGEN_LOCK:
-        already_running = t in _REGEN_JOBS
-        if not already_running:
-            _REGEN_JOBS[t] = datetime.utcnow()
-        started_at = _REGEN_JOBS[t]
-
-    if not already_running:
-        # Spawn a detached daemon thread instead of FastAPI's
-        # BackgroundTasks. BackgroundTasks runs inside the response
-        # lifecycle (Starlette awaits them in Response.__call__),
-        # which means if uvicorn / the proxy cancels the long-running
-        # response handler, the task dies along with it — observed
-        # in prod as in_progress flipping True→False in 20s with no
-        # exception captured (the threadpool was being torn down).
-        # A daemon thread is fully detached: response returns 202
-        # immediately and the thread keeps running independently
-        # until the process itself exits.
-        thread = threading.Thread(
-            target=_run_regen_job, args=(t, sc),
-            name=f"memo-regen-{t}", daemon=True,
-        )
-        thread.start()
+    # Async path. `enqueue` coalesces duplicate requests against the
+    # same ticker so a frantic-click double-fire doesn't queue two
+    # regens — and, unlike the old in-memory registry, the coalescing
+    # holds across process restarts.
+    job, created = regen_worker.enqueue(t, sc)
 
     snap = memo_store.latest_memo(t)
     return {
         "ticker": t,
-        "status": "in_progress" if already_running else "started",
-        "started_at": started_at.isoformat(),
+        "status": "started" if created else "in_progress",
+        # The polling contract compares `latest_memo_at` against this
+        # value, so it must predate the memo the job will persist —
+        # enqueue time qualifies even while the job is still queued.
+        "started_at": job["started_at"] or job["enqueued_at"],
+        "job_id": job["id"],
         "current_version": snap.version if snap else None,
         "current_generated_at": snap.generated_at.isoformat() if snap and snap.generated_at else None,
         "note": (
@@ -465,8 +364,8 @@ def analyze_status(ticker: str) -> Dict[str, Any]:
     """Poll target for the async analyze flow.
 
     Returns:
-      - `in_progress`: True while a background regen for this ticker
-        is still running.
+      - `in_progress`: True while a regen job for this ticker is
+        queued or running.
       - `started_at`: when the in-flight regen began (None when idle).
       - `latest_memo_at`: timestamp of the most recent persisted memo.
         Compare against the `started_at` you got from POST /analyze
@@ -476,24 +375,27 @@ def analyze_status(ticker: str) -> Dict[str, Any]:
       - `last_failure`: the most recent regen failure for this ticker,
         if any. Cleared on next success. Includes error_type, message,
         and a truncated traceback so a 502/silent-failure is visible
-        rather than spinning forever on the frontend.
+        rather than spinning forever on the frontend. Process deaths
+        (OOM kill, deploy) now surface here too, as `WorkerRestart`.
+      - `last_progress`: step trace of the most recent regen — worker
+        waypoints merged with per-step `MemoRunCheckpoint` completions,
+        so a dead run shows exactly which step it reached.
+      - `job_id` / `job_status`: the underlying `RegenJob` row, for
+        cross-referencing `/api/admin/regen-jobs` telemetry.
     """
     t = ticker.upper()
-    with _REGEN_LOCK:
-        running_started_at = _REGEN_JOBS.get(t)
-        last_failure = _REGEN_FAILURES.get(t)
-        progress = list(_REGEN_PROGRESS.get(t, []))
+    state = regen_worker.ticker_status(t)
     snap = memo_store.latest_memo(t)
     return {
         "ticker": t,
-        "in_progress": running_started_at is not None,
-        "started_at": running_started_at.isoformat() if running_started_at else None,
+        "in_progress": state["in_progress"],
+        "started_at": state["started_at"],
         "latest_memo_at": (
             snap.generated_at.isoformat() if snap and snap.generated_at else None
         ),
         "latest_version": snap.version if snap else None,
-        "last_failure": last_failure,
-        # Step-by-step trace of the most recent regen for diagnostics.
-        # Shows which step the regen reached when it died (or finished).
-        "last_progress": progress[-20:],  # last 20 entries
+        "last_failure": state["last_failure"],
+        "last_progress": state["progress"][-20:],  # last 20 entries
+        "job_id": state["job_id"],
+        "job_status": state["job_status"],
     }
