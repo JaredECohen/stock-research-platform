@@ -49,6 +49,11 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
   if (!open) return null;
 
   const generatedDate = formatDate(memo.generated_at);
+  const misp = memo.mispricing_thesis;
+  const hasMispricing = Boolean(
+    misp && (misp.consensus_view || misp.our_view || misp.gap),
+  );
+  const degraded = memo.degraded_agents || [];
   const dcf = memo.dcf_summary || {};
   const dcfFair = pickNumber(dcf, ["target_price", "fair_value", "implied_per_share", "fair_value_per_share"]);
   const dcfImpliedUpside = pickNumber(dcf, ["implied_upside", "upside", "upside_pct"]);
@@ -124,9 +129,25 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
             <div className="mt-4 text-xs text-slate-500 print:text-slate-600 flex flex-wrap gap-x-6 gap-y-1">
               <span>Report date: {generatedDate}</span>
               <span>Prepared by: MarketMosaic AI Research</span>
-              <span>Generation mode: {memo.generation_mode}</span>
+              <span>
+                {memo.generation_mode === "demo"
+                  ? "Demo dataset — figures are illustrative, not live market data"
+                  : "Live market data"}
+              </span>
             </div>
           </header>
+
+          {/* DEGRADED AGENTS — must survive into the PDF so a partial memo
+              never presents as complete. */}
+          {degraded.length > 0 && (
+            <div className="mt-5 border border-amber-500/50 print:border-amber-700 rounded p-3 text-sm text-amber-400 print:text-amber-800">
+              <span className="font-semibold">Partial coverage:</span>{" "}
+              {degraded.join(", ")}{" "}
+              {degraded.length === 1 ? "was" : "were"} unavailable or fell back
+              to deterministic output during this run. Treat the affected
+              section{degraded.length === 1 ? "" : "s"} as thinner evidence.
+            </div>
+          )}
 
           {/* EXECUTIVE SUMMARY */}
           <Section title="Executive Summary">
@@ -137,6 +158,41 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
               <Markdown text={memo.final_pm_view} />
             )}
           </Section>
+
+          {/* MISPRICING — consensus vs our view, and what would prove us wrong */}
+          {hasMispricing && misp && (
+            <Section title="Where We Differ From Consensus">
+              <div className="space-y-2 text-sm text-slate-200 print:text-slate-800">
+                {misp.consensus_view && (
+                  <p>
+                    <span className="font-semibold">Consensus:</span>{" "}
+                    {misp.consensus_view}
+                  </p>
+                )}
+                {misp.our_view && (
+                  <p>
+                    <span className="font-semibold">Our view:</span>{" "}
+                    {misp.our_view}
+                  </p>
+                )}
+                {misp.gap && (
+                  <p>
+                    <span className="font-semibold">The gap:</span> {misp.gap}
+                  </p>
+                )}
+                {misp.falsifiers && misp.falsifiers.length > 0 && (
+                  <div>
+                    <div className="font-semibold">What would prove us wrong:</div>
+                    <ul className="list-disc pl-5 mt-1 space-y-0.5">
+                      {misp.falsifiers.map((f, i) => (
+                        <li key={i}>{f}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </Section>
+          )}
 
           {/* BUSINESS OVERVIEW */}
           {memo.business_summary && (
@@ -176,6 +232,11 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
 
           {/* VALUATION */}
           <Section title="Valuation">
+            {memo.valuation_verdict?.summary && (
+              <p className="text-sm font-semibold text-slate-100 print:text-slate-900 mb-3">
+                {memo.valuation_verdict.summary}
+              </p>
+            )}
             <div className="grid md:grid-cols-2 gap-4 mb-4">
               <KvTable
                 title="DCF Summary"
@@ -390,6 +451,16 @@ function AgentBlock({ finding, subhead }: { finding: AgentFinding; subhead?: str
             <li key={i}>{p}</li>
           ))}
         </ul>
+      )}
+      {finding.long_form_report && (
+        <details className="mt-2 text-sm">
+          <summary className="cursor-pointer text-xs uppercase tracking-wider text-slate-400 print:text-slate-600 hover:text-slate-200">
+            Full {finding.agent || "analyst"} report
+          </summary>
+          <div className="mt-2 border-l border-slate-700 print:border-slate-300 pl-3 text-slate-300 print:text-slate-700">
+            <Markdown text={finding.long_form_report} />
+          </div>
+        </details>
       )}
     </div>
   );

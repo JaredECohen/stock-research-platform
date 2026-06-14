@@ -338,9 +338,10 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
       {degraded.length > 0 && (
         <div className="card-tight border-warn-500/40 bg-warn-500/5 text-warn-500 text-sm">
           <span className="font-semibold">Partial result:</span>{" "}
-          {degraded.length} agent{degraded.length === 1 ? "" : "s"} unavailable —{" "}
-          <span className="text-slate-200">{degraded.join(", ")}</span>. The memo
-          was generated from the remaining specialists.
+          {degraded.length} agent{degraded.length === 1 ? "" : "s"} degraded —{" "}
+          <span className="text-slate-200">{degraded.join(", ")}</span>. These
+          either failed or fell back to deterministic output; treat their
+          sections as thinner evidence.
         </div>
       )}
       <div className="card">
@@ -359,8 +360,15 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
             <span className={ratingBadgeClass(memo.rating_label)}>
               {memo.rating_label}
             </span>
-            <div className="text-[10px] uppercase tracking-widest text-slate-600">
-              mode: {memo.generation_mode}
+            <div
+              className="text-[10px] uppercase tracking-widest text-slate-600"
+              title={
+                memo.generation_mode === "demo"
+                  ? "Generated from the demo dataset — figures are illustrative, not live market data."
+                  : "Generated from live market data."
+              }
+            >
+              {memo.generation_mode === "demo" ? "demo data" : "live data"}
             </div>
           </div>
         </div>
@@ -373,6 +381,14 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
           <div className="text-base md:text-lg text-slate-100 leading-snug">
             {memo.one_sentence_thesis}
           </div>
+          {memo.valuation_verdict?.summary && (
+            <div className="mt-2 pt-2 border-t border-ink-700 text-xs text-slate-300">
+              <span className="text-[10px] uppercase tracking-widest text-slate-500 mr-2">
+                Valuation verdict
+              </span>
+              {memo.valuation_verdict.summary}
+            </div>
+          )}
         </div>
 
         <ScorecardRow
@@ -388,6 +404,47 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
           {crossSector.length > 0 && <CrossSectorChips tickers={crossSector} className="mt-3" />}
         </div>
       </div>
+
+      {memo.mispricing_thesis &&
+        (memo.mispricing_thesis.consensus_view ||
+          memo.mispricing_thesis.our_view ||
+          memo.mispricing_thesis.gap) && (
+          <div className="card-tight border-accent-600/30">
+            <div className="section-title mb-2">Where We Differ From Consensus</div>
+            <div className="space-y-1.5 text-sm text-slate-200">
+              {memo.mispricing_thesis.consensus_view && (
+                <p>
+                  <span className="text-slate-400">Consensus:</span>{" "}
+                  {memo.mispricing_thesis.consensus_view}
+                </p>
+              )}
+              {memo.mispricing_thesis.our_view && (
+                <p>
+                  <span className="text-slate-400">Our view:</span>{" "}
+                  {memo.mispricing_thesis.our_view}
+                </p>
+              )}
+              {memo.mispricing_thesis.gap && (
+                <p>
+                  <span className="text-slate-400">The gap:</span>{" "}
+                  {memo.mispricing_thesis.gap}
+                </p>
+              )}
+              {memo.mispricing_thesis.falsifiers?.length > 0 && (
+                <div className="pt-1">
+                  <span className="text-xs text-slate-400">
+                    What would prove us wrong:
+                  </span>
+                  <ul className="text-xs text-slate-300 list-disc pl-5 mt-1 space-y-0.5">
+                    {memo.mispricing_thesis.falsifiers.map((f, i) => (
+                      <li key={i}>{f}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
       {macroBroadcast && (
         <MacroRegimeBanner
@@ -456,31 +513,38 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
         <BullBearAnalysisBlock analysis={sectorData.bull_bear_analysis} />
       )}
 
-      <div className="grid md:grid-cols-2 gap-4">
-        <div className="card-tight">
-          <div className="section-title mb-1">Catalysts</div>
-          <ul className="text-sm text-slate-300 space-y-1">
-            {memo.catalysts.map((c, i) => (
-              <li key={i}>
-                <span className="font-medium text-slate-100">{c.title}</span>
-                <span className="text-xs text-slate-400 ml-2">[{c.horizon} · {c.impact}]</span>
-                <div className="text-xs text-slate-400">{c.detail}</div>
-              </li>
-            ))}
-          </ul>
+      {/* Empty-extraction memos (B4) must not render bare section headers. */}
+      {(memo.catalysts.length > 0 || memo.key_risks.length > 0) && (
+        <div className="grid md:grid-cols-2 gap-4">
+          {memo.catalysts.length > 0 && (
+            <div className="card-tight">
+              <div className="section-title mb-1">Catalysts</div>
+              <ul className="text-sm text-slate-300 space-y-1">
+                {memo.catalysts.map((c, i) => (
+                  <li key={i}>
+                    <span className="font-medium text-slate-100">{c.title}</span>
+                    <span className="text-xs text-slate-400 ml-2">[{c.horizon} · {c.impact}]</span>
+                    <div className="text-xs text-slate-400">{c.detail}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {memo.key_risks.length > 0 && (
+            <div className="card-tight">
+              <div className="section-title mb-1">Key Risks & Thesis Breakers</div>
+              <ul className="text-sm text-slate-300 space-y-1">
+                {memo.key_risks.map((r, i) => (
+                  <li key={i}>
+                    <span className="font-medium text-slate-100">{r.title}</span>
+                    <span className="text-xs text-slate-400 ml-2">[{r.severity} · {r.type}]</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
-        <div className="card-tight">
-          <div className="section-title mb-1">Key Risks & Thesis Breakers</div>
-          <ul className="text-sm text-slate-300 space-y-1">
-            {memo.key_risks.map((r, i) => (
-              <li key={i}>
-                <span className="font-medium text-slate-100">{r.title}</span>
-                <span className="text-xs text-slate-400 ml-2">[{r.severity} · {r.type}]</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
+      )}
 
       <div className="card-tight">
         <div className="section-title mb-1">DCF Snapshot</div>
