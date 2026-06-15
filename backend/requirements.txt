@@ -50,3 +50,13 @@ apscheduler>=3.10.4
 # Default backend is in-memory, which is fine for a single-replica deploy.
 # Set `RATE_LIMIT_STORAGE_URL=redis://...` to share state across replicas.
 slowapi>=0.1.9
+
+# Vector store for filing / transcript chunk retrieval. pgvector is the
+# Postgres extension; the python package wraps it for SQLAlchemy. The
+# `EmbeddingChunk` model uses pgvector's `Vector` column type when
+# Postgres is the backend, falling back to JSON storage on SQLite for
+# local dev parity.
+pgvector>=0.3.0
+# tiktoken powers token-aware chunking of long filings / transcripts so
+# embed calls stay within OpenAI's 8K-token input limit per chunk.
+tiktoken>=0.7.0

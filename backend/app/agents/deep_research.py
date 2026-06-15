@@ -126,17 +126,26 @@ def pm_critique(
         prior_rounds_block=_format_prior_rounds(rounds_so_far),
         max_questions=settings.deep_research_max_questions_per_round,
     )
+    # Use whatever provider is active — forcing OpenAI here meant the
+    # dialog hard-failed on deployments configured with only an
+    # Anthropic key, surfacing as "LLM call failed" in the UI.
     with llm_call_context(agent_name="PM Critique", run_id=run_id, route="strong"):
         try:
             out = llm.chat_json(
                 prompt, system=_PM_CRITIQUE_SYSTEM, route="strong",
-                model=settings.openai_pm_model, provider_override="openai",
+                max_tokens=1200,
             )
         except Exception as exc:  # pragma: no cover — defensive
             log.warning("PM critique LLM call failed: %s", exc)
             out = None
     if not isinstance(out, dict):
-        return CritiqueOutput(no_further_questions=True, rationale="LLM call failed")
+        return CritiqueOutput(
+            no_further_questions=True,
+            rationale=(
+                "PM critique unavailable (LLM call failed) — "
+                "round-0 findings used as-is."
+            ),
+        )
 
     questions: List[CritiqueQuestion] = []
     for raw in (out.get("questions") or [])[: settings.deep_research_max_questions_per_round]:

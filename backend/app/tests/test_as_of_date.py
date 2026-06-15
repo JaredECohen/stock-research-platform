@@ -201,7 +201,9 @@ def test_backtest_returns_fresh_memo_even_when_live_snapshot_exists():
     """Backtest path should always run fresh — never serve the cached live memo."""
     c = _ensure_started()
     # Force a live memo so a snapshot exists.
-    r0 = c.post("/api/stocks/MSFT/analyze")
+    # `?sync=true` runs the regen inline so the test can grab
+    # X-Memo-Version directly. Default async path returns 202.
+    r0 = c.post("/api/stocks/MSFT/analyze?sync=true")
     assert r0.status_code == 200
     live_version = int(r0.headers.get("X-Memo-Version", "0"))
 

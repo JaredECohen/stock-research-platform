@@ -111,12 +111,14 @@ def _propose_adjustments(
     )
     try:
         from .llm import llm_call_context
+        # Use whatever provider is active. Forcing OpenAI hard-failed
+        # on deployments configured with only an Anthropic key (100%
+        # failure rate observed in prod LLMCallLog before this fix).
         with llm_call_context(
             agent_name="PM DCF Adjuster", run_id=run_id, route="strong",
         ):
             out = llm.chat_json(
                 prompt, system=_PM_DCF_SYSTEM, route="strong",
-                model=settings.openai_pm_model, provider_override="openai",
             )
     except Exception as exc:  # pragma: no cover — defensive
         log.warning("PM DCF adjuster LLM call failed for %s: %s", ticker, exc)

@@ -124,11 +124,25 @@ def run_filing_agent(
         vec_hits = vector_store.search(
             retrieval_query, ticker=ticker, source_types=["filing"], top_k=4,
         )
-        retrieved = [{"text": h["text"], "section": h.get("section")} for h in vec_hits]
+        retrieved = [
+            {
+                "text": h["text"],
+                "section": h.get("section"),
+                "source_type": "filing",
+            }
+            for h in vec_hits
+        ]
     except Exception:
         retrieved = []
     if not retrieved:
-        retrieved = retrieval_service.search(ticker, retrieval_query, limit=4) or []
+        # BM25 fallback returns filings + transcripts + news in one
+        # scored list (see retrieval_service._chunks_for_ticker). A
+        # high-scoring news article would otherwise leak in as a fake
+        # MD&A snippet — observed in prod with MSTR news appearing in
+        # an ADBE memo. Filter at the call site so downstream code
+        # never sees off-source chunks.
+        raw = retrieval_service.search(ticker, retrieval_query, limit=8) or []
+        retrieved = [c for c in raw if _is_filing_chunk(c)][:4]
     primary = next((f for f in filings if f.get("type") == "10-K"), filings[0])
 
     # Wave 9b — pass real filing content to the LLM. SEC EDGAR returns
@@ -221,21 +235,169 @@ def run_filing_agent(
             evidence=evidence[:6],
         )
 
-    # Deterministic fallback
-    risks = (primary.get("risk_factors") or [])[:3]
+    # Deterministic fallback. Skip past SEC boilerplate openers and
+    # prefer retrieved chunks (when the vector store has indexed this
+    # filing) over the front-of-section truncation, which routinely
+    # serves the "The following discussion should be read in conjunction
+    # with our Consolidated Financial Statements..." legalese.
     segments = primary.get("segments", []) or profile.get("segments", []) or []
     seg_text = ", ".join(s if isinstance(s, str) else s.get("name", "") for s in segments)[:200]
-    summary = (
-        f"{primary.get('type', '10-K')} dated {primary.get('filing_date', '—')}: "
-        f"business spans {seg_text or 'core segments'}. "
-        f"MD&A reads as: {primary.get('mda', '')[:280]}"
-    )
-    key_points = [f"Risk: {r}" for r in risks]
+
+    mda_snippet = _substantive_filing_snippet(primary.get("mda", ""), retrieved)
+    risks = _substantive_risk_factors(primary.get("risk_factors") or [], top_n=3)
+
+    summary_parts = [
+        f"{primary.get('type', '10-K')} dated {primary.get('filing_date', '—')}.",
+    ]
+    if seg_text:
+        summary_parts.append(f"Segments: {seg_text}.")
+    if mda_snippet:
+        summary_parts.append(f"MD&A: {mda_snippet}")
+    else:
+        summary_parts.append(
+            "LLM analyst couldn't run; filing body indexed for retrieval but "
+            "no substantive MD&A snippet was extracted in the deterministic path."
+        )
+    summary = " ".join(summary_parts)
+
+    key_points = [f"Risk: {r}" for r in risks] or ["See filing for detail."]
     return AgentFinding(
         agent="Filing Analyst",
         headline=f"{ticker} {primary.get('type', '10-K')} highlights",
         summary=summary,
-        key_points=key_points or ["See filing for detail."],
+        key_points=key_points,
         confidence=0.6,
         sources=[f"filing:{primary.get('accession_number', '')}"],
     )
+
+
+# Phrases used to filter out SEC boilerplate from MD&A and Risk Factor
+# extracts. These appear verbatim across every 10-K and crowd out any
+# real signal when we naively take the first N characters of a section.
+_FILING_BOILERPLATE_PREFIXES = (
+    "the following discussion should be read in conjunction",
+    "discussion regarding our financial condition and results of operations",
+    "as previously discussed, our actual results could differ materially",
+    "you should carefully consider the risks",
+    "the risks and uncertainties described below",
+    "in addition to the other information set forth in this report",
+    "investing in our common stock involves a high degree of risk",
+)
+
+_RISK_GENERIC_PREFIXES = (
+    "as previously discussed, our actual results",
+    "you should carefully consider the risks",
+    "the risks and uncertainties described below",
+    "investing in our common stock involves",
+    "many factors affect more than one category",
+)
+
+
+# Sections that legitimately belong in a "MD&A snippet" — everything
+# else (news articles, transcript chunks) gets filtered out before the
+# snippet picker runs. Without this, the BM25 fallback in
+# retrieval_service.search mixes filing/transcript/news chunks into one
+# scored list, and a high-scoring news article would surface as
+# "MD&A: <wrong-ticker headline>" (seen in prod: MSTR news leaking
+# into an ADBE memo).
+_FILING_SECTIONS = frozenset({
+    "mda", "business_description", "risk_factors",
+    "legal_or_regulatory", "financial_highlights",
+    # SEC Item 1-N headers (Item 1, Item 1A, Item 7, etc.) — produced
+    # by sec_edgar_provider's section extractor.
+    *(f"item_{i}" for i in range(1, 17)),
+})
+
+
+def _is_filing_chunk(chunk: Dict) -> bool:
+    """True iff `chunk` is sourced from a filing (10-K / 10-Q / 8-K)
+    rather than a transcript or news article. Two signals are
+    available depending on which retriever produced the chunk:
+      - `source_type` (vector_store path): "filing" / "transcript" / "news"
+      - `section` (BM25 path): "mda" / "risk_factors" / "article" / ...
+    """
+    src = (chunk.get("source_type") or "").lower()
+    if src and src != "filing":
+        return False
+    section = (chunk.get("section") or "").lower()
+    if section and section in _FILING_SECTIONS:
+        return True
+    # If neither signal is present, treat as filing (vector_store path
+    # already filtered by source_types=["filing"]).
+    return src == "filing" or not section
+
+
+def _substantive_filing_snippet(
+    mda_text: str, retrieved_chunks: List[Dict],
+) -> str:
+    """Pick a snippet of MD&A worth showing.
+
+    Preference:
+      1. The highest-scoring retrieved chunk that doesn't start with
+         boilerplate AND is from a filing (not a news article or
+         transcript). Vector retrieval already lands semantically
+         near the thesis query, so this is usually the substantive
+         content.
+      2. Fall back to scanning past boilerplate prefixes in the raw
+         MD&A — split on "Results of Operations" / "Liquidity" / similar
+         section markers and pull the next 280 chars.
+      3. Last resort: empty string (handled by caller).
+    """
+    for chunk in retrieved_chunks or []:
+        if not _is_filing_chunk(chunk):
+            continue
+        text = (chunk.get("text") or "").strip()
+        if not text:
+            continue
+        low = text.lower()[:200]
+        if any(low.startswith(p) for p in _FILING_BOILERPLATE_PREFIXES):
+            continue
+        return text[:400]
+
+    if not mda_text:
+        return ""
+
+    # Try to skip past the standard MD&A intro by anchoring on
+    # substantive headers; pull the next 280 chars after the first hit.
+    markers = (
+        "Results of Operations",
+        "Liquidity and Capital Resources",
+        "Revenue", "Operating Income", "Segment",
+    )
+    for marker in markers:
+        idx = mda_text.find(marker)
+        if idx > 0:
+            return mda_text[idx : idx + 360].strip()
+
+    # No marker hit — just strip leading boilerplate paragraphs and
+    # take whatever's left.
+    paragraphs = [p.strip() for p in mda_text.split("\n") if p.strip()]
+    for p in paragraphs:
+        low = p.lower()[:200]
+        if not any(low.startswith(b) for b in _FILING_BOILERPLATE_PREFIXES):
+            return p[:360]
+    return ""
+
+
+def _substantive_risk_factors(
+    raw_risks: List[Any], *, top_n: int = 3,
+) -> List[str]:
+    """Filter out generic risk-section boilerplate.
+
+    The Risk Factors section in every 10-K opens with several paragraphs
+    of "you should carefully consider..." legalese before the actual
+    named risks. We skip rows that start with those phrases and prefer
+    ones that name a specific business risk.
+    """
+    keep: List[str] = []
+    for r in raw_risks:
+        text = (str(r) or "").strip()
+        if not text:
+            continue
+        low = text.lower()[:200]
+        if any(low.startswith(p) for p in _RISK_GENERIC_PREFIXES):
+            continue
+        keep.append(text)
+        if len(keep) >= top_n:
+            break
+    return keep

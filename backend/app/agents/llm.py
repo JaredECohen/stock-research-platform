@@ -42,11 +42,21 @@ except Exception:  # pragma: no cover
 # `provider_failure` row to CacheCostLog so the issue is visible.
 
 _FAILURE_COUNTERS: Dict[str, int] = {"openai": 0, "anthropic": 0, "gemini": 0}
+# Wall-clock timestamp of last failure per provider — used by the
+# self-healing breaker to auto-reset after _BREAKER_COOLDOWN_SECONDS
+# without a fresh failure. Without auto-reset the breaker pins open
+# until process restart; transient blips from one bad call (e.g.,
+# the PM DCF Adjuster's forced-OpenAI override before that was fixed)
+# would cascade-block every other call's provider lookup forever.
+_FAILURE_LAST_AT: Dict[str, float] = {}
 _BREAKER_THRESHOLD = 3
+_BREAKER_COOLDOWN_SECONDS = 120.0  # 2 min idle = self-heal
 
 
 def _record_failure(provider: str) -> None:
+    import time as _time
     _FAILURE_COUNTERS[provider] = _FAILURE_COUNTERS.get(provider, 0) + 1
+    _FAILURE_LAST_AT[provider] = _time.time()
     if _FAILURE_COUNTERS[provider] >= _BREAKER_THRESHOLD:
         try:
             from ..cache import log_cost
@@ -58,10 +68,30 @@ def _record_failure(provider: str) -> None:
 
 def _record_success(provider: str) -> None:
     _FAILURE_COUNTERS[provider] = 0
+    _FAILURE_LAST_AT.pop(provider, None)
 
 
 def _breaker_open(provider: str) -> bool:
-    return _FAILURE_COUNTERS.get(provider, 0) >= _BREAKER_THRESHOLD
+    """True iff the breaker is tripped AND not yet eligible to retry.
+
+    Auto-resets after `_BREAKER_COOLDOWN_SECONDS` of no fresh failure.
+    The cooldown gives the provider time to recover from a transient
+    blip without blocking otherwise-healthy callers. Resetting on time
+    is intentionally permissive — a real outage will re-trip on the
+    first retry; a transient was real-but-brief and worth retrying.
+    """
+    import time as _time
+    if _FAILURE_COUNTERS.get(provider, 0) < _BREAKER_THRESHOLD:
+        return False
+    last_at = _FAILURE_LAST_AT.get(provider)
+    if last_at is None:
+        return True
+    if _time.time() - last_at >= _BREAKER_COOLDOWN_SECONDS:
+        # Cooldown elapsed — reset the counter and let one call through.
+        _FAILURE_COUNTERS[provider] = 0
+        _FAILURE_LAST_AT.pop(provider, None)
+        return False
+    return True
 
 
 def reset_circuit_breaker(provider: Optional[str] = None) -> None:
@@ -69,8 +99,32 @@ def reset_circuit_breaker(provider: Optional[str] = None) -> None:
     if provider is None:
         for k in list(_FAILURE_COUNTERS.keys()):
             _FAILURE_COUNTERS[k] = 0
+        _FAILURE_LAST_AT.clear()
     else:
         _FAILURE_COUNTERS[provider] = 0
+        _FAILURE_LAST_AT.pop(provider, None)
+
+
+def get_breaker_state() -> Dict[str, Dict[str, Any]]:
+    """Snapshot of circuit-breaker state for the admin endpoint."""
+    import time as _time
+    now = _time.time()
+    out: Dict[str, Dict[str, Any]] = {}
+    for provider in ("openai", "anthropic", "gemini"):
+        last_at = _FAILURE_LAST_AT.get(provider)
+        count = _FAILURE_COUNTERS.get(provider, 0)
+        out[provider] = {
+            "failure_count": count,
+            "is_open": count >= _BREAKER_THRESHOLD and (
+                last_at is not None
+                and now - last_at < _BREAKER_COOLDOWN_SECONDS
+            ),
+            "seconds_since_last_failure": (
+                round(now - last_at, 1) if last_at is not None else None
+            ),
+            "cooldown_seconds": _BREAKER_COOLDOWN_SECONDS,
+        }
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -468,17 +522,37 @@ def _walk_array_objects(text: str, start_idx: int) -> List[str]:
     return out
 
 
+def _anthropic_supports_custom_temp(model: str) -> bool:
+    """Newer Anthropic models (Opus 4.7+, Sonnet 4.6+, Haiku 4.5+) reject
+    `temperature` other than the default and return HTTP 400 with
+    `temperature is deprecated for this model`. Empirically observed
+    2026-05-30 against claude-opus-4-7 and claude-haiku-4-5. Older
+    Claude 3.x models accept it. We gate the parameter rather than
+    pinning a fixed default so the call works across the supported
+    model fleet."""
+    m = (model or "").lower().strip()
+    if not m.startswith("claude-"):
+        return True
+    # The "4-x" generation deprecates the parameter. Pattern: "claude-
+    # {opus,sonnet,haiku}-4-N" or "claude-{family}-4-N-YYYYMMDD".
+    if "-4-" in m or m.endswith("-4"):
+        return False
+    return True
+
+
 def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[str]:
     import time as _time
     t0 = _time.perf_counter()
     try:
-        msg = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            temperature=0.3,
-            system=system or "You are a helpful assistant.",
-            messages=[{"role": "user", "content": user}],
-        )
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system or "You are a helpful assistant.",
+            "messages": [{"role": "user", "content": user}],
+        }
+        if _anthropic_supports_custom_temp(model):
+            kwargs["temperature"] = 0.3
+        msg = client.messages.create(**kwargs)
         dur = int((_time.perf_counter() - t0) * 1000)
         # Capture real token usage for cost accounting (Phase C) + log row (Wave 1A).
         in_tok, out_tok = _usage_from_anthropic(msg)

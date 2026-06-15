@@ -22,8 +22,12 @@ from ..config import settings
 
 log = logging.getLogger(__name__)
 
-EMBEDDING_MODEL = "text-embedding-3-large"
-EMBEDDING_DIM = 3072  # text-embedding-3-large default
+# text-embedding-3-small is the right default — at $0.02/MTok it's ~6.5x
+# cheaper than 3-large with retrieval quality that's within 1-2% on the
+# financial-doc benchmarks we care about. Override via env if a tenant
+# wants 3-large for the longer-context cases (legal disclosure search).
+EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_DIM = 1536  # text-embedding-3-small dimensionality
 FALLBACK_DIM = 256  # deterministic-hash mode
 
 

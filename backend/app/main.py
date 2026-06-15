@@ -18,6 +18,7 @@ from .api import (
     routes_admin,
     routes_chat,
     routes_comps,
+    routes_data_catalog,
     routes_dcf,
     routes_health,
     routes_macro,
@@ -114,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_comps.router, tags=["comps"])
     app.include_router(routes_portfolio.router, tags=["portfolio"])
     app.include_router(routes_macro.router, tags=["macro"])
+    app.include_router(routes_data_catalog.router, tags=["data-catalog"])
     app.include_router(routes_admin.router, tags=["admin"])
 
     @app.on_event("startup")
@@ -124,6 +126,18 @@ def create_app() -> FastAPI:
             log.info("MarketMosaic seeded: %s", summary)
         except Exception as exc:  # pragma: no cover - startup hardening
             log.warning("Seed failed at startup: %s", exc)
+
+        # Theme 5: memo-regen worker. Drains the durable `regen_jobs`
+        # queue that POST /analyze writes to. Started after the seed so
+        # requeued/recovered jobs see a fully-initialized universe.
+        # No-ops under pytest (tests drain the queue via
+        # `regen_worker.process_next_job()`), and when
+        # ENABLE_REGEN_WORKER=false.
+        try:
+            from .services.regen_worker import start_worker
+            start_worker()
+        except Exception as exc:  # pragma: no cover - startup hardening
+            log.warning("Regen worker failed to start: %s", exc)
 
         # Phase 5: register always-on monitoring loops if enabled. Default off
         # in dev/test so the test client doesn't spin up a background scheduler.

@@ -1,0 +1,258 @@
+{
+  "_doc": {
+    "purpose": "Approximate geographic footprint weights per ticker. Used by sector_overlays to weight regional time series (Case-Shiller per metro, state unemployment, regional retail) when computing the regional context for a name. Weights need not sum to 1.0 — they are relative; the overlay engine renormalizes.",
+    "schema": {
+      "type": "string (e.g. 'REIT', 'Retailer', 'Restaurant', 'Bank', 'Utility', 'Telecom', 'Energy', 'Insurance', 'Homebuilder')",
+      "metros": "metro_code -> weight (use the metro codes defined in data_catalog.registry, e.g. 'NYC', 'SF', 'LA', 'ATL', 'DAL', 'PHX', 'MIA', 'CHI', 'BOS', 'SEA', 'DCA', 'DEN', 'MIN', 'POR', 'LAS', 'DET')",
+      "states": "state_postal_code -> weight (e.g. 'CA', 'TX', 'NY', 'FL', 'IL', 'PA', 'OH')",
+      "notes": "Free-text explanation of how the weights were derived (10-K disclosure, store-count table, property list)."
+    },
+    "sourcing": "Manually curated from each company's most recent 10-K (Properties section, Item 2) or annual store-count disclosure. Refresh when a major repositioning happens (e.g. WMT closes a region, PLD acquires a portfolio).",
+    "fallback": "When a ticker is not in this file, the geography service falls back to LLM extraction against the cached 10-K text in filing_docs."
+  },
+
+  "PLD": {
+    "type": "REIT",
+    "sub_type": "Industrial REIT",
+    "metros": {"LA": 0.22, "NYC": 0.10, "ATL": 0.08, "DAL": 0.08, "CHI": 0.07, "SEA": 0.06, "MIA": 0.04},
+    "states": {"CA": 0.30, "TX": 0.12, "NJ": 0.08, "GA": 0.08, "IL": 0.07, "FL": 0.06, "WA": 0.05},
+    "notes": "Prologis logistics real estate concentrated in coastal infill markets — LA/Inland Empire is the single largest market by NOI."
+  },
+  "AMT": {
+    "type": "REIT",
+    "sub_type": "Tower REIT",
+    "metros": {},
+    "states": {"TX": 0.10, "CA": 0.10, "FL": 0.07, "NY": 0.05},
+    "notes": "American Tower owns ~43k US sites distributed broadly; ~55% of revenue international. Domestic exposure tracks population density."
+  },
+  "EQIX": {
+    "type": "REIT",
+    "sub_type": "Data Center REIT",
+    "metros": {"DCA": 0.18, "SF": 0.12, "NYC": 0.09, "CHI": 0.07, "DAL": 0.06, "LA": 0.05},
+    "states": {"VA": 0.18, "CA": 0.18, "NY": 0.09, "IL": 0.07, "TX": 0.06},
+    "notes": "Equinix US data center footprint dominated by NoVA (Ashburn), Silicon Valley, NYC metro. Power-constrained markets command premium rents."
+  },
+  "O": {
+    "type": "REIT",
+    "sub_type": "Net-Lease Retail REIT",
+    "metros": {"DAL": 0.05, "ATL": 0.05, "HOU": 0.04, "PHX": 0.04, "MIA": 0.04, "CHI": 0.03},
+    "states": {"TX": 0.11, "FL": 0.08, "CA": 0.07, "GA": 0.05, "OH": 0.04, "IL": 0.04, "NC": 0.04},
+    "notes": "Realty Income net-lease portfolio is highly diversified across 50 states; TX/FL/CA carry the highest dollar weights."
+  },
+  "SPG": {
+    "type": "REIT",
+    "sub_type": "Mall REIT",
+    "metros": {"MIA": 0.05, "NYC": 0.04, "DCA": 0.04, "ATL": 0.03, "PHX": 0.03, "DAL": 0.03, "LA": 0.03, "BOS": 0.03},
+    "states": {"FL": 0.13, "CA": 0.10, "TX": 0.09, "NY": 0.06, "IL": 0.05, "MA": 0.04, "NJ": 0.04, "PA": 0.04},
+    "notes": "Simon Property Group regional mall + premium outlet portfolio. FL/CA/TX outsized weight reflects population growth + tourism."
+  },
+  "AVB": {
+    "type": "REIT",
+    "sub_type": "Apartment REIT",
+    "metros": {"NYC": 0.20, "DCA": 0.16, "BOS": 0.14, "SF": 0.13, "LA": 0.10, "SEA": 0.07, "DEN": 0.05},
+    "states": {"CA": 0.30, "NY": 0.16, "VA": 0.10, "MA": 0.10, "WA": 0.07, "NJ": 0.06},
+    "notes": "AvalonBay multifamily portfolio is concentrated in supply-constrained coastal markets — Northeast / Mid-Atlantic + Pacific."
+  },
+  "EQR": {
+    "type": "REIT",
+    "sub_type": "Apartment REIT",
+    "metros": {"BOS": 0.14, "NYC": 0.12, "DCA": 0.12, "SF": 0.15, "LA": 0.10, "SEA": 0.08, "DEN": 0.04},
+    "states": {"CA": 0.30, "MA": 0.13, "VA": 0.12, "NY": 0.12, "WA": 0.08},
+    "notes": "Equity Residential portfolio overlaps AvalonBay's coastal footprint; modest Sun Belt expansion underway."
+  },
+  "WELL": {
+    "type": "REIT",
+    "sub_type": "Healthcare REIT",
+    "metros": {},
+    "states": {"CA": 0.10, "FL": 0.08, "OH": 0.05, "TX": 0.05, "PA": 0.04, "NY": 0.04},
+    "notes": "Welltower senior housing + outpatient medical office; geography correlates with 75+ population density."
+  },
+  "VICI": {
+    "type": "REIT",
+    "sub_type": "Gaming REIT",
+    "metros": {"LAS": 0.45, "ATL": 0.05, "DCA": 0.03},
+    "states": {"NV": 0.50, "IN": 0.07, "MO": 0.05, "LA": 0.04, "MS": 0.04, "PA": 0.04},
+    "notes": "VICI Properties largest landlord on Las Vegas Strip. Regional casino exposure across Mississippi River + Atlantic City."
+  },
+  "IRM": {
+    "type": "REIT",
+    "sub_type": "Specialty / Storage REIT",
+    "metros": {},
+    "states": {"CA": 0.08, "TX": 0.07, "NY": 0.06, "FL": 0.05, "IL": 0.05, "PA": 0.05},
+    "notes": "Iron Mountain records management + data centers. Geography mirrors enterprise / federal customer density."
+  },
+
+  "WMT": {
+    "type": "Retailer",
+    "sub_type": "Discount Retail",
+    "metros": {},
+    "states": {"TX": 0.13, "FL": 0.10, "CA": 0.06, "GA": 0.05, "OH": 0.04, "PA": 0.04, "NC": 0.04, "AR": 0.04, "AL": 0.03, "TN": 0.03},
+    "notes": "Walmart US store base ~4,600 stores. Sun Belt and Mid-South heavy by store count; CA underweight relative to population."
+  },
+  "COST": {
+    "type": "Retailer",
+    "sub_type": "Warehouse Club",
+    "metros": {"LA": 0.10, "SF": 0.06, "SEA": 0.04, "NYC": 0.05, "DCA": 0.03},
+    "states": {"CA": 0.27, "WA": 0.06, "TX": 0.06, "FL": 0.05, "VA": 0.04, "NY": 0.04, "AZ": 0.04, "IL": 0.03},
+    "notes": "Costco US warehouse base ~600; California is HQ + the single biggest market by warehouse count + revenue."
+  },
+  "HD": {
+    "type": "Retailer",
+    "sub_type": "Home Improvement",
+    "metros": {},
+    "states": {"TX": 0.10, "CA": 0.10, "FL": 0.09, "GA": 0.04, "NY": 0.04, "PA": 0.04, "OH": 0.04, "NC": 0.04},
+    "notes": "Home Depot ~2,000 US stores. Sun Belt + South strongest by revenue; comp sales tightly correlated with existing home sales + housing-related credit."
+  },
+  "LOW": {
+    "type": "Retailer",
+    "sub_type": "Home Improvement",
+    "metros": {},
+    "states": {"NC": 0.06, "TX": 0.10, "FL": 0.09, "CA": 0.07, "GA": 0.05, "PA": 0.05, "OH": 0.04, "TN": 0.04},
+    "notes": "Lowe's ~1,700 US stores; HQ in NC. Strongest store density in South and Mid-Atlantic."
+  },
+  "TGT": {
+    "type": "Retailer",
+    "sub_type": "Discount Retail",
+    "metros": {"LA": 0.06, "MIN": 0.04, "CHI": 0.04, "DCA": 0.03},
+    "states": {"CA": 0.16, "TX": 0.09, "FL": 0.07, "MN": 0.05, "IL": 0.05, "NY": 0.05, "PA": 0.04},
+    "notes": "Target ~1,950 US stores. Minneapolis HQ + dense Midwest + California presence; underexposed to deep South vs. Walmart."
+  },
+  "KR": {
+    "type": "Retailer",
+    "sub_type": "Food Retail",
+    "metros": {"CIN": 0.05, "ATL": 0.05, "HOU": 0.04, "DAL": 0.04, "PHX": 0.03},
+    "states": {"OH": 0.08, "TX": 0.08, "GA": 0.07, "TN": 0.06, "VA": 0.05, "AZ": 0.04, "MI": 0.04, "CA": 0.07},
+    "notes": "Kroger banners across Midwest + South + Southwest. Underrepresented in Northeast vs. Albertsons."
+  },
+  "DG": {
+    "type": "Retailer",
+    "sub_type": "Dollar Store",
+    "metros": {},
+    "states": {"TX": 0.10, "FL": 0.07, "GA": 0.05, "OH": 0.05, "TN": 0.05, "AL": 0.04, "NC": 0.04, "KY": 0.04, "MS": 0.04, "LA": 0.03},
+    "notes": "Dollar General ~19,000 stores; concentrated in rural South and Mid-South — sensitive to low-income consumer credit metrics."
+  },
+  "AMZN": {
+    "type": "Retailer",
+    "sub_type": "E-Commerce",
+    "metros": {"SEA": 0.06, "NYC": 0.05, "LA": 0.04, "DCA": 0.04},
+    "states": {"CA": 0.13, "TX": 0.10, "NY": 0.07, "FL": 0.07, "WA": 0.04, "VA": 0.05, "IL": 0.04},
+    "notes": "Amazon retail revenue mirrors US population + e-commerce penetration; fulfillment footprint Sun-Belt-heavy."
+  },
+
+  "MCD": {
+    "type": "Restaurant",
+    "sub_type": "QSR",
+    "metros": {},
+    "states": {"CA": 0.09, "TX": 0.08, "FL": 0.06, "IL": 0.06, "OH": 0.04, "PA": 0.04, "NY": 0.04, "MI": 0.03},
+    "notes": "McDonald's ~13,500 US stores. Comps sensitive to fuel prices (drive-thru traffic) + low/mid-income wage growth."
+  },
+  "SBUX": {
+    "type": "Restaurant",
+    "sub_type": "QSR / Coffee",
+    "metros": {"SEA": 0.06, "LA": 0.06, "NYC": 0.05, "SF": 0.04, "DCA": 0.03, "CHI": 0.03},
+    "states": {"CA": 0.20, "TX": 0.08, "FL": 0.06, "WA": 0.05, "NY": 0.06, "IL": 0.04},
+    "notes": "Starbucks ~16,400 US stores. Coastal + urban density much higher than QSR peers; price elasticity matters more."
+  },
+  "CMG": {
+    "type": "Restaurant",
+    "sub_type": "Fast Casual",
+    "metros": {"LA": 0.08, "NYC": 0.06, "CHI": 0.04, "DCA": 0.04, "DAL": 0.04},
+    "states": {"CA": 0.18, "TX": 0.09, "NY": 0.07, "FL": 0.06, "OH": 0.05, "IL": 0.05},
+    "notes": "Chipotle ~3,400 US stores; concentrated in coastal urban + suburban Sun Belt."
+  },
+
+  "JPM": {
+    "type": "Bank",
+    "sub_type": "Money Center",
+    "metros": {"NYC": 0.15, "CHI": 0.06, "LA": 0.05, "DAL": 0.04, "PHX": 0.03},
+    "states": {"NY": 0.15, "CA": 0.10, "TX": 0.08, "IL": 0.07, "AZ": 0.05, "FL": 0.05, "OH": 0.05},
+    "notes": "JPMorgan US consumer + commercial bank deposits broadest in NY, CA, TX, IL, OH. Wholesale banking less geographically tied."
+  },
+  "BAC": {
+    "type": "Bank",
+    "sub_type": "Money Center",
+    "metros": {"CLT": 0.06, "LA": 0.05, "NYC": 0.05, "MIA": 0.04, "DCA": 0.04},
+    "states": {"NC": 0.10, "CA": 0.13, "FL": 0.09, "TX": 0.07, "NY": 0.06, "MA": 0.04, "VA": 0.04},
+    "notes": "Bank of America retail deposits heaviest in NC (HQ), CA, FL. Strong East Coast + Sun Belt overlap with population growth."
+  },
+  "WFC": {
+    "type": "Bank",
+    "sub_type": "Money Center",
+    "metros": {"SF": 0.08, "LA": 0.07, "MIA": 0.04, "DEN": 0.03},
+    "states": {"CA": 0.20, "TX": 0.08, "FL": 0.07, "NC": 0.06, "NJ": 0.04, "GA": 0.04, "MN": 0.04},
+    "notes": "Wells Fargo legacy West Coast bank; deposit base CA-heavy with growing Texas + Southeast presence."
+  },
+  "USB": {
+    "type": "Bank",
+    "sub_type": "Regional Bank",
+    "metros": {"MIN": 0.08, "PDX": 0.04, "SEA": 0.03, "DEN": 0.03},
+    "states": {"MN": 0.12, "CA": 0.11, "OR": 0.05, "OH": 0.05, "WA": 0.05, "MO": 0.04, "WI": 0.04, "CO": 0.04},
+    "notes": "US Bancorp footprint Midwest + Pacific Northwest + Mountain West. Less exposed to coastal CRE than NYC banks."
+  },
+  "PNC": {
+    "type": "Bank",
+    "sub_type": "Regional Bank",
+    "metros": {"PIT": 0.06, "PHL": 0.05, "DCA": 0.05},
+    "states": {"PA": 0.13, "OH": 0.10, "NJ": 0.06, "MD": 0.05, "MI": 0.05, "IL": 0.04, "VA": 0.04, "NC": 0.04, "FL": 0.05},
+    "notes": "PNC Mid-Atlantic + Midwest stronghold; BBVA USA acquisition added Sun Belt presence (TX, AZ, AL, FL, NM, CO)."
+  },
+
+  "T": {
+    "type": "Telecom",
+    "sub_type": "Wireless Carrier",
+    "metros": {},
+    "states": {"TX": 0.10, "CA": 0.09, "FL": 0.07, "NY": 0.05, "IL": 0.04, "GA": 0.04, "PA": 0.04, "OH": 0.04, "NJ": 0.04},
+    "notes": "AT&T wireless coverage broadly mirrors US population. Fiber footprint concentrated in legacy SBC/BellSouth states (TX/CA/Southeast)."
+  },
+  "VZ": {
+    "type": "Telecom",
+    "sub_type": "Wireless Carrier",
+    "metros": {"NYC": 0.10, "PHL": 0.04, "BOS": 0.04, "DCA": 0.04},
+    "states": {"NY": 0.13, "NJ": 0.10, "PA": 0.07, "MA": 0.06, "MD": 0.05, "VA": 0.05, "CA": 0.07, "FL": 0.05},
+    "notes": "Verizon wireless ubiquitous; FiOS fiber footprint Northeast-heavy (legacy Bell Atlantic + NYNEX territory)."
+  },
+
+  "NEE": {
+    "type": "Utility",
+    "sub_type": "Regulated Electric + Renewables",
+    "metros": {"MIA": 0.20, "TPA": 0.10, "JAX": 0.08},
+    "states": {"FL": 0.55, "TX": 0.08, "CA": 0.05},
+    "notes": "NextEra = Florida Power & Light (regulated) + NextEra Energy Resources (national renewables). Regulated leg is ~100% Florida."
+  },
+  "DUK": {
+    "type": "Utility",
+    "sub_type": "Regulated Electric",
+    "metros": {"CLT": 0.08, "ORL": 0.04},
+    "states": {"NC": 0.30, "SC": 0.13, "FL": 0.16, "IN": 0.10, "OH": 0.04, "KY": 0.04},
+    "notes": "Duke Energy regulated electric across Carolinas + Florida + Midwest (IN/OH/KY). Earnings tied to rate-base growth + cooling-degree days in SE."
+  },
+  "SO": {
+    "type": "Utility",
+    "sub_type": "Regulated Electric",
+    "metros": {"ATL": 0.08, "BHM": 0.05},
+    "states": {"GA": 0.40, "AL": 0.30, "MS": 0.07},
+    "notes": "Southern Company subsidiaries Georgia Power + Alabama Power + Mississippi Power. Earnings tied to Southeast load growth + Vogtle nuclear."
+  },
+
+  "XOM": {
+    "type": "Energy",
+    "sub_type": "Integrated Oil & Gas",
+    "metros": {"HOU": 0.10},
+    "states": {"TX": 0.30, "LA": 0.08, "NM": 0.05, "ND": 0.04},
+    "notes": "ExxonMobil upstream concentrated Permian Basin (TX/NM) + Gulf of Mexico + Guyana (international). Downstream Baytown / Beaumont refining."
+  },
+  "CVX": {
+    "type": "Energy",
+    "sub_type": "Integrated Oil & Gas",
+    "metros": {"HOU": 0.08, "SF": 0.04},
+    "states": {"TX": 0.25, "CA": 0.10, "LA": 0.05, "NM": 0.04, "CO": 0.03},
+    "notes": "Chevron upstream Permian + DJ Basin + Gulf of Mexico + international. California El Segundo / Richmond refining."
+  },
+  "COP": {
+    "type": "Energy",
+    "sub_type": "Oil & Gas E&P",
+    "metros": {"HOU": 0.10},
+    "states": {"TX": 0.40, "NM": 0.10, "ND": 0.10, "AK": 0.05},
+    "notes": "ConocoPhillips concentrated Permian + Eagle Ford + Bakken + Alaska Slope. No downstream so price exposure is pure E&P."
+  }
+}

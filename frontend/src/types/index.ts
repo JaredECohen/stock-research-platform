@@ -89,6 +89,53 @@ export interface SectorFindingData {
   [key: string]: unknown;
 }
 
+export interface GuidanceChange {
+  metric: string;
+  prior: string;
+  current: string;
+  direction:
+    | "raised"
+    | "lowered"
+    | "reaffirmed"
+    | "introduced"
+    | "withdrawn"
+    | "unclear";
+  rationale: string;
+}
+
+export interface ToneSignal {
+  speaker: string;
+  segment: string;
+  classification:
+    | "constructive"
+    | "measured"
+    | "cautious"
+    | "defensive"
+    | "evasive";
+  evidence: string;
+}
+
+export interface QAThemeAnalysis {
+  theme: string;
+  analyst?: string;
+  response_quality: "clear" | "partial" | "deflected" | "evasive";
+}
+
+export interface EarningsStructured {
+  period: string;
+  overall_tone: "constructive" | "measured" | "cautious";
+  guidance_changes: GuidanceChange[];
+  tone_signals: ToneSignal[];
+  qa_themes: QAThemeAnalysis[];
+  most_defended_segment: { name?: string; why?: string };
+  most_pressed_segment: { name?: string; why?: string };
+  forward_catalysts: Array<{
+    event?: string;
+    expected_quarter?: string;
+    materiality?: string;
+  }>;
+}
+
 export interface AgentFinding {
   agent: string;
   headline: string;
@@ -96,7 +143,7 @@ export interface AgentFinding {
   key_points: string[];
   confidence: number;
   sources: string[];
-  data?: SectorFindingData;
+  data?: SectorFindingData & { structured?: EarningsStructured };
   // Wave 3C — drill-down report (markdown). Optional; older memos won't carry it.
   long_form_report?: string | null;
 }
@@ -348,6 +395,26 @@ export interface CustomScreenResult {
   generated_at: string;
 }
 
+// "Why is the market wrong" structure — consensus vs our view, the gap,
+// and what would prove us wrong. Backfilled deterministically when the PM
+// declines, so post-fix memos always carry content here.
+export interface MispricingThesis {
+  consensus_view: string;
+  our_view: string;
+  gap: string;
+  falsifiers: string[];
+}
+
+// Single reconciled valuation call. The one place that answers "cheap or
+// expensive?" — the thesis, valuation card, and rating all agree with it.
+export interface ValuationVerdict {
+  verdict: "undervalued" | "fairly_priced" | "overvalued";
+  dcf_base_upside?: number | null;
+  comps_ev_ebitda_premium?: number | null;
+  factor_valuation?: number | null;
+  summary: string;
+}
+
 export interface StockMemoOut {
   ticker: string;
   company_name: string;
@@ -356,6 +423,9 @@ export interface StockMemoOut {
   rating_label: RatingLabel;
   confidence_score: number;
   one_sentence_thesis: string;
+  // Optional: memos predating these fields won't carry them.
+  mispricing_thesis?: MispricingThesis;
+  valuation_verdict?: ValuationVerdict;
   business_summary: string;
   sector_agent_view: AgentFinding;
   earnings_agent_view: AgentFinding;

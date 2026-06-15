@@ -375,8 +375,11 @@ def rerun_memos_endpoint(tickers: List[str]) -> Dict[str, Any]:
     DCF default change) and you want to refresh a curated subset
     without waiting for organic triggers.
 
-    Throttled by the on_filing_event path, which is the same
-    full-reanalysis route the EDGAR poller uses.
+    Goes through the on_filing_event path — the same gated
+    full-reanalysis route the EDGAR poller uses — which enqueues each
+    ticker on the durable `regen_jobs` queue. The response returns
+    job ids immediately (no more holding the request open while up to
+    50 memos run); watch progress via /api/admin/regen-jobs.
     """
     from ..services.update_orchestrator import on_filing_event
     if not tickers:
@@ -391,7 +394,7 @@ def rerun_memos_endpoint(tickers: List[str]) -> Dict[str, Any]:
         if not ticker:
             continue
         try:
-            results.append(on_filing_event(ticker))
+            results.append(on_filing_event(ticker, source="admin_rerun"))
         except Exception as exc:  # pragma: no cover
             results.append({"ticker": ticker, "error": str(exc)})
     return {"requested": len(tickers), "results": results}
@@ -696,3 +699,235 @@ def lopsidedness_audit(
         ),
         "rows": rows,
     }
+
+
+# ---------------------------------------------------------------------------
+# Auto-update memo gating (Phase A — universe expansion cost control)
+# ---------------------------------------------------------------------------
+
+class AutoUpdateToggle(BaseModel):
+    auto_update_memo: bool = Field(
+        ..., description="True = regenerate memo automatically on new filings / transcripts."
+    )
+
+
+@router.get("/api/admin/auto-update")
+def list_auto_update_tickers() -> Dict[str, Any]:
+    """List tickers eligible for automatic memo regeneration.
+
+    A ticker is eligible when its `Company.auto_update_memo` is True
+    OR a memo was generated/viewed within the recency window (currently
+    30 days — see `update_orchestrator.AUTO_REGEN_RECENCY_DAYS`). The
+    `pinned` list is the explicit subset that always auto-regens
+    regardless of recency. Users curate this list to keep the marginal
+    LLM spend of the SP500 expansion predictable.
+    """
+    from ..database import SessionLocal
+    from ..models import Company
+    with SessionLocal() as db:
+        rows = db.query(Company.ticker, Company.company_name).filter(
+            Company.auto_update_memo == True,  # noqa: E712 — sqlalchemy
+        ).order_by(Company.ticker).all()
+    return {
+        "pinned": [{"ticker": t, "company_name": n} for (t, n) in rows],
+        "recency_window_days": update_orchestrator.AUTO_REGEN_RECENCY_DAYS,
+        "note": (
+            "Pinned tickers always auto-regen on new filings/transcripts. "
+            "Other tickers auto-regen only if their memo was generated "
+            "or viewed within the recency window."
+        ),
+    }
+
+
+@router.put("/api/admin/auto-update/{ticker}")
+def set_auto_update_memo(ticker: str, payload: AutoUpdateToggle) -> Dict[str, Any]:
+    """Pin or unpin a ticker for automatic memo regeneration.
+
+    Returns 404 when the ticker isn't in the companies table. Idempotent.
+    """
+    from ..database import session_scope
+    from ..models import Company
+    ticker = ticker.upper()
+    with session_scope() as db:
+        company = db.get(Company, ticker)
+        if company is None:
+            raise HTTPException(404, f"Ticker {ticker} not in universe")
+        company.auto_update_memo = payload.auto_update_memo
+        return {
+            "ticker": ticker,
+            "auto_update_memo": company.auto_update_memo,
+        }
+
+
+@router.post("/api/admin/auto-update/check/{ticker}")
+def check_auto_regen_decision(ticker: str) -> Dict[str, Any]:
+    """Dry-run the gating logic for a specific ticker — useful for
+    debugging when a filing landed but no memo regenerated."""
+    return update_orchestrator.should_auto_regen(ticker)
+
+
+# ---------------------------------------------------------------------------
+# LLM circuit-breaker ops surface
+# ---------------------------------------------------------------------------
+
+@router.get("/api/admin/llm-breakers")
+def get_llm_breakers() -> Dict[str, Any]:
+    """Inspect the current circuit-breaker state for each LLM provider.
+
+    Three failures in a row open the breaker — subsequent calls return
+    None instantly until the cooldown elapses or the breaker is reset.
+    Use this to debug "everything's silently failing" — if a provider
+    shows `is_open: true`, that's the cause.
+    """
+    from ..agents.llm import get_breaker_state
+    return get_breaker_state()
+
+
+@router.post("/api/admin/llm-breakers/reset")
+def reset_llm_breakers(provider: Optional[str] = Query(None)) -> Dict[str, Any]:
+    """Manually reset LLM circuit breakers. Pass `?provider=openai|anthropic|
+    gemini` to reset one; omit for all. Useful after fixing a transient
+    issue (auth, model swap, etc.) to skip the auto-reset cooldown."""
+    from ..agents.llm import reset_circuit_breaker, get_breaker_state
+    reset_circuit_breaker(provider)
+    return {"reset": provider or "all", "state": get_breaker_state()}
+
+
+@router.get("/api/admin/llm-recent-failures")
+def get_recent_llm_failures(
+    limit: int = Query(20, ge=1, le=200),
+) -> List[Dict[str, Any]]:
+    """Return the most recent LLM call failures from LLMCallLog.
+
+    Surfaces the actual provider error message — needed to diagnose
+    "regen completes silently with no memo work done" cases where the
+    breaker trips because of repeated provider errors but the user
+    never sees the underlying reason (e.g., bad model name, auth
+    rejection, rate limit).
+    """
+    from ..database import SessionLocal
+    from ..models import LLMCallLog
+    from sqlalchemy import desc
+    with SessionLocal() as db:
+        LLMCallLog.__table__.create(bind=db.get_bind(), checkfirst=True)
+        rows = (
+            db.query(LLMCallLog)
+            .filter(LLMCallLog.success == False)  # noqa: E712
+            .order_by(desc(LLMCallLog.generated_at))
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "generated_at": r.generated_at.isoformat() if r.generated_at else None,
+                "agent_name": r.agent_name,
+                "provider": r.provider,
+                "model": r.model,
+                "duration_ms": r.duration_ms,
+                "error": (r.error or "")[:500],
+                "run_id": r.run_id,
+            }
+            for r in rows
+        ]
+
+
+@router.get("/api/admin/regen-jobs")
+def list_regen_jobs(
+    ticker: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+) -> Dict[str, Any]:
+    """Theme 5 — memo-regen queue telemetry.
+
+    Newest-first `RegenJob` rows: status, attempt count, timings, the
+    memo version produced, full error fields on failure, and the
+    worker's waypoint trace. Each row's `run_id` joins against
+    `/api/admin/llm-recent-failures` (LLMCallLog) and the checkpoint
+    store for per-step drill-down. This is the durable replacement for
+    the in-memory regen registry that OOM kills used to erase — a
+    killed regen now shows up here as `failed` (WorkerRestart) instead
+    of vanishing.
+    """
+    from ..services import regen_worker
+    jobs = regen_worker.recent_jobs(ticker=ticker, limit=limit)
+    counts: Dict[str, int] = {}
+    for j in jobs:
+        counts[j["status"]] = counts.get(j["status"], 0) + 1
+    return {"count": len(jobs), "status_counts": counts, "jobs": jobs}
+
+
+# ---------------------------------------------------------------------------
+# Postgres sequence repair
+# ---------------------------------------------------------------------------
+
+@router.post("/api/admin/fix-sequences")
+def fix_postgres_sequences() -> Dict[str, Any]:
+    """Reset Postgres autoincrement sequences to MAX(id)+1 for every
+    table that has an `id` primary key.
+
+    Why this exists: a Postgres sequence falls behind the table's
+    actual MAX(id) when rows are inserted with EXPLICIT id values
+    (bulk seed, SQLite-to-Postgres migration, manual SQL inserts).
+    Postgres' nextval() then returns ids that already exist, and
+    every INSERT hits `UniqueViolation` on the primary key. Seen
+    on prod's `memo_snapshots` table — id=48 conflict was blocking
+    every memo regen from persisting.
+
+    Idempotent and SQLite-safe (SQLite has no sequences; the function
+    returns an empty diff there).
+
+    Returns `{fixed: [{table, sequence, old_value, new_value}, ...]}`.
+    Run after any bulk import or after observing UniqueViolation on
+    a `_pkey` constraint.
+    """
+    from sqlalchemy import inspect, text
+    from ..database import engine
+
+    if engine.dialect.name != "postgresql":
+        return {"fixed": [], "note": f"no-op on {engine.dialect.name} (sequences are Postgres-only)"}
+
+    fixed: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table_name in inspector.get_table_names():
+            cols = inspector.get_columns(table_name)
+            id_col = next((c for c in cols if c["name"] == "id"), None)
+            if id_col is None or not id_col.get("autoincrement"):
+                continue
+            # Probe for the sequence — typically `{table}_id_seq`
+            seq_name = f"{table_name}_id_seq"
+            try:
+                # Check sequence exists
+                seq_exists = conn.execute(text(
+                    "SELECT 1 FROM information_schema.sequences "
+                    "WHERE sequence_name = :seq"
+                ), {"seq": seq_name}).first()
+                if not seq_exists:
+                    skipped.append({"table": table_name, "reason": "no sequence found"})
+                    continue
+                max_id = conn.execute(text(
+                    f"SELECT COALESCE(MAX(id), 0) FROM {table_name}"
+                )).scalar() or 0
+                old_val = conn.execute(text(
+                    f"SELECT last_value FROM {seq_name}"
+                )).scalar()
+                # is_called=true tells Postgres "advance past this value
+                # before returning it"; setting it to false plus value=N
+                # means nextval() returns exactly N. We want nextval()
+                # to return max_id+1, so set with is_called=true and
+                # value=max_id.
+                new_val = max_id + 1
+                conn.execute(text(
+                    f"SELECT setval(:seq, :val, false)"
+                ), {"seq": seq_name, "val": new_val})
+                fixed.append({
+                    "table": table_name,
+                    "sequence": seq_name,
+                    "old_value": int(old_val) if old_val is not None else None,
+                    "max_id": int(max_id),
+                    "new_value": int(new_val),
+                })
+            except Exception as exc:
+                skipped.append({"table": table_name, "reason": str(exc)[:200]})
+    return {"fixed": fixed, "skipped": skipped}
+

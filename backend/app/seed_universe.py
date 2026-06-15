@@ -1,20 +1,28 @@
-"""Seeder: populate the curated screener universe from `data/sp100.json`.
+"""Seeder: populate the curated screener universe from `data/sp500.json`.
 
-Replaces the legacy demo seeder. Reads the static S&P 100 ticker list,
-hits the live data provider chain (FMP first) for each company's
-profile, upserts a row into the `companies` table, and tags it as
-`auto_analysis` so the nightly history backfill picks it up.
+Reads the static S&P 500 ticker list (refreshable via
+`app.scripts.refresh_universe_lists`), hits the live data provider
+chain (FMP first) for each company's profile, upserts a row into the
+`companies` table, and tags it as `auto_analysis` so the nightly
+history backfill picks it up.
+
+Auto-update memo gating — separately from the screener universe, a
+small `_top_10_by_market_cap` list inside sp500.json names tickers
+eligible for *automatic memo regeneration* on new filings/transcripts.
+Everything else only regenerates memos on user request (or when a
+prior memo was viewed within the recency window). Keeps incremental
+LLM spend predictable when expanding the universe.
 
 Idempotent. Cheap on warm starts: existing rows are skipped unless
-`refresh=True`. Cold start hits ~100 FMP `/profile` calls (well within
-Starter-tier rate limits).
+`refresh=True`. Cold start hits ~500 FMP `/profile` calls (well within
+Premium-tier rate limits; for Starter-tier, run the seeder in batches).
 
 Heavy work — financial statement backfill, screener score recompute —
 is intentionally NOT done here. Those run via:
     - `monitoring/history_backfill.py` (nightly cron, when monitoring on)
     - `services/screener_service.compute_universe_scores` (admin endpoint
       / scheduler)
-so app boot stays fast even with 100+ tickers.
+so app boot stays fast even with 500+ tickers.
 """
 from __future__ import annotations
 
@@ -31,13 +39,28 @@ from .services.data_service import get_data_service
 log = logging.getLogger(__name__)
 
 
-def _load_sp100() -> List[str]:
-    path = Path(__file__).resolve().parent / "data" / "sp100.json"
+def _load_universe() -> tuple[List[str], List[str]]:
+    """Load (universe_tickers, auto_update_tickers) from sp500.json.
+
+    Falls back to sp100.json when sp500.json is missing so a stale
+    deployment keeps working. Returns ([], []) when both are missing.
+    """
+    data_dir = Path(__file__).resolve().parent / "data"
+    sp500_path = data_dir / "sp500.json"
+    sp100_path = data_dir / "sp100.json"
+    path = sp500_path if sp500_path.exists() else sp100_path
     if not path.exists():
-        log.warning("sp100.json missing at %s — seeder is a no-op", path)
-        return []
+        log.warning("No universe file at %s — seeder is a no-op", data_dir)
+        return [], []
     cfg = json.loads(path.read_text())
-    return [t.upper() for t in (cfg.get("tickers") or [])]
+    universe = [t.upper() for t in (cfg.get("tickers") or [])]
+    # auto-update list — explicit top-N override. Empty list means "no
+    # tickers pinned to auto-update", and gating falls back to the
+    # recency-window check alone.
+    auto_update = [
+        t.upper() for t in (cfg.get("_top_10_by_market_cap_2026_05") or [])
+    ]
+    return universe, auto_update
 
 
 def _profile_to_company_kwargs(profile: Dict, ticker: str) -> Dict:
@@ -79,22 +102,27 @@ def seed_universe(refresh: bool = False) -> Dict[str, int]:
     Returns counts: `{inserted, refreshed, skipped, missing_profile,
     auto_analysis, total_in_db}`.
     """
-    tickers = _load_sp100()
+    tickers, auto_update_tickers = _load_universe()
     if not tickers:
         return {"inserted": 0, "refreshed": 0, "skipped": 0,
                 "missing_profile": 0, "auto_analysis": 0, "total_in_db": 0}
 
     ds = get_data_service()
-    sp100_set: Set[str] = set(tickers)
+    universe_set: Set[str] = set(tickers)
+    auto_update_set: Set[str] = set(auto_update_tickers)
     inserted = refreshed = skipped = missing = 0
 
     with session_scope() as db:
         for ticker in tickers:
             existing: Optional[Company] = db.get(Company, ticker)
+            wants_auto_update = ticker in auto_update_set
             if existing and not refresh:
-                # Warm start — leave row alone, just ensure tier is right.
+                # Warm start — leave row alone, just ensure tier is right
+                # and the auto-update flag matches the current top-N list.
                 if existing.universe_tier != "auto_analysis":
                     existing.universe_tier = "auto_analysis"
+                if existing.auto_update_memo != wants_auto_update:
+                    existing.auto_update_memo = wants_auto_update
                 skipped += 1
                 continue
             profile = ds.get_company_profile(ticker)
@@ -104,29 +132,31 @@ def seed_universe(refresh: bool = False) -> Dict[str, int]:
                 continue
             kwargs = _profile_to_company_kwargs(profile, ticker)
             if existing is None:
-                # S&P 100 ticker freshly resolved from FMP/AV → curated
-                # screener universe.
                 db.add(Company(
-                    ticker=ticker, universe_tier="auto_analysis", **kwargs,
+                    ticker=ticker, universe_tier="auto_analysis",
+                    auto_update_memo=wants_auto_update, **kwargs,
                 ))
                 inserted += 1
             else:
                 for k, v in kwargs.items():
                     setattr(existing, k, v)
                 existing.universe_tier = "auto_analysis"
+                existing.auto_update_memo = wants_auto_update
                 refreshed += 1
 
-        # Demote any companies no longer in the S&P 100 list (kept in DB
-        # so any saved memos / DCFs remain readable, but they drop off
-        # the screener universe).
+        # Demote companies no longer in the universe file (kept in DB so
+        # saved memos / DCFs remain readable, but they drop off the
+        # screener). Preserve `analyzed_on_demand` rows the user
+        # explicitly researched; only demote anything stuck on
+        # `auto_analysis` from a prior universe definition.
         for row in db.query(Company).all():
-            if row.ticker in sp100_set:
+            if row.ticker in universe_set:
                 continue
-            # Preserve `analyzed_on_demand` rows the user explicitly
-            # researched; only demote anything stuck on `auto_analysis`
-            # from a prior universe definition.
             if row.universe_tier == "auto_analysis":
                 row.universe_tier = "data_only"
+            # And never auto-regenerate memos for demoted names.
+            if row.auto_update_memo:
+                row.auto_update_memo = False
 
         # Flush so the in-progress inserts are visible to the count
         # below; otherwise (autoflush=False) the count under-reports.

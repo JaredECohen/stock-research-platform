@@ -60,23 +60,38 @@ export default function DiligenceDialog({
 }
 
 function RoundBlock({ round }: { round: RoundFindings }) {
+  // Tell apart a real "no more questions" exit (good signal) from an
+  // LLM failure (which used to render as a confusing "LLM call failed"
+  // quote followed by the satisfied-PM tagline).
+  const rationale = round.pm_rationale ?? "";
+  const failedExit = /LLM call failed|critique unavailable/i.test(rationale);
   return (
     <div className="rounded border border-ink-700 bg-ink-900/40 p-3">
       <div className="flex items-center justify-between mb-2">
         <div className="text-[11px] uppercase tracking-widest text-accent-400 font-semibold">
           Round {round.round}
-          {round.early_exit && " · PM declared no further questions"}
+          {round.early_exit && !failedExit && " · PM declared no further questions"}
+          {round.early_exit && failedExit && " · dialog skipped"}
         </div>
-        {round.pm_rationale && (
+        {rationale && !failedExit && (
           <div className="text-[11px] text-slate-500 italic max-w-[60%] text-right">
-            "{round.pm_rationale}"
+            "{rationale}"
           </div>
         )}
       </div>
       {round.pm_questions.length === 0 && round.early_exit && (
-        <div className="text-xs text-slate-500">
-          PM ended the dialog — round-N findings already triangulate.
-        </div>
+        failedExit ? (
+          <div className="text-xs text-warn-500 leading-relaxed">
+            PM critique was unavailable for this memo (the LLM call did not
+            return). Round-0 findings shipped as-is — no follow-up dialog ran.
+            This usually means the configured PM model / provider is offline
+            or unkeyed in this environment.
+          </div>
+        ) : (
+          <div className="text-xs text-slate-500">
+            PM ended the dialog — round-N findings already triangulate.
+          </div>
+        )
       )}
       <div className="space-y-3">
         {round.pm_questions.map((q, i) => {

@@ -63,6 +63,19 @@ class Company(Base):
     universe_tier: Mapped[str] = mapped_column(
         String(24), default="data_only", index=True
     )
+    # When True, new EDGAR filings / earnings transcripts trigger an
+    # automatic memo regeneration (`full_reanalysis(ticker)`) for this
+    # ticker. When False, the polling jobs still ingest + persist the
+    # raw data, but memo regen waits for a user request. Seeded `True`
+    # only for the top-10-by-market-cap list defined in sp500.json
+    # (`_top_10_by_market_cap_*`). Orthogonal to `universe_tier` —
+    # a ticker can be `auto_analysis` (in the screener) without being
+    # `auto_update_memo` (no auto-regen). Combined with the recency
+    # window in `update_orchestrator.should_auto_regen`, this controls
+    # the marginal LLM spend of the SP500 expansion.
+    auto_update_memo: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="0",
+    )
 
     memos: Mapped[list["StockMemo"]] = relationship(back_populates="company")
 
@@ -666,6 +679,56 @@ class CatalystEvent(Base):
         ),
         Index("ix_catalyst_events_ticker_date", "ticker", "event_date"),
     )
+
+
+class RegenJob(Base):
+    """Theme 5 — durable queue for background memo regeneration.
+
+    One row per regen request. Replaces the in-memory `_REGEN_JOBS` /
+    `_REGEN_FAILURES` dicts that lived in `routes_stocks` — those
+    vanished with the process on OOM kills / deploys, which made
+    failures invisible (the status endpoint just stopped reporting
+    in_progress with no explanation). A DB row survives the process,
+    so a killed regen shows up as a `failed` job with an explicit
+    error instead of silently disappearing.
+
+    Lifecycle: queued → running → succeeded | failed. A single worker
+    thread (`services/regen_worker.py`) claims queued jobs oldest-first.
+    On worker startup, orphaned `running` jobs (the process died
+    mid-run) are requeued once with the same `run_id` — the Wave 8A
+    checkpoint store then skips already-completed steps — and marked
+    failed on the second orphaning so a crash-looping ticker can't
+    wedge the queue.
+
+    `run_id` joins against `MemoRunCheckpoint` (per-step progress) and
+    `LLMCallLog` (per-call cost/failure) so one id links the job to its
+    full telemetry trail. `progress` carries the worker's own coarse
+    waypoints (claimed / calling graph / persisted / failed) for the
+    gaps those tables can't see.
+    """
+    __tablename__ = "regen_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    scenario: Mapped[str] = mapped_column(String(32), default="soft_landing")
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    enqueued_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True,
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Version of the MemoSnapshot the job produced (success only).
+    memo_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error_type: Mapped[str] = mapped_column(String(64), default="")
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    traceback_tail: Mapped[str] = mapped_column(Text, default="")
+    # Coarse waypoint trace: [{"step": ..., "at": iso-ts}, ...], capped.
+    progress: Mapped[list] = mapped_column(JSON, default=list)
+
+
+Index("ix_regen_jobs_ticker_status", RegenJob.ticker, RegenJob.status)
 
 
 class MispricingAudit(Base):

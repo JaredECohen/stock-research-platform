@@ -73,8 +73,24 @@ class FREDProvider:
             return None
 
     def list_macro_series(self) -> List[Dict[str, Any]]:
-        """Return the curated catalog metadata. Points fetched per series."""
-        return [dict(c, points=[]) for c in _MACRO_CATALOG]
+        """Return the curated catalog metadata. Points fetched per series.
+
+        Pulls both the legacy `_MACRO_CATALOG` entries (which power the
+        macro_loop / MacroBroadcast) AND any FRED-sourced series in the
+        unified `data_catalog` registry. Deduplicated by series_id with
+        the catalog metadata winning when both define the same series.
+        """
+        try:
+            from ..data_catalog import SERIES_REGISTRY
+            catalog_rows = [
+                {"series_id": s.series_id, "name": s.name, "units": s.units, "points": []}
+                for s in SERIES_REGISTRY if s.source == "FRED"
+            ]
+        except Exception:
+            catalog_rows = []
+        seen = {row["series_id"] for row in catalog_rows}
+        legacy = [dict(c, points=[]) for c in _MACRO_CATALOG if c["series_id"] not in seen]
+        return catalog_rows + legacy
 
     # Stubs for other BaseProvider methods
     def get_company_profile(self, ticker: str): return None

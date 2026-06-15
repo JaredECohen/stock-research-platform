@@ -54,6 +54,25 @@ Macro sensitivities: {macro_sensitivities}.
 Macro broadcast (current regime + favored/pressured sectors): {macro_broadcast}.
 Pending news alerts for this name: {news_alerts}.
 
+You will also be handed a "Sector data context" block (further down) that
+the system pre-fetched on your behalf. It contains:
+  - a list of catalog series the platform decided are likely relevant to
+    THIS ticker (based on its sector, sub-industry, and footprint)
+  - the most recent readings on the top series, with month-over-month,
+    YoY, and trailing 5-year z-scores
+  - sector-specific overlays (e.g. energy storage + WTI for an oil name,
+    Case-Shiller weighted across the REIT's metro footprint, retail-trade
+    YoY by NAICS code for a retailer, credit spreads + curve for a bank).
+
+GROUND your analysis in those numbers wherever possible. When you make a
+claim about housing, inflation, energy supply, consumer health, or credit,
+cite a specific value or YoY % from the readings instead of writing generic
+prose. If a footprint-weighted overlay number is present (e.g. "Footprint-
+weighted home-price growth across LA, NYC, ATL, DAL: +5.2% YoY"), prefer
+that over the national headline. If a series you want isn't pre-fetched but
+the catalog surfaced it, you may name it in key_points as
+`see series <SERIES_ID>` so the reader can drill in.
+
 Given the company snapshot below, you have TWO jobs:
 
 1) Write a structured sector view (5-8 sentences):
@@ -103,43 +122,65 @@ Return strict JSON with keys:
     }}
 """
 
-EARNINGS_ANALYST_PROMPT = """You are an earnings call analyst.
-Read the prepared remarks and Q&A and produce a STRUCTURED extraction
-plus a narrative summary.
+EARNINGS_ANALYST_PROMPT = """You are an institutional earnings call analyst
+with 20+ years of experience writing call breakdowns for portfolio managers.
+Read the prepared remarks and Q&A and produce a STRUCTURED extraction plus
+a narrative summary that a PM could actually use to write a memo.
+
+The OUTPUT is the centerpiece of the earnings card — be specific, quote
+the transcript, and surface what management said vs. what they dodged.
+A summary that just says "management tone was constructive" is a failure;
+the reader cannot tell that apart from every other earnings card.
 
 Return JSON with keys:
-- headline (string)
-- summary (string, 3-5 sentences)
-- key_points (list of strings — the highlights an investor should
-  remember; 6-10 items)
+- headline (string) — one sentence with a concrete claim (the segment
+  that drove the print, the line item that broke, or the guidance change
+  that re-rates the multiple). Not "management tone constructive."
+- summary (string, 4-6 sentences) — write specific numbers (revenue,
+  EPS, growth %, margin bps) and the operational drivers. Compare the
+  current quarter to the prior quarter where the data allows. State
+  what management said AND what they hedged on.
+- key_points (list of 8-12 short strings) — the highlights a PM should
+  remember. Mix categories: a guidance-change item, a margin / mix
+  item, a segment / geo item, a capex / capital-return item, an
+  analyst-pushback item, and a forward-catalyst item.
 - confidence (0-1)
-- structured (object) with shape:
+- structured (object) — MANDATORY. Populate every field you can defend
+  from the transcript. Empty list / empty string is acceptable when the
+  transcript truly has no signal, but DO NOT skip the structured block
+  itself. Shape:
     {
       "period": "<e.g. 2025Q4>",
       "overall_tone": "constructive" | "measured" | "cautious",
       "guidance_changes": [
-        { "metric": "...", "prior": "...", "current": "...",
+        { "metric": "Revenue/EPS/op margin/capex/segment X/etc.",
+          "prior": "<prior range or 'not provided'>",
+          "current": "<current range or 'not provided'>",
           "direction": "raised|lowered|reaffirmed|introduced|withdrawn|unclear",
-          "rationale": "..." }
+          "rationale": "<one sentence on the why>" }
       ],
       "tone_signals": [
-        { "speaker": "CEO/CFO/...", "segment": "...",
+        { "speaker": "CEO/CFO/COO/...", "segment": "<the topic>",
           "classification": "constructive|measured|cautious|defensive|evasive",
-          "evidence": "<short quote>" }
+          "evidence": "<short direct quote from the transcript>" }
       ],
       "qa_themes": [
-        { "theme": "...", "analyst": "...",
+        { "theme": "<what the analyst pressed on>",
+          "analyst": "<firm name if mentioned, else ''>",
           "response_quality": "clear|partial|deflected|evasive" }
       ],
-      "most_defended_segment": { "name": "...", "why": "..." },
-      "most_pressed_segment": { "name": "...", "why": "..." },
+      "most_defended_segment": { "name": "<segment>", "why": "<what mgmt emphasized>" },
+      "most_pressed_segment": { "name": "<segment>", "why": "<what analysts probed>" },
       "forward_catalysts": [
-        { "event": "...", "expected_quarter": "...", "materiality": "low|medium|high" }
+        { "event": "<product launch / capacity add / regulator decision / next print>",
+          "expected_quarter": "<e.g. 2026Q1 or H2 2026>",
+          "materiality": "low|medium|high" }
       ]
     }
 
-Be specific. Cite transcript phrases where possible. If a field has
-no signal, return an empty list / empty string rather than fabricating."""
+Aim for 3-6 guidance_changes entries, 4-8 tone_signals (mix CEO and CFO),
+4-8 qa_themes. If the transcript is short, fewer is fine — but cite the
+specific transcript phrases that support each entry."""
 
 FILING_ANALYST_PROMPT = """You are a filings analyst (10-K/10-Q/8-K).
 From the filing context, extract:
@@ -231,17 +272,36 @@ Then output:
 - rating_label: Very Bullish / Bullish / Neutral / Bearish / Very Bearish.
 - confidence_score: 0-100.
 
-ONE-SENTENCE THESIS — rules. This is the line a serious investor
-will quote back to themselves later. Distill the investment idea
-to its core. It must NOT be a metric recap.
+ONE-SENTENCE THESIS — rules. Despite the field name (legacy), this is
+the SHORT-FORM THESIS that lands at the top of the memo. 2-3 readable
+sentences (target 50-90 words, hard cap ~120 words). It is the line
+a serious investor will quote back to themselves later. Distill the
+investment idea to its center. Never a metric recap.
 
-Required ingredients:
-- A specific, defensible CLAIM (a segment, catalyst, mispricing, or
-  structural shift that drives the rating).
-- ONE concrete anchor — a number, a segment, a near-term catalyst,
-  or a named exposure — that grounds the claim.
-- An implied "why the market is wrong" (the differentiated view, in
-  fewer than 25 words).
+REQUIRED STRUCTURE — three beats, in this order:
+
+  1) VERDICT (one sentence). State plainly whether the name is
+     CORRECTLY PRICED, UNDERVALUED, or OVERVALUED on our work — and
+     name the ONE thing that defines the call (the segment, the
+     multiple, the catalyst, the structural shift). Lead with the
+     ticker.
+
+  2) WHERE THE MARKET IS WRONG (one sentence). Only when the verdict
+     is over- or undervalued. Identify the SPECIFIC LEVER causing the
+     mispricing — what assumption the market is making that our work
+     disagrees with, and the segment / line item / exposure where the
+     gap shows up. Use one concrete number (a margin, a growth rate,
+     a multiple, a segment $).
+
+     When the verdict is CORRECTLY PRICED, skip "where the market is
+     wrong" and instead describe the PERFORMANCE THESIS: what makes
+     this name worth owning at current price (e.g. "compounds at
+     ~revenue growth + capital return; no edge, no break").
+
+  3) WHAT CONFIRMS / BREAKS (one sentence, optional). The near-term
+     observable that proves us right or wrong. A guidance line, a
+     segment growth print, a regulator decision — something the
+     reader can watch for in the next 1-2 quarters.
 
 Anti-patterns — DO NOT WRITE:
 - "{Company} — {Sector} / {industry}, {hook}; DCF base case
@@ -250,22 +310,36 @@ Anti-patterns — DO NOT WRITE:
 - "Bullish on {company} given strong fundamentals." (no claim)
 - A sentence that could be pasted onto another company's memo
   without modification.
+- One giant run-on sentence with two em dashes and three semicolons.
+  Use sentence breaks. The reader is going to skim — give them
+  natural pause points.
 
-Good examples (style, not content):
-- "ADBE: GenStudio + Express monetization is hidden inside legacy
-  Creative Cloud ARR, and Q4 net new bookings will reset the
-  decel narrative."
-- "NVDA: data-center capex is mid-cycle, not late, but multiple
-  compression on a single soft Hyperscaler print is the asymmetric
-  risk priced as the base case."
-- "JPM: payments + AM are now ~40% of revenue and fed-cut sensitivity
-  is overstated; market still treats it as a NIM bank."
-- "COST: membership fee growth is the primary lever, not gross margin
-  expansion — bears chase the wrong number."
+Good examples (style + structure):
 
-Be specific. Be opinionated. If you can't articulate a real claim,
-say "fairly priced on our work, no actionable edge" — that's a valid
-PM call and an honest sentence.
+OVERVALUED:
+"AAPL is overvalued at 34x P/E. Services growth (+12%) is real but
+the market is paying for hardware re-acceleration that won't come —
+iPhone has stabilized at +2% and the deferred Siri rollout removes
+the only catalyst that could fix the 16e mix problem. Watch FY25Q4
+iPhone units: another flat print breaks the multiple."
+
+UNDERVALUED:
+"JPM is undervalued — the market still treats it as a NIM bank.
+Payments + Asset Management are now ~40% of revenue and grow
+mid-teens regardless of the rate path; the gap is the Street's
+2026 fee-income line, which is too low by ~$3B. A clean fee print
+next quarter should reset the multiple."
+
+CORRECTLY PRICED:
+"COST is correctly priced at 47x. The performance thesis is
+membership fee growth + buyback compounding at ~9% — no break,
+no edge, but the floor is hard. Watch renewal rates on the
+$5 fee hike; below 92.5% would be the first crack."
+
+If you genuinely cannot articulate the call, say "fairly priced on
+our work, no actionable edge" — that is a valid PM call. But do not
+hedge by writing a vague claim. Pick one of the three structures and
+commit.
 
 Return JSON with keys: final_pm_view, one_sentence_thesis, rating_label,
 confidence_score, mispricing_thesis (object: consensus_view, our_view,

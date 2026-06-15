@@ -67,9 +67,9 @@ class Settings(BaseSettings):
     # by setting OPENAI_MACRO_MODEL="" + GEMINI_API_KEY in the agent code path.
     openai_macro_model: str = "gpt-5.4"
     anthropic_api_key: str = ""
-    anthropic_strong_model: str = "claude-opus-4-7"
+    anthropic_strong_model: str = "claude-opus-4-8"
     anthropic_cheap_model: str = "claude-haiku-4-5"
-    anthropic_critic_model: str = "claude-opus-4-7"
+    anthropic_critic_model: str = "claude-opus-4-8"
     # Gemini (Google GenAI) — used for news/social/long-doc analysts.
     # Two access paths:
     #   - Direct API: set GEMINI_API_KEY. Quick setup; generous free tier.
@@ -105,6 +105,17 @@ class Settings(BaseSettings):
     # Phase 5: always-on monitoring loops (EDGAR, news, social, macro). Default
     # off in dev/test; flip on in prod via env.
     enable_monitoring: bool = False
+    # Theme 5: DB-backed memo-regen queue. The worker thread that drains
+    # `regen_jobs` starts with the app; disable to run an API-only
+    # replica that enqueues but never executes (e.g., when a dedicated
+    # worker service owns execution). Poll interval is how long the
+    # worker sleeps when the queue is empty; max queue age bounds how
+    # stale a queued-but-never-claimed job can be before startup
+    # recovery expires it instead of running it (guards against a
+    # backlog of forgotten jobs burning LLM spend after downtime).
+    enable_regen_worker: bool = True
+    regen_worker_poll_seconds: float = 2.0
+    regen_queue_max_age_minutes: int = 30
     # Long-term agent memory (filesystem markdown, delta-triggered).
     # `memory_dir` is the root; companies live at <root>/companies/<TICKER>.md
     # and sectors at <root>/sectors/<sector_slug>.md. Set absolute or
@@ -143,6 +154,11 @@ class Settings(BaseSettings):
     finnhub_api_key: str = ""
     intrinio_api_key: str = ""
     nasdaq_data_link_api_key: str = ""
+    # Sector-overlay providers. All three work without a key against
+    # public endpoints; supplying a key lifts the daily rate cap.
+    eia_api_key: str = ""
+    bls_api_key: str = ""
+    census_api_key: str = ""
     sec_user_agent: str = "MarketMosaic contact@example.com"
 
     # App / server

@@ -2,15 +2,22 @@
 
 Wires monitoring loops to memo refresh logic:
 
-- New filing/earnings observed by EDGAR poller → enqueue
-  `full_reanalysis(ticker)` (the existing `run_stock_memo` path).
+- New filing/earnings observed by EDGAR poller → enqueue a
+  `full_reanalysis` job on the durable `regen_jobs` queue
+  (`services/regen_worker.py`) — the same queue POST /analyze uses, so
+  scheduler-driven and user-driven regens share one worker thread (one
+  memo in memory at a time; this service has a history of OOM kills
+  during regen, see render.yaml) and one failure-telemetry trail. The
+  queue coalesces per ticker, so an EDGAR event landing while a user
+  regen is queued/running attaches to that job instead of doubling up.
+  Enqueue-and-forget: handlers return the job id, not the finished
+  memo — rating/outcome lives in the job row once the worker drains it.
 - Material/breaking news from the news loop → call `news_impact_agent`
   on the latest memo. If it returns `material=true`, build an
   `incremental_patch` snapshot inheriting from the prior version with
   the rating / confidence / risks patched. Critic is skipped on patches
   (locked in MASTER_PLAN); `revision_log` carries `critic_skipped: true`.
 
-Per-ticker FIFO queue prevents two events on the same ticker racing.
 Patch frequency cap: max 2 patches per ticker per day; further material
 events queue but don't fire until the next refresh.
 
@@ -37,9 +44,17 @@ log = logging.getLogger(__name__)
 # Locked policy: max patches per ticker per UTC day.
 MAX_PATCHES_PER_DAY = 2
 
-# Per-ticker FIFO queue (singleton). Process state — for production
-# multi-process deployments we'd back this with Redis; for now the
-# in-process queue is enough for the demo + tests.
+# How recently a memo must have been generated/viewed for new
+# filings/transcripts to trigger automatic regeneration. Outside this
+# window, the polling jobs still ingest + persist the raw data, but
+# memo regen waits for a user request. Configurable via env;
+# essentially the cost ceiling on the universe expansion.
+AUTO_REGEN_RECENCY_DAYS = 30
+
+# Per-ticker FIFO queue (singleton). Largely superseded for
+# full_reanalysis by the durable `regen_jobs` queue — kept because the
+# /api/admin/update-queue inspector reads it and future in-process
+# event types may still want it.
 _QUEUES: Dict[str, Deque[Dict[str, Any]]] = defaultdict(deque)
 
 
@@ -69,28 +84,158 @@ def _patch_count_today(ticker: str) -> int:
 # Event handlers
 # ---------------------------------------------------------------------------
 
-def on_filing_event(ticker: str) -> Dict[str, Any]:
-    """A new filing was observed → enqueue a `full_reanalysis(ticker)`.
+def should_auto_regen(
+    ticker: str, *, window_days: int = AUTO_REGEN_RECENCY_DAYS,
+) -> Dict[str, Any]:
+    """Decide whether a polling event should trigger memo regeneration.
 
-    Synchronous re-run is fine at our scale (one ticker per call from
-    the EDGAR poller); a future async worker can pop these off the
-    FIFO queue.
+    Two conditions, OR'd together:
+      1. `Company.auto_update_memo` is True (explicit pin — top mega-caps
+         by default, user-curable via the admin endpoint).
+      2. A memo exists for this ticker and was generated within the
+         last `window_days` days (proxy for "user is actively watching").
+
+    Returns a dict with the decision + the reason so callers can log
+    without re-implementing the logic. Never raises — DB failure
+    returns `{should: False, reason: 'db_error'}` (fail-safe — better
+    to skip a regen than to over-spend).
     """
     ticker = ticker.upper()
-    _QUEUES[ticker].append({
-        "kind": "full_reanalysis", "ticker": ticker,
-        "enqueued_at": datetime.utcnow().isoformat(),
-    })
     try:
-        from ..agents.graph import run_stock_memo
-        memo = run_stock_memo(ticker, force_refresh=True)
+        from . import memo_store
+        from ..database import SessionLocal
+        from ..models import Company
+        with SessionLocal() as db:
+            company = db.get(Company, ticker)
+            if company is not None and company.auto_update_memo:
+                return {"should": True, "reason": "auto_update_pinned"}
+        snap = memo_store.latest_memo(ticker)
+        if snap is None or snap.generated_at is None:
+            return {"should": False, "reason": "no_memo_on_file"}
+        gen_at = snap.generated_at
+        if isinstance(gen_at, datetime):
+            age_days = (datetime.utcnow() - gen_at).total_seconds() / 86400.0
+        else:
+            return {"should": False, "reason": "no_generated_at"}
+        if age_days <= window_days:
+            return {
+                "should": True,
+                "reason": f"within_window_{int(age_days)}d",
+            }
         return {
-            "ticker": ticker, "kind": "full_reanalysis",
-            "rating_label": memo.rating_label,
+            "should": False,
+            "reason": f"stale_memo_{int(age_days)}d_old",
         }
-    finally:
-        if _QUEUES[ticker]:
-            _QUEUES[ticker].popleft()
+    except Exception as exc:  # pragma: no cover — fail-safe to no-regen
+        log.warning("should_auto_regen failed for %s: %s", ticker, exc)
+        return {"should": False, "reason": "db_error"}
+
+
+def _persist_raw_data_only(ticker: str) -> Dict[str, int]:
+    """Ingest fresh filings + transcripts into FilingDoc / EarningsTranscript
+    + the vector store, WITHOUT running the LLM memo synthesis.
+
+    Used by the polling event handlers when the auto-regen gate
+    decides "no memo yet" — we still want the raw data in the DB
+    + indexed for future on-demand retrieval. Cheap (no LLM calls
+    on this path; filing_memory.post_pass DOES use the LLM for the
+    diff bullets, but that's a separate gate inside that function).
+    """
+    counts = {"filings": 0, "transcripts": 0}
+    try:
+        from ..database import SessionLocal
+        from .data_service import get_data_service
+        from . import history_service
+        ds = get_data_service()
+        filings = ds.get_filings(ticker) or []
+        transcripts = ds.get_earnings_transcripts(ticker) or []
+        with SessionLocal() as db:
+            history_service._ensure_tables(db)
+            counts["filings"] = history_service._ingest_filings(db, ticker, filings)
+            counts["transcripts"] = history_service._ingest_transcripts(
+                db, ticker, transcripts,
+            )
+            db.commit()
+    except Exception as exc:  # pragma: no cover — never block the poller
+        log.warning("_persist_raw_data_only failed for %s: %s", ticker, exc)
+    return counts
+
+
+def on_transcript_event(ticker: str, *, period: str = "") -> Dict[str, Any]:
+    """A new earnings transcript landed → maybe regenerate the memo.
+
+    Two-phase:
+      1. Always persist+index the raw transcript (so future memo runs
+         can retrieve it). Cheap; no LLM call beyond the embed batch.
+      2. Conditionally enqueue a full memo regen on the durable
+         `regen_jobs` queue, gated by `should_auto_regen` (auto_update
+         pin + recency window). Enqueue-and-forget: the single worker
+         thread runs the memo; outcome telemetry lives in the job row.
+    """
+    ticker = ticker.upper()
+    persist_counts = _persist_raw_data_only(ticker)
+    decision = should_auto_regen(ticker)
+    if not decision["should"]:
+        return {
+            "ticker": ticker, "period": period, "kind": "skipped",
+            "reason": decision["reason"],
+            "persisted": persist_counts,
+        }
+
+    from . import regen_worker
+    job, created = regen_worker.enqueue(ticker, source="transcript_event")
+    log.info(
+        "transcript event for %s → regen job %d (%s)",
+        ticker, job["id"], "created" if created else "coalesced",
+    )
+    return {
+        "ticker": ticker, "period": period,
+        "kind": "full_reanalysis",
+        "job_id": job["id"], "job_created": created,
+        "trigger_reason": decision["reason"],
+        "persisted": persist_counts,
+    }
+
+
+def on_filing_event(ticker: str, *, source: str = "filing_event") -> Dict[str, Any]:
+    """A new filing was observed → persist + index, then maybe memo regen.
+
+    Two-phase:
+      1. Always persist+index the raw filing (so future on-demand memo
+         runs can retrieve it). Cheap; ~$0.02 in embed cost per 10-K.
+      2. Conditionally enqueue a full memo regen on the durable
+         `regen_jobs` queue, gated by `should_auto_regen` (auto_update
+         pin + recency window). Enqueue-and-forget: scheduler-driven
+         regens share the single worker thread (and its one-at-a-time
+         memory ceiling) with user-triggered POST /analyze jobs, and
+         coalesce onto any job already queued/running for the ticker.
+
+    `source` flows into the job's telemetry waypoints — the regime-shift
+    and admin-rerun callers override it so `regen_jobs` shows what
+    actually triggered each regen.
+    """
+    ticker = ticker.upper()
+    persist_counts = _persist_raw_data_only(ticker)
+    decision = should_auto_regen(ticker)
+    if not decision["should"]:
+        return {
+            "ticker": ticker, "kind": "skipped",
+            "reason": decision["reason"],
+            "persisted": persist_counts,
+        }
+
+    from . import regen_worker
+    job, created = regen_worker.enqueue(ticker, source=source)
+    log.info(
+        "filing event for %s → regen job %d (%s)",
+        ticker, job["id"], "created" if created else "coalesced",
+    )
+    return {
+        "ticker": ticker, "kind": "full_reanalysis",
+        "job_id": job["id"], "job_created": created,
+        "trigger_reason": decision["reason"],
+        "persisted": persist_counts,
+    }
 
 
 def on_news_alert(ticker: str, alert: NewsAlert) -> Dict[str, Any]:
@@ -149,7 +294,11 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> Dict[str, Any]:
 
 
 def queue_depth(ticker: Optional[str] = None) -> Dict[str, int]:
-    """Inspect the in-process FIFO queue (for /api/admin)."""
+    """Inspect the in-process FIFO queue (for /api/admin).
+
+    Note: `full_reanalysis` no longer flows through this queue — it
+    lives in the durable `regen_jobs` table (see
+    /api/admin/regen-jobs for that telemetry)."""
     if ticker:
         return {ticker.upper(): len(_QUEUES.get(ticker.upper(), []))}
     return {t: len(q) for t, q in _QUEUES.items() if q}
@@ -233,9 +382,13 @@ def on_regime_shift(prior_regime: str, new_regime: str) -> Dict[str, Any]:
     Strategy: full_reanalysis for the top N by exposure (forces fresh
     valuation + rating; light patches wouldn't reflect the regime
     change properly). Bounded by `MAX_TICKERS_PER_REGIME_SHIFT` so a
-    single regime flip can't blow the budget.
+    single regime flip can't blow the budget. The regens are enqueued
+    on the `regen_jobs` queue and drained one at a time by the worker
+    thread — a 10-ticker shift queues instantly instead of holding the
+    scheduler thread for 10 sequential memo runs.
 
-    Returns {prior, new, refreshed: List[str]} for cron logging.
+    Returns {prior, new, refreshed: List[str]} for cron logging
+    (refreshed = enqueued; outcomes land in `regen_jobs`).
     """
     if prior_regime == new_regime:
         return {"prior": prior_regime, "new": new_regime, "refreshed": []}
@@ -243,12 +396,13 @@ def on_regime_shift(prior_regime: str, new_regime: str) -> Dict[str, Any]:
     refreshed: List[str] = []
     for ticker in affected:
         try:
-            on_filing_event(ticker)  # reuses the full_reanalysis path
+            # Reuses the full_reanalysis path (gating + enqueue).
+            on_filing_event(ticker, source="regime_shift")
             refreshed.append(ticker)
         except Exception as exc:  # pragma: no cover
             log.warning("regime-shift refresh failed for %s: %s", ticker, exc)
     log.info(
-        "regime shift %s → %s: refreshed %d ticker(s) — %s",
+        "regime shift %s → %s: enqueued regen for %d ticker(s) — %s",
         prior_regime, new_regime, len(refreshed), refreshed,
     )
     return {"prior": prior_regime, "new": new_regime, "refreshed": refreshed}

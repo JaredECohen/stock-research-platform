@@ -31,3 +31,23 @@ def _register_demo_provider():
     ds.register_test_provider(provider)
     yield provider
     ds.register_test_provider(None)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _drain_regen_queue_on_exit():
+    """Tests enqueue durable `RegenJob` rows (POST /analyze) but the
+    worker thread is deliberately not started under pytest, so queued
+    rows would persist in the shared sqlite file. Purge unfinished jobs
+    at session end so the next `uvicorn` boot doesn't pick up a test's
+    leftover job and burn a real LLM regen on it."""
+    yield
+    try:
+        from app.database import SessionLocal
+        from app.models import RegenJob
+        with SessionLocal() as db:
+            db.query(RegenJob).filter(
+                RegenJob.status.in_(("queued", "running"))
+            ).delete(synchronize_session=False)
+            db.commit()
+    except Exception:
+        pass  # table may not exist if no test touched the queue

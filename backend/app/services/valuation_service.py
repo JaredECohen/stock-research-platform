@@ -28,10 +28,72 @@ def _peer_groups() -> Dict[str, List[str]]:
 def get_peers(ticker: str) -> List[str]:
     """Direct competitors — Track A in the two-track design.
 
-    Curated `peer_groups.json` (sub-industry / direct-competitor
-    style: biotech same-therapy peers, semis same-sub-segment, etc.).
+    Two-tier resolution:
+      1. Curated override in `peer_groups.json` (hand-picked
+         sub-industry / direct-competitor sets — biotech same-therapy,
+         semis same-sub-segment, etc.).
+      2. Auto-derived by sub-industry (or industry fallback) when no
+         curated entry exists. Pulls the top market-cap names in the
+         same GICS bucket from the `companies` table; excludes the
+         target itself. Up to 5 peers.
+
+    Returns [] only when the target has no usable classification AND
+    no curated entry, in which case the comps agent renders the
+    "no peer data" stub.
     """
-    return _peer_groups().get(ticker.upper(), [])
+    t = ticker.upper()
+    curated = _peer_groups().get(t)
+    if curated:
+        return curated
+    return _derive_peers_by_classification(t, top_n=5)
+
+
+def _derive_peers_by_classification(
+    ticker: str, *, top_n: int = 5,
+) -> List[str]:
+    """Auto-derive peers from the companies table.
+
+    Order of preference:
+      1. Same `sub_industry` (GICS Level 4) — tightest match.
+      2. Same `industry` (GICS Level 3) — fallback when sub-industry
+         is sparse (often the case outside the curated mega-caps).
+
+    Picks the top-N by market cap; excludes the target and any rows
+    missing market cap. Result is empty when the target itself isn't
+    in `companies` or has no classification.
+    """
+    try:
+        from sqlalchemy import select, desc
+        from ..database import SessionLocal
+        from ..models import Company
+        with SessionLocal() as db:
+            target = db.execute(
+                select(Company).where(Company.ticker == ticker)
+            ).scalar_one_or_none()
+            if target is None:
+                return []
+            for field, value in (
+                ("sub_industry", target.sub_industry),
+                ("industry", target.industry),
+            ):
+                if not value:
+                    continue
+                stmt = (
+                    select(Company.ticker)
+                    .where(
+                        getattr(Company, field) == value,
+                        Company.ticker != ticker,
+                        Company.market_cap.is_not(None),
+                    )
+                    .order_by(desc(Company.market_cap))
+                    .limit(top_n)
+                )
+                peers = [t for (t,) in db.execute(stmt).all()]
+                if peers:
+                    return peers
+    except Exception:  # pragma: no cover — fail-safe to no-peers
+        pass
+    return []
 
 
 def get_exposure_peers(ticker: str, *, force_refresh: bool = False) -> List[str]:
