@@ -331,6 +331,10 @@ def analyze_stock(
             response.headers["X-Memo-Version"] = str(snap.version)
             response.headers["X-Memo-Trigger"] = snap.trigger
             response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
+        # The route default is 202 (async enqueue). The sync path runs
+        # inline and returns the memo, so override back to 200 — otherwise
+        # `?sync=true` returns a body with a misleading 202 status.
+        response.status_code = 200
         # FastAPI's response_model coercion is bypassed because we
         # declared the return type as Dict; serialize via model_dump.
         return memo.model_dump()

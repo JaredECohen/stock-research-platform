@@ -875,6 +875,11 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
             f"({dcf.bull.upside_pct:+.0%})."
         )
     if not points:
+        # Template fallback: cite the profile's own thesis drivers as
+        # "Tailwind:" points rather than emitting a generic filler line.
+        drivers = [d for d in (profile.get("drivers") or []) if d]
+        points.extend(f"Tailwind: {d}" for d in drivers[:3])
+    if not points:
         points.append("Quality + growth profile supports a premium versus peers.")
 
     # Pick a headline from the strongest available signal.
