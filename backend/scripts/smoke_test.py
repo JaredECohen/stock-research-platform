@@ -28,36 +28,40 @@ PROMPTS = [
 
 
 def main() -> int:
-    client = TestClient(app)
-    health = client.get("/health").json()
-    print("health:", health)
-    status = client.get("/api/providers/status").json()
-    print("mode:", status["mode"], "providers:", list(status["providers"].keys()))
-    print("missing_keys:", status["missing_api_keys"])
-    print("=" * 80)
-    failures = 0
-    for i, prompt in enumerate(PROMPTS, 1):
-        r = client.post("/api/chat", json={"message": prompt, "history": []})
-        if r.status_code != 200:
-            print(f"[{i}] FAIL ({r.status_code}): {prompt}")
-            failures += 1
-            continue
-        data = r.json()
-        intent = data.get("intent")
-        bits: list[str] = [f"intent={intent}"]
-        if data.get("memo"):
-            m = data["memo"]
-            bits.append(f"memo={m['ticker']}/{m['rating_label']} ({int(m['confidence_score'])})")
-        if data.get("portfolio"):
-            bits.append(f"portfolio={len(data['portfolio']['holdings'])} holdings")
-        if data.get("screener"):
-            bits.append(f"screener={len(data['screener']['rows'])} rows")
-        if data.get("macro"):
-            bits.append(f"macro={data['macro']['scenario']}")
-        if data.get("dcf"):
-            bits.append(f"dcf base={data['dcf']['base']['implied_share_price']:.2f}")
-        print(f"[{i}] OK :: {prompt}")
-        print("    -", " | ".join(bits))
+    # Use TestClient as a context manager so the app's startup event fires
+    # (`run_full_seed` -> init_db + seed demo universe). A bare
+    # `TestClient(app)` skips lifespan/startup, leaving the DB tableless —
+    # every chat prompt then 500s with "no such table: companies".
+    with TestClient(app) as client:
+        health = client.get("/health").json()
+        print("health:", health)
+        status = client.get("/api/providers/status").json()
+        print("mode:", status["mode"], "providers:", list(status["providers"].keys()))
+        print("missing_keys:", status["missing_api_keys"])
+        print("=" * 80)
+        failures = 0
+        for i, prompt in enumerate(PROMPTS, 1):
+            r = client.post("/api/chat", json={"message": prompt, "history": []})
+            if r.status_code != 200:
+                print(f"[{i}] FAIL ({r.status_code}): {prompt}")
+                failures += 1
+                continue
+            data = r.json()
+            intent = data.get("intent")
+            bits: list[str] = [f"intent={intent}"]
+            if data.get("memo"):
+                m = data["memo"]
+                bits.append(f"memo={m['ticker']}/{m['rating_label']} ({int(m['confidence_score'])})")
+            if data.get("portfolio"):
+                bits.append(f"portfolio={len(data['portfolio']['holdings'])} holdings")
+            if data.get("screener"):
+                bits.append(f"screener={len(data['screener']['rows'])} rows")
+            if data.get("macro"):
+                bits.append(f"macro={data['macro']['scenario']}")
+            if data.get("dcf"):
+                bits.append(f"dcf base={data['dcf']['base']['implied_share_price']:.2f}")
+            print(f"[{i}] OK :: {prompt}")
+            print("    -", " | ".join(bits))
     print("=" * 80)
     print("failures:" if failures else "all prompts succeeded.", failures)
     return 1 if failures else 0
