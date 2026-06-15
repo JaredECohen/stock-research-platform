@@ -52,10 +52,12 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
     `[{ticker, new_periods, regenerated}]` events.
 
     `regenerated` is the truthy result of
-    `update_orchestrator.on_transcript_event` — `None` when the
-    gating decided to skip memo regen (transcript persisted, no memo
-    burned), or a dict with the regenerated memo's rating when the
-    ticker is pinned / actively viewed.
+    `update_orchestrator.on_transcript_event` — `None` when the handler
+    raised, a `kind="skipped"` dict when the gating decided to skip
+    memo regen (transcript persisted, no memo burned), or a
+    `kind="full_reanalysis"` dict with the enqueued `regen_jobs` job id
+    when the ticker is pinned / actively viewed (the worker thread runs
+    the memo asynchronously; outcome lands in the job row).
     """
     if tickers is None:
         ds = get_data_service()

@@ -12,7 +12,8 @@ Covers:
   in revision_log.
 - No prior memo → `on_news_alert` returns `not_material`-ish reason.
 - Daily patch cap: after 2 patches, further calls are gated.
-- `on_filing_event` runs `run_stock_memo(force_refresh=True)`.
+- `on_filing_event` enqueues a durable `regen_jobs` job (shared lane
+  with user-triggered POST /analyze) instead of running the memo inline.
 """
 from __future__ import annotations
 
@@ -221,24 +222,78 @@ def test_daily_patch_cap_blocks_further_patches():
     assert out["reason"] == "daily_cap_reached"
 
 
-def test_on_filing_event_runs_full_reanalysis():
-    """The entry point reaches `run_stock_memo(force_refresh=True)` when
-    the auto-regen gate allows it. With the new gating policy that
-    means the ticker must be pinned OR have a recent memo on file —
-    we stub `should_auto_regen` to True to keep this test focused on
-    the dispatch path, not the gating policy itself."""
-    with patch.object(
-        update_orchestrator, "should_auto_regen",
-        return_value={"should": True, "reason": "test_stub"},
-    ), patch.object(
-        update_orchestrator, "_persist_raw_data_only",
-        return_value={"filings": 0, "transcripts": 0},
-    ), patch("app.agents.graph.run_stock_memo") as m:
-        m.return_value = _stub_memo("TSTFE")
-        out = update_orchestrator.on_filing_event("TSTFE")
-    assert out["kind"] == "full_reanalysis"
-    assert out["ticker"] == "TSTFE"
-    m.assert_called_once_with("TSTFE", force_refresh=True)
+def test_on_filing_event_enqueues_durable_regen_job():
+    """When the auto-regen gate allows it, the entry point enqueues a
+    job on the durable `regen_jobs` queue (the same lane user-triggered
+    POST /analyze uses) instead of running `run_stock_memo` inline —
+    one worker thread, one telemetry trail. We stub `should_auto_regen`
+    to True to keep this test focused on the dispatch path, not the
+    gating policy itself. The worker thread is not running under
+    pytest, so enqueueing burns no LLM calls."""
+    from app.models import RegenJob
+    from app.services import regen_worker
+
+    with SessionLocal() as db:
+        regen_worker._ensure_table(db)
+        db.query(RegenJob).filter(RegenJob.ticker == "TSTFE").delete()
+        db.commit()
+    try:
+        with patch.object(
+            update_orchestrator, "should_auto_regen",
+            return_value={"should": True, "reason": "test_stub"},
+        ), patch.object(
+            update_orchestrator, "_persist_raw_data_only",
+            return_value={"filings": 0, "transcripts": 0},
+        ), patch("app.agents.graph.run_stock_memo") as m:
+            out = update_orchestrator.on_filing_event("TSTFE")
+        assert out["kind"] == "full_reanalysis"
+        assert out["ticker"] == "TSTFE"
+        assert out["job_created"] is True
+        m.assert_not_called()  # memo runs in the worker, not inline
+
+        with SessionLocal() as db:
+            job = db.get(RegenJob, out["job_id"])
+            assert job is not None
+            assert job.ticker == "TSTFE"
+            assert job.status == "queued"
+            # Trigger source recorded in the enqueue waypoint.
+            assert job.progress[0]["source"] == "filing_event"
+    finally:
+        with SessionLocal() as db:
+            db.query(RegenJob).filter(RegenJob.ticker == "TSTFE").delete()
+            db.commit()
+
+
+def test_on_filing_event_coalesces_with_queued_user_job():
+    """An EDGAR-triggered regen landing while a user job is already
+    queued attaches to that job (created=False) instead of inserting a
+    second one — the concurrency/memory guarantee the shared queue
+    exists for."""
+    from app.models import RegenJob
+    from app.services import regen_worker
+
+    with SessionLocal() as db:
+        regen_worker._ensure_table(db)
+        db.query(RegenJob).filter(RegenJob.ticker == "TSTCOAL").delete()
+        db.commit()
+    try:
+        user_job, created = regen_worker.enqueue("TSTCOAL")
+        assert created is True
+        with patch.object(
+            update_orchestrator, "should_auto_regen",
+            return_value={"should": True, "reason": "test_stub"},
+        ), patch.object(
+            update_orchestrator, "_persist_raw_data_only",
+            return_value={"filings": 0, "transcripts": 0},
+        ):
+            out = update_orchestrator.on_filing_event("TSTCOAL")
+        assert out["kind"] == "full_reanalysis"
+        assert out["job_id"] == user_job["id"]
+        assert out["job_created"] is False
+    finally:
+        with SessionLocal() as db:
+            db.query(RegenJob).filter(RegenJob.ticker == "TSTCOAL").delete()
+            db.commit()
 
 
 def test_on_filing_event_skips_when_gate_says_no():

@@ -105,6 +105,17 @@ class Settings(BaseSettings):
     # Phase 5: always-on monitoring loops (EDGAR, news, social, macro). Default
     # off in dev/test; flip on in prod via env.
     enable_monitoring: bool = False
+    # Theme 5: DB-backed memo-regen queue. The worker thread that drains
+    # `regen_jobs` starts with the app; disable to run an API-only
+    # replica that enqueues but never executes (e.g., when a dedicated
+    # worker service owns execution). Poll interval is how long the
+    # worker sleeps when the queue is empty; max queue age bounds how
+    # stale a queued-but-never-claimed job can be before startup
+    # recovery expires it instead of running it (guards against a
+    # backlog of forgotten jobs burning LLM spend after downtime).
+    enable_regen_worker: bool = True
+    regen_worker_poll_seconds: float = 2.0
+    regen_queue_max_age_minutes: int = 30
     # Long-term agent memory (filesystem markdown, delta-triggered).
     # `memory_dir` is the root; companies live at <root>/companies/<TICKER>.md
     # and sectors at <root>/sectors/<sector_slug>.md. Set absolute or

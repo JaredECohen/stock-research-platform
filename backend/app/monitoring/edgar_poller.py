@@ -70,9 +70,11 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
         if new and seen:  # Skip first-run, when seen is empty (initialization)
             invalidate(t, kind="company_cold")
             events.append({"ticker": t, "new_accessions": sorted(new)})
-            # Wave 5B: hand the new-filing event to the update orchestrator
-            # which enqueues a `full_reanalysis(ticker)`. Wrapped so a memo
-            # failure here doesn't block the next ticker's poll.
+            # Wave 5B: hand the new-filing event to the update orchestrator,
+            # which enqueues a `full_reanalysis` job on the durable
+            # `regen_jobs` queue (memo failures land there, not here).
+            # Wrapped so an enqueue failure doesn't block the next
+            # ticker's poll.
             try:
                 from ..services.update_orchestrator import on_filing_event
                 on_filing_event(t)

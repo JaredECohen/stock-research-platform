@@ -96,6 +96,34 @@ def _own_history_signal(history: CompsHistoryStats, metric: str) -> Optional[str
     return None
 
 
+def _strongest_fact_headline(ticker: str, comps: CompsResult) -> Optional[str]:
+    """Lead the headline with the comps read's strongest fact (B5).
+
+    The old default — "Peer-relative read for {ticker}" — said nothing,
+    while the summary right below it carried the punchline ("+76.6%
+    premium to peers"). Readers skim headlines, so the premium/discount
+    magnitude and direction belong there. Returns None when no EV/EBITDA
+    premium is computable (caller keeps the generic label).
+    """
+    ev = (comps.premium_discount or {}).get("ev_ebitda")
+    if ev is None:
+        return None
+    if abs(ev) < 0.05:
+        return f"{ticker} trades in line with peers on EV/EBITDA ({ev:+.0%})."
+    direction = "premium" if ev > 0 else "discount"
+    qualifier = ""
+    t, m = comps.target, comps.median
+    if t.revenue_growth is not None and m.revenue_growth is not None:
+        qualifier = (
+            " with above-peer growth" if t.revenue_growth > m.revenue_growth
+            else " with below-peer growth"
+        )
+    return (
+        f"{ticker} trades at a {abs(ev):.0%} EV/EBITDA "
+        f"{direction} to peers{qualifier}."
+    )
+
+
 def run_comps_agent(
     profile: Dict, comps: Optional[CompsResult],
     *, prior_round_critique: Optional[str] = None,
@@ -119,7 +147,10 @@ def run_comps_agent(
     summary_parts: List[str] = [
         f"Peer set: {', '.join(p.ticker for p in comps.peers)}. {comps.interpretation}"
     ]
-    headline = f"Peer-relative read for {ticker}"
+    headline = (
+        _strongest_fact_headline(ticker, comps)
+        or f"Peer-relative read for {ticker}"
+    )
 
     if history is not None:
         key_points.extend(_self_history_points(
@@ -136,18 +167,22 @@ def run_comps_agent(
         peer_sig = _premium_signal(comps, "ev_ebitda")
         own_sig = _own_history_signal(history, "ev_ebitda")
         if peer_sig and own_sig:
+            # Carry the magnitude into the headline — readers skim it,
+            # and "premium" without a number undersells the finding (B5).
+            ev_prem = (comps.premium_discount or {}).get("ev_ebitda")
+            mag = f" ({ev_prem:+.0%} vs peers)" if ev_prem is not None else ""
             if peer_sig == own_sig:
                 # Both lenses agree — bump confidence.
                 confidence = 0.75
                 headline = (
-                    f"{ticker}: EV/EBITDA at a {peer_sig} on BOTH peer "
+                    f"{ticker}: EV/EBITDA {peer_sig}{mag} on BOTH peer "
                     f"and own-history axes."
                 )
             else:
                 # They disagree — that's the alpha; surface in headline.
                 confidence = 0.65
                 headline = (
-                    f"{ticker}: peer {peer_sig} but own-history {own_sig} "
+                    f"{ticker}: peer {peer_sig}{mag} but own-history {own_sig} "
                     f"on EV/EBITDA — divergence to investigate."
                 )
 

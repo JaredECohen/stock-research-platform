@@ -252,18 +252,25 @@ def run_risk_agent(
     return finding
 
 
+def risk_item_from_text(text: str) -> RiskItem:
+    """Classify a free-text risk into a typed RiskItem.
+
+    Shared by `derive_risk_items` (profile-driven) and the graph's
+    bear-case backfill (B4) so both paths produce identically
+    categorized items.
+    """
+    rl = text.lower()
+    sev = "high" if any(k in rl for k in ("competition", "regulator", "antitrust")) else "medium"
+    type_ = "company"
+    if "regulat" in rl or "antitrust" in rl or "policy" in rl:
+        type_ = "regulatory"
+    elif "macro" in rl or "rate" in rl or "recession" in rl:
+        type_ = "macro"
+    elif "valuation" in rl or "multiple" in rl or "compress" in rl:
+        type_ = "valuation"
+    return RiskItem(title=text[:80], detail=text, severity=sev, type=type_)
+
+
 def derive_risk_items(profile: Dict) -> List[RiskItem]:
     risks = profile.get("risks") or []
-    items: List[RiskItem] = []
-    for r in risks[:6]:
-        sev = "high" if any(k in r.lower() for k in ("competition", "regulator", "antitrust")) else "medium"
-        type_ = "company"
-        rl = r.lower()
-        if "regulat" in rl or "antitrust" in rl or "policy" in rl:
-            type_ = "regulatory"
-        elif "macro" in rl or "rate" in rl or "recession" in rl:
-            type_ = "macro"
-        elif "valuation" in rl or "multiple" in rl:
-            type_ = "valuation"
-        items.append(RiskItem(title=r[:80], detail=r, severity=sev, type=type_))
-    return items
+    return [risk_item_from_text(r) for r in risks[:6]]

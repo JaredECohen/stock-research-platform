@@ -375,8 +375,11 @@ def rerun_memos_endpoint(tickers: List[str]) -> Dict[str, Any]:
     DCF default change) and you want to refresh a curated subset
     without waiting for organic triggers.
 
-    Throttled by the on_filing_event path, which is the same
-    full-reanalysis route the EDGAR poller uses.
+    Goes through the on_filing_event path — the same gated
+    full-reanalysis route the EDGAR poller uses — which enqueues each
+    ticker on the durable `regen_jobs` queue. The response returns
+    job ids immediately (no more holding the request open while up to
+    50 memos run); watch progress via /api/admin/regen-jobs.
     """
     from ..services.update_orchestrator import on_filing_event
     if not tickers:
@@ -391,7 +394,7 @@ def rerun_memos_endpoint(tickers: List[str]) -> Dict[str, Any]:
         if not ticker:
             continue
         try:
-            results.append(on_filing_event(ticker))
+            results.append(on_filing_event(ticker, source="admin_rerun"))
         except Exception as exc:  # pragma: no cover
             results.append({"ticker": ticker, "error": str(exc)})
     return {"requested": len(tickers), "results": results}
@@ -826,6 +829,30 @@ def get_recent_llm_failures(
             }
             for r in rows
         ]
+
+
+@router.get("/api/admin/regen-jobs")
+def list_regen_jobs(
+    ticker: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+) -> Dict[str, Any]:
+    """Theme 5 — memo-regen queue telemetry.
+
+    Newest-first `RegenJob` rows: status, attempt count, timings, the
+    memo version produced, full error fields on failure, and the
+    worker's waypoint trace. Each row's `run_id` joins against
+    `/api/admin/llm-recent-failures` (LLMCallLog) and the checkpoint
+    store for per-step drill-down. This is the durable replacement for
+    the in-memory regen registry that OOM kills used to erase — a
+    killed regen now shows up here as `failed` (WorkerRestart) instead
+    of vanishing.
+    """
+    from ..services import regen_worker
+    jobs = regen_worker.recent_jobs(ticker=ticker, limit=limit)
+    counts: Dict[str, int] = {}
+    for j in jobs:
+        counts[j["status"]] = counts.get(j["status"], 0) + 1
+    return {"count": len(jobs), "status_counts": counts, "jobs": jobs}
 
 
 # ---------------------------------------------------------------------------

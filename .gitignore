@@ -49,3 +49,4 @@ coverage/
 build/
 out/
 research_notes/_index.json
+.gstack/

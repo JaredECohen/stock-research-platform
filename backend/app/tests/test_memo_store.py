@@ -214,11 +214,10 @@ def test_analyze_endpoint_creates_new_version():
 
 def test_analyze_endpoint_async_returns_202_with_status_payload():
     """Default (async) analyze returns 202 + a started_at timestamp.
-    The actual regen runs in a detached daemon thread (decoupled from
-    the request lifecycle), so we only assert the 202 shape here —
-    completion would require either a wait or `?sync=true`. The
-    detachment is the whole point of the design; testing thread
-    completion in TestClient is fragile and not the contract anyway."""
+    The actual regen is a durable `RegenJob` row drained by the
+    worker thread (Theme 5; not started under pytest), so we only
+    assert the 202 shape here. Queue mechanics + completion are
+    covered in test_regen_worker.py."""
     c = _ensure_started()
     r = c.post("/api/stocks/MSFT/analyze")
     assert r.status_code == 202

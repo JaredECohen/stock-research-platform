@@ -788,6 +788,24 @@ class MispricingThesis(BaseModel):
     falsifiers: List[str] = Field(default_factory=list)
 
 
+class ValuationVerdict(BaseModel):
+    """Single source of truth for "is it cheap or expensive?".
+
+    Historically the memo answered that question independently in five
+    places (thesis verdict word, rating badge, comps premium, valuation
+    headline, DCF summary) and the answers could contradict each other.
+    This object is computed once per memo — after the PM DCF adjustment
+    and the final rating blend — from the three signals that diverge in
+    practice. The thesis, the valuation card, and the mispricing fallback
+    all read from it.
+    """
+    verdict: Literal["undervalued", "fairly_priced", "overvalued"] = "fairly_priced"
+    dcf_base_upside: Optional[float] = None
+    comps_ev_ebitda_premium: Optional[float] = None
+    factor_valuation: Optional[float] = None
+    summary: str = ""
+
+
 class StockMemoOut(BaseModel):
     ticker: str
     company_name: str
@@ -799,6 +817,9 @@ class StockMemoOut(BaseModel):
     # Wave 10 — mispricing-first synthesis. Empty Mispricing() means the
     # memo predates the schema or the PM declined to commit a view.
     mispricing_thesis: MispricingThesis = Field(default_factory=MispricingThesis)
+    # Reconciled valuation call — the one place that answers "cheap or
+    # expensive?". Empty default on memos that pre-date the field.
+    valuation_verdict: ValuationVerdict = Field(default_factory=ValuationVerdict)
     # Wave 10 — memo-time price snapshot. Frozen at memo creation so a
     # later live-overlay can show drift ("memo wrote DCF vs $145; current
     # $158, +9% since memo"). Null on memos that pre-date the field or

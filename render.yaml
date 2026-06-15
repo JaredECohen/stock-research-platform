@@ -36,6 +36,12 @@ services:
         value: production
       - key: USE_DEMO_DATA
         value: "false"
+      # Explicit live-data intent. USE_DEMO_DATA=false already routes the
+      # provider chain to live sources; setting this too keeps every
+      # consumer of the flag pair (incl. memo `generation_mode` labeling)
+      # unambiguous.
+      - key: ENABLE_LIVE_DATA
+        value: "true"
       - key: BACKEND_HOST
         value: 0.0.0.0
       - key: BACKEND_PORT

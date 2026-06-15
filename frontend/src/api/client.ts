@@ -104,12 +104,15 @@ export const api = {
       ticker: string;
       status: "started" | "in_progress";
       started_at: string;
+      job_id: number;
       current_version: number | null;
       current_generated_at: string | null;
       note: string;
     }>(`/api/stocks/${ticker}/analyze`, { method: "POST", body: "{}" }),
   /** Poll for async memo regen completion. Returns the in-flight flag
-   *  + the latest persisted memo's timestamp. */
+   *  + the latest persisted memo's timestamp. `last_failure` carries
+   *  the regen job's error telemetry when the most recent run failed
+   *  (cleared on next success); `last_progress` is its step trace. */
   analyzeStatus: (ticker: string) =>
     request<{
       ticker: string;
@@ -117,6 +120,18 @@ export const api = {
       started_at: string | null;
       latest_memo_at: string | null;
       latest_version: number | null;
+      last_failure: {
+        ticker: string;
+        error_type: string;
+        error_message: string;
+        traceback_tail: string;
+        started_at: string | null;
+        failed_at: string | null;
+        duration_seconds: number | null;
+      } | null;
+      last_progress: Array<{ step: string; at: string }>;
+      job_id: number | null;
+      job_status: "queued" | "running" | "succeeded" | "failed" | null;
     }>(`/api/stocks/${ticker}/analyze/status`),
   /** Synchronous escape hatch for dev — returns the memo inline. Will
    *  504 on Render (HTTP timeout ~100s). Use `analyzeStock` + polling

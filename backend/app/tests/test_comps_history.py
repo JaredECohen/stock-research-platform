@@ -299,4 +299,8 @@ def test_comps_agent_runs_without_history_unchanged():
     )
     finding = run_comps_agent({"ticker": "X"}, comps)
     assert finding.confidence == 0.7  # default when no history
-    assert "Peer-relative" in finding.headline
+    # B5 — the headline now leads with the strongest peer-relative fact
+    # (premium/discount magnitude) instead of the generic
+    # "Peer-relative read for X" label.
+    assert "premium" in finding.headline.lower()
+    assert "10%" in finding.headline

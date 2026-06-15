@@ -127,6 +127,18 @@ def create_app() -> FastAPI:
         except Exception as exc:  # pragma: no cover - startup hardening
             log.warning("Seed failed at startup: %s", exc)
 
+        # Theme 5: memo-regen worker. Drains the durable `regen_jobs`
+        # queue that POST /analyze writes to. Started after the seed so
+        # requeued/recovered jobs see a fully-initialized universe.
+        # No-ops under pytest (tests drain the queue via
+        # `regen_worker.process_next_job()`), and when
+        # ENABLE_REGEN_WORKER=false.
+        try:
+            from .services.regen_worker import start_worker
+            start_worker()
+        except Exception as exc:  # pragma: no cover - startup hardening
+            log.warning("Regen worker failed to start: %s", exc)
+
         # Phase 5: register always-on monitoring loops if enabled. Default off
         # in dev/test so the test client doesn't spin up a background scheduler.
         if settings.enable_monitoring:
