@@ -22,6 +22,25 @@ from app.tests.fixtures.demo_provider import DemoProvider
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _create_tables():
+    """Create all ORM tables before any test runs.
+
+    CI starts from a fresh DB (`rm -f marketmosaic.db`). Tables are
+    otherwise only created lazily by `init_db()` at app startup — which
+    fires for TestClient-based tests but NOT for tests that import a
+    service module directly (e.g. `test_as_of_clipping` calling
+    `data_service.get_filings`, whose path queries the `companies`
+    table). Those failed with "no such table: companies" purely on
+    collection order — whichever ran before the first TestClient boot.
+    Creating the schema once at session start makes the suite
+    order-independent.
+    """
+    from app.database import init_db
+    init_db()
+    yield
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _register_demo_provider():
     """Wire the in-memory demo provider into `data_service` for the entire
     test session. Cleared on teardown so subprocess pytests don't leak

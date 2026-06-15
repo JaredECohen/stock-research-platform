@@ -49,8 +49,15 @@ def _exit(patches):
         p.stop()
 
 
+# Per-agent override model names must be provider-shaped: `chat_json`/`chat_text`
+# drop any model that isn't named for the active provider family (see
+# `llm._model_matches_provider`) so an OpenAI-shaped env can't 404 an
+# Anthropic run. Synthetic names like "TEST-PM-MODEL" would be silently
+# dropped to the route default, so use `gpt-*` / `claude-*` shapes that the
+# guard passes through — this still validates that the per-agent env reaches
+# the provider call.
 def test_pm_synthesis_uses_openai_pm_model(monkeypatch):
-    monkeypatch.setattr(settings, "openai_pm_model", "TEST-PM-MODEL")
+    monkeypatch.setattr(settings, "openai_pm_model", "gpt-test-pm-model")
     calls, patches = _capture_openai_calls()
     _enter(patches)
     try:
@@ -59,11 +66,11 @@ def test_pm_synthesis_uses_openai_pm_model(monkeypatch):
     finally:
         _exit(patches)
     assert calls, "pm_synthesis should have called the OpenAI helper"
-    assert calls[0]["model"] == "TEST-PM-MODEL"
+    assert calls[0]["model"] == "gpt-test-pm-model"
 
 
 def test_sector_agent_uses_openai_sector_model(monkeypatch):
-    monkeypatch.setattr(settings, "openai_sector_model", "TEST-SECTOR-MODEL")
+    monkeypatch.setattr(settings, "openai_sector_model", "gpt-test-sector-model")
     calls, patches = _capture_openai_calls()
     _enter(patches)
     try:
@@ -72,11 +79,11 @@ def test_sector_agent_uses_openai_sector_model(monkeypatch):
         sector_agents.run_sector_agent(fin["profile"], fin["ratios"])
     finally:
         _exit(patches)
-    assert calls and calls[0]["model"] == "TEST-SECTOR-MODEL"
+    assert calls and calls[0]["model"] == "gpt-test-sector-model"
 
 
 def test_earnings_agent_uses_openai_tool_model(monkeypatch):
-    monkeypatch.setattr(settings, "openai_tool_model", "TEST-TOOL-MODEL")
+    monkeypatch.setattr(settings, "openai_tool_model", "gpt-test-tool-model")
     calls, patches = _capture_openai_calls()
     _enter(patches)
     try:
@@ -88,11 +95,11 @@ def test_earnings_agent_uses_openai_tool_model(monkeypatch):
         )
     finally:
         _exit(patches)
-    assert calls and calls[0]["model"] == "TEST-TOOL-MODEL"
+    assert calls and calls[0]["model"] == "gpt-test-tool-model"
 
 
 def test_filing_agent_uses_openai_tool_model(monkeypatch):
-    monkeypatch.setattr(settings, "openai_tool_model", "TEST-TOOL-MODEL")
+    monkeypatch.setattr(settings, "openai_tool_model", "gpt-test-tool-model")
     calls, patches = _capture_openai_calls()
     _enter(patches)
     try:
@@ -105,11 +112,11 @@ def test_filing_agent_uses_openai_tool_model(monkeypatch):
         )
     finally:
         _exit(patches)
-    assert calls and calls[0]["model"] == "TEST-TOOL-MODEL"
+    assert calls and calls[0]["model"] == "gpt-test-tool-model"
 
 
 def test_valuation_agent_uses_openai_tool_model(monkeypatch):
-    monkeypatch.setattr(settings, "openai_tool_model", "TEST-TOOL-MODEL")
+    monkeypatch.setattr(settings, "openai_tool_model", "gpt-test-tool-model")
     calls, patches = _capture_openai_calls()
     _enter(patches)
     try:
@@ -120,14 +127,14 @@ def test_valuation_agent_uses_openai_tool_model(monkeypatch):
         )
     finally:
         _exit(patches)
-    assert calls and calls[0]["model"] == "TEST-TOOL-MODEL"
+    assert calls and calls[0]["model"] == "gpt-test-tool-model"
 
 
 def test_critic_uses_anthropic_critic_model_when_anthropic_configured(monkeypatch):
     """Critic flips to Anthropic when ANTHROPIC_API_KEY is set, and uses the
     `anthropic_critic_model` env explicitly — not the strong-route default."""
     monkeypatch.setattr(settings, "anthropic_api_key", "stub-key")
-    monkeypatch.setattr(settings, "anthropic_critic_model", "TEST-CRITIC-MODEL")
+    monkeypatch.setattr(settings, "anthropic_critic_model", "claude-test-critic-model")
 
     captured: list[dict] = []
 
@@ -143,7 +150,7 @@ def test_critic_uses_anthropic_critic_model_when_anthropic_configured(monkeypatc
             "sources_used": ["filing:0001"], "key_risks": [],
             "dcf_summary": {"summary": "x"},
         })
-    assert captured and captured[0]["model"] == "TEST-CRITIC-MODEL"
+    assert captured and captured[0]["model"] == "claude-test-critic-model"
 
 
 def test_empty_model_string_falls_back_to_route_default():
