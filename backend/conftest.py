@@ -27,6 +27,11 @@ import pytest
 # default stays "demo".
 os.environ.setdefault("ENABLE_LIVE_DATA", "false")
 os.environ.setdefault("USE_DEMO_DATA", "true")
+# Disable per-IP rate limiting under TestClient. The whole suite shares one
+# client IP, so cumulative POSTs to capped endpoints (e.g. /analyze, 5/min)
+# would otherwise trip slowapi and return 429s — making any test that fires
+# more than the limit flaky depending on collection order/timing.
+os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
