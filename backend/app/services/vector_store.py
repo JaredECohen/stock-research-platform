@@ -211,6 +211,82 @@ def sync_pgvector_column(*, batch: int = 2000, max_batches: int = 50) -> int:
     return total
 
 
+def ensure_hnsw_index(*, maintenance_work_mem: str = "128MB") -> bool:
+    """Build the HNSW index over `embedding_vec` if it doesn't exist.
+
+    Deliberately NOT called from `init_db()`: on a large table this takes
+    minutes and holds its transaction, and init_db runs on the startup
+    path before the service can answer /health — building it there would
+    fail the deploy. It belongs anywhere that can afford to block:
+    `scripts/backfill_pgvector`, or the worker's background boot thread.
+
+    Also correct to call *after* the rows are populated — building on an
+    empty table and inserting row-by-row is substantially slower.
+
+    `maintenance_work_mem` drives how much of the graph pgvector keeps in
+    memory during the build. When it doesn't fit, pgvector falls back to a
+    slower on-disk build rather than failing, so a conservative value is
+    safe on a small database instance.
+
+    Returns True when the index exists afterwards. Failure is non-fatal:
+    search without the index does an exact scan — slower, identical
+    results, and still no corpus in Python memory.
+    """
+    if not pgvector_available():
+        return False
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa_text(f"SET maintenance_work_mem = '{maintenance_work_mem}'"))
+            conn.execute(sa_text(
+                # Cosine opclass must match the `<=>` operator that search
+                # orders by, or the planner ignores the index entirely.
+                "CREATE INDEX IF NOT EXISTS ix_doc_chunks_embedding_vec "
+                "ON doc_chunks USING hnsw (embedding_vec vector_cosine_ops)"
+            ))
+        log.info("pgvector HNSW index ready on doc_chunks")
+        return True
+    except Exception as exc:  # pragma: no cover — needs Postgres
+        log.warning(
+            "pgvector HNSW index build failed (%s); search falls back to an "
+            "exact scan — same results, slower", exc,
+        )
+        return False
+
+
+def backfill_and_index(*, batch: int = 2000, max_batches: int = 25) -> Dict[str, Any]:
+    """Populate `embedding_vec` for every eligible row, then build the index.
+
+    The full catch-up pass, as opposed to the deliberately tiny sync that
+    `upsert_source` does inline (which is capped so it can't stall a memo
+    run). Loops until no rows remain rather than trusting a single call to
+    drain the whole corpus.
+
+    Idempotent and resumable — only NULL `embedding_vec` rows are touched,
+    so an interrupted run picks up where it left off. Safe to call on every
+    boot: once the corpus is populated this is a single cheap COUNT.
+    """
+    if not pgvector_available():
+        return {"skipped": True, "populated": 0, "indexed": False}
+    populated = 0
+    # Bounded rather than `while True`. sync_pgvector_column returns 0 both
+    # when it's done and when it fails, so this terminates on its own — but
+    # this runs unattended on worker boot, and a spin loop there would be
+    # far worse than a backfill that finishes on the next deploy. At the
+    # default bounds this ceiling is 2.5M rows per boot.
+    for _ in range(50):
+        n = sync_pgvector_column(batch=batch, max_batches=max_batches)
+        populated += n
+        if n == 0:
+            break
+    else:
+        log.warning(
+            "pgvector backfill hit its per-run ceiling after %d rows; "
+            "remaining rows will be picked up on the next run", populated,
+        )
+    indexed = ensure_hnsw_index()
+    return {"skipped": False, "populated": populated, "indexed": indexed}
+
+
 def upsert_source(
     *,
     ticker: Optional[str],
