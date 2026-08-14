@@ -202,12 +202,16 @@ def run_earnings_agent(
             if prior_round_critique and len(prior_round_critique) > 8
             else "guidance margin segment demand capex commentary"
         )
+        # No ticker (profile lookup missed) means we cannot scope the
+        # retrieval, and an unscoped transcript search is a corpus-wide
+        # scan — see `vector_store._reject_global_scan`. Skip instead.
+        _rt = profile.get("ticker")
         vec_hits = vector_store.search(
             retrieval_query,
-            ticker=profile.get("ticker"),
+            ticker=_rt,
             source_types=["transcript"],
             top_k=5,
-        )
+        ) if _rt else []
         retrieved_chunks = [
             {
                 "text": (h.get("text") or "")[:1200],

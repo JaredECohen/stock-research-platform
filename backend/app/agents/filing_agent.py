@@ -121,9 +121,13 @@ def run_filing_agent(
     retrieved: List[Dict] = []
     try:
         from ..services import vector_store
+        # `ticker` is `profile.get("ticker", "")` — empty when the profile
+        # lookup missed. Skipping the call keeps the (correct) BM25
+        # fallback below without logging a spurious global-scan warning;
+        # `vector_store.search` refuses the unscoped query either way.
         vec_hits = vector_store.search(
             retrieval_query, ticker=ticker, source_types=["filing"], top_k=4,
-        )
+        ) if ticker else []
         retrieved = [
             {
                 "text": h["text"],
