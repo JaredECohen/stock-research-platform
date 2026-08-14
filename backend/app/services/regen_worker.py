@@ -355,6 +355,8 @@ def execute_job(job_id: int) -> Dict[str, Any]:
         ticker, scenario, run_id = job.ticker, job.scenario, job.run_id
     started = _utcnow()
     _append_progress(job_id, "worker_claimed")
+    from . import memory_probe
+    memory_probe.log_rss("regen_job_start", job=job_id, ticker=ticker)
     log.info("regen job %d STARTING for %s (scenario=%s, run_id=%s)",
              job_id, ticker, scenario, run_id)
     try:
@@ -401,6 +403,14 @@ def execute_job(job_id: int) -> Dict[str, Any]:
                 row.error_message = str(exc)[:500]
                 row.traceback_tail = tb[-1500:]
                 db.commit()
+    # A memo run is the largest allocator in the process — 26+ LLM
+    # round-trips, filing bodies, and (pre-2026-08-12) tens of MB of chunk
+    # embeddings per specialist. CPython hands those objects back to its
+    # own freelists but not to the OS, and Render kills on RSS, so the
+    # pages have to be returned explicitly. Runs on both the success and
+    # failure paths: a job that died partway through is exactly the case
+    # where the most garbage is left behind.
+    memory_probe.trim_memory(f"regen_job_{job_id}")
     with SessionLocal() as db:
         job = db.get(RegenJob, job_id)
         return _job_dict(job) if job is not None else {}

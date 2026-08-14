@@ -1193,13 +1193,23 @@ def run_stock_memo(
 
     from .llm import llm_call_context
     from ..services.data_service import as_of_context
-    with as_of_context(as_of_date), llm_call_context(
-        agent_name="run_stock_memo", run_id=run_id,
-    ):
-        return _run_stock_memo_inner(
-            ticker, scenario=scenario, force_refresh=force_refresh,
-            run_id=run_id, as_of_date=as_of_date,
-        )
+    from ..services import memory_probe
+    # RSS breadcrumbs around the most memory-hungry operation in the
+    # process. A Render OOM-kill is a SIGKILL, so Python never gets to log
+    # anything on the way down — these two lines are what turns the next
+    # one from "the instance restarted" into "it restarted during TICKER's
+    # memo, having already grown N MB".
+    memory_probe.log_rss("memo_start", ticker=ticker, run_id=run_id)
+    try:
+        with as_of_context(as_of_date), llm_call_context(
+            agent_name="run_stock_memo", run_id=run_id,
+        ):
+            return _run_stock_memo_inner(
+                ticker, scenario=scenario, force_refresh=force_refresh,
+                run_id=run_id, as_of_date=as_of_date,
+            )
+    finally:
+        memory_probe.log_rss("memo_end", ticker=ticker, run_id=run_id)
 
 
 def _run_stock_memo_inner(
