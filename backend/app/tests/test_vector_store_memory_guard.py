@@ -264,3 +264,47 @@ def test_search_falls_back_when_pgvector_returns_none(seeded, monkeypatch):
     hits = vector_store.search("currency exposure", ticker=T1, top_k=3)
     assert hits, "fallback path returned nothing"
     assert {h["ticker"] for h in hits} == {T1}
+
+
+# ---------------------------------------------------------------------------
+# pgvector backfill (runs unattended on worker boot — must be safe everywhere)
+# ---------------------------------------------------------------------------
+
+def test_backfill_and_index_noops_off_postgres(seeded):
+    """SQLite (local, CI) must skip cleanly rather than emit invalid SQL."""
+    vector_store.reset_pgvector_probe()
+    out = vector_store.backfill_and_index()
+    assert out == {"skipped": True, "populated": 0, "indexed": False}
+
+
+def test_ensure_hnsw_index_noops_off_postgres(seeded):
+    vector_store.reset_pgvector_probe()
+    assert vector_store.ensure_hnsw_index() is False
+
+
+def test_backfill_loop_terminates_and_is_bounded(monkeypatch):
+    """The loop runs unattended on every worker boot. A backfill that never
+    returns 0 must still stop, rather than spin the boot thread forever."""
+    calls = []
+    monkeypatch.setattr(vector_store, "pgvector_available", lambda: True)
+    monkeypatch.setattr(
+        vector_store, "sync_pgvector_column",
+        lambda **kw: (calls.append(1), 100)[1],  # never drains
+    )
+    monkeypatch.setattr(vector_store, "ensure_hnsw_index", lambda **kw: True)
+    out = vector_store.backfill_and_index()
+    assert len(calls) == 50, "loop is not bounded"
+    assert out["populated"] == 5000
+
+
+def test_backfill_stops_as_soon_as_it_drains(monkeypatch):
+    calls = []
+    monkeypatch.setattr(vector_store, "pgvector_available", lambda: True)
+    monkeypatch.setattr(
+        vector_store, "sync_pgvector_column",
+        lambda **kw: (calls.append(1), 7 if len(calls) == 1 else 0)[1],
+    )
+    monkeypatch.setattr(vector_store, "ensure_hnsw_index", lambda **kw: True)
+    out = vector_store.backfill_and_index()
+    assert len(calls) == 2  # one productive pass, one that returns 0
+    assert out == {"skipped": False, "populated": 7, "indexed": True}

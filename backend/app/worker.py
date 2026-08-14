@@ -95,6 +95,25 @@ def main() -> int:
         except Exception as exc:
             log.warning("worker seed failed (continuing): %s", exc)
 
+        # Catch the pgvector column up with the JSON embeddings, then build
+        # the HNSW index. This has to happen *somewhere* that can block for
+        # minutes and has production credentials, and this thread is the
+        # only such place: init_db() would fail the deploy's health check,
+        # and the inline sync in upsert_source is capped at ~1000 rows so it
+        # can't stall a memo run — which means the historical corpus would
+        # otherwise never converge without someone remembering to run
+        # scripts/backfill_pgvector by hand.
+        #
+        # Safe on every boot: idempotent, resumable, and a no-op costing one
+        # COUNT once the corpus is populated. No-ops entirely off Postgres.
+        try:
+            from .services import vector_store
+            result = vector_store.backfill_and_index()
+            if not result["skipped"]:
+                log.info("worker pgvector backfill: %s", result)
+        except Exception as exc:
+            log.warning("worker pgvector backfill failed (continuing): %s", exc)
+
     threading.Thread(target=_seed, name="worker-seed", daemon=True).start()
 
     scheduler = None
