@@ -156,6 +156,24 @@ services:
     name: marketmosaic-worker
     runtime: docker
     dockerfilePath: ./Dockerfile
+    # The `app` package is NOT importable from the image's default
+    # working directory: WORKDIR is /app but `COPY backend /app/backend`
+    # puts the package at /app/backend/app. Bare `python -m app.worker`
+    # exits 1 with "No module named 'app'" — which is how this first
+    # shipped on 2026-08-14, because it was only ever run from the
+    # backend/ directory locally. The web service dodges it because its
+    # generated /app/server.py does sys.path.insert(0, "/app/backend").
+    #
+    # Fixed with PYTHONPATH (see envVars) rather than a
+    # `sh -c "cd /app/backend && exec ..."` wrapper, for two reasons:
+    #   - python stays PID 1, so Render's SIGTERM reaches it directly and
+    #     the graceful shutdown in app/worker.py actually runs. A shell
+    #     wrapper without `exec` would absorb the signal and the worker
+    #     would be SIGKILLed on every deploy.
+    #   - the working directory stays /app, matching the web service.
+    #     `memory_dir` defaults to a cwd-relative "./memory", so cd-ing
+    #     elsewhere would silently point the two services at different
+    #     directories.
     dockerCommand: python -m app.worker
     plan: standard
     autoDeploy: true
@@ -164,6 +182,11 @@ services:
         fromDatabase:
           name: marketmosaic-db
           property: connectionString
+
+      # Puts the `app` package on sys.path without changing the working
+      # directory — see the dockerCommand comment above.
+      - key: PYTHONPATH
+        value: /app/backend
 
       - key: APP_ENV
         value: production
