@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -10,6 +11,20 @@ from ..finance import comps as comps_engine
 from ..finance import dcf as dcf_engine
 from ..schemas import CompsResult, CompsRow, DCFAssumptions, DCFResult
 from .fundamentals_service import get_full_financials
+
+log = logging.getLogger(__name__)
+
+
+def _has_full_financials(fin: Dict) -> bool:
+    """True when income, balance AND cash statements are all present.
+
+    `comps_engine.build_row` reads line items from all three, and each is
+    accessed via `sorted(...)[-1]` — so a missing statement is an
+    IndexError, not a degraded row. Checking only `income` (the previous
+    behaviour) turned any partial-financials ticker into a crash that took
+    out the entire comps result rather than costing one peer.
+    """
+    return all(fin.get(k) for k in ("income", "balance", "cash"))
 
 
 _PEERS_CACHE: Optional[Dict[str, List[str]]] = None
@@ -229,7 +244,14 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
                 pass
 
     target = get_full_financials(target_ticker)
-    if not target.get("income"):
+    # All three statements are required — `build_row` reads balance-sheet and
+    # cash-flow line items, so an empty list here is not a degraded row, it
+    # is an IndexError on the `[-1]`. Only `income` used to be checked, which
+    # meant a partial-financials ticker crashed comps outright instead of
+    # returning None. Partial data is normal in production: a provider that
+    # serves the income statement but misses the balance sheet is a routine
+    # per-endpoint failure, not an exotic case.
+    if not _has_full_financials(target):
         return None
     target_inc = sorted(target["income"], key=lambda r: r.get("period", ""))[-1]
     target_bs = sorted(target["balance"], key=lambda r: r.get("period", ""))[-1]
@@ -242,9 +264,15 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
     )
 
     peer_rows: List[CompsRow] = []
+    skipped_peers: List[str] = []
     for peer in get_peers(target_ticker):
         p = get_full_financials(peer)
-        if not p.get("income"):
+        if not _has_full_financials(p):
+            # Skip, don't crash. This check used to cover `income` only, so a
+            # peer with an income statement but no balance sheet raised
+            # IndexError out of build_comps and killed the whole comps card —
+            # target included — rather than costing that one peer.
+            skipped_peers.append(peer)
             continue
         p_inc = sorted(p["income"], key=lambda r: r.get("period", ""))[-1]
         p_bs = sorted(p["balance"], key=lambda r: r.get("period", ""))[-1]
@@ -255,6 +283,14 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
             p["profile"].get("market_cap"),
             p_inc, p_bs, p_cf, p_prior,
         ))
+    if skipped_peers:
+        # Surfaced at WARNING because a shrinking peer set silently weakens
+        # every premium/discount number downstream, and the memo has no other
+        # way to tell that its comps were computed against fewer names.
+        log.warning(
+            "build_comps(%s): skipped %d peer(s) with incomplete financials: %s",
+            target_ticker, len(skipped_peers), ",".join(skipped_peers),
+        )
     if not peer_rows:
         return None
 
@@ -285,7 +321,7 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
             if peer in {p.ticker for p in result.peers}:
                 continue
             p = get_full_financials(peer)
-            if not p.get("income"):
+            if not _has_full_financials(p):
                 continue
             p_inc = sorted(p["income"], key=lambda r: r.get("period", ""))[-1]
             p_bs = sorted(p["balance"], key=lambda r: r.get("period", ""))[-1]
