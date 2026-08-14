@@ -50,6 +50,27 @@ def _handle_signal(signum, _frame) -> None:
     _shutdown.set()
 
 
+def _heartbeat() -> None:
+    """Persist a liveness marker readable by the web service.
+
+    Uses the same `record_run` path as the monitoring loops, so it shows
+    up in `/api/admin/cron-health` alongside them and inherits the same
+    never-raises guarantee. `rss` in the note makes the worker's memory
+    curve visible through the API too, not only in Render's log viewer.
+    """
+    try:
+        from .monitoring import record_run
+        from .services import memory_probe
+        rss = memory_probe.rss_mb()
+        record_run(
+            "worker_heartbeat",
+            success=True,
+            note=f"rss={rss:.0f}MB" if rss is not None else "",
+        )
+    except Exception:  # pragma: no cover — liveness must not kill the worker
+        log.warning("worker heartbeat failed", exc_info=True)
+
+
 def main() -> int:
     from .config import settings
     from .services import memory_probe
@@ -149,6 +170,14 @@ def main() -> int:
             settings.enable_regen_worker,
         )
 
+    # Heartbeat immediately, then every 5 minutes. Without this, nothing
+    # outside the container can tell a healthy worker from a crash-looping
+    # one until a loop happens to fire — and the earliest, edgar_poller, is
+    # 30 minutes out. The row is what makes `/api/admin/cron-health`,
+    # served by the *web* service, able to answer "is the worker alive
+    # right now?" without anyone opening the Render dashboard.
+    _heartbeat()
+
     log.info("worker ready; waiting for shutdown signal")
     while not _shutdown.is_set():
         # The regen worker and APScheduler both run on their own threads;
@@ -157,6 +186,7 @@ def main() -> int:
         if _shutdown.wait(timeout=300):
             break
         memory_probe.log_rss("worker_heartbeat")
+        _heartbeat()
 
     stop_worker()
     if scheduler is not None:
