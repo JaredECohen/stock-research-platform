@@ -48,6 +48,30 @@ def _can_use_sdk() -> bool:
         return False
 
 
+def _profile_for(fin: Dict[str, Any], ticker: str) -> Dict[str, Any]:
+    """Extract the profile from a `get_full_financials` result, guaranteeing
+    a `ticker` key.
+
+    `fin.get("profile") or {}` on its own produced the 2026-08-12 Render
+    OOM: when the fundamentals lookup missed (off-universe name, provider
+    miss), the specialists received a profile with no ticker and passed
+    `profile.get("ticker")` → None into `vector_store.search`, which read
+    a falsy ticker as "no filter" and scanned every chunk in the corpus.
+
+    The memo path never hit this because `graph.py` raises on an empty
+    profile. Chat can't raise — a follow-up question about a thinly
+    covered name is legitimate — so instead of failing, we seed the
+    ticker the caller already gave us. The specialist then runs with a
+    correctly *scoped* retrieval rather than an unscoped one, which is
+    strictly more useful than either OOMing or bailing out.
+    """
+    profile = dict(fin.get("profile") or {})
+    resolved = (ticker or "").strip().upper()
+    if resolved and not profile.get("ticker"):
+        profile["ticker"] = resolved
+    return profile
+
+
 def _build_chat_agent() -> Optional[Any]:
     """Wire an `Agent` with the four data-fetch tools the chat handler
     might need. Returns None if the SDK isn't usable."""
@@ -267,7 +291,7 @@ def _build_chat_agent() -> Optional[Any]:
             from ..services.fundamentals_service import get_full_financials
             try:
                 fin = get_full_financials((ticker or "").upper())
-                profile = fin.get("profile") or {}
+                profile = _profile_for(fin, ticker)
                 ratios = fin.get("ratios") or {}
                 finding = run_sector_agent(profile, ratios, prior_round_critique=question)
             except Exception as exc:
@@ -289,7 +313,7 @@ def _build_chat_agent() -> Optional[Any]:
             from ..services.data_service import get_data_service
             try:
                 fin = get_full_financials((ticker or "").upper())
-                profile = fin.get("profile") or {}
+                profile = _profile_for(fin, ticker)
                 transcripts = get_data_service().get_earnings_transcripts(ticker.upper()) or []
                 latest = transcripts[-1] if transcripts else {}
                 finding = run_earnings_agent(
@@ -315,7 +339,7 @@ def _build_chat_agent() -> Optional[Any]:
             from ..services.data_service import get_data_service
             try:
                 fin = get_full_financials((ticker or "").upper())
-                profile = fin.get("profile") or {}
+                profile = _profile_for(fin, ticker)
                 filings = get_data_service().get_filings(ticker.upper()) or []
                 finding = run_filing_agent(
                     profile=profile, filings=filings,
@@ -340,7 +364,7 @@ def _build_chat_agent() -> Optional[Any]:
             from ..services.valuation_service import build_dcf
             try:
                 fin = get_full_financials((ticker or "").upper())
-                profile = fin.get("profile") or {}
+                profile = _profile_for(fin, ticker)
                 ratios = fin.get("ratios") or {}
                 dcf = build_dcf((ticker or "").upper())
                 finding = run_valuation_agent(
@@ -365,7 +389,7 @@ def _build_chat_agent() -> Optional[Any]:
                     from .macro_agent import run_macro_agent
                     from ..services.fundamentals_service import get_full_financials
                     fin = get_full_financials((ticker or "").upper())
-                    profile = fin.get("profile") or {}
+                    profile = _profile_for(fin, ticker)
                     finding = run_macro_agent(
                         profile=profile, scenario=question,
                         prior_round_critique=question,
