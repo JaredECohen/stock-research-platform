@@ -16,8 +16,16 @@ sqlalchemy>=2.0.35
 psycopg2-binary>=2.9.9
 python-dotenv>=1.0.1
 httpx>=0.27.2
+# numpy backs the factor regression (services/factor_analytics.py) and the
+# batched cosine scoring in services/vector_store.py. Imported lazily in
+# the vector path — it costs ~28MB RSS, which is worth paying only once a
+# process actually runs a streaming search.
 numpy>=1.26.4
-pandas>=2.2.3
+# `pandas` was removed 2026-08-12: nothing in the repo imported it, and it
+# is not a hard requirement of any dependency (only of the optional
+# `openai[datalib]` extra, which we don't install). It was ~48MB of image
+# weight for zero call sites. If a future analytics module wants it, add
+# it back with the import kept lazy so it stays off the idle footprint.
 
 # --- LLM SDKs ----------------------------------------------------------------
 # openai 2.26+ is required by openai-agents.
