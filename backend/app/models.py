@@ -749,3 +749,37 @@ class MispricingAudit(Base):
     per_memo_scores: Mapped[list] = mapped_column(JSON, default=list)
     aggregate_means: Mapped[dict] = mapped_column(JSON, default=dict)
     weak_memo_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class CronLoopRun(Base):
+    """Last-run record per monitoring loop, readable across processes.
+
+    Added 2026-08-14, after the worker split (#44) silently broke
+    `/api/admin/cron-health`. `monitoring._LAST_RUNS` is a module-level
+    dict, so it only ever described the process that happened to be
+    serving the request. Once the loops moved to `marketmosaic-worker`,
+    the endpoint — running on the *web* service — began reporting
+    `{"loops": [], "stale_count": 0}`.
+
+    That failure mode is worse than an outage: `stale_count: 0` reads as
+    "every loop is healthy" when it actually means "I cannot see any
+    loops". The endpoint exists specifically to surface silent cron
+    failures, so a version of it that silently reports success is exactly
+    backwards.
+
+    One row per loop, upserted on each run. Deliberately not append-only:
+    this is a liveness signal, not an audit log, and 15 loops on intervals
+    as short as 30 minutes would grow unbounded for no benefit.
+    `CacheCostLog` already covers the append-only telemetry case.
+    """
+    __tablename__ = "cron_loop_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    loop_name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    last_run_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    # Which process reported it. Distinguishes the worker's loops from
+    # anything still running in-process on the web service, which is the
+    # first question to ask when cron-health looks wrong.
+    reported_by: Mapped[str] = mapped_column(String(32), default="")
