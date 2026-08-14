@@ -308,3 +308,40 @@ def test_backfill_stops_as_soon_as_it_drains(monkeypatch):
     out = vector_store.backfill_and_index()
     assert len(calls) == 2  # one productive pass, one that returns 0
     assert out == {"skipped": False, "populated": 7, "indexed": True}
+
+
+def test_empty_pgvector_result_falls_back_to_streaming(seeded, monkeypatch):
+    """An empty pgvector result must not be treated as authoritative.
+
+    `_search_pgvector` filters `WHERE embedding_vec IS NOT NULL`, so rows
+    whose vector column isn't populated look like "no matches" rather than
+    "couldn't look". That happens mid-backfill, and permanently for rows
+    whose embedding_dim isn't the current model's. Observed in production
+    as `populated: 0` while chunks existed — retrieval silently returned
+    nothing for them.
+    """
+    monkeypatch.setattr(vector_store, "pgvector_available", lambda: True)
+    monkeypatch.setattr(vector_store, "_search_pgvector", lambda *a, **k: [])
+    hits = vector_store.search("currency exposure", ticker=T1, top_k=3)
+    assert hits, "empty pgvector result did not fall back to the JSON column"
+    assert {h["ticker"] for h in hits} == {T1}
+
+
+def test_nonempty_pgvector_result_is_used_directly(seeded, monkeypatch):
+    """The fallback must not fire when pgvector actually returned rows,
+    or the fast path is pointless."""
+    sentinel = [{
+        "id": -1, "ticker": T1, "source_type": "filing", "source_id": 1,
+        "section": "risk_factors", "period_end": None, "text": "from pgvector",
+        "score": 0.99, "meta": {},
+    }]
+    streaming_called = []
+    monkeypatch.setattr(vector_store, "pgvector_available", lambda: True)
+    monkeypatch.setattr(vector_store, "_search_pgvector", lambda *a, **k: sentinel)
+    monkeypatch.setattr(
+        vector_store, "_search_streaming",
+        lambda *a, **k: streaming_called.append(1) or [],
+    )
+    hits = vector_store.search("anything", ticker=T1, top_k=3)
+    assert hits == sentinel
+    assert streaming_called == [], "streaming ran despite pgvector returning rows"

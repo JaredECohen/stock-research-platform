@@ -417,7 +417,21 @@ def search(
             q_vec, ticker=ticker, source_types=source_types,
             sections=sections, top_k=top_k,
         )
-    if hits is None:
+    # Fall back on an EMPTY pgvector result, not just on a failed one.
+    # `_search_pgvector` filters `WHERE embedding_vec IS NOT NULL`, so a
+    # chunk whose vector column hasn't been populated is invisible to it
+    # — and it reports that as "no matches" rather than "I couldn't
+    # look". Two states produce exactly this, both real:
+    #   - mid-backfill, before `backfill_and_index` has caught the
+    #     corpus up (observed in production as `populated: 0`);
+    #   - permanently, for rows whose `embedding_dim` isn't the current
+    #     model's, since a 256-dim hash-fallback vector cannot cast into
+    #     a vector(1536) column and is skipped by the backfill by design.
+    # Treating empty as authoritative silently hid those chunks from
+    # retrieval. The streaming path reads the JSON column and finds them.
+    # Costs one bounded scan when there genuinely is nothing to find,
+    # which is cheap: the query is ticker-scoped and row-capped.
+    if not hits:
         hits = _search_streaming(
             q_vec, ticker=ticker, source_types=source_types,
             sections=sections, top_k=top_k,
