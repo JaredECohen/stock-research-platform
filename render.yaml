@@ -31,9 +31,13 @@ services:
     #   - the fallback path streams + scores in numpy with a top-k heap;
     #   - regen + monitoring moved off this service (see the worker below),
     #     so the web instance no longer has to be sized for their peak.
-    # Keep `standard` until the memory graph shows sustained headroom;
-    # `starter` is only viable once the worker split has been observed in
-    # production for a full nightly cycle.
+    # 2026-08-14: measured, so this is no longer a guess. Render metrics
+    # put this service at avg 226MB / peak 334MB even after regen and
+    # monitoring moved to the worker. Against `starter`'s 512MB cap that is
+    # 1.5x headroom on the traffic-exposed, latency-sensitive service —
+    # not enough, so it stays `standard`. (An earlier note here assumed
+    # web could shrink once the worker split landed; the numbers say
+    # otherwise. The worker is the one that downsized — see below.)
     plan: standard
     healthCheckPath: /health
     autoDeploy: true
@@ -136,18 +140,31 @@ services:
   #   - worker: memo regen is the largest allocator in the codebase, and
   #     the nightly sweeps walk the whole S&P 500 universe with several
   #     jobs overlapping between 03:00 and 06:00 UTC.
-  # `standard` (2GB), NOT `starter`. This service inherits the workload
-  # that OOM-killed the web service on 512MB in the first place — memo
-  # regen. Sizing it `starter` would have moved the crash rather than
-  # fixed it. The 2026-08-12 retrieval fixes cut the per-memo peak a lot,
-  # but the process still carries a ~200-250MB import baseline before any
-  # work starts, so 512MB leaves no room for a nightly sweep and a regen
-  # at once.
+  # `starter` (512MB), downsized from `standard` on 2026-08-14 against
+  # measured data rather than the earlier guess. Render metrics over a
+  # window that included a full memo regen:
   #
-  # Once the worker's own RSS logs (`rss worker_heartbeat: …`, every 5
-  # min) show sustained headroom, the cheaper move is to downsize the
-  # WEB service to `starter` — it now only serves requests — rather than
-  # to shrink this one.
+  #   worker: avg 118MB, peak 133MB   (was provisioned 2048MB — 6.5% used)
+  #   web:    avg 226MB, peak 334MB
+  #
+  # A memo regen now adds only ~18MB over the idle baseline (`rss
+  # memo_end: 148.3 MB` against ~133MB idle) because the unbounded
+  # `doc_chunks` scan that caused the original OOM is gone. 133MB against
+  # a 512MB cap is 3.8x headroom.
+  #
+  # Residual risk, stated plainly: a nightly universe sweep (03:00-06:00
+  # UTC) has NOT been measured on this service — the loops only moved here
+  # mid-morning, after that day's crons had already fired. It is a
+  # sequential per-ticker walk with per-ticker peaks freed each iteration,
+  # so it should behave like the regen, but that is inference not data.
+  # The failure mode is bounded and now observable: an OOM restarts the
+  # worker, `recover_orphans` requeues the in-flight job once with
+  # checkpoint resume, and the missed loop shows up as a stale entry in
+  # `/api/admin/cron-health`. Revert this line to `standard` if it fires.
+  #
+  # NOTE the web service stays `standard`: 334MB peak against a 512MB cap
+  # is only 1.5x headroom on the traffic-exposed, latency-sensitive
+  # service, which is not enough.
   #
   # MUST stay at a single instance: `claim_next_job` is safe for
   # concurrent claims, but the APScheduler loops are not multi-instance
@@ -175,7 +192,7 @@ services:
     #     elsewhere would silently point the two services at different
     #     directories.
     dockerCommand: python -m app.worker
-    plan: standard
+    plan: starter
     autoDeploy: true
     envVars:
       - key: DATABASE_URL
