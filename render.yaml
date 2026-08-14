@@ -20,6 +20,20 @@ services:
     # were invisible: in-memory _REGEN_JOBS / _REGEN_FAILURES vanished
     # with the process, no exception ever fired through the try/except
     # in _run_regen_job. 4× the RAM resolves it.
+    #
+    # 2026-08-12: OOM-killed again, on `standard` this time. Root cause
+    # was NOT undersizing — `vector_store.search` treated a falsy ticker
+    # as "no filter" and scanned the entire `doc_chunks` corpus (every
+    # embedding rehydrated as 1536 boxed Python floats, ~48KB each), which
+    # no instance size survives. Fixes, in order of effect:
+    #   - the missing-ticker global scan is now refused outright;
+    #   - ranking moved into Postgres via pgvector (top_k rows, not all);
+    #   - the fallback path streams + scores in numpy with a top-k heap;
+    #   - regen + monitoring moved off this service (see the worker below),
+    #     so the web instance no longer has to be sized for their peak.
+    # Keep `standard` until the memory graph shows sustained headroom;
+    # `starter` is only viable once the worker split has been observed in
+    # production for a full nightly cycle.
     plan: standard
     healthCheckPath: /health
     autoDeploy: true
@@ -54,11 +68,21 @@ services:
         value: https://marketmosaic.ai,https://www.marketmosaic.ai
 
       # Production-mode toggles (Wave 9b).
-      # Nightly cron jobs: history backfill (03:15 UTC), EDGAR poller,
-      # outcome tracking, LLM-log GC. Without this, memos go stale and
-      # the screener stops auto-refreshing.
+      # Nightly cron jobs (history backfill 03:15 UTC, EDGAR poller,
+      # outcome tracking, LLM-log GC) and the memo-regen queue drainer
+      # both now run on the `marketmosaic-worker` service below, NOT here.
+      # 2026-08-12: they used to run in this process, which meant the web
+      # instance had to be sized for a nightly universe sweep plus a
+      # concurrent memo regen, and an OOM in either took user-facing
+      # traffic down with it. The web service still *enqueues* regen jobs
+      # via POST /analyze — the queue is durable and DB-backed, so the two
+      # services coordinate entirely through Postgres.
+      # Both must stay "false" here; flipping either back on re-couples
+      # the memory profiles.
       - key: ENABLE_MONITORING
-        value: "true"
+        value: "false"
+      - key: ENABLE_REGEN_WORKER
+        value: "false"
       # glibc opens up to 8 arenas per core and each keeps its own
       # high-water mark, so a transient spike in one thread permanently
       # inflates RSS — which is what Render bills and kills on. This
@@ -83,6 +107,88 @@ services:
         value: "false"
 
       # Secrets — set values in the Render dashboard, not in this file.
+      - key: SEC_USER_AGENT
+        sync: false
+      - key: FMP_API_KEY
+        sync: false
+      - key: FRED_API_KEY
+        sync: false
+      - key: ALPHA_VANTAGE_API_KEY
+        sync: false
+      - key: POLYGON_API_KEY
+        sync: false
+      - key: TIINGO_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+
+  # ---------------------------------------------------------------------
+  # Background worker — owns memo regen + the monitoring loops.
+  # ---------------------------------------------------------------------
+  # Same Docker image as the web service, different entrypoint
+  # (`python -m app.worker` instead of uvicorn). Split out on 2026-08-12
+  # so the two very different memory profiles stop sharing a ceiling:
+  #   - web: a few MB per request, flat and predictable.
+  #   - worker: memo regen is the largest allocator in the codebase, and
+  #     the nightly sweeps walk the whole S&P 500 universe with several
+  #     jobs overlapping between 03:00 and 06:00 UTC.
+  # `standard` (2GB), NOT `starter`. This service inherits the workload
+  # that OOM-killed the web service on 512MB in the first place — memo
+  # regen. Sizing it `starter` would have moved the crash rather than
+  # fixed it. The 2026-08-12 retrieval fixes cut the per-memo peak a lot,
+  # but the process still carries a ~200-250MB import baseline before any
+  # work starts, so 512MB leaves no room for a nightly sweep and a regen
+  # at once.
+  #
+  # Once the worker's own RSS logs (`rss worker_heartbeat: …`, every 5
+  # min) show sustained headroom, the cheaper move is to downsize the
+  # WEB service to `starter` — it now only serves requests — rather than
+  # to shrink this one.
+  #
+  # MUST stay at a single instance: `claim_next_job` is safe for
+  # concurrent claims, but the APScheduler loops are not multi-instance
+  # aware and a second replica would double provider spend.
+  - type: worker
+    name: marketmosaic-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python -m app.worker
+    plan: standard
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marketmosaic-db
+          property: connectionString
+
+      - key: APP_ENV
+        value: production
+      - key: USE_DEMO_DATA
+        value: "false"
+      - key: ENABLE_LIVE_DATA
+        value: "true"
+
+      # The inverse of the web service: this process exists to run these.
+      - key: ENABLE_MONITORING
+        value: "true"
+      - key: ENABLE_REGEN_WORKER
+        value: "true"
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+      # No HTTP surface here, so per-IP rate limiting is meaningless.
+      - key: RATE_LIMIT_ENABLED
+        value: "false"
+      # Same ephemeral-disk caveat as the web service.
+      - key: ENABLE_LONG_TERM_MEMORY
+        value: "false"
+
+      # Secrets — set values in the Render dashboard, not in this file.
+      # The worker needs the full set: the monitoring loops hit every
+      # provider and memo regen makes the LLM calls.
       - key: SEC_USER_AGENT
         sync: false
       - key: FMP_API_KEY
