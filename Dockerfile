@@ -48,5 +48,16 @@ app = api_app
 PY
 
 ENV BACKEND_PORT=8000 BACKEND_HOST=0.0.0.0
+
+# Cap glibc's per-thread arena count. This process runs uvicorn plus, on
+# the worker service, the regen thread and a 10-thread APScheduler pool;
+# glibc would otherwise open up to 8 arenas per core, each retaining its
+# own high-water mark, so one transient spike permanently inflates RSS.
+# Render enforces its memory limit on RSS, so that inflation is the
+# difference between a restart and no restart. Set here as the image
+# default; render.yaml sets it per-service too so it survives anyone
+# running the image with an overridden env.
+ENV MALLOC_ARENA_MAX=2
+
 EXPOSE 8000
 CMD ["uvicorn", "server:app", "--app-dir", "/app", "--host", "0.0.0.0", "--port", "8000"]

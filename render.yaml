@@ -59,6 +59,16 @@ services:
       # the screener stops auto-refreshing.
       - key: ENABLE_MONITORING
         value: "true"
+      # glibc opens up to 8 arenas per core and each keeps its own
+      # high-water mark, so a transient spike in one thread permanently
+      # inflates RSS — which is what Render bills and kills on. This
+      # process is thread-heavy (uvicorn + the regen worker + a 10-thread
+      # APScheduler pool), so capping arenas trades a little allocator
+      # contention for a materially flatter memory curve. Also set as the
+      # image default in the Dockerfile; repeated here so it survives
+      # anyone running the image with an overridden env.
+      - key: MALLOC_ARENA_MAX
+        value: "2"
       # Per-IP rate limits on /api/chat, /api/stocks/*/memo,
       # /api/stocks/*/analyze, /api/screener/custom, /api/seed-universe,
       # /api/admin/run-backfill. In-memory store is fine for one
