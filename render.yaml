@@ -110,6 +110,16 @@ services:
       - key: ENABLE_LONG_TERM_MEMORY
         value: "false"
 
+      # Bearer token for the /api/admin/* ops surface (and
+      # /api/seed-universe, which sits outside that prefix). MUST be set
+      # in the Render dashboard BEFORE this deploys: `admin_auth` fails
+      # CLOSED in production, so an unset token makes those endpoints
+      # return 503 rather than serving them openly. Endpoints the browser
+      # calls (ui-log POST, track-record, dcf-versions,
+      # lopsidedness-audit, evaluate-outcomes) are exempt and keep
+      # working without it — see app/api/admin_auth.EXEMPT_PREFIXES.
+      - key: ADMIN_API_TOKEN
+        sync: false
       # Secrets — set values in the Render dashboard, not in this file.
       - key: SEC_USER_AGENT
         sync: false

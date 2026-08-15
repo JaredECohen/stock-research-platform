@@ -175,6 +175,18 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_storage_url: str = "memory://"
 
+    # Bearer token guarding the `/api/admin/*` ops surface (plus
+    # `/api/seed-universe`, which lives in routes_admin but outside that
+    # prefix). Empty means "unauthenticated", which is only tolerated
+    # outside production — `admin_auth` fails CLOSED when `app_env` is
+    # production and no token is set, because failing open is precisely
+    # how this surface ended up publicly reachable.
+    #
+    # Set it in the Render dashboard (render.yaml carries `sync: false`),
+    # never in the repo. Empty by default so dev and the test suite work
+    # without ceremony.
+    admin_api_token: str = ""
+
     # PM rating blend (Option A). The final rating label is derived from a
     # weighted mix of the LLM's directional call and the deterministic
     # factor_pm_score: `final = w * llm_score + (1 - w) * factor_pm_score`,

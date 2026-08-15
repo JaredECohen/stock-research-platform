@@ -26,6 +26,7 @@ from .api import (
     routes_screener,
     routes_stocks,
 )
+from .api.admin_auth import admin_auth_middleware
 from .config import settings
 from .rate_limit import limiter
 
@@ -106,6 +107,15 @@ def create_app() -> FastAPI:
     # log line + a UILog row so frontend traces and backend traces sit
     # in one timeline.
     app.middleware("http")(_http_logging_middleware)
+
+    # Admin/ops auth. Registered AFTER the logging middleware, which with
+    # Starlette's stack means it runs INSIDE it — so rejected admin calls
+    # are still traced (a 401 spike on /api/admin is exactly what you want
+    # in the log), while the auth check itself stays outside the routers.
+    # Applied as middleware rather than per-route dependencies so a newly
+    # added admin endpoint is covered the moment it is mounted; see
+    # `admin_auth` and `test_admin_auth.py`.
+    app.middleware("http")(admin_auth_middleware)
 
     app.include_router(routes_health.router, tags=["system"])
     app.include_router(routes_stocks.router, tags=["stocks"])
