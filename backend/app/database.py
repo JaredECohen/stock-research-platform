@@ -58,7 +58,116 @@ def init_db() -> None:
     from . import models  # noqa: F401  -- ensures models register on Base
     Base.metadata.create_all(bind=engine)
     _ensure_added_columns()
+    reconcile_missing_columns()
     ensure_pgvector()
+
+
+def reconcile_missing_columns() -> list[str]:
+    """Add ORM-declared columns that are absent from existing tables.
+
+    `create_all` creates missing TABLES but never touches an existing
+    one, so a column added to a model after its table was first created
+    simply never appears in a long-lived database. Every query naming it
+    then fails — not at deploy, but whenever that code path next runs.
+
+    Found in production 2026-08-15: `postmortem_loop` had been raising
+    every night at 03:00 UTC with
+
+        psycopg2.errors.UndefinedColumn:
+        column memo_outcomes.regime_at_memo does not exist
+
+    `regime_at_memo` was added to `MemoOutcome` in Wave 10, long after
+    `memo_outcomes` was created in Wave 4A. It was invisible twice over:
+    the loop raises before reaching `record_run`, and `/api/admin/
+    cron-health` only listed loops that had reported at least once, so a
+    loop that never succeeded didn't appear at all.
+
+    `_ADDITIVE_COLUMNS` above is the hand-maintained version of this, and
+    the drift is exactly what it misses — someone has to remember to add
+    an entry. This reconciles automatically against the ORM metadata,
+    which is the thing that actually changed.
+
+    Only adds columns that are safe to add to a populated table: nullable,
+    or carrying a default. A missing NOT NULL column with no default
+    cannot be added without inventing values, so it is logged at ERROR
+    and left alone. Primary keys likewise.
+
+    Returns the list of `table.column` strings added.
+    """
+    import logging
+    from sqlalchemy import inspect as sa_inspect, text
+    log = logging.getLogger(__name__)
+
+    from . import models  # noqa: F401
+    added: list[str] = []
+    try:
+        insp = sa_inspect(engine)
+        existing_tables = set(insp.get_table_names())
+    except Exception as exc:  # pragma: no cover — inspection unavailable
+        log.warning("schema reconcile skipped (inspection failed): %s", exc)
+        return added
+
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue  # create_all just made it, with every column
+        try:
+            have = {c["name"] for c in insp.get_columns(table.name)}
+        except Exception as exc:  # pragma: no cover
+            log.warning("schema reconcile skipped for %s: %s", table.name, exc)
+            continue
+        for col in table.columns:
+            if col.name in have:
+                continue
+            if col.primary_key:
+                log.error(
+                    "schema drift: %s.%s is a missing PRIMARY KEY — cannot be "
+                    "added automatically; needs a manual migration",
+                    table.name, col.name,
+                )
+                continue
+            if not col.nullable and col.default is None and col.server_default is None:
+                log.error(
+                    "schema drift: %s.%s is NOT NULL with no default — cannot be "
+                    "added to a populated table automatically; needs a manual "
+                    "migration or a default",
+                    table.name, col.name,
+                )
+                continue
+            try:
+                col_type = col.type.compile(dialect=engine.dialect)
+                with engine.begin() as conn:
+                    conn.execute(text(
+                        f"ALTER TABLE {table.name} ADD COLUMN {col.name} {col_type}"
+                    ))
+                added.append(f"{table.name}.{col.name}")
+                # WARNING, not INFO: drift means a deploy shipped a model
+                # change without one, and that is worth noticing even
+                # though it just got repaired.
+                log.warning(
+                    "schema drift repaired: added %s.%s (%s)",
+                    table.name, col.name, col_type,
+                )
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "duplicate column" in msg or "already exists" in msg:
+                    continue  # raced with another process; fine
+                log.error(
+                    "schema drift: failed to add %s.%s: %s",
+                    table.name, col.name, exc,
+                )
+
+    if added:
+        # Recreate indexes for the repaired columns — the column alone
+        # restores correctness, but an indexed column silently losing its
+        # index is a performance cliff that would be hard to attribute
+        # later. `checkfirst` makes this a no-op for existing indexes.
+        for table in Base.metadata.sorted_tables:
+            for index in table.indexes:
+                try:
+                    index.create(bind=engine, checkfirst=True)
+                except Exception as exc:  # pragma: no cover — best effort
+                    log.warning("could not ensure index %s: %s", index.name, exc)
+    return added
 
 
 def ensure_pgvector() -> bool:
