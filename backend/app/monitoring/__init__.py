@@ -15,6 +15,34 @@ from datetime import datetime
 # own import-time wiring without a circular import.
 _LAST_RUNS: dict = {}
 
+# Every loop `register_all` wires up, by the name it passes to
+# `record_run`. Needed because `/api/admin/cron-health` reports what has
+# been *recorded* — so a loop that has never completed once has no row
+# and was simply absent from the response, rather than flagged.
+#
+# That blind spot hid a real outage: `postmortem_loop` raised on every
+# 03:00 UTC run (a missing `memo_outcomes.regime_at_memo` column) before
+# reaching `record_run`, so nightly postmortems were dead and the health
+# endpoint showed nothing wrong. `test_cron_health_cross_process`
+# asserts this list matches what `register_all` actually registers.
+KNOWN_LOOPS: tuple[str, ...] = (
+    "catalyst_loop",
+    "checkpoint_gc",
+    "edgar_poller",
+    "history_backfill",
+    "llm_log_gc",
+    "macro_loop",
+    "mispricing_audit_loop",
+    "news_loop",
+    "outcome_loop",
+    "postmortem_loop",
+    "sector_digest_loop",
+    "social_loop",
+    "theme_exposure_loop",
+    "transcripts_poller",
+    "weekly_digest_loop",
+)
+
 
 def _process_role() -> str:
     """Best-effort label for which process is reporting: worker or web."""
@@ -104,7 +132,7 @@ __all__ = [
     "llm_log_gc", "macro_loop", "mispricing_audit_loop", "news_loop",
     "outcome_loop", "postmortem_loop", "sector_digest_loop", "social_loop",
     "theme_exposure_loop", "transcripts_poller", "weekly_digest_loop",
-    "register_all", "record_run", "status_snapshot",
+    "register_all", "record_run", "status_snapshot", "KNOWN_LOOPS",
 ]
 
 
