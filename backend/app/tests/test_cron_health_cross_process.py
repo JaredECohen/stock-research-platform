@@ -128,3 +128,58 @@ def test_stale_loop_is_flagged():
     row = next(r for r in out["loops"] if r["loop"] == LOOP)
     assert row["stale"] is True
     assert out["stale_count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Never-run loops must be visible, not absent
+# ---------------------------------------------------------------------------
+
+def test_known_loops_matches_what_register_all_registers():
+    """`KNOWN_LOOPS` is hand-maintained; if it drifts from the scheduler
+    the endpoint goes back to hiding whichever loop fell off the list."""
+    from app.monitoring import KNOWN_LOOPS, register_all
+
+    class FakeScheduler:
+        def __init__(self):
+            self.ids = []
+
+        def add_job(self, fn, trigger, **kw):
+            self.ids.append(kw.get("id") or getattr(fn, "__module__", "?").rsplit(".", 1)[-1])
+
+    sched = FakeScheduler()
+    register_all(sched)
+    assert set(sched.ids) == set(KNOWN_LOOPS), (
+        "KNOWN_LOOPS is out of sync with register_all:\n"
+        f"  registered but not listed: {sorted(set(sched.ids) - set(KNOWN_LOOPS))}\n"
+        f"  listed but not registered: {sorted(set(KNOWN_LOOPS) - set(sched.ids))}"
+    )
+
+
+def test_a_loop_that_never_ran_is_reported_as_stale_not_omitted():
+    """The blind spot that hid `postmortem_loop` dying nightly.
+
+    It raised before reaching `record_run`, so it had no row — and the
+    endpoint listed only loops with rows, making a dead loop
+    indistinguishable from a healthy one.
+    """
+    from app.monitoring import KNOWN_LOOPS
+    from app.api.routes_admin import cron_health_endpoint
+
+    with SessionLocal() as db:
+        db.query(CronLoopRun).filter(
+            CronLoopRun.loop_name == "postmortem_loop"
+        ).delete(synchronize_session=False)
+        db.commit()
+    import app.monitoring as monitoring
+    monitoring._LAST_RUNS.pop("postmortem_loop", None)
+
+    out = cron_health_endpoint()
+    reported = {r["loop"] for r in out["loops"]}
+    assert set(KNOWN_LOOPS) <= reported, (
+        "registered loops missing from cron-health: "
+        f"{sorted(set(KNOWN_LOOPS) - reported)}"
+    )
+    row = next(r for r in out["loops"] if r["loop"] == "postmortem_loop")
+    assert row["last_run_at"] is None
+    assert row["stale"] is True, "a loop that never ran must not read as healthy"
+    assert out["stale_count"] >= 1

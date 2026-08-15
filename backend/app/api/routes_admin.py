@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from ..monitoring import status_snapshot
+from ..monitoring import KNOWN_LOOPS, _process_role, status_snapshot
 from ..rate_limit import LIMITS, limiter
 from ..seed_universe import run_full_seed
 from ..services import dcf_store, llm_metrics, memo_store, outcome_service, update_orchestrator
@@ -268,6 +268,16 @@ def cron_health_endpoint() -> Dict[str, Any]:
     silent cron failures.
     """
     snap = status_snapshot()
+    # Start from the registry, not from what happens to have reported.
+    # A loop that has never completed once has no record, so it used to be
+    # absent from this response entirely — and "absent" reads as "fine".
+    # That hid `postmortem_loop` failing on every 03:00 UTC run for as long
+    # as `memo_outcomes.regime_at_memo` was missing: it raised before
+    # reaching `record_run`, so it never appeared here at all. An endpoint
+    # whose whole job is surfacing silent cron failures has to name the
+    # loops it has heard nothing from.
+    for name in KNOWN_LOOPS:
+        snap.setdefault(name, {"last_run_at": None, "success": None, "note": "never run"})
     out_loops: List[Dict[str, Any]] = []
     now = datetime.utcnow()
     weekly_loops = {"weekly_digest_loop", "sector_digest_loop"}
@@ -778,9 +788,32 @@ def get_llm_breakers() -> Dict[str, Any]:
     None instantly until the cooldown elapses or the breaker is reset.
     Use this to debug "everything's silently failing" — if a provider
     shows `is_open: true`, that's the cause.
+
+    **Scope: THIS PROCESS ONLY.** The breaker lives in module-level dicts
+    in `agents.llm`, so this describes whichever process served the
+    request — the web service. Since the 2026-08-12 worker split, memo
+    regen (and therefore most LLM calls) runs in `marketmosaic-worker`,
+    whose breakers are NOT visible here; web only makes LLM calls for
+    `/api/chat`. The response says so explicitly rather than returning
+    clean-looking numbers about the wrong process.
+
+    For cross-process diagnosis use `/api/admin/llm-recent-failures`,
+    which reads `LLMCallLog` from the database and therefore sees every
+    process. A tripped breaker also writes a `provider_failure` row to
+    `CacheCostLog`. Note the breaker self-heals after 120s idle, so a
+    permanently stuck breaker — the 2026-05-31 incident — is no longer
+    possible; this endpoint is for catching one while it is open.
     """
     from ..agents.llm import get_breaker_state
-    return get_breaker_state()
+    return {
+        "reported_by": _process_role(),
+        "scope_note": (
+            "Per-process state. Memo regen runs on marketmosaic-worker, whose "
+            "breakers are not visible here — use /api/admin/llm-recent-failures "
+            "(DB-backed) for a cross-process view."
+        ),
+        "providers": get_breaker_state(),
+    }
 
 
 @router.post("/api/admin/llm-breakers/reset")
@@ -790,7 +823,20 @@ def reset_llm_breakers(provider: Optional[str] = Query(None)) -> Dict[str, Any]:
     issue (auth, model swap, etc.) to skip the auto-reset cooldown."""
     from ..agents.llm import reset_circuit_breaker, get_breaker_state
     reset_circuit_breaker(provider)
-    return {"reset": provider or "all", "state": get_breaker_state()}
+    return {
+        "reset": provider or "all",
+        # Same per-process caveat as the GET: this resets the breaker in
+        # the process that served the request (web), NOT the worker's.
+        # Rarely matters — the breaker self-heals after 120s idle, so this
+        # endpoint only skips the remainder of a cooldown — but returning
+        # a bare success would imply a fleet-wide reset it cannot perform.
+        "reported_by": _process_role(),
+        "scope_note": (
+            "Reset applied to this process only; marketmosaic-worker's breakers "
+            "are unaffected and self-heal after 120s idle."
+        ),
+        "providers": get_breaker_state(),
+    }
 
 
 @router.get("/api/admin/llm-recent-failures")

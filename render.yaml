@@ -162,15 +162,23 @@ services:
   # `doc_chunks` scan that caused the original OOM is gone. 133MB against
   # a 512MB cap is 3.8x headroom.
   #
-  # Residual risk, stated plainly: a nightly universe sweep (03:00-06:00
-  # UTC) has NOT been measured on this service — the loops only moved here
-  # mid-morning, after that day's crons had already fired. It is a
-  # sequential per-ticker walk with per-ticker peaks freed each iteration,
-  # so it should behave like the regen, but that is inference not data.
-  # The failure mode is bounded and now observable: an OOM restarts the
-  # worker, `recover_orphans` requeues the in-flight job once with
-  # checkpoint resume, and the missed loop shows up as a stale entry in
-  # `/api/admin/cron-health`. Revert this line to `standard` if it fires.
+  # 2026-08-15: the nightly sweep has now RUN on this plan, so the one
+  # open question about the downsize is closed. Render metrics over the
+  # 24h spanning it:
+  #
+  #   overall              avg 180MB  peak 212MB
+  #   nightly 03:00-06:00  avg 193MB  peak 212MB   (peak at 02:46 UTC)
+  #
+  # 212MB against the 512MB cap is 2.4x headroom with the heaviest
+  # workload the service has. The sweep costs ~80MB over idle, which
+  # matches the expectation that it is a sequential per-ticker walk whose
+  # per-ticker peaks are freed each iteration.
+  #
+  # If a future change does push this over: the failure mode is bounded
+  # and observable — an OOM restarts the worker, `recover_orphans`
+  # requeues the in-flight job once with checkpoint resume, and the missed
+  # loop surfaces as a stale entry in `/api/admin/cron-health`. Revert
+  # this line to `standard`.
   #
   # NOTE the web service stays `standard`: 334MB peak against a 512MB cap
   # is only 1.5x headroom on the traffic-exposed, latency-sensitive
