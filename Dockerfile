@@ -42,6 +42,40 @@ from app.main import app as api_app  # type: ignore
 
 DIST = Path("/app/frontend_dist")
 if DIST.exists():
+    # SPA deep-link fallback. `StaticFiles(html=True)` serves index.html for a
+    # DIRECTORY request ("/"), but a client-side route like "/track-record"
+    # looks for a FILE of that name, doesn't find one, and 404s with FastAPI's
+    # {"detail":"Not Found"}. In-app navigation worked (React Router never hit
+    # the server), so this only broke the cases nobody clicks through to:
+    # typing a URL, refreshing, opening a bookmark, following a shared link.
+    #
+    # Starlette matches in registration order, and this is registered before
+    # the StaticFiles mount, so it takes precedence for GET — which is why it
+    # serves real files itself rather than delegating. The mount stays for
+    # other methods (HEAD, and a 405 on anything else).
+    #
+    # It deliberately excludes the API prefixes: a bad /api/... path must keep
+    # returning a JSON 404 rather than 200 with an HTML body, which would turn
+    # every client-side fetch typo into an unparseable response.
+    #
+    # `is_relative_to` is the containment check — without it, "/../../etc/passwd"
+    # would resolve outside the dist directory and serve arbitrary files.
+    from fastapi.responses import FileResponse, JSONResponse
+
+    _INDEX = DIST / "index.html"
+    _API_PREFIXES = ("api/", "health", "docs", "redoc", "openapi.json")
+
+    @api_app.get("/{full_path:path}", include_in_schema=False)
+    def _spa_fallback(full_path: str):
+        if full_path.startswith(_API_PREFIXES):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        candidate = (DIST / full_path).resolve()
+        # Serve a real asset when one exists; containment check keeps
+        # "../"-style paths from escaping the dist directory.
+        if full_path and candidate.is_file() and candidate.is_relative_to(DIST.resolve()):
+            return FileResponse(candidate)
+        return FileResponse(_INDEX)
+
     api_app.mount("/", StaticFiles(directory=str(DIST), html=True), name="ui")
 
 app = api_app
