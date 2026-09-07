@@ -51,8 +51,11 @@ def _format_kpi_summary(placements: Dict) -> List[str]:
         is_ratio = abs(target_v) < 5
         target_s = f"{target_v:.1%}" if is_ratio else f"{target_v:.1f}x"
         med_s = f"{med_v:.1%}" if is_ratio else f"{med_v:.1f}x"
+        # Python 3.11 (the declared floor) rejects a nested f-string that
+        # reuses the enclosing quote character; resolve the fallback first.
+        interpretation = p.get("interpretation") or f"Q{p['quartile']}"
         bullets.append(
-            f"{kpi}: {target_s} vs cohort median {med_s} — {p.get('interpretation', f'Q{p['quartile']}')}"
+            f"{kpi}: {target_s} vs cohort median {med_s} — {interpretation}"
         )
         seen.add(kpi)
         if len(bullets) >= 5:
