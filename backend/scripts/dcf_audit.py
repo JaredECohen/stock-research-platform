@@ -1,7 +1,8 @@
 """Wave 10 — DCF audit script.
 
 Runs the new DCF (with the Wave 10 reality-check guardrails and the
-optional margin-mean-reversion glide) over the curated S&P 100 and
+optional margin-mean-reversion glide) over the curated universe
+(S&P 500 + extensions, every `auto_analysis` row) and
 flags names where the model + the live price are materially apart.
 
 The founder's complaint was "valuations seem off." This script is the

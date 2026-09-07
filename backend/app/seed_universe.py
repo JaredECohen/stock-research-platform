@@ -1,7 +1,11 @@
 """Seeder: populate the curated screener universe from `data/sp500.json`.
 
-Reads the static S&P 500 ticker list (refreshable via
-`app.scripts.refresh_universe_lists`), hits the live data provider
+Reads the static universe file — S&P 500 constituents plus curated
+extensions (foreign-listed ADRs, sub-industry semis); any ticker outside
+it is researched on demand. The list is never modified automatically:
+`app.scripts.refresh_universe_lists` pulls the live FMP constituent
+feed only when an operator runs it, and `services/universe_review.py`
+reports drift read-only. This module hits the live data provider
 chain (FMP first) for each company's profile, upserts a row into the
 `companies` table, and tags it as `auto_analysis` so the nightly
 history backfill picks it up.
@@ -28,9 +32,10 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from .database import init_db, session_scope
 from .models import Company, ScreenerScore
@@ -39,20 +44,44 @@ from .services.data_service import get_data_service
 log = logging.getLogger(__name__)
 
 
-def _load_universe() -> tuple[List[str], List[str]]:
-    """Load (universe_tickers, auto_update_tickers) from sp500.json.
+@dataclass(frozen=True)
+class UniverseFile:
+    """The parsed universe file plus the review metadata it carries.
+
+    `last_reviewed` / `review_cadence_days` drive the staleness check in
+    `services/universe_review.py`; they are read here so the seeder and
+    the review share one parser and cannot disagree about which file is
+    live. `path` is None when neither sp500.json nor sp100.json exists.
+    """
+
+    path: Optional[Path]
+    tickers: List[str] = field(default_factory=list)
+    auto_update: List[str] = field(default_factory=list)
+    as_of: Optional[str] = None
+    last_reviewed: Optional[str] = None
+    review_source: Optional[str] = None
+    review_cadence_days: Optional[int] = None
+    status: Optional[str] = None
+
+    @property
+    def legacy_fallback(self) -> bool:
+        return self.path is not None and self.path.name == "sp100.json"
+
+
+def load_universe_file() -> UniverseFile:
+    """Parse sp500.json (or the sp100.json fallback) without side effects.
 
     Falls back to sp100.json when sp500.json is missing so a stale
-    deployment keeps working. Returns ([], []) when both are missing.
+    deployment keeps working. Returns an empty `UniverseFile` (path=None)
+    when both are missing; the seeder then no-ops with a warning.
     """
     data_dir = Path(__file__).resolve().parent / "data"
     sp500_path = data_dir / "sp500.json"
     sp100_path = data_dir / "sp100.json"
     path = sp500_path if sp500_path.exists() else sp100_path
     if not path.exists():
-        log.warning("No universe file at %s — seeder is a no-op", data_dir)
-        return [], []
-    cfg = json.loads(path.read_text())
+        return UniverseFile(path=None)
+    cfg: Dict[str, Any] = json.loads(path.read_text())
     universe = [t.upper() for t in (cfg.get("tickers") or [])]
     # auto-update list — explicit top-N override. Empty list means "no
     # tickers pinned to auto-update", and gating falls back to the
@@ -60,7 +89,32 @@ def _load_universe() -> tuple[List[str], List[str]]:
     auto_update = [
         t.upper() for t in (cfg.get("_top_10_by_market_cap_2026_05") or [])
     ]
-    return universe, auto_update
+    cadence = cfg.get("_review_cadence_days")
+    return UniverseFile(
+        path=path,
+        tickers=universe,
+        auto_update=auto_update,
+        as_of=cfg.get("as_of"),
+        last_reviewed=cfg.get("_last_reviewed"),
+        review_source=cfg.get("_review_source"),
+        review_cadence_days=int(cadence) if cadence is not None else None,
+        status=cfg.get("_status"),
+    )
+
+
+def _load_universe() -> tuple[List[str], List[str]]:
+    """Load (universe_tickers, auto_update_tickers) from the universe file.
+
+    Thin tuple view over `load_universe_file` kept for the seeder and the
+    tests that already call it. Returns ([], []) when no file exists.
+    """
+    uf = load_universe_file()
+    if uf.path is None:
+        log.warning(
+            "No universe file at %s — seeder is a no-op",
+            Path(__file__).resolve().parent / "data",
+        )
+    return uf.tickers, uf.auto_update
 
 
 def _profile_to_company_kwargs(profile: Dict, ticker: str) -> Dict:
@@ -87,7 +141,7 @@ def _profile_to_company_kwargs(profile: Dict, ticker: str) -> Dict:
 
 
 def seed_universe(refresh: bool = False) -> Dict[str, int]:
-    """Upsert S&P 100 companies from the live provider chain.
+    """Upsert the curated universe (S&P 500 + extensions) from the live provider chain.
 
     Behavior:
       - Existing rows are skipped unless `refresh=True` (warm start = no
@@ -96,7 +150,7 @@ def seed_universe(refresh: bool = False) -> Dict[str, int]:
         on success the row is inserted with `universe_tier=auto_analysis`.
       - Tickers the provider rejects are skipped with a warning so one
         bad symbol doesn't block the rest.
-      - Existing rows still in the S&P 100 list are re-tagged
+      - Existing rows still in the universe file are re-tagged
         `auto_analysis` (cheap correction if a previous tier got stuck).
 
     Returns counts: `{inserted, refreshed, skipped, missing_profile,
@@ -194,8 +248,8 @@ def ensure_company_in_universe(ticker: str) -> Optional[Dict]:
     """Lazy-introduce a ticker that isn't in the curated universe.
 
     Used by the research route when the user submits an arbitrary
-    ticker (e.g., "PYPL" after the screener universe has settled on
-    the S&P 100). Behavior:
+    ticker that the curated S&P 500 + extensions file does not list).
+    Behavior:
 
     - Returns immediately when the row already exists.
     - Otherwise hits the live profile chain. Returns None if the
@@ -284,14 +338,14 @@ def run_full_seed(refresh: bool = False) -> dict:
 
     Order:
       1. `init_db` — create any missing tables.
-      2. `seed_universe` — upsert S&P 100 profiles from FMP.
+      2. `seed_universe` — upsert universe-file profiles from FMP.
       3. `recompute_screener_scores` — refresh AI-composite scores
          from whatever's currently in the history tables (will be
          empty on first boot until history_backfill has run).
       4. `snapshot_screener_metrics` — refresh the raw-metric snapshot
          used by the rule-based custom screener.
 
-    Heavy work (financial backfill across all 100 names) is NOT done
+    Heavy work (financial backfill across the whole universe) is NOT done
     here — call `monitoring.history_backfill.run_once()` from the admin
     endpoint or the nightly cron.
     """

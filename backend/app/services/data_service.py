@@ -310,8 +310,9 @@ class DataService:
         """Return every ticker the platform has ever touched.
 
         Reads the `companies` table directly — covers both the curated
-        S&P 100 (`auto_analysis`) and any ticker the user has researched
-        on demand (`analyzed_on_demand`). Empty on cold start before the
+        universe from `data/sp500.json` (S&P 500 + extensions, tagged
+        `auto_analysis`) and any ticker the user has researched on
+        demand (`analyzed_on_demand`). Empty on cold start before the
         seeder runs.
         """
         from ..database import SessionLocal

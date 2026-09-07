@@ -1,7 +1,8 @@
 {
-  "_doc": "S&P 100 (OEX) constituents — the curated screener universe. Every ticker here is pre-analyzed nightly so the screener returns instant results. Researched-but-not-listed tickers live on the Research page only and do not appear in the screener. List is a static snapshot; review and update periodically (S&P revises constituents a few times per year). Last reviewed: 2026-05.",
+  "_doc": "LEGACY (see _status). S&P 100 (OEX) constituents — the curated screener universe until 2026-05-30, now replaced by sp500.json. Historical description follows. Every ticker here is pre-analyzed nightly so the screener returns instant results. Researched-but-not-listed tickers live on the Research page only and do not appear in the screener. List is a static snapshot; review and update periodically (S&P revises constituents a few times per year). Last reviewed: 2026-05.",
   "_dual_class_policy": "When a company has multiple share classes in the index (Alphabet GOOG/GOOGL, Berkshire BRK.A/BRK.B), we list only one ticker per company. FMP's per-class market_cap is inconsistent for these (GOOG returns ~2x GOOGL's market cap despite identical fundamentals), which would distort every price-derived metric. Picked GOOGL (Class A, voting) and BRK.B (lower-priced, more retail-tradeable) as the canonical tickers.",
   "as_of": "2026-05",
+  "_status": "legacy — superseded by sp500.json on 2026-05-30; retained only as the seeder's fallback",
   "tickers": [
     "AAPL", "ABBV", "ABT", "ACN", "ADBE", "AIG", "AMD", "AMGN", "AMT", "AMZN",
     "AVGO", "AXP", "BA", "BAC", "BK", "BKNG", "BLK", "BMY", "BRK.B", "C",

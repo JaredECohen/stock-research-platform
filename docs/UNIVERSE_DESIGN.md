@@ -1,5 +1,24 @@
 # Wave 9b — Universe refactor (kill demo, S&P 100 screener, custom screens)
 
+> **Status as of 2026-09 — read this before the historical text below.**
+> The S&P 100 described in this document was the Phase 3 universe and is
+> **superseded**: on 2026-05-30 the curated screener universe became
+> `backend/app/data/sp500.json` (S&P 500 constituents plus curated
+> extensions — foreign-listed ADRs and sub-industry semis; a 170-ticker
+> starter list until an operator pulls the full constituent set). Any
+> ticker outside it is researched on demand (`analyzed_on_demand`).
+> `sp100.json` remains only as the seeder's fallback when `sp500.json` is
+> missing. The "static snapshot, manual refresh" decision in §2 still
+> stands and is now enforced with tooling rather than intent: the file
+> stamps `_last_reviewed` / `_review_cadence_days`, `python -m
+> app.scripts.universe_review [--compare-feed]` and
+> `GET /api/admin/universe-review` report staleness and drift **read-only**,
+> `GET /api/admin/cron-health` carries the same staleness flag, and the
+> only path that rewrites the file is the operator-run
+> `python -m app.scripts.refresh_universe_lists`. Nothing modifies the
+> universe automatically from an external feed. References to "S&P 100"
+> below are historically accurate and left as written.
+
 The platform was built around a synthesized 33-ticker demo dataset.
 Live providers (FMP, Alpha Vantage, FRED, SEC EDGAR) were bolted on
 as a chain that falls back to demo on miss. That tradeoff made sense

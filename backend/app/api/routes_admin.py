@@ -32,11 +32,18 @@ router = APIRouter()
 def seed_universe_endpoint(
     request: Request, response: Response, refresh: bool = False,
 ) -> Dict:
-    """Re-seed the S&P 100 screener universe from FMP.
+    """Re-seed the curated screener universe (S&P 500 + curated extensions) from FMP.
 
-    `refresh=true` re-fetches every profile (slower; use after FMP data
-    corrections). `refresh=false` (default) only inserts missing rows
-    and is cheap to call.
+    Upserts a `companies` row per ticker in `data/sp500.json` and tags it
+    `auto_analysis`; any ticker outside the file is still researchable
+    on demand. `refresh=true` re-fetches every profile (slower; use after
+    FMP data corrections). `refresh=false` (default) only inserts missing
+    rows and is cheap to call.
+
+    This does NOT change which tickers are in the universe. Refreshing
+    the constituent list is a separate, manual step —
+    `python -m app.scripts.refresh_universe_lists` — and
+    `GET /api/admin/universe-review` shows whether that is due.
     """
     return run_full_seed(refresh=refresh)
 
@@ -50,9 +57,10 @@ def run_backfill_endpoint(
 ) -> Dict:
     """Trigger the heavy history backfill on demand.
 
-    Synchronous — for the curated S&P 100 this is ~3-5 minutes (~600
-    provider calls). For a single ticker (`?ticker=NVDA`) it's ~5
-    seconds. Idempotent.
+    Synchronous — for the curated universe (S&P 500 + extensions) budget
+    ~6 provider calls per ticker, so minutes at the 170-name starter
+    list and longer at full 500. For a single ticker (`?ticker=NVDA`)
+    it's ~5 seconds. Idempotent.
 
     Use this after a fresh deploy when the database is empty (Postgres
     on first boot has 0 financial_periods rows; the `seed_universe`
@@ -308,7 +316,44 @@ def cron_health_endpoint() -> Dict[str, Any]:
         })
     out_loops.sort(key=lambda r: r["loop"])
     n_stale = sum(1 for r in out_loops if r["stale"])
-    return {"loops": out_loops, "stale_count": n_stale}
+    # The universe file is not a loop — nothing refreshes it on a
+    # schedule, by design — but "the snapshot is past its review date" is
+    # exactly the kind of quiet rot this endpoint exists to surface, and
+    # ops already looks here. Kept out of `stale_count`, which counts
+    # loops; a stale file is a review task, not a cron failure.
+    from ..services.universe_review import file_status
+    uf = file_status()
+    return {
+        "loops": out_loops,
+        "stale_count": n_stale,
+        "universe_review": {
+            "last_reviewed": uf["last_reviewed"],
+            "days_since_review": uf["days_since_review"],
+            "stale": uf["stale"],
+        },
+    }
+
+
+@router.get("/api/admin/universe-review")
+def universe_review_endpoint(
+    compare_feed: bool = Query(
+        False,
+        description="Also diff data/sp500.json against the live FMP constituent "
+                    "list. Read-only; needs FMP_API_KEY and ENABLE_LIVE_DATA.",
+    ),
+) -> Dict[str, Any]:
+    """Read-only review of the curated screener universe.
+
+    Reports the universe file's review timestamp and staleness, its
+    drift against the `companies` table, and — only with
+    `compare_feed=true` — the added/removed diff against FMP's S&P 500
+    constituent feed. Nothing is written: the universe is a hand-reviewed
+    snapshot, and changing it stays a deliberate operator step
+    (`python -m app.scripts.refresh_universe_lists`, then
+    `POST /api/seed-universe`).
+    """
+    from ..services.universe_review import review_universe
+    return review_universe(compare_feed=compare_feed)
 
 
 @router.post("/api/admin/run-weekly-digest")
