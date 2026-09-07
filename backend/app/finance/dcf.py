@@ -587,7 +587,10 @@ def build_default_sensitivities(
 # ---------------------------------------------------------------------------
 
 def check_dcf_realism(
-    base: DCFScenario, *, ticker: str = "",
+    base: DCFScenario,
+    *,
+    ticker: str = "",
+    scenarios: Optional[Iterable[DCFScenario]] = None,
 ) -> List[DCFGuardrail]:
     """Wave 10 — sanity-check the DCF against cohort distribution.
 
@@ -614,19 +617,28 @@ def check_dcf_realism(
     5. **Terminal value clamped.** WACC − terminal growth was at or
        below the 50bp floor, so the Gordon denominator was capped and
        the terminal value (hence the implied price) is an artefact of
-       the floor, not of the assumptions. Flagged at WARN.
+       the floor, not of the assumptions. Flagged at WARN — once per
+       clamped scenario, because the bull / bear bumps (tg up, WACC
+       down) routinely push a healthy base spread through the floor
+       while the base itself stays clean, and the memo prints all
+       three prices side by side. Pass the sibling scenarios via
+       `scenarios`; checks 1-4 stay base-only since the sensitivity
+       grids already cover the assumption range.
     """
     guardrails: List[DCFGuardrail] = []
 
     # 0) Degenerate Gordon denominator — surfaced first because every
     #    other number in the scenario is downstream of the capped TV.
-    if base.tv_clamped:
-        spread = base.assumptions.wacc - base.assumptions.terminal_growth
+    for scenario in (base, *(scenarios or ())):
+        if not scenario.tv_clamped:
+            continue
+        spread = scenario.assumptions.wacc - scenario.assumptions.terminal_growth
         guardrails.append(DCFGuardrail(
             severity="warn",
             metric="terminal_value_clamped",
             message=(
-                f"WACC minus terminal growth is {spread:+.2%}, at or below the "
+                f"{scenario.label or scenario.name.capitalize()}: WACC minus "
+                f"terminal growth is {spread:+.2%}, at or below the "
                 f"{TV_CLAMP_FLOOR:.1%} floor, so the Gordon terminal value was "
                 f"capped at that floor. The terminal value and implied price "
                 f"are not trustworthy — lower terminal growth or raise WACC."
@@ -784,7 +796,7 @@ def build_full_dcf(
     sens = build_default_sensitivities(
         base_assumptions, bull=bull_assumptions, bear=bear_assumptions,
     )
-    guardrails = check_dcf_realism(base, ticker=ticker)
+    guardrails = check_dcf_realism(base, ticker=ticker, scenarios=(bull, bear))
 
     summary_parts: List[str] = []
     # `current_price` 0.0 means "no quote" — the summary then reads
@@ -800,11 +812,16 @@ def build_full_dcf(
         f"Bull {fmt_price(bull.implied_share_price)} ({fmt_upside(bull.upside_pct)}) | "
         f"Bear {fmt_price(bear.implied_share_price)} ({fmt_upside(bear.upside_pct)})"
     )
-    if base.tv_clamped:
+    # Name the clamped scenario(s): a bull-only clamp is the common case
+    # (the bull bumps narrow the spread) and the reader needs to know
+    # WHICH of the three prices above is the artefact.
+    clamped = [s.label or s.name.capitalize() for s in (base, bull, bear) if s.tv_clamped]
+    if clamped:
         summary_parts.append(
-            "⚠ Terminal value clamped: WACC minus terminal growth is at or "
-            "below the 0.5% floor, so the Gordon terminal value was capped "
-            "and the implied prices are not trustworthy"
+            f"⚠ Terminal value clamped ({', '.join(clamped)}): WACC minus "
+            f"terminal growth is at or below the {TV_CLAMP_FLOOR:.1%} floor, "
+            "so the Gordon terminal value was capped and the affected implied "
+            "prices are not trustworthy"
         )
     if guardrails:
         n_warn = sum(1 for g in guardrails if g.severity == "warn")

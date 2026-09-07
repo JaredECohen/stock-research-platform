@@ -159,3 +159,46 @@ def test_fmt_helpers_render_na_for_none():
     assert fmt_price(1234.5) == "$1,234.50"
     assert fmt_upside(0.1234) == "+12.3%"
     assert fmt_upside(-0.05, decimals=0) == "-5%"
+
+
+def test_bull_only_terminal_clamp_is_surfaced_in_guardrails_and_summary():
+    """Regression: a base spread of 1.0% survives the floor, but the
+    cyclical bull bumps (tg +50bp, WACC -75bp) push the bull spread to
+    0.25% and clamp it. The memo badge keys off any scenario, so the
+    guardrail list and summary must agree with it — otherwise the capped
+    bull price prints as a trustworthy four-digit upside."""
+    a = DCFAssumptions(
+        wacc=0.055, terminal_growth=0.045, diluted_shares=1e8,
+        current_price=50.0, base_revenue=1e9,
+    )
+    res = build_full_dcf("XYZ", a, profile={"ticker": "XYZ", "sector": "Industrials"})
+    assert res.base.tv_clamped is False
+    assert res.bull.tv_clamped is True
+    assert res.bear.tv_clamped is False
+
+    clamped = [g for g in res.guardrails if g.metric == "terminal_value_clamped"]
+    assert len(clamped) == 1
+    assert clamped[0].severity == "warn"
+    assert clamped[0].message.startswith("Bull case")
+    assert clamped[0].value == pytest.approx(
+        res.bull.assumptions.wacc - res.bull.assumptions.terminal_growth,
+    )
+    # Summary names the offending scenario so the reader knows which of
+    # the three prices is the artefact.
+    assert "Terminal value clamped (Bull case)" in res.summary
+    assert "not trustworthy" in res.summary
+
+
+def test_check_dcf_realism_flags_each_clamped_scenario():
+    """One guardrail per clamped scenario: base clean, bull and bear both
+    degenerate -> two warns, each naming its scenario."""
+    a = _msft_assumptions()
+    base = run_dcf(a, scenario_name="base", label="Base case")
+    degenerate = a.model_copy(update={"wacc": 0.06, "terminal_growth": 0.06})
+    bull = run_dcf(degenerate, scenario_name="bull", label="Bull case")
+    bear = run_dcf(degenerate, scenario_name="bear", label="Bear case")
+    rails = check_dcf_realism(base, scenarios=(bull, bear))
+    clamped = [g for g in rails if g.metric == "terminal_value_clamped"]
+    assert [g.message.split(":")[0] for g in clamped] == ["Bull case", "Bear case"]
+    # Base-only call is unchanged: a clean base yields no clamp warning.
+    assert not [g for g in check_dcf_realism(base) if g.metric == "terminal_value_clamped"]
