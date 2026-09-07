@@ -227,6 +227,42 @@ def test_get_serve_stale_honours_max_age(clock):
     assert pc.get("profile", key, ttl_seconds=60, serve_stale=True, max_age_seconds=1800) is None
 
 
+def test_cached_call_fallback_uses_get_stale_path(clock, monkeypatch):
+    """Regression: the cap check used to be an inline copy in
+    cached_call rather than the `get(serve_stale=True, max_age_seconds)`
+    path, so the two could drift. The fallback must go through the same
+    lookup with the capability's cap."""
+    key = _key("wiring")
+    _seed(clock, "news", key, {"h": 1}, age_seconds=7200)  # past 1h TTL, inside 24h cap
+    seen: list = []
+    real_lookup = pc._lookup
+
+    def recording_lookup(*args, **kwargs):
+        seen.append(kwargs)
+        return real_lookup(*args, **kwargs)
+
+    monkeypatch.setattr(pc, "_lookup", recording_lookup)
+    assert pc.cached_call("news", key, lambda: None) == {"h": 1}
+    stale_calls = [k for k in seen if k.get("serve_stale")]
+    assert len(stale_calls) == 1
+    assert stale_calls[0]["max_age_seconds"] == pc.max_stale_seconds("news")
+
+
+@pytest.mark.parametrize("offset", [-1, 0, 1])
+def test_get_and_cached_call_agree_at_the_cap_boundary(clock, offset):
+    """`get(serve_stale=True, max_age_seconds=cap)` and the provider-miss
+    fallback are the same decision; they must flip at the same second."""
+    cap = pc.max_stale_seconds("quote")
+    key = _key(f"boundary{offset}")
+    _seed(clock, "quote", key, {"p": 1}, age_seconds=cap + offset)
+    via_get = pc.get("quote", key, ttl_seconds=0, serve_stale=True, max_age_seconds=cap)
+    via_call = pc.cached_call("quote", key, lambda: None)
+    assert via_get == via_call
+    assert (via_call is None) == (offset >= 0)
+    kinds = [kind for kind, _ in _ledger_rows(key)]
+    assert kinds == (["stale_refused"] if offset >= 0 else ["stale_served"])
+
+
 # ---------------------------------------------------------------------------
 # put() race handling
 # ---------------------------------------------------------------------------

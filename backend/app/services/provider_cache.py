@@ -161,6 +161,34 @@ def _read_row(capability: str, key: str) -> Optional[Tuple[Any, datetime]]:
         return row.payload_json, row.fetched_at
 
 
+def _lookup(
+    capability: str, key: str,
+    *, ttl_seconds: Optional[int],
+    serve_stale: bool,
+    max_age_seconds: Optional[int],
+) -> Tuple[Optional[Any], Optional[int]]:
+    """The one place the fresh / stale / too-stale decision is made, so
+    `get` and `cached_call` cannot drift apart on the age cap.
+
+    Returns `(payload, age_seconds)`. `payload` is None when there is no
+    row *or* the row was refused; `age_seconds` is None only when there
+    is no row, which lets `cached_call` tell the two apart and log the
+    age without a second read.
+    """
+    found = _read_row(capability, key)
+    if found is None:
+        return None, None
+    payload, fetched_at = found
+    age = int((_now() - fetched_at).total_seconds())
+    if _is_fresh(fetched_at, ttl_seconds):
+        return payload, age
+    if not serve_stale:
+        return None, age
+    if max_age_seconds is not None and not _is_fresh(fetched_at, max_age_seconds):
+        return None, age
+    return payload, age
+
+
 def get(
     capability: str, key: str,
     *, ttl_seconds: Optional[int] = None,
@@ -175,16 +203,10 @@ def get(
     `serve_stale=True`, `max_age_seconds` bounds how old that fallback
     may be; rows older than it are refused (None) as well.
     """
-    found = _read_row(capability, key)
-    if found is None:
-        return None
-    payload, fetched_at = found
-    if _is_fresh(fetched_at, ttl_seconds):
-        return payload
-    if not serve_stale:
-        return None
-    if max_age_seconds is not None and not _is_fresh(fetched_at, max_age_seconds):
-        return None
+    payload, _age = _lookup(
+        capability, key, ttl_seconds=ttl_seconds,
+        serve_stale=serve_stale, max_age_seconds=max_age_seconds,
+    )
     return payload
 
 
@@ -302,13 +324,18 @@ def cached_call(
         return fresh
 
     # Provider also missed — better stale than empty, up to a point.
-    found = _read_row(capability, key)
-    if found is None:
-        return None
-    payload, fetched_at = found
-    age = int((_now() - fetched_at).total_seconds())
+    # Same decision path as `get(serve_stale=True, max_age_seconds=…)`.
+    # ttl_seconds=0 because whatever TTL the caller asked for, a row we
+    # consult after a provider miss is by definition the stale fallback
+    # (the fresh check already failed or was skipped by force_refresh),
+    # and only the age cap should decide.
     cap = max_stale_seconds(capability)
-    if age >= cap:
+    payload, age = _lookup(
+        capability, key, ttl_seconds=0, serve_stale=True, max_age_seconds=cap,
+    )
+    if age is None:
+        return None
+    if payload is None:
         log.warning(
             "provider miss and cached row too stale capability=%s key=%s "
             "age_seconds=%d max_stale_seconds=%d", capability, key, age, cap,
