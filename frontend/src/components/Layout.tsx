@@ -1,6 +1,7 @@
 import React from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { Activity, Award, BarChart3, Briefcase, GanttChart, MessageCircle, Newspaper, Search, Settings, Sparkles, TrendingUp } from "lucide-react";
+import ProviderHealthBanner from "@/components/ProviderHealthBanner";
 
 const links = [
   { to: "/", label: "Dashboard", icon: Sparkles },
@@ -54,6 +55,9 @@ export default function Layout() {
         </div>
       </aside>
       <main className="flex-1 px-6 lg:px-10 py-6 max-w-[1400px] mx-auto w-full">
+        {/* Lives in the shell, not a page, so a degraded provider is visible
+            wherever the user lands; renders null when healthy. */}
+        <ProviderHealthBanner />
         <Outlet />
       </main>
     </div>

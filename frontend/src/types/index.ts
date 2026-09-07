@@ -540,20 +540,49 @@ export interface ProviderStatus {
   capabilities: string[];
 }
 
+// Per-provider circuit-breaker snapshot from app/agents/llm.py. Scope
+// caveat: web and worker each keep their own breakers, so a status served
+// by web only describes web's view of the providers.
+export interface LLMBreakerStatus {
+  failure_count: number;
+  is_open: boolean;
+  seconds_since_last_failure: number | null;
+  cooldown_seconds: number;
+}
+
+export interface LLMFailoverStatus {
+  enabled: boolean;
+  count: number;
+  last_from: string | null;
+  last_to: string | null;
+  // ISO-8601 (naive strings are UTC) or epoch seconds; parseTimestamp() normalises.
+  last_at: string | number | null;
+  last_reason: string | null;
+}
+
+// Everything past the first five fields is optional: the deployed backend
+// may lag the frontend, and the health banner must render nothing (never
+// crash) when an older payload comes back without them.
 export interface LLMStatus {
   configured: boolean;
   provider_choice: string;
-  active_provider: "openai" | "anthropic" | "none";
+  active_provider: "openai" | "anthropic" | "gemini" | "none" | (string & {});
   openai_configured: boolean;
   anthropic_configured: boolean;
-  openai_strong_model: string;
-  openai_cheap_model: string;
-  anthropic_strong_model: string;
-  anthropic_cheap_model: string;
+  gemini_configured?: boolean;
+  openai_strong_model?: string;
+  openai_cheap_model?: string;
+  anthropic_strong_model?: string;
+  anthropic_cheap_model?: string;
+  role_models?: Record<string, string>;
+  breakers?: Record<string, LLMBreakerStatus>;
+  failover?: LLMFailoverStatus;
+  degraded?: boolean;
+  degradation_reasons?: string[];
 }
 
 export interface ProvidersStatusResponse {
-  mode: "demo" | "live";
+  mode: "demo" | "live" | (string & {});
   providers: Record<string, ProviderStatus>;
   missing_api_keys: string[];
   llm_configured: boolean;
