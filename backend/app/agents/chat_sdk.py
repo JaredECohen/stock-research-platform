@@ -183,7 +183,7 @@ def _build_chat_agent() -> Optional[Any]:
 
         @function_tool
         def list_universe(sector: Optional[str] = None) -> Dict[str, Any]:
-            """List the curated screener universe (S&P 100). Optionally
+            """List the curated screener universe (S&P 500 + curated extensions). Optionally
             filter by sector ('Technology', 'Healthcare', etc.). Use
             when the user asks "what stocks does the platform cover" or
             "show me tech names available"."""
