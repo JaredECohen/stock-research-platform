@@ -1,0 +1,19 @@
+[
+ {
+  "symbol": "ACME",
+  "publishedDate": "2025-09-05 13:02:00",
+  "publisher": "Example Wire",
+  "title": "Acme Industrial wins multi-year logistics automation contract",
+  "image": "",
+  "site": "example.invalid",
+  "text": "Acme said the contract covers automated sortation for three regional hubs.",
+  "url": "https://example.invalid/news/1"
+ },
+ {
+  "symbol": "ACME",
+  "publishedDate": "2025-09-03 08:15:00",
+  "title": "Acme raises full-year margin outlook",
+  "text": "Management now expects operating margin near 20%.",
+  "link": "https://example.invalid/news/2"
+ }
+]

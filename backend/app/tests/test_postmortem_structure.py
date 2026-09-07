@@ -1,0 +1,238 @@
+"""Structural tests for `services/postmortem_service.py`.
+
+Covers the pure verdict classifier, the dedupe guard (`_should_postmortem`:
+rating-unchanged skip + 14-day per-(ticker, horizon) window), and the
+`run_postmortems` driver end-to-end with a seeded outcome and no LLM —
+the deterministic lesson must land in `memo_postmortems` and, on the
+90-day cadence, in the company memory file. Memory writes are pointed
+at `tmp_path`; the LLM gate is asserted closed rather than patched, so
+the real fallback branch is what runs.
+
+Seeding mirrors `test_outcome_tracking._seed_snapshot`, but keeps
+earlier versions when asked so the rating-change rule can be probed.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from typing import Optional
+
+import pytest
+
+from app.config import settings
+from app.database import SessionLocal
+from app.models import MemoOutcome, MemoPostmortem, MemoSnapshot
+from app.services import postmortem_service as pm
+
+
+def _seed_snapshot(
+    ticker: str, *, version: int = 1, rating: Optional[str] = "Bullish",
+    days_ago: int = 120, regime: str = "", clear: bool = True,
+) -> MemoSnapshot:
+    with SessionLocal() as db:
+        if clear:
+            db.query(MemoPostmortem).filter(MemoPostmortem.ticker == ticker).delete()
+            db.query(MemoOutcome).filter(MemoOutcome.ticker == ticker).delete()
+            db.query(MemoSnapshot).filter(MemoSnapshot.ticker == ticker).delete()
+        memo = {"ticker": ticker, "confidence_score": 70.0, "sector": "Technology",
+                "macro_regime_at_memo": regime}
+        if rating is not None:
+            memo["rating_label"] = rating
+        snap = MemoSnapshot(
+            ticker=ticker, version=version, trigger="first_run", memo_json=memo,
+            revision_log=[], generated_at=datetime.utcnow() - timedelta(days=days_ago),
+        )
+        db.add(snap)
+        db.commit()
+        db.refresh(snap)
+        db.expunge(snap)
+        return snap
+
+
+def _seed_outcome(snap: MemoSnapshot, *, horizon: int, fwd: float, bench: float) -> MemoOutcome:
+    with SessionLocal() as db:
+        row = MemoOutcome(
+            memo_snapshot_id=snap.id, ticker=snap.ticker,
+            rating_at_memo=snap.memo_json.get("rating_label", ""),
+            confidence_at_memo=70.0, price_at_memo=100.0, horizon_days=horizon,
+            forward_return=fwd, benchmark_return=bench, alpha=fwd - bench,
+            thesis_held=(fwd - bench) > 0,
+            regime_at_memo=snap.memo_json.get("macro_regime_at_memo") or None,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        db.expunge(row)
+        return row
+
+
+def _seed_postmortem(ticker: str, snap_id: int, horizon: int, *, days_ago: int = 0) -> None:
+    with SessionLocal() as db:
+        db.add(MemoPostmortem(
+            memo_snapshot_id=snap_id, ticker=ticker, horizon_days=horizon,
+            verdict="mixed", lesson="seed", agent_attribution={},
+            created_at=datetime.utcnow() - timedelta(days=days_ago),
+        ))
+        db.commit()
+
+
+def _postmortems(ticker: str, horizon: int):
+    with SessionLocal() as db:
+        return db.query(MemoPostmortem).filter_by(ticker=ticker, horizon_days=horizon).all()
+
+
+# ---------------------------------------------------------------------------
+# _classify_verdict
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("rating, alpha, expected", [
+    ("Bullish", None, "pending"),
+    ("Bullish", 0.021, "right"),
+    ("Bullish", 0.02, "mixed"),          # strict > 0.02
+    ("Bullish", -0.05, "mixed"),         # strict < -0.05
+    ("Bullish", -0.051, "wrong"),
+    ("Very Bullish", 0.5, "right"),
+    ("Bearish", -0.021, "right"),
+    ("Bearish", -0.02, "mixed"),
+    ("Bearish", 0.05, "mixed"),
+    ("Bearish", 0.051, "wrong"),
+    ("Very Bearish", 0.2, "wrong"),
+    ("Neutral", 0.049, "right"),
+    ("Neutral", -0.049, "right"),
+    ("Neutral", 0.05, "mixed"),
+    ("Neutral", -0.5, "mixed"),
+    ("", 0.0, "right"),                  # unknown label → neutral rules
+    ("Mixed Positive", 0.3, "mixed"),
+])
+def test_classify_verdict_boundaries(rating, alpha, expected):
+    assert pm._classify_verdict(rating, alpha) == expected
+
+
+# ---------------------------------------------------------------------------
+# _should_postmortem
+# ---------------------------------------------------------------------------
+
+def test_should_postmortem_dedupe_rules():
+    t = "TSTPMDEDUP"
+    v1 = _seed_snapshot(t, version=1, rating="Bullish")
+    with SessionLocal() as db:
+        assert pm._should_postmortem(db, v1, 90) == (True, "ok")   # first memo always proceeds
+
+    v2 = _seed_snapshot(t, version=2, rating="Bullish", clear=False)
+    with SessionLocal() as db:
+        ok, reason = pm._should_postmortem(db, v2, 90)
+    assert ok is False and reason.startswith("rating unchanged (Bullish)") and "v1" in reason
+
+    v3 = _seed_snapshot(t, version=3, rating="Neutral", clear=False)
+    with SessionLocal() as db:
+        assert pm._should_postmortem(db, v3, 90) == (True, "ok")
+
+    # A fresh postmortem for (ticker, 90) blocks 90 but not 30.
+    _seed_postmortem(t, v3.id, 90, days_ago=1)
+    with SessionLocal() as db:
+        ok, reason = pm._should_postmortem(db, v3, 90)
+        assert ok is False and reason.startswith("recent postmortem exists")
+        assert f"within {pm._DEDUPE_WINDOW_DAYS}d" in reason
+        assert pm._should_postmortem(db, v3, 30) == (True, "ok")
+
+    # Outside the window the guard opens again.
+    with SessionLocal() as db:
+        db.query(MemoPostmortem).filter_by(ticker=t).update(
+            {"created_at": datetime.utcnow() - timedelta(days=pm._DEDUPE_WINDOW_DAYS + 1)}
+        )
+        db.commit()
+    with SessionLocal() as db:
+        assert pm._should_postmortem(db, v3, 90) == (True, "ok")
+
+
+def test_rating_unchanged_skip_needs_both_labels():
+    t = "TSTPMNOLBL"
+    _seed_snapshot(t, version=1, rating=None)                 # prior has no label
+    v2 = _seed_snapshot(t, version=2, rating="Bullish", clear=False)
+    with SessionLocal() as db:
+        assert pm._should_postmortem(db, v2, 90) == (True, "ok")
+    v3 = _seed_snapshot(t, version=3, rating=None, clear=False)  # new has no label
+    with SessionLocal() as db:
+        assert pm._should_postmortem(db, v3, 90) == (True, "ok")
+
+
+def test_due_memos_excludes_already_written_and_deduped():
+    t = "TSTPMDUE"
+    snap = _seed_snapshot(t, rating="Bullish")
+    _seed_outcome(snap, horizon=90, fwd=0.2, bench=0.05)
+    due = [d for d in pm._due_memos(90, limit=500) if d["snapshot"].ticker == t]
+    assert len(due) == 1 and due[0]["outcome"].memo_snapshot_id == snap.id
+    _seed_postmortem(t, snap.id, 90)
+    assert not [d for d in pm._due_memos(90, limit=500) if d["snapshot"].ticker == t]
+
+
+# ---------------------------------------------------------------------------
+# run_postmortems — deterministic path
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def memory_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "memory_dir", str(tmp_path))
+    return tmp_path
+
+
+def test_llm_gate_is_closed_under_blank_keys():
+    assert settings.has_llm is False
+    outcome = MemoOutcome(forward_return=0.1, benchmark_return=0.0, alpha=0.1)
+    assert pm._llm_postmortem({"ticker": "X"}, outcome, 90) is None
+
+
+def test_deterministic_lesson_text():
+    outcome = MemoOutcome(forward_return=0.2, benchmark_return=0.06, alpha=0.14)
+    lesson = pm._deterministic_lesson({"rating_label": "Bullish"}, outcome, "right", 90)
+    assert lesson == (
+        "90d postmortem (right). Memo rated Bullish; alpha 14.0% vs benchmark "
+        "over the window. Realized return 20.0%, benchmark 6.0%."
+    )
+    no_alpha = MemoOutcome(forward_return=0.0, benchmark_return=0.0, alpha=None)
+    assert "alpha 0.0%" in pm._deterministic_lesson({}, no_alpha, "pending", 30)
+
+
+def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir):
+    t = "TSTPMRUN"
+    snap = _seed_snapshot(t, rating="Bullish", regime="soft_landing")
+    outcome = _seed_outcome(snap, horizon=90, fwd=0.20, bench=0.06)
+
+    report = pm.run_postmortems(horizon_days=90, limit=500)
+    assert set(report) == {"horizon_days", "due", "written", "skipped"}
+    assert report["horizon_days"] == 90 and report["written"] >= 1
+
+    rows = _postmortems(t, 90)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.memo_snapshot_id == snap.id
+    assert row.verdict == "right"
+    assert row.lesson == pm._deterministic_lesson(snap.memo_json, outcome, "right", 90)
+    assert row.agent_attribution == {}                 # no LLM → no attribution
+    assert row.regime_at_memo == "soft_landing"        # memo's own tag, not an LLM guess
+    assert row.realized_return == 0.20 and row.benchmark_return == 0.06
+    assert row.written_to_memory is True
+
+    memory_file = memory_dir / "companies" / f"{t}.md"
+    assert memory_file.exists()
+    assert "90d postmortem (right)" in memory_file.read_text()
+
+    # Idempotent: the (snapshot, horizon) pair is never written twice.
+    again = pm.run_postmortems(horizon_days=90, limit=500)
+    assert not [d for d in pm._due_memos(90, limit=500) if d["snapshot"].ticker == t]
+    assert len(_postmortems(t, 90)) == 1
+    assert again["written"] + again["skipped"] == again["due"]
+
+
+def test_run_postmortems_30d_early_read_stays_out_of_memory(memory_dir):
+    t = "TSTPM30"
+    snap = _seed_snapshot(t, rating="Bearish", days_ago=45)
+    _seed_outcome(snap, horizon=30, fwd=0.10, bench=0.01)    # bearish call, stock up → wrong
+
+    report = pm.run_postmortems(horizon_days=30, limit=500)
+    assert report["written"] >= 1
+    rows = _postmortems(t, 30)
+    assert len(rows) == 1
+    assert rows[0].verdict == "wrong"
+    assert rows[0].written_to_memory is False
+    assert not (memory_dir / "companies" / f"{t}.md").exists()
+    assert _postmortems(t, 90) == []                   # other horizon untouched

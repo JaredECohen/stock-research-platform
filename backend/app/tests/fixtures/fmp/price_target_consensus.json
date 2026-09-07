@@ -1,0 +1,9 @@
+[
+ {
+  "symbol": "ACME",
+  "targetHigh": 125,
+  "targetLow": 82,
+  "targetConsensus": 104.5,
+  "targetMedian": 105
+ }
+]
