@@ -68,17 +68,22 @@ class UniverseFile:
         return self.path is not None and self.path.name == "sp100.json"
 
 
-def load_universe_file() -> UniverseFile:
+def load_universe_file(path: Optional[Path] = None) -> UniverseFile:
     """Parse sp500.json (or the sp100.json fallback) without side effects.
 
     Falls back to sp100.json when sp500.json is missing so a stale
     deployment keeps working. Returns an empty `UniverseFile` (path=None)
     when both are missing; the seeder then no-ops with a warning.
+
+    `path` overrides the lookup so a file written elsewhere (a
+    `refresh_universe_lists` output under test) goes through the same
+    parser as the shipped one instead of a hand-rolled copy of it.
     """
-    data_dir = Path(__file__).resolve().parent / "data"
-    sp500_path = data_dir / "sp500.json"
-    sp100_path = data_dir / "sp100.json"
-    path = sp500_path if sp500_path.exists() else sp100_path
+    if path is None:
+        data_dir = Path(__file__).resolve().parent / "data"
+        sp500_path = data_dir / "sp500.json"
+        sp100_path = data_dir / "sp100.json"
+        path = sp500_path if sp500_path.exists() else sp100_path
     if not path.exists():
         return UniverseFile(path=None)
     cfg: Dict[str, Any] = json.loads(path.read_text())

@@ -5,6 +5,12 @@ a schedule. These tests pin the two properties that make that safe:
 the review can always tell you the file is old or has drifted, and the
 review itself never touches the file, the DB, or the network unless
 explicitly asked — and even then only reads.
+
+Anything that asserts a date or a count builds its own `UniverseFile`
+(`small_file`) instead of reading the shipped sp500.json: the operator
+workflow this slice documents rewrites that file's `_last_reviewed` and
+ticker list, and a refresh must not turn CI red. The shipped file is
+checked for the *shape* of its metadata only.
 """
 from __future__ import annotations
 
@@ -22,6 +28,7 @@ from app.models import Company
 from app.providers.fmp_provider import FMPProvider
 from app.seed_universe import UniverseFile, _load_universe, load_universe_file
 from app.services import universe_review
+from app.scripts import refresh_universe_lists
 from app.scripts import universe_review as cli
 
 DATA_DIR = Path(universe_review.__file__).resolve().parent.parent / "data"
@@ -87,15 +94,41 @@ def feed_never_called(monkeypatch):
 # File metadata
 # ---------------------------------------------------------------------------
 
+def _assert_review_contract(uf: UniverseFile) -> None:
+    """The metadata contract both the shipped file and a refresh must meet.
+
+    Deliberately no literal dates or counts: `refresh_universe_lists`
+    rewrites `_last_reviewed` and the ticker list, and the file being
+    refreshed is the documented workflow, not a regression.
+    """
+    assert uf.last_reviewed, "sp500.json must carry _last_reviewed"
+    assert date.fromisoformat(uf.last_reviewed) <= date.today()
+    assert isinstance(uf.review_cadence_days, int) and uf.review_cadence_days > 0
+    assert uf.review_source and uf.review_source.strip()
+    assert uf.tickers, "universe must not be empty"
+    assert len(uf.tickers) == len(set(uf.tickers)), "duplicate tickers"
+    assert all(t == t.upper() for t in uf.tickers)
+    # A pinned auto-update name outside the universe would never be seeded.
+    assert set(uf.auto_update) <= set(uf.tickers)
+
+
 def test_shipped_file_carries_review_metadata():
     uf = load_universe_file()
     assert uf.path == SP500_PATH
-    assert uf.last_reviewed == "2026-09-07"
-    assert uf.review_cadence_days == 120
-    assert "manual review" in (uf.review_source or "")
-    assert len(uf.tickers) == 170
-    assert len(uf.auto_update) == 10
     assert not uf.legacy_fallback
+    _assert_review_contract(uf)
+
+
+def test_shipped_file_review_is_internally_consistent():
+    """`days_since_review` is derived from the file, never asserted as a
+    literal — so this holds on the day the file is refreshed and on every
+    day after."""
+    uf = load_universe_file()
+    today = date(2030, 1, 1)
+    status = universe_review.file_status(uf, today=today)
+    assert status["last_reviewed"] == uf.last_reviewed
+    assert status["days_since_review"] == (today - date.fromisoformat(uf.last_reviewed)).days
+    assert status["stale"] is (status["days_since_review"] > uf.review_cadence_days)
 
 
 def test_tuple_api_still_matches_dataclass():
@@ -115,25 +148,38 @@ def test_legacy_file_is_marked_superseded():
 # Staleness
 # ---------------------------------------------------------------------------
 
-def test_fresh_file_is_not_stale():
-    report = universe_review.review_universe(today=date(2026, 9, 8))
+def _freeze_today(monkeypatch, frozen: date) -> None:
+    class _FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return frozen
+
+    monkeypatch.setattr(universe_review, "date", _FrozenDate)
+
+
+def test_fresh_file_is_not_stale(small_file):
+    # small_file: reviewed 2026-09-01, cadence 30
+    report = universe_review.review_universe(today=date(2026, 9, 2))
     assert report["file"] == "sp500.json"
-    assert report["last_reviewed"] == "2026-09-07"
-    assert report["review_cadence_days"] == 120
+    assert report["last_reviewed"] == small_file.last_reviewed
+    assert report["review_cadence_days"] == small_file.review_cadence_days
     assert report["days_since_review"] == 1
     assert report["stale"] is False
 
 
-def test_stale_when_last_review_is_older_than_the_cadence(monkeypatch):
-    class _FrozenDate(date):
-        @classmethod
-        def today(cls):
-            return date(2027, 1, 10)  # 125 days after 2026-09-07
-
-    monkeypatch.setattr(universe_review, "date", _FrozenDate)
+def test_stale_when_last_review_is_older_than_the_cadence(monkeypatch, small_file):
+    _freeze_today(monkeypatch, date(2026, 10, 6))  # 35 days after 2026-09-01
     report = universe_review.review_universe()
-    assert report["days_since_review"] == 125
+    assert report["days_since_review"] == 35
     assert report["stale"] is True
+
+
+def test_exactly_at_the_cadence_is_not_yet_stale(monkeypatch, small_file):
+    # The cadence is "review within N days"; day N itself is on time.
+    _freeze_today(monkeypatch, date(2026, 10, 1))  # 30 days after 2026-09-01
+    report = universe_review.review_universe()
+    assert report["days_since_review"] == small_file.review_cadence_days
+    assert report["stale"] is False
 
 
 def test_missing_review_stamp_counts_as_stale():
@@ -235,7 +281,7 @@ def client():
     return TestClient(app)
 
 
-def test_endpoint_requires_the_admin_token(monkeypatch, client, feed_never_called):
+def test_endpoint_requires_the_admin_token(monkeypatch, client, feed_never_called, small_file):
     monkeypatch.setattr(settings, "admin_api_token", TOKEN)
     assert client.get("/api/admin/universe-review").status_code == 401
     resp = client.get(
@@ -244,7 +290,8 @@ def test_endpoint_requires_the_admin_token(monkeypatch, client, feed_never_calle
     assert resp.status_code == 200
     body = resp.json()
     assert body["file"] == "sp500.json"
-    assert body["last_reviewed"] == "2026-09-07"
+    assert body["last_reviewed"] == small_file.last_reviewed
+    assert body["ticker_count"] == len(small_file.tickers)
     assert body["feed"] is None
     assert "missing_in_db" in body["diff_vs_db"]
 
@@ -260,17 +307,55 @@ def test_endpoint_compare_feed_without_key_explains(monkeypatch, client, feed_ne
     assert "FMP_API_KEY" in resp.json()["feed"]["error"]
 
 
-def test_cron_health_surfaces_universe_staleness(monkeypatch, client):
+def test_cron_health_surfaces_universe_staleness(monkeypatch, client, small_file):
     monkeypatch.setattr(settings, "admin_api_token", TOKEN)
+    _freeze_today(monkeypatch, date(2026, 10, 6))  # past small_file's 30-day cadence
     resp = client.get(
         "/api/admin/cron-health", headers={"Authorization": f"Bearer {TOKEN}"},
     )
     assert resp.status_code == 200
     body = resp.json()
     assert set(body["universe_review"]) == {"last_reviewed", "days_since_review", "stale"}
-    assert body["universe_review"]["last_reviewed"] == "2026-09-07"
+    assert body["universe_review"]["last_reviewed"] == small_file.last_reviewed
+    assert body["universe_review"]["days_since_review"] == 35
+    assert body["universe_review"]["stale"] is True
     # Loops only — a stale file is a review task, not a cron failure.
     assert body["stale_count"] == sum(1 for r in body["loops"] if r["stale"])
+
+
+# ---------------------------------------------------------------------------
+# Refresh round-trip — the documented operator step must not break the review
+# ---------------------------------------------------------------------------
+
+def test_refreshed_file_meets_the_same_contract_and_reads_as_fresh(monkeypatch, tmp_path):
+    """Regression: the shipped-file assertions above must hold for a file
+    `refresh_universe_lists` has just written, or the operator workflow
+    breaks CI. Writes only to tmp_path; the shipped file is untouched."""
+    target = tmp_path / "sp500.json"
+    target.write_text(json.dumps({
+        "_review_cadence_days": 45,
+        "_top_10_by_market_cap_2026_05": ["AAPL"],
+        "tickers": ["AAPL", "OLDCO"],
+    }))
+    monkeypatch.setattr(refresh_universe_lists, "SP500_PATH", target)
+    monkeypatch.setattr(
+        FMPProvider, "get_sp500_constituents", lambda self: ["msft", "AAPL", "NEWCO"],
+    )
+    shipped_before = SP500_PATH.read_bytes()
+
+    assert refresh_universe_lists.main([]) == 0
+
+    assert SP500_PATH.read_bytes() == shipped_before
+    uf = load_universe_file(target)
+    _assert_review_contract(uf)
+    assert uf.tickers == ["AAPL", "MSFT", "NEWCO"]
+    assert uf.auto_update == ["AAPL"]                 # pin list carried forward
+    assert uf.review_cadence_days == 45               # cadence carried forward
+    assert uf.last_reviewed == date.today().isoformat()
+    assert "refresh_universe_lists" in uf.review_source
+    status = universe_review.file_status(uf)
+    assert status["days_since_review"] == 0
+    assert status["stale"] is False
 
 
 # ---------------------------------------------------------------------------
