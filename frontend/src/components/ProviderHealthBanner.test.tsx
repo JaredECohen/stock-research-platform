@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import ProviderHealthBanner, { assessHealth } from "@/components/ProviderHealthBanner";
+import ProviderHealthBanner, { assessHealth, parseTimestamp } from "@/components/ProviderHealthBanner";
 import type { ProvidersStatusResponse } from "@/types";
 
 // The banner goes through api.providersStatus → global fetch, so we mock
@@ -199,6 +199,55 @@ describe("ProviderHealthBanner", () => {
     expect(screen.getByText("Using Anthropic after OpenAI failed (rate_limit).")).toBeInTheDocument();
     expect(screen.queryByText("AI analysis is degraded")).not.toBeInTheDocument();
     expect(screen.queryByText(/deterministic sections/)).not.toBeInTheDocument();
+  });
+
+  // Regression: Date.parse reads an offset-less stamp as browser-local time,
+  // and the backend emits datetime.utcnow().isoformat() with no "Z". These
+  // assertions hold in any TZ and fail with the old code in any non-UTC one.
+  describe("parseTimestamp", () => {
+    it("treats a naive ISO stamp as UTC", () => {
+      expect(parseTimestamp("2026-09-07T19:38:50.123456")).toBe(Date.parse("2026-09-07T19:38:50.123456Z"));
+      expect(parseTimestamp("2026-09-07T19:38:50")).toBe(Date.UTC(2026, 8, 7, 19, 38, 50));
+    });
+
+    it("leaves explicit offsets alone", () => {
+      expect(parseTimestamp("2026-09-07T19:38:50Z")).toBe(Date.UTC(2026, 8, 7, 19, 38, 50));
+      expect(parseTimestamp("2026-09-07T19:38:50+00:00")).toBe(Date.UTC(2026, 8, 7, 19, 38, 50));
+      expect(parseTimestamp("2026-09-07T15:38:50-04:00")).toBe(Date.UTC(2026, 8, 7, 19, 38, 50));
+      expect(parseTimestamp("2026-09-07T15:38:50-0400")).toBe(Date.UTC(2026, 8, 7, 19, 38, 50));
+    });
+
+    it("accepts epoch seconds and milliseconds", () => {
+      expect(parseTimestamp(1788809930)).toBe(1788809930000);
+      expect(parseTimestamp(1788809930123)).toBe(1788809930123);
+    });
+
+    it("returns null for unreadable values", () => {
+      expect(parseTimestamp(null)).toBeNull();
+      expect(parseTimestamp(undefined)).toBeNull();
+      expect(parseTimestamp("")).toBeNull();
+      expect(parseTimestamp("not a date")).toBeNull();
+      expect(parseTimestamp(Number.NaN)).toBeNull();
+    });
+  });
+
+  it("treats a naive-UTC failover stamp from the backend as recent or stale by UTC, not local time", () => {
+    // Pin the clock so the assertions do not depend on when the suite runs.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-07T20:00:00Z"));
+    const naive = (iso: string) => iso.replace("Z", "");
+    const failoverAt = (last_at: string | number) =>
+      withLLM({ failover: { ...FAILOVER_ONLY.llm!.failover!, last_at } });
+
+    // 5 minutes ago in UTC: a viewer at UTC-4 must still see it as recent
+    // (the old code read it as 3h55m in the future — also "recent", but
+    // lingering for hours), and a viewer at UTC+2 must not see it as stale.
+    expect(assessHealth(failoverAt(naive("2026-09-07T19:55:00.000000Z")))?.variant).toBe("info");
+    // 2 hours ago in UTC: stale for everyone, even where local parsing
+    // would have put it inside the 30-minute window.
+    expect(assessHealth(failoverAt(naive("2026-09-07T18:00:00.000000Z")))).toBeNull();
+    // Epoch seconds, 10 minutes ago.
+    expect(assessHealth(failoverAt(Date.UTC(2026, 8, 7, 19, 50, 0) / 1000))?.variant).toBe("info");
   });
 
   it("ignores a stale failover", () => {

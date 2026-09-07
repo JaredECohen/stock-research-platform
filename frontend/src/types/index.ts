@@ -536,7 +536,8 @@ export interface LLMFailoverStatus {
   count: number;
   last_from: string | null;
   last_to: string | null;
-  last_at: string | null;
+  // ISO-8601 (naive strings are UTC) or epoch seconds; parseTimestamp() normalises.
+  last_at: string | number | null;
   last_reason: string | null;
 }
 

@@ -58,10 +58,34 @@ function breakerSentence(provider: string, b: { failure_count: number; seconds_s
   return `${providerLabel(provider)} circuit breaker is open after ${failures} — retrying in ~${remaining}s`;
 }
 
-function isRecent(iso: string | null): boolean {
-  if (!iso) return false;
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return false;
+// A trailing "Z" or "+hh:mm"/"-hhmm" offset; anything else is a naive stamp.
+const HAS_UTC_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+// Below this an epoch number is seconds (1e12 s is the year 33658; 1e12 ms
+// is 2001, before any failover this app could have recorded).
+const EPOCH_MS_THRESHOLD = 1e12;
+
+/**
+ * Backend timestamps are `datetime.utcnow().isoformat()` — naive UTC with no
+ * "Z" — which Date.parse reads as browser-local time, so a fresh failover
+ * looks hours old (or hours in the future) to anyone outside UTC. Pin naive
+ * strings to UTC and accept epoch seconds/ms in case the backend switches.
+ * Returns epoch milliseconds, or null when the value cannot be read.
+ */
+export function parseTimestamp(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return null;
+    return value < EPOCH_MS_THRESHOLD ? value * 1000 : value;
+  }
+  const s = value.trim();
+  if (!s) return null;
+  const t = Date.parse(HAS_UTC_OFFSET.test(s) ? s : `${s}Z`);
+  return Number.isNaN(t) ? null : t;
+}
+
+function isRecent(at: string | number | null | undefined): boolean {
+  const t = parseTimestamp(at);
+  if (t === null) return false;
   return Date.now() - t <= FAILOVER_RECENT_MS;
 }
 

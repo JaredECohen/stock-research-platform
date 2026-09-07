@@ -1,7 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/api/client";
 import type { LLMStatus, ProvidersStatusResponse } from "@/types";
-import { providerLabel } from "@/components/ProviderHealthBanner";
+import { parseTimestamp, providerLabel } from "@/components/ProviderHealthBanner";
+
+// Naive-UTC backend stamps would otherwise display as-is and invite a
+// local-time misreading; show the normalised instant, raw only if unparseable.
+function formatTimestamp(value: string | number): string {
+  const t = parseTimestamp(value);
+  return t === null ? String(value) : new Date(t).toISOString().replace(".000Z", "Z");
+}
 
 function yesNo(v: boolean | undefined): { text: string; cls: string } {
   if (v === undefined) return { text: "—", cls: "text-slate-500" };
@@ -102,7 +109,7 @@ function ProviderHealthCard({ llm, mode, llmConfigured }: { llm?: LLMStatus; mod
               <>
                 {" "}· last: <span className="font-mono">{fo.last_from ? providerLabel(fo.last_from) : "?"}</span> →{" "}
                 <span className="font-mono">{providerLabel(fo.last_to)}</span>
-                {fo.last_at && <span className="text-slate-500"> at {fo.last_at}</span>}
+                {fo.last_at != null && <span className="text-slate-500"> at {formatTimestamp(fo.last_at)}</span>}
                 {fo.last_reason && <span className="text-slate-500"> ({fo.last_reason})</span>}
               </>
             )}
