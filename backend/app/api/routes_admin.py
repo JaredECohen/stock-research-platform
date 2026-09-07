@@ -13,6 +13,7 @@ its own rows; one timeline I can query.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -23,6 +24,8 @@ from ..monitoring import KNOWN_LOOPS, _process_role, status_snapshot
 from ..rate_limit import LIMITS, limiter
 from ..seed_universe import run_full_seed
 from ..services import dcf_store, llm_metrics, memo_store, outcome_service, update_orchestrator
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -609,6 +612,13 @@ def post_ui_log(batch: UILogBatch) -> Dict[str, Any]:
                 written += 1
             db.commit()
     except Exception:
+        # RP-001 class (c), deliberately NOT made to raise: this is a
+        # browser-called telemetry sink (exempt from admin auth) whose
+        # contract is "always 200, never block the user". Raising would
+        # turn a logging hiccup into a 500 on every page the UI traces
+        # from. Log with the traceback and keep returning ok=False so the
+        # failure is visible in the server log instead of nowhere.
+        log.exception("ui-log ingest failed after %d event(s)", written)
         return {"written": written, "ok": False}
     return {"written": written, "ok": True}
 

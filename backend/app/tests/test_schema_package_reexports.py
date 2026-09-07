@@ -92,13 +92,13 @@ MODEL_SUBMODULES = [
 ]
 
 # sha256 of `StockMemoOut.model_json_schema()` (sorted keys, compact
-# separators) taken on the pre-split `schemas.py`. A pure move must not
-# change the JSON schema at all — field order, `$defs` names, defaults and
-# docstring-derived descriptions all survive a module change untouched.
-# Update this deliberately, in the same commit, whenever `StockMemoOut`
-# itself changes.
+# separators). The split itself did not move this hash (it was taken on
+# the pre-split `schemas.py` and matched after the move); RP-001 then
+# added `degradation_events` + `extra_agent_views`, which is the value
+# pinned here. Update this deliberately, in the same commit, whenever
+# `StockMemoOut` itself changes — never to make an accidental drift pass.
 STOCK_MEMO_OUT_SCHEMA_SHA256 = (
-    "c4e1756f135ce185b29db6b2f0507262e5d2179e5dba252851aa36c25349bb22"
+    "b6bae72535f1ce6f50ea5c4a36530b791dd97779239cef85fb72ae1bef03ff56"
 )
 
 

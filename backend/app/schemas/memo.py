@@ -137,6 +137,17 @@ class StockMemoOut(BaseModel):
     # everything ran normally; populated by the safe-runner so the UI can
     # show "X analyst was unavailable" rather than dropping the memo.
     degraded_agents: List[str] = Field(default_factory=list)
+    # RP-001 — the *reason* behind each `degraded_agents` entry, in the
+    # same order: `{agent, error_type, message}` (the shape of
+    # `DegradationLog.failures`). Lets the guard tests and a future UI
+    # tooltip say why a section is thin instead of only that it is.
+    # Empty on memos that pre-date the field.
+    degradation_events: List[Dict[str, Any]] = Field(default_factory=list)
+    # RP-003 landing zone — a roster agent with no dedicated memo field
+    # (a future Industry Group analyst) lands here keyed by its roster key,
+    # so adding an analyst does not require a schema edit. Empty for the
+    # current eight-agent roster.
+    extra_agent_views: Dict[str, AgentFinding] = Field(default_factory=dict)
     disclaimer: str = (
         "MarketMosaic is for investment research and education only. "
         "It does not provide personalized financial, investment, legal, or tax advice."

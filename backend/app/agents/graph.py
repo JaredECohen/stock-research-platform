@@ -64,8 +64,10 @@ from .earnings_agent import run_earnings_agent
 from .filing_agent import run_filing_agent
 from .macro_agent import run_macro_agent
 from .risk_agent import derive_risk_items, risk_item_from_text, run_risk_agent
+from .log_safety import redact
 from .safe_runner import (
     DegradationLog,
+    note_soft,
     safe_call,
     safe_critic,
     safe_finding,
@@ -195,8 +197,10 @@ def _refresh_dcf_references(
     for ev in (getattr(finding, "evidence", None) or []):
         try:
             ev.excerpt = _sub(ev.excerpt or "")
-        except Exception:  # pragma: no cover — citations are best-effort
-            pass
+        except Exception as exc:  # pragma: no cover — citations are best-effort
+            # (a) the citation keeps its pre-adjustment number; the finding
+            # prose above already carries the corrected figures.
+            log.debug("citation excerpt substitution skipped: %s", type(exc).__name__)
     note = (
         f"DCF figures reflect PM-adjusted assumptions "
         f"(base case {fmt_upside(new.base.upside_pct, decimals=0)} vs current)."
@@ -502,7 +506,17 @@ def _build_thesis_from_findings(
     sentence_2 = ""
     try:
         gap_clause = _market_gap_clause(profile, dcf, ticker_sym)
-    except Exception:  # pragma: no cover
+    except Exception as exc:  # pragma: no cover
+        # (b) sentence 2 of the thesis silently loses the consensus-gap
+        # framing and falls back to the generic lever clause. That changes
+        # what the reader sees, so it belongs on the memo banner, not only
+        # in a debug log. `note_soft` no-ops outside a memo run.
+        log.warning("market-gap clause failed for %s: %s", ticker_sym, type(exc).__name__)
+        note_soft(
+            "Thesis Builder",
+            f"consensus-gap clause unavailable: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
         gap_clause = ""
 
     if verdict_word in ("undervalued", "overvalued"):
@@ -548,7 +562,9 @@ def _market_gap_clause(
         if not model_growths:
             return ""
         model_avg = sum(model_growths) / len(model_growths)
-    except Exception:
+    except Exception as exc:
+        # (a) no growth path on the DCF means there is no gap to describe.
+        log.debug("market-gap clause: no model growth path for %s: %s", ticker, type(exc).__name__)
         return ""
 
     # Pull consensus from the data service via the same helper the engine uses.
@@ -560,7 +576,10 @@ def _market_gap_clause(
         consensus = _consensus_growth_path(estimates)
         if consensus:
             consensus_avg = sum(consensus) / len(consensus)
-    except Exception:
+    except Exception as exc:
+        # (a) the clause degrades to its "vs. trend" framing below, which is
+        # the same output as "no consensus published" — not a memo change.
+        log.debug("market-gap clause: consensus unavailable for %s: %s", ticker, type(exc).__name__)
         consensus_avg = None
 
     drivers = profile.get("drivers") or []
@@ -1040,6 +1059,17 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
     if llm_out and "rating_label" in llm_out:
         return llm_out
 
+    if settings.has_llm:
+        # (b) The PM view is the memo's headline. Templated prose standing in
+        # for it while an LLM was configured is a degradation the reader must
+        # see; in deterministic mode (no keys) this path IS the design, so it
+        # is not flagged there. `_pm_synthesis` has no log handle — the
+        # contextvar set by `run_stock_memo` carries it.
+        note_soft(
+            "PM Synthesis",
+            "LLM returned no usable synthesis; deterministic PM view shipped",
+        )
+
     # Deterministic synthesis
     # None (no DCF, or a DCF that could not price the shares) contributes
     # nothing to the score — it is an absent signal, not a neutral one.
@@ -1221,13 +1251,22 @@ def run_stock_memo(
     # one from "the instance restarted" into "it restarted during TICKER's
     # memo, having already grown N MB".
     memory_probe.log_rss("memo_start", ticker=ticker, run_id=run_id)
+    # The degradation log is created here and *activated* for the whole run
+    # (RP-001): service code and helpers with no handle on it — the thesis
+    # builder, PM synthesis, the PM DCF adjuster, the valuation service —
+    # report soft failures through `safe_runner.note_soft`, which writes to
+    # whichever log is active in this context. Activating in the outermost
+    # `with` keeps the guarantee identical to the other two contexts: every
+    # line of the memo run is covered, and the token is reset in `finally`
+    # so the regen worker's next memo in the same thread starts empty.
+    degradation = DegradationLog()
     try:
         with as_of_context(as_of_date), llm_call_context(
             agent_name="run_stock_memo", run_id=run_id,
-        ):
+        ), degradation.activate():
             return _run_stock_memo_inner(
                 ticker, scenario=scenario, force_refresh=force_refresh,
-                run_id=run_id, as_of_date=as_of_date,
+                run_id=run_id, as_of_date=as_of_date, degradation=degradation,
             )
     finally:
         memory_probe.log_rss("memo_end", ticker=ticker, run_id=run_id)
@@ -1236,9 +1275,11 @@ def run_stock_memo(
 def _run_stock_memo_inner(
     ticker: str, *, scenario: str, force_refresh: bool, run_id: str,
     as_of_date: Optional[Any] = None,
+    degradation: Optional[DegradationLog] = None,
 ) -> StockMemoOut:
     """Indirection so `run_stock_memo` can wrap the entire body in a single
-    `llm_call_context` + `as_of_context`. Splitting keeps the public signature clean.
+    `llm_call_context` + `as_of_context` + `DegradationLog.activate()`.
+    Splitting keeps the public signature clean.
 
     Wave 8A: each major step (fundamentals, dcf, comps, every specialist,
     critic) runs through a `@checkpointed` wrapper. When `run_id` is reused
@@ -1256,8 +1297,11 @@ def _run_stock_memo_inner(
     # Everything below this point goes through the safe-runner: a failure in
     # any single specialist becomes a typed fallback rather than killing the
     # memo. Failures are accumulated into `degradation` and surfaced on the
-    # memo's `degraded_agents` field.
-    degradation = DegradationLog()
+    # memo's `degraded_agents` field. `run_stock_memo` — the only production
+    # caller — passes the log it activated; a direct caller without one gets
+    # a private log, and `note_soft` is then a no-op for the run.
+    if degradation is None:
+        degradation = DegradationLog()
     # Failover events are context-local and the regen worker runs memos
     # back to back in one long-lived thread, so whatever the previous run
     # left undrained would otherwise be pinned on this memo. Discard it.
@@ -1616,7 +1660,10 @@ def _run_stock_memo_inner(
         from ..services.catalyst_service import get_upcoming
         forward_catalysts = get_upcoming(profile.get("ticker", ticker), days_ahead=90)
     except Exception as exc:  # pragma: no cover
-        log.debug("forward_catalysts fetch failed: %s", exc)
+        # (a) the catalyst tile is legitimately empty before the calendar
+        # cron has run, so an empty tile is not a memo degradation — but a
+        # *failed* read should be visible in the log, not a debug line.
+        log.warning("forward_catalysts fetch failed for %s: %s", ticker, type(exc).__name__)
 
     # Wave 10 — earnings quarter-over-quarter delta. Reads the
     # earnings agent's structured payload and walks back through the
@@ -1629,7 +1676,14 @@ def _run_stock_memo_inner(
             profile.get("ticker", ticker), earnings_struct,
         )
     except Exception as exc:  # pragma: no cover
-        log.debug("earnings QoQ delta failed: %s", exc)
+        # (b) the QoQ tile silently vanishes from the memo — the reader
+        # cannot tell "no prior quarter" from "the delta crashed". Record
+        # it so the banner says which.
+        log.warning("earnings QoQ delta failed for %s: %s", ticker, type(exc).__name__)
+        degradation.record_soft(
+            "Earnings QoQ", f"quarter-over-quarter delta unavailable: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
 
     # Wave 10 — per-agent influence on the rating. Computed from each
     # finding's confidence + tone; deterministic, no extra LLM cost.
@@ -1713,6 +1767,7 @@ def _run_stock_memo_inner(
         # old check label genuinely live-data memos as "demo" (Theme 3).
         generation_mode="live" if settings.has_llm and not settings.use_demo_data_only else "demo",
         degraded_agents=degradation.degraded_agents(),
+        degradation_events=degradation.events(),
         round_findings=round_findings,
         forward_catalysts=forward_catalysts,
         earnings_qoq_delta=earnings_qoq,
@@ -1746,7 +1801,7 @@ def _run_stock_memo_inner(
     if critic:
         memo.risk_committee_challenge = critic
     # Refresh degraded_agents in case the critic recorded a failure.
-    memo.degraded_agents = degradation.degraded_agents()
+    _sync_degradation(memo, degradation)
 
     # Long-term memory: appends a structured entry to the company + sector
     # memory files iff a delta event fired this run (new earnings / new
@@ -1762,7 +1817,7 @@ def _run_stock_memo_inner(
             fallback=([], []),
             name="Reflection (long-term memory)", log_to=degradation,
         )
-        memo.degraded_agents = degradation.degraded_agents()
+        _sync_degradation(memo, degradation)
 
     # Wave 8H — apply the risk analyst's structured recommendations.
     # Runs AFTER the memo body is assembled but BEFORE final_verdict +
@@ -1807,9 +1862,11 @@ def _run_stock_memo_inner(
     # Theme 1 — compute the memo's single reconciled valuation call now
     # that the rating blend is final. Everything downstream (thesis
     # consistency guard, mispricing fallback, UI valuation card) reads it.
+    # `log_to=degradation` (RP-001): an exception here used to ship an empty
+    # valuation card with no banner entry — a memo-visible silent failure.
     memo.valuation_verdict = safe_call(
         _build_valuation_verdict, memo, comps,
-        fallback=ValuationVerdict(), name="Valuation Verdict", log_to=None,
+        fallback=ValuationVerdict(), name="Valuation Verdict", log_to=degradation,
     )
 
     # Anti-pattern guard + verdict-consistency guard. The PM prompt forbids
@@ -1844,8 +1901,15 @@ def _run_stock_memo_inner(
             )
             if rewritten and not _looks_like_anti_pattern_thesis(rewritten):
                 memo.one_sentence_thesis = rewritten
-        except Exception:  # pragma: no cover — never break the memo
-            pass
+        except Exception as exc:  # pragma: no cover — never break the memo
+            # (b) the thesis the reader sees keeps the anti-pattern form or
+            # the wrong verdict word — exactly what this guard exists to
+            # prevent. Surface it instead of swallowing it.
+            log.warning("thesis rewrite failed for %s: %s", ticker, type(exc).__name__)
+            degradation.record_soft(
+                "Thesis Builder", f"thesis rewrite failed: {redact(exc)}",
+                kind=type(exc).__name__,
+            )
 
     # Wave 8R — thesis augmentation. Surface where the model diverges
     # from analyst consensus (the actual *what is the market missing*
@@ -1869,8 +1933,16 @@ def _run_stock_memo_inner(
                 memo.one_sentence_thesis.rstrip(".")
                 + ". " + delta_clause
             )
-    except Exception:  # pragma: no cover — never break a memo on thesis polish
-        pass
+    except Exception as exc:  # pragma: no cover — never break a memo on thesis polish
+        # (b) the "what is the market missing" clause is the part of the
+        # thesis a reader pays for; losing it silently is a memo change.
+        # `record_soft` dedupes per agent, so an earlier "Thesis Builder"
+        # entry from the rewrite guard above is not doubled.
+        log.warning("thesis gap-clause polish failed for %s: %s", ticker, type(exc).__name__)
+        degradation.record_soft(
+            "Thesis Builder", f"consensus-gap clause polish failed: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
 
     # B6 — never ship an empty mispricing card. When the PM declined (or
     # the deterministic path ran), build the consensus-vs-us structure
@@ -1881,10 +1953,13 @@ def _run_stock_memo_inner(
         or memo.mispricing_thesis.our_view
         or memo.mispricing_thesis.gap
     ):
+        # `log_to=degradation` (RP-001): a crash here used to ship an empty
+        # mispricing card — the field B6 exists to never leave empty — with
+        # no banner entry. Same class as the valuation verdict above.
         memo.mispricing_thesis = safe_call(
             _build_mispricing_fallback, memo,
             fallback=memo.mispricing_thesis,
-            name="Mispricing Fallback", log_to=None,
+            name="Mispricing Fallback", log_to=degradation,
         )
 
     # Refresh the rating/confidence-derived locals after enforcement.
@@ -1948,7 +2023,7 @@ def _run_stock_memo_inner(
     # Last LLM call is behind us: pick up any failover the later stages
     # recorded so the persisted memo says which vendor actually wrote it.
     _absorb_failover_events(degradation)
-    memo.degraded_agents = degradation.degraded_agents()
+    _sync_degradation(memo, degradation)
     try:
         _persist_memo_snapshot(memo, as_of_date)
     except Exception as exc:
@@ -1959,10 +2034,21 @@ def _run_stock_memo_inner(
         # Record on the degradation log so synchronous callers (sync=true
         # path) can still see what happened via memo.degraded_agents.
         degradation.record("Memo store", exc)
-        memo.degraded_agents = degradation.degraded_agents()
+        _sync_degradation(memo, degradation)
         raise
-    memo.degraded_agents = degradation.degraded_agents()
+    _sync_degradation(memo, degradation)
     return memo
+
+
+def _sync_degradation(memo: StockMemoOut, degradation: DegradationLog) -> None:
+    """Copy the log onto the memo — both the names and the reasons.
+
+    `degraded_agents` and `degradation_events` are two views of the same
+    accumulator and must never disagree, so every refresh point goes
+    through here rather than assigning one field and forgetting the other.
+    """
+    memo.degraded_agents = degradation.degraded_agents()
+    memo.degradation_events = degradation.events()
 
 
 def _absorb_failover_events(degradation: DegradationLog) -> None:

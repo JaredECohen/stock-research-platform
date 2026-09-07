@@ -153,3 +153,29 @@ def test_memo_survives_three_simultaneous_failures(monkeypatch):
 def test_memo_with_no_failures_has_empty_degraded_agents():
     memo = graph.run_stock_memo("MSFT")
     assert memo.degraded_agents == []
+    assert memo.degradation_events == []
+    assert memo.extra_agent_views == {}
+
+
+# ---------------------------------------------------------------------------
+# RP-001 — the reason travels with the name
+# ---------------------------------------------------------------------------
+
+def test_degradation_events_mirror_degraded_agents(monkeypatch):
+    """`degradation_events` is the same accumulator as `degraded_agents`,
+    with the error type and redacted message attached. Both are refreshed
+    at every point the graph syncs the log, so they can never disagree."""
+    memo = _run_with(monkeypatch, "run_sector_agent")
+    assert [e["agent"] for e in memo.degradation_events] == memo.degraded_agents
+    event = next(e for e in memo.degradation_events if e["agent"] == "Sector Analyst")
+    assert event["error_type"] == "RuntimeError"
+    assert "simulated agent failure" in event["message"]
+    assert set(event) == {"agent", "error_type", "message"}
+
+
+def test_critic_failure_is_reflected_in_degradation_events(monkeypatch):
+    """The critic records *after* the memo object is built, so this is the
+    refresh point most likely to drift if only one field were reassigned."""
+    memo = _run_with(monkeypatch, "run_critic")
+    assert "Risk Committee" in memo.degraded_agents
+    assert "Risk Committee" in [e["agent"] for e in memo.degradation_events]

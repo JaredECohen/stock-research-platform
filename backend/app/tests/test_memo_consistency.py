@@ -216,6 +216,23 @@ def test_healthy_run_does_not_flag_valuation_as_degraded(nvda_memo):
     assert "Valuation Analyst" not in nvda_memo.degraded_agents
 
 
+def test_healthy_run_carries_no_degradation_events(nvda_memo):
+    """RP-001: with no keys every deterministic path is the design, so a
+    healthy demo run must not report PM Synthesis / PM DCF Adjuster /
+    Thesis Builder as degraded — `note_soft` is gated on `has_llm` where
+    the deterministic path is expected."""
+    assert nvda_memo.degradation_events == []
+    assert nvda_memo.degraded_agents == []
+    assert nvda_memo.extra_agent_views == {}
+
+
+def test_degradation_events_agree_with_degraded_agents(nvda_memo_unpriced):
+    """The two fields are views of one accumulator; whatever the run
+    recorded, their agent lists must be identical and in order."""
+    memo = nvda_memo_unpriced
+    assert [e["agent"] for e in memo.degradation_events] == memo.degraded_agents
+
+
 # ---------------------------------------------------------------------------
 # DCF unavailable — None is "n/a", never "+0.0%" / "$0.00" / a neutral signal
 # ---------------------------------------------------------------------------

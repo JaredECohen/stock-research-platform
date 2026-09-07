@@ -24,9 +24,11 @@ Failure semantics:
 """
 from __future__ import annotations
 
+import contextvars
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, TypeVar
+from typing import Any, Callable, Iterator, List, Optional, TypeVar
 
 from ..schemas import AgentFinding, CriticReview
 from .log_safety import redact
@@ -40,11 +42,41 @@ def _log_failure(msg: str, exc: BaseException) -> None:
 
 T = TypeVar("T")
 
+# The DegradationLog of the memo run active in this context, if any.
+#
+# A ContextVar rather than a module-level global on purpose: the regen
+# worker runs memos back to back in one long-lived thread and the web
+# process serves the synchronous `/memo` path, so a global would bleed one
+# run's failures into the next. A ContextVar is per-thread (each thread
+# starts from an empty context) and `DegradationLog.activate()` resets it
+# in `finally`, so a run can never inherit a stale log. Nothing crosses the
+# web/worker process boundary here — a memo run is single-process end to
+# end — so this does not belong in the database (see CLAUDE.md).
+_ACTIVE_LOG: contextvars.ContextVar[Optional["DegradationLog"]] = contextvars.ContextVar(
+    "degradation_log", default=None,
+)
+
 
 @dataclass
 class DegradationLog:
     """Accumulator passed through `run_stock_memo` so failed agents surface."""
     failures: List[dict] = field(default_factory=list)
+
+    @contextmanager
+    def activate(self) -> Iterator["DegradationLog"]:
+        """Make this log the target of `note_soft` for the enclosed block.
+
+        `run_stock_memo` wraps the whole memo run in it so service code that
+        has no handle on the log (valuation service, thesis builder, PM DCF
+        adjuster) can still report a soft degradation. The token is reset in
+        `finally`, so a run that raises leaves nothing behind for the next
+        run in the same thread.
+        """
+        token = _ACTIVE_LOG.set(self)
+        try:
+            yield self
+        finally:
+            _ACTIVE_LOG.reset(token)
 
     def record(self, agent: str, exc: BaseException) -> None:
         # The message rides on the memo's `degraded_agents` banner and is
@@ -75,6 +107,37 @@ class DegradationLog:
 
     def degraded_agents(self) -> List[str]:
         return [f["agent"] for f in self.failures]
+
+    def events(self) -> List[dict]:
+        """Copy of the failure records for `StockMemoOut.degradation_events`.
+
+        Same `{agent, error_type, message}` shape as `failures`, copied so
+        the memo does not alias the accumulator (a later `record` must not
+        mutate an already-built memo behind its back).
+        """
+        return [dict(f) for f in self.failures]
+
+
+def active_log() -> Optional[DegradationLog]:
+    """The DegradationLog of the memo run active in this context, or None."""
+    return _ACTIVE_LOG.get()
+
+
+def note_soft(agent: str, reason: str, kind: str = "DeterministicFallback") -> bool:
+    """Record a soft degradation on the active memo run's log.
+
+    The one-liner for class (b) sites — code that can change what the user
+    reads in a memo but has no `DegradationLog` in scope. Returns True when
+    it recorded (or deduped) on an active log and False when no memo run is
+    active: chat, screener and monitoring paths call the same services, and
+    for them a fallback is not a memo degradation, so the call is a no-op
+    rather than an error. Callers may therefore invoke it unconditionally.
+    """
+    active = _ACTIVE_LOG.get()
+    if active is None:
+        return False
+    active.record_soft(agent, reason, kind=kind)
+    return True
 
 
 def _fallback_finding(agent: str, error: str) -> AgentFinding:
