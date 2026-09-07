@@ -26,8 +26,9 @@
 | Conversational PM (8 tools — memo / DCF / comps / macro / universe / screener / custom screen) | `/chat` | `agents/orchestrator.py` + `agents/chat_sdk.py` |
 | Scenario-based portfolio builder | `/portfolio` | `finance/portfolio_construction.py` |
 
-The **curated screener universe** is the S&P 100, pre-analyzed nightly. Any ticker outside
-it is researchable on demand: typing it into `/research` triggers a profile lookup, a
+The **curated screener universe** is the S&P 500 plus curated extensions (foreign-listed
+ADRs, sub-industry semis), pre-analyzed nightly. Any ticker outside it is researchable on
+demand: typing it into `/research` triggers a profile lookup, a
 5-year financial backfill (including 10-K + 10-Q + 8-K body text from SEC EDGAR and four
 quarters of transcripts from Alpha Vantage), and a full agent run. Subsequent reads are
 served from cache until a new filing or earnings transcript invalidates the memo.
@@ -63,7 +64,7 @@ flowchart TB
 
     subgraph DB["Persistent store (SQLite or Postgres)"]
         direction TB
-        COMP[("companies<br/>S&amp;P 100 + analyzed_on_demand")]
+        COMP[("companies<br/>S&amp;P 500 + extensions + analyzed_on_demand")]
         FP[("financial_periods<br/>append-only · idempotent")]
         FD[("filing_docs<br/>10-K/Q text + sections")]
         ET[("earnings_transcripts<br/>speaker-segmented")]
@@ -191,17 +192,31 @@ Three tiers in the `companies.universe_tier` column. Dual-class names (Alphabet 
 GOOGL, Berkshire BRK.A / BRK.B) are listed once — FMP returns inconsistent per-class
 market caps for the two classes, which would distort every price-derived metric. Picked
 GOOGL (Class A, voting) and BRK.B (lower-priced, more retail-tradeable) as the canonical
-tickers. See [`backend/app/data/sp100.json`](backend/app/data/sp100.json)
+tickers. See [`backend/app/data/sp500.json`](backend/app/data/sp500.json)
 `_dual_class_policy` for the rationale.
 
 | Tier | Population | How it's used |
 |---|---|---|
-| `auto_analysis` | S&P 100 (curated, [`backend/app/data/sp100.json`](backend/app/data/sp100.json)) | Pre-scored nightly. Drives the screener. |
+| `auto_analysis` | S&P 500 + curated extensions ([`backend/app/data/sp500.json`](backend/app/data/sp500.json)) | Pre-scored nightly. Drives the screener. |
 | `analyzed_on_demand` | Anything the user has researched | Lazy-introduced via FMP profile lookup. Has a memo + DCF; not in the screener. |
 | `data_only` | Legacy / demoted | Has metadata but no memo. Not eligible for auto-analysis. |
 
-The S&P 100 list is a static snapshot — review and refresh it periodically (S&P revises
-constituents a few times a year).
+The universe file is a **hand-reviewed static snapshot** — it is never modified
+automatically from an external feed. It stamps its own review date
+(`_last_reviewed`, `_review_cadence_days`), and the platform tells you when that is due:
+
+```bash
+# Read-only: review date, staleness, drift vs the companies table
+python -m app.scripts.universe_review            # or GET /api/admin/universe-review
+# Also diff against FMP's live S&P 500 constituent list (still read-only)
+python -m app.scripts.universe_review --compare-feed
+# Explicit operator step: rewrite data/sp500.json from FMP (Premium), then re-seed
+python -m app.scripts.refresh_universe_lists && curl -X POST 'localhost:8000/api/seed-universe'
+```
+
+`GET /api/admin/cron-health` carries the same `universe_review` staleness flag so ops sees it
+where they already look. `sp100.json` is the legacy list the seeder falls back to only when
+`sp500.json` is missing.
 
 ---
 
@@ -225,14 +240,15 @@ cd ../backend
 python -m pytest -q
 ```
 
-First boot runs the lightweight S&P 100 seed (~100 FMP `/profile` calls, ~30s). Trigger the
-heavy financial backfill explicitly when you want full coverage:
+First boot runs the lightweight universe seed (one FMP `/profile` call per ticker in
+`data/sp500.json`; ~1 min for the 170-name starter list). Trigger the heavy financial
+backfill explicitly when you want full coverage:
 
 ```bash
-# Re-seed the S&P 100 universe (admin endpoint)
+# Re-seed the curated universe (admin endpoint; does not change the ticker list)
 curl -X POST 'localhost:8000/api/seed-universe?refresh=true'
 
-# Pull 5y financials + filings + transcripts for all 100 tickers (~600 calls, 3-5 min)
+# Pull 5y financials + filings + transcripts for the whole universe (~6 calls/ticker, minutes)
 python -c "from app.monitoring.history_backfill import run_once; print(run_once())"
 ```
 
@@ -282,7 +298,8 @@ curl localhost:8000/api/providers/status | jq .
 |---|---|
 | `GET /health` | Liveness probe |
 | `GET /api/providers/status` | Per-provider configured/healthy state + active LLM provider |
-| `POST /api/seed-universe?refresh=…` | Re-seed S&P 100 from FMP profile |
+| `POST /api/seed-universe?refresh=…` | Re-seed the curated universe (S&P 500 + extensions) from FMP profiles; ticker list unchanged |
+| `GET /api/admin/universe-review?compare_feed=…` | Read-only universe review: review date, staleness, drift vs DB, optional FMP constituent diff |
 | `GET /api/admin/monitoring/status` | Last-run snapshot for every scheduler loop |
 | `GET /api/admin/llm-metrics` | Aggregate token / cost trail (last N days) |
 | `GET /api/admin/sdk-traces` | OpenAI Agents SDK exchange traces (when SDK runtime is on) |
@@ -304,11 +321,12 @@ curl localhost:8000/api/providers/status | jq .
 ├── Dockerfile / docker-compose.yml
 ├── backend/app/
 │   ├── main.py                     # FastAPI factory + startup seed
-│   ├── seed_universe.py            # S&P 100 seeder (idempotent)
+│   ├── seed_universe.py            # Curated-universe seeder (idempotent)
 │   ├── agents/                     # PM, specialists, critic, reflection, deep-research
 │   ├── api/                        # Route modules
 │   ├── data/
-│   │   ├── sp100.json
+│   │   ├── sp500.json              # S&P 500 + curated extensions (hand-reviewed)
+│   │   ├── sp100.json              # legacy fallback only
 │   │   ├── sector_configs.json
 │   │   └── peer_groups.json
 │   ├── finance/                    # DCF · comps · ratios · risk · portfolio · technicals

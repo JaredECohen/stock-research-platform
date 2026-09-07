@@ -387,8 +387,9 @@ function CustomScreenView() {
     <>
       <div className="card-tight space-y-3">
         <div className="text-xs text-slate-500">
-          Rules are AND-combined. Tickers are limited to the curated S&amp;P 100. Rows with missing
-          metrics fail the rule (rather than being dropped silently).
+          Rules are AND-combined. Tickers are limited to the curated universe (S&amp;P 500 plus
+          curated extensions); research any other ticker on demand from the Research page. Rows
+          with missing metrics fail the rule (rather than being dropped silently).
         </div>
         <div className="space-y-2">
           {state.rules.map((rule, idx) => (

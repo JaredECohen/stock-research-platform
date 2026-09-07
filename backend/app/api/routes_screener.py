@@ -184,7 +184,7 @@ def _execute_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
 def run_custom_screen(
     request: Request, response: Response, req: CustomScreenRequest,
 ) -> CustomScreenResult:
-    """Filter the curated S&P 100 against a user-defined rule set.
+    """Filter the curated universe (S&P 500 + extensions) against a user-defined rule set.
 
     Each rule is `{metric, op, value}` (or `{op: "between", value, value2}`).
     Rules are AND-combined. Tickers are restricted to the curated
