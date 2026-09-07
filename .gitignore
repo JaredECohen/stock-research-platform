@@ -59,3 +59,6 @@ research_notes/_index.json
 .claude/memory/
 # safety net: a stray root MEMORY.md from an older session must stay invisible too
 MEMORY.md
+
+# Workflow agent worktrees (created under .claude/ by the orchestration tooling)
+.claude/worktrees/
