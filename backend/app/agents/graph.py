@@ -55,6 +55,7 @@ from ..services.fundamentals_service import get_full_financials
 from ..services.market_data_service import get_basic_stats
 from ..services.transcripts_service import latest_transcript
 from ..services.filings_service import get_filings
+from ..finance.dcf import fmt_price, fmt_upside
 from ..services.valuation_service import build_comps, build_dcf
 from . import llm, prompts
 from .comps_agent import run_comps_agent
@@ -149,21 +150,30 @@ def _refresh_dcf_references(
     if finding is None or old is None or new is None or old is new:
         return
 
-    def _pct_strs(x: float) -> tuple:
+    def _pct_strs(x: Optional[float]) -> tuple:
         # Signed forms first (what the deterministic path emits), then the
         # one-decimal unsigned form LLM prose tends to use. The unsigned
         # integer form ("49%") is deliberately excluded — too collision-
         # prone with margins/percentages that aren't DCF upside.
+        # An unavailable number has no formatted variants: "n/a" is far
+        # too common a token to substitute, and we cannot invent a
+        # replacement for a figure that was never printed.
+        if x is None:
+            return ()
         return (f"{x:+.0%}", f"{x:+.1%}", f"{x * 100:+.0f}%",
                 f"{x * 100:+.1f}%", f"{x * 100:.1f}%")
 
-    def _usd_strs(x: float) -> tuple:
+    def _usd_strs(x: Optional[float]) -> tuple:
+        if x is None:
+            return ()
         return (f"${x:,.2f}", f"${x:,.0f}")
 
     pairs: List[tuple] = []
     for o_s, n_s in ((old.base, new.base), (old.bull, new.bull), (old.bear, new.bear)):
         if o_s is None or n_s is None:
             continue
+        # zip() stops at the shorter tuple, so a None on either side yields
+        # no pairs for that field rather than a half-substituted memo.
         for o_str, n_str in zip(_pct_strs(o_s.upside_pct), _pct_strs(n_s.upside_pct)):
             if o_str != n_str:
                 pairs.append((o_str, n_str))
@@ -189,7 +199,7 @@ def _refresh_dcf_references(
             pass
     note = (
         f"DCF figures reflect PM-adjusted assumptions "
-        f"(base case {new.base.upside_pct:+.0%} vs current)."
+        f"(base case {fmt_upside(new.base.upside_pct, decimals=0)} vs current)."
     )
     if note not in finding.key_points:
         finding.key_points = list(finding.key_points) + [note]
@@ -247,6 +257,12 @@ def _build_valuation_verdict(
     parts: List[str] = []
     if dcf_up is not None:
         parts.append(f"DCF base case {dcf_up:+.0%} to fair value")
+    else:
+        # No DCF upside — either the model never ran or it could not price
+        # the shares (no share count / no quote). Say so explicitly: an
+        # unavailable DCF is NOT a 0% neutral signal, and `_verdict_word`
+        # already falls through to the rating / other signals.
+        parts.append("DCF unavailable")
     if prem is not None:
         parts.append(
             f"EV/EBITDA {abs(prem):.0%} "
@@ -854,8 +870,8 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
         points.extend(dcf_drivers)
         if dcf:
             points.append(
-                f"DCF bull case implies ${dcf.bull.implied_share_price:,.2f} "
-                f"({dcf.bull.upside_pct:+.0%})."
+                f"DCF bull case implies {fmt_price(dcf.bull.implied_share_price)} "
+                f"({fmt_upside(dcf.bull.upside_pct, decimals=0)})."
             )
         return BullBearCase(
             headline=str(bull.get("headline") or "Bull case from sector synthesis."),
@@ -871,8 +887,8 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
     points.extend(dcf_drivers)
     if dcf:
         points.append(
-            f"DCF bull case implies ${dcf.bull.implied_share_price:,.2f} "
-            f"({dcf.bull.upside_pct:+.0%})."
+            f"DCF bull case implies {fmt_price(dcf.bull.implied_share_price)} "
+            f"({fmt_upside(dcf.bull.upside_pct, decimals=0)})."
         )
     if not points:
         # Template fallback: cite the profile's own thesis drivers as
@@ -913,8 +929,8 @@ def _bear_case(profile: Dict, dcf: Optional[DCFResult],
         points.extend(dcf_drivers)
         if dcf:
             points.append(
-                f"DCF bear case implies ${dcf.bear.implied_share_price:,.2f} "
-                f"({dcf.bear.upside_pct:+.0%})."
+                f"DCF bear case implies {fmt_price(dcf.bear.implied_share_price)} "
+                f"({fmt_upside(dcf.bear.upside_pct, decimals=0)})."
             )
         return BullBearCase(
             headline=str(bear.get("headline") or "Bear case from sector synthesis."),
@@ -930,8 +946,8 @@ def _bear_case(profile: Dict, dcf: Optional[DCFResult],
     points.extend(dcf_drivers)
     if dcf:
         points.append(
-            f"DCF bear case implies ${dcf.bear.implied_share_price:,.2f} "
-            f"({dcf.bear.upside_pct:+.0%})."
+            f"DCF bear case implies {fmt_price(dcf.bear.implied_share_price)} "
+            f"({fmt_upside(dcf.bear.upside_pct, decimals=0)})."
         )
     if not points:
         points.append("Cohort positioning leaves modest downside if execution slips.")
@@ -1025,12 +1041,17 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
         return llm_out
 
     # Deterministic synthesis
-    upside = dcf.base.upside_pct if dcf else 0.0
+    # None (no DCF, or a DCF that could not price the shares) contributes
+    # nothing to the score — it is an absent signal, not a neutral one.
+    upside = dcf.base.upside_pct if dcf else None
     pos_signals = sum(1 for f in findings.values() if any(k in (f.headline + f.summary).lower()
                                                           for k in ("constructive", "premium", "outperform", "tailwind")))
     neg_signals = sum(1 for f in findings.values() if any(k in (f.headline + f.summary).lower()
                                                           for k in ("pressured", "underperform", "elevated", "compress")))
-    score = pos_signals - neg_signals + (1 if upside > 0.10 else (-1 if upside < -0.10 else 0))
+    dcf_signal = 0
+    if upside is not None:
+        dcf_signal = 1 if upside > 0.10 else (-1 if upside < -0.10 else 0)
+    score = pos_signals - neg_signals + dcf_signal
     # Wave 8P — five-label scheme tied to the deterministic Stock-Score
     # mapping. The actual rating gets *overridden* later by
     # `rating_from_stock_score` once the factor blend is computed; this
@@ -1517,6 +1538,10 @@ def _run_stock_memo_inner(
             bear_upside=d.bear.upside_pct,
             wacc=d.base.assumptions.wacc,
             terminal_growth=d.base.assumptions.terminal_growth,
+            # Any scenario whose Gordon denominator hit the floor taints
+            # the three prices the memo prints side by side, so the UI
+            # badge keys off "any", not just the base case.
+            tv_clamped=any(s.tv_clamped for s in (d.base, d.bull, d.bear)),
             summary=d.summary,
         )
 

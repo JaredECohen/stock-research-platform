@@ -214,3 +214,137 @@ def test_healthy_run_does_not_flag_valuation_as_degraded(nvda_memo):
     all — in which case the deterministic path IS the expected behavior
     and the graph's `settings.has_llm` gate keeps it out of the log."""
     assert "Valuation Analyst" not in nvda_memo.degraded_agents
+
+
+# ---------------------------------------------------------------------------
+# DCF unavailable — None is "n/a", never "+0.0%" / "$0.00" / a neutral signal
+# ---------------------------------------------------------------------------
+
+def _unpriced_copy(dcf: DCFResult) -> DCFResult:
+    """The shape `run_dcf` emits when the share count / quote never reached
+    the model: every scenario's implied price and upside are None."""
+    data = dcf.model_dump()
+    for k in ("base", "bull", "bear"):
+        data[k]["implied_share_price"] = None
+        data[k]["upside_pct"] = None
+    data["current_price"] = None
+    return DCFResult(**data)
+
+
+_ZERO_LIES = ("+0.0%", "+0%", "$0.00")
+
+
+def test_refresh_dcf_references_tolerates_none_numbers():
+    """Neither side of the PM adjustment may crash the rewrite when a
+    number is None, and the transparency note must read n/a rather than
+    fabricate a figure. Nothing is substituted for a None side — there is
+    no printed variant of "n/a" that is safe to rewrite."""
+    old = build_dcf("NVDA")
+    new = _unpriced_copy(old)
+    finding = AgentFinding(
+        agent="Valuation Analyst",
+        headline=f"DCF base implies {old.base.upside_pct:+.0%} vs current",
+        summary="s", key_points=["k"], confidence=0.7,
+    )
+    _refresh_dcf_references(finding, old, new)
+    # Old numbers are left alone (no pairs), so only the note is appended.
+    assert f"{old.base.upside_pct:+.0%}" in finding.headline
+    assert finding.key_points == ["k"] or any(
+        "PM-adjusted" in p and "n/a" in p for p in finding.key_points
+    )
+    # And the reverse direction (old None → new real) must not raise either.
+    finding2 = AgentFinding(agent="Valuation Analyst", headline="h", summary="s",
+                            key_points=[], confidence=0.7)
+    _refresh_dcf_references(finding2, new, old)
+    assert not any(z in p for p in finding2.key_points for z in _ZERO_LIES)
+
+
+def test_valuation_verdict_treats_none_dcf_as_unavailable(nvda_memo):
+    memo = nvda_memo.model_copy(
+        update={"dcf_summary": {**nvda_memo.dcf_summary, "base_upside": None}},
+    )
+    vv = _build_valuation_verdict(memo, build_comps("NVDA"))
+    assert vv.dcf_base_upside is None
+    assert "DCF unavailable" in vv.summary
+    assert not any(z in vv.summary for z in _ZERO_LIES)
+    # The word still follows the rating badge — None is not a 0% neutral.
+    assert vv.verdict == _verdict_word(memo.rating_label, None).replace(" ", "_")
+
+
+def test_verdict_word_accepts_none_upside():
+    assert _verdict_word(None, None) == "fairly priced"
+    assert _verdict_word("Bullish", None) == "undervalued"
+    assert _verdict_word("Bearish", None) == "overvalued"
+    assert _verdict_word("Neutral", None) == "fairly priced"
+
+
+def test_valuation_agent_fallback_renders_na_for_unpriced_dcf(monkeypatch):
+    from app.agents import valuation_agent as va
+    monkeypatch.setattr(va.llm, "chat_json", lambda *a, **k: None)
+    dcf = _unpriced_copy(build_dcf("NVDA"))
+    finding = run_valuation_agent({"ticker": "NVDA"}, {"PE": 50.0}, dcf)
+    assert "DCF upside n/a" in finding.headline
+    assert any(p == "Base case implied price: n/a" for p in finding.key_points)
+    assert any(p == "Bull case: n/a | Bear case: n/a" for p in finding.key_points)
+    for text in [finding.headline, finding.summary, *finding.key_points]:
+        assert not any(z in text for z in _ZERO_LIES)
+
+
+@pytest.fixture(scope="module")
+def nvda_memo_unpriced():
+    """A full memo run whose DCF could not price the shares. Module-scoped
+    like `nvda_memo` (a memo run is the expensive part of this file);
+    `pytest.MonkeyPatch` because the function-scoped `monkeypatch` fixture
+    can't back a module fixture."""
+    unpriced = _unpriced_copy(build_dcf("NVDA"))
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(graph, "build_dcf", lambda ticker, **kw: unpriced)
+        yield graph.run_stock_memo("NVDA")
+
+
+def test_unpriced_memo_dcf_summary_carries_none(nvda_memo_unpriced):
+    m = nvda_memo_unpriced
+    assert m.dcf_summary, "the DCF ran — the summary must not vanish"
+    assert m.dcf_summary["base_upside"] is None
+    assert m.dcf_summary["base_implied_price"] is None
+    assert m.dcf_summary["current_price"] is None
+    assert m.dcf_summary["tv_clamped"] is False
+
+
+def test_unpriced_memo_verdict_names_dcf_unavailable(nvda_memo_unpriced):
+    vv = nvda_memo_unpriced.valuation_verdict
+    assert vv.dcf_base_upside is None
+    assert "DCF unavailable" in vv.summary
+    assert vv.verdict == _verdict_word(nvda_memo_unpriced.rating_label, None).replace(" ", "_")
+
+
+def test_unpriced_memo_keeps_consistency_invariants(nvda_memo_unpriced):
+    """The B1/B6 invariants must survive a None DCF: the thesis verdict
+    word agrees with the rating, and the mispricing card still ships."""
+    m = nvda_memo_unpriced
+    expected = _verdict_word(m.rating_label, None)
+    stated = [
+        w for w in ("undervalued", "overvalued", "fairly priced")
+        if w in m.one_sentence_thesis.lower()
+    ]
+    if stated:
+        assert stated[0] == expected
+    assert m.mispricing_thesis.consensus_view or m.mispricing_thesis.our_view or m.mispricing_thesis.gap
+    assert m.key_risks or not m.bear_case.key_points
+
+
+def test_unpriced_memo_prose_never_prints_zero_lies(nvda_memo_unpriced):
+    """No section may render the missing number as a real one."""
+    m = nvda_memo_unpriced
+    texts = [
+        m.one_sentence_thesis, m.final_pm_view, m.final_verdict,
+        m.valuation_verdict.summary, m.mispricing_thesis.gap,
+        m.bull_case.headline, m.bear_case.headline,
+        *m.bull_case.key_points, *m.bear_case.key_points,
+        m.valuation_agent_view.headline, m.valuation_agent_view.summary,
+        *m.valuation_agent_view.key_points,
+        str(m.dcf_summary.get("summary", "")),
+    ]
+    for t in texts:
+        assert not any(z in t for z in _ZERO_LIES), t
+    assert any("n/a" in p for p in m.bull_case.key_points + m.bear_case.key_points)

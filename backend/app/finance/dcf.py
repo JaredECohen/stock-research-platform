@@ -38,6 +38,48 @@ def _avg(values: Iterable[float]) -> float:
     return sum(vals) / len(vals) if vals else 0.0
 
 
+# Floor on (WACC − terminal growth). At or below this the Gordon terminal
+# value is capped rather than computed — see `run_dcf`.
+TV_CLAMP_FLOOR = 0.005
+
+# Rendered wherever an implied price / upside cannot be computed. One
+# spelling so memo prose, chat answers and the guardrail text agree, and
+# so `_refresh_dcf_references` never has to rewrite it.
+NA = "n/a"
+
+
+def _implied_share_price(equity_value: float, diluted_shares: Optional[float]) -> Optional[float]:
+    """Equity value per share, or None when there is no share count.
+
+    A missing / zero share count used to yield `0.0`, which downstream read
+    as "the stock is worth nothing" (-100% upside). There is no price to
+    report in that case, so say so.
+    """
+    if diluted_shares is None or diluted_shares <= 0:
+        return None
+    return equity_value / diluted_shares
+
+
+def _upside_pct(implied: Optional[float], current_price: Optional[float]) -> Optional[float]:
+    """Upside of `implied` over `current_price`, or None when either side
+    is missing. `current_price` 0.0 is "no quote" (that's what the
+    assumption builders emit when the quote chain is down), not a free
+    stock."""
+    if implied is None or current_price is None or current_price <= 0:
+        return None
+    return (implied - current_price) / current_price
+
+
+def fmt_price(x: Optional[float]) -> str:
+    """"$1,234.56", or "n/a" when the implied price could not be computed."""
+    return NA if x is None else f"${x:,.2f}"
+
+
+def fmt_upside(x: Optional[float], *, decimals: int = 1) -> str:
+    """"+12.3%" (signed), or "n/a" when the upside could not be computed."""
+    return NA if x is None else f"{x:+.{decimals}%}"
+
+
 def _trend(values: List[float]) -> float:
     """Naive trend = average year-over-year growth, last 3 periods."""
     if not values or len(values) < 2:
@@ -281,9 +323,15 @@ def run_dcf(assumptions: DCFAssumptions, *, scenario_name: str = "base", label: 
     pv_explicit = sum(p.pv_fcff for p in projections)
     last = projections[-1]
 
-    # Terminal: Gordon Growth on FCFF
+    # Terminal: Gordon Growth on FCFF. The denominator is floored at 50bps
+    # so a terminal growth at/above WACC can't blow up (or flip the sign
+    # of) the terminal value — but a floored denominator means the TV is
+    # a cap, not a valuation, so the scenario carries `tv_clamped` and
+    # `check_dcf_realism` warns on it rather than letting the number pass
+    # as trustworthy.
     gordon_denom = (assumptions.wacc - assumptions.terminal_growth)
-    gordon_denom = gordon_denom if gordon_denom > 0.005 else 0.005
+    tv_clamped = gordon_denom <= TV_CLAMP_FLOOR
+    gordon_denom = gordon_denom if not tv_clamped else TV_CLAMP_FLOOR
     tv_gordon = (last.fcff * (1 + assumptions.terminal_growth)) / gordon_denom
 
     # Terminal: exit EBITDA multiple
@@ -307,13 +355,8 @@ def run_dcf(assumptions: DCFAssumptions, *, scenario_name: str = "base", label: 
     ev_blended = ev_gordon
 
     equity_value = ev_blended - assumptions.net_debt
-    if assumptions.diluted_shares and assumptions.diluted_shares > 0:
-        implied_share_price = equity_value / assumptions.diluted_shares
-    else:
-        implied_share_price = 0.0
-    upside_pct = 0.0
-    if assumptions.current_price:
-        upside_pct = (implied_share_price - assumptions.current_price) / assumptions.current_price
+    implied_share_price = _implied_share_price(equity_value, assumptions.diluted_shares)
+    upside_pct = _upside_pct(implied_share_price, assumptions.current_price)
 
     return DCFScenario(
         name=scenario_name,  # type: ignore[arg-type]
@@ -331,6 +374,7 @@ def run_dcf(assumptions: DCFAssumptions, *, scenario_name: str = "base", label: 
         equity_value=equity_value,
         implied_share_price=implied_share_price,
         upside_pct=upside_pct,
+        tv_clamped=tv_clamped,
     )
 
 
@@ -384,9 +428,10 @@ def _build_sensitivity(
 
 def _scenario_with_exit_terminal(
     assumptions: DCFAssumptions, exit_multiple: float,
-) -> float:
+) -> Optional[float]:
     """Run a single DCF scenario but use the *exit-multiple terminal*
-    instead of Gordon Growth. Returns the implied share price.
+    instead of Gordon Growth. Returns the implied share price, or None
+    when there is no share count to divide by.
 
     Wave 10j — used by `build_exit_multiple_sensitivity` to show what
     the implied price would be if the user picked exit-multiple
@@ -409,9 +454,7 @@ def _scenario_with_exit_terminal(
     pv_terminal_exit = tv_exit / ((1 + a.wacc) ** years)
     ev = pv_explicit + pv_terminal_exit
     equity_value = ev - a.net_debt
-    if a.diluted_shares and a.diluted_shares > 0:
-        return equity_value / a.diluted_shares
-    return 0.0
+    return _implied_share_price(equity_value, a.diluted_shares)
 
 
 def build_exit_multiple_sensitivity(
@@ -544,7 +587,10 @@ def build_default_sensitivities(
 # ---------------------------------------------------------------------------
 
 def check_dcf_realism(
-    base: DCFScenario, *, ticker: str = "",
+    base: DCFScenario,
+    *,
+    ticker: str = "",
+    scenarios: Optional[Iterable[DCFScenario]] = None,
 ) -> List[DCFGuardrail]:
     """Wave 10 — sanity-check the DCF against cohort distribution.
 
@@ -568,8 +614,37 @@ def check_dcf_realism(
        margin tops 60%, that's an extraordinary claim — flagged at
        WARN unless it's a software / payments name (caller can
        suppress via business-context if needed).
+    5. **Terminal value clamped.** WACC − terminal growth was at or
+       below the 50bp floor, so the Gordon denominator was capped and
+       the terminal value (hence the implied price) is an artefact of
+       the floor, not of the assumptions. Flagged at WARN — once per
+       clamped scenario, because the bull / bear bumps (tg up, WACC
+       down) routinely push a healthy base spread through the floor
+       while the base itself stays clean, and the memo prints all
+       three prices side by side. Pass the sibling scenarios via
+       `scenarios`; checks 1-4 stay base-only since the sensitivity
+       grids already cover the assumption range.
     """
     guardrails: List[DCFGuardrail] = []
+
+    # 0) Degenerate Gordon denominator — surfaced first because every
+    #    other number in the scenario is downstream of the capped TV.
+    for scenario in (base, *(scenarios or ())):
+        if not scenario.tv_clamped:
+            continue
+        spread = scenario.assumptions.wacc - scenario.assumptions.terminal_growth
+        guardrails.append(DCFGuardrail(
+            severity="warn",
+            metric="terminal_value_clamped",
+            message=(
+                f"{scenario.label or scenario.name.capitalize()}: WACC minus "
+                f"terminal growth is {spread:+.2%}, at or below the "
+                f"{TV_CLAMP_FLOOR:.1%} floor, so the Gordon terminal value was "
+                f"capped at that floor. The terminal value and implied price "
+                f"are not trustworthy — lower terminal growth or raise WACC."
+            ),
+            value=spread,
+        ))
 
     # 1) Terminal value disagreement
     if base.enterprise_value_gordon and base.enterprise_value_exit:
@@ -614,8 +689,19 @@ def check_dcf_realism(
     except Exception:  # pragma: no cover — guardrails never fail loudly
         pass
 
-    # 3) Absurd implied price
-    if base.implied_share_price <= 0:
+    # 3) Missing or absurd implied price
+    if base.implied_share_price is None:
+        guardrails.append(DCFGuardrail(
+            severity="error",
+            metric="implied_share_price_unavailable",
+            message=(
+                "Implied share price is unavailable — no diluted share count "
+                "reached the model, so equity value cannot be expressed per "
+                "share. Fix the share-count input before trusting any upside."
+            ),
+            value=None,
+        ))
+    elif base.implied_share_price <= 0:
         guardrails.append(DCFGuardrail(
             severity="error",
             metric="implied_share_price",
@@ -710,26 +796,40 @@ def build_full_dcf(
     sens = build_default_sensitivities(
         base_assumptions, bull=bull_assumptions, bear=bear_assumptions,
     )
-    guardrails = check_dcf_realism(base, ticker=ticker)
+    guardrails = check_dcf_realism(base, ticker=ticker, scenarios=(bull, bear))
 
     summary_parts: List[str] = []
-    if base_assumptions.current_price:
-        summary_parts.append(
-            f"Base case implied price ${base.implied_share_price:,.2f} "
-            f"vs current ${base_assumptions.current_price:,.2f} "
-            f"({base.upside_pct:+.1%})"
-        )
+    # `current_price` 0.0 means "no quote" — the summary then reads
+    # "vs current n/a" rather than hiding the comparison, so a reader can
+    # see WHY the upside is n/a instead of wondering where it went.
+    current = base_assumptions.current_price if base_assumptions.current_price > 0 else None
     summary_parts.append(
-        f"Bull ${bull.implied_share_price:,.2f} ({bull.upside_pct:+.1%}) | "
-        f"Bear ${bear.implied_share_price:,.2f} ({bear.upside_pct:+.1%})"
+        f"Base case implied price {fmt_price(base.implied_share_price)} "
+        f"vs current {fmt_price(current)} "
+        f"({fmt_upside(base.upside_pct)})"
     )
+    summary_parts.append(
+        f"Bull {fmt_price(bull.implied_share_price)} ({fmt_upside(bull.upside_pct)}) | "
+        f"Bear {fmt_price(bear.implied_share_price)} ({fmt_upside(bear.upside_pct)})"
+    )
+    # Name the clamped scenario(s): a bull-only clamp is the common case
+    # (the bull bumps narrow the spread) and the reader needs to know
+    # WHICH of the three prices above is the artefact.
+    clamped = [s.label or s.name.capitalize() for s in (base, bull, bear) if s.tv_clamped]
+    if clamped:
+        summary_parts.append(
+            f"⚠ Terminal value clamped ({', '.join(clamped)}): WACC minus "
+            f"terminal growth is at or below the {TV_CLAMP_FLOOR:.1%} floor, "
+            "so the Gordon terminal value was capped and the affected implied "
+            "prices are not trustworthy"
+        )
     if guardrails:
         n_warn = sum(1 for g in guardrails if g.severity == "warn")
         n_err = sum(1 for g in guardrails if g.severity == "error")
         summary_parts.append(f"⚠ Model warnings: {n_err} errors, {n_warn} warns")
     return DCFResult(
         ticker=ticker,
-        current_price=base_assumptions.current_price,
+        current_price=current,
         base=base,
         bull=bull,
         bear=bear,

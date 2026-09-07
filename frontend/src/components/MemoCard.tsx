@@ -1,7 +1,8 @@
 import React from "react";
 import type { AgentFinding, BullBearAnalysis, StockMemoOut } from "@/types";
-import { fmtCurrency, fmtPct, ratingBadgeClass } from "@/lib/format";
+import { fmtPct, fmtPrice, fmtUpside, numOrNull, ratingBadgeClass } from "@/lib/format";
 import CrossSectorChips from "./CrossSectorChips";
+import TerminalClampBadge from "./TerminalClampBadge";
 import DiligenceDialog from "./DiligenceDialog";
 import EarningsBreakdown from "./EarningsBreakdown";
 import MacroRegimeBanner from "./MacroRegimeBanner";
@@ -326,7 +327,7 @@ function FindingBlock({
 }
 
 export default function MemoCard({ memo }: { memo: StockMemoOut }) {
-  const dcf = memo.dcf_summary as Record<string, number | string | undefined>;
+  const dcf = memo.dcf_summary as Record<string, unknown>;
   const degraded = memo.degraded_agents ?? [];
   // Phase 6 sector-finding fields ride on `sector_agent_view.data`.
   const sectorData = memo.sector_agent_view.data;
@@ -550,54 +551,61 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
         <div className="section-title mb-1">DCF Snapshot</div>
         {dcf && Object.keys(dcf).length > 0 ? (
           (() => {
-            const current = Number(dcf.current_price) || 0;
-            const base = Number(dcf.base_implied_price) || 0;
-            const bull = Number(dcf.bull_implied_price) || 0;
-            const bear = Number(dcf.bear_implied_price) || 0;
+            // null = the engine could not compute the number (no share
+            // count / no quote) → rendered "n/a". `Number(null)` is 0,
+            // which is exactly the "+0.0%" lie this block used to print.
+            const current = numOrNull(dcf.current_price);
+            const base = numOrNull(dcf.base_implied_price);
+            const bull = numOrNull(dcf.bull_implied_price);
+            const bear = numOrNull(dcf.bear_implied_price);
             // Prefer per-scenario upside fields when present (Wave 8L);
-            // fall back to recomputing from current_price for older memos.
-            const baseUp = dcf.base_upside !== undefined
-              ? Number(dcf.base_upside)
-              : current ? (base - current) / current : 0;
-            const bullUp = dcf.bull_upside !== undefined
-              ? Number(dcf.bull_upside)
-              : current ? (bull - current) / current : 0;
-            const bearUp = dcf.bear_upside !== undefined
-              ? Number(dcf.bear_upside)
-              : current ? (bear - current) / current : 0;
-            const tone = (v: number) =>
-              v > 0.005 ? "text-accent-500" : v < -0.005 ? "text-danger-500" : "text-slate-400";
+            // recompute from current_price only for memos that pre-date
+            // them (key absent) — never when the field is present-but-null.
+            const upside = (key: string, implied: number | null): number | null => {
+              if (key in dcf) return numOrNull(dcf[key]);
+              return implied != null && current != null && current > 0
+                ? (implied - current) / current
+                : null;
+            };
+            const baseUp = upside("base_upside", base);
+            const bullUp = upside("bull_upside", bull);
+            const bearUp = upside("bear_upside", bear);
+            const tone = (v: number | null) =>
+              v == null
+                ? "text-slate-500"
+                : v > 0.005 ? "text-accent-500" : v < -0.005 ? "text-danger-500" : "text-slate-400";
             return (
               <div className="space-y-3 text-sm">
-                <div className="flex items-baseline gap-2">
+                <div className="flex items-baseline gap-2 flex-wrap">
                   <span className="text-xs text-slate-500">Current</span>
                   <span className="font-mono text-base text-slate-100">
-                    {fmtCurrency(current)}
+                    {fmtPrice(current)}
                   </span>
                   <span className="text-[10px] text-slate-500">
                     Δ vs DCF below
                   </span>
+                  {dcf.tv_clamped === true && <TerminalClampBadge className="ml-auto" />}
                 </div>
                 <div className="grid grid-cols-3 gap-3">
                   <div>
                     <div className="text-xs text-slate-500">Bear</div>
-                    <div className="font-mono text-base">{fmtCurrency(bear)}</div>
+                    <div className="font-mono text-base">{fmtPrice(bear)}</div>
                     <div className={`text-xs ${tone(bearUp)}`}>
-                      {fmtPct(bearUp)}
+                      {fmtUpside(bearUp)}
                     </div>
                   </div>
                   <div>
                     <div className="text-xs text-slate-500">Base</div>
-                    <div className="font-mono text-base">{fmtCurrency(base)}</div>
+                    <div className="font-mono text-base">{fmtPrice(base)}</div>
                     <div className={`text-xs ${tone(baseUp)}`}>
-                      {fmtPct(baseUp)}
+                      {fmtUpside(baseUp)}
                     </div>
                   </div>
                   <div>
                     <div className="text-xs text-slate-500">Bull</div>
-                    <div className="font-mono text-base">{fmtCurrency(bull)}</div>
+                    <div className="font-mono text-base">{fmtPrice(bull)}</div>
                     <div className={`text-xs ${tone(bullUp)}`}>
-                      {fmtPct(bullUp)}
+                      {fmtUpside(bullUp)}
                     </div>
                   </div>
                 </div>

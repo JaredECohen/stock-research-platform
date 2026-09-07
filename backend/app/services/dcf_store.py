@@ -153,11 +153,25 @@ def assumptions_to_pydantic(row: DCFModel) -> DCFAssumptions:
 
 
 def result_to_pydantic(row: DCFModel) -> Optional[DCFResult]:
+    """Rehydrate the stored DCFResult payload, or None when the row has
+    none / the payload no longer validates.
+
+    The payload is stored as JSON, so `implied_share_price` / `upside_pct`
+    round-trip as `null` ↔ None with no migration; rows saved before those
+    fields became optional still carry `0.0` and load unchanged.
+    """
     if not row.dcf_result:
         return None
     try:
         return DCFResult.model_validate(row.dcf_result)
-    except Exception:
+    except Exception as exc:
+        # Schema drift between the stored payload and today's DCFResult.
+        # Returning None is what callers expect (they rebuild), but a
+        # silent None hides exactly the drift that would need a migration.
+        log.warning(
+            "dcf_store: stored DCF result for %s v%s no longer validates: %s",
+            row.ticker, row.version, exc,
+        )
         return None
 
 

@@ -12,6 +12,7 @@ from sqlalchemy import select
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import settings
+from ..finance.dcf import fmt_price, fmt_upside
 from ..schemas import (
     AgentTrace,
     ChatMessage,
@@ -249,9 +250,15 @@ def _render_dcf_answer(d: DCFResult) -> str:
     lines = [f"**DCF for {d.ticker}**", ""]
     lines.append(f"WACC: {d.base.assumptions.wacc:.2%} · Terminal growth: {d.base.assumptions.terminal_growth:.1%}")
     lines.append("")
-    lines.append(f"- Base implied price: ${d.base.implied_share_price:,.2f} ({d.base.upside_pct:+.1%})")
-    lines.append(f"- Bull implied price: ${d.bull.implied_share_price:,.2f} ({d.bull.upside_pct:+.1%})")
-    lines.append(f"- Bear implied price: ${d.bear.implied_share_price:,.2f} ({d.bear.upside_pct:+.1%})")
+    for s in (d.base, d.bull, d.bear):
+        # "n/a" rather than a crash or "$0.00" when the share count or
+        # quote never reached the model — see `finance.dcf.fmt_price`.
+        lines.append(
+            f"- {s.name.capitalize()} implied price: "
+            f"{fmt_price(s.implied_share_price)} ({fmt_upside(s.upside_pct)})"
+        )
+    if any(s.tv_clamped for s in (d.base, d.bull, d.bear)):
+        lines.append("- ⚠ Terminal value clamped (WACC − terminal growth ≤ 0.5%) — implied prices are not trustworthy")
     lines.append("")
     lines.append(d.summary)
     return "\n".join(lines)

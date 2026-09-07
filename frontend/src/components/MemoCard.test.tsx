@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import MemoCard from "@/components/MemoCard";
-import { BLANK_MISPRICING, makeMemo } from "@/test/fixtures/memo";
+import {
+  BLANK_MISPRICING,
+  CLAMPED_DCF_SUMMARY,
+  PRICED_DCF_SUMMARY,
+  UNPRICED_DCF_SUMMARY,
+  makeMemo,
+} from "@/test/fixtures/memo";
 import type { StockMemoOut } from "@/types";
 
 // MemoryRouter because CrossSectorChips renders react-router <Link>s when
@@ -117,6 +123,45 @@ describe("MemoCard", () => {
       renderCard(makeMemo({ catalysts: [], key_risks: [] }));
       expect(screen.queryByText("Catalysts")).not.toBeInTheDocument();
       expect(screen.queryByText("Key Risks & Thesis Breakers")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("DCF snapshot", () => {
+    it("renders priced scenarios with signed upside", () => {
+      renderCard(makeMemo({ dcf_summary: PRICED_DCF_SUMMARY }));
+      expect(screen.getByText("$918.00")).toBeInTheDocument();
+      expect(screen.getByText("+2.0%")).toBeInTheDocument();
+      expect(screen.getByText("-20.0%")).toBeInTheDocument();
+      expect(screen.queryByText("Terminal value clamped")).not.toBeInTheDocument();
+    });
+
+    it("renders n/a — never $0.00 or +0.0% — when the DCF could not price the shares", () => {
+      renderCard(makeMemo({ dcf_summary: UNPRICED_DCF_SUMMARY }));
+      // Current + three implied prices + three upsides.
+      expect(screen.getAllByText("n/a")).toHaveLength(7);
+      expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+      expect(screen.queryByText(/\+0\.0%/)).not.toBeInTheDocument();
+      expect(screen.queryByText("DCF unavailable.")).not.toBeInTheDocument();
+    });
+
+    it("does not recompute an upside from a null current price on older memos", () => {
+      // Older memos lack per-scenario upside keys; the fallback recompute
+      // must yield n/a, not -100%, when the quote is missing.
+      const legacy: Record<string, unknown> = { ...PRICED_DCF_SUMMARY, current_price: null };
+      delete legacy.base_upside;
+      delete legacy.bull_upside;
+      delete legacy.bear_upside;
+      renderCard(makeMemo({ dcf_summary: legacy }));
+      expect(screen.getByText("$918.00")).toBeInTheDocument();
+      expect(screen.getAllByText("n/a")).toHaveLength(4);
+      expect(screen.queryByText("-100.0%")).not.toBeInTheDocument();
+    });
+
+    it("shows the terminal-clamp badge with an explanatory tooltip when tv_clamped is set", () => {
+      renderCard(makeMemo({ dcf_summary: CLAMPED_DCF_SUMMARY }));
+      const badge = screen.getByText("Terminal value clamped").closest("[title]");
+      expect(badge).not.toBeNull();
+      expect(badge?.getAttribute("title")).toMatch(/0\.5% floor/);
     });
   });
 });

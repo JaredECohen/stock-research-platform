@@ -258,3 +258,60 @@ def test_build_dcf_persists_initial_version():
     assert snap is not None
     assert snap.version >= 1
     assert snap.trigger in ("initial", "memo_rebuild")
+
+
+# ---------------------------------------------------------------------------
+# None round-trip — implied price / upside are Optional now
+# ---------------------------------------------------------------------------
+
+def test_save_version_round_trips_none_implied_price():
+    """A DCF that could not price the shares (no share count) persists
+    `null` and rehydrates as None — never as 0.0. The payload column is
+    JSON, so no migration is involved."""
+    _reset_table()
+    from app.finance.dcf import build_full_dcf
+    a = _stub_assumptions().model_copy(update={"diluted_shares": 0.0})
+    res = build_full_dcf("NOSHARES", a)
+    assert res.base.implied_share_price is None
+    assert res.base.upside_pct is None
+
+    snap = dcf_store.save_version("NOSHARES", assumptions=a, dcf_result=res, trigger="initial")
+    assert snap.dcf_result["base"]["implied_share_price"] is None
+    assert snap.dcf_result["base"]["upside_pct"] is None
+
+    loaded = dcf_store.result_to_pydantic(dcf_store.latest_version("NOSHARES"))
+    assert loaded is not None
+    assert loaded.base.implied_share_price is None
+    assert loaded.base.upside_pct is None
+    assert all(c.value is None for s in loaded.sensitivities for c in s.cells)
+
+
+def test_legacy_zero_payload_loads_unchanged():
+    """Rows written before the fields became Optional carry `0.0` (and no
+    `tv_clamped`). They must keep loading with those values intact — we
+    do not rewrite history, we just stop producing it."""
+    _reset_table()
+    from app.finance.dcf import build_full_dcf
+    a = _stub_assumptions()
+    res = build_full_dcf("LEGACY", a)
+    legacy = res.model_dump(mode="json")
+    for k in ("base", "bull", "bear"):
+        legacy[k]["implied_share_price"] = 0.0
+        legacy[k]["upside_pct"] = 0.0
+        legacy[k].pop("tv_clamped", None)
+    legacy["current_price"] = 0.0
+
+    with SessionLocal() as db:
+        row = DCFModel(
+            ticker="LEGACY", version=1, trigger="initial",
+            assumptions=a.model_dump(mode="json"), dcf_result=legacy,
+        )
+        db.add(row)
+        db.commit()
+
+    loaded = dcf_store.result_to_pydantic(dcf_store.latest_version("LEGACY"))
+    assert loaded is not None
+    assert loaded.base.implied_share_price == 0.0
+    assert loaded.base.upside_pct == 0.0
+    assert loaded.current_price == 0.0
+    assert loaded.base.tv_clamped is False
