@@ -53,3 +53,9 @@ build/
 out/
 research_notes/_index.json
 .gstack/
+
+# Claude project memory (not for humans)
+# Claude-only project memory (core + topic files) — not for humans
+.claude/memory/
+# safety net: a stray root MEMORY.md from an older session must stay invisible too
+MEMORY.md
