@@ -19,10 +19,13 @@ log = logging.getLogger(__name__)
 def run_once() -> Dict[str, int]:
     res = evaluate_all_due()
     note = (
-        f"evaluated={res['evaluated']} written={res['written']} "
+        f"evaluated={res['evaluated']} due={res['due']} "
+        f"written={res['written']} existing={res['already_recorded']} "
+        f"unavailable={res['data_unavailable']} "
         f"reflections={res['reflections']} errors={res['errors']}"
     )
-    record_run("outcome_loop", success=res["errors"] == 0, note=note)
+    success = res["errors"] == 0 and res["data_unavailable"] == 0
+    record_run("outcome_loop", success=success, note=note)
     return res
 
 

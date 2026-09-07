@@ -174,7 +174,11 @@ def _llm_postmortem(
     Returns dict with: `lesson` (markdown body), `agent_attribution`
     (per-specialist credit/blame dict), and `regime_at_memo`.
     """
-    if not getattr(settings, "openai_api_key", None):
+    # Gate on any configured LLM, not OpenAI specifically: `llm.chat_json`
+    # picks the active provider itself, and the old OpenAI-only check made
+    # every postmortem on an Anthropic-only deployment fall back to the
+    # deterministic lesson without ever trying.
+    if not settings.has_llm:
         return None
     payload = {
         "memo": {
@@ -290,7 +294,10 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> Dict[str, Any
         outcome: MemoOutcome = item["outcome"]
         snap: MemoSnapshot = item["snapshot"]
         try:
-            memo = snap.memo or {}
+            # MemoSnapshot stores the report in ``memo_json``.  ``snap.memo``
+            # never existed; the AttributeError was swallowed here and made
+            # every due postmortem count as skipped forever.
+            memo = snap.memo_json or {}
             if not isinstance(memo, dict):
                 memo = json.loads(memo)
         except Exception:
