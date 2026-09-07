@@ -26,6 +26,7 @@ A monthly cron refreshes the universe.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -124,8 +125,9 @@ def _llm_theme_scores(
     """Score the ticker against the full theme vocabulary in one
     LLM call. Returns `{theme: {"score": float, "evidence": str}}`
     or None on any failure."""
-    from ..config import settings
-    if not getattr(settings, "openai_api_key", None) or not text.strip():
+    # Any configured provider counts — `llm.chat_json` routes the call; the
+    # old OpenAI-only gate silently disabled this on Anthropic deployments.
+    if not settings.has_llm or not text.strip():
         return None
     schema_hint = {
         theme: {

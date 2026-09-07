@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import get_args, Any, Dict, List, Optional, Tuple
 
 from ..config import settings
 from ..schemas import (
@@ -29,11 +29,11 @@ log = logging.getLogger(__name__)
 # Subset of metrics + ops the LLM is allowed to emit. Keep the
 # vocabulary tight so the rule chain hits the existing custom-screen
 # evaluator without surprises.
-_ALLOWED_METRICS: List[str] = [
-    "pe_ttm", "ev_ebitda", "ev_revenue", "gross_margin",
-    "op_margin", "fcf_margin", "roic", "roe", "debt_to_ebitda",
-    "revenue_growth_yoy", "market_cap", "beta", "fcf_yield",
-]
+# Derived from the schema's `ScreenerMetricName` literal rather than kept
+# by hand: the two drifted (this list carried `fcf_yield`, which the schema
+# rejects), so an LLM translation using it raised a pydantic ValidationError
+# out of `translate()` instead of the rule simply being dropped.
+_ALLOWED_METRICS: List[str] = list(get_args(ScreenerMetricName))
 _ALLOWED_OPS: List[str] = [">", "<", ">=", "<=", "=", "between"]
 _SUPPORTED_THEMES = [
     "ai_infrastructure", "ai_applications", "energy_transition", "glp1",

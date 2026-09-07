@@ -491,21 +491,10 @@ def _fail_everywhere(router: _Router, failure: str) -> None:
 @pytest.mark.parametrize("failure", sorted(_FAILURES))
 @pytest.mark.parametrize("method, args", _ALL_METHODS)
 def test_every_method_returns_none_on_failure(router, provider, method, args, failure):
-    if (method, failure) == ("get_financial_statements", "object_not_list"):
-        pytest.skip("covered by the xfail below — the provider raises here today")
     _fail_everywhere(router, failure)
     assert getattr(provider, method)(*args) is None
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "get_financial_statements does `self._get(...) or []` and then "
-        "iterates the result, so an HTTP-200 JSON *object* (FMP's "
-        "`{\"Error Message\": ...}` shape) is iterated as a dict of keys "
-        "and raises AttributeError instead of returning None"
-    ),
-)
 def test_financial_statements_with_error_object_body_returns_none(router, provider):
     _fail_everywhere(router, "object_not_list")
     assert provider.get_financial_statements("ACME") is None

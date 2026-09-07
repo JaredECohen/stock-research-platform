@@ -2,14 +2,14 @@
 
 An autouse fixture blanks the OpenAI key so `compute_for_ticker` takes
 the deterministic keyword path regardless of the environment (the LLM
-branch is currently a NameError, see the xfail); what is pinned here is: the keyword scorer's arithmetic, that
+branch used to be a NameError, fixed alongside these tests); what is pinned here is: the keyword scorer's arithmetic, that
 every ticker with text gets exactly one row per vocabulary theme (never
 a theme outside `THEME_KEYWORDS`), the evidence format each path
 produces, re-runs upsert in place, and `top_for_theme` on an unknown
 theme is empty rather than an error.
 
 The LLM branch is gated on `settings.openai_api_key`; that gate is
-asserted closed here. Its result-cleaning logic is recorded as an xfail
+asserted closed here. Its result-cleaning logic is now asserted directly
 because the branch currently cannot execute at all (see the reason);
 that test re-sets a throwaway key on top of the autouse blanking.
 """
@@ -155,14 +155,6 @@ def _upsert_text_only(ticker: str, description: str) -> None:
 # LLM result cleaning (cannot run today — see reason)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "_llm_theme_scores builds its prompt with json.dumps but "
-        "theme_exposure_service never imports json, so the branch raises "
-        "NameError before the LLM is called whenever a key is configured"
-    ),
-)
 def test_llm_scores_are_clamped_and_unknown_themes_dropped(monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "test-key-not-real")
     monkeypatch.setattr(llm, "chat_json", lambda *a, **k: {

@@ -178,14 +178,6 @@ def test_valid_llm_output_round_trips(fake_llm):
     assert rationale == "Read as margin-rich AI names."
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "_ALLOWED_METRICS admits `fcf_yield` but `ScreenerMetricName` does "
-        "not, so a translation that uses it raises a pydantic "
-        "ValidationError out of translate() instead of being dropped"
-    ),
-)
 def test_fcf_yield_rule_is_dropped_rather_than_raising(fake_llm):
     fake_llm({"rules": [{"metric": "fcf_yield", "op": ">", "value": 4}]})
     req, _, _ = nl_screener.translate("fcf yield above 4%")

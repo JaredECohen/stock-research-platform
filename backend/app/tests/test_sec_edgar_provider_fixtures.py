@@ -8,7 +8,8 @@ through an `httpx.MockTransport`, so real `httpx` request / response
 objects flow through the provider but no socket is ever opened.
 
 The section-parser tests pin what `_extract_sections` actually does
-today. Two known gaps are recorded as non-strict xfails rather than
+today. Two gaps found while writing these tests (TOC stubs winning over
+real sections; en-dash separators) were fixed in the provider rather than
 papered over (see the `xfail` reasons); fixing them belongs to the
 provider, not to this file.
 """
@@ -143,14 +144,6 @@ def test_toc_duplicates_do_not_win_for_mapped_keys():
     assert bullets and all(b in sections["risk_factors"] for b in bullets)
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "_extract_sections fills item_* keys with setdefault, so the "
-        "table-of-contents stub (first match) wins over the real body for "
-        "the retrieval-facing item_1a / item_7 keys"
-    ),
-)
 def test_item_keys_prefer_the_real_section_over_the_toc_stub():
     sections, _ = _sections("10k_trimmed.html")
     assert "TOC-SENTINEL-RISK" in sections["item_1a"]
@@ -201,14 +194,6 @@ def test_extract_sections_needs_strip_html_to_normalise_nbsp():
     assert "risk_factors" in sections
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "an en-dash between the item number and title is not in the "
-        "header separator class, so the captured title starts with the "
-        "dash and never matches the MD&A mapping"
-    ),
-)
 def test_en_dash_separator_maps_mda():
     text = (
         "Item 7 – Management’s Discussion and Analysis\n"

@@ -303,7 +303,9 @@ def _compact_memo(memo: StockMemoOut) -> Dict[str, Any]:
         "confidence": memo.confidence_score,
         "thesis": memo.one_sentence_thesis,
         "pm_view": memo.final_pm_view,
-        "sector": memo.sector_agent_view.summary,
+        # Was a second "sector" key, which silently overwrote the sector NAME
+        # above with the analyst summary (ruff F601).
+        "sector_view": memo.sector_agent_view.summary,
         "earnings": memo.earnings_agent_view.summary,
         "filing": memo.filing_agent_view.summary,
         "valuation": memo.valuation_agent_view.summary,

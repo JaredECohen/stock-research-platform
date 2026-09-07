@@ -82,7 +82,7 @@ def _strip_html(raw: str) -> str:
 # Multi-line aware; case-insensitive; tolerates the long-S "ITEM" all-caps
 # variant and optional trailing punctuation.
 _ITEM_HEADER = re.compile(
-    r"^[ \t]*item[ \t]+(\d{1,2}[a-z]?)[\.\s:\-]+([^\n\r]{1,120})$",
+    r"^[ \t]*item[ \t]+(\d{1,2}[a-z]?)[\.\s:\-\u2013\u2014]+([^\n\r]{1,120})$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -106,15 +106,24 @@ def _extract_sections(text: str) -> Tuple[Dict[str, str], List[str]]:
         # Map a few well-known headings into stable keys the rest of the
         # platform expects (history_service / filing_agent read these).
         if "risk factor" in item_title:
-            sections["risk_factors"] = body
+            if len(body) > len(sections.get("risk_factors", "")):
+                sections["risk_factors"] = body
         elif "management's discussion" in item_title or item_title.startswith("management"):
-            sections["mda"] = body
+            if len(body) > len(sections.get("mda", "")):
+                sections["mda"] = body
         elif "business" in item_title and item_num.startswith("1"):
-            sections["business_description"] = body
+            if len(body) > len(sections.get("business_description", "")):
+                sections["business_description"] = body
         elif "legal" in item_title:
-            sections["legal_or_regulatory"] = body
-        # Keep an item-keyed view for retrieval to consume.
-        sections.setdefault(f"item_{item_num}", body)
+            if len(body) > len(sections.get("legal_or_regulatory", "")):
+                sections["legal_or_regulatory"] = body
+        # Keep an item-keyed view for retrieval to consume. A 10-K's table
+        # of contents repeats every heading before the real section, so the
+        # first match is usually a page-number stub; the longest body for a
+        # given item is the actual section.
+        key = f"item_{item_num}"
+        if len(body) > len(sections.get(key, "")):
+            sections[key] = body
 
     # Bullet extraction from the risk-factor section. SEC 10-Ks
     # typically structure each risk as one paragraph (caption + body);

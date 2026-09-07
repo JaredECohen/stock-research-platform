@@ -267,9 +267,18 @@ class FMPProvider:
         """`/stable/income-statement` + `/balance-sheet-statement` +
         `/cash-flow-statement`, all keyed by `?symbol=`. Period defaults
         to `annual` on /stable/; pass `period=quarter` for Q-by-Q."""
-        income = self._get("/income-statement", symbol=ticker.upper(), limit=8) or []
-        balance = self._get("/balance-sheet-statement", symbol=ticker.upper(), limit=8) or []
-        cash = self._get("/cash-flow-statement", symbol=ticker.upper(), limit=8) or []
+        # FMP answers some failures with HTTP 200 and a JSON *object*
+        # ({"Error Message": ...}); iterating that as rows raised out of the
+        # provider chain. Anything that is not a list of rows is "no data".
+        def _rows(path: str) -> List[Dict[str, Any]]:
+            payload = self._get(path, symbol=ticker.upper(), limit=8)
+            if not isinstance(payload, list):
+                return []
+            return [r for r in payload if isinstance(r, dict)]
+
+        income = _rows("/income-statement")
+        balance = _rows("/balance-sheet-statement")
+        cash = _rows("/cash-flow-statement")
         if not income:
             return None
         return dict(
