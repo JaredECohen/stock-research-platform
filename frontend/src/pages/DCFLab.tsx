@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/api/client";
+import TerminalClampBadge from "@/components/TerminalClampBadge";
 import TickerPicker from "@/components/TickerPicker";
 import type { CompanyOut, DCFAssumptions, DCFResult, DCFSensitivity } from "@/types";
-import { fmtCurrency, fmtPct } from "@/lib/format";
+import { fmtPrice, fmtUpside } from "@/lib/format";
 
 function NumInput(props: { label: string; value: number; onChange: (v: number) => void; step?: number; pct?: boolean; suffix?: string }) {
   const display = props.pct ? (props.value * 100).toFixed(2) : props.value.toFixed(props.step && props.step >= 1 ? 1 : 4);
@@ -33,13 +34,14 @@ function ExitMultipleSensitivityTable({
   currentPrice,
 }: {
   s: DCFSensitivity;
-  currentPrice: number;
+  currentPrice: number | null;
 }) {
   // Wave 10j — dedicated renderer for the exit-multiple cross-check
   // (headline DCF uses Gordon Growth). Rows are multiples (9x, 12x,
-  // ...), columns are Bear / Base / Bull, cells are implied price.
+  // ...), columns are Bear / Base / Bull, cells are implied price
+  // (null when the engine had no share count → rendered "n/a").
   const scenarios = ["bear", "base", "bull"];
-  const cellMap = new Map<string, number>();
+  const cellMap = new Map<string, number | null>();
   s.cells.forEach((c) => cellMap.set(`${c.row_label}|${c.col_label}`, c.value));
   const multiples = Array.from(new Set(s.cells.map((c) => c.row_label)));
 
@@ -68,17 +70,18 @@ function ExitMultipleSensitivityTable({
             <tr key={m} className="border-t border-ink-800">
               <td className="text-slate-400 p-1">{m}</td>
               {scenarios.map((sc) => {
-                const v = cellMap.get(`${m}|${sc}`) ?? 0;
-                const above = currentPrice && v > currentPrice;
-                const below = currentPrice && v < currentPrice;
-                const cls = above
+                const v = cellMap.get(`${m}|${sc}`) ?? null;
+                const comparable = v != null && currentPrice != null && currentPrice > 0;
+                const cls = !comparable
+                  ? v == null ? "text-slate-500" : ""
+                  : v > currentPrice
                   ? "text-emerald-400"
-                  : below
+                  : v < currentPrice
                   ? "text-rose-400"
                   : "";
                 return (
                   <td key={`${m}-${sc}`} className={`text-right p-1 ${cls}`}>
-                    ${v.toFixed(2)}
+                    {fmtPrice(v)}
                   </td>
                 );
               })}
@@ -93,7 +96,7 @@ function ExitMultipleSensitivityTable({
 function SensitivityTable({ s }: { s: DCFSensitivity }) {
   const cols = s.cols;
   const rows = s.rows;
-  const cellMap = new Map<string, number>();
+  const cellMap = new Map<string, number | null>();
   s.cells.forEach((c) => cellMap.set(`${c.row_label}|${c.col_label}`, c.value));
 
   return (
@@ -118,10 +121,10 @@ function SensitivityTable({ s }: { s: DCFSensitivity }) {
                 <td className="text-slate-400 p-1">{rowLabel}</td>
                 {cols.map((c) => {
                   const colLabel = c < 1 ? `${(c * 100).toFixed(2)}%` : c.toFixed(1);
-                  const v = cellMap.get(`${rowLabel}|${colLabel}`) ?? 0;
+                  const v = cellMap.get(`${rowLabel}|${colLabel}`) ?? null;
                   return (
-                    <td key={`${r}-${c}`} className="text-right p-1">
-                      ${v.toFixed(2)}
+                    <td key={`${r}-${c}`} className={`text-right p-1 ${v == null ? "text-slate-500" : ""}`}>
+                      {fmtPrice(v)}
                     </td>
                   );
                 })}
@@ -425,6 +428,8 @@ export default function DCFLab() {
     fcff: p.fcff / 1e9,
   })) ?? [];
 
+  // null prices become gaps in the bar chart (recharts skips null), which
+  // is honest — a $0 bar would read as "worthless".
   const scenarioData = result
     ? [
         { name: "Bear", price: result.bear.implied_share_price },
@@ -433,6 +438,9 @@ export default function DCFLab() {
         { name: "Current", price: result.current_price },
       ]
     : [];
+  const tvClamped = Boolean(
+    result && [result.base, result.bull, result.bear].some((s) => s.tv_clamped),
+  );
 
   return (
     <div className="space-y-4">
@@ -615,17 +623,24 @@ export default function DCFLab() {
             {result && (
               <>
                 <div className="card">
-                  <div className="section-title mb-2">Scenario summary</div>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="section-title">Scenario summary</div>
+                    {tvClamped && <TerminalClampBadge />}
+                  </div>
                   <p className="text-sm text-slate-300">{result.summary}</p>
                   <div className="grid grid-cols-3 gap-3 mt-3">
                     {(["bear", "base", "bull"] as const).map((k) => {
                       const s = result[k];
+                      const up = s.upside_pct;
+                      const tone = up == null
+                        ? "text-slate-500"
+                        : up >= 0 ? "text-accent-500" : "text-danger-500";
                       return (
                         <div key={k} className="card-tight">
                           <div className="text-xs uppercase tracking-widest text-slate-500">{s.label}</div>
-                          <div className="text-xl font-mono mt-1">{fmtCurrency(s.implied_share_price)}</div>
-                          <div className={`text-xs ${s.upside_pct >= 0 ? "text-accent-500" : "text-danger-500"}`}>
-                            {fmtPct(s.upside_pct)} vs current
+                          <div className="text-xl font-mono mt-1">{fmtPrice(s.implied_share_price)}</div>
+                          <div className={`text-xs ${tone}`}>
+                            {fmtUpside(up)} vs current
                           </div>
                         </div>
                       );

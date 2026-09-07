@@ -430,8 +430,18 @@ class DCFScenario(BaseModel):
     enterprise_value_exit: float
     enterprise_value_blended: float
     equity_value: float
-    implied_share_price: float
-    upside_pct: float
+    # None when the number genuinely cannot be computed — no diluted share
+    # count for the implied price, no (positive) current price for the
+    # upside. A 0.0 here used to flow into memos as "+0.0%" and into the
+    # valuation verdict as a neutral signal, which is a lie, not a value.
+    # Renderers print "n/a"; verdict logic treats None as "DCF unavailable".
+    implied_share_price: Optional[float] = None
+    upside_pct: Optional[float] = None
+    # True when WACC − terminal growth was ≤ 0.5% and the Gordon denominator
+    # was floored. The terminal value is then a cap, not a valuation, so the
+    # flag rides on the scenario for the UI badge + a `check_dcf_realism`
+    # warning. Defaults False so memos that pre-date the field validate.
+    tv_clamped: bool = False
     # Wave 10k — named drivers for bull / bear scenarios. Empty for
     # the base case + on memos that pre-date the field. Bull / bear
     # scenarios populated via `services/scenario_assumptions.py` so
@@ -443,7 +453,9 @@ class DCFScenario(BaseModel):
 class SensitivityCell(BaseModel):
     row_label: str
     col_label: str
-    value: float
+    # None mirrors `DCFScenario.implied_share_price` — a grid cell has no
+    # implied price when the share count is missing.
+    value: Optional[float] = None
 
 
 class DCFSensitivity(BaseModel):
@@ -470,7 +482,10 @@ class DCFGuardrail(BaseModel):
 
 class DCFResult(BaseModel):
     ticker: str
-    current_price: float
+    # None when no quote reached the model (off-universe name, quote chain
+    # down). Historical payloads carry 0.0 here; `run_dcf` treats both as
+    # "no price" so the upside comes back None rather than -100%.
+    current_price: Optional[float] = None
     base: DCFScenario
     bull: DCFScenario
     bear: DCFScenario

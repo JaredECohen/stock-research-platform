@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from "react";
 import type { AgentFinding, RiskItem, StockMemoOut } from "@/types";
-import { fmtPct, ratingBadgeClass } from "@/lib/format";
+import { fmtPct, fmtPrice, fmtUpside, ratingBadgeClass } from "@/lib/format";
 import { Markdown } from "./Markdown";
+import TerminalClampBadge from "./TerminalClampBadge";
 
 /**
  * Professional investment-memo layout (sell-side / buy-side IC style):
@@ -55,10 +56,16 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
   );
   const degraded = memo.degraded_agents || [];
   const dcf = memo.dcf_summary || {};
-  const dcfFair = pickNumber(dcf, ["target_price", "fair_value", "implied_per_share", "fair_value_per_share"]);
-  const dcfImpliedUpside = pickNumber(dcf, ["implied_upside", "upside", "upside_pct"]);
+  // `hasDcf` separates "the model ran" (numbers may still be null → "n/a")
+  // from "no DCF on this memo" (the section shows "—").
+  const hasDcf = Object.keys(dcf).length > 0;
+  // `base_implied_price` / `base_upside` are what the graph writes; the
+  // older aliases are kept for memos that pre-date that summary shape.
+  const dcfFair = pickNumber(dcf, ["base_implied_price", "target_price", "fair_value", "implied_per_share", "fair_value_per_share"]);
+  const dcfImpliedUpside = pickNumber(dcf, ["base_upside", "implied_upside", "upside", "upside_pct"]);
   const dcfWacc = pickNumber(dcf, ["wacc", "discount_rate"]);
   const dcfGrowth = pickNumber(dcf, ["terminal_growth", "g_terminal"]);
+  const tvClamped = dcf.tv_clamped === true;
 
   return (
     <div
@@ -118,10 +125,9 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                 <div className="mt-2 text-xs text-slate-400 print:text-slate-600">
                   Conviction: {Math.round(memo.confidence_score)}/100
                 </div>
-                {dcfFair !== null && (
+                {hasDcf && (
                   <div className="mt-1 text-xs text-slate-400 print:text-slate-600">
-                    Fair value: ${dcfFair.toFixed(2)}
-                    {dcfImpliedUpside !== null && ` (${fmtPctLoose(dcfImpliedUpside)})`}
+                    Fair value: {fmtPrice(dcfFair)} ({fmtUpside(dcfImpliedUpside)})
                   </div>
                 )}
               </div>
@@ -237,12 +243,13 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                 {memo.valuation_verdict.summary}
               </p>
             )}
+            {tvClamped && <TerminalClampBadge className="mb-3" />}
             <div className="grid md:grid-cols-2 gap-4 mb-4">
               <KvTable
                 title="DCF Summary"
                 rows={[
-                  ["Fair value / share", dcfFair !== null ? `$${dcfFair.toFixed(2)}` : "—"],
-                  ["Implied upside", dcfImpliedUpside !== null ? fmtPctLoose(dcfImpliedUpside) : "—"],
+                  ["Fair value / share", hasDcf ? fmtPrice(dcfFair) : "—"],
+                  ["Implied upside", hasDcf ? fmtUpside(dcfImpliedUpside) : "—"],
                   ["WACC", dcfWacc !== null ? fmtPctLoose(dcfWacc) : "—"],
                   ["Terminal growth", dcfGrowth !== null ? fmtPctLoose(dcfGrowth) : "—"],
                 ]}

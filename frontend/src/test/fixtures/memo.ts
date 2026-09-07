@@ -27,6 +27,45 @@ export const BLANK_MISPRICING: MispricingThesis = {
   falsifiers: [],
 };
 
+// `dcf_summary` as the graph writes it (`_summarize_dcf`). A fully priced
+// model — every scenario has an implied price and an upside.
+export const PRICED_DCF_SUMMARY: Record<string, unknown> = {
+  current_price: 900,
+  base_implied_price: 918,
+  bull_implied_price: 1080,
+  bear_implied_price: 720,
+  base_upside: 0.02,
+  bull_upside: 0.2,
+  bear_upside: -0.2,
+  wacc: 0.085,
+  terminal_growth: 0.025,
+  tv_clamped: false,
+  summary: "Base case implied price $918.00 vs current $900.00 (+2.0%).",
+};
+
+// The engine could not price the shares (no diluted share count) and had
+// no quote: every price / upside is null. The UI must render "n/a" — a
+// 0 here used to print as "$0.00" / "+0.0%".
+export const UNPRICED_DCF_SUMMARY: Record<string, unknown> = {
+  ...PRICED_DCF_SUMMARY,
+  current_price: null,
+  base_implied_price: null,
+  bull_implied_price: null,
+  bear_implied_price: null,
+  base_upside: null,
+  bull_upside: null,
+  bear_upside: null,
+  summary: "Base case implied price n/a vs current n/a (n/a).",
+};
+
+// WACC − terminal growth hit the engine floor; prices exist but are capped.
+export const CLAMPED_DCF_SUMMARY: Record<string, unknown> = {
+  ...PRICED_DCF_SUMMARY,
+  wacc: 0.06,
+  terminal_growth: 0.06,
+  tv_clamped: true,
+};
+
 export function makeMemo(overrides: Partial<StockMemoOut> = {}): StockMemoOut {
   return {
     ticker: "COST",

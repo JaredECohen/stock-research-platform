@@ -218,14 +218,31 @@ export interface DCFScenario {
   enterprise_value_exit: number;
   enterprise_value_blended: number;
   equity_value: number;
-  implied_share_price: number;
-  upside_pct: number;
+  // null when the engine could not compute the number — no diluted share
+  // count (implied price) or no positive quote (upside). Render "n/a";
+  // a 0 here used to print as "+0.0%" and read as a real valuation.
+  implied_share_price: number | null;
+  upside_pct: number | null;
+  // True when WACC − terminal growth hit the engine's 0.5% floor, so the
+  // Gordon terminal value was capped and the price is not trustworthy.
+  // Absent on results that pre-date the field.
+  tv_clamped?: boolean;
 }
 
 export interface SensitivityCell {
   row_label: string;
   col_label: string;
-  value: number;
+  // null mirrors DCFScenario.implied_share_price (no share count).
+  value: number | null;
+}
+
+// Wave 10 — sanity-check flag from the engine's `check_dcf_realism`.
+export interface DCFGuardrail {
+  severity: "warn" | "error";
+  message: string;
+  metric: string;
+  value?: number | null;
+  cohort_p90?: number | null;
 }
 
 export interface DCFSensitivity {
@@ -239,12 +256,14 @@ export interface DCFSensitivity {
 
 export interface DCFResult {
   ticker: string;
-  current_price: number;
+  // null when no quote reached the model (older payloads may carry 0).
+  current_price: number | null;
   base: DCFScenario;
   bull: DCFScenario;
   bear: DCFScenario;
   sensitivities: DCFSensitivity[];
   summary: string;
+  guardrails?: DCFGuardrail[];
   generated_at: string;
 }
 

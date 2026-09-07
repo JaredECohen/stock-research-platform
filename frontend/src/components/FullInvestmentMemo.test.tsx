@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import FullInvestmentMemo from "@/components/FullInvestmentMemo";
-import { BLANK_MISPRICING, makeMemo } from "@/test/fixtures/memo";
+import {
+  BLANK_MISPRICING,
+  CLAMPED_DCF_SUMMARY,
+  PRICED_DCF_SUMMARY,
+  UNPRICED_DCF_SUMMARY,
+  makeMemo,
+} from "@/test/fixtures/memo";
 import type { StockMemoOut } from "@/types";
 
 function renderMemo(memo: StockMemoOut) {
@@ -105,6 +111,40 @@ describe("FullInvestmentMemo", () => {
     it("hides Risks & Thesis Breakers when both risk arrays are empty", () => {
       renderMemo(makeMemo({ key_risks: [], thesis_breakers: [] }));
       expect(screen.queryByText("Risks & Thesis Breakers")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("DCF summary", () => {
+    it("renders the graph's base_implied_price / base_upside on the cover and in the table", () => {
+      renderMemo(makeMemo({ dcf_summary: PRICED_DCF_SUMMARY }));
+      expect(screen.getByText(/Fair value: \$918\.00 \(\+2\.0%\)/)).toBeInTheDocument();
+      // KvTable rows
+      expect(screen.getByText("Fair value / share")).toBeInTheDocument();
+      expect(screen.getAllByText("$918.00").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText("+2.0%")).toBeInTheDocument();
+      expect(screen.queryByText("Terminal value clamped")).not.toBeInTheDocument();
+    });
+
+    it("renders n/a — never $0.00 or +0.0% — when the DCF could not price the shares", () => {
+      renderMemo(makeMemo({ dcf_summary: UNPRICED_DCF_SUMMARY }));
+      expect(screen.getByText(/Fair value: n\/a \(n\/a\)/)).toBeInTheDocument();
+      // Two KvTable cells (fair value / share, implied upside).
+      expect(screen.getAllByText("n/a")).toHaveLength(2);
+      expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+      expect(screen.queryByText(/\+0\.0%/)).not.toBeInTheDocument();
+    });
+
+    it("shows dashes, not n/a, when the memo carries no DCF at all", () => {
+      renderMemo(makeMemo({ dcf_summary: {} }));
+      expect(screen.queryByText(/Fair value:/)).not.toBeInTheDocument();
+      expect(screen.queryByText("n/a")).not.toBeInTheDocument();
+    });
+
+    it("shows the terminal-clamp badge with an explanatory tooltip when tv_clamped is set", () => {
+      renderMemo(makeMemo({ dcf_summary: CLAMPED_DCF_SUMMARY }));
+      const badge = screen.getByText("Terminal value clamped").closest("[title]");
+      expect(badge).not.toBeNull();
+      expect(badge?.getAttribute("title")).toMatch(/0\.5% floor/);
     });
   });
 });
