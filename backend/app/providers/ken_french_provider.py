@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 
@@ -175,7 +175,7 @@ class KenFrenchProvider:
                     return None
                 payload = resp.content
         except Exception as exc:
-            log.warning("Ken French download error (%s): %s", url, exc)
+            log_safely(log, f"Ken French download error ({url})", exc)
             return None
         try:
             with zipfile.ZipFile(io.BytesIO(payload)) as zf:
@@ -188,7 +188,7 @@ class KenFrenchProvider:
                 with zf.open(inner_name) as fh:
                     text = fh.read().decode("latin-1", errors="ignore")
         except (zipfile.BadZipFile, KeyError) as exc:
-            log.warning("Ken French zip parse failed (%s): %s", bundle_id, exc)
+            log_safely(log, f"Ken French zip parse failed ({bundle_id})", exc)
             return None
         return _parse_ken_french_csv(text, monthly="MONTHLY" in bundle_id)
 

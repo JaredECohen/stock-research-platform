@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -177,7 +177,7 @@ class SECEdgarProvider:
                     for row in data.values()
                 }
             except Exception as exc:  # pragma: no cover
-                log.warning("SEC ticker map fetch failed: %s", exc)
+                log_safely(log, "SEC ticker map fetch failed", exc)
                 return None
         return self._ticker_cik_map.get(ticker)
 
@@ -197,7 +197,7 @@ class SECEdgarProvider:
                     return None
                 body = r.text
         except Exception as exc:  # pragma: no cover
-            log.warning("SEC doc fetch failed for %s: %s", url, exc)
+            log_safely(log, f"SEC doc fetch failed for {url}", exc)
             return None
         text = _strip_html(body)
         if len(text) > MAX_TEXT_BYTES:
@@ -258,7 +258,7 @@ class SECEdgarProvider:
                 if len(results) >= 10:
                     break
         except Exception as exc:  # pragma: no cover
-            log.warning("SEC submissions fetch failed: %s", exc)
+            log_safely(log, "SEC submissions fetch failed", exc)
             return None
 
         if not fetch_text:

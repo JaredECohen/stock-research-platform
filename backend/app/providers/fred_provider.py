@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
@@ -69,7 +69,7 @@ class FREDProvider:
                 ],
             )
         except Exception as exc:  # pragma: no cover
-            log.warning("FRED fetch failed: %s", exc)
+            log_safely(log, "FRED fetch failed", exc)
             return None
 
     def list_macro_series(self) -> List[Dict[str, Any]]:

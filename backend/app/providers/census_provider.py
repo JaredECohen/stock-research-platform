@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ class CensusProvider:
                     return None
                 rows = r.json()
         except Exception as exc:  # pragma: no cover
-            log.warning("Census MARTS fetch failed for %s: %s", series_id, exc)
+            log_safely(log, f"Census MARTS fetch failed for {series_id}", exc)
             return None
         if not rows or len(rows) < 2:
             return None
@@ -133,7 +133,7 @@ class CensusProvider:
                     return None
                 rows = r.json()
         except Exception as exc:  # pragma: no cover
-            log.warning("Census C30 fetch failed for %s: %s", series_id, exc)
+            log_safely(log, f"Census C30 fetch failed for {series_id}", exc)
             return None
         if not rows or len(rows) < 2:
             return None

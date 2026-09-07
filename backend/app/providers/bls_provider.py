@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +71,8 @@ class BLSProvider:
                     return None
                 data = r.json()
         except Exception as exc:  # pragma: no cover
-            log.warning("BLS fetch failed for %s: %s", series_id, exc)
+            # The request body carries `registrationkey`.
+            log_safely(log, f"BLS fetch failed for {series_id}", exc)
             return None
 
         status = (data or {}).get("status")

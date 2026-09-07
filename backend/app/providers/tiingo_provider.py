@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 BASE = "https://api.tiingo.com"
@@ -43,7 +43,7 @@ class TiingoProvider:
                     return None
                 rows = r.json()
         except Exception as exc:  # pragma: no cover
-            log.warning("Tiingo quote failed: %s", exc)
+            log_safely(log, f"Tiingo quote failed for {ticker}", exc)
             return None
         if not isinstance(rows, list) or not rows:
             return None
@@ -84,7 +84,7 @@ class TiingoProvider:
                 for row in rows
             ][-days:]
         except Exception as exc:  # pragma: no cover
-            log.warning("Tiingo fetch failed: %s", exc)
+            log_safely(log, f"Tiingo fetch failed for {ticker}", exc)
             return None
 
     def get_news(self, ticker: str) -> Optional[List[Dict[str, Any]]]:

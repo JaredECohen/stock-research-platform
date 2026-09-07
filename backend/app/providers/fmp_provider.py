@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 BASE_URL = "https://financialmodelingprep.com/stable"
@@ -63,7 +63,8 @@ class FMPProvider:
                     return None
                 return r.json()
         except Exception as exc:  # pragma: no cover — network paths
-            log.warning("FMP request failed: %s", exc)
+            # httpx errors quote the URL, which carries `?apikey=`.
+            log_safely(log, f"FMP request failed for {path}", exc)
             return None
 
     # ------------------------------------------------------------------

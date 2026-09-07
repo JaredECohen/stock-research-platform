@@ -6,8 +6,24 @@ falling back to the demo provider when a method returns None or raises.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol
+
+
+def log_safely(
+    log: logging.Logger, msg: str, exc: BaseException, *, level: int = logging.WARNING,
+) -> None:
+    """Providers' entry to `agents.log_safety.log_safely` (type at `level`,
+    redacted detail at DEBUG).
+
+    Imported lazily because `app.agents.__init__` pulls in the orchestrator,
+    which reaches `data_service`, which imports every provider — a
+    module-level import here would cycle whenever a provider module is
+    the first thing imported (as the provider unit tests do).
+    """
+    from ..agents.log_safety import log_safely as _impl
+    _impl(log, msg, exc, level=level)
 
 
 @dataclass

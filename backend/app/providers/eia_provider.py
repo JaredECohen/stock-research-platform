@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ class EIAProvider:
                     return None
                 data = r.json()
         except Exception as exc:  # pragma: no cover
-            log.warning("EIA v2 fetch failed for %s: %s", series_id, exc)
+            log_safely(log, f"EIA v2 fetch failed for {series_id}", exc)
             return None
         rows = (((data or {}).get("response") or {}).get("data")) or []
         if not rows:
@@ -163,7 +163,7 @@ class EIAProvider:
                 if r.status_code != 200:
                     return None
         except Exception as exc:  # pragma: no cover
-            log.debug("EIA public petroleum fetch failed: %s", exc)
+            log_safely(log, "EIA public petroleum fetch failed", exc, level=logging.DEBUG)
             return None
         return self._parse_xls_two_column(
             r.content,
@@ -180,7 +180,7 @@ class EIAProvider:
                 if r.status_code != 200:
                     return None
         except Exception as exc:  # pragma: no cover
-            log.debug("EIA public natgas fetch failed: %s", exc)
+            log_safely(log, "EIA public natgas fetch failed", exc, level=logging.DEBUG)
             return None
         # Parsing the XLS varies sheet-to-sheet. Best-effort: try the
         # generic two-column parser; on failure return None so the
@@ -200,7 +200,7 @@ class EIAProvider:
                 if r.status_code != 200:
                     return None
         except Exception as exc:  # pragma: no cover
-            log.debug("EIA public WTI fetch failed: %s", exc)
+            log_safely(log, "EIA public WTI fetch failed", exc, level=logging.DEBUG)
             return None
         return self._parse_xls_two_column(
             r.content,
@@ -217,7 +217,7 @@ class EIAProvider:
                 if r.status_code != 200:
                     return None
         except Exception as exc:  # pragma: no cover
-            log.debug("EIA public Henry Hub fetch failed: %s", exc)
+            log_safely(log, "EIA public Henry Hub fetch failed", exc, level=logging.DEBUG)
             return None
         return self._parse_xls_two_column(
             r.content,
@@ -276,7 +276,7 @@ class EIAProvider:
                 "points": points,
             }
         except Exception as exc:  # pragma: no cover
-            log.debug("EIA XLS parse failed for %s: %s", series_id, exc)
+            log_safely(log, f"EIA XLS parse failed for {series_id}", exc, level=logging.DEBUG)
             return None
 
     @staticmethod

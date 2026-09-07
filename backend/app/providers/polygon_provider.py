@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 BASE = "https://api.polygon.io"
@@ -41,7 +41,7 @@ class PolygonProvider:
                     return None
                 return r.json()
         except Exception as exc:  # pragma: no cover
-            log.warning("Polygon fetch failed: %s", exc)
+            log_safely(log, f"Polygon fetch failed for {path}", exc)
             return None
 
     def get_quote(self, ticker: str) -> Optional[Dict[str, Any]]:

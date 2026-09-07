@@ -1416,6 +1416,17 @@ def _run_stock_memo_inner(
             if isinstance(_f.data, dict) and _f.data.get("deterministic_fallback"):
                 degradation.record_soft(_f.agent, str(_f.data["deterministic_fallback"]))
 
+    # A specialist that ran on the backup vendor after a failover produced
+    # a real view, but not the one the routing config asked for — surface
+    # it on the same banner. Drained here, after the round, so the events
+    # belong to this run and not to whatever the process ran before it.
+    for _ev in llm.consume_failover_events():
+        degradation.record_soft(
+            "LLM provider",
+            f"failed over from {_ev['from']} to {_ev['to']}: {_ev['reason']}",
+            kind="ProviderFailover",
+        )
+
     # Wave 3C: drill-down long-form reports. The deterministic build is
     # cheap and always populates the field; LLM enrichment runs only when
     # ENABLE_LONG_FORM_REPORTS=true. safe_call wraps so a failure never

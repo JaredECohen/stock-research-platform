@@ -130,6 +130,22 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def _startup() -> None:
+        # One line saying which provider and which model each role actually
+        # resolved to — the answer to "why did the sector agent run on
+        # haiku?" without grepping env. Names and booleans only.
+        try:
+            from .agents.llm import model_summary
+            ms = model_summary()
+            roles = " ".join(f"{r}={m}" for r, m in ms["role_models"].items())
+            cfg = ",".join(k for k, v in ms["configured"].items() if v) or "none"
+            log.info(
+                "LLM routing: provider=%s choice=%s configured=%s failover=%s %s",
+                ms["active_provider"], ms["provider_choice"], cfg,
+                "on" if settings.llm_failover_enabled else "off", roles,
+            )
+        except Exception as exc:  # pragma: no cover - startup hardening
+            log.warning("LLM routing summary failed: %s", type(exc).__name__)
+
         try:
             from .seed_universe import run_full_seed
             summary = run_full_seed()
