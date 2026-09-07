@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Optional
 
 # Anything longer than this is not a useful log line, and a truncated
 # secret is still a secret — so redact first, then cut.
@@ -88,7 +88,7 @@ def safe_exc(exc: BaseException) -> str:
 def log_safely(
     log: logging.Logger,
     msg: str,
-    exc: BaseException,
+    exc: Optional[BaseException],
     *,
     level: int = logging.WARNING,
 ) -> None:
@@ -97,7 +97,15 @@ def log_safely(
     `msg` is a finished string (f-string at the call site), not a
     %-format template — the two records must not diverge in what they
     interpolate, and the operational line must never receive `exc`.
+
+    `exc=None` is for operational events that have no exception to show
+    (a failover whose cause the wrapper already swallowed): the message
+    alone is logged at `level`, redacted, so every line that leaves the
+    agent layer goes through the same mask.
     """
+    if exc is None:
+        log.log(level, "%s", redact(msg))
+        return
     log.log(level, "%s: %s", msg, type(exc).__name__)
     if log.isEnabledFor(logging.DEBUG):
         log.debug("%s — %s", msg, safe_exc(exc))

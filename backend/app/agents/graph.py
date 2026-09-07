@@ -1237,6 +1237,10 @@ def _run_stock_memo_inner(
     # memo. Failures are accumulated into `degradation` and surfaced on the
     # memo's `degraded_agents` field.
     degradation = DegradationLog()
+    # Failover events are context-local and the regen worker runs memos
+    # back to back in one long-lived thread, so whatever the previous run
+    # left undrained would otherwise be pinned on this memo. Discard it.
+    llm.consume_failover_events()
 
     transcript = safe_call(latest_transcript, ticker, fallback=None,
                            name="Transcript Service", log_to=degradation)
@@ -1418,14 +1422,10 @@ def _run_stock_memo_inner(
 
     # A specialist that ran on the backup vendor after a failover produced
     # a real view, but not the one the routing config asked for — surface
-    # it on the same banner. Drained here, after the round, so the events
-    # belong to this run and not to whatever the process ran before it.
-    for _ev in llm.consume_failover_events():
-        degradation.record_soft(
-            "LLM provider",
-            f"failed over from {_ev['from']} to {_ev['to']}: {_ev['reason']}",
-            kind="ProviderFailover",
-        )
+    # it on the same banner. Drained here after the round and again just
+    # before persistence, because PM synthesis, the critic, reflection and
+    # the long-form/DCF enrichment all make LLM calls after this point.
+    _absorb_failover_events(degradation)
 
     # Wave 3C: drill-down long-form reports. The deterministic build is
     # cheap and always populates the field; LLM enrichment runs only when
@@ -1920,6 +1920,10 @@ def _run_stock_memo_inner(
     # The regen worker (services/regen_worker.py) catches BaseException
     # and records the traceback on the RegenJob row, surfaced via
     # /analyze/status and /api/admin/regen-jobs.
+    # Last LLM call is behind us: pick up any failover the later stages
+    # recorded so the persisted memo says which vendor actually wrote it.
+    _absorb_failover_events(degradation)
+    memo.degraded_agents = degradation.degraded_agents()
     try:
         _persist_memo_snapshot(memo, as_of_date)
     except Exception as exc:
@@ -1934,6 +1938,16 @@ def _run_stock_memo_inner(
         raise
     memo.degraded_agents = degradation.degraded_agents()
     return memo
+
+
+def _absorb_failover_events(degradation: DegradationLog) -> None:
+    """Move this context's LLM failover events onto the memo's degradation log."""
+    for _ev in llm.consume_failover_events():
+        degradation.record_soft(
+            "LLM provider",
+            f"failed over from {_ev['from']} to {_ev['to']}: {_ev['reason']}",
+            kind="ProviderFailover",
+        )
 
 
 def _persist_memo_snapshot(memo: StockMemoOut, as_of_date: Optional[Any] = None) -> None:

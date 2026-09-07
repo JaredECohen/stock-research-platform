@@ -71,7 +71,9 @@ def _llm_status(mode: str) -> Dict[str, Any]:
     """
     # Per-process, like the admin breaker endpoint: this describes the
     # web service. The worker's breakers are only visible via the DB.
-    breakers = llm.get_breaker_state()
+    # The contract's `breakers` is one row per provider; failover has its
+    # own top-level object below.
+    breakers = llm.get_breaker_state(include_failover=False)
     failover = llm.get_failover_state()
     summary = llm.model_summary()
     active = settings.active_llm_provider

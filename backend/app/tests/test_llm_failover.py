@@ -8,6 +8,7 @@ model name. Everything is monkeypatched — no client is ever built.
 from __future__ import annotations
 
 import contextvars
+import logging
 import time
 from typing import Any, Dict, List
 from unittest.mock import patch
@@ -254,7 +255,26 @@ def test_repeated_failover_failures_trip_the_secondary_breaker():
     assert len(calls.anthropic_calls) == before
 
 
-def test_breaker_state_exposes_failover_only_on_request():
-    assert "failover" not in llm.get_breaker_state()
-    state = llm.get_breaker_state(include_failover=True)
+def test_breaker_state_carries_failover_unless_told_otherwise():
+    state = llm.get_breaker_state()
+    assert set(state) == {"openai", "anthropic", "gemini", "failover"}
     assert set(state["failover"]) == {"count", "last_from", "last_to", "last_at", "last_reason"}
+    # The status contract renders `breakers` as one row per provider.
+    assert set(llm.get_breaker_state(include_failover=False)) == {"openai", "anthropic", "gemini"}
+
+
+def test_failover_is_logged_at_warning_through_log_safety(monkeypatch, caplog):
+    seen: List[tuple] = []
+    real = llm.log_safely
+
+    def _spy(log, msg, exc, **kw):
+        seen.append((msg, exc))
+        real(log, msg, exc, **kw)
+
+    monkeypatch.setattr(llm, "log_safely", _spy)
+    calls = _Calls(openai_result=None, anthropic_result='{"ok": true}')
+    with caplog.at_level(logging.WARNING, logger="app.agents.llm"):
+        _run(calls)
+    assert seen == [("LLM failover from openai to anthropic (call_failed)", None)]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert [r.getMessage() for r in warnings] == ["LLM failover from openai to anthropic (call_failed)"]

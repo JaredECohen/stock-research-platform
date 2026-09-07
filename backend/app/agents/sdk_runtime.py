@@ -33,6 +33,7 @@ from ..cache import cache_get
 from ..config import settings
 from ..schemas import AgentFinding, StockMemoOut
 from . import llm
+from .log_safety import log_safely, safe_exc
 
 log = logging.getLogger(__name__)
 
@@ -116,8 +117,10 @@ class Runner:
             trace.append(f"done agent={agent.name}")
             return RunResult(final_output=output, iterations=1, trace=trace)
         except Exception as exc:
-            log.warning("Agent %s raised: %s", agent.name, exc)
-            return RunResult(final_output=None, iterations=1, trace=trace + [f"error: {exc}"])
+            log_safely(log, f"Agent {agent.name} raised", exc)
+            # The trace travels to the chat response (`agent_trace`), so it
+            # gets the same mask as the log line.
+            return RunResult(final_output=None, iterations=1, trace=trace + [f"error: {safe_exc(exc)}"])
 
 
 # ---------------------------------------------------------------------------
@@ -518,13 +521,16 @@ def _run_via_real_sdk(
             "new_items": new_items,
         }
     except Exception as exc:
-        log.warning("real Agents SDK exchange failed for %s: %s", ticker, exc)
+        # The real SDK's AuthenticationError / httpx errors quote the
+        # request headers; neither the log nor the persisted trace row may
+        # carry that body.
+        log_safely(log, f"real Agents SDK exchange failed for {ticker}", exc)
         if run_id:
             elapsed_ms = int((_time.perf_counter() - started) * 1000)
             _persist_sdk_trace(
                 run_id=run_id, ticker=ticker, surface="memo",
                 final_output="", new_items=None,
-                error=str(exc), duration_ms=elapsed_ms,
+                error=safe_exc(exc), duration_ms=elapsed_ms,
             )
         return None
 

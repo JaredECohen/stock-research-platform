@@ -198,6 +198,57 @@ def test_critic_role_follows_the_anthropic_env_when_anthropic_is_active(monkeypa
         assert llm_mod.resolve_role_model("critic") == settings.anthropic_strong_model
 
 
+def test_critic_role_mirrors_the_forced_anthropic_route(monkeypatch):
+    """critic_agent force-routes to Anthropic whenever a key is present, so
+    the role table must report the Anthropic model under an OpenAI-active
+    deployment — otherwise the ops page names a model the critic never ran."""
+    monkeypatch.setattr(settings, "anthropic_api_key", "stub-key")
+    monkeypatch.setattr(settings, "anthropic_critic_model", "claude-test-critic")
+    with _openai_active():
+        assert llm_mod.resolve_role_model("critic") == "claude-test-critic"
+        assert llm_mod.model_summary()["role_models"]["critic"] == "claude-test-critic"
+        monkeypatch.setattr(settings, "anthropic_critic_model", "")
+        assert llm_mod.resolve_role_model("critic") == settings.anthropic_strong_model
+        # Every other role still follows the active provider.
+        assert llm_mod.resolve_role_model("pm") == settings.openai_strong_model
+
+
+def test_critic_role_falls_back_to_the_active_provider_without_anthropic(monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    monkeypatch.setattr(settings, "anthropic_critic_model", "claude-test-critic")
+    with _openai_active():
+        assert llm_mod.resolve_role_model("critic") == settings.openai_strong_model
+
+
+def test_chat_sdk_agent_never_carries_a_blank_pm_model(monkeypatch):
+    """The chat surface builds a *real* `agents.Agent`; an unset
+    OPENAI_PM_MODEL used to reach it as "" and silently drop chat to the
+    non-SDK path. The SDK module is patched so nothing is ever run."""
+    import agents as real_sdk
+    from app.agents import chat_sdk
+
+    captured: dict = {}
+
+    class _FakeAgent:
+        def __init__(self, **kw):
+            captured.update(kw)
+
+    monkeypatch.setattr(real_sdk, "Agent", _FakeAgent)
+    monkeypatch.setattr(real_sdk, "function_tool", lambda fn: fn)
+    monkeypatch.setattr(settings, "use_agents_sdk", True)
+    monkeypatch.setattr(settings, "openai_api_key", "stub-key")
+    monkeypatch.setattr(settings, "openai_pm_model", "")
+    with _openai_active():
+        assert chat_sdk._build_chat_agent() is not None
+    assert captured["model"] == settings.openai_strong_model
+
+    captured.clear()
+    monkeypatch.setattr(settings, "openai_pm_model", "gpt-test-chat-pm")
+    with _openai_active():
+        chat_sdk._build_chat_agent()
+    assert captured["model"] == "gpt-test-chat-pm"
+
+
 def test_explicit_provider_overrides_the_active_one(monkeypatch):
     """The Agents SDK only speaks OpenAI, so sdk_runtime resolves against
     OpenAI even when Anthropic is the active provider."""

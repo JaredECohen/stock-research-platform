@@ -106,13 +106,15 @@ def reset_circuit_breaker(provider: Optional[str] = None) -> None:
         _FAILURE_LAST_AT.pop(provider, None)
 
 
-def get_breaker_state(include_failover: bool = False) -> Dict[str, Dict[str, Any]]:
+def get_breaker_state(include_failover: bool = True) -> Dict[str, Dict[str, Any]]:
     """Snapshot of circuit-breaker state for the admin endpoint.
 
-    `include_failover=True` adds a `failover` key (see
-    `get_failover_state`). It is opt-in because existing consumers
-    iterate this dict as "one entry per provider" and render
-    `failure_count` per row; a non-provider key would break them.
+    Carries a `failover` key (see `get_failover_state`) beside the three
+    provider rows so the admin breaker view shows a hop when one happened;
+    a breaker that never opened tells only half the story once failover
+    exists. `include_failover=False` is for consumers that already expose
+    failover elsewhere and need strictly one row per provider (the
+    `/api/providers/status` contract).
     """
     import time as _time
     now = _time.time()
@@ -183,7 +185,10 @@ def _record_failover(src: str, dst: str, reason: str) -> None:
         events = []
         _FAILOVER_EVENTS.set(events)
     events.append({"from": src, "to": dst, "reason": reason})
-    log.warning("LLM failover from %s to %s (%s)", src, dst, reason)
+    # No exception to hand over — the wrappers already turned it into
+    # None — but the line still goes through the redacting path so a
+    # future reason string can never carry key material.
+    log_safely(log, f"LLM failover from {src} to {dst} ({reason})", None)
 
 
 def get_failover_state() -> Dict[str, Any]:
@@ -236,20 +241,35 @@ _ROLE_SETTINGS = {
 }
 
 
+def _provider_for_role(role: str) -> str:
+    """The provider `role` actually runs on when no explicit one is given.
+
+    Every role follows the active provider except the critic, which
+    `critic_agent` force-routes to Anthropic whenever a key is present
+    (Phase 4: the reviewer should not share the author's vendor). The
+    role table has to say the same thing, or the ops page answers
+    "which model reviewed this memo" with a model that never ran.
+    """
+    if role == "critic" and settings.has_anthropic:
+        return "anthropic"
+    return settings.active_llm_provider
+
+
 def resolve_role_model(role: str, provider: Optional[str] = None) -> str:
     """Model name to run `role` on, never blank and never provider-foreign.
 
     Returns the configured per-role model when it is non-blank AND named
     for `provider`'s family; otherwise that provider's route default. The
-    provider defaults to the active one; the Agents SDK runtime passes
-    `provider="openai"` explicitly because that SDK only speaks OpenAI
-    regardless of which provider `chat_json` would pick.
+    provider defaults to the one the role really runs on (see
+    `_provider_for_role`); the Agents SDK runtime passes `provider="openai"`
+    explicitly because that SDK only speaks OpenAI regardless of which
+    provider `chat_json` would pick.
     """
     try:
         attr, route = _ROLE_SETTINGS[role]
     except KeyError:
         raise ValueError(f"unknown LLM role: {role!r}") from None
-    prov = (provider or settings.active_llm_provider).lower()
+    prov = (provider or _provider_for_role(role)).lower()
     if prov not in _FAILOVER_PARTNER:
         # "none" (no keys) still has to yield a usable name for the SDK
         # shim's Agent objects; OpenAI is the shape every default carries.

@@ -29,6 +29,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from ..config import settings
+from . import llm
 from .log_safety import log_safely, safe_exc
 
 log = logging.getLogger(__name__)
@@ -477,7 +478,10 @@ def _build_chat_agent() -> Optional[Any]:
                 "    education only and does not provide personalized "
                 "    financial advice._'"
             ),
-            model=settings.openai_pm_model,
+            # Same resolution as sdk_runtime: an unset OPENAI_PM_MODEL is ""
+            # and the real SDK rejects that, which used to drop chat to the
+            # non-SDK path with only a "build failed" line to show for it.
+            model=llm.resolve_role_model("pm", provider="openai"),
             tools=[
                 get_memo, get_dcf_summary, get_comps, get_macro_snapshot,
                 get_company_lite, list_universe, screener_query, custom_screen,
