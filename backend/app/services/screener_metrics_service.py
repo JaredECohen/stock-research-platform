@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 
 from ..database import session_scope
+from ..finance import ratios as R
 from ..models import Company, FinancialPeriod, ScreenerMetric
 
 log = logging.getLogger(__name__)
@@ -133,13 +134,23 @@ def compute_metrics(ticker: str) -> Optional[Dict[str, Any]]:
         beta=company_kwargs["beta"],
     )
 
-    # ROIC = NOPAT / (debt + equity); approximate NOPAT from operating income.
-    if op_income is not None and pretax and pretax != 0:
-        tax_rate = (tax or 0) / pretax if pretax > 0 else 0.21
-        nopat = op_income * (1 - max(0.0, min(0.5, tax_rate)))
-        invested = (total_debt or 0) + (equity or 0)
-        if invested > 0:
-            metrics["roic"] = nopat / invested
+    # ROIC comes from the shared definition in `finance/ratios.py` so the
+    # screener, comps and history views agree. Its tax-rate resolution
+    # (effective rate → 21% statutory for profitable names → None for a
+    # loss-maker with no credible rate) is the reason `roic` may stay
+    # NULL for a ticker that has operating income: an unknown rate must
+    # not be manufactured into a number a screen rule can rank on.
+    roic_value, roic_source = R.roic_with_provenance(
+        {
+            "operating_income": op_income,
+            "pretax_income": pretax,
+            "tax_expense": tax,
+        },
+        {"total_debt": total_debt, "shareholders_equity": equity},
+    )
+    metrics["roic"] = roic_value
+    if roic_value is None and op_income is not None:
+        log.info("screener_metrics %s: roic unavailable (%s)", ticker, roic_source)
 
     return metrics
 
