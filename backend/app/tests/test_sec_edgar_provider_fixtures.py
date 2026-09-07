@@ -10,8 +10,7 @@ objects flow through the provider but no socket is ever opened.
 The section-parser tests pin what `_extract_sections` actually does
 today. Two gaps found while writing these tests (TOC stubs winning over
 real sections; en-dash separators) were fixed in the provider rather than
-papered over (see the `xfail` reasons); fixing them belongs to the
-provider, not to this file.
+papered over here, and are asserted below.
 """
 from __future__ import annotations
 
