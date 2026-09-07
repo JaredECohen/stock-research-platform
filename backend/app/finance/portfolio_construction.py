@@ -254,7 +254,7 @@ def build_portfolio(
     if concentration.get("top_3", 0) > 0.40:
         risk_notes.append("Top 3 holdings exceed 40% — single-name event risk is elevated.")
     if max(sector_allocation.values(), default=0) > 0.40:
-        biggest = max(sector_allocation, key=sector_allocation.get)
+        biggest = max(sector_allocation, key=lambda k: sector_allocation[k])
         risk_notes.append(
             f"{biggest} is the largest sector exposure at {sector_allocation[biggest]:.0%}; "
             "monitor sector-specific drawdowns."

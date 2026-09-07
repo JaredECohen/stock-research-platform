@@ -20,3 +20,86 @@ testpaths = ["app/tests"]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+
+# ---------------------------------------------------------------------------
+# ruff — `ruff check app` from backend/ is a blocking CI step.
+#
+# The target is the `requires-python` floor, not the Docker image's 3.12:
+# ruff's UP rules would otherwise happily rewrite syntax that the 3.11
+# floor cannot parse, and that class of bug has shipped before (a 3.12-only
+# construct passed the 3.13 CI and failed on the image). The py311-floor
+# CI job is the second line of defence for the same thing.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["app/tests/fixtures"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "DTZ"]
+ignore = [
+    # --- permanent for this phase -------------------------------------------
+    "E501",     # 778 long lines; no reformat pass is scheduled
+    "DTZ001",   # naive UTC is the persisted convention: DateTime columns are
+    "DTZ003",   # naive, sqlite comparisons are naive, and the monitoring
+    "DTZ011",   # loops compare against `datetime.utcnow()`. Making these
+    "DTZ012",   # aware is a behavior change, not a lint fix.
+    "B905",     # zip(strict=) raises on unequal lengths: a behavior change
+    "B008",     # FastAPI `Query()` / `Depends()` call-in-default is the idiom
+    # --- temporary until RP-005 (the typing sweep, slice S5) -----------------
+    # These are the findings the mechanical `Dict -> dict` / `Optional -> |`
+    # rewrite (and the F401/I001 cleanup that follows it) removes. They are
+    # ignored rather than fixed here so this slice stays config-only and S5
+    # lands as one revertible commit. S5 deletes this whole block.
+    "UP006",    # `List[...]` -> `list[...]` (~2,400 sites)
+    "UP007",    # `Union[...]` -> `X | Y`
+    "UP045",    # `Optional[X]` -> `X | None`
+    "UP035",    # deprecated `typing` imports, gone once UP006/UP045 land
+    "UP037",    # quoted annotations under `from __future__ import annotations`
+    "UP038",    # `isinstance(x, (A, B))` -> `isinstance(x, A | B)`
+    "UP017",    # `timezone.utc` -> `datetime.UTC`
+    "I001",     # import ordering: one sweep after the typing rewrite
+    "F401",     # unused imports: mostly `Dict/List/Optional` that S5 removes
+    "F541",     # f-string without placeholders
+    "F841",     # unused local
+    "B904",     # `raise ... from err` inside `except`
+    "B007",     # unused loop variable
+    "E702",     # multiple statements on one line (semicolon)
+    # --- temporary, owned by other slices ------------------------------------
+    "UP033",    # `lru_cache(maxsize=None)` -> `cache` in app/prompts/__init__.py
+    "UP034",    # extraneous parentheses in agents/graph.py (S1/S3 own the file)
+    "B039",     # mutable ContextVar default in agents/llm.py (Phase 2 owns llm.py)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Package __init__ modules re-export names on purpose.
+"app/__init__.py" = ["F401"]
+"app/schemas/__init__.py" = ["F401"]
+"app/models/__init__.py" = ["F401"]
+# monitoring/__init__ configures logging before importing the loops, so the
+# imports are deliberately not at the top.
+"app/monitoring/__init__.py" = ["E402", "F401"]
+# graph.py binds `log = logging.getLogger(__name__)` at :38, before its
+# imports. Moving that line is trivial but the file is owned by the
+# RP-001/RP-003 slices; drop this entry once one of them moves it.
+"app/agents/graph.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+# ---------------------------------------------------------------------------
+# mypy — scoped to the pure-arithmetic paths where a wrong type is a wrong
+# number. Runs in CI as a non-blocking step (its error count is echoed) until
+# the scoped set reaches zero; then it becomes blocking and `files` grows.
+#
+# `files` must list only paths that exist: mypy errors on a missing entry,
+# and the RP-003 slice adds `app/agents/roster.py` / `memo_context.py` after
+# this config lands. Add them there.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+files = ["app/finance", "app/agents/graph.py", "app/agents/safe_runner.py"]
+follow_imports = "silent"
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+check_untyped_defs = false

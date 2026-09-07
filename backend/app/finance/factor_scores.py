@@ -77,7 +77,9 @@ def _zscore(values: List[float], v: float) -> float:
 
 
 def normalize(universe: List[Dict], field: str, *, higher_better: bool = True) -> Dict[str, float]:
-    vals = [r.get(field) for r in universe if r.get(field) is not None]
+    # The walrus keeps the None-guard on the same expression that is
+    # collected, which is what lets the checker see `vals` as non-optional.
+    vals = [v for r in universe if (v := r.get(field)) is not None]
     out: Dict[str, float] = {}
     for r in universe:
         v = r.get(field)
