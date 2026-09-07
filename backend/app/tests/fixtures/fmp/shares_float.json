@@ -1,0 +1,9 @@
+[
+ {
+  "symbol": "ACME",
+  "date": "2025-09-05",
+  "freeFloat": 98.7,
+  "floatShares": 493500000,
+  "outstandingShares": 500000000
+ }
+]

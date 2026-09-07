@@ -1,0 +1,62 @@
+[
+ {
+  "symbol": "ACME",
+  "date": "2025-09-05",
+  "open": 95.0,
+  "high": 97.2,
+  "low": 94.8,
+  "close": 96.4,
+  "volume": 3120000,
+  "change": 1.4,
+  "changePercent": 1.47,
+  "vwap": 96.13
+ },
+ {
+  "symbol": "ACME",
+  "date": "2025-09-04",
+  "open": 94.1,
+  "high": 95.6,
+  "low": 93.7,
+  "close": 95.1,
+  "volume": 2810000,
+  "change": 1.0,
+  "changePercent": 1.06,
+  "vwap": 94.8
+ },
+ {
+  "symbol": "ACME",
+  "date": "2025-09-03",
+  "open": 93.5,
+  "high": 94.4,
+  "low": 92.9,
+  "close": 94.0,
+  "volume": 2650000,
+  "change": 0.5,
+  "changePercent": 0.53,
+  "vwap": 93.77
+ },
+ {
+  "symbol": "ACME",
+  "date": "2025-09-02",
+  "open": 92.8,
+  "high": 93.9,
+  "low": 92.1,
+  "close": 93.4,
+  "volume": 3010000,
+  "change": 0.6,
+  "changePercent": 0.65,
+  "vwap": 93.13
+ },
+ {
+  "symbol": "ACME",
+  "date": "2025-08-29",
+  "open": 93.2,
+  "high": 93.6,
+  "low": 92.0,
+  "close": 92.7,
+  "volume": 2440000,
+  "change": -0.5,
+  "changePercent": -0.54,
+  "vwap": 92.77
+ }
+]

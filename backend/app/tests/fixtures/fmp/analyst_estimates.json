@@ -1,0 +1,40 @@
+[
+ {
+  "symbol": "ACME",
+  "date": "2027-06-30",
+  "revenueLow": 6900000000,
+  "revenueHigh": 7600000000,
+  "revenueAvg": 7250000000,
+  "ebitdaAvg": 1780000000,
+  "epsAvg": 2.31,
+  "epsHigh": 2.55,
+  "epsLow": 2.1,
+  "numAnalystsRevenue": 9,
+  "numAnalystsEps": 11
+ },
+ {
+  "symbol": "ACME",
+  "date": "2026-06-30",
+  "revenueLow": 6450000000,
+  "revenueHigh": 6900000000,
+  "revenueAvg": 6700000000,
+  "ebitdaAvg": 1620000000,
+  "epsAvg": 2.02,
+  "epsHigh": 2.2,
+  "epsLow": 1.9,
+  "numAnalystsRevenue": 12,
+  "numAnalystsEps": 14
+ },
+ {
+  "symbol": "ACME",
+  "date": "2025-06-30",
+  "revenueLow": null,
+  "revenueHigh": null,
+  "revenueAvg": null,
+  "epsAvg": 1.78,
+  "epsHigh": 1.85,
+  "epsLow": 1.7,
+  "numAnalystsRevenue": 0,
+  "numAnalystsEps": 13
+ }
+]

@@ -1,0 +1,47 @@
+[
+ {
+  "symbol": "ACME",
+  "date": "2025-10-28",
+  "epsActual": null,
+  "epsEstimated": 0.52,
+  "revenueActual": null,
+  "revenueEstimated": 1690000000,
+  "lastUpdated": "2025-09-01"
+ },
+ {
+  "symbol": "ACME",
+  "date": "2026-01-27",
+  "epsActual": null,
+  "epsEstimated": null,
+  "revenueActual": null,
+  "revenueEstimated": null,
+  "lastUpdated": "2025-09-01"
+ },
+ {
+  "symbol": "ACME",
+  "date": "2025-07-29",
+  "epsActual": 0.5,
+  "epsEstimated": 0.46,
+  "revenueActual": 1650000000,
+  "revenueEstimated": 1610000000,
+  "lastUpdated": "2025-07-30"
+ },
+ {
+  "symbol": "ACME",
+  "date": "2025-04-29",
+  "epsActual": 0.44,
+  "epsEstimated": 0.44,
+  "revenueActual": 1540000000,
+  "revenueEstimated": 1555000000,
+  "lastUpdated": "2025-04-30"
+ },
+ {
+  "symbol": "ACME",
+  "date": "2025-01-28",
+  "epsActual": 0.42,
+  "epsEstimated": 0,
+  "revenueActual": 1520000000,
+  "revenueEstimated": 1500000000,
+  "lastUpdated": "2025-01-29"
+ }
+]
