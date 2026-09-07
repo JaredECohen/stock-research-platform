@@ -1,7 +1,8 @@
 """Structural tests for `services/theme_exposure_service.py`.
 
-Under blank keys `compute_for_ticker` takes the deterministic keyword
-path, so what is pinned here is: the keyword scorer's arithmetic, that
+An autouse fixture blanks the OpenAI key so `compute_for_ticker` takes
+the deterministic keyword path regardless of the environment (the LLM
+branch is currently a NameError, see the xfail); what is pinned here is: the keyword scorer's arithmetic, that
 every ticker with text gets exactly one row per vocabulary theme (never
 a theme outside `THEME_KEYWORDS`), the evidence format each path
 produces, re-runs upsert in place, and `top_for_theme` on an unknown
@@ -9,9 +10,12 @@ theme is empty rather than an error.
 
 The LLM branch is gated on `settings.openai_api_key`; that gate is
 asserted closed here. Its result-cleaning logic is recorded as an xfail
-because the branch currently cannot execute at all (see the reason).
+because the branch currently cannot execute at all (see the reason);
+that test re-sets a throwaway key on top of the autouse blanking.
 """
 from __future__ import annotations
+
+import socket
 
 import pytest
 
@@ -32,6 +36,20 @@ GLP1_TEXT = (
 @pytest.fixture(scope="module", autouse=True)
 def _seeded():
     run_full_seed()
+
+
+@pytest.fixture(autouse=True)
+def _offline(monkeypatch):
+    def _refuse(*_a, **_k):
+        raise RuntimeError("network access attempted during an offline structural test")
+    monkeypatch.setattr(socket.socket, "connect", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _keyword_path(monkeypatch):
+    """Force the keyword path: with a developer `.env` key in place every
+    `compute_for_ticker` here would take the (broken) LLM branch."""
+    monkeypatch.setattr(settings, "openai_api_key", "")
 
 
 def _upsert_company(ticker: str, description: str) -> None:
@@ -70,8 +88,6 @@ def test_keyword_score_arithmetic():
 # ---------------------------------------------------------------------------
 
 def test_llm_gate_is_closed_under_blank_keys(monkeypatch):
-    assert settings.openai_api_key == ""
-
     def _never(*_a, **_k):
         raise AssertionError("chat_json must not be called without a key")
     monkeypatch.setattr(llm, "chat_json", _never)

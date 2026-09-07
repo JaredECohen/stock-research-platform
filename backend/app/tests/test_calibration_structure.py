@@ -8,6 +8,7 @@ sees only its own rows.
 """
 from __future__ import annotations
 
+import socket
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -19,6 +20,13 @@ from app.services import calibration_service as cal
 
 H = 7                                   # horizon reserved for this file
 PREFIX = "TSTCAL"
+
+
+@pytest.fixture(autouse=True)
+def _offline(monkeypatch):
+    def _refuse(*_a, **_k):
+        raise RuntimeError("network access attempted during an offline structural test")
+    monkeypatch.setattr(socket.socket, "connect", _refuse)
 
 
 def _purge() -> None:

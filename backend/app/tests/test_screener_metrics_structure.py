@@ -13,12 +13,14 @@ backfill_ticker`, the same path production uses to fill
 """
 from __future__ import annotations
 
+import socket
 from datetime import date
 from typing import Any
 
 import pytest
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models import Company, ScreenerMetric
 from app.services import history_service
@@ -38,7 +40,21 @@ DERIVED_KEYS = METRIC_KEYS - {"ticker", "market_cap", "beta"}
 @pytest.fixture(scope="module", autouse=True)
 def _seeded():
     run_full_seed()
-    history_service.backfill_ticker(DEMO)
+    # `backfill_ticker` also ingests doc chunks, and `embeddings.embed`
+    # calls OpenAI whenever a key is configured — blank it for the seed
+    # so a developer `.env` cannot turn this into a billable network
+    # call (the function-scoped socket guard below cannot cover module
+    # setup). The hash fallback is what CI exercises anyway.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(settings, "openai_api_key", "")
+        history_service.backfill_ticker(DEMO)
+
+
+@pytest.fixture(autouse=True)
+def _offline(monkeypatch):
+    def _refuse(*_a, **_k):
+        raise RuntimeError("network access attempted during an offline structural test")
+    monkeypatch.setattr(socket.socket, "connect", _refuse)
 
 
 def _is_number_or_none(v: Any) -> bool:

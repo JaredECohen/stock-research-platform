@@ -5,23 +5,36 @@ rating-unchanged skip + 14-day per-(ticker, horizon) window), and the
 `run_postmortems` driver end-to-end with a seeded outcome and no LLM —
 the deterministic lesson must land in `memo_postmortems` and, on the
 90-day cadence, in the company memory file. Memory writes are pointed
-at `tmp_path`; the LLM gate is asserted closed rather than patched, so
-the real fallback branch is what runs.
+at `tmp_path`. The LLM is *pinned* to its no-answer path via
+`_llm_postmortem` rather than assumed absent: with a developer `.env`
+in place the driver would otherwise issue a billable `route="strong"`
+completion per due memo. A separate test configures a throwaway key and
+routes `llm.chat_json` through a canned reply to prove that seam is the
+only one the driver uses; an autouse socket guard backs both up.
 
 Seeding mirrors `test_outcome_tracking._seed_snapshot`, but keeps
 earlier versions when asked so the rating-change rule can be probed.
 """
 from __future__ import annotations
 
+import socket
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import pytest
 
+from app.agents import llm
 from app.config import settings
 from app.database import SessionLocal
 from app.models import MemoOutcome, MemoPostmortem, MemoSnapshot
 from app.services import postmortem_service as pm
+
+
+@pytest.fixture(autouse=True)
+def _offline(monkeypatch):
+    def _refuse(*_a, **_k):
+        raise RuntimeError("network access attempted during an offline structural test")
+    monkeypatch.setattr(socket.socket, "connect", _refuse)
 
 
 def _seed_snapshot(
@@ -175,8 +188,28 @@ def memory_dir(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_llm_gate_is_closed_under_blank_keys():
+@pytest.fixture
+def no_llm(monkeypatch) -> List[Dict[str, Any]]:
+    """Pin `_llm_postmortem` to None so the deterministic branch runs
+    regardless of which keys the environment carries; returns the calls
+    so a test can prove the driver asked."""
+    calls: List[Dict[str, Any]] = []
+
+    def _none(memo, outcome, horizon_days):
+        calls.append({"ticker": memo.get("ticker"), "horizon": horizon_days})
+        return None
+    monkeypatch.setattr(pm, "_llm_postmortem", _none)
+    return calls
+
+
+def test_llm_gate_is_closed_under_blank_keys(monkeypatch):
+    for key in ("openai_api_key", "anthropic_api_key", "gemini_api_key"):
+        monkeypatch.setattr(settings, key, "")
     assert settings.has_llm is False
+
+    def _never(*_a, **_k):
+        raise AssertionError("chat_json must not be called without a key")
+    monkeypatch.setattr(llm, "chat_json", _never)
     outcome = MemoOutcome(forward_return=0.1, benchmark_return=0.0, alpha=0.1)
     assert pm._llm_postmortem({"ticker": "X"}, outcome, 90) is None
 
@@ -192,7 +225,7 @@ def test_deterministic_lesson_text():
     assert "alpha 0.0%" in pm._deterministic_lesson({}, no_alpha, "pending", 30)
 
 
-def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir):
+def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir, no_llm):
     t = "TSTPMRUN"
     snap = _seed_snapshot(t, rating="Bullish", regime="soft_landing")
     outcome = _seed_outcome(snap, horizon=90, fwd=0.20, bench=0.06)
@@ -200,6 +233,7 @@ def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir):
     report = pm.run_postmortems(horizon_days=90, limit=500)
     assert set(report) == {"horizon_days", "due", "written", "skipped"}
     assert report["horizon_days"] == 90 and report["written"] >= 1
+    assert {"ticker": t, "horizon": 90} in no_llm       # the LLM was asked, and declined
 
     rows = _postmortems(t, 90)
     assert len(rows) == 1
@@ -223,7 +257,7 @@ def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir):
     assert again["written"] + again["skipped"] == again["due"]
 
 
-def test_run_postmortems_30d_early_read_stays_out_of_memory(memory_dir):
+def test_run_postmortems_30d_early_read_stays_out_of_memory(memory_dir, no_llm):
     t = "TSTPM30"
     snap = _seed_snapshot(t, rating="Bearish", days_ago=45)
     _seed_outcome(snap, horizon=30, fwd=0.10, bench=0.01)    # bearish call, stock up → wrong
@@ -236,3 +270,38 @@ def test_run_postmortems_30d_early_read_stays_out_of_memory(memory_dir):
     assert rows[0].written_to_memory is False
     assert not (memory_dir / "companies" / f"{t}.md").exists()
     assert _postmortems(t, 90) == []                   # other horizon untouched
+
+
+def test_run_postmortems_with_a_configured_key_uses_only_the_chat_json_seam(memory_dir, monkeypatch):
+    """Regression for the review finding that the driver tests relied on
+    blank keys: give `settings` a throwaway key so `has_llm` opens the
+    gate, route `llm.chat_json` through a canned reply, and check the
+    reply is what lands. The socket guard makes any attempt to build a
+    real client and call out fail loudly instead of silently billing."""
+    t = "TSTPMLLM"
+    monkeypatch.setattr(settings, "openai_api_key", "test-key-not-real")
+    assert settings.has_llm is True
+    seen: List[Dict[str, Any]] = []
+
+    def _chat_json(prompt: str, **kwargs: Any):
+        seen.append(kwargs)
+        return {
+            "lesson": "LLM lesson body",
+            "agent_attribution": {"sector": 0.5, "valuation": -0.25},
+            "regime_at_memo": "llm_guess",
+            "sector_lesson": "",
+        }
+    monkeypatch.setattr(llm, "chat_json", _chat_json)
+
+    snap = _seed_snapshot(t, rating="Bullish", regime="")
+    _seed_outcome(snap, horizon=90, fwd=0.20, bench=0.06)
+    report = pm.run_postmortems(horizon_days=90, limit=500)
+    assert report["written"] >= 1
+    assert len(seen) == 1 and seen[0]["route"] == "strong"
+
+    rows = _postmortems(t, 90)
+    assert len(rows) == 1
+    assert rows[0].lesson == "LLM lesson body"
+    assert rows[0].agent_attribution == {"sector": 0.5, "valuation": -0.25}
+    assert rows[0].regime_at_memo == "llm_guess"          # memo had no tag → LLM guess used
+    assert "LLM lesson body" in (memory_dir / "companies" / f"{t}.md").read_text()

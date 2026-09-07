@@ -156,8 +156,10 @@ def provider() -> FMPProvider:
 # Preconditions + transport
 # ---------------------------------------------------------------------------
 
-def test_no_real_key_is_configured_and_unconfigured_provider_never_calls_out(router):
-    assert settings.fmp_api_key == ""
+def test_unconfigured_provider_never_calls_out(router, monkeypatch):
+    # Blank the key ourselves: the canonical test command only blanks the
+    # LLM keys, and a developer `.env` carries a live FMP_API_KEY.
+    monkeypatch.setattr(settings, "fmp_api_key", "")
     p = FMPProvider()
     assert p.status().configured is False
     assert p.get_quote("ACME") is None

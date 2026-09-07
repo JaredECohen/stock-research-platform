@@ -1,9 +1,12 @@
 """Structural tests for the natural-language screener (`services/nl_screener.py`).
 
-Under CI there is no LLM key, so `_llm_translate` returns None and
-`translate` degrades to an empty rule chain over the default sort. The
-module has no keyword heuristic of its own — that absence is recorded
-in the no-LLM tests below as shape assertions rather than by pinning
+Without an LLM key `_llm_translate` returns None and `translate`
+degrades to an empty rule chain over the default sort. The no-LLM tests
+blank the key themselves (`no_llm_key`) rather than trusting the
+environment — a developer `.env` carries a live key and `translate`
+would otherwise issue a real completion per phrasing. The module has
+no keyword heuristic of its own — that absence is recorded in the
+no-LLM tests below as shape assertions rather than by pinning
 `rules == []`, so a future deterministic fallback lands without
 rewriting them.
 
@@ -13,6 +16,7 @@ the duration of the test; nothing reaches a provider.
 """
 from __future__ import annotations
 
+import socket
 from datetime import datetime
 from typing import Any
 
@@ -39,6 +43,24 @@ RUN_KEYS = {"query", "request", "themes", "rationale", "matched", "rows"}
 @pytest.fixture(scope="module", autouse=True)
 def _seeded():
     run_full_seed()
+
+
+@pytest.fixture(autouse=True)
+def _offline(monkeypatch):
+    def _refuse(*_a, **_k):
+        raise RuntimeError("network access attempted during an offline structural test")
+    monkeypatch.setattr(socket.socket, "connect", _refuse)
+
+
+@pytest.fixture
+def no_llm_key(monkeypatch):
+    """Blank the key and make any LLM call a test failure, so the
+    fallback path is exercised rather than assumed."""
+    monkeypatch.setattr(settings, "openai_api_key", "")
+
+    def _never(*_a, **_k):
+        raise AssertionError("chat_json must not be called without a key")
+    monkeypatch.setattr(llm, "chat_json", _never)
 
 
 @pytest.fixture
@@ -72,17 +94,12 @@ def _assert_valid_request(req: CustomScreenRequest) -> None:
 # No LLM
 # ---------------------------------------------------------------------------
 
-def test_no_key_means_no_llm_call(monkeypatch):
-    assert settings.openai_api_key == ""
-
-    def _never(*_a, **_k):
-        raise AssertionError("chat_json must not be called without a key")
-    monkeypatch.setattr(llm, "chat_json", _never)
+def test_no_key_means_no_llm_call(no_llm_key):
     assert nl_screener._llm_translate("cheap software") is None
 
 
 @pytest.mark.parametrize("query", PHRASINGS)
-def test_translate_without_llm_returns_a_valid_request(query):
+def test_translate_without_llm_returns_a_valid_request(no_llm_key, query):
     req, themes, rationale = nl_screener.translate(query)
     _assert_valid_request(req)
     assert all(t in nl_screener._SUPPORTED_THEMES for t in themes)
@@ -179,7 +196,7 @@ def test_fcf_yield_rule_is_dropped_rather_than_raising(fake_llm):
 # run() — the payload routes_screener hands straight to the client
 # ---------------------------------------------------------------------------
 
-def test_run_payload_shape_without_llm():
+def test_run_payload_shape_without_llm(no_llm_key):
     out = nl_screener.run("cheap profitable software")
     assert set(out) == RUN_KEYS
     assert out["query"] == "cheap profitable software"
@@ -218,7 +235,7 @@ def test_run_theme_overlay_intersects_rows(monkeypatch):
     assert empty["rows"] == [] and empty["matched"] == 0
 
 
-def test_endpoint_returns_the_run_payload():
+def test_endpoint_returns_the_run_payload(no_llm_key):
     from app.main import app
     client = TestClient(app)
     r = client.post("/api/screener/nl", json={"query": "cheap profitable software"})

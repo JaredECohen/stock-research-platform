@@ -8,21 +8,27 @@ a demo ticker. A separate test builds against the real `openai-agents`
 package (no key needed to construct an `Agent`) to pin the tool list.
 
 Nothing here talks to a provider or an LLM: the DemoProvider is wired by
-`conftest.py`, keys are blank, and the specialist `ask_*` tools are
+`conftest.py`, an autouse guard makes any socket connect raise (the
+keyless SEC / BLS providers in `data_service` would otherwise call out
+regardless of ENABLE_LIVE_DATA), a second autouse guard pins both LLM
+seams to their no-answer path instead of trusting the environment's
+keys to be blank (`comps_service` and the sector specialist both call
+`llm.chat_json` when a key is configured), and the `ask_*` tools are
 tested by capturing the profile they hand to the (monkeypatched)
 specialist — which is exactly where the 2026-08-12 unscoped-scan OOM
 originated.
 """
 from __future__ import annotations
 
+import socket
 import sys
 import types
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pytest
 
-from app.agents import chat_sdk
+from app.agents import chat_sdk, llm
 from app.config import settings
 from app.schemas import AgentFinding, BullBearCase, CriticReview, StockMemoOut
 from app.services import memo_store
@@ -41,6 +47,32 @@ FINDING_KEYS = {"agent", "ticker", "headline", "summary", "key_points", "confide
 @pytest.fixture(scope="module", autouse=True)
 def _seeded():
     run_full_seed()
+
+
+@pytest.fixture(autouse=True)
+def _offline(monkeypatch):
+    """Every provider on the chat surface catches its own transport
+    errors, so refusing the connect keeps the tests green while proving
+    no test here depends on sec.gov / bls.gov being reachable."""
+    def _refuse(*_a, **_k):
+        raise RuntimeError("network access attempted during an offline structural test")
+    monkeypatch.setattr(socket.socket, "connect", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def no_llm(monkeypatch) -> List[Dict[str, Any]]:
+    """What a blank key yields from `llm.chat_json` / `chat_text` is None;
+    pin that so every tool takes its deterministic branch even under a
+    developer `.env` with a live key. The key itself is blanked too:
+    `embeddings.embed` (reached by `get_comps` via doc-chunk ingest) has
+    no seam through `llm` and calls OpenAI directly whenever a key is
+    set. Returns the recorded calls so a test can prove the seam was
+    reached."""
+    calls: List[Dict[str, Any]] = []
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.setattr(llm, "chat_json", lambda *a, **k: calls.append(k) or None)
+    monkeypatch.setattr(llm, "chat_text", lambda *a, **k: calls.append(k) or None)
+    return calls
 
 
 def _stub_memo(ticker: str) -> StockMemoOut:
@@ -90,8 +122,10 @@ def _finding(**overrides: Any) -> SimpleNamespace:
 # Gate + registry
 # ---------------------------------------------------------------------------
 
-def test_sdk_gate_is_closed_without_a_key():
-    assert settings.openai_api_key == ""
+def test_sdk_gate_is_closed_without_a_key(monkeypatch):
+    # Blank the key ourselves rather than asserting the environment did:
+    # a developer `.env` carries a live key and must not fail this test.
+    monkeypatch.setattr(settings, "openai_api_key", "")
     assert chat_sdk._can_use_sdk() is False
     assert chat_sdk._build_chat_agent() is None
     assert chat_sdk.answer_via_sdk(message="hi", history=[]) is None
@@ -323,14 +357,20 @@ def test_specialist_failure_is_an_error_dict_not_an_exception(tools, provider_mi
     assert set(out) == {"error"} and "specialist exploded" in out["error"]
 
 
-def test_no_specialist_tool_ever_hands_vector_search_a_falsy_ticker(tools, provider_miss, monkeypatch):
+def test_no_specialist_tool_ever_hands_vector_search_a_falsy_ticker(tools, provider_miss, no_llm, monkeypatch):
     """Belt-and-braces on the OOM guard: run the real sector specialist
-    (deterministic under blank keys) and assert every retrieval call it
+    on its deterministic branch and assert every retrieval call it
     makes is scoped. `vector_store.search` refuses a falsy ticker by
-    design, so this pins the *caller* side of that contract."""
+    design, so this pins the *caller* side of that contract.
+
+    The deterministic branch is forced by the autouse `no_llm` pin
+    rather than assumed from blank keys — with a developer `.env` in
+    place this test used to attempt a real, billable sector-agent
+    completion."""
     from app.services import vector_store
     real_search = vector_store.search
     calls = []
+    no_llm.clear()
 
     def guarded(query, **kwargs):
         calls.append(kwargs.get("ticker"))
@@ -340,3 +380,7 @@ def test_no_specialist_tool_ever_hands_vector_search_a_falsy_ticker(tools, provi
     out = tools["ask_sector"]("zzzoff", "anything")
     assert "error" not in out, out
     assert all(calls), calls
+    # The specialist consulted the LLM exactly through the pinned seam,
+    # so the run above is the same code path production takes minus
+    # the completion — not a short-circuit that never reached it.
+    assert no_llm, "sector specialist never reached llm.chat_json"
