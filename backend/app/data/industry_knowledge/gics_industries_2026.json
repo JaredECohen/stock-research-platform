@@ -1,0 +1,1869 @@
+{
+  "_doc": "Provenance: generated from docs/research/GICS_74_Industry_Research_Encyclopedia.md by app/scripts/build_industry_knowledge.py; do not edit by hand — rerun `python -m app.scripts.build_industry_knowledge` from backend/. GICS structure April 2026: 11 sectors / 25 industry groups / 74 industries; codes are the public GICS numeric hierarchy (sector=2 digits, group=4, industry=6). The descriptive text is MarketMosaic's own analyst research, not licensed GICS content.",
+  "taxonomy_version": "gics-2026-04",
+  "generated_from": "docs/research/GICS_74_Industry_Research_Encyclopedia.md",
+  "source_sha256": "f6d578e89b2d450042c73703c67432672050c2b7f84d3d9c1992fcbb2e1339ef",
+  "sector_count": 11,
+  "industry_group_count": 25,
+  "industry_count": 74,
+  "field_names": [
+    "economic_engine",
+    "core_kpis",
+    "leading_indicators",
+    "typical_moats",
+    "capital_cycle_supply_response",
+    "valuation_lenses",
+    "accounting_data_traps",
+    "common_failure_modes",
+    "ideal_compounder_setup",
+    "ideal_inflection_setup",
+    "research_priority",
+    "cadence",
+    "preferred_archetype",
+    "highest_evi_question"
+  ],
+  "universal_research_rules": [
+    "Detect a change before searching for a stock.",
+    "Write the causal chain from external change to earnings and expectations.",
+    "Separate fact, interpretation, estimate, and unknown.",
+    "Classify demand quality; do not equate pipeline with contracted demand.",
+    "Model supply response and scarcity duration.",
+    "Quantify earnings elasticity.",
+    "Establish what is priced in before declaring a thesis variant.",
+    "Red-team before upgrading conviction.",
+    "Use industry-specific valuation and accounting checks.",
+    "Define dated milestones and falsifiers."
+  ],
+  "primary_sources": [
+    {
+      "domain": "Cross-market",
+      "name": "SEC EDGAR / company filings",
+      "url": "https://www.sec.gov/edgar/search/",
+      "description": "10-K/10-Q/8-K, exhibits, contracts, primary-source financial disclosures"
+    },
+    {
+      "domain": "Macro",
+      "name": "FRED / ALFRED",
+      "url": "https://fred.stlouisfed.org/",
+      "description": "Rates, credit, production, inflation, vintage macro series"
+    },
+    {
+      "domain": "Macro",
+      "name": "BEA",
+      "url": "https://www.bea.gov/",
+      "description": "GDP, industry accounts, consumption, investment"
+    },
+    {
+      "domain": "Labor",
+      "name": "BLS",
+      "url": "https://www.bls.gov/",
+      "description": "Employment, wages, productivity, PPI/CPI by industry"
+    },
+    {
+      "domain": "Energy",
+      "name": "U.S. EIA",
+      "url": "https://www.eia.gov/",
+      "description": "Oil/gas/power inventories, production, prices, generation and capacity"
+    },
+    {
+      "domain": "Construction",
+      "name": "U.S. Census Construction",
+      "url": "https://www.census.gov/construction/",
+      "description": "Housing starts, permits, construction spending"
+    },
+    {
+      "domain": "Manufacturing",
+      "name": "Federal Reserve Industrial Production",
+      "url": "https://www.federalreserve.gov/releases/g17/",
+      "description": "Industrial production and capacity utilization"
+    },
+    {
+      "domain": "Transportation",
+      "name": "Bureau of Transportation Statistics",
+      "url": "https://www.bts.gov/",
+      "description": "Freight, transport activity and infrastructure statistics"
+    },
+    {
+      "domain": "Aviation",
+      "name": "FAA",
+      "url": "https://www.faa.gov/",
+      "description": "Aircraft, traffic, safety, certification and aerospace context"
+    },
+    {
+      "domain": "Agriculture/Food",
+      "name": "USDA ERS",
+      "url": "https://www.ers.usda.gov/",
+      "description": "Agricultural commodities, food demand and farm economics"
+    },
+    {
+      "domain": "Health Care",
+      "name": "CMS",
+      "url": "https://www.cms.gov/",
+      "description": "Reimbursement, enrollment, utilization and health policy"
+    },
+    {
+      "domain": "Drugs/Devices",
+      "name": "FDA",
+      "url": "https://www.fda.gov/",
+      "description": "Approvals, recalls, trial/regulatory documents"
+    },
+    {
+      "domain": "Banks",
+      "name": "FDIC Bank Data",
+      "url": "https://www.fdic.gov/analysis/quarterly-banking-profile",
+      "description": "Bank balances, deposits, credit quality and industry profitability"
+    },
+    {
+      "domain": "Banks/Finance",
+      "name": "Federal Reserve",
+      "url": "https://www.federalreserve.gov/",
+      "description": "Rates, financial conditions, bank credit, Senior Loan Officer surveys"
+    },
+    {
+      "domain": "Insurance",
+      "name": "NAIC",
+      "url": "https://content.naic.org/",
+      "description": "Insurance statutory/regulatory data and industry resources"
+    },
+    {
+      "domain": "Telecom/Media",
+      "name": "FCC",
+      "url": "https://www.fcc.gov/",
+      "description": "Broadband, wireless, spectrum and communications regulation"
+    },
+    {
+      "domain": "Utilities/Power",
+      "name": "FERC",
+      "url": "https://www.ferc.gov/",
+      "description": "Power markets, transmission, pipelines and interconnection regulation"
+    },
+    {
+      "domain": "Real Estate",
+      "name": "U.S. Census / FRED",
+      "url": "https://fred.stlouisfed.org/categories/97",
+      "description": "Construction, vacancies, housing, rates and economic series"
+    },
+    {
+      "domain": "Semiconductors",
+      "name": "SEMI",
+      "url": "https://www.semi.org/",
+      "description": "Semiconductor equipment, fab and industry ecosystem research"
+    },
+    {
+      "domain": "Semiconductors",
+      "name": "SIA",
+      "url": "https://www.semiconductors.org/",
+      "description": "Semiconductor sales and industry policy/context"
+    },
+    {
+      "domain": "GICS",
+      "name": "S&P DJI GICS",
+      "url": "https://www.spglobal.com/spdji/en/landing/topic/gics/",
+      "description": "Official classification structure and methodology"
+    },
+    {
+      "domain": "GICS",
+      "name": "MSCI GICS",
+      "url": "https://www.msci.com/indexes/index-resources/gics",
+      "description": "Official GICS framework and definitions"
+    }
+  ],
+  "sectors": [
+    {
+      "code": "10",
+      "name": "Energy",
+      "industry_groups": [
+        {
+          "code": "1010",
+          "name": "Energy",
+          "industries": [
+            {
+              "code": "101010",
+              "name": "Energy Equipment & Services",
+              "fields": {
+                "economic_engine": "Oilfield activity × service intensity × day/rental rates; economics hinge on upstream capex and equipment utilization.",
+                "core_kpis": "Rig count; frac spreads; utilization; day rates; backlog/book-to-bill; service pricing; offshore awards; FCF conversion.",
+                "leading_indicators": "E&P capex budgets; oil/gas strip; tender activity; rig reactivations; equipment lead times.",
+                "typical_moats": "Technical know-how, installed fleet, high-spec equipment scarcity, customer qualification, local service network.",
+                "capital_cycle_supply_response": "Very cyclical. High returns trigger fleet/equipment additions; offshore/high-spec assets can have multi-year supply lags.",
+                "valuation_lenses": "EV/EBITDA, EV/FCF, replacement value, mid-cycle earnings.",
+                "accounting_data_traps": "Capitalized equipment costs, maintenance vs growth capex, contract backlog quality, asset impairments.",
+                "common_failure_modes": "Overbuilding capacity, commodity collapse, customer concentration, technological substitution, leverage.",
+                "ideal_compounder_setup": "Asset-light service niches with recurring consumables/software, high switching costs, disciplined capital allocation.",
+                "ideal_inflection_setup": "Utilization crosses threshold → pricing rises → incremental margins surge; offshore tender cycle turns.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Scarcity inflection.",
+                "highest_evi_question": "What utilization level historically unlocks pricing? How fast can idle/competing capacity return?"
+              }
+            },
+            {
+              "code": "101020",
+              "name": "Oil, Gas & Consumable Fuels",
+              "fields": {
+                "economic_engine": "Commodity price × production/refining/storage volumes − lifting/feedstock/capex; midstream adds fee-based throughput.",
+                "core_kpis": "Production; realized prices; breakeven; decline rate; reserves; crack spreads; throughput; inventories; FCF/bbl; leverage.",
+                "leading_indicators": "Futures curves; inventories; OPEC/supply policy; rig activity; refinery outages; pipeline flows; LNG capacity.",
+                "typical_moats": "Low-cost resource, advantaged acreage, scale, integrated assets, pipeline rights-of-way, long-term contracts.",
+                "capital_cycle_supply_response": "Upstream/mining highly cyclical; pipelines slower; refinery capacity additions take years but utilization can swing quickly.",
+                "valuation_lenses": "NAV, EV/EBITDA, FCF yield, EV/boe/d, P/NAV; DCF for contracted midstream.",
+                "accounting_data_traps": "Reserve estimates, hedging, asset retirement obligations, maintenance capex, working-capital swings, MLP adjustments.",
+                "common_failure_modes": "Commodity mean reversion, depletion, political/regulatory risk, leverage, poor acquisitions, stranded assets.",
+                "ideal_compounder_setup": "Low-cost reserves or fee-based infrastructure with disciplined reinvestment and per-share capital returns.",
+                "ideal_inflection_setup": "Supply deficit, refinery bottleneck, gas/LNG basis change, capex discipline creates FCF step-up.",
+                "research_priority": "4/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Scarcity / capital-cycle.",
+                "highest_evi_question": "What marginal supply sets price, and what capex is required to sustain—not grow—production?"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "15",
+      "name": "Materials",
+      "industry_groups": [
+        {
+          "code": "1510",
+          "name": "Materials",
+          "industries": [
+            {
+              "code": "151010",
+              "name": "Chemicals",
+              "fields": {
+                "economic_engine": "Price × volume − feedstock/energy; mix ranges from commodity plants to high-value formulations.",
+                "core_kpis": "Price/mix; volumes; utilization; feedstock spreads; inventories; EBITDA/ton; working capital; ROIC.",
+                "leading_indicators": "Distributor inventories; plant operating rates; ethane/naphtha spreads; customer production; capacity shutdowns.",
+                "typical_moats": "Process know-how, formulation IP, qualification, switching costs, scale, feedstock advantage.",
+                "capital_cycle_supply_response": "Commodity chemicals respond via plant additions/closures; specialty capacity often less fungible and slower to qualify.",
+                "valuation_lenses": "EV/EBITDA, normalized FCF, P/E, replacement cost; specialty names may warrant ROIC-based DCF.",
+                "accounting_data_traps": "Inventory gains/losses, restructuring add-backs, environmental liabilities, pension costs, maintenance capex.",
+                "common_failure_modes": "Capacity glut, feedstock disadvantage, customer destocking, China supply, environmental liabilities.",
+                "ideal_compounder_setup": "Specialty portfolio with specification lock-in, recurring formulations, pricing power and low capital intensity.",
+                "ideal_inflection_setup": "Destocking ends → utilization/pricing recover; feedstock spread widens; competitor capacity exits.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Inventory / price-cost inflection.",
+                "highest_evi_question": "Is the product truly differentiated or merely marketed as specialty?"
+              }
+            },
+            {
+              "code": "151020",
+              "name": "Construction Materials",
+              "fields": {
+                "economic_engine": "Local price × volume − quarry/cement/aggregate production and freight costs; geography matters enormously.",
+                "core_kpis": "Tons/shipments; price/ton; aggregates margins; cement utilization; backlog; public/private construction mix.",
+                "leading_indicators": "Infrastructure awards; housing starts; nonres construction; DOT budgets; cement imports; weather.",
+                "typical_moats": "Permits/reserves, local scarcity, transportation economics, route density, vertical integration.",
+                "capital_cycle_supply_response": "New quarries/cement plants face permitting and long lead times; local shortages can persist for years.",
+                "valuation_lenses": "EV/EBITDA, FCF, value per reserve ton, replacement value.",
+                "accounting_data_traps": "Depletion, reclamation liabilities, acquisition accounting, weather normalization, land values.",
+                "common_failure_modes": "Construction downturn, overpaying for reserves, energy inflation, permitting changes.",
+                "ideal_compounder_setup": "Local oligopoly with scarce permitted reserves and consistent price > cost inflation.",
+                "ideal_inflection_setup": "Volume trough + continued price increases; infrastructure spend hits constrained local supply.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Local scarcity compounder.",
+                "highest_evi_question": "How many years of permitted reserves exist, and can competitors economically truck material into the market?"
+              }
+            },
+            {
+              "code": "151030",
+              "name": "Containers & Packaging",
+              "fields": {
+                "economic_engine": "Units × price/mix − resin/metal/fiber and conversion cost; demand tied to consumer/industrial volumes.",
+                "core_kpis": "Volumes; price-cost spread; resin/paper/aluminum inputs; utilization; contract resets; EBITDA/ton/unit.",
+                "leading_indicators": "Packaging volumes; retailer inventories; resin/pulp prices; capacity closures; customer contract renewals.",
+                "typical_moats": "Scale, customer integration, efficient plants, local freight advantage; usually modest differentiation.",
+                "capital_cycle_supply_response": "Cyclical and prone to overcapacity; closures/consolidation can restore pricing.",
+                "valuation_lenses": "EV/EBITDA, FCF yield, normalized margins.",
+                "accounting_data_traps": "Pass-through timing, restructuring charges, pension, lease obligations, maintenance capex.",
+                "common_failure_modes": "Overcapacity, customer bargaining power, input spikes, secular packaging substitution.",
+                "ideal_compounder_setup": "Niche packaging with high switching costs, specialized formats, disciplined consolidation.",
+                "ideal_inflection_setup": "Capacity closures + demand stabilization → price-cost spread expansion.",
+                "research_priority": "3/5.",
+                "cadence": "Quarterly.",
+                "preferred_archetype": "Capacity rationalization.",
+                "highest_evi_question": "Are price increases contractual pass-throughs or genuine pricing power?"
+              }
+            },
+            {
+              "code": "151040",
+              "name": "Metals & Mining",
+              "fields": {
+                "economic_engine": "Commodity price × volume − cash cost − sustaining/growth capex; ore grade and mine life dominate.",
+                "core_kpis": "Production; realized price; cash cost/AISC; grade; recovery; reserves; mine life; capex; jurisdiction exposure.",
+                "leading_indicators": "Spot/futures prices; inventories; Chinese demand; smelter treatment charges; mine disruptions; project approvals.",
+                "typical_moats": "Lowest-cost resource, reserve quality, scale infrastructure, scarce geology; little product differentiation.",
+                "capital_cycle_supply_response": "Extremely cyclical; new mines can require 5–15 years, making supply lags long but eventual additions powerful.",
+                "valuation_lenses": "NAV, P/NAV, EV/EBITDA, FCF yield, EV/reserve unit.",
+                "accounting_data_traps": "Reserve assumptions, stripping capitalization, impairment, reclamation, royalties, by-product credits.",
+                "common_failure_modes": "Commodity collapse, grade decline, political expropriation/tax, project overruns, bad M&A.",
+                "ideal_compounder_setup": "Rare: royalty/streaming or exceptionally low-cost long-life assets with disciplined capital returns.",
+                "ideal_inflection_setup": "Supply disruption/deficit, inventory drawdown, capex drought, new mine ramp.",
+                "research_priority": "4/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Scarcity / commodity inflection.",
+                "highest_evi_question": "Where is the marginal cost curve and what projects enter supply at today's incentive price?"
+              }
+            },
+            {
+              "code": "151050",
+              "name": "Paper & Forest Products",
+              "fields": {
+                "economic_engine": "Pulp/lumber/paper price × volume − fiber/energy/freight; timber assets add biological growth and land optionality.",
+                "core_kpis": "Pulp/lumber prices; shipments; mill utilization; timber harvest; log costs; inventories; housing exposure.",
+                "leading_indicators": "Housing starts; pulp inventories; mill downtime; export demand; freight; capacity closures.",
+                "typical_moats": "Low-cost timberland/fiber basket, mill efficiency, local logistics; commodity moat otherwise limited.",
+                "capital_cycle_supply_response": "Strong capital cycle; mill additions/closures drive multi-year pricing swings.",
+                "valuation_lenses": "EV/EBITDA, FCF yield, timberland NAV, replacement value.",
+                "accounting_data_traps": "Biological asset accounting, depletion, maintenance capex, pension, restructuring.",
+                "common_failure_modes": "Overcapacity, housing recession, China demand weakness, wildfire, input inflation.",
+                "ideal_compounder_setup": "Timberland with low-cost growth and disciplined harvest/land monetization.",
+                "ideal_inflection_setup": "Mill closures + demand rebound; lumber/pulp inventory cycle turns.",
+                "research_priority": "2/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Commodity cycle.",
+                "highest_evi_question": "What percentage of earnings is truly structural versus spot commodity pricing?"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "20",
+      "name": "Industrials",
+      "industry_groups": [
+        {
+          "code": "2010",
+          "name": "Capital Goods",
+          "industries": [
+            {
+              "code": "201010",
+              "name": "Aerospace & Defense",
+              "fields": {
+                "economic_engine": "Aircraft/defense installed base + production rates + aftermarket/service; defense adds funded backlog and program economics.",
+                "core_kpis": "Book-to-bill; backlog; aircraft deliveries; flight hours; aftermarket mix; program margin; cash conversion; defense awards.",
+                "leading_indicators": "OEM production schedules; airline traffic; defense budgets; supplier lead times; shop visits; engine cycles.",
+                "typical_moats": "Certification, IP, sole-source positions, installed base, long program lives, switching/requalification cost.",
+                "capital_cycle_supply_response": "Capacity/qualification can take years; aftermarket scarcity can persist; defense programs span decades.",
+                "valuation_lenses": "EV/EBITDA, P/E, FCF yield, sum-of-parts; aftermarket deserves higher multiple than OE.",
+                "accounting_data_traps": "Program accounting, customer advances, pension, warranty, development capitalization, one-time contract charges.",
+                "common_failure_modes": "Program delays, fixed-price overruns, supplier failure, leverage, aftermarket normalization.",
+                "ideal_compounder_setup": "Sole-source component/aftermarket supplier with growing installed base, high recurring content, disciplined M&A.",
+                "ideal_inflection_setup": "Production-rate recovery, aftermarket surge, defense award, supply bottleneck relief → margin step-up.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Installed-base compounder / production inflection.",
+                "highest_evi_question": "What percentage of lifetime economics comes after the original equipment sale?"
+              }
+            },
+            {
+              "code": "201020",
+              "name": "Building Products",
+              "fields": {
+                "economic_engine": "Residential/nonres construction volume × product content × price − materials/labor; repair/remodel can stabilize.",
+                "core_kpis": "Orders; backlog; price/mix; housing starts; R&R mix; dealer inventory; gross margin; channel share.",
+                "leading_indicators": "Permits; housing starts; mortgage rates; builder orders; architectural billings; distributor inventories.",
+                "typical_moats": "Brand/specification, contractor preference, code approval, distribution, installed base, low product cost vs labor.",
+                "capital_cycle_supply_response": "Plant capacity can often be added in 1–3 years; distribution/specification barriers may matter more than factories.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, through-cycle margins.",
+                "accounting_data_traps": "Channel inventory, rebates, acquisition intangibles, warranty reserves, housing-cycle normalization.",
+                "common_failure_modes": "Housing downturn, destocking, raw-material inflation, private-label competition.",
+                "ideal_compounder_setup": "Mission-critical low-ticket product with contractor pull-through, recurring replacement, high incremental ROIC.",
+                "ideal_inflection_setup": "Housing/order trough + destocking end; price-cost recovers; capacity absorption.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Local/specification compounder.",
+                "highest_evi_question": "Is the product selected by the contractor/specifier or commoditized by the distributor?"
+              }
+            },
+            {
+              "code": "201030",
+              "name": "Construction & Engineering",
+              "fields": {
+                "economic_engine": "Backlog conversion × project margin − labor/material overruns; cash flow depends on contract terms and working capital.",
+                "core_kpis": "Backlog/RPO; book-to-bill; gross margin; change orders; working capital; project mix; utilization.",
+                "leading_indicators": "Infrastructure awards; data-center/energy project FIDs; permitting; labor availability; customer financing.",
+                "typical_moats": "Engineering expertise, safety record, bonding capacity, customer relationships, specialized labor.",
+                "capital_cycle_supply_response": "Labor and execution capacity are the bottleneck; competitors can scale but skilled teams take time.",
+                "valuation_lenses": "EV/EBITDA, FCF, backlog quality, P/E; avoid valuing pass-through revenue like value-add revenue.",
+                "accounting_data_traps": "Percentage-of-completion estimates, claims, change orders, retainage, customer advances, JV liabilities.",
+                "common_failure_modes": "Fixed-price overruns, project cancellations, labor inflation, customer insolvency.",
+                "ideal_compounder_setup": "Specialty contractor with repeat customers, low fixed capital and disciplined project selection.",
+                "ideal_inflection_setup": "Backlog surge + labor productivity + mix shift; margin normalization after troubled projects.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Backlog conversion inflection.",
+                "highest_evi_question": "How enforceable is backlog and who bears material/labor inflation?"
+              }
+            },
+            {
+              "code": "201040",
+              "name": "Electrical Equipment",
+              "fields": {
+                "economic_engine": "Units/capacity slots × price − copper/electrical components/labor; scarcity and qualification drive high incremental margins.",
+                "core_kpis": "Orders; backlog/RPO; book-to-bill; lead times; price/mix; plant utilization; data-center/grid exposure; margins.",
+                "leading_indicators": "Utility capex; transformer/switchgear lead times; data-center FIDs; grid interconnection; copper prices.",
+                "typical_moats": "Qualification, reliability, installed base, scarce factory slots, engineering integration, channel relationships.",
+                "capital_cycle_supply_response": "New transformer/switchgear capacity can take 2–5+ years including equipment/labor/qualification.",
+                "valuation_lenses": "EV/EBITDA, P/E, FCF; backlog-adjusted earnings and normalized margin sensitivity.",
+                "accounting_data_traps": "Backlog definitions, advances, copper pass-through, project accounting, growth capex.",
+                "common_failure_modes": "Ghost demand, capacity glut, hyperscaler bargaining, copper inflation, execution delays.",
+                "ideal_compounder_setup": "Niche electrical supplier with scarce capacity, high reliability and recurring service/retrofit demand.",
+                "ideal_inflection_setup": "Orders outrun revenue → backlog → utilization → margin; grid/data-center bottleneck migrates into equipment.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Scarcity / backlog inflection.",
+                "highest_evi_question": "Which orders are funded and binding, and when does new industry capacity arrive?"
+              }
+            },
+            {
+              "code": "201050",
+              "name": "Industrial Conglomerates",
+              "fields": {
+                "economic_engine": "Portfolio cash flows plus capital allocation; value depends on segment quality and management's reinvestment choices.",
+                "core_kpis": "Segment margins/ROIC; organic growth; FCF; acquisition multiples; portfolio mix; leverage.",
+                "leading_indicators": "Portfolio reviews; spin-offs; acquisitions; segment order trends; capital allocation changes.",
+                "typical_moats": "Capital allocation system, decentralized culture, shared distribution/technology; conglomerate discount may or may not be justified.",
+                "capital_cycle_supply_response": "Depends on segments; acquisition capital cycle can become the key constraint.",
+                "valuation_lenses": "SOTP, FCF yield, EV/EBITDA, ROIC; compare implied segment multiples.",
+                "accounting_data_traps": "Corporate allocations, pension, intercompany items, acquisition adjustments, stranded costs.",
+                "common_failure_modes": "Empire building, opaque segments, leverage, bad M&A, conglomerate discount persistence.",
+                "ideal_compounder_setup": "Decentralized operator with repeatable acquisition playbook and high incremental ROIC.",
+                "ideal_inflection_setup": "Spin/separation reveals higher-quality asset; margin reset; capital allocation regime changes.",
+                "research_priority": "4/5.",
+                "cadence": "Quarterly.",
+                "preferred_archetype": "SOTP / capital-allocation.",
+                "highest_evi_question": "Does the corporate center create value beyond what independent segments could?"
+              }
+            },
+            {
+              "code": "201060",
+              "name": "Machinery",
+              "fields": {
+                "economic_engine": "Equipment units × price + aftermarket − manufacturing cost; highly sensitive to utilization and customer capex.",
+                "core_kpis": "Orders; book-to-bill; backlog; dealer inventories; utilization; price/cost; aftermarket mix; incremental margin.",
+                "leading_indicators": "PMI; construction/mining/ag equipment demand; dealer inventory; commodity farmer income; capex plans.",
+                "typical_moats": "Installed base, dealer network, application expertise, brand, parts/service ecosystem.",
+                "capital_cycle_supply_response": "Factories respond in 1–3 years, but dealer/installed-base moats persist; end markets can be deeply cyclical.",
+                "valuation_lenses": "EV/EBITDA, P/E, FCF, normalized mid-cycle margins.",
+                "accounting_data_traps": "Dealer financing, inventory, warranty, pension, restructuring, acquisition intangibles.",
+                "common_failure_modes": "Dealer destocking, peak-cycle extrapolation, China competition, input inflation.",
+                "ideal_compounder_setup": "Niche machinery with consumables/service, high aftermarket share, low customer failure tolerance.",
+                "ideal_inflection_setup": "Dealer inventory bottom, utilization rebound, price-cost turn, new product qualification.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Operating leverage / installed base.",
+                "highest_evi_question": "How much gross profit comes from aftermarket versus new machines?"
+              }
+            },
+            {
+              "code": "201070",
+              "name": "Trading Companies & Distributors",
+              "fields": {
+                "economic_engine": "Volume × gross margin − logistics/SG&A; working-capital turns and local scale are central.",
+                "core_kpis": "Organic sales; gross margin; inventory turns; working capital; branch productivity; private-label mix; ROIC.",
+                "leading_indicators": "Industrial production; channel inventories; supplier lead times; customer order frequency; pricing.",
+                "typical_moats": "Distribution density, breadth, availability, procurement scale, embedded workflow, private label.",
+                "capital_cycle_supply_response": "Physical capacity is easy; network density, data and relationships compound slowly.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, ROIC; working-capital-normalized FCF.",
+                "accounting_data_traps": "LIFO/FIFO, inventory gains, supplier rebates, acquisition add-backs, receivables.",
+                "common_failure_modes": "Destocking, e-commerce disintermediation, inventory obsolescence, acquisition overpayment.",
+                "ideal_compounder_setup": "Specialty distributor with fragmented market, high service content, private label and bolt-on runway.",
+                "ideal_inflection_setup": "Destocking ends; gross margin recovers; working capital releases cash.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Density compounder / destocking inflection.",
+                "highest_evi_question": "What value does the distributor add that a manufacturer or online marketplace cannot replicate?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "2020",
+          "name": "Commercial & Professional Services",
+          "industries": [
+            {
+              "code": "202010",
+              "name": "Commercial Services & Supplies",
+              "fields": {
+                "economic_engine": "Recurring service contracts × route/site density − labor/equipment; includes waste, facilities, security, office services.",
+                "core_kpis": "Organic price; retention; route density; labor utilization; recurring mix; acquisition multiples; FCF.",
+                "leading_indicators": "Contract renewals; wage inflation; disposal pricing; customer formation; regulation; acquisition pipeline.",
+                "typical_moats": "Route density, permits, local regulation, installed systems, switching friction, reputation.",
+                "capital_cycle_supply_response": "Local networks take years to build; attractive returns invite bolt-on consolidation more than greenfield entry.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF yield, ROIC; route businesses often deserve DCF on local density economics.",
+                "accounting_data_traps": "Acquisition adjustments, environmental reserves, landfill closure, lease classification, labor normalization.",
+                "common_failure_modes": "Labor inflation, contract repricing lag, poor M&A, environmental liabilities.",
+                "ideal_compounder_setup": "Waste/environmental/security niche with high retention, route density, pricing > inflation.",
+                "ideal_inflection_setup": "Price catches wages; route density improves; competitor exits; acquisition synergies.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Local-density compounder.",
+                "highest_evi_question": "Can price rise annually without meaningful churn?"
+              }
+            },
+            {
+              "code": "202020",
+              "name": "Professional Services",
+              "fields": {
+                "economic_engine": "Billable headcount/utilization × billing rate − compensation; data/process outsourcing adds recurring contracts.",
+                "core_kpis": "Utilization; bill rates; headcount; attrition; bookings; backlog; recurring mix; revenue per employee.",
+                "leading_indicators": "Hiring trends; wage inflation; client budgets; consulting demand; outsourcing awards; regulation.",
+                "typical_moats": "Reputation, specialized expertise, proprietary data, workflow integration, switching costs.",
+                "capital_cycle_supply_response": "Human capital supply responds relatively quickly; proprietary data/workflow moats are more durable.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF; revenue-per-employee and organic growth quality.",
+                "accounting_data_traps": "Capitalized software, stock comp, acquisition earnouts, billable vs non-billable headcount.",
+                "common_failure_modes": "Utilization collapse, wage pressure, automation/AI, client concentration.",
+                "ideal_compounder_setup": "Vertical data/analytics or outsourced mission-critical process with recurring contracts and high retention.",
+                "ideal_inflection_setup": "Hiring freeze ends, utilization rebounds, pricing outpaces wages, large outsourcing award.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Utilization / recurring data.",
+                "highest_evi_question": "Is the moat people-based or embedded in proprietary data/workflows?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "2030",
+          "name": "Transportation",
+          "industries": [
+            {
+              "code": "203010",
+              "name": "Air Freight & Logistics",
+              "fields": {
+                "economic_engine": "Shipment volume × yield/spread − transport procurement/labor; asset-light brokers differ from asset-heavy integrators.",
+                "core_kpis": "Tonnage; yield; load factor; purchased transportation; spot vs contract rates; working capital.",
+                "leading_indicators": "Freight indices; e-commerce; air cargo rates; inventories; port volumes; fuel.",
+                "typical_moats": "Network density, customs capability, scale purchasing, customer integration, route network.",
+                "capital_cycle_supply_response": "Broker capacity adjusts fast; integrated global networks are slow and capital intensive.",
+                "valuation_lenses": "EV/EBITDA, P/E, FCF; mid-cycle margins.",
+                "accounting_data_traps": "Fuel surcharges, purchased transportation gross vs net reporting, leases, pension.",
+                "common_failure_modes": "Rate collapse, excess capacity, labor, fuel, customer concentration.",
+                "ideal_compounder_setup": "Asset-light logistics with sticky vertical specialization and technology-enabled network effects.",
+                "ideal_inflection_setup": "Freight recession ends → rates/volumes recover; purchased transport spread expands.",
+                "research_priority": "3/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Freight-cycle inflection.",
+                "highest_evi_question": "Are profits driven by structural network advantage or temporary rate spreads?"
+              }
+            },
+            {
+              "code": "203020",
+              "name": "Passenger Airlines",
+              "fields": {
+                "economic_engine": "Passengers × fare/yield − fuel/labor/aircraft ownership; high fixed costs create extreme operating leverage.",
+                "core_kpis": "RASM/PRASM; CASM ex-fuel; load factor; capacity; bookings; fare; loyalty economics; net debt.",
+                "leading_indicators": "TSA/booking data; capacity schedules; jet fuel; competitor cuts; corporate travel.",
+                "typical_moats": "Slots, hubs, loyalty programs, scale; historically weak due to low switching cost and high fixed costs.",
+                "capital_cycle_supply_response": "Aircraft/crew capacity adjusts slowly but bankruptcies/restructurings reset economics.",
+                "valuation_lenses": "EV/EBITDAR, FCF, normalized EPS; value loyalty separately when material.",
+                "accounting_data_traps": "Aircraft leases, loyalty deferred revenue, pension, special items, maintenance timing.",
+                "common_failure_modes": "Fare wars, fuel spikes, labor contracts, leverage, recession, aircraft grounding.",
+                "ideal_compounder_setup": "Rare; loyalty/network with disciplined capacity and strong balance sheet.",
+                "ideal_inflection_setup": "Capacity cuts + resilient demand → fare/yield inflection; fuel decline.",
+                "research_priority": "2/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Capacity rationalization.",
+                "highest_evi_question": "Is capacity discipline industry-wide or temporary?"
+              }
+            },
+            {
+              "code": "203030",
+              "name": "Marine Transportation",
+              "fields": {
+                "economic_engine": "Freight rate × vessel days − fuel/opex; ship supply orderbook and route demand drive economics.",
+                "core_kpis": "Spot/contract rates; utilization; fleet age; orderbook; scrapping; ton-miles; breakeven.",
+                "leading_indicators": "Orderbook deliveries; port congestion; trade flows; canal constraints; commodity demand.",
+                "typical_moats": "Low-cost fleet, niche routes/contracts; otherwise weak moat.",
+                "capital_cycle_supply_response": "Very strong capital cycle: high rates trigger ship orders with 2–4 year delivery lag.",
+                "valuation_lenses": "NAV, EV/EBITDA, FCF yield, fleet value.",
+                "accounting_data_traps": "Vessel values, depreciation, charter accounting, drydock capex.",
+                "common_failure_modes": "Fleet oversupply, rate collapse, leverage, geopolitics, environmental capex.",
+                "ideal_compounder_setup": "Niche contracted operator with scarce specialized vessels and disciplined fleet growth.",
+                "ideal_inflection_setup": "Orderbook tight + demand/ton-mile shock; congestion/geopolitical rerouting.",
+                "research_priority": "3/5.",
+                "cadence": "Weekly.",
+                "preferred_archetype": "Shipping supply-cycle.",
+                "highest_evi_question": "What percentage of fleet capacity is already on order relative to demand growth?"
+              }
+            },
+            {
+              "code": "203040",
+              "name": "Ground Transportation",
+              "fields": {
+                "economic_engine": "Rail/truck/bus volume × yield − labor/fuel/equipment; network density and capacity utilization determine margins.",
+                "core_kpis": "Carloads/loads; yield; OR; miles; driver/crew productivity; spot/contract rates; equipment utilization.",
+                "leading_indicators": "Freight indices; inventory cycle; industrial production; truck exits; rail service metrics.",
+                "typical_moats": "Rail network/rights-of-way; terminal density; brokerage network; dedicated contracts.",
+                "capital_cycle_supply_response": "Truck capacity adjusts quickly through exits; rail infrastructure is effectively impossible to replicate.",
+                "valuation_lenses": "EV/EBITDA, P/E, FCF; rail normalized OR and capex.",
+                "accounting_data_traps": "Equipment leases, fuel surcharges, pension, owner-operator classification.",
+                "common_failure_modes": "Freight recession, labor, regulation, service failure, capacity additions.",
+                "ideal_compounder_setup": "Rail/network or niche fleet with density and pricing power.",
+                "ideal_inflection_setup": "Truck capacity exits → rates turn; rail service improvement unlocks price/volume.",
+                "research_priority": "4/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Capacity / network moat.",
+                "highest_evi_question": "What is the marginal carrier's cash breakeven and exit rate?"
+              }
+            },
+            {
+              "code": "203050",
+              "name": "Transportation Infrastructure",
+              "fields": {
+                "economic_engine": "Passenger/cargo throughput × regulated/concession fees − operating/capex; often toll-road-like.",
+                "core_kpis": "Traffic; passengers; TEUs; aeronautical/non-aero revenue; tariff increases; capex; concession life.",
+                "leading_indicators": "Travel volumes; trade; port congestion; government concessions; route additions.",
+                "typical_moats": "Scarce concession, location, network, regulatory barriers.",
+                "capital_cycle_supply_response": "Very long-lived, difficult-to-replicate assets; expansions slow and regulated.",
+                "valuation_lenses": "DCF, EV/EBITDA, concession NAV, dividend yield.",
+                "accounting_data_traps": "Concession liabilities, capitalized interest, regulatory assets, maintenance capex.",
+                "common_failure_modes": "Traffic shock, political tariff controls, concession renewal, leverage.",
+                "ideal_compounder_setup": "Long concession with inflation-linked pricing and growing throughput.",
+                "ideal_inflection_setup": "Traffic recovery; tariff reset; capacity expansion commissioned.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Infrastructure toll-road.",
+                "highest_evi_question": "How much pricing is contractual versus politically discretionary?"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "25",
+      "name": "Consumer Discretionary",
+      "industry_groups": [
+        {
+          "code": "2510",
+          "name": "Automobiles & Components",
+          "industries": [
+            {
+              "code": "251010",
+              "name": "Automobile Components",
+              "fields": {
+                "economic_engine": "Vehicle production × content per vehicle × price − materials/labor; EV/ADAS can radically shift content.",
+                "core_kpis": "Global light vehicle production; content/vehicle; backlog; customer mix; margin; launches; warranty.",
+                "leading_indicators": "OEM production schedules; vehicle inventories; EV penetration; platform awards; semiconductor supply.",
+                "typical_moats": "Qualification, platform lock-in, safety certification, engineering integration; OEM bargaining limits returns.",
+                "capital_cycle_supply_response": "Plant/tooling additions tied to programs; multi-year awards but rapid technology shifts.",
+                "valuation_lenses": "EV/EBITDA, P/E, FCF; normalize cycle and launch costs.",
+                "accounting_data_traps": "Tooling reimbursements, warranty, restructuring, pension, program capitalized costs.",
+                "common_failure_modes": "OEM price-downs, platform loss, EV transition, recall, leverage.",
+                "ideal_compounder_setup": "High-content niche supplier with IP, aftermarket or safety-critical products and diversified platforms.",
+                "ideal_inflection_setup": "Production recovery + new content launch + fixed-cost absorption.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Content-per-unit inflection.",
+                "highest_evi_question": "Does content growth outweigh annual OEM price-downs and EV substitution risk?"
+              }
+            },
+            {
+              "code": "251020",
+              "name": "Automobiles",
+              "fields": {
+                "economic_engine": "Vehicle units × ASP − materials/labor/warranty + financing/software; enormous fixed capital and product-cycle risk.",
+                "core_kpis": "Deliveries; ASP; incentives; inventory days; utilization; gross margin; FCF; warranty; finance penetration.",
+                "leading_indicators": "Dealer inventory; incentives; order books; battery/raw materials; rates; used-car prices.",
+                "typical_moats": "Brand, scale, dealer/service network, software ecosystem, manufacturing efficiency.",
+                "capital_cycle_supply_response": "Capacity additions are large and slow; price wars can destroy returns rapidly.",
+                "valuation_lenses": "EV/EBITDA, P/E, FCF, sum-of-parts, enterprise value per unit/capacity.",
+                "accounting_data_traps": "Lease residuals, warranty, captive finance credit, regulatory credits, capitalized development.",
+                "common_failure_modes": "Price wars, overcapacity, recalls, tech transition, financing losses.",
+                "ideal_compounder_setup": "Rare: brand-led premium economics or capital-light ecosystem/service layer.",
+                "ideal_inflection_setup": "Inventory tightens, incentives fall; plant utilization rises; model launch resets mix.",
+                "research_priority": "2/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Product-cycle / utilization.",
+                "highest_evi_question": "What normalized ROIC survives a full auto cycle?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "2520",
+          "name": "Consumer Durables & Apparel",
+          "industries": [
+            {
+              "code": "252010",
+              "name": "Household Durables",
+              "fields": {
+                "economic_engine": "Units × price/mix − materials/channel costs; homebuilding is land turns × gross margin.",
+                "core_kpis": "Orders; backlog; housing starts; cancellation; ASP; gross margin; inventory; land position.",
+                "leading_indicators": "Mortgage rates; permits; builder sentiment; channel inventories; raw materials.",
+                "typical_moats": "Brand, distribution, design, land sourcing, local scale; varies widely.",
+                "capital_cycle_supply_response": "Homebuilding land cycle is long; appliances/furniture capacity responds faster.",
+                "valuation_lenses": "P/E, EV/EBITDA, P/B for builders, FCF; builders on normalized ROE/tangible book.",
+                "accounting_data_traps": "Land impairments, incentives, inventory capitalization, warranty, channel stuffing.",
+                "common_failure_modes": "Housing downturn, inventory write-downs, promotional pressure, fashion obsolescence.",
+                "ideal_compounder_setup": "Asset-light branded niche or disciplined homebuilder with superior land turns.",
+                "ideal_inflection_setup": "Rates fall/order growth turns; channel destocking; gross margin recovers.",
+                "research_priority": "3/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Housing / inventory inflection.",
+                "highest_evi_question": "Is inventory owned by the company, dealer, or customer—and where is the real excess?"
+              }
+            },
+            {
+              "code": "252020",
+              "name": "Leisure Products",
+              "fields": {
+                "economic_engine": "Unit demand × ASP − manufacturing/marketing; enthusiast installed bases can drive accessories/consumables.",
+                "core_kpis": "Sell-through; dealer inventory; ASP; participation rates; backlog; gross margin; new products.",
+                "leading_indicators": "Retail sell-through; channel inventory; consumer confidence; participation trends.",
+                "typical_moats": "Brand/community, IP, dealer network, installed base, ecosystem.",
+                "capital_cycle_supply_response": "Capacity generally flexible; fads and product cycles can be short.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF; normalize pandemic-like demand spikes.",
+                "accounting_data_traps": "Dealer inventory, returns, capitalized development, promotional allowances.",
+                "common_failure_modes": "Fad reversal, dealer destocking, discretionary downturn, product failure.",
+                "ideal_compounder_setup": "Niche enthusiast brand with repeat accessories/consumables and community moat.",
+                "ideal_inflection_setup": "Channel inventory bottoms; new product cycle; participation reaccelerates.",
+                "research_priority": "3/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Inventory / product cycle.",
+                "highest_evi_question": "What is true end-consumer sell-through versus shipments into channel?"
+              }
+            },
+            {
+              "code": "252030",
+              "name": "Textiles, Apparel & Luxury Goods",
+              "fields": {
+                "economic_engine": "Units × ASP × gross margin − marketing/retail costs; luxury depends on brand scarcity and price integrity.",
+                "core_kpis": "Comparable sales; DTC mix; gross margin; inventory; full-price sell-through; store productivity.",
+                "leading_indicators": "Search/social trends; tourism; wholesale inventories; China demand; discounting.",
+                "typical_moats": "Brand, heritage, scarcity, design, distribution control; low for commoditized apparel.",
+                "capital_cycle_supply_response": "Supply is easy for basic apparel, but authentic luxury brand equity takes decades.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF; brand/IP DCF; watch inventory-adjusted margins.",
+                "accounting_data_traps": "Inventory reserves, wholesale returns, lease liabilities, marketing capitalization narratives.",
+                "common_failure_modes": "Fashion miss, discounting, brand dilution, inventory build, China slowdown.",
+                "ideal_compounder_setup": "Luxury/niche brand with pricing power, controlled distribution and low dilution.",
+                "ideal_inflection_setup": "Inventory cleared + gross margin normalization; new creative/product cycle.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Brand compounder / inventory inflection.",
+                "highest_evi_question": "Can price rise faster than inflation without increased discounting?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "2530",
+          "name": "Consumer Services",
+          "industries": [
+            {
+              "code": "253010",
+              "name": "Hotels, Restaurants & Leisure",
+              "fields": {
+                "economic_engine": "Traffic/occupancy × price − labor/food/property costs; franchised models separate brand economics from asset ownership.",
+                "core_kpis": "Same-store sales; traffic; ADR/RevPAR; occupancy; unit growth; store margin; franchise mix.",
+                "leading_indicators": "Reservations; credit-card spend; air travel; restaurant traffic; wage/food inflation.",
+                "typical_moats": "Brand, loyalty, franchise network, site density, unit economics, regulatory scarcity in gaming.",
+                "capital_cycle_supply_response": "Restaurants can add units in months/years; hotels/casinos/cruise capacity slower and capital intensive.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF; EV/room or unit economics where relevant.",
+                "accounting_data_traps": "Franchise vs company-owned mix, pre-opening costs, loyalty liabilities, lease accounting.",
+                "common_failure_modes": "Traffic decline, wage inflation, oversaturation, weak new-unit returns, leverage.",
+                "ideal_compounder_setup": "Asset-light franchise/royalty model with high unit ROIC and long runway.",
+                "ideal_inflection_setup": "Traffic turns + price holds; food/wage cost eases; new-unit cohorts mature.",
+                "research_priority": "5/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Unit-economics compounder / margin inflection.",
+                "highest_evi_question": "Are new units earning returns equal to or above mature cohorts after full occupancy/labor?"
+              }
+            },
+            {
+              "code": "253020",
+              "name": "Diversified Consumer Services",
+              "fields": {
+                "economic_engine": "Enrollment/membership/transaction volume × fee − service delivery and customer acquisition.",
+                "core_kpis": "Enrollments; retention; utilization; revenue/student/member; CAC; regulatory metrics.",
+                "leading_indicators": "Employment trends; education demand; household formation; regulatory approvals.",
+                "typical_moats": "Accreditation, brand, local network, trust, switching friction.",
+                "capital_cycle_supply_response": "Capacity often scalable; regulation/accreditation can slow entrants.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF; cohort/unit economics.",
+                "accounting_data_traps": "Deferred revenue, student financing, regulatory reserves, acquisition costs.",
+                "common_failure_modes": "Regulatory action, poor outcomes, CAC inflation, churn.",
+                "ideal_compounder_setup": "Mission-critical service with recurring membership and reputation moat.",
+                "ideal_inflection_setup": "Enrollment/member growth turns; regulatory overhang clears; utilization rises.",
+                "research_priority": "3/5.",
+                "cadence": "Quarterly.",
+                "preferred_archetype": "Cohort / regulatory inflection.",
+                "highest_evi_question": "What objective customer outcome justifies retention and pricing?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "2550",
+          "name": "Consumer Discretionary Distribution & Retail",
+          "industries": [
+            {
+              "code": "255010",
+              "name": "Distributors",
+              "fields": {
+                "economic_engine": "Wholesale volume × gross spread − logistics/working capital.",
+                "core_kpis": "Sales growth; gross margin; inventory turns; receivables; supplier concentration; ROIC.",
+                "leading_indicators": "Retailer orders; channel inventories; freight; supplier lead times.",
+                "typical_moats": "Scale procurement, exclusive distribution rights, logistics density.",
+                "capital_cycle_supply_response": "Easy physical entry but relationships/exclusivity can be durable.",
+                "valuation_lenses": "EV/EBITDA, P/E, FCF; working-capital normalized.",
+                "accounting_data_traps": "Inventory, rebates, returns, supplier incentives.",
+                "common_failure_modes": "Supplier bypass, retailer destocking, inventory obsolescence.",
+                "ideal_compounder_setup": "Exclusive/niche distributor with high turns and fragmented end market.",
+                "ideal_inflection_setup": "Destocking ends; supplier shortage improves spreads.",
+                "research_priority": "3/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Distribution density / destocking.",
+                "highest_evi_question": "Who controls the customer—the distributor or supplier?"
+              }
+            },
+            {
+              "code": "255030",
+              "name": "Broadline Retail",
+              "fields": {
+                "economic_engine": "Traffic × conversion × basket × gross margin − fulfillment/store/marketing cost.",
+                "core_kpis": "Comp sales; units; ticket; traffic; inventory; fulfillment cost; membership/ad revenue; ROIC.",
+                "leading_indicators": "Consumer spending; web traffic; search trends; inventory; promotional intensity.",
+                "typical_moats": "Scale, logistics, membership, ecosystem, data, private label.",
+                "capital_cycle_supply_response": "Warehouses/logistics take years; digital competition can change rapidly.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, GMV-based unit economics where relevant.",
+                "accounting_data_traps": "Third-party gross vs net revenue, inventory, lease liabilities, fulfillment capex.",
+                "common_failure_modes": "Margin-dilutive growth, promotions, inventory errors, disintermediation.",
+                "ideal_compounder_setup": "Membership/marketplace flywheel with high repeat frequency and improving ancillary monetization.",
+                "ideal_inflection_setup": "Inventory normalizes; mix/ads/membership raise margin; competitor exits.",
+                "research_priority": "4/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Flywheel / margin mix-shift.",
+                "highest_evi_question": "What part of gross profit comes from high-margin ancillary revenue versus merchandise?"
+              }
+            },
+            {
+              "code": "255040",
+              "name": "Specialty Retail",
+              "fields": {
+                "economic_engine": "Store/online traffic × conversion × ticket × gross margin − occupancy/labor/fulfillment.",
+                "core_kpis": "Comp sales; traffic; ticket; gross margin; inventory; store productivity; new-store payback.",
+                "leading_indicators": "Credit-card spend; channel checks; housing/auto category trends; search traffic.",
+                "typical_moats": "Category authority, service expertise, distribution, private label, local scale.",
+                "capital_cycle_supply_response": "Stores can be added quickly; category expertise/brand takes longer.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF; unit economics and lease-adjusted returns.",
+                "accounting_data_traps": "Inventory reserves, leases, vendor allowances, loyalty liabilities.",
+                "common_failure_modes": "Category slowdown, inventory markdowns, e-commerce pressure, overexpansion.",
+                "ideal_compounder_setup": "Niche category leader with high turns, private label and strong new-store ROIC.",
+                "ideal_inflection_setup": "Inventory clears; comp turns positive; gross margin normalizes.",
+                "research_priority": "4/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Unit economics / inventory inflection.",
+                "highest_evi_question": "Are comp gains traffic-led or price-led, and what happens when inflation reverses?"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "30",
+      "name": "Consumer Staples",
+      "industry_groups": [
+        {
+          "code": "3010",
+          "name": "Consumer Staples Distribution & Retail",
+          "industries": [
+            {
+              "code": "301010",
+              "name": "Consumer Staples Distribution & Retail",
+              "fields": {
+                "economic_engine": "High-frequency volume × thin gross margin − logistics/labor; scale and turns dominate.",
+                "core_kpis": "Same-store sales; traffic; units; gross margin; inventory turns; shrink; private label; working capital.",
+                "leading_indicators": "Food inflation; SNAP/consumer budgets; supplier pricing; shrink trends.",
+                "typical_moats": "Scale procurement, location density, distribution centers, loyalty data.",
+                "capital_cycle_supply_response": "Physical networks take years; margins remain structurally thin.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, ROIC; inventory-turn adjusted.",
+                "accounting_data_traps": "LIFO, supplier allowances, shrink reserves, leases.",
+                "common_failure_modes": "Price competition, wage inflation, shrink, weak pharmacy economics.",
+                "ideal_compounder_setup": "High-turn retailer with private label, density and membership economics.",
+                "ideal_inflection_setup": "Inflation moderates while unit volumes recover; shrink falls.",
+                "research_priority": "3/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Scale / margin normalization.",
+                "highest_evi_question": "Can gross margin expand without sacrificing traffic?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "3020",
+          "name": "Food, Beverage & Tobacco",
+          "industries": [
+            {
+              "code": "302010",
+              "name": "Beverages",
+              "fields": {
+                "economic_engine": "Volume × price/mix − concentrate/commodity/packaging/distribution costs; brand economics can be exceptional.",
+                "core_kpis": "Organic volume; price/mix; gross margin; concentrate mix; distributor inventory; market share.",
+                "leading_indicators": "Retail scanner data; commodity inputs; channel inventories; emerging-market FX.",
+                "typical_moats": "Brand, distribution, shelf space, route-to-market, habitual consumption.",
+                "capital_cycle_supply_response": "Production easy relative to building brand/distribution; brand moat can last decades.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, ROIC.",
+                "accounting_data_traps": "Bottler consolidation, FX, commodity hedges, marketing spend.",
+                "common_failure_modes": "Volume elasticity, health/regulation, brand erosion, distributor conflict.",
+                "ideal_compounder_setup": "Global/niche brand with pricing power, high repeat purchase and low incremental capital.",
+                "ideal_inflection_setup": "Input costs fall while pricing holds; distribution expansion.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Brand compounder / price-cost.",
+                "highest_evi_question": "Is price/mix being retained after commodity inflation recedes?"
+              }
+            },
+            {
+              "code": "302020",
+              "name": "Food Products",
+              "fields": {
+                "economic_engine": "Volume × price/mix − agricultural inputs/manufacturing/promotion; brands vary from commodity to durable.",
+                "core_kpis": "Volume; price/mix; gross margin; commodity basket; promotional spend; market share.",
+                "leading_indicators": "Scanner data; crop/livestock prices; retailer inventories; private-label share.",
+                "typical_moats": "Brand, formulation, distribution, sourcing scale; weak for commodity processors.",
+                "capital_cycle_supply_response": "Commodity processing cyclical; branded capacity easy but brand building slow.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, ROIC.",
+                "accounting_data_traps": "Commodity hedges, biological/ag inputs, restructuring, trade spend.",
+                "common_failure_modes": "Private-label pressure, commodity spikes, volume erosion, brand overextension.",
+                "ideal_compounder_setup": "Niche branded food with loyal repeat purchase and distribution runway.",
+                "ideal_inflection_setup": "Price-cost spread widens; volume recovers after inflation shock.",
+                "research_priority": "3/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Brand / price-cost inflection.",
+                "highest_evi_question": "Is volume loss temporary elasticity or structural share loss?"
+              }
+            },
+            {
+              "code": "302030",
+              "name": "Tobacco",
+              "fields": {
+                "economic_engine": "Nicotine users × price/mix − manufacturing/marketing/tax; combustible decline offset by pricing and next-gen products.",
+                "core_kpis": "Volumes; price/mix; market share; reduced-risk product users; excise tax; FCF; buybacks.",
+                "leading_indicators": "Regulation; illicit trade; new-product approvals; cigarette volumes.",
+                "typical_moats": "Brand, addiction/habit, distribution, regulatory barriers.",
+                "capital_cycle_supply_response": "New entrants constrained by regulation; category volume structurally declining.",
+                "valuation_lenses": "P/E, FCF yield, dividend yield, DCF with declining volumes.",
+                "accounting_data_traps": "Litigation reserves, excise taxes, pension, regulatory provisions.",
+                "common_failure_modes": "Regulation, litigation, accelerated volume decline, failed next-gen transition.",
+                "ideal_compounder_setup": "Cash-generative franchise that transitions users to durable reduced-risk platform.",
+                "ideal_inflection_setup": "New product approval/adoption; price exceeds volume decline.",
+                "research_priority": "2/5.",
+                "cadence": "Quarterly.",
+                "preferred_archetype": "Cash harvest / product transition.",
+                "highest_evi_question": "What terminal decline rate and regulatory outcome does valuation require?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "3030",
+          "name": "Household & Personal Products",
+          "industries": [
+            {
+              "code": "303010",
+              "name": "Household Products",
+              "fields": {
+                "economic_engine": "Recurring unit consumption × price/mix − commodities/marketing; mature but resilient.",
+                "core_kpis": "Organic sales; volume; price/mix; gross margin; market share; ad spend.",
+                "leading_indicators": "Scanner data; pulp/resin/chemical inputs; retailer inventories.",
+                "typical_moats": "Brand, shelf space, habit, scale purchasing.",
+                "capital_cycle_supply_response": "Capacity easy; brand/distribution hard.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, ROIC.",
+                "accounting_data_traps": "Restructuring, trade spend, commodity hedges, FX.",
+                "common_failure_modes": "Private label, brand erosion, persistent volume loss.",
+                "ideal_compounder_setup": "Category leader with habitual use, pricing power and emerging-market runway.",
+                "ideal_inflection_setup": "Commodity deflation while pricing sticks; innovation lifts mix.",
+                "research_priority": "3/5.",
+                "cadence": "Quarterly.",
+                "preferred_archetype": "Brand / price-cost.",
+                "highest_evi_question": "Is marketing spend maintaining share or masking weak organic demand?"
+              }
+            },
+            {
+              "code": "303020",
+              "name": "Personal Care Products",
+              "fields": {
+                "economic_engine": "Repeat consumption × premium price − formulation/marketing/distribution; innovation and brand matter.",
+                "core_kpis": "Organic growth; volume; price/mix; DTC/retail mix; gross margin; CAC; repeat rates.",
+                "leading_indicators": "Retail sell-through; social/search trends; channel expansion; beauty category growth.",
+                "typical_moats": "Brand, formulation, community, shelf access, dermatologist/professional endorsement.",
+                "capital_cycle_supply_response": "Manufacturing easy; durable brand/community difficult.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF; cohort economics for DTC-heavy names.",
+                "accounting_data_traps": "Channel inventory, returns, marketing capitalization narratives, acquisition intangibles.",
+                "common_failure_modes": "Trend reversal, CAC inflation, retailer concentration, brand fad.",
+                "ideal_compounder_setup": "Niche brand with high repeat purchase, low CAC and large distribution white space.",
+                "ideal_inflection_setup": "Retail rollout + repeat rates hold; gross margin scales.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Brand/distribution compounder.",
+                "highest_evi_question": "How much growth comes from repeat customers versus paid acquisition?"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "35",
+      "name": "Health Care",
+      "industry_groups": [
+        {
+          "code": "3510",
+          "name": "Health Care Equipment & Services",
+          "industries": [
+            {
+              "code": "351010",
+              "name": "Health Care Equipment & Supplies",
+              "fields": {
+                "economic_engine": "Procedures/installed base × device/consumable content − manufacturing/R&D/sales; recurring consumables can dominate economics.",
+                "core_kpis": "Procedure volumes; installed base; placements; utilization; consumable pull-through; ASP; gross margin; R&D.",
+                "leading_indicators": "Procedure data; hospital capex; reimbursement; FDA approvals; competitor recalls.",
+                "typical_moats": "Clinical evidence, regulatory approval, surgeon workflow, installed base, patents, switching/retraining cost.",
+                "capital_cycle_supply_response": "Qualification/regulatory cycles slow entry; capacity often less constraining than adoption.",
+                "valuation_lenses": "P/E, EV/EBITDA, DCF; installed-base plus consumables model.",
+                "accounting_data_traps": "Capitalized R&D/acquired IPR&D, stock comp, contingent consideration, warranty.",
+                "common_failure_modes": "Clinical failure, reimbursement cut, recall, new technology, hospital budget pressure.",
+                "ideal_compounder_setup": "Razor/razorblade medtech with growing installed base and high-margin recurring consumables.",
+                "ideal_inflection_setup": "Procedure recovery; new indication; reimbursement win; installed-base utilization inflects.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Installed-base compounder.",
+                "highest_evi_question": "What recurring revenue is generated per installed system over its lifetime?"
+              }
+            },
+            {
+              "code": "351020",
+              "name": "Health Care Providers & Services",
+              "fields": {
+                "economic_engine": "Patient/member volume × reimbursement − labor/medical cost; payors depend on premiums minus claims.",
+                "core_kpis": "Admissions; procedures; occupancy; reimbursement; labor cost; MLR; membership; payer mix; same-store revenue.",
+                "leading_indicators": "Utilization; wage rates; CMS rates; enrollment; flu/seasonality; policy changes.",
+                "typical_moats": "Local scale, physician networks, payer contracts, provider density, data.",
+                "capital_cycle_supply_response": "Local capacity and regulation can constrain entry; labor remains variable bottleneck.",
+                "valuation_lenses": "EV/EBITDA, P/E, FCF; payors on P/E/tangible capital; facilities on leverage-adjusted FCF.",
+                "accounting_data_traps": "Risk adjustment, medical reserves, provider receivables, leases, supplemental payments.",
+                "common_failure_modes": "Reimbursement cuts, utilization spikes, labor inflation, regulatory change, leverage.",
+                "ideal_compounder_setup": "Specialized provider with local density, repeat referrals, low capex and favorable reimbursement.",
+                "ideal_inflection_setup": "Labor normalizes; reimbursement catches cost inflation; utilization mix improves.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Reimbursement / utilization inflection.",
+                "highest_evi_question": "Who bears medical-cost inflation and how quickly can reimbursement reset?"
+              }
+            },
+            {
+              "code": "351030",
+              "name": "Health Care Technology",
+              "fields": {
+                "economic_engine": "Subscription/transaction revenue from provider/payor workflows − R&D/sales; value tied to embedded workflows and data.",
+                "core_kpis": "ARR; retention; bookings; implementation backlog; gross margin; sales efficiency; client count.",
+                "leading_indicators": "Hospital IT budgets; regulatory mandates; contract wins; provider consolidation.",
+                "typical_moats": "Workflow integration, proprietary data, switching costs, regulatory complexity.",
+                "capital_cycle_supply_response": "Software supply easy, but replacing clinical/admin workflows is slow and risky.",
+                "valuation_lenses": "EV/ARR, EV/FCF, P/E for mature; Rule-of-40 style unit economics with caution.",
+                "accounting_data_traps": "Capitalized implementation/software, stock comp, contract assets, acquisition intangibles.",
+                "common_failure_modes": "Long implementations, customer concentration, interoperability disruption, AI commoditization.",
+                "ideal_compounder_setup": "Vertical workflow platform with high GRR and expansion into adjacent modules.",
+                "ideal_inflection_setup": "Bookings acceleration; implementation bottleneck clears; margin expands.",
+                "research_priority": "5/5.",
+                "cadence": "Quarterly.",
+                "preferred_archetype": "Vertical software compounder.",
+                "highest_evi_question": "What is gross retention after excluding acquisitions and cross-sell?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "3520",
+          "name": "Pharmaceuticals, Biotechnology & Life Sciences",
+          "industries": [
+            {
+              "code": "352010",
+              "name": "Biotechnology",
+              "fields": {
+                "economic_engine": "Probability-adjusted future drug cash flows; value changes discontinuously with clinical/regulatory evidence.",
+                "core_kpis": "Trial endpoints; enrollment; safety; cash runway; burn; probability of success; addressable patients; pricing.",
+                "leading_indicators": "Clinical readouts; FDA/EMA meetings; competitor data; enrollment updates; financing.",
+                "typical_moats": "Patents, biological insight, clinical differentiation, manufacturing know-how.",
+                "capital_cycle_supply_response": "Entry can be fast scientifically but development takes years; capital markets matter.",
+                "valuation_lenses": "rNPV, probability-adjusted DCF, EV/cash for preclinical context—not conventional P/E.",
+                "accounting_data_traps": "R&D capitalization narratives, milestone accounting, stock-based comp, warrant dilution.",
+                "common_failure_modes": "Trial failure, safety, financing dilution, competitor superiority, patent weakness.",
+                "ideal_compounder_setup": "Platform with repeated validated biology and self-funded pipeline is rare but valuable.",
+                "ideal_inflection_setup": "Binary/milestone catalyst where market misestimates probability or commercial magnitude.",
+                "research_priority": "4/5.",
+                "cadence": "Event-driven.",
+                "preferred_archetype": "Clinical probability inflection.",
+                "highest_evi_question": "What exact evidence changes probability of technical and regulatory success?"
+              }
+            },
+            {
+              "code": "352020",
+              "name": "Pharmaceuticals",
+              "fields": {
+                "economic_engine": "Drug volume × net price over patent life − COGS/R&D/SG&A; portfolio must replace patent expirations.",
+                "core_kpis": "Prescription volume; new-to-brand; net price; gross-to-net; patent dates; pipeline NPV; R&D productivity.",
+                "leading_indicators": "Prescription data; formulary coverage; trial readouts; FDA decisions; generic/biosimilar entries.",
+                "typical_moats": "Patents, clinical differentiation, physician trust, manufacturing, commercial scale.",
+                "capital_cycle_supply_response": "Patents create temporary monopolies; competitive response accelerates after success.",
+                "valuation_lenses": "P/E, EV/EBITDA, DCF by product, SOTP/rNPV.",
+                "accounting_data_traps": "Gross-to-net accruals, acquired IPR&D, milestone payments, restructuring.",
+                "common_failure_modes": "Patent cliffs, safety, pricing regulation, pipeline failure.",
+                "ideal_compounder_setup": "Specialty pharma with durable orphan/niche franchises and disciplined pipeline acquisition.",
+                "ideal_inflection_setup": "Launch inflection, label expansion, competitor setback, patent litigation resolution.",
+                "research_priority": "4/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Product-cycle / patent inflection.",
+                "highest_evi_question": "What proportion of enterprise value depends on assets within five years of loss of exclusivity?"
+              }
+            },
+            {
+              "code": "352030",
+              "name": "Life Sciences Tools & Services",
+              "fields": {
+                "economic_engine": "Instrument placements + consumables/services tied to research/bioprocess activity; installed-base model can be excellent.",
+                "core_kpis": "Instrument orders; consumables pull-through; bioprocess demand; book-to-bill; China exposure; R&D funding.",
+                "leading_indicators": "Biotech funding; NIH budgets; bioprocess utilization; pharma R&D; China stimulus/regulation.",
+                "typical_moats": "Installed base, proprietary consumables, workflow validation, regulatory quality systems.",
+                "capital_cycle_supply_response": "Instrument competitors can emerge, but consumable workflows and validation create switching costs.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, installed-base DCF.",
+                "accounting_data_traps": "Channel inventory, COVID normalization, acquired intangibles, restructuring.",
+                "common_failure_modes": "Biotech funding downturn, destocking, China weakness, technology obsolescence.",
+                "ideal_compounder_setup": "Instrument/consumable platform with high recurring pull-through and expanding applications.",
+                "ideal_inflection_setup": "Destocking ends; bioprocess utilization rebounds; new instrument cycle.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Installed-base / destocking.",
+                "highest_evi_question": "What consumables revenue is generated per installed instrument and how stable is it through funding cycles?"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "40",
+      "name": "Financials",
+      "industry_groups": [
+        {
+          "code": "4010",
+          "name": "Banks",
+          "industries": [
+            {
+              "code": "401010",
+              "name": "Banks",
+              "fields": {
+                "economic_engine": "Earning assets × NIM + fees − credit losses − opex; deposit franchise and underwriting determine long-run ROE.",
+                "core_kpis": "Deposit growth/mix/cost; NIM; loan growth; NCOs; criticized assets; CET1; tangible book; efficiency ratio.",
+                "leading_indicators": "Yield curve; deposit betas; delinquencies; CRE values; loan officer surveys; funding competition.",
+                "typical_moats": "Low-cost core deposits, local relationships, underwriting culture, scale in niche verticals.",
+                "capital_cycle_supply_response": "Balance-sheet growth constrained by capital/liquidity; credit cycles can take years to surface.",
+                "valuation_lenses": "P/TBV, P/E, ROTCE, dividend discount.",
+                "accounting_data_traps": "CECL reserves, AOCI, held-to-maturity marks, nonaccruals, deposit classification.",
+                "common_failure_modes": "Credit losses, deposit flight, duration mismatch, CRE concentration, weak capital.",
+                "ideal_compounder_setup": "Niche bank with durable low-cost deposits, conservative underwriting and fee income.",
+                "ideal_inflection_setup": "Deposit costs peak + asset yields reprice; credit fears prove overdone.",
+                "research_priority": "5/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "NIM / credit inflection.",
+                "highest_evi_question": "What losses are embedded in tangible book after marking securities and loans economically?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "4020",
+          "name": "Financial Services",
+          "industries": [
+            {
+              "code": "402010",
+              "name": "Financial Services",
+              "fields": {
+                "economic_engine": "Varies: diversified finance, payments, specialty lending, holding companies; core is spread/fees × volume minus losses/capital.",
+                "core_kpis": "Transaction volume; take rate; funding cost; credit losses; assets under management where relevant; capital returns.",
+                "leading_indicators": "Consumer spend; rates; funding markets; merchant volumes; regulatory changes.",
+                "typical_moats": "Networks, licenses, data, low-cost funding, distribution, scale.",
+                "capital_cycle_supply_response": "Network businesses compound slowly; lenders' capacity follows funding and credit cycles.",
+                "valuation_lenses": "P/E, P/TBV, EV/EBITDA for fee businesses, DCF/SOTP.",
+                "accounting_data_traps": "Securitization, gain-on-sale, fair value, CECL, regulatory capital.",
+                "common_failure_modes": "Funding shock, regulation, credit loss, take-rate compression.",
+                "ideal_compounder_setup": "Payment/network or specialty finance niche with data advantage and low losses.",
+                "ideal_inflection_setup": "Funding costs fall; transaction mix improves; credit cycle stabilizes.",
+                "research_priority": "5/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Network / spread inflection.",
+                "highest_evi_question": "Is growth consuming capital or generating self-funded network economics?"
+              }
+            },
+            {
+              "code": "402020",
+              "name": "Consumer Finance",
+              "fields": {
+                "economic_engine": "Receivables × net interest spread − credit losses − servicing/marketing; underwriting and funding are everything.",
+                "core_kpis": "Loan/receivable growth; yield; funding cost; delinquencies; charge-offs; reserves; CAC; payment rate.",
+                "leading_indicators": "Consumer delinquencies; unemployment; card spend; securitization spreads; used-car/home values.",
+                "typical_moats": "Proprietary underwriting data, low-cost deposits/funding, distribution partnerships.",
+                "capital_cycle_supply_response": "Credit capacity expands in booms and contracts after losses; competition is cyclical.",
+                "valuation_lenses": "P/E, P/TBV, ROE, excess capital DCF.",
+                "accounting_data_traps": "CECL, gain-on-sale, securitization residuals, deferred acquisition costs.",
+                "common_failure_modes": "Under-reserving, funding freeze, adverse selection, regulation.",
+                "ideal_compounder_setup": "Niche lender with superior underwriting and low-cost captive distribution.",
+                "ideal_inflection_setup": "Losses peak below expectations; funding spreads compress; reserve releases.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Credit-cycle inflection.",
+                "highest_evi_question": "How would losses behave under vintage-level stress, not just portfolio averages?"
+              }
+            },
+            {
+              "code": "402030",
+              "name": "Capital Markets",
+              "fields": {
+                "economic_engine": "AUM/trading/issuance/data volume × fee rates − compensation; exchanges/data can be recurring, brokers more cyclical.",
+                "core_kpis": "AUM; net flows; fee rate; trading volume; underwriting pipeline; client assets; comp ratio; data subscriptions.",
+                "leading_indicators": "Markets; volatility; IPO/M&A calendar; fund flows; futures/open interest.",
+                "typical_moats": "Brand, distribution, exchange liquidity/network effects, proprietary indices/data, switching costs.",
+                "capital_cycle_supply_response": "People-based capacity can scale quickly; exchange/data moats compound over decades.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF; exchanges on recurring data/volume mix; asset managers on AUM/fees.",
+                "accounting_data_traps": "Performance fees, seed investments, compensation accruals, fair-value marks.",
+                "common_failure_modes": "Fee compression, poor performance, market drawdown, regulatory shifts.",
+                "ideal_compounder_setup": "Exchange/data platform or specialist asset manager with durable flows and high incremental margins.",
+                "ideal_inflection_setup": "Capital-markets cycle reopens; volatility/trading spikes; net flows turn.",
+                "research_priority": "5/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Network compounder / activity inflection.",
+                "highest_evi_question": "What revenue persists if asset prices and transaction activity are flat for three years?"
+              }
+            },
+            {
+              "code": "402040",
+              "name": "Mortgage REITs",
+              "fields": {
+                "economic_engine": "Levered mortgage assets × spread − hedging/funding losses; book value and funding determine survival.",
+                "core_kpis": "Book value; leverage; asset yield; repo cost; duration gap; CPR; hedges; dividend coverage.",
+                "leading_indicators": "Yield curve; mortgage spreads; volatility; repo conditions; prepayments.",
+                "typical_moats": "Scale/funding relationships; generally limited moat.",
+                "capital_cycle_supply_response": "Capital availability drives asset growth; leverage makes cycles violent.",
+                "valuation_lenses": "P/B, dividend yield, ROE on book.",
+                "accounting_data_traps": "Fair-value marks, hedge accounting, non-GAAP distributable earnings.",
+                "common_failure_modes": "Margin calls, spread widening, prepayment shocks, dilution.",
+                "ideal_compounder_setup": "Rare; disciplined manager buying assets below replacement/book during dislocation.",
+                "ideal_inflection_setup": "Mortgage spreads tighten from panic; funding stabilizes.",
+                "research_priority": "1/5.",
+                "cadence": "Weekly.",
+                "preferred_archetype": "Spread dislocation.",
+                "highest_evi_question": "What happens to book value under parallel and curve-shape shocks?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "4030",
+          "name": "Insurance",
+          "industries": [
+            {
+              "code": "403010",
+              "name": "Insurance",
+              "fields": {
+                "economic_engine": "Premium − claims − expenses + investment income; value compounds through underwriting profit and float.",
+                "core_kpis": "Combined ratio; loss ratio; expense ratio; rate change; retention; reserve development; book value/share; ROE.",
+                "leading_indicators": "Commercial pricing surveys; catastrophe losses; repair/medical inflation; bond yields; reinsurance renewals.",
+                "typical_moats": "Distribution, underwriting data, specialty expertise, customer relationships, scale, regulatory licenses.",
+                "capital_cycle_supply_response": "Capital enters after hard markets; specialty expertise/distribution can keep returns durable.",
+                "valuation_lenses": "P/B, P/E, ROE, tangible book growth; sum underwriting + investment income.",
+                "accounting_data_traps": "Reserve releases, catastrophe normalization, unrealized investment marks, reinsurance recoverables.",
+                "common_failure_modes": "Under-reserving, social inflation, catastrophe aggregation, pricing softness, investment losses.",
+                "ideal_compounder_setup": "Specialty insurer/broker with disciplined underwriting, recurring distribution and high book-value compounding.",
+                "ideal_inflection_setup": "Rate > loss-cost inflation; reserve fears peak; investment yield reprices upward.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Underwriting-cycle compounder.",
+                "highest_evi_question": "Are favorable reserve developments genuine conservatism or masking current-year weakness?"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "45",
+      "name": "Information Technology",
+      "industry_groups": [
+        {
+          "code": "4510",
+          "name": "Software & Services",
+          "industries": [
+            {
+              "code": "451020",
+              "name": "IT Services",
+              "fields": {
+                "economic_engine": "Billable labor/managed services/cloud infrastructure × rate − personnel/infrastructure; recurring managed services can improve quality.",
+                "core_kpis": "Bookings; backlog; utilization; bill rates; attrition; recurring mix; cloud workload; FCF.",
+                "leading_indicators": "Enterprise IT budgets; cloud migrations; outsourcing deals; wage trends.",
+                "typical_moats": "Customer integration, certifications, scale, vertical expertise, proprietary platforms.",
+                "capital_cycle_supply_response": "Labor scales quickly; deeply embedded managed services are sticky.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF; organic growth and margin quality.",
+                "accounting_data_traps": "Capitalized software, restructuring, stock comp, pass-through cloud revenue.",
+                "common_failure_modes": "AI automation, pricing pressure, client budget cuts, wage inflation.",
+                "ideal_compounder_setup": "Vertical managed-services platform with high retention and automation-driven margin upside.",
+                "ideal_inflection_setup": "Utilization recovers; large deal ramps; AI lowers delivery cost faster than price.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Utilization / automation inflection.",
+                "highest_evi_question": "Will AI commoditize billable hours or expand margins through automation?"
+              }
+            },
+            {
+              "code": "451030",
+              "name": "Software",
+              "fields": {
+                "economic_engine": "ARR/subscription × retention/expansion − R&D/S&M; high gross margins make CAC and durability decisive.",
+                "core_kpis": "ARR; GRR/NRR; bookings; RPO; CAC payback; gross margin; FCF margin; SBC/dilution.",
+                "leading_indicators": "CIO budgets; seat growth; usage; renewal cohorts; channel checks; cloud consumption.",
+                "typical_moats": "Workflow lock-in, data network effects, ecosystem, developer adoption, brand, switching cost.",
+                "capital_cycle_supply_response": "Software supply easy; distribution, data and embedded workflows take years; AI may reset barriers.",
+                "valuation_lenses": "EV/ARR, EV/FCF, P/E for mature, DCF; growth + FCF quality.",
+                "accounting_data_traps": "SBC, capitalized commissions/R&D, billings vs revenue, acquisition adjustments.",
+                "common_failure_modes": "AI disruption, seat contraction, poor retention, CAC inflation, dilution.",
+                "ideal_compounder_setup": "Vertical mission-critical software with high GRR, expansion, low CAC and long runway.",
+                "ideal_inflection_setup": "Bookings/RPO trough; sales productivity turns; AI feature monetization; margin inflects.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Vertical software compounder.",
+                "highest_evi_question": "What is retention by cohort and how much growth depends on seat inflation versus true value expansion?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "4520",
+          "name": "Technology Hardware & Equipment",
+          "industries": [
+            {
+              "code": "452010",
+              "name": "Communications Equipment",
+              "fields": {
+                "economic_engine": "Networking units/ports × ASP + software/service − silicon/components/manufacturing; product cycles and customer capex dominate.",
+                "core_kpis": "Orders; backlog; revenue by speed/gen; deferred revenue; gross margin; service mix; customer concentration.",
+                "leading_indicators": "Cloud/telco capex; bandwidth growth; optical/network standards; lead times.",
+                "typical_moats": "Protocol/IP, installed base, interoperability, switching costs, channel ecosystem.",
+                "capital_cycle_supply_response": "Hardware supply can ramp in 1–2 years; qualification and standards slow switching.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, SOTP recurring software/service.",
+                "accounting_data_traps": "Deferred revenue, channel inventory, component purchase commitments, acquisitions.",
+                "common_failure_modes": "Standards transition, hyperscaler insourcing, component glut, customer concentration.",
+                "ideal_compounder_setup": "Installed-base vendor with recurring software/service and increasing content per network.",
+                "ideal_inflection_setup": "New bandwidth generation ramps (800G/1.6T), qualification wins, component shortage eases.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Bandwidth/product-cycle inflection.",
+                "highest_evi_question": "Does higher bandwidth create more supplier gross profit per rack, or just lower $/bit?"
+              }
+            },
+            {
+              "code": "452020",
+              "name": "Technology Hardware, Storage & Peripherals",
+              "fields": {
+                "economic_engine": "Device/storage units × ASP − components/manufacturing; ecosystem services can alter quality.",
+                "core_kpis": "Units; ASP; channel inventory; installed base; attach/service revenue; component cost; gross margin.",
+                "leading_indicators": "PC/server/storage shipments; DRAM/NAND prices; channel inventory; refresh cycles.",
+                "typical_moats": "Brand/ecosystem, OS integration, enterprise qualification, scale procurement.",
+                "capital_cycle_supply_response": "Capacity often flexible via ODMs; ecosystem/installed base more durable.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF; SOTP services.",
+                "accounting_data_traps": "Channel inventory, warranty, supplier commitments, capitalized software.",
+                "common_failure_modes": "Commoditization, component inflation, refresh-cycle stall, cloud substitution.",
+                "ideal_compounder_setup": "Hardware ecosystem with high-margin services/consumables and loyal installed base.",
+                "ideal_inflection_setup": "Refresh cycle + inventory normalization; component costs fall before ASP.",
+                "research_priority": "3/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Refresh / component-cycle.",
+                "highest_evi_question": "How much margin is structural ecosystem value versus temporary component pricing?"
+              }
+            },
+            {
+              "code": "452030",
+              "name": "Electronic Equipment, Instruments & Components",
+              "fields": {
+                "economic_engine": "Units/content × ASP − components/manufacturing; includes instrumentation, components, EMS and distributors.",
+                "core_kpis": "Orders; book-to-bill; backlog; design wins; content/unit; utilization; inventory; gross margin.",
+                "leading_indicators": "PMI; semiconductor/electronics inventories; design wins; customer capex.",
+                "typical_moats": "Qualification, precision know-how, design-in, test data, switching cost; EMS/distribution moats differ.",
+                "capital_cycle_supply_response": "Component capacity can be cyclical; high-spec instrumentation qualification slow.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF; design-win pipeline and normalized margins.",
+                "accounting_data_traps": "Distributor gross vs net, inventory reserves, customer-owned tooling, acquisition intangibles.",
+                "common_failure_modes": "Design loss, inventory correction, customer insourcing, component commoditization.",
+                "ideal_compounder_setup": "Precision sensor/instrument/component with long design cycles, high content growth and aftermarket.",
+                "ideal_inflection_setup": "Inventory correction ends; design wins enter production; utilization lifts margins.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Design-win / inventory inflection.",
+                "highest_evi_question": "How long from design win to revenue, and how sticky is the socket across product generations?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "4530",
+          "name": "Semiconductors & Semiconductor Equipment",
+          "industries": [
+            {
+              "code": "453010",
+              "name": "Semiconductors & Semiconductor Equipment",
+              "fields": {
+                "economic_engine": "Wafer/device units × ASP + equipment intensity − fab/equipment cost; utilization and technology transitions create nonlinear cycles.",
+                "core_kpis": "Wafer starts; utilization; bit growth; ASP; inventories; capex; bookings; WFE; advanced packaging/HBM content.",
+                "leading_indicators": "Memory spot/contract prices; foundry utilization; hyperscaler capex; equipment lead times; node transitions.",
+                "typical_moats": "Process IP, scale, ecosystem, qualification, installed base/service, manufacturing learning curves.",
+                "capital_cycle_supply_response": "Fabs/equipment capacity takes years and billions; shortages/gluts can persist then reverse violently.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, replacement cost; normalized mid-cycle plus secular content model.",
+                "accounting_data_traps": "Inventory, capital intensity, depreciation, stock comp, customer prepayments, export controls.",
+                "common_failure_modes": "Overcapacity, node execution, customer concentration, export restrictions, rapid substitution.",
+                "ideal_compounder_setup": "Fabless/IP/equipment/inspection platform with rising content per compute and durable installed base.",
+                "ideal_inflection_setup": "Inventory/utilization bottom → pricing/orders turn → massive earnings elasticity; new node/HBM packaging bottleneck.",
+                "research_priority": "5/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Cycle + secular content inflection.",
+                "highest_evi_question": "Which bottleneck is next, and what supply response date ends the scarcity rent?"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "50",
+      "name": "Communication Services",
+      "industry_groups": [
+        {
+          "code": "5010",
+          "name": "Telecommunication Services",
+          "industries": [
+            {
+              "code": "501010",
+              "name": "Diversified Telecommunication Services",
+              "fields": {
+                "economic_engine": "Subscribers/lines × ARPU − network opex/capex; fixed broadband economics improve with density.",
+                "core_kpis": "Net adds; churn; ARPU; broadband penetration; capex; FCF; fiber passings; leverage.",
+                "leading_indicators": "Subscriber trends; fiber builds; pricing/promotions; spectrum/regulation.",
+                "typical_moats": "Local network, spectrum, rights-of-way, bundled services; high fixed costs.",
+                "capital_cycle_supply_response": "Networks take years and huge capital; overbuild can permanently impair returns.",
+                "valuation_lenses": "EV/EBITDA, FCF yield, sum-of-parts, subscriber/household metrics.",
+                "accounting_data_traps": "Leases, spectrum capitalization, pension, restructuring, handset financing.",
+                "common_failure_modes": "Price wars, overbuild, capex creep, leverage, regulation.",
+                "ideal_compounder_setup": "Local broadband/fiber network with high penetration, low churn and declining capex intensity.",
+                "ideal_inflection_setup": "Capex peaks; fiber penetration ramps; pricing stabilizes; FCF inflects.",
+                "research_priority": "3/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Capex-to-FCF inflection.",
+                "highest_evi_question": "What is mature maintenance capex after the current build cycle ends?"
+              }
+            },
+            {
+              "code": "501020",
+              "name": "Wireless Telecommunication Services",
+              "fields": {
+                "economic_engine": "Subscribers × ARPU − network/spectrum/device subsidies; scale and spectrum portfolio matter.",
+                "core_kpis": "Net adds; churn; ARPU; service revenue; spectrum; capex; FCF; device promotions.",
+                "leading_indicators": "Porting data; promotions; spectrum auctions; network quality; subscriber growth.",
+                "typical_moats": "Spectrum licenses, network density, scale, distribution.",
+                "capital_cycle_supply_response": "Network/spectrum capacity costly and slow; pricing can still be competitive.",
+                "valuation_lenses": "EV/EBITDA, FCF yield, subscriber value.",
+                "accounting_data_traps": "Spectrum amortization, leases, handset receivables, tower contracts.",
+                "common_failure_modes": "Promotional wars, spectrum costs, capex, saturation.",
+                "ideal_compounder_setup": "Low-churn operator with network quality and structurally lower capex.",
+                "ideal_inflection_setup": "Promotions ease; capex falls; ARPU rises.",
+                "research_priority": "2/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Pricing / capex inflection.",
+                "highest_evi_question": "Is ARPU growth from real pricing or device/accounting mix?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "5020",
+          "name": "Media & Entertainment",
+          "industries": [
+            {
+              "code": "502010",
+              "name": "Media",
+              "fields": {
+                "economic_engine": "Audience/reach × ad/subscription monetization − content/distribution; legacy broadcast/cable differs from digital advertising.",
+                "core_kpis": "Ad revenue; impressions; CPM; subscribers; churn; affiliate fees; content cost.",
+                "leading_indicators": "Ad spend; ratings; upfronts; cord-cutting; political ad cycles.",
+                "typical_moats": "Owned audience, local licenses, brand/content rights; legacy distribution eroding.",
+                "capital_cycle_supply_response": "Digital ad inventory abundant; scarce premium audiences/content remain valuable.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, SOTP; subscriber LTV where relevant.",
+                "accounting_data_traps": "Content amortization, retransmission, political ad normalization, goodwill.",
+                "common_failure_modes": "Audience fragmentation, cord cutting, ad recession, platform dependence.",
+                "ideal_compounder_setup": "Niche information/media asset with loyal paid audience and proprietary content/data.",
+                "ideal_inflection_setup": "Ad cycle turns; rights renewal; cost reset; streaming breakeven.",
+                "research_priority": "3/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Audience monetization inflection.",
+                "highest_evi_question": "Does the company own the customer relationship or rent distribution from a platform?"
+              }
+            },
+            {
+              "code": "502020",
+              "name": "Entertainment",
+              "fields": {
+                "economic_engine": "Content/IP engagement × monetization across box office, subscriptions, licensing, games/merchandise − content cost.",
+                "core_kpis": "Bookings; subscribers; engagement; slate; franchise revenue; content spend; margins.",
+                "leading_indicators": "Release calendars; engagement rankings; box office; game preorders; subscriber trends.",
+                "typical_moats": "Franchise IP, creative talent, communities, distribution, network effects in games.",
+                "capital_cycle_supply_response": "Hit-driven supply unpredictable; durable franchises can compound for decades.",
+                "valuation_lenses": "P/E, EV/EBITDA, FCF, franchise SOTP; game bookings-based models.",
+                "accounting_data_traps": "Content capitalization/amortization, deferred revenue, participations, impairment.",
+                "common_failure_modes": "Flops, franchise fatigue, cost inflation, platform dependence.",
+                "ideal_compounder_setup": "Durable IP with recurring game/service monetization and multiple distribution channels.",
+                "ideal_inflection_setup": "Major release exceeds expectations; live-service bookings inflect; cost rationalization.",
+                "research_priority": "4/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "IP / product-cycle.",
+                "highest_evi_question": "What percentage of value comes from repeatable franchises versus unrepeatable hits?"
+              }
+            },
+            {
+              "code": "502030",
+              "name": "Interactive Media & Services",
+              "fields": {
+                "economic_engine": "Users × engagement × monetization (ads/subscriptions/commerce) − infrastructure/R&D; network effects can be enormous.",
+                "core_kpis": "DAU/MAU; time spent; ad impressions; CPM; conversion; take rate; CAC; capex; FCF.",
+                "leading_indicators": "Ad budgets; app usage; creator activity; privacy/regulation; product launches.",
+                "typical_moats": "Social/network effects, data, identity, creator ecosystems, distribution.",
+                "capital_cycle_supply_response": "Digital supply scales instantly, but networks can tip toward winners.",
+                "valuation_lenses": "P/E, EV/FCF, DCF; user economics and ad load.",
+                "accounting_data_traps": "SBC, traffic acquisition costs, capex, gross vs net ad/commerce revenue.",
+                "common_failure_modes": "Platform shift, regulation, privacy, AI disruption, user migration.",
+                "ideal_compounder_setup": "Network with rising monetization per user and low incremental capital.",
+                "ideal_inflection_setup": "Ad pricing/engagement turns; new product monetizes; cost discipline.",
+                "research_priority": "5/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Network-effect compounder.",
+                "highest_evi_question": "Are engagement gains durable among younger cohorts and creators?"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "55",
+      "name": "Utilities",
+      "industry_groups": [
+        {
+          "code": "5510",
+          "name": "Utilities",
+          "industries": [
+            {
+              "code": "551010",
+              "name": "Electric Utilities",
+              "fields": {
+                "economic_engine": "Rate base × allowed ROE + unregulated generation − financing/opex; load growth can accelerate capital deployment.",
+                "core_kpis": "Rate-base growth; allowed ROE; load growth; capex; regulatory lag; FFO/debt; customer mix.",
+                "leading_indicators": "Rate cases; data-center load requests; interconnection; generation retirements; bond yields.",
+                "typical_moats": "Exclusive service territory, regulated asset base, transmission rights.",
+                "capital_cycle_supply_response": "Generation/transmission takes years; regulatory approval and financing constrain supply.",
+                "valuation_lenses": "P/E, P/B, dividend yield, DCF on rate base.",
+                "accounting_data_traps": "Regulatory assets/liabilities, storm costs, pension, nuclear decommissioning.",
+                "common_failure_modes": "Regulatory disallowance, wildfire/storm liability, financing dilution, project overruns.",
+                "ideal_compounder_setup": "Utility with above-average load/rate-base growth, constructive regulator and self-funded capex.",
+                "ideal_inflection_setup": "Large load contracts become funded; rate case improves ROE; financing costs fall.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Rate-base / load inflection.",
+                "highest_evi_question": "How much announced load is contracted and creditworthy versus speculative queue demand?"
+              }
+            },
+            {
+              "code": "551020",
+              "name": "Gas Utilities",
+              "fields": {
+                "economic_engine": "Regulated rate base × allowed return; throughput/weather affects near-term volumes.",
+                "core_kpis": "Rate base; customer growth; capex; allowed ROE; weather-normalized volumes; FFO/debt.",
+                "leading_indicators": "Rate cases; housing starts; pipeline safety mandates; gas policy.",
+                "typical_moats": "Exclusive territory, network infrastructure.",
+                "capital_cycle_supply_response": "Slow, regulated capital additions.",
+                "valuation_lenses": "P/E, P/B, dividend yield.",
+                "accounting_data_traps": "Regulatory assets, pension, environmental obligations.",
+                "common_failure_modes": "Decarbonization policy, regulatory lag, safety incidents.",
+                "ideal_compounder_setup": "Constructive-regulation utility with steady customer/rate-base growth.",
+                "ideal_inflection_setup": "Rate case reset; safety replacement program accelerates allowed investment.",
+                "research_priority": "2/5.",
+                "cadence": "Quarterly.",
+                "preferred_archetype": "Rate-case inflection.",
+                "highest_evi_question": "Will new capex earn full allowed return or face stranded-asset risk?"
+              }
+            },
+            {
+              "code": "551030",
+              "name": "Multi-Utilities",
+              "fields": {
+                "economic_engine": "Portfolio of regulated electric/gas/water rate bases; capital allocation and jurisdiction mix matter.",
+                "core_kpis": "Rate-base growth by jurisdiction; ROE; capex; FFO/debt; dividend.",
+                "leading_indicators": "Rate cases; load growth; bond yields; jurisdiction policy.",
+                "typical_moats": "Diversified regulated franchises, scale.",
+                "capital_cycle_supply_response": "Slow capacity; portfolio complexity can hide quality differences.",
+                "valuation_lenses": "P/E, P/B, DCF/SOTP.",
+                "accounting_data_traps": "Regulatory assets, pension, segment allocations.",
+                "common_failure_modes": "Bad jurisdiction, financing, project overruns.",
+                "ideal_compounder_setup": "Portfolio tilted to constructive jurisdictions with above-average rate-base growth.",
+                "ideal_inflection_setup": "Asset sale/restructuring improves mix; load growth surprises.",
+                "research_priority": "3/5.",
+                "cadence": "Quarterly.",
+                "preferred_archetype": "SOTP / regulatory mix.",
+                "highest_evi_question": "Which jurisdiction drives marginal capital and what is earned ROE versus allowed ROE?"
+              }
+            },
+            {
+              "code": "551040",
+              "name": "Water Utilities",
+              "fields": {
+                "economic_engine": "Customers/usage × regulated tariffs − treatment/distribution cost; acquisitions expand rate base.",
+                "core_kpis": "Customer growth; rate-base growth; allowed ROE; capex; leakage; acquisition pipeline.",
+                "leading_indicators": "Rate cases; drought; municipal privatization; infrastructure funding.",
+                "typical_moats": "Scarce local network, water rights, regulation, acquisition expertise.",
+                "capital_cycle_supply_response": "Extremely slow to replicate; replacement needs are multi-decade.",
+                "valuation_lenses": "P/E, EV/EBITDA, dividend yield, rate-base DCF.",
+                "accounting_data_traps": "Regulatory assets, acquisition premiums, infrastructure surcharge accounting.",
+                "common_failure_modes": "Political rate pressure, drought, contamination liability, rich valuation.",
+                "ideal_compounder_setup": "Fragmented local systems consolidated by disciplined operator with constructive regulators.",
+                "ideal_inflection_setup": "Acquisition approval, rate case, infrastructure surcharge.",
+                "research_priority": "4/5.",
+                "cadence": "Quarterly.",
+                "preferred_archetype": "Regulated compounder.",
+                "highest_evi_question": "Can acquisition premiums be recovered in rates without diluting returns?"
+              }
+            },
+            {
+              "code": "551050",
+              "name": "Independent Power and Renewable Electricity Producers",
+              "fields": {
+                "economic_engine": "Generation MWh × power price/PPA − fuel/opex/capex; asset mix and contract duration define volatility.",
+                "core_kpis": "MW; capacity factor; realized power price; PPA tenor; merchant exposure; pipeline; capex; leverage.",
+                "leading_indicators": "Power forwards; capacity auctions; data-center PPAs; tax credits; interconnection queues.",
+                "typical_moats": "Scarce interconnects, low-cost generation, permits, long PPAs.",
+                "capital_cycle_supply_response": "Projects take years; interconnection is often bottleneck; capital can flood attractive subsidies.",
+                "valuation_lenses": "DCF by asset/PPA, EV/MW, EV/EBITDA, CAFD yield.",
+                "accounting_data_traps": "Tax equity, project finance, derivative marks, development pipeline probabilities.",
+                "common_failure_modes": "Merchant price collapse, curtailment, financing, policy change, construction overruns.",
+                "ideal_compounder_setup": "Contracted low-cost fleet with valuable interconnects and disciplined development.",
+                "ideal_inflection_setup": "Power scarcity/PPAs reprice; project reaches NTP; financing cost falls.",
+                "research_priority": "4/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "Power-price / interconnect scarcity.",
+                "highest_evi_question": "What portion of pipeline has interconnection, offtake and financing—not just site control?"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "60",
+      "name": "Real Estate",
+      "industry_groups": [
+        {
+          "code": "6010",
+          "name": "Equity REITs",
+          "industries": [
+            {
+              "code": "601010",
+              "name": "Diversified REITs",
+              "fields": {
+                "economic_engine": "Property NOI across multiple types − interest/corporate costs; capital allocation and portfolio mix dominate.",
+                "core_kpis": "Same-store NOI; occupancy; leasing spreads; AFFO; leverage; NAV discount; development yields.",
+                "leading_indicators": "Cap rates; credit spreads; leasing data; property transactions.",
+                "typical_moats": "Scale, access to capital, local operating expertise; diversification can dilute edge.",
+                "capital_cycle_supply_response": "Property supply slow but varies by segment.",
+                "valuation_lenses": "P/NAV, P/AFFO, implied cap rate, DCF.",
+                "accounting_data_traps": "AFFO adjustments, straight-line rent, recurring capex, JV accounting.",
+                "common_failure_modes": "Bad mix, leverage, value-destructive acquisitions.",
+                "ideal_compounder_setup": "Exceptional allocator buying/selling assets through cycles at NAV-accretive spreads.",
+                "ideal_inflection_setup": "NAV discount closes after asset sales/deleveraging.",
+                "research_priority": "3/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "NAV / capital allocation.",
+                "highest_evi_question": "Does diversification lower risk or hide inferior assets?"
+              }
+            },
+            {
+              "code": "601025",
+              "name": "Industrial REITs",
+              "fields": {
+                "economic_engine": "Warehouse rent × occupancy − property costs; development spread and rent mark-to-market drive value.",
+                "core_kpis": "Occupancy; cash leasing spreads; same-store NOI; development pipeline; yield on cost; rent mark-to-market.",
+                "leading_indicators": "Warehouse supply; absorption; e-commerce; vacancy; construction starts.",
+                "typical_moats": "Location, land bank, development platform, tenant network.",
+                "capital_cycle_supply_response": "Supply takes 1–3 years; land/entitlements constrain prime markets.",
+                "valuation_lenses": "P/NAV, P/AFFO, implied cap rate, development NAV.",
+                "accounting_data_traps": "Straight-line rent, tenant improvements, recurring capex, JV development.",
+                "common_failure_modes": "Overbuilding, tenant concentration, cap-rate expansion.",
+                "ideal_compounder_setup": "Infill portfolio with embedded below-market rents and accretive development runway.",
+                "ideal_inflection_setup": "Supply starts collapse while demand holds; leases reset materially higher.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Rent mark-to-market compounder.",
+                "highest_evi_question": "What percentage of rents reset in the next 3 years and at what mark-to-market?"
+              }
+            },
+            {
+              "code": "601030",
+              "name": "Hotel & Resort REITs",
+              "fields": {
+                "economic_engine": "Rooms × occupancy × ADR − hotel operating costs − fixed charges; very high operating leverage.",
+                "core_kpis": "RevPAR; occupancy; ADR; group bookings; EBITDA margin; renovation capex; leverage.",
+                "leading_indicators": "Travel bookings; convention calendars; airline capacity; corporate travel.",
+                "typical_moats": "Location, asset quality, brand/operator agreements; limited corporate moat.",
+                "capital_cycle_supply_response": "New hotels take years but demand can collapse instantly.",
+                "valuation_lenses": "P/NAV, EV/EBITDA, FFO/AFFO, value per key.",
+                "accounting_data_traps": "FF&E reserves, management fees, renovations, seasonality.",
+                "common_failure_modes": "Recession, new supply, labor, leverage.",
+                "ideal_compounder_setup": "Scarce luxury/convention assets bought below replacement cost.",
+                "ideal_inflection_setup": "Group/business travel recovery; renovation completion; supply constrained.",
+                "research_priority": "2/5.",
+                "cadence": "Weekly/monthly.",
+                "preferred_archetype": "RevPAR operating leverage.",
+                "highest_evi_question": "How much EBITDA changes for 1% RevPAR movement after fixed costs?"
+              }
+            },
+            {
+              "code": "601040",
+              "name": "Office REITs",
+              "fields": {
+                "economic_engine": "Leased square feet × rent − property costs/capex; tenant demand and obsolescence dominate.",
+                "core_kpis": "Occupancy; leasing spreads; expirations; TI/LC; same-store NOI; debt maturities.",
+                "leading_indicators": "Office utilization; sublease availability; job growth; new supply; transactions.",
+                "typical_moats": "Prime location, modern amenities, transit; many assets have weak moat post-remote work.",
+                "capital_cycle_supply_response": "Supply slow, but demand impairment can make existing stock obsolete.",
+                "valuation_lenses": "P/NAV, implied cap rate, FFO adjusted for TI/LC.",
+                "accounting_data_traps": "Straight-line rent, concessions, tenant improvements, capex capitalization.",
+                "common_failure_modes": "Structural vacancy, refinancing, obsolete assets.",
+                "ideal_compounder_setup": "Rare trophy/infill portfolio with low basis and strong tenant demand.",
+                "ideal_inflection_setup": "Leasing trough; asset sales validate NAV; debt refinance removes solvency fear.",
+                "research_priority": "1/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Deep-value / balance-sheet inflection.",
+                "highest_evi_question": "What is economic occupancy after concessions and required tenant capex?"
+              }
+            },
+            {
+              "code": "601050",
+              "name": "Health Care REITs",
+              "fields": {
+                "economic_engine": "Rent from senior housing/medical/life-science properties − property/financing; operator health matters.",
+                "core_kpis": "Occupancy; rent coverage; operator EBITDAR; same-store NOI; lease escalators; development.",
+                "leading_indicators": "Senior demographics; labor costs; reimbursement; life-science funding.",
+                "typical_moats": "Purpose-built assets, relationships, local scale, licensing.",
+                "capital_cycle_supply_response": "Supply slow; operator economics can be fragile.",
+                "valuation_lenses": "P/NAV, P/AFFO, implied cap rate.",
+                "accounting_data_traps": "Operator loans, straight-line rent, development, recurring capex.",
+                "common_failure_modes": "Tenant distress, reimbursement, labor, overbuilding.",
+                "ideal_compounder_setup": "Medical/senior housing platform with improving occupancy and strong operator coverage.",
+                "ideal_inflection_setup": "Occupancy recovery + labor normalization; troubled tenant reset.",
+                "research_priority": "3/5.",
+                "cadence": "Quarterly.",
+                "preferred_archetype": "Occupancy / operator recovery.",
+                "highest_evi_question": "Can tenants cover rent after normalized labor and maintenance capex?"
+              }
+            },
+            {
+              "code": "601060",
+              "name": "Residential REITs",
+              "fields": {
+                "economic_engine": "Units × effective rent × occupancy − property costs; supply pipeline and household formation drive growth.",
+                "core_kpis": "Occupancy; blended rent growth; concessions; turnover; same-store NOI; development yield.",
+                "leading_indicators": "Apartment deliveries; permits; household formation; wages; mortgage affordability.",
+                "typical_moats": "Infill locations, operating scale, data; limited differentiation beyond location.",
+                "capital_cycle_supply_response": "Supply takes 2–4 years, creating visible boom/bust pipeline.",
+                "valuation_lenses": "P/NAV, P/AFFO, implied cap rate.",
+                "accounting_data_traps": "Concessions, capitalized renovations, same-store definitions.",
+                "common_failure_modes": "Supply wave, rent controls, property taxes, cap-rate expansion.",
+                "ideal_compounder_setup": "Low-cost operator with scarce infill assets and accretive redevelopment.",
+                "ideal_inflection_setup": "Supply deliveries peak; starts collapse; rent growth reaccelerates.",
+                "research_priority": "4/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Supply-pipeline inflection.",
+                "highest_evi_question": "When do new deliveries peak relative to lease renewal calendar?"
+              }
+            },
+            {
+              "code": "601070",
+              "name": "Retail REITs",
+              "fields": {
+                "economic_engine": "Tenant sales support rent × occupancy − property costs; quality malls/centers can benefit from scarce locations.",
+                "core_kpis": "Occupancy; leasing spreads; tenant sales/sqft; bad debt; redevelopment yield; same-store NOI.",
+                "leading_indicators": "Retail bankruptcies; store openings/closures; consumer spend; new supply.",
+                "typical_moats": "Location, tenant mix, zoning, experiential density.",
+                "capital_cycle_supply_response": "New prime retail supply limited in many markets.",
+                "valuation_lenses": "P/NAV, P/AFFO, implied cap rate.",
+                "accounting_data_traps": "Straight-line rent, redevelopment capitalization, tenant allowances.",
+                "common_failure_modes": "Tenant failures, e-commerce, overleveraged assets.",
+                "ideal_compounder_setup": "Grocery/necessity or top-tier center with pricing power and redevelopment runway.",
+                "ideal_inflection_setup": "Bankruptcies fall; occupancy rises; redevelopment leased.",
+                "research_priority": "4/5.",
+                "cadence": "Quarterly.",
+                "preferred_archetype": "Location / redevelopment compounder.",
+                "highest_evi_question": "Are tenant sales productivity and occupancy strong enough to support rent increases?"
+              }
+            },
+            {
+              "code": "601080",
+              "name": "Specialized REITs",
+              "fields": {
+                "economic_engine": "Varies by towers, data centers, storage, timber, gaming/other: lease/usage revenue on specialized infrastructure.",
+                "core_kpis": "Tenant churn; same-store NOI; bookings; utilization; power availability; tower amendments; storage street rates.",
+                "leading_indicators": "Wireless capex; data-center demand; storage move-ins; timber prices; tenant capex.",
+                "typical_moats": "Specialized asset scarcity, network/location, permits, power/interconnect, switching cost.",
+                "capital_cycle_supply_response": "Often very slow supply for towers/data centers/power; self-storage faster.",
+                "valuation_lenses": "P/NAV, P/AFFO, EV/EBITDA, asset-specific DCF.",
+                "accounting_data_traps": "Development capex, straight-line rent, power pass-through, customer concentration.",
+                "common_failure_modes": "Tenant concentration, technology substitution, overbuilding, financing.",
+                "ideal_compounder_setup": "Asset network with embedded escalators, high incremental margins and scarce locations/power.",
+                "ideal_inflection_setup": "Lease-up/utilization inflection; power scarcity reprices; tenant capex cycle turns.",
+                "research_priority": "5/5.",
+                "cadence": "Monthly.",
+                "preferred_archetype": "Infrastructure REIT compounder.",
+                "highest_evi_question": "What physical constraint—power, zoning, fiber, location—prevents new supply?"
+              }
+            }
+          ]
+        },
+        {
+          "code": "6020",
+          "name": "Real Estate Management & Development",
+          "industries": [
+            {
+              "code": "602010",
+              "name": "Real Estate Management & Development",
+              "fields": {
+                "economic_engine": "Development spread, management/brokerage fees, transaction volumes and owned-property cash flows.",
+                "core_kpis": "Pre-sales; backlog; land bank; development margin; AUM; fee revenue; transactions; net debt.",
+                "leading_indicators": "Cap rates; mortgage rates; transaction volumes; permits; property prices.",
+                "typical_moats": "Local land expertise, brand, capital relationships, management scale, data.",
+                "capital_cycle_supply_response": "Development supply lags but can overbuild; fee businesses scale faster.",
+                "valuation_lenses": "NAV/SOTP, P/E for fee businesses, P/B for developers.",
+                "accounting_data_traps": "Land valuation, capitalized interest, JV/off-balance-sheet debt, percentage-of-completion.",
+                "common_failure_modes": "Property downturn, leverage, land impairments, transaction freeze.",
+                "ideal_compounder_setup": "Asset-light manager/service platform with recurring AUM and low capital needs.",
+                "ideal_inflection_setup": "Transaction cycle reopens; distressed land bought cheaply; pre-sales turn.",
+                "research_priority": "3/5.",
+                "cadence": "Monthly/quarterly.",
+                "preferred_archetype": "Transaction / NAV inflection.",
+                "highest_evi_question": "How much value is fee-based recurring earnings versus leveraged land/property exposure?"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
