@@ -160,6 +160,13 @@ class Settings(BaseSettings):
     bls_api_key: str = ""
     census_api_key: str = ""
     sec_user_agent: str = "MarketMosaic contact@example.com"
+    # How old a stale `provider_cache` row may be and still be served when
+    # the live provider misses, per capability, overriding the defaults in
+    # `services.provider_cache.MAX_STALE_BY_CAPABILITY` without a deploy.
+    # Format: "capability=seconds,capability=seconds" (a d/h/m suffix is
+    # accepted, e.g. "quote=900,news=12h"). Bad entries are logged and
+    # skipped rather than failing startup.
+    provider_cache_max_stale: str = ""
 
     # App / server
     app_env: str = "development"
