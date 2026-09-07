@@ -24,6 +24,9 @@ from __future__ import annotations
 from app.api.routes_admin import get_llm_breakers, reset_llm_breakers
 
 _PROVIDERS = {"openai", "anthropic", "gemini"}
+# `get_breaker_state()` carries the failover counters beside the provider
+# rows (a clean breaker with a recent hop is not a clean picture).
+_ROWS = _PROVIDERS | {"failover"}
 
 
 def test_breaker_state_declares_the_reporting_process():
@@ -40,11 +43,12 @@ def test_breaker_state_declares_the_reporting_process():
 def test_breaker_state_still_reports_every_provider():
     """The labelling must not cost the actual payload."""
     providers = get_llm_breakers()["providers"]
-    assert set(providers) == _PROVIDERS
-    for name, state in providers.items():
-        assert set(state) >= {
+    assert set(providers) == _ROWS
+    for name in _PROVIDERS:
+        assert set(providers[name]) >= {
             "failure_count", "is_open", "cooldown_seconds",
         }, f"{name} lost fields"
+    assert set(providers["failover"]) == {"count", "last_from", "last_to", "last_at", "last_reason"}
 
 
 def test_reset_reports_scope_rather_than_implying_a_fleet_wide_reset():
@@ -53,7 +57,7 @@ def test_reset_reports_scope_rather_than_implying_a_fleet_wide_reset():
     assert out["reset"] == "all"
     assert out["reported_by"] in ("web", "worker")
     assert "this process only" in out["scope_note"].lower()
-    assert set(out["providers"]) == _PROVIDERS
+    assert set(out["providers"]) == _ROWS
 
 
 def test_reset_actually_resets_this_process():

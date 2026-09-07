@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ class GDELTProvider:
                     # GDELT sometimes returns HTML when overloaded.
                     return []
         except Exception as exc:  # pragma: no cover
-            log.debug("GDELT fetch failed for %s: %s", gdelt_query, exc)
+            log_safely(log, f"GDELT fetch failed for {gdelt_query}", exc, level=logging.DEBUG)
             return []
 
         articles_raw = data.get("articles") if isinstance(data, dict) else None

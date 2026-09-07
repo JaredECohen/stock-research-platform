@@ -17,8 +17,10 @@ Failure semantics:
     - Records the (agent_name, exception class, message) tuple on a
       `DegradationLog` accumulator so the memo can surface a banner of
       degraded agents.
-    - Logs the exception via `logging.exception` so prod telemetry / Sentry
-      sees the full traceback.
+    - Logs the failure at WARNING with the exception *type* only, and the
+      traceback at DEBUG. Provider exceptions quote the request that
+      failed — including auth headers — so the body must not reach the
+      retained production log stream (see `log_safety`).
 """
 from __future__ import annotations
 
@@ -27,8 +29,14 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, TypeVar
 
 from ..schemas import AgentFinding, CriticReview
+from .log_safety import redact
 
 log = logging.getLogger(__name__)
+
+
+def _log_failure(msg: str, exc: BaseException) -> None:
+    log.warning("%s: %s", msg, type(exc).__name__)
+    log.debug("%s — traceback follows", msg, exc_info=True)
 
 T = TypeVar("T")
 
@@ -39,10 +47,12 @@ class DegradationLog:
     failures: List[dict] = field(default_factory=list)
 
     def record(self, agent: str, exc: BaseException) -> None:
+        # The message rides on the memo's `degraded_agents` banner and is
+        # persisted with the memo — redact it like a log line.
         self.failures.append({
             "agent": agent,
             "error_type": type(exc).__name__,
-            "message": str(exc)[:300],
+            "message": redact(exc),
         })
 
     def record_soft(self, agent: str, reason: str,
@@ -99,10 +109,10 @@ def safe_finding(
             raise RuntimeError(f"{agent} returned None")
         return result
     except Exception as exc:
-        log.exception("Agent %s failed", agent)
+        _log_failure(f"Agent {agent} failed", exc)
         if log_to is not None:
             log_to.record(agent, exc)
-        return _fallback_finding(agent, str(exc))
+        return _fallback_finding(agent, redact(exc))
 
 
 def safe_call(
@@ -121,7 +131,7 @@ def safe_call(
     try:
         return fn(*args, **kwargs)
     except Exception as exc:
-        log.exception("Safe call %s failed", name or fn.__name__)
+        _log_failure(f"Safe call {name or fn.__name__} failed", exc)
         if log_to is not None and name:
             log_to.record(name, exc)
         return fallback
@@ -142,7 +152,7 @@ def safe_critic(
     try:
         return fn(*args, **kwargs)
     except Exception as exc:
-        log.exception("Critic failed")
+        _log_failure("Critic failed", exc)
         if log_to is not None:
             log_to.record("Risk Committee", exc)
         return CriticReview(

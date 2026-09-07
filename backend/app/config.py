@@ -89,6 +89,16 @@ class Settings(BaseSettings):
     # calls (news / social / longdoc) on the Vertex backend. Leave empty to
     # let each agent use its own GEMINI_*_MODEL.
     vertex_model: str = ""
+    # Bounded provider failover (openai <-> anthropic). When the active
+    # provider's breaker is open or a call fails, `llm.chat_json` /
+    # `chat_text` try the *other* configured provider exactly once, on
+    # that provider's own route default. One hop, no retry loop — the
+    # point is to keep a memo run alive through a single-vendor outage,
+    # not to hide a misconfiguration. Gemini is a specialist path and
+    # never participates. `cooldown_seconds` is how long a failover keeps
+    # `/api/providers/status` reporting `degraded`.
+    llm_failover_enabled: bool = True
+    llm_failover_cooldown_seconds: float = 600.0
 
     # Database
     database_url: str = "sqlite:///./marketmosaic.db"

@@ -29,6 +29,8 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from ..config import settings
+from . import llm
+from .log_safety import log_safely, safe_exc
 
 log = logging.getLogger(__name__)
 
@@ -476,7 +478,10 @@ def _build_chat_agent() -> Optional[Any]:
                 "    education only and does not provide personalized "
                 "    financial advice._'"
             ),
-            model=settings.openai_pm_model,
+            # Same resolution as sdk_runtime: an unset OPENAI_PM_MODEL is ""
+            # and the real SDK rejects that, which used to drop chat to the
+            # non-SDK path with only a "build failed" line to show for it.
+            model=llm.resolve_role_model("pm", provider="openai"),
             tools=[
                 get_memo, get_dcf_summary, get_comps, get_macro_snapshot,
                 get_company_lite, list_universe, screener_query, custom_screen,
@@ -484,7 +489,7 @@ def _build_chat_agent() -> Optional[Any]:
             ],
         )
     except Exception as exc:
-        log.warning("chat-SDK agent build failed: %s", exc)
+        log_safely(log, "chat-SDK agent build failed", exc)
         return None
 
 
@@ -537,7 +542,7 @@ def answer_via_sdk(
             profile={"ticker": first_ticker, "sector": first_sector},
         )
     except Exception as exc:  # pragma: no cover — never block chat
-        log.debug("PM context for SDK seed failed: %s", exc)
+        log_safely(log, "PM context for SDK seed failed", exc, level=logging.DEBUG)
 
     seed = (
         ((pm_ctx + "\n\n---\n\n") if pm_ctx else "")
@@ -549,11 +554,11 @@ def answer_via_sdk(
         from agents import Runner as RealRunner
         result = RealRunner.run_sync(agent, seed)
     except Exception as exc:
-        log.warning("chat-SDK run failed: %s", exc)
+        log_safely(log, "chat-SDK run failed", exc)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         _persist_chat_trace(
             run_id=run_id, final_output="", new_items=None,
-            error=str(exc), duration_ms=elapsed_ms,
+            error=safe_exc(exc), duration_ms=elapsed_ms,
         )
         return None
 
@@ -615,4 +620,4 @@ def _persist_chat_trace(
             ))
             session.commit()
     except Exception as exc:  # pragma: no cover — telemetry must not block
-        log.debug("chat SDKTrace persistence failed (non-fatal): %s", exc)
+        log_safely(log, "chat SDKTrace persistence failed (non-fatal)", exc, level=logging.DEBUG)

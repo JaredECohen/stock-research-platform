@@ -102,7 +102,9 @@ def run_audit(*, limit: int = 20) -> Dict[str, Any]:
     memos = _gather_memos(limit=limit)
     if not memos:
         return {"audited": 0, "per_memo": [], "pattern_observation": ""}
-    if not getattr(settings, "openai_api_key", None):
+    # Any configured provider will do — `llm.chat_json` picks it. An
+    # OpenAI-only gate here skipped the audit on Anthropic deployments.
+    if not settings.has_llm:
         return {
             "audited": len(memos),
             "per_memo": [],

@@ -32,6 +32,8 @@ from typing import Any, Callable, Dict, List, Optional
 from ..cache import cache_get
 from ..config import settings
 from ..schemas import AgentFinding, StockMemoOut
+from . import llm
+from .log_safety import log_safely, safe_exc
 
 log = logging.getLogger(__name__)
 
@@ -115,8 +117,10 @@ class Runner:
             trace.append(f"done agent={agent.name}")
             return RunResult(final_output=output, iterations=1, trace=trace)
         except Exception as exc:
-            log.warning("Agent %s raised: %s", agent.name, exc)
-            return RunResult(final_output=None, iterations=1, trace=trace + [f"error: {exc}"])
+            log_safely(log, f"Agent {agent.name} raised", exc)
+            # The trace travels to the chat response (`agent_trace`), so it
+            # gets the same mask as the log line.
+            return RunResult(final_output=None, iterations=1, trace=trace + [f"error: {safe_exc(exc)}"])
 
 
 # ---------------------------------------------------------------------------
@@ -313,11 +317,19 @@ def _tool_handler_factory(name: str) -> Callable:
 _AGENT_CACHE: Dict[str, Agent] = {}
 
 
+# The Agents SDK (real or shim) only speaks OpenAI, so roles resolve
+# against the OpenAI family here regardless of `settings.active_llm_provider`.
+# `resolve_role_model` also turns an unset env ("") into the route default —
+# the SDK rejects an empty model name outright.
+def _sdk_model(role: str) -> str:
+    return llm.resolve_role_model(role, provider="openai")
+
+
 def _build_tool_agent(name: str) -> Agent:
     return Agent(
         name=f"{name}-tool",
         instructions=f"You are the {name} tool agent. Provide grounded findings for the sector.",
-        model=settings.openai_tool_model,
+        model=_sdk_model("tool"),
         tools=[get_cached_company_cold, get_cached_news_hot],
         handler=_tool_handler_factory(name),
     )
@@ -331,7 +343,7 @@ def _build_sector_agent(sector: str) -> Agent:
             "and peer outliers; query tool agents for filings/earnings/valuation/comps/risk; "
             "talk to peer sectors via `query_peer_sector`."
         ),
-        model=settings.openai_sector_model,
+        model=_sdk_model("sector"),
         tools=[
             get_cached_sector_warm,
             get_cached_company_cold,
@@ -373,7 +385,7 @@ def get_agents() -> Dict[str, Agent]:
             "You are the Portfolio Manager. Coordinate sector agents and produce a structured "
             "stock memo. Always cite cached snapshots when available."
         ),
-        model=settings.openai_pm_model,
+        model=_sdk_model("pm"),
         tools=[
             get_cached_company_cold, get_cached_sector_warm,
             get_cached_news_hot, get_cached_macro_broadcast,
@@ -476,7 +488,7 @@ def _run_via_real_sdk(
                     "you about a name in your sector, respond with one "
                     "sector-specific observation."
                 ),
-                model=settings.openai_sector_model,
+                model=_sdk_model("sector"),
             ))
 
         pm = RealAgent(
@@ -487,7 +499,7 @@ def _run_via_real_sdk(
                 "the rating + thesis in 2-3 sentences. You may hand off to "
                 "a sector agent if the user's question is sector-scoped."
             ),
-            model=settings.openai_pm_model,
+            model=_sdk_model("pm"),
             tools=[produce_legacy_memo],
             handoffs=sector_agents_real,
         )
@@ -509,13 +521,16 @@ def _run_via_real_sdk(
             "new_items": new_items,
         }
     except Exception as exc:
-        log.warning("real Agents SDK exchange failed for %s: %s", ticker, exc)
+        # The real SDK's AuthenticationError / httpx errors quote the
+        # request headers; neither the log nor the persisted trace row may
+        # carry that body.
+        log_safely(log, f"real Agents SDK exchange failed for {ticker}", exc)
         if run_id:
             elapsed_ms = int((_time.perf_counter() - started) * 1000)
             _persist_sdk_trace(
                 run_id=run_id, ticker=ticker, surface="memo",
                 final_output="", new_items=None,
-                error=str(exc), duration_ms=elapsed_ms,
+                error=safe_exc(exc), duration_ms=elapsed_ms,
             )
         return None
 

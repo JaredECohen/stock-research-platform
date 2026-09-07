@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 BASE_URL = "https://www.alphavantage.co/query"
@@ -37,11 +37,12 @@ class AlphaVantageProvider:
             with httpx.Client(timeout=TIMEOUT) as client:
                 r = client.get(BASE_URL, params=params)
                 if r.status_code != 200:
-                    log.warning("AlphaVantage %s -> %s", params, r.status_code)
+                    # `params` carries `apikey` — log the function only.
+                    log.warning("AlphaVantage %s -> %s", params.get("function"), r.status_code)
                     return None
                 return r.json()
         except Exception as exc:  # pragma: no cover
-            log.warning("AlphaVantage request failed: %s", exc)
+            log_safely(log, f"AlphaVantage request failed for {params.get('function')}", exc)
             return None
 
     def get_company_profile(self, ticker: str) -> Optional[Dict[str, Any]]:

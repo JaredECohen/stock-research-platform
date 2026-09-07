@@ -425,10 +425,11 @@ def run_sector_agent(
         + json.dumps(research_for_prompt, default=str)[:4500]
     )
 
-    # Sector agents share OPENAI_SECTOR_MODEL (gpt-5.4 by default).
+    # Sector agents share OPENAI_SECTOR_MODEL (gpt-5.4 by default); an
+    # unset env resolves to the active provider's cheap-route default.
     llm_out = llm.chat_json(
         user_prompt, system=prompts.PM_SYSTEM, route="cheap",
-        model=settings.openai_sector_model,
+        model=llm.resolve_role_model("sector"),
     )
 
     if llm_out:

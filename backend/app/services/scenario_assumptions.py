@@ -209,10 +209,10 @@ def build_bull_bear(
 ) -> Tuple[DCFAssumptions, List[ScenarioDriver], DCFAssumptions, List[ScenarioDriver]]:
     """Build bull and bear assumption sets + driver lists.
 
-    LLM-driven when an OpenAI key is configured; sector-aware
-    deterministic fallback otherwise.
+    LLM-driven when any provider is configured (`llm.chat_json` picks
+    it); sector-aware deterministic fallback otherwise.
     """
-    if not getattr(settings, "openai_api_key", None):
+    if not settings.has_llm:
         return _deterministic_fallback(profile, base)
 
     payload = {

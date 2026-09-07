@@ -45,7 +45,10 @@ _SUPPORTED_THEMES = [
 def _llm_translate(query: str) -> Optional[Dict[str, Any]]:
     """Returns a dict with: rules (list), themes (list), sectors
     (list), sort_by, order, rationale. Returns None on any failure."""
-    if not getattr(settings, "openai_api_key", None):
+    # `has_llm`, not the OpenAI key: `llm.chat_json` routes to whichever
+    # provider is configured, and gating on one vendor's key silently
+    # disabled this on Anthropic-only deployments.
+    if not settings.has_llm:
         return None
     schema = {
         "rules": "list of {metric, op, value, value2?} — metrics/ops below",
