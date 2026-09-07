@@ -85,7 +85,8 @@ def list_stocks() -> List[CompanyOut]:
     """Return every ticker the platform knows about.
 
     Wave 9b — reads the `companies` table directly so the dropdown gets
-    all S&P 100 + analyzed_on_demand entries in one query. The previous
+    every curated-universe (S&P 500 + extensions) and analyzed_on_demand
+    entry in one query. The previous
     implementation iterated `data_service.list_tickers()` and made one
     live `get_company_profile` call per ticker; with 100+ universe size
     that was both slow (~10s) and lossy (a single provider miss dropped

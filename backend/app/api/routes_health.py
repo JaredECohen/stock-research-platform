@@ -11,6 +11,7 @@ from fastapi import APIRouter
 from ..agents import llm
 from ..config import settings
 from ..services.data_service import get_data_service
+from ..services import provider_cache
 
 router = APIRouter()
 
@@ -130,6 +131,10 @@ def providers_status() -> Dict:
         "missing_api_keys": missing_keys,
         "llm_configured": settings.has_llm,
         "llm": _llm_status(mode),
+        # Stale-serve ledger from provider_cache: how often the last 24h fell
+        # back to an expired row (and how old), or refused one as too stale.
+        # DB-backed, so web and worker report the same picture. Never raises.
+        "stale_cache": provider_cache.stale_stats(window_hours=24),
         "feature_flags": {
             "use_demo_data": settings.use_demo_data,
             "enable_live_data": settings.enable_live_data,
