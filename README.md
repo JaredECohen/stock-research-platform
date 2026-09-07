@@ -252,6 +252,33 @@ curl -X POST 'localhost:8000/api/seed-universe?refresh=true'
 python -c "from app.monitoring.history_backfill import run_once; print(run_once())"
 ```
 
+### Dependencies and lint
+
+`backend/pyproject.toml` `[project.dependencies]` is the only place a dependency is
+declared. `backend/requirements.txt` is a **generated, fully pinned, universal lock**
+of it — the file Docker, CI and the quickstart above install — and CI fails when the
+two disagree. Never edit the lock by hand:
+
+```bash
+cd backend
+# bump a floor in pyproject.toml, then:
+make lock          # uv pip compile pyproject.toml --universal --python-version 3.12
+make lock-check    # what CI runs: re-lock and fail on any diff
+```
+
+The lock is compiled for the Docker image's Python 3.12; CI runs 3.12 too, and a
+separate `py311-floor` job only byte-compiles the package on the 3.11 floor. Because
+every version is pinned at lock time, **re-locking is a deploy-visible change**: review
+the diff and canary the redeploy.
+
+Lint runs as a blocking CI step; mypy is scoped and non-blocking until its count hits zero:
+
+```bash
+cd backend
+ruff check app     # config in pyproject.toml [tool.ruff]
+python -m mypy     # scoped via [tool.mypy].files
+```
+
 ---
 
 ## Configuration
