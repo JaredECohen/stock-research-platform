@@ -113,8 +113,98 @@ def test_stale_keys_keep_verifying_while_jwks_is_down(auth_on):
     assert jwks.verify_token(auth_on.token())["sub"]
     auth_on.fail_fetch = True
     jwks._STATE["fetched_at"] -= jwks.LIFESPAN + 10  # due for refresh
+    jwks._STATE["last_attempt"] = 0.0                # and the attempt is not throttled
     assert jwks.verify_token(auth_on.token())["sub"], "stale-while-error"
     assert auth_on.fetch_calls == 2
+
+
+def test_scheduled_refresh_is_throttled_while_jwks_is_down(auth_on):
+    """Regression: once the keys passed LIFESPAN, EVERY verification ran a
+    refresh — under the lock, with a 5s timeout — so a JWKS outage turned
+    into ~1 request per 5s per process. One attempt per REFRESH_THROTTLE;
+    the stale keys are served in between without a network call."""
+    assert jwks.verify_token(auth_on.token())["sub"]
+    auth_on.fail_fetch = True
+    jwks._STATE["fetched_at"] -= jwks.LIFESPAN + 10
+    jwks._STATE["last_attempt"] = 0.0
+    for _ in range(5):
+        assert jwks.verify_token(auth_on.token())["sub"]
+    assert auth_on.fetch_calls == 2, "one attempt per throttle window, not one per request"
+    # The window passing buys exactly one more attempt.
+    jwks._STATE["last_attempt"] -= jwks.REFRESH_THROTTLE + 1
+    assert jwks.verify_token(auth_on.token())["sub"]
+    assert auth_on.fetch_calls == 3
+
+
+def test_cold_start_failure_is_refused_fast_inside_the_throttle(auth_on):
+    """No keys and the endpoint down: the first request pays the fetch,
+    the next ones inside the window are refused immediately (503), and
+    the window passing lets the process recover."""
+    auth_on.fail_fetch = True
+    with pytest.raises(jwks.AuthUnavailable):
+        jwks.verify_token(auth_on.token())
+    assert auth_on.fetch_calls == 1
+    with pytest.raises(jwks.AuthUnavailable):
+        jwks.verify_token(auth_on.token())
+    assert auth_on.fetch_calls == 1, "no second fetch inside the throttle window"
+    auth_on.fail_fetch = False
+    jwks._STATE["last_attempt"] -= jwks.REFRESH_THROTTLE + 1
+    assert jwks.verify_token(auth_on.token())["sub"]
+    assert auth_on.fetch_calls == 2
+
+
+def test_fetch_never_runs_under_the_state_lock(auth_on, monkeypatch):
+    """Scheduled and forced refreshes alike: the network call must not
+    hold the lock every other verification needs for its key lookup."""
+    held: list[bool] = []
+    real = auth_on.fetch
+
+    def probing_fetch(url):
+        held.append(jwks._state_lock.locked())
+        return real(url)
+
+    monkeypatch.setattr(jwks, "fetch", probing_fetch)
+    assert jwks.verify_token(auth_on.token())["sub"]                 # cold-start fetch
+    with pytest.raises(jwks.TokenInvalid):
+        jwks.verify_token(auth_on.token(kid="kid-unknown"))          # forced refresh
+    assert len(held) == 2 and not any(held)
+
+
+def test_cold_start_burst_is_single_flight(auth_on, monkeypatch):
+    """Two verifications racing on an empty cache produce ONE fetch: the
+    second queues on the fetch lock and finds the keys on its re-check.
+    Deterministic — the in-flight fetch is held open with an Event, not
+    timed."""
+    import threading
+
+    gate, entered = threading.Event(), threading.Event()
+    real = auth_on.fetch
+
+    def slow_fetch(url):
+        entered.set()
+        assert gate.wait(5), "test gate never opened"
+        return real(url)
+
+    monkeypatch.setattr(jwks, "fetch", slow_fetch)
+    tok = auth_on.token(sub="user_single_flight")
+    results: list = []
+
+    def worker() -> None:
+        try:
+            results.append(jwks.verify_token(tok)["sub"])
+        except Exception as exc:  # surfaces as a failed assertion below
+            results.append(exc)
+
+    t1 = threading.Thread(target=worker)
+    t1.start()
+    assert entered.wait(5), "first fetch never started"
+    t2 = threading.Thread(target=worker)
+    t2.start()
+    gate.set()
+    t1.join(5)
+    t2.join(5)
+    assert results == ["user_single_flight", "user_single_flight"], results
+    assert auth_on.fetch_calls == 1
 
 
 def test_no_keys_and_jwks_down_is_unavailable_not_invalid(auth_on):
