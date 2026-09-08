@@ -32,7 +32,8 @@ provider payloads (counts and dollars only), start the regen worker thread
 (jobs are executed synchronously in this process so the timing is
 attributable), or generate memos inside `pm_chat` — under `AUTH_ENABLED`
 chat never runs a memo in-request, so the measurement emulates that by
-answering from the stored memo.
+answering from the stored memo on BOTH inline paths (legacy graph and
+`USE_AGENTS_SDK=true`, which is the committed `config.env` default).
 """
 from __future__ import annotations
 
@@ -41,6 +42,7 @@ import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -52,14 +54,40 @@ RUN_LIVE = os.environ.get("RUN_LIVE_TESTS", "") == "1"
 
 FEATURES = ("memo_view", "research_run", "pm_chat", "dcf", "comps", "chart_commentary")
 
-# DEVPLAN FEAT-002 launch allowances — the multipliers in the worst-case
-# formulas. Mirrors docs/economics/unit-costs-2026-09.md §3; change both.
+# The worst-case formulas have three kinds of term. All three mirror
+# docs/economics/unit-costs-2026-09.md §3 — change both together.
+#
+# 1. Metered: DEVPLAN FEAT-002 launch allowances, hard-capped by the usage
+#    meter, so `allowance × C(feature)` is a true monthly ceiling.
 ALLOWANCES = {
-    "free": {"memo_view": 3, "research_run": 1, "pm_chat": 10, "chart_commentary": 5,
-             # DCF/comps follow the memo allowance: 3 tickers' worth.
-             "dcf": 3, "comps": 3},
+    "free": {"memo_view": 3, "research_run": 1, "pm_chat": 10, "chart_commentary": 5},
     "pro": {"research_run": 20, "pm_chat": 300, "chart_commentary": 100},
 }
+# 2. Cache-bounded: no meter, but the LLM call sits behind a cache whose
+#    TTL bounds the count arithmetically. Free comps: 3 follows-memo tickers
+#    × 2 (`_llm_exposure_peers` is cached 30 days, a month is up to 31, and
+#    `GET /api/comps/{t}` exposes no force_refresh). Pro comps is unbounded
+#    in tickers, so it is an assumption below, not a bound.
+CACHE_BOUNDED = {"free": {"comps": 6}, "pro": {}}
+# 3. Unmetered and NOT cache-bounded: `POST /api/dcf/{t}` runs
+#    `build_bull_bear` (one LLM call) on every request whose body carries
+#    assumptions — `build_dcf` reads its cache only for `assumptions=None`,
+#    and the DCF Lab always posts a body — so the only ceiling is the
+#    `series` rate scope (60/min/user). These multipliers are DECLARED USAGE
+#    ASSUMPTIONS for the go/no-go, not measurements and not ceilings; the
+#    summary reports the rate-limit ceiling next to them so the abuse
+#    exposure is visible, and the doc raises the meter question to the owner.
+ASSUMED_UNMETERED = {
+    "free": {"dcf": 60},           # 20 what-if runs on each of 3 allowed tickers
+    "pro": {"dcf": 200, "comps": 20},  # 10 tickers' worth of comps (2 LLM calls each)
+}
+# Actions/hour the rate scope permits one user — the true (abuse) ceiling
+# for an unmetered term. `series` 60/min, `data` 120/min.
+RATE_CEILING_PER_HOUR = {"dcf": 60 * 60, "comps": 120 * 60}
+# LLM-in-request features the script does not sample; a plan's total is
+# labelled incomplete when one of these is in its policy (Pro only —
+# `portfolio/build` is Pro-only, one cheap-route call, `llm_light` 10/min).
+UNMEASURED_TERMS = {"free": [], "pro": ["portfolio_build"]}
 PRO_PRICE_USD = 29.99
 THRESHOLDS = {"pro_max_usd": round(PRO_PRICE_USD * 0.5, 3), "free_max_usd": 1.50}
 
@@ -235,16 +263,59 @@ _PM_QUESTIONS = (
 )
 
 
+def _stored_memo_only(ticker: str, **_kw):
+    """Stand-in for both inline memo entry points: answer from the stored
+    snapshot or fail loudly. Never generates."""
+    from app.services import memo_store
+    snap = memo_store.latest_memo(ticker)
+    if snap is None:
+        raise ValueError(f"no stored memo for {ticker} (inline generation disabled)")
+    return memo_store.memo_to_pydantic(snap)
+
+
+# (module, attribute) pairs through which `Orchestrator.chat` can start a
+# memo run inside the request. Both must be swapped: the orchestrator
+# resolves `sdk_runtime.run_stock_memo_via_sdk` at call time when
+# `settings.use_agents_sdk` is true (the committed config.env default), and
+# that path mints its own uuid `run_id`, so a memo it started would not even
+# show up under the sample's run_id — the chat number would be silently
+# wrong rather than obviously wrong.
+_INLINE_MEMO_ENTRY_POINTS = (
+    ("app.agents.orchestrator", "run_stock_memo"),
+    ("app.agents.sdk_runtime", "run_stock_memo_via_sdk"),
+)
+
+
+@contextmanager
+def _inline_memo_generation_disabled():
+    """Swap every inline memo entry point for `_stored_memo_only`; restore
+    on exit even when the chat turn raises."""
+    import importlib
+    originals = []
+    for mod_name, attr in _INLINE_MEMO_ENTRY_POINTS:
+        mod = importlib.import_module(mod_name)
+        originals.append((mod, attr, getattr(mod, attr)))
+        setattr(mod, attr, _stored_memo_only)
+    try:
+        yield
+    finally:
+        for mod, attr, original in originals:
+            setattr(mod, attr, original)
+
+
 def _pm_chat(index: int, tickers: list[str]):
     """One Ask-the-PM turn with inline memo generation disabled.
 
     Under `AUTH_ENABLED` the orchestrator answers from `memo_store.latest_memo`
-    and never runs `run_stock_memo` in-request (plan §4, orchestrator
+    and never runs a memo in-request (plan §4, orchestrator
     `allow_inline_memo=False`). Until that flag exists the same behaviour
-    is emulated by swapping the module-level `run_stock_memo` for a stored-
-    memo lookup — otherwise a `single_stock_analysis` intent would bill a
-    5-9 minute memo run against the chat sample and the number would be
-    meaningless for pm_chat.
+    is emulated by swapping BOTH module-level entry points
+    (`_INLINE_MEMO_ENTRY_POINTS`) for a stored-memo lookup — otherwise a
+    `single_stock_analysis` intent would bill a 5-9 minute memo run against
+    the chat sample and the number would be meaningless for pm_chat.
+    `settings.use_agents_sdk` is left as configured on purpose: the SDK
+    chat agent (tool reads over stored data) is the production chat path
+    and is what the sample should cost.
     """
     t = tickers[index % len(tickers)]
     u = tickers[(index + 1) % len(tickers)]
@@ -255,22 +326,11 @@ def _pm_chat(index: int, tickers: list[str]):
     def go(_run_id: str) -> dict[str, Any]:
         from app.agents import orchestrator as orch_mod
         from app.schemas import ChatMessage
-        from app.services import memo_store
 
-        def stored_only(ticker: str, **_kw):
-            snap = memo_store.latest_memo(ticker)
-            if snap is None:
-                raise ValueError(f"no stored memo for {ticker} (inline generation disabled)")
-            return memo_store.memo_to_pydantic(snap)
-
-        original = orch_mod.run_stock_memo
-        orch_mod.run_stock_memo = stored_only
-        try:
+        with _inline_memo_generation_disabled():
             resp = orch_mod.Orchestrator().chat(
                 question, [ChatMessage(**m) for m in hist],
             )
-        finally:
-            orch_mod.run_stock_memo = original
         # Intent + answer length only: the answer text is never printed.
         return {"intent": resp.intent, "answer_chars": len(resp.answer or "")}
     return go
@@ -334,26 +394,65 @@ def _aggregate(samples: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _worst_case(features: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """Monthly variable LLM cost per user if every allowance is exhausted.
+    """Monthly variable LLM cost per user under the §3 formulas.
 
-    A feature with no `ok` sample (skipped / not_implemented / errored)
-    makes the total `None` — an unmeasured term is reported as unknown,
-    never silently treated as zero.
+    Per plan: `metered` (allowance × C), `cache_bounded` (TTL bound × C) and
+    `assumed_unmetered` (declared usage assumption × C, with the rate-limit
+    ceiling per hour reported next to it — that ceiling, not the
+    assumption, is what an abusive user can actually spend). `total_usd`
+    sums all three kinds. A feature with no `ok` sample (skipped /
+    not_implemented / errored) makes the total `None` — an unmeasured
+    term is reported as unknown, never silently treated as zero;
+    `total_measured_usd` sums the terms that do have a sample so partial
+    runs still say something, and `unmeasured_terms` names what is
+    missing (including features the script never samples at all).
     """
+    def mean_cost(feat: str) -> float | None:
+        return (features.get(feat) or {}).get("mean_llm_cost_usd")
+
     out: dict[str, Any] = {}
-    for plan, mult in ALLOWANCES.items():
-        terms: dict[str, float | None] = {}
+    for plan in ALLOWANCES:
+        kinds = {
+            "metered": ALLOWANCES[plan],
+            "cache_bounded": CACHE_BOUNDED[plan],
+            "assumed_unmetered": ASSUMED_UNMETERED[plan],
+        }
         total: float | None = 0.0
-        for feat, qty in mult.items():
-            mean = (features.get(feat) or {}).get("mean_llm_cost_usd")
-            terms[feat] = None if mean is None else round(qty * mean, 4)
-            total = None if (total is None or mean is None) else total + qty * mean
-        out[plan] = {"terms": terms, "total_usd": None if total is None else round(total, 4)}
+        measured_total = 0.0
+        unmeasured = list(UNMEASURED_TERMS[plan])
+        if unmeasured:
+            total = None
+        entry: dict[str, Any] = {}
+        for kind, mult in kinds.items():
+            terms: dict[str, float | None] = {}
+            for feat, qty in mult.items():
+                mean = mean_cost(feat)
+                if mean is None:
+                    terms[feat] = None
+                    unmeasured.append(feat)
+                    total = None
+                else:
+                    terms[feat] = round(qty * mean, 4)
+                    measured_total += qty * mean
+                    if total is not None:
+                        total += qty * mean
+            entry[kind] = terms
+        entry["rate_ceiling_per_hour_usd"] = {
+            feat: None if mean_cost(feat) is None
+            else round(RATE_CEILING_PER_HOUR[feat] * mean_cost(feat), 4)
+            for feat in ASSUMED_UNMETERED[plan]
+        }
+        entry["total_usd"] = None if total is None else round(total, 4)
+        entry["total_measured_usd"] = round(measured_total, 4)
+        entry["unmeasured_terms"] = unmeasured
+        out[plan] = entry
     pro, free = out["pro"]["total_usd"], out["free"]["total_usd"]
     out["verdict"] = {
         "pro_under_threshold": None if pro is None else pro < THRESHOLDS["pro_max_usd"],
         "free_under_threshold": None if free is None else free < THRESHOLDS["free_max_usd"],
         "thresholds": THRESHOLDS,
+        "note": "unmetered terms use the declared ASSUMED_UNMETERED multipliers, "
+                "not measurements; see rate_ceiling_per_hour_usd for the abuse exposure",
     }
     return out
 
@@ -457,6 +556,9 @@ def main(argv: list[str] | None = None) -> int:
         "n": args.n,
         "research_n": args.research_n,
         "allowances": ALLOWANCES,
+        "cache_bounded": CACHE_BOUNDED,
+        "assumed_unmetered": ASSUMED_UNMETERED,
+        "rate_ceiling_per_hour": RATE_CEILING_PER_HOUR,
         "features": results,
         "worst_case_monthly_usd": _worst_case(results),
     }
@@ -471,8 +573,14 @@ def main(argv: list[str] | None = None) -> int:
     print(_markdown(results))
     wc = summary["worst_case_monthly_usd"]
     print()
-    print(f"Free worst case: ${wc['free']['total_usd']}  (threshold < ${THRESHOLDS['free_max_usd']})")
-    print(f"Pro  worst case: ${wc['pro']['total_usd']}  (threshold < ${THRESHOLDS['pro_max_usd']})")
+    for plan, label, key in (("free", "Free", "free_max_usd"), ("pro", "Pro ", "pro_max_usd")):
+        w = wc[plan]
+        print(f"{label} worst case: ${w['total_usd']}  (threshold < ${THRESHOLDS[key]}; "
+              f"measured terms ${w['total_measured_usd']}; "
+              f"unmeasured: {w['unmeasured_terms'] or 'none'})")
+        for feat, ceiling in w["rate_ceiling_per_hour_usd"].items():
+            print(f"  {label.strip()} {feat}: assumed {ASSUMED_UNMETERED[plan][feat]}/month "
+                  f"(not a ceiling); rate-limit ceiling ${ceiling}/hour")
     print(f"Wrote {out}")
     return 0
 

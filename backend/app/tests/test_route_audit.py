@@ -16,11 +16,14 @@ mirror.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from app.main import app
 
@@ -182,3 +185,137 @@ def test_unit_cost_script_refuses_without_llm_keys():
     )
     assert out.returncode == 0, f"exit {out.returncode}: {out.stdout}\n{out.stderr}"
     assert "no LLM key configured" in out.stdout
+
+
+# ---------------------------------------------------------------------------
+# The measurement script's own invariants (pure functions + the swap)
+# ---------------------------------------------------------------------------
+
+def _load_cost_script():
+    """Import `backend/scripts/audit_unit_costs.py` by path — `scripts/` is
+    not a package. Module-level code only reads env and defines constants;
+    nothing runs (and nothing can spend) without `main()`."""
+    spec = importlib.util.spec_from_file_location("audit_unit_costs_under_test", COST_SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("use_agents_sdk", [False, True])
+def test_pm_chat_sample_never_generates_a_memo(monkeypatch, use_agents_sdk):
+    """A `single_stock_analysis` chat turn must answer from the stored memo
+    on BOTH inline entry points.
+
+    Regression: the first draft swapped only `orchestrator.run_stock_memo`.
+    With `USE_AGENTS_SDK=true` (the committed config.env default) the
+    orchestrator resolves `sdk_runtime.run_stock_memo_via_sdk` at call
+    time instead, which runs a full memo under its own uuid run_id — so a
+    chat sample silently billed a 5-9 minute memo and reported only the
+    intent call. Both entry points are replaced with sentinels that fail
+    the test if reached; the stored-memo stand-in must be what runs.
+    """
+    from app.agents import orchestrator as orch_mod
+    from app.agents import sdk_runtime
+    from app.config import settings
+    from app.services import memo_store
+
+    mod = _load_cost_script()
+    reached: list[str] = []
+
+    def memo_ran(ticker: str, **_kw):
+        reached.append(ticker)
+        raise AssertionError("a pm_chat sample started a memo run")
+
+    monkeypatch.setattr(orch_mod, "run_stock_memo", memo_ran)
+    monkeypatch.setattr(sdk_runtime, "run_stock_memo_via_sdk", memo_ran)
+    monkeypatch.setattr(settings, "use_agents_sdk", use_agents_sdk)
+    # Deterministic routing into the inline-memo branch, no LLM and no
+    # SDK chat agent involved (both would need keys).
+    monkeypatch.setattr(orch_mod, "classify_intent",
+                        lambda _m: ("single_stock_analysis", ["NVDA"], None))
+    monkeypatch.setattr(orch_mod, "_is_conceptual_followup", lambda _m, _h: False)
+    # No stored memo → the stand-in raises its own ValueError; a memo run
+    # would have raised the sentinel's AssertionError instead.
+    monkeypatch.setattr(memo_store, "latest_memo", lambda _t: None)
+
+    go = mod._pm_chat(0, ["NVDA", "COST"])
+    with pytest.raises(ValueError, match="inline generation disabled"):
+        go("audit-test-run")
+
+    assert reached == []
+    # Restored even though the turn raised.
+    assert orch_mod.run_stock_memo is memo_ran
+    assert sdk_runtime.run_stock_memo_via_sdk is memo_ran
+
+
+def test_free_dcf_is_not_an_allowance_term():
+    """`POST /api/dcf/{t}` is an LLM call on every request with an
+    assumptions body (`build_dcf` caches only `assumptions=None`) and is
+    bounded by the `series` rate scope, not by the follows-memo rule. It
+    must therefore live in the declared-assumption dict with a rate
+    ceiling beside it, never in `ALLOWANCES` where `3 × C(dcf)` would
+    read as a ceiling. The doc's Free formula must say the same."""
+    mod = _load_cost_script()
+    assert "dcf" not in mod.ALLOWANCES["free"]
+    assert "comps" not in mod.ALLOWANCES["free"]
+    assert mod.ASSUMED_UNMETERED["free"]["dcf"] > 0
+    for plan in ("free", "pro"):
+        for feat in mod.ASSUMED_UNMETERED[plan]:
+            assert feat in mod.RATE_CEILING_PER_HOUR, f"{plan}.{feat} has no rate ceiling"
+    # Metered / cache-bounded / assumed dicts must not double-count a feature.
+    for plan in ("free", "pro"):
+        kinds = [set(mod.ALLOWANCES[plan]), set(mod.CACHE_BOUNDED[plan]),
+                 set(mod.ASSUMED_UNMETERED[plan])]
+        assert not (kinds[0] & kinds[1]) and not (kinds[0] & kinds[2]) and not (kinds[1] & kinds[2])
+
+    section = COST_DOC.read_text().split("## 3.", 1)[1].split("## 4.", 1)[0]
+    free_part = section.split("**Free Explorer", 1)[1].split("**Pro,", 1)[0]
+    # The fenced block is the formula; the prose around it may quote the
+    # old wrong term while explaining why it was wrong.
+    free_formula = free_part.split("```", 2)[1]
+    assert "U_free_dcf" in free_formula
+    assert not re.search(r"\b\d+·C\(dcf\)", free_formula), "Free dcf written as an allowance term"
+    # The multiplier the doc states must be the one the script uses.
+    assert f"U_free_dcf = {mod.ASSUMED_UNMETERED['free']['dcf']}" in free_formula
+
+
+def test_worst_case_keeps_term_kinds_apart_and_never_zeroes_an_unmeasured_term():
+    mod = _load_cost_script()
+
+    def feat(mean):
+        return {"mean_llm_cost_usd": mean}
+
+    costs = {"memo_view": 0.0, "research_run": 2.0, "pm_chat": 0.01,
+             "chart_commentary": 0.005, "dcf": 0.002, "comps": 0.003}
+    wc = mod._worst_case({k: feat(v) for k, v in costs.items()})
+
+    free = wc["free"]
+    assert free["metered"] == {"memo_view": 0.0, "research_run": 2.0,
+                               "pm_chat": 0.1, "chart_commentary": 0.025}
+    assert free["cache_bounded"] == {"comps": round(6 * 0.003, 4)}
+    assert free["assumed_unmetered"] == {"dcf": round(60 * 0.002, 4)}
+    assert free["rate_ceiling_per_hour_usd"] == {"dcf": round(3600 * 0.002, 4)}
+    expected_free = 2.0 + 0.1 + 0.025 + 6 * 0.003 + 60 * 0.002
+    assert free["total_usd"] == round(expected_free, 4)
+    assert free["unmeasured_terms"] == []
+    assert wc["verdict"]["free_under_threshold"] is False  # research_run alone is $2
+
+    # Pro has a term the script never samples → total unknown, not zero,
+    # while the measured partial is still reported.
+    pro = wc["pro"]
+    assert pro["total_usd"] is None
+    assert "portfolio_build" in pro["unmeasured_terms"]
+    assert pro["total_measured_usd"] == round(
+        20 * 2.0 + 300 * 0.01 + 100 * 0.005 + 200 * 0.002 + 20 * 0.003, 4)
+    assert wc["verdict"]["pro_under_threshold"] is None
+
+    # An unmeasured feature (no ok sample) makes the plan total None too.
+    partial = {k: feat(v) for k, v in costs.items()}
+    partial["chart_commentary"] = {"mean_llm_cost_usd": None}
+    wc2 = mod._worst_case(partial)
+    assert wc2["free"]["total_usd"] is None
+    assert wc2["free"]["metered"]["chart_commentary"] is None
+    assert "chart_commentary" in wc2["free"]["unmeasured_terms"]
+    assert wc2["free"]["total_measured_usd"] == round(expected_free - 0.025, 4)
+    assert wc2["verdict"]["free_under_threshold"] is None

@@ -17,9 +17,9 @@ One row per billable feature in the DEVPLAN FEAT-002 matrix:
 |---|---|---|
 | `memo_view` | read the latest stored `MemoSnapshot` for a ticker | DB read only — the memo was paid for when it was generated. Expected LLM $0, provider calls 0. Measured anyway so a regression (a read path that starts generating) shows up as a non-zero number. |
 | `research_run` | `POST /api/stocks/{t}/analyze` → `RegenJob` → worker `execute_job` → `run_stock_memo(force_refresh=True)` | Worker: ~26 LLM round-trips per memo (specialists + PM synthesis + risk committee), provider backfill on cold tickers, 5-9 minutes wall-clock. **The dominant term.** |
-| `pm_chat` | one `POST /api/chat` turn with inline memo generation disabled (answers from the stored memo, as the gated orchestrator will) | Web: `classify_intent` (one cheap call) + SDK chat agent or memo-context answer (1+ calls, tool reads). |
-| `dcf` | `POST /api/dcf/{t}` with default assumptions, `force_refresh=True` | Web: one cheap-route call for bull/bear scenario drivers; provider reads for financials + estimates. |
-| `comps` | `GET /api/comps/{t}`, `force_refresh=True` | Web: one cheap-route call for exposure peers (cached 7d); provider reads for the target and every peer. |
+| `pm_chat` | one `POST /api/chat` turn with inline memo generation disabled on **both** entry points — `orchestrator.run_stock_memo` and `sdk_runtime.run_stock_memo_via_sdk` (the `USE_AGENTS_SDK=true` branch, which is the committed `config.env` default and mints its own `run_id`) — so the sample answers from the stored memo, as the gated orchestrator will | Web: `classify_intent` (one cheap call) + SDK chat agent or memo-context answer (1+ calls, tool reads). |
+| `dcf` | `POST /api/dcf/{t}` with default assumptions, `force_refresh=True` | Web: one cheap-route call for bull/bear scenario drivers (`build_bull_bear`) on **every** request that carries an assumptions body — `build_dcf` reads its 7-day cache only for `assumptions=None`, and the DCF Lab always posts a body; provider reads for financials + estimates. |
+| `comps` | `GET /api/comps/{t}`, `force_refresh=True` | Web: one cheap-route call for exposure peers (cached **30d**; the comps snapshot itself 7d; the route exposes no refresh switch); provider reads for the target and every peer. |
 | `chart_commentary` | placeholder — FEAT-001 is not built | Unknown. The script records `not_implemented`; the formulas below treat it as an unmeasured term (result `None`), never as zero. |
 
 `POST /api/macro/analyze` and `POST /api/screener/nl` are charged as
@@ -89,45 +89,95 @@ Caveats the reader must carry into §5:
 - `pm_chat` cost depends on the question class. The three representative
   questions (risk summary, rating rationale with history, moat comparison)
   are chosen to hit the SDK chat path with tool reads; a purely conversational
-  turn is cheaper.
+  turn is cheaper. `USE_AGENTS_SDK` is left as configured (true in
+  `config.env`) so the SDK chat agent is what gets measured; only the two
+  inline-memo entry points are swapped, and
+  `test_route_audit.py::test_pm_chat_sample_never_generates_a_memo` pins
+  that a `single_stock_analysis` turn cannot start a memo run under either
+  flag value. A sample whose `llm.n_calls` is in the twenties is a memo
+  run leaking in — treat it as a script bug, not a chat cost.
 
 ## 3. Worst-case monthly variable cost per user
 
 Let `C(f)` be the mean LLM $/action for feature `f` from §5. Allowances are
 the DEVPLAN FEAT-002 launch numbers (plan §4.7), UTC calendar month.
 
+Three kinds of term appear, and the reader must not confuse them:
+
+| Kind | Meaning | Is it a ceiling? |
+|---|---|---|
+| **metered** | `allowance × C(f)` — the usage meter refuses the (n+1)th action | yes |
+| **cache-bounded** | no meter, but the LLM call sits behind a cache whose TTL bounds the monthly count arithmetically | yes, as long as the cache stays in front of the call |
+| **unmetered `U_*`** | no meter and no cache; the only limit is the per-user rate scope | **no** — `U_*` is a *declared usage assumption* for the go/no-go; the abuse ceiling is the rate limit, reported separately |
+
 **Free Explorer, every allowance exhausted:**
 
 ```
-Free = 3·C(memo_view) + 1·C(research_run) + 10·C(pm_chat) + 5·C(chart_commentary)
-       + 3·C(dcf) + 3·C(comps)
+Free = 3·C(memo_view) + 1·C(research_run) + 10·C(pm_chat) + 5·C(chart_commentary)   # metered
+       + 6·C(comps)                                                                # cache-bounded
+       + U_free_dcf·C(dcf)                                                         # unmetered, U_free_dcf = 60 (assumed)
 ```
 
-The last two terms are the "DCF/comps follow the memo allowance" rule: a
-Free user can run DCF and comps for each of the 3 memo tickers. Plan §4.7
-omits them; they are included here because each is an LLM call and the
-worst case must not understate.
+- `6·C(comps)`: the "comps follows the memo allowance" rule gives a Free
+  user 3 tickers; `GET /api/comps/{t}` exposes no refresh switch, the
+  comps snapshot is cached 7 days and the exposure-peers LLM call 30 days,
+  so a 31-day month can reach that call at most twice per ticker — 3 × 2.
+  The bound disappears if a refresh switch is ever added to the route.
+- `U_free_dcf·C(dcf)`: the "DCF follows the memo allowance" rule limits
+  *which tickers*, not *how many runs*. `POST /api/dcf/{t}` calls
+  `build_bull_bear` (one LLM call) on every request whose body carries
+  assumptions — `build_dcf` reads its cache only for `assumptions=None`,
+  and the DCF Lab always posts a body — so a Free user's DCF spend is
+  bounded by the `series` scope (60/min/user ⇒ up to 3,600 LLM calls/hour),
+  not by 3. Plan §4.7 omits this term; an earlier draft of this doc wrote it
+  as `3·C(dcf)`, which understated it. **`U_free_dcf = 60`** (20 what-if
+  runs on each of 3 tickers) is the declared assumption for the go/no-go;
+  the script prints `3600·C(dcf)` next to it as the per-hour abuse ceiling.
+  See the owner question at the end of this section.
 
 **Pro, every allowance exhausted:**
 
 ```
-Pro = 20·C(research_run) + 300·C(pm_chat) + 100·C(chart_commentary)
-      + U_dcf·C(dcf) + U_comps·C(comps) + U_portfolio·C(portfolio) + U_macro·C(macro)
+Pro = 20·C(research_run) + 300·C(pm_chat) + 100·C(chart_commentary)   # metered
+      + U_pro_dcf·C(dcf) + U_pro_comps·C(comps)                        # unmetered, assumed 200 / 20
+      + U_portfolio·C(portfolio_build)                                 # unmetered, NOT sampled by the script
 ```
 
-`U_*` are Pro's unmetered features, bounded only by rate limits
-(`series` 60/min, `llm_light` 10/min with 2 concurrent). There is no
-allowance to multiply by, so the script reports the first three terms as
-`pro.total_usd` and the doc must state the assumed `U_*` from observed usage
-once there is any; until then the go/no-go below is evaluated on the metered
-terms plus a stated headroom.
+- `POST /api/macro/analyze` and `POST /api/screener/nl` are charged as
+  `pm_chat` turns (orchestrator decision), so they sit inside
+  `300·C(pm_chat)` and get no separate `U_macro` term.
+- `U_pro_dcf = 200` and `U_pro_comps = 20` (10 tickers × 2 cache expiries)
+  are declared assumptions, replaced by observed usage once there is any.
+  Rate ceilings: `dcf` 3,600/hour (`series`), `comps` 7,200/hour (`data`).
+- `portfolio_build` (one cheap-route call, `llm_light` 10/min with 2
+  concurrent, Pro-only) is not sampled by the script; the script lists it
+  under `unmeasured_terms` and leaves `pro.total_usd` `None` until a
+  figure is supplied by hand from `LLMCallLog` for that route.
+
+The script mirrors these constants (`ALLOWANCES`, `CACHE_BOUNDED`,
+`ASSUMED_UNMETERED`, `RATE_CEILING_PER_HOUR`, `UNMEASURED_TERMS`) and
+reports, per plan: `metered`, `cache_bounded`, `assumed_unmetered`,
+`rate_ceiling_per_hour_usd`, `total_usd` (`None` while any term is
+unmeasured), `total_measured_usd` and `unmeasured_terms`.
+`test_route_audit.py::test_free_dcf_is_not_an_allowance_term` pins that
+`dcf` never returns to the metered dict for Free.
+
+**Owner question (extends plan §9 Q5).** Q5 accepted the in-request DCF
+LLM call "bounded by 60/min/user" — that bound is 3,600 calls/hour, which
+is not a bound a Free tier can carry. Before `USAGE_LIMITS_ENABLED` flips,
+one of: (a) meter `dcf` runs for Free (e.g. 20 what-ifs per allowed ticker
+per month, matching `U_free_dcf`), (b) run `build_bull_bear` only for the
+default-assumption build and use the deterministic scenario fallback for
+Free what-ifs, or (c) precompute scenarios in the worker (Q5's alternative).
+Until decided, `U_free_dcf` is an assumption and the Free threshold below
+is evaluated against an assumption, not a ceiling.
 
 **Go / no-go thresholds** (plan §4.7, owner decision §9 Q1 if failed):
 
 | Plan | Threshold | Rationale |
 |---|---|---|
-| Pro | worst-case variable cost **< 50% of $29.99 = $14.995 / user / month** | leaves gross margin for infrastructure, payment fees (~3%+$0.30) and the unmetered `U_*` terms |
-| Free | worst-case variable cost **< $1.50 / user / month** | a Free user must be cheap enough that the trial-to-paid funnel, not cost control, is the reason to limit Free |
+| Pro | worst-case variable cost **< 50% of $29.99 = $14.995 / user / month** | leaves gross margin for infrastructure, payment fees (~3%+$0.30) and error in the assumed `U_*` terms |
+| Free | worst-case variable cost **< $1.50 / user / month** | a Free user must be cheap enough that the trial-to-paid funnel, not cost control, is the reason to limit Free. Evaluated with `U_free_dcf = 60` — an assumption; the DCF meter question above must be settled for this to become a ceiling |
 
 If either threshold fails, the DEVPLAN allowances are revisited *before* the
 flags flip (`USAGE_LIMITS_ENABLED` stays false until then). Likely levers, in
@@ -171,8 +221,9 @@ handful of users cannot exhaust a provider plan. Report it from the
 | comps | — | not measured | — | — | — | — | — |
 | chart_commentary | — | not implemented (FEAT-001) | — | — | — | — | — |
 
-Free worst case: **not measured** (threshold < $1.50)
-Pro worst case: **not measured** (threshold < $14.995)
+Free worst case: **not measured** (threshold < $1.50; with `U_free_dcf = 60` assumed)
+Pro worst case: **not measured** (threshold < $14.995; `portfolio_build` term to be supplied by hand)
+Rate-limit ceilings (`dcf`, `comps` $/hour): **not measured**
 
 Verdict: **pending measurement.** Owner question §9 Q1 cannot be answered
 until this section is filled.
