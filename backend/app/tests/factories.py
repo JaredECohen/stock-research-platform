@@ -37,6 +37,15 @@ def make_finding(agent: str = "Sector Analyst", **overrides: Any) -> AgentFindin
     return AgentFinding(**base)
 
 
+def make_findings(**overrides: AgentFinding) -> Dict[str, AgentFinding]:
+    """One plain finding per roster analyst, keyed by `AgentSpec.key` in
+    roster order — the shape `AnalystRound.findings` carries."""
+    from app.agents.roster import AGENTS
+    findings = {spec.key: make_finding(spec.display_name) for spec in AGENTS}
+    findings.update(overrides)
+    return findings
+
+
 def make_profile(ticker: str = "TEST", **overrides: Any) -> Dict[str, Any]:
     base: Dict[str, Any] = {
         "ticker": ticker,
