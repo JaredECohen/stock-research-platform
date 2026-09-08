@@ -66,19 +66,11 @@ CAPABILITY_CASES = [
     pytest.param("get_filings", "Filings Service", id="filings"),
     pytest.param("get_earnings_transcripts", "Transcript Service", id="transcript"),
     # `get_current_price` reads the quote first and only falls back to
-    # `get_close_series` when the quote misses, so a dead price feed reaches
-    # the DCF engine only in some fixture states. The deterministic consumer
-    # of the price series is the technical agent, which swallows the failure
-    # today; S2 records it there (data["degraded"] + note_soft). Flip this
-    # case to "Technical Analyst" and drop the xfail when S2 lands.
-    pytest.param(
-        "get_price_history", "DCF Engine", id="price-series",
-        marks=pytest.mark.xfail(
-            strict=False,
-            reason="price-series failure is swallowed by the technical agent "
-                   "until S2 records it; DCF attribution depends on the quote path",
-        ),
-    ),
+    # `get_close_series` when the quote misses, so the DCF engine sees a
+    # dead price feed only in some fixture states. The technical agent is
+    # the deterministic consumer: it records the failure softly under its
+    # own name (S2), so that is the attribution a reader can rely on.
+    pytest.param("get_price_history", "Technical Analyst", id="price-series"),
     # The memo path reaches news only through the filing analyst's BM25
     # retrieval, so today the failure is attributed to that analyst.
     pytest.param("get_news", "Filing Analyst", id="news"),
