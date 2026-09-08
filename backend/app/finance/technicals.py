@@ -89,12 +89,19 @@ def vwma(rows: Sequence[Dict[str, Any]], window: int) -> Optional[float]:
     num = 0.0
     den = 0.0
     for r in chunk:
-        try:
-            c = float(r.get("close")) if isinstance(r, dict) else float(r)
-        except (TypeError, ValueError):
+        # A missing close used to reach `float(None)` and be caught as a
+        # TypeError; testing for None first is the same skip, spelled so the
+        # type-checker can see it.
+        close_raw = r.get("close") if isinstance(r, dict) else r
+        if close_raw is None:
             continue
         try:
-            v = float(r.get("volume")) if isinstance(r, dict) else 0.0
+            c = float(close_raw)
+        except (TypeError, ValueError):
+            continue
+        volume_raw = r.get("volume") if isinstance(r, dict) else None
+        try:
+            v = float(volume_raw) if volume_raw is not None else 0.0
         except (TypeError, ValueError):
             v = 0.0
         num += c * v

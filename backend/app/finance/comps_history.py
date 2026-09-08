@@ -98,8 +98,11 @@ def _closing_price_for(
         if not d:
             continue
         if d <= target_date:
+            close_raw = r.get("close")
+            if close_raw is None:
+                continue
             try:
-                chosen = float(r.get("close"))
+                chosen = float(close_raw)
             except (TypeError, ValueError):
                 continue
         else:
@@ -273,8 +276,8 @@ def build_history_stats(
     current_vs_own_median: Dict[str, float] = {}
     for metric in _METRICS:
         series = [
-            m.get(metric) for m in per_period_metrics
-            if m.get(metric) is not None
+            v for m in per_period_metrics
+            if (v := m.get(metric)) is not None
         ]
         # `pe` should drop sign-flip periods (negative net income makes P/E
         # meaningless) — `safe_div` already returned None for divide-by-zero,

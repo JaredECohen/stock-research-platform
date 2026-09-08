@@ -1,9 +1,14 @@
 """Guards on what the app drags into memory at import time.
 
 Every module imported at startup is resident for the life of the
-process. `pandas` alone is ~48MB, and it was in `requirements.txt` with
+process. `pandas` alone is ~48MB, and it was a declared dependency with
 zero call sites anywhere in the repo. Dropping it only stays dropped if
 something notices when an import sneaks back in.
+
+Dependencies are declared in pyproject.toml [project.dependencies];
+requirements.txt is the generated lock (see backend/Makefile), so
+"restore the dependency" below means editing pyproject.toml and
+re-locking, never editing requirements.txt.
 """
 from __future__ import annotations
 
@@ -33,7 +38,7 @@ def test_pandas_is_not_imported_by_the_app():
     """pandas was removed from requirements — nothing may import it."""
     assert _app_import_probe("'pandas' in sys.modules") == "False", (
         "app.main now imports pandas; either restore the dependency in "
-        "requirements.txt or keep the import lazy"
+        "pyproject.toml (then `make lock`) or keep the import lazy"
     )
 
 
