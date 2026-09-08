@@ -64,4 +64,21 @@ LIMITS = {
     "custom_screen":   "30/minute",
     "seed_universe":    "1/minute",
     "admin_backfill":  "1/5minute",
+    # FEAT-002. `public_get` is the anonymous ceiling on the marketing
+    # reads (`/api/public/*`); `bootstrap` is the signup ceiling on
+    # `POST /api/me/bootstrap` — the only per-IP number that bounds how
+    # many trials one address can start per hour, so keep it small.
+    "public_get":      "60/minute",
+    "bootstrap":        "3/hour",
 }
+
+
+def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    """Structured 429 for slowapi's per-IP limits.
+
+    Delegates to `auth.ratelimit.structured_slowapi_handler` so the per-IP
+    and per-user limiters emit one shape. Imported lazily: `auth` pulls in
+    the ORM, and this module is imported by every route module.
+    """
+    from .auth.ratelimit import structured_slowapi_handler
+    return structured_slowapi_handler(request, exc)

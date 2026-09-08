@@ -10,12 +10,13 @@ from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from .api import (
+    routes_account,
     routes_admin,
+    routes_billing,
     routes_chat,
     routes_comps,
     routes_data_catalog,
@@ -23,12 +24,14 @@ from .api import (
     routes_health,
     routes_macro,
     routes_portfolio,
+    routes_public,
     routes_screener,
     routes_stocks,
 )
 from .api.admin_auth import admin_auth_middleware
+from .auth.middleware import customer_auth_middleware
 from .config import settings
-from .rate_limit import limiter
+from .rate_limit import limiter, rate_limit_exceeded_handler
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("marketmosaic")
@@ -36,6 +39,16 @@ log = logging.getLogger("marketmosaic")
 
 # Paths that don't deserve a UILog row (very noisy + low signal).
 _HTTP_LOG_SKIP_PATHS = {"/api/admin/ui-log"}
+
+# Query keys whose VALUES must never be persisted to `ui_logs.payload`.
+# The customer auth middleware only reads `Authorization`, so a `?token=`
+# is ignored for auth — but this middleware stores every query param, and
+# a credential pasted into a URL would otherwise sit in the database.
+_REDACTED_QUERY_KEYS = {"token", "authorization", "access_token", "api_key", "apikey", "key", "secret"}
+
+
+def _safe_query(params) -> dict:
+    return {k: ("<redacted>" if k.lower() in _REDACTED_QUERY_KEYS else v) for k, v in dict(params).items()}
 
 
 async def _http_logging_middleware(request: Request, call_next):
@@ -69,7 +82,7 @@ async def _http_logging_middleware(request: Request, call_next):
                         duration_ms=duration_ms,
                         session_id=request.headers.get("x-session-id"),
                         payload={
-                            "query": dict(request.query_params),
+                            "query": _safe_query(request.query_params),
                             "error": error_str or None,
                         },
                     ))
@@ -100,7 +113,11 @@ def create_app() -> FastAPI:
     # slowapi looks up at request time; `SlowAPIMiddleware` is what
     # actually evaluates the configured per-route limits.
     app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    # Structured 429 body (`code`, `scope`, `retry_after`, `window_seconds`,
+    # `message`) plus a `Retry-After` header, so the per-IP slowapi limits
+    # and the per-user DB limits in `auth/ratelimit.py` look identical to
+    # the frontend's RateLimitNotice.
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
     app.add_middleware(SlowAPIMiddleware)
 
     # Wave 8G — HTTP request tracing. Every API call emits a structured
@@ -117,6 +134,16 @@ def create_app() -> FastAPI:
     # `admin_auth` and `test_admin_auth.py`.
     app.middleware("http")(admin_auth_middleware)
 
+    # FEAT-002 customer auth. Registered AFTER `admin_auth_middleware`, so
+    # it runs INSIDE it: admin-token traffic has already been accepted or
+    # rejected by the time this runs, and `auth/policy.py` classifies the
+    # admin prefix as "not mine" — the two guards never overlap, so the
+    # admin token never satisfies a customer route and a customer JWT
+    # never satisfies `/api/admin/*`. With AUTH_ENABLED=false it is a
+    # pass-through that still attaches an anonymous `request.state.principal`
+    # so route code has one code path.
+    app.middleware("http")(customer_auth_middleware)
+
     app.include_router(routes_health.router, tags=["system"])
     app.include_router(routes_stocks.router, tags=["stocks"])
     app.include_router(routes_screener.router, tags=["screener"])
@@ -127,6 +154,13 @@ def create_app() -> FastAPI:
     app.include_router(routes_macro.router, tags=["macro"])
     app.include_router(routes_data_catalog.router, tags=["data-catalog"])
     app.include_router(routes_admin.router, tags=["admin"])
+    # FEAT-002: account + public config (S1), public samples/events (S3)
+    # and billing (S4). The latter two are stubs until their slices land;
+    # including them here means `import app.main` never breaks on a
+    # missing module when the slices merge in any order.
+    app.include_router(routes_account.router, tags=["account"])
+    app.include_router(routes_public.router, tags=["public"])
+    app.include_router(routes_billing.router, tags=["billing"])
 
     @app.on_event("startup")
     def _startup() -> None:
