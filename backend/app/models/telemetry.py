@@ -39,6 +39,11 @@ class LLMCallLog(Base):
     generated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True,
     )
+    # FEAT-002: per-plan gross margin without prompts. Populated from
+    # `llm_call_context(user_id=…, feature=…)`; every pre-accounts row and
+    # every sweep-driven call stays NULL, which reads as "system spend".
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    feature: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 Index("ix_llm_call_run", LLMCallLog.run_id, LLMCallLog.generated_at)

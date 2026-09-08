@@ -11,6 +11,18 @@ its own without a cycle.
 """
 from __future__ import annotations
 
+from .accounts import (
+    AccountOut,
+    BillingOut,
+    BootstrapOut,
+    EntitlementOut,
+    PlanStateOut,
+    PublicConfigOut,
+    StructuredError,
+    UsageHistoryItem,
+    UsageOut,
+    UserOut,
+)
 from .agents import (
     AgentFinding,
     BullBearAnalysis,
@@ -143,4 +155,15 @@ __all__ = [
     "ChatRequest",
     "AgentTrace",
     "ChatResponse",
+    # accounts (FEAT-002)
+    "StructuredError",
+    "EntitlementOut",
+    "PlanStateOut",
+    "UserOut",
+    "BillingOut",
+    "AccountOut",
+    "BootstrapOut",
+    "UsageHistoryItem",
+    "UsageOut",
+    "PublicConfigOut",
 ]

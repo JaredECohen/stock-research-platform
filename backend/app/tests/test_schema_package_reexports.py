@@ -54,6 +54,9 @@ SCHEMA_NAMES = [
     "CustomScreenResult",
     "MispricingThesis", "ValuationVerdict", "StockMemoOut",
     "ChatMessage", "ChatRequest", "AgentTrace", "ChatResponse",
+    # FEAT-002 (additive, `schemas/accounts.py`).
+    "StructuredError", "EntitlementOut", "PlanStateOut", "UserOut", "BillingOut",
+    "AccountOut", "BootstrapOut", "UsageHistoryItem", "UsageOut", "PublicConfigOut",
 ]
 
 # `typing.Literal` aliases are not classes and carry no `__module__`.
@@ -68,12 +71,16 @@ MODEL_NAMES = [
     "MemoOutcome", "EarningsTranscript", "DocChunk", "MemoPostmortem",
     "ThemeExposure", "CatalystEvent", "RegenJob", "MispricingAudit",
     "CronLoopRun",
+    # FEAT-002 (`models/accounts.py`, `models/public.py`).
+    "User", "Subscription", "UsageCounter", "UsageEvent", "AdminOverride",
+    "BillingWebhookEvent", "RateLimitWindow", "ActiveAction",
+    "PublicSample", "AnalyticsEvent",
 ]
 
 # Frozen at the split. `research_snapshots` / `cache_cost_logs` live in
 # `app.cache.snapshots` and are only on the metadata because
 # `models/__init__.py` imports them for the side effect.
-TABLE_NAMES = [
+TABLE_NAMES = sorted([
     "cache_cost_logs", "cached_documents", "catalyst_events", "companies",
     "cron_loop_runs", "dcf_models", "doc_chunks", "earnings_transcripts",
     "filing_docs", "financial_periods", "llm_call_logs", "memo_outcomes",
@@ -81,14 +88,19 @@ TABLE_NAMES = [
     "mispricing_audits", "portfolio_runs", "provider_cache", "regen_jobs",
     "research_snapshots", "screener_metrics", "screener_scores", "sdk_traces",
     "stock_memos", "theme_exposure", "ui_logs",
-]
+    # FEAT-002 (`models/accounts.py`, `models/public.py`).
+    "users", "subscriptions", "usage_counters", "usage_events", "admin_overrides",
+    "billing_webhook_events", "rate_limit_windows", "active_actions",
+    "public_samples", "analytics_events",
+])
 
 SCHEMA_SUBMODULES = [
     "common", "agents", "dcf", "comps", "macro", "portfolio", "screener",
-    "memo", "chat",
+    "memo", "chat", "accounts",
 ]
 MODEL_SUBMODULES = [
     "universe", "documents", "memo", "dcf", "portfolio", "telemetry", "jobs",
+    "accounts", "public",
 ]
 
 # sha256 of `StockMemoOut.model_json_schema()` (sorted keys, compact

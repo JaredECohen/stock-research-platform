@@ -46,6 +46,11 @@ class ChatResponse(BaseModel):
     comps: CompsResult | None = None
     screener: ScreenerResult | None = None
     sources: list[str] = Field(default_factory=list)
+    # FEAT-002: when the login wall is on, chat never generates a memo
+    # inside the request. Tickers the answer needed but had no stored memo
+    # for are listed here so the UI can offer a (charged) research run.
+    # Empty in every other case, including with auth disabled.
+    needs_analysis: list[str] = Field(default_factory=list)
     disclaimer: str = (
         "MarketMosaic is for research and education only and does not provide personalized financial advice."
     )

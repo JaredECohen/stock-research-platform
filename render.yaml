@@ -103,6 +103,17 @@ services:
       # replica; set RATE_LIMIT_STORAGE_URL=redis://… when scaling out.
       - key: RATE_LIMIT_ENABLED
         value: "true"
+      # Render terminates TLS and proxies to the container, so the socket
+      # peer uvicorn sees is Render's proxy on every request; the caller
+      # is the LAST X-Forwarded-For entry (the one the proxy appended).
+      # `app/rate_limit.client_ip` reads that entry for slowapi's per-IP
+      # ceilings, the DB limiter's ip: buckets and the bootstrap IP hash —
+      # without it the "3 signups per hour per IP" cap was 3 per hour for
+      # the whole site. Exactly one hop here; a CDN in front makes it 2.
+      # Do NOT reach for FORWARDED_ALLOW_IPS="*" instead: uvicorn's
+      # always-trust mode takes the FIRST entry, which the client controls.
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
       # Long-term agent memory writes to memory/companies/<TICKER>.md.
       # Render's container disk is ephemeral — disable by default to
       # avoid silently losing entries on every redeploy. Set "true"
@@ -138,6 +149,43 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GEMINI_API_KEY
+        sync: false
+
+      # FEAT-002 — accounts, trial, Pro billing. All three flags ship OFF
+      # and flip in the dashboard in this order once the Clerk/Stripe
+      # values below are set: AUTH_ENABLED → USAGE_LIMITS_ENABLED →
+      # BILLING_ENABLED. With AUTH_ENABLED=true and the CLERK_* values
+      # still empty, every non-public route answers 503 (fail closed);
+      # marketing and /health stay up. These live on the WEB service
+      # only: the worker never reads a JWT or a Stripe webhook, and
+      # test_deploy_config.py asserts it defines none of them.
+      - key: AUTH_ENABLED
+        value: "false"
+      - key: BILLING_ENABLED
+        value: "false"
+      - key: USAGE_LIMITS_ENABLED
+        value: "false"
+      - key: CLERK_ISSUER
+        sync: false
+      - key: CLERK_JWKS_URL
+        sync: false
+      - key: CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: CLERK_AUTHORIZED_PARTIES
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_PRO_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_PRO_ANNUAL
+        sync: false
+      - key: STRIPE_PORTAL_CONFIGURATION_ID
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: ABUSE_HASH_SALT
         sync: false
 
   # ---------------------------------------------------------------------

@@ -20,6 +20,16 @@ from __future__ import annotations
 # for the side-effect of registering on Base.metadata; the symbols themselves
 # are re-exported via app.cache.
 from ..cache.snapshots import CacheCostLog, ResearchSnapshot  # noqa: F401
+from .accounts import (
+    ActiveAction,
+    AdminOverride,
+    BillingWebhookEvent,
+    RateLimitWindow,
+    Subscription,
+    UsageCounter,
+    UsageEvent,
+    User,
+)
 from .dcf import DCFModel
 from .documents import (
     CachedDocument,
@@ -38,10 +48,23 @@ from .memo import (
     MispricingAudit,
 )
 from .portfolio import PortfolioRun
+from .public import AnalyticsEvent, PublicSample
 from .telemetry import LLMCallLog, SDKTrace, UILog
 from .universe import Company, ScreenerMetric, ScreenerScore, StockMemo
 
 __all__ = [
+    # accounts (FEAT-002)
+    "User",
+    "Subscription",
+    "UsageCounter",
+    "UsageEvent",
+    "AdminOverride",
+    "BillingWebhookEvent",
+    "RateLimitWindow",
+    "ActiveAction",
+    # public (FEAT-002)
+    "PublicSample",
+    "AnalyticsEvent",
     # universe
     "Company",
     "StockMemo",

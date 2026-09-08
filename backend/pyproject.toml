@@ -90,6 +90,16 @@ dependencies = [
     # tiktoken powers token-aware chunking of long filings / transcripts so
     # embed calls stay within OpenAI's 8K-token input limit per chunk.
     "tiktoken>=0.7.0",
+
+    # --- Customer auth (FEAT-002) --------------------------------------------
+    # Verifies Clerk session JWTs (RS256) against the tenant's JWKS in
+    # `app/auth/jwks.py`. The `crypto` extra is `cryptography`, which the
+    # RSA verification needs; both were already in the lock transitively
+    # (via `mcp`), so declaring them here pins the floor we actually rely
+    # on rather than inheriting whatever another package happens to want.
+    # Imported lazily inside the auth middleware so `import app.main` cost
+    # stays flat (see test_dependency_footprint.py).
+    "PyJWT[crypto]>=2.9",
 ]
 
 [tool.setuptools]

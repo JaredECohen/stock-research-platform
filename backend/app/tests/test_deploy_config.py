@@ -103,3 +103,73 @@ def test_every_service_caps_malloc_arenas():
     for svc in _services():
         env = {e["key"]: e.get("value") for e in svc.get("envVars", []) if "value" in e}
         assert env.get("MALLOC_ARENA_MAX"), f"{svc['name']} is missing MALLOC_ARENA_MAX"
+
+
+# ---------------------------------------------------------------------------
+# FEAT-002 — accounts / billing configuration lives on the web service only
+# ---------------------------------------------------------------------------
+
+FEAT_002_FLAGS = ("AUTH_ENABLED", "BILLING_ENABLED", "USAGE_LIMITS_ENABLED")
+FEAT_002_SECRETS = (
+    "CLERK_ISSUER", "CLERK_JWKS_URL", "CLERK_PUBLISHABLE_KEY", "CLERK_AUTHORIZED_PARTIES",
+    "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRICE_PRO_MONTHLY",
+    "STRIPE_PRICE_PRO_ANNUAL", "STRIPE_PORTAL_CONFIGURATION_ID", "PUBLIC_BASE_URL", "ABUSE_HASH_SALT",
+)
+
+
+def _web_and_worker():
+    services = _services()
+    web = [s for s in services if s.get("type") == "web"]
+    workers = [s for s in services if s.get("type") == "worker"]
+    assert len(web) == 1 and len(workers) == 1, "expected exactly one web and one worker service"
+    return web[0], workers[0]
+
+
+def test_feat_002_flags_ship_off_on_web():
+    """The login wall, meters and billing flip on in the dashboard, in
+    order, after the owner checklist — never by a deploy of this file."""
+    web, _ = _web_and_worker()
+    env = {e["key"]: e.get("value") for e in web.get("envVars", []) if "value" in e}
+    for flag in FEAT_002_FLAGS:
+        assert env.get(flag) == "false", f"web must define {flag}: \"false\" (got {env.get(flag)!r})"
+
+
+def test_feat_002_secrets_are_dashboard_placeholders_on_web():
+    """Present (so the dashboard shows them) but `sync: false` (so a value
+    can never be committed here)."""
+    web, _ = _web_and_worker()
+    entries = {e["key"]: e for e in web.get("envVars", [])}
+    for key in FEAT_002_SECRETS:
+        assert key in entries, f"web is missing a placeholder for {key}"
+        assert entries[key].get("sync") is False and "value" not in entries[key], (
+            f"{key} must be `sync: false` with no value in render.yaml"
+        )
+
+
+def test_web_reads_the_caller_through_exactly_one_proxy():
+    """Render fronts the web service with one proxy, so the socket peer is
+    the proxy on every request. `rate_limit.client_ip` keys every per-IP
+    ceiling (slowapi's, the DB limiter's ip: buckets, the trial-bootstrap
+    cap and its IP hash) on the X-Forwarded-For entry TRUSTED_PROXY_HOPS
+    from the end; without the pin those become site-wide limits. And
+    FORWARDED_ALLOW_IPS="*" is not a substitute: uvicorn's always-trust
+    mode takes the FIRST entry, which the client controls."""
+    web, _ = _web_and_worker()
+    env = {e["key"]: e.get("value") for e in web.get("envVars", []) if "value" in e}
+    assert env.get("TRUSTED_PROXY_HOPS") == "1", "web must pin TRUSTED_PROXY_HOPS: \"1\" for Render's single proxy"
+    assert env.get("FORWARDED_ALLOW_IPS") != "*", "always-trust proxy headers let the client pick its address"
+    assert not re.search(r"--forwarded-allow-ips[=\"',\s]*\*", DOCKERFILE.read_text()), (
+        "Dockerfile CMD must not run uvicorn with --forwarded-allow-ips '*'"
+    )
+
+
+def test_worker_never_sees_clerk_or_stripe():
+    """The worker reads no JWT and no webhook; a Clerk/Stripe value there
+    is secret surface with no consumer (and, for the SDK-free Stripe
+    client, no code path)."""
+    _, worker = _web_and_worker()
+    keys = {e["key"] for e in worker.get("envVars", [])}
+    leaked = sorted(k for k in keys if k.startswith(("CLERK_", "STRIPE_")))
+    assert not leaked, f"worker defines {leaked}"
+    for flag in FEAT_002_FLAGS:
+        assert flag not in keys, f"{flag} is a web-only flag"

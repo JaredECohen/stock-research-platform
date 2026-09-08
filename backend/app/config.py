@@ -216,6 +216,106 @@ class Settings(BaseSettings):
     max_stocks_in_portfolio: int = 25
     default_stock_universe: str = "large_cap_demo"
 
+    # ------------------------------------------------------------------
+    # FEAT-002 — customer accounts, freemium trial, Pro subscriptions.
+    # ------------------------------------------------------------------
+    # Every flag defaults OFF so a deployment that sets nothing behaves
+    # exactly as before this feature existed: no login wall, no meters,
+    # no billing routes doing anything. The three flags are independent
+    # and are meant to flip in this order (see docs/ops): AUTH_ENABLED
+    # first with internal accounts, then USAGE_LIMITS_ENABLED, then
+    # BILLING_ENABLED once Stripe test-mode has been exercised.
+    #
+    # Fail-closed rule: `auth_enabled` with no Clerk issuer/JWKS configured
+    # makes `customer_auth_middleware` answer 503 `auth_unavailable` on every
+    # non-public route rather than letting anyone through. Marketing/public
+    # routes stay up. A half-configured login wall is not a login wall.
+    auth_enabled: bool = False
+    billing_enabled: bool = False
+    usage_limits_enabled: bool = False
+    # Clerk. The JWT template named "marketmosaic" carries `email` and
+    # `email_verified` claims so the backend never calls Clerk's API per
+    # request. RS256 only; keys come from `<frontend-api>/.well-known/
+    # jwks.json`. `clerk_authorized_parties` is a comma-separated list of
+    # origins the token's `azp` must match (PUBLIC_BASE_URL in prod).
+    clerk_issuer: str = ""
+    clerk_jwks_url: str = ""
+    clerk_publishable_key: str = ""
+    clerk_authorized_parties: str = ""
+    # Stripe. No SDK — `services/stripe_client.py` is a thin httpx client.
+    # Secrets are read only there and in the webhook verifier; never log.
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_pro_monthly: str = ""
+    stripe_price_pro_annual: str = ""
+    stripe_portal_configuration_id: str = ""
+    # Checkout return URLs + Clerk allowed origin. Empty means "not set",
+    # which billing treats as unconfigured.
+    public_base_url: str = ""
+    # Curated public samples shown to logged-out visitors (S3 builds them
+    # in the worker; the public routes only read). Comma-separated.
+    sample_tickers: str = "NVDA,COST,JPM"
+    # Card-less Pro trial length, started once per verified email.
+    trial_days: int = 7
+    # How long a `past_due` subscription keeps Pro while the card is fixed.
+    grace_days: int = 7
+    # Per-environment overrides for `auth/features.py` allowances and
+    # `auth/ratelimit.py` scopes, so a number can change without a deploy.
+    # JSON objects; bad JSON is logged and ignored (defaults apply).
+    #   ENTITLEMENT_OVERRIDES_JSON='{"pm_chat": {"free": 5, "pro": 500}}'
+    #   RATE_LIMIT_OVERRIDES_JSON='{"research": "5/hour"}'
+    entitlement_overrides_json: str = "{}"
+    rate_limit_overrides_json: str = "{}"
+    # Whether GET /api/stocks/{t}/memo may run the agent graph inside the
+    # request. None (the default) resolves to `not auth_enabled`: today's
+    # behaviour with the login wall off, worker-only generation with it
+    # on. Set explicitly only to force one mode for an experiment.
+    memo_inline_generation: bool | None = None
+    # Legal pages ship as clearly labelled drafts until the owner records
+    # the review date here (any non-empty value flips the banner off).
+    legal_reviewed_at: str = ""
+    # Salt for the bootstrap IP / user-agent hashes on `users`. Those
+    # hashes exist so repeated trial creation from one source is visible
+    # later; salting keeps them from being a rainbow-table lookup of the
+    # visitor's IP. Rotate to invalidate. Empty salt still hashes (dev).
+    abuse_hash_salt: str = ""
+    # How many proxies sit between the internet and uvicorn — i.e. how
+    # many trailing `X-Forwarded-For` entries were written by infrastructure
+    # we trust. Render is exactly one hop, so the caller is the LAST entry
+    # (the one Render appended); anything left of it came from the client
+    # and proves nothing. Read by `rate_limit.client_ip`, which keys every
+    # per-IP ceiling and the bootstrap IP hash. 0 ignores the header and
+    # uses the socket peer: right for a directly exposed dev server, wrong
+    # behind any proxy (every caller then looks like the proxy).
+    trusted_proxy_hops: int = 1
+
+    @property
+    def auth_configured(self) -> bool:
+        """Enough Clerk config to verify a token at all."""
+        return bool(self.clerk_issuer) and bool(self.clerk_jwks_url)
+
+    @property
+    def billing_configured(self) -> bool:
+        return bool(self.stripe_secret_key) and bool(self.stripe_webhook_secret)
+
+    @property
+    def clerk_authorized_parties_list(self) -> list[str]:
+        return [p.strip() for p in self.clerk_authorized_parties.split(",") if p.strip()]
+
+    @property
+    def sample_tickers_list(self) -> list[str]:
+        return [t.strip().upper() for t in self.sample_tickers.split(",") if t.strip()]
+
+    @property
+    def legal_reviewed(self) -> bool:
+        return bool(self.legal_reviewed_at.strip())
+
+    @property
+    def memo_inline_generation_effective(self) -> bool:
+        if self.memo_inline_generation is None:
+            return not self.auth_enabled
+        return bool(self.memo_inline_generation)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
