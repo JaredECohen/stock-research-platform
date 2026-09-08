@@ -536,6 +536,10 @@ export interface ChatResponse {
   screener?: ScreenerResult;
   sources: string[];
   disclaimer: string;
+  /** Tickers the orchestrator could not answer about because no memo is
+   *  stored and inline generation is off under the login wall; the UI
+   *  offers a research run for each. Absent on older backends. */
+  needs_analysis?: string[];
 }
 
 export interface ProviderStatus {
@@ -594,4 +598,184 @@ export interface ProvidersStatusResponse {
   llm_configured: boolean;
   llm?: LLMStatus;
   feature_flags: Record<string, boolean>;
+}
+
+// ---------------------------------------------------------------------------
+// FEAT-002 — accounts, entitlements, billing, structured errors.
+// Mirrors backend/app/schemas/accounts.py. The backend is the authority on
+// every one of these; the frontend only renders them.
+// ---------------------------------------------------------------------------
+
+export type PlanName = "free" | "pro" | "none";
+export type PlanSource = "trial" | "subscription" | "override" | "grace" | "default" | "suspended";
+
+/** Names in backend/app/auth/features.py. Kept as a union so the UI copy
+ *  table (`FEATURE_LABELS`) cannot silently miss one. */
+export type FeatureName =
+  | "memo_view"
+  | "research_run"
+  | "pm_chat"
+  | "chart_commentary"
+  | "fundamentals_explorer"
+  | "dcf"
+  | "comps"
+  | "portfolio"
+  | "macro"
+  | "track_record"
+  | "memo_history"
+  | "data_catalog";
+
+export interface Entitlement {
+  feature: string;
+  allowed: boolean;
+  /** null = unlimited (when allowed). */
+  limit: number | null;
+  used: number;
+  remaining: number | null;
+  resets_at: string | null;
+  /** Free may use DCF/comps only for a ticker already counted as a memo view this month. */
+  follows_memo?: boolean;
+  metered?: boolean;
+}
+
+export interface PlanState {
+  plan: PlanName;
+  source: PlanSource;
+  trial_ends_at: string | null;
+  period_end: string | null;
+  cancel_at_period_end: boolean;
+  grace_until: string | null;
+  ends_at?: string | null;
+  warning: string | null;
+}
+
+export interface AccountUser {
+  id: number;
+  external_id: string;
+  email_verified: boolean;
+  created_at: string;
+  account_state: string;
+  trial_started_at?: string | null;
+  trial_ends_at?: string | null;
+}
+
+export interface BillingInfo {
+  has_subscription: boolean;
+  stripe_status: string | null;
+  interval: string | null;
+  /** True only when Stripe is configured AND this user has a customer id. */
+  portal_available: boolean;
+  billing_enabled?: boolean;
+}
+
+/** GET /api/me */
+export interface Account {
+  user: AccountUser;
+  plan: PlanState;
+  entitlements: Record<string, Entitlement>;
+  billing: BillingInfo;
+  period_key: string;
+  usage_limits_enabled: boolean;
+}
+
+/** POST /api/me/bootstrap */
+export interface BootstrapResponse extends Account {
+  trial_started_now: boolean;
+}
+
+export interface UsageHistoryItem {
+  feature: string;
+  resource_ref: string | null;
+  created_at: string;
+  status: string;
+  quantity: number;
+}
+
+/** GET /api/me/usage */
+export interface UsageResponse {
+  period_key: string;
+  features: Record<string, Entitlement>;
+  history: UsageHistoryItem[];
+}
+
+/** GET /api/public/config — safe defaults live in auth/ConfigProvider. */
+export interface PublicConfig {
+  auth_enabled: boolean;
+  billing_enabled: boolean;
+  usage_limits_enabled: boolean;
+  clerk_publishable_key: string | null;
+  clerk_frontend_api: string | null;
+  sample_tickers: string[];
+  prices: { monthly_cents: number; annual_cents: number; currency: string };
+  legal_reviewed: boolean;
+  app_env: string;
+  trial_days?: number;
+  features?: Record<string, { description: string; free: unknown; pro: unknown; metered: boolean; period: string }>;
+}
+
+export type BillingInterval = "month" | "year";
+
+/** Every entitlement / quota / rate-limit refusal puts this inside FastAPI's
+ *  `{"detail": ...}` envelope. `code` is what the UI switches on. */
+export type ApiErrorCode =
+  | "auth_required"
+  | "auth_invalid"
+  | "auth_unavailable"
+  | "email_unverified"
+  | "account_suspended"
+  | "plan_required"
+  | "quota_exceeded"
+  | "rate_limited"
+  | "concurrency_limited"
+  | "feature_disabled"
+  | "no_memo"
+  | "already_subscribed"
+  | "billing_unavailable"
+  | (string & {});
+
+export interface StructuredErrorDetail {
+  code: ApiErrorCode;
+  message?: string;
+  feature?: string | null;
+  plan?: string | null;
+  used?: number | null;
+  limit?: number | null;
+  remaining?: number | null;
+  resets_at?: string | null;
+  upgrade_url?: string | null;
+  scope?: string | null;
+  retry_after?: number | null;
+  window_seconds?: number | null;
+  extra?: Record<string, unknown>;
+}
+
+export interface EntitlementRefusal {
+  code: "plan_required" | "quota_exceeded";
+  feature: string | null;
+  plan: string | null;
+  used: number | null;
+  limit: number | null;
+  resets_at: string | null;
+  upgrade_url: string;
+  message: string;
+}
+
+export interface RateLimitRefusal {
+  code: "rate_limited" | "concurrency_limited";
+  scope: string;
+  retry_after: number;
+  window_seconds: number | null;
+  message: string;
+}
+
+/** 202 from POST /api/stocks/{t}/analyze (and from GET /memo?ondemand=true
+ *  when the login wall routes generation through the worker). */
+export interface AnalyzeJob {
+  ticker: string;
+  status: "started" | "in_progress";
+  started_at: string;
+  job_id: number;
+  current_version: number | null;
+  current_generated_at: string | null;
+  note: string;
 }
