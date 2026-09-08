@@ -253,6 +253,34 @@ def test_same_idempotency_key_replays_without_a_second_charge(limits_on):
         assert usage.used(db, u.id, "research_run", "2026-09") == 1
 
 
+def test_replayed_grant_release_leaves_the_live_reservation_alone(limits_on):
+    """Regression: a retry that replayed the idempotency key and then
+    failed used to release the ORIGINAL reservation — refunding a charge
+    for a job still in flight, and turning the worker's later commit
+    into a no-op. Only the call that made the reservation may release it."""
+    u = make_user()
+    p = principal_for(u)
+    key = "rr-" + uuid.uuid4().hex
+    first = authorize(request_for(p), "research_run", resource="NVDA", idempotency_key=key, now=NOW)
+    retry = authorize(request_for(p), "research_run", resource="NVDA", idempotency_key=key, now=NOW)
+    assert retry.replayed and retry.usage_event_id == first.usage_event_id
+    retry.release()  # the retry's handler blew up
+    with SessionLocal() as db:
+        assert db.get(UsageEvent, first.usage_event_id).status == "reserved", "the original charge is untouched"
+        assert usage.used(db, u.id, "research_run", "2026-09") == 1
+        assert usage.commit(db, first.usage_event_id) is True, "the worker's commit still lands"
+        assert db.get(UsageEvent, first.usage_event_id).status == "committed"
+    # and the original's own release still works when IT is the one that fails
+    key2 = "rr-" + uuid.uuid4().hex
+    u2 = make_user()
+    own = authorize(request_for(principal_for(u2)), "research_run", resource="COST", idempotency_key=key2, now=NOW)
+    replay = authorize(request_for(principal_for(u2)), "research_run", resource="COST", idempotency_key=key2, now=NOW)
+    replay.commit()  # a successful retry is allowed to make the charge stick
+    with SessionLocal() as db:
+        assert db.get(UsageEvent, own.usage_event_id).status == "committed"
+        assert usage.used(db, u2.id, "research_run", "2026-09") == 1
+
+
 def test_pm_chat_concurrency_lease(limits_on):
     u = make_user()
     p = principal_for(u)

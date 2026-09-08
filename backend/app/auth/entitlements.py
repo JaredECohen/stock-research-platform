@@ -15,8 +15,11 @@ render as something other than "an error occurred":
 A successful call returns a `Grant`. Metered grants hold a reserved
 `usage_events` id; the route (or the worker, for research runs) commits
 it on success and releases it on failure, so a generation that blows up
-costs the customer nothing. `require_feature(name)` is the FastAPI
-dependency form that does that commit/release automatically.
+costs the customer nothing. Only the call that CREATED the reservation
+may release it — a retry that replayed the same idempotency key gets
+`replayed=True` and its `release()` leaves the original charge alone.
+`require_feature(name)` is the FastAPI dependency form that does that
+commit/release automatically.
 
 Frontend gating is UX only. This is the authorization.
 """
@@ -124,7 +127,14 @@ class Grant:
         self._finish(db, commit=True)
 
     def release(self, db: Session | None = None) -> None:
-        """Give the units back (the work failed) and drop the lease. Idempotent."""
+        """Give the units back (the work failed) and drop the lease. Idempotent.
+
+        A REPLAYED grant (same idempotency key as an earlier call) never
+        releases: the reservation belongs to the request that made it, and
+        that work may still be running. Releasing here would refund a
+        charge for a job that goes on to finish — and turn the worker's
+        later `usage.commit` into a no-op. The lease is this call's own
+        and is always dropped."""
         if self._finalized:
             return
         self._finalized = True
@@ -137,7 +147,7 @@ class Grant:
             if self.usage_event_id is not None:
                 if commit:
                     usage.commit(session, self.usage_event_id)
-                else:
+                elif not self.replayed:
                     usage.release(session, self.usage_event_id)
             if self.lease_token:
                 ratelimit.release_lease(session, self.lease_token)
