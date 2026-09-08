@@ -159,10 +159,6 @@ ignore = [
 # monitoring/__init__ configures logging before importing the loops, so the
 # imports are deliberately not at the top.
 "app/monitoring/__init__.py" = ["E402", "F401"]
-# graph.py binds `log = logging.getLogger(__name__)` at :38, before its
-# imports. Moving that line is trivial but the file is owned by the
-# RP-001/RP-003 slices; drop this entry once one of them moves it.
-"app/agents/graph.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
@@ -172,13 +168,17 @@ known-first-party = ["app"]
 # number. Runs in CI as a non-blocking step (its error count is echoed) until
 # the scoped set reaches zero; then it becomes blocking and `files` grows.
 #
-# `files` must list only paths that exist: mypy errors on a missing entry,
-# and the RP-003 slice adds `app/agents/roster.py` / `memo_context.py` after
-# this config lands. Add them there.
+# `files` must list only paths that exist: mypy errors on a missing entry.
 # ---------------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.11"
-files = ["app/finance", "app/agents/graph.py", "app/agents/safe_runner.py"]
+files = [
+    "app/finance",
+    "app/agents/graph.py",
+    "app/agents/safe_runner.py",
+    "app/agents/roster.py",
+    "app/agents/memo_context.py",
+]
 follow_imports = "silent"
 ignore_missing_imports = true
 plugins = ["pydantic.mypy"]

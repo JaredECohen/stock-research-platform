@@ -365,3 +365,173 @@ def test_unpriced_memo_prose_never_prints_zero_lies(nvda_memo_unpriced):
     for t in texts:
         assert not any(z in t for z in _ZERO_LIES), t
     assert any("n/a" in p for p in m.bull_case.key_points + m.bear_case.key_points)
+
+
+# ---------------------------------------------------------------------------
+# RP-002 — `_build_verdict` exercised directly on a fixture memo
+#
+# The verdict stage is pure: it reads the post-review memo and returns a
+# `VerdictOutcome` the orchestrator applies. That is what lets these tests
+# target the reconciliation logic without the module-scoped pipeline run
+# above (which stays for the end-to-end invariants).
+# ---------------------------------------------------------------------------
+
+from app.agents.graph import _build_verdict  # noqa: E402
+from app.agents.memo_context import VerdictOutcome  # noqa: E402
+from app.schemas import MispricingThesis, ValuationVerdict  # noqa: E402
+from app.tests.factories import make_findings, make_memo, make_profile  # noqa: E402
+
+
+def _verdict_for(memo, *, dcf=None, comps=None, findings=None, profile=None) -> VerdictOutcome:
+    return _build_verdict(
+        memo, comps=comps, dcf=dcf,
+        profile=profile if profile is not None else make_profile(memo.ticker),
+        findings=findings if findings is not None else make_findings(),
+        ticker=memo.ticker,
+    )
+
+
+@pytest.mark.parametrize("rating, word", [
+    ("Very Bullish", "undervalued"), ("Bullish", "undervalued"),
+    ("Neutral", "fairly_priced"),
+    ("Bearish", "overvalued"), ("Very Bearish", "overvalued"),
+])
+def test_build_verdict_word_follows_rating(rating, word):
+    """The verdict word anchors on the rating badge even when the DCF
+    disagrees — the COST failure mode (DCF cheap, multiple rich)."""
+    memo = make_memo(rating_label=rating, dcf_summary={"base_upside": -0.25})
+    out = _verdict_for(memo)
+    assert out.valuation_verdict.verdict == word
+    assert out.final_verdict.startswith(f"PM final view: {rating} (confidence 60)")
+
+
+def test_build_verdict_dcf_number_is_the_dcf_summary_number():
+    memo = make_memo(rating_label="Bullish", dcf_summary={"base_upside": 0.173})
+    out = _verdict_for(memo, dcf=build_dcf("NVDA"))
+    assert out.valuation_verdict.dcf_base_upside == memo.dcf_summary["base_upside"]
+    assert "+17%" in out.valuation_verdict.summary
+
+
+def test_build_verdict_none_dcf_upside_says_unavailable():
+    """Phase 2: an unpriced DCF is "n/a", never a 0% neutral signal."""
+    memo = make_memo(rating_label="Bullish", dcf_summary={"base_upside": None})
+    out = _verdict_for(memo)
+    assert out.valuation_verdict.dcf_base_upside is None
+    assert "DCF unavailable" in out.valuation_verdict.summary
+    assert not any(z in out.valuation_verdict.summary for z in _ZERO_LIES)
+    assert out.valuation_verdict.verdict == "undervalued"
+
+
+def test_build_verdict_mispricing_fallback_is_nonempty_and_quotes_final_thesis():
+    memo = make_memo(
+        rating_label="Neutral", one_sentence_thesis="TEST is fairly priced — steady compounder.",
+    )
+    assert memo.mispricing_thesis == MispricingThesis()
+    out = _verdict_for(memo)
+    m = out.mispricing_thesis
+    assert m.consensus_view and m.our_view and m.gap
+    assert "no material mispricing" in m.gap.lower()
+    assert m.our_view == out.one_sentence_thesis
+    assert m.falsifiers == ["Cloud slowdown"]  # thesis breakers lead the falsifier list
+
+
+def test_build_verdict_keeps_a_populated_mispricing_thesis():
+    pm_thesis = MispricingThesis(consensus_view="Street sees 10%.", our_view="We see 15%.", gap="5pp.")
+    memo = make_memo(rating_label="Bullish", mispricing_thesis=pm_thesis)
+    out = _verdict_for(memo)
+    assert out.mispricing_thesis is pm_thesis
+
+
+def test_build_verdict_rewrites_the_anti_pattern_thesis():
+    anti = "TEST Corp — Technology / Software, AI hook; DCF base case +25% suggests material upside."
+    memo = make_memo(rating_label="Bullish", one_sentence_thesis=anti)
+    out = _verdict_for(memo)
+    assert out.thesis_rewrite_fired
+    assert out.one_sentence_thesis != anti
+    assert not graph._looks_like_anti_pattern_thesis(out.one_sentence_thesis)
+    assert "undervalued" in out.one_sentence_thesis
+    assert out.one_sentence_thesis in out.final_verdict
+
+
+def test_build_verdict_rewrites_a_thesis_whose_verdict_word_contradicts_the_rating():
+    """The thesis was written pre-blend; a risk-rec downgrade or the
+    factor blend can move the rating after it, so the stated word must
+    be re-checked against the FINAL rating."""
+    memo = make_memo(rating_label="Bearish", one_sentence_thesis="TEST is undervalued — great franchise.")
+    out = _verdict_for(memo)
+    assert out.thesis_rewrite_fired
+    assert "overvalued" in out.one_sentence_thesis
+    assert "undervalued" not in out.one_sentence_thesis
+
+
+def test_build_verdict_leaves_a_consistent_thesis_alone():
+    memo = make_memo(rating_label="Bullish", one_sentence_thesis="TEST is undervalued — cloud share gains.")
+    out = _verdict_for(memo)
+    assert not out.thesis_rewrite_fired
+    assert out.one_sentence_thesis == memo.one_sentence_thesis
+    assert out.degradations == []
+
+
+def test_build_verdict_is_pure():
+    """Nothing on the memo changes until `VerdictOutcome.apply` runs."""
+    memo = make_memo(
+        rating_label="Bullish",
+        one_sentence_thesis="TEST — Tech / Software, hook; DCF base case +25%.",
+    )
+    before = memo.model_dump()
+    out = _verdict_for(memo)
+    assert memo.model_dump() == before
+    assert memo.valuation_verdict == ValuationVerdict()
+    assert memo.final_verdict == ""
+    out.apply(memo, DegradationLog())
+    assert memo.valuation_verdict is out.valuation_verdict
+    assert memo.one_sentence_thesis == out.one_sentence_thesis
+    assert memo.mispricing_thesis is out.mispricing_thesis
+    assert memo.final_verdict == out.final_verdict
+
+
+def test_build_verdict_cross_sector_relevance_rides_on_scores():
+    findings = make_findings()
+    findings["sector"].data = {"cross_sector_relevance": ["AMD", "AVGO"], "kpi_placements": {"x": 1}}
+    memo = make_memo(rating_label="Neutral")
+    out = _verdict_for(memo, findings=findings)
+    assert out.extra_scores == {"cross_sector_relevance_count": 2.0}
+    assert "Cross-sector pull-through: AMD, AVGO." in out.final_verdict
+    assert "Cohort placement" in out.final_verdict
+    out.apply(memo, DegradationLog())
+    assert memo.scores["cross_sector_relevance_count"] == 2.0
+    assert memo.scores["factor_pm_score"] == 55.0  # existing scores kept
+
+
+def test_build_verdict_reports_a_valuation_verdict_crash_instead_of_hiding_it(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("verdict exploded")
+
+    monkeypatch.setattr(graph, "_build_valuation_verdict", boom)
+    memo = make_memo(rating_label="Neutral")
+    out = _verdict_for(memo)
+    assert out.valuation_verdict == ValuationVerdict()
+    assert [(n.agent, n.error_type, n.soft) for n in out.degradations] == [
+        ("Valuation Verdict", "RuntimeError", False),
+    ]
+    log = DegradationLog()
+    out.apply(memo, log)
+    assert log.degraded_agents() == ["Valuation Verdict"]
+    assert "verdict exploded" in log.failures[0]["message"]
+
+
+def test_build_verdict_soft_notes_dedupe_on_apply(monkeypatch):
+    """A second "Thesis Builder" note must not double the banner entry —
+    the same guarantee `record_soft` gave when the stage wrote to the log
+    directly."""
+    def boom(*a, **k):
+        raise RuntimeError("gap clause exploded")
+
+    monkeypatch.setattr(graph, "_market_gap_clause", boom)
+    memo = make_memo(rating_label="Bullish", one_sentence_thesis="TEST is undervalued — fine.")
+    out = _verdict_for(memo)
+    assert [(n.agent, n.soft) for n in out.degradations] == [("Thesis Builder", True)]
+    log = DegradationLog()
+    log.record_soft("Thesis Builder", "earlier note from PM synthesis")
+    out.apply(memo, log)
+    assert log.degraded_agents() == ["Thesis Builder"]
