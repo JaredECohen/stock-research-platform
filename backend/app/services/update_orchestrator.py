@@ -127,8 +127,20 @@ def should_auto_regen(
             "reason": f"stale_memo_{int(age_days)}d_old",
         }
     except Exception as exc:  # pragma: no cover — fail-safe to no-regen
-        log.warning("should_auto_regen failed for %s: %s", ticker, exc)
+        from ..agents.log_safety import log_safely  # lazy: agents imports services
+        log_safely(log, f"should_auto_regen failed for {ticker}", exc)
         return {"should": False, "reason": "db_error"}
+
+
+# `reason` values from `should_auto_regen` that mean the gate *crashed*
+# rather than decided. The event handlers report these as `kind="gate_error"`
+# instead of `kind="skipped"`, so a poller summarising its run cannot fold a
+# dead database into "nothing was due" (RP-001 class (c), kept fail-safe).
+GATE_ERROR_REASONS = frozenset({"db_error"})
+
+
+def _skip_kind(decision: Dict[str, Any]) -> str:
+    return "gate_error" if decision.get("reason") in GATE_ERROR_REASONS else "skipped"
 
 
 def _persist_raw_data_only(ticker: str) -> Dict[str, int]:
@@ -177,7 +189,7 @@ def on_transcript_event(ticker: str, *, period: str = "") -> Dict[str, Any]:
     decision = should_auto_regen(ticker)
     if not decision["should"]:
         return {
-            "ticker": ticker, "period": period, "kind": "skipped",
+            "ticker": ticker, "period": period, "kind": _skip_kind(decision),
             "reason": decision["reason"],
             "persisted": persist_counts,
         }
@@ -219,7 +231,7 @@ def on_filing_event(ticker: str, *, source: str = "filing_event") -> Dict[str, A
     decision = should_auto_regen(ticker)
     if not decision["should"]:
         return {
-            "ticker": ticker, "kind": "skipped",
+            "ticker": ticker, "kind": _skip_kind(decision),
             "reason": decision["reason"],
             "persisted": persist_counts,
         }
@@ -258,6 +270,18 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> Dict[str, Any]:
 
     from ..agents.news_impact_agent import apply_patch, assess
     assessment = assess(prior_memo, alert)
+    if assessment.get("error"):
+        # (b) RP-001: the agent crashed or got nothing back, so the alert
+        # was never judged — reporting it as "not material" would read as a
+        # verdict. The memo is left alone either way (safe side).
+        log.warning(
+            "news impact assessment failed for %s (%s); alert %r left unassessed",
+            ticker, assessment["error"], alert.title[:80],
+        )
+        return {
+            "patched": False, "ticker": ticker, "reason": "assessment_error",
+            "error": assessment["error"],
+        }
     if not assessment.get("material"):
         return {"patched": False, "ticker": ticker, "reason": "not_material"}
 
@@ -387,22 +411,32 @@ def on_regime_shift(prior_regime: str, new_regime: str) -> Dict[str, Any]:
     thread — a 10-ticker shift queues instantly instead of holding the
     scheduler thread for 10 sequential memo runs.
 
-    Returns {prior, new, refreshed: List[str]} for cron logging
-    (refreshed = enqueued; outcomes land in `regen_jobs`).
+    Returns {prior, new, refreshed: List[str], gate_errors: List[str]} for
+    cron logging (refreshed = handed to the gate; outcomes land in
+    `regen_jobs`; gate_errors = tickers whose auto-regen gate crashed, so
+    "refreshed" must not be read as "regenerated" for those).
     """
     if prior_regime == new_regime:
-        return {"prior": prior_regime, "new": new_regime, "refreshed": []}
+        return {"prior": prior_regime, "new": new_regime, "refreshed": [], "gate_errors": []}
     affected = _affected_tickers_for_regime_shift(prior_regime, new_regime)
     refreshed: List[str] = []
+    gate_errors: List[str] = []
     for ticker in affected:
         try:
             # Reuses the full_reanalysis path (gating + enqueue).
-            on_filing_event(ticker, source="regime_shift")
+            res = on_filing_event(ticker, source="regime_shift")
             refreshed.append(ticker)
+            if res.get("kind") == "gate_error":
+                gate_errors.append(ticker)
         except Exception as exc:  # pragma: no cover
-            log.warning("regime-shift refresh failed for %s: %s", ticker, exc)
+            from ..agents.log_safety import log_safely  # lazy: agents imports services
+            log_safely(log, f"regime-shift refresh failed for {ticker}", exc)
     log.info(
-        "regime shift %s → %s: enqueued regen for %d ticker(s) — %s",
+        "regime shift %s → %s: enqueued regen for %d ticker(s) — %s%s",
         prior_regime, new_regime, len(refreshed), refreshed,
+        f"; gate errors on {gate_errors}" if gate_errors else "",
     )
-    return {"prior": prior_regime, "new": new_regime, "refreshed": refreshed}
+    return {
+        "prior": prior_regime, "new": new_regime,
+        "refreshed": refreshed, "gate_errors": gate_errors,
+    }

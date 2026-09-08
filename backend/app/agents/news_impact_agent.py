@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 from ..config import settings
 from ..schemas import NewsAlert, StockMemoOut
 from . import llm
+from .log_safety import log_safely
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +112,11 @@ def assess(
 
     No LLM available → returns `{material: false}` deterministically:
     on the safe side, we don't push an unverified patch into a live memo.
+
+    An LLM that was configured but crashed or returned nothing also
+    yields `material=False` (same safe side), but with an `error` key
+    carrying the exception type — the update path must not report a
+    crashed assessment as "the news was not material" (RP-001 class (b)).
     """
     if not settings.has_llm:
         return {"material": False, "patch": {}, "rationales": {}, "delta_summary": ""}
@@ -141,11 +147,20 @@ def assess(
             route="cheap", model=settings.anthropic_cheap_model,
         )
     except Exception as exc:  # pragma: no cover — defensive
-        log.warning("news_impact_agent LLM call failed for %s: %s", memo.ticker, exc)
-        return {"material": False, "patch": {}, "rationales": {}, "delta_summary": ""}
+        log_safely(log, f"news_impact_agent LLM call failed for {memo.ticker}", exc)
+        return {
+            "material": False, "patch": {}, "rationales": {}, "delta_summary": "",
+            "error": type(exc).__name__,
+        }
 
     if not isinstance(out, dict):
-        return {"material": False, "patch": {}, "rationales": {}, "delta_summary": ""}
+        # `chat_json` absorbs provider failures into None (breaker open,
+        # unparseable response); the alert was never actually assessed.
+        log.warning("news_impact_agent got no usable LLM output for %s", memo.ticker)
+        return {
+            "material": False, "patch": {}, "rationales": {}, "delta_summary": "",
+            "error": "LLMNoOutput",
+        }
 
     material = bool(out.get("material"))
     if not material:

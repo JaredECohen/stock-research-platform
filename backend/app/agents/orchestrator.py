@@ -6,6 +6,7 @@ appropriate sub-graph, and synthesizes the final response.
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from sqlalchemy import select
@@ -33,7 +34,10 @@ from ..services.screener_service import compute_universe_scores
 from ..services.valuation_service import build_comps, build_dcf
 from . import llm, prompts
 from .graph import default_agent_trace, run_stock_memo
+from .log_safety import log_safely
 from .macro_agent import run_macro_scenario
+
+log = logging.getLogger(__name__)
 
 
 KNOWN_THEMES = {
@@ -354,21 +358,28 @@ class Orchestrator:
             # safe-runner-protected internally, so errors here would only come
             # from the unrecoverable "unknown ticker" case.
             memos = []
+            # (c) RP-001 / D8: a dropped ticker used to vanish from the
+            # comparison with no trace — the user asked about four names
+            # and silently read about three. The note rides on `sources`
+            # (appended after the cap so it is never truncated away).
+            unavailable: List[str] = []
             for t in tickers[:4]:
                 try:
                     memos.append(run_stock_memo(t))
-                except Exception:
-                    continue
+                except Exception as exc:
+                    log_safely(log, f"comparison memo unavailable for {t}", exc)
+                    unavailable.append(t)
+            unavailable_notes = [f"memo unavailable: {t}" for t in unavailable]
             if not memos:
                 return ChatResponse(
                     intent=intent,
                     answer="Could not generate any memos for the requested tickers.",
-                    agent_trace=trace,
+                    agent_trace=trace, sources=unavailable_notes,
                 )
             return ChatResponse(
                 intent=intent, answer=_render_comparison_answer(memos),
                 agent_trace=trace, memo=memos[0],
-                sources=[s for m in memos for s in m.sources_used][:20],
+                sources=[s for m in memos for s in m.sources_used][:20] + unavailable_notes,
             )
 
         if intent == "dcf_analysis" and tickers:
@@ -501,8 +512,16 @@ class Orchestrator:
                     if len(memos) >= 4:
                         break
                     continue
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # (a) the chat falls back to the lite company snapshot;
+                    # a stored memo that no longer validates is worth a
+                    # log line because the row is otherwise unreachable.
+                    log_safely(
+                        log,
+                        f"cached memo snapshot for {t} v{getattr(snap, 'version', '?')} "
+                        "could not be hydrated for chat context",
+                        exc,
+                    )
             lite = _company_lite_snapshot(t)
             if lite is not None:
                 company_lites.append(lite)
@@ -612,8 +631,9 @@ def _company_lite_snapshot(ticker: str) -> Optional[Dict[str, Any]]:
             live = get_current_price(c.ticker)
             if live is not None:
                 live_price = live
-        except Exception:  # pragma: no cover — best-effort overlay
-            pass
+        except Exception as exc:  # pragma: no cover — best-effort overlay
+            log_safely(log, f"live price overlay failed for {c.ticker}", exc,
+                       level=logging.DEBUG)
         return {
             "ticker": c.ticker,
             "name": c.company_name,

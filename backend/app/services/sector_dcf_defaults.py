@@ -156,6 +156,35 @@ Return strict JSON:
 """
 
 
+def _fell_back_to_baseline(profile: Dict[str, Any], exc: Optional[BaseException]) -> None:
+    """(b) RP-001: the LLM was configured and asked, and the DCF shipped
+    the generic baseline (15x exit, 2.5% tg, CAPM WACC) anyway.
+
+    That is a different implied price than the sector-aware one the memo
+    presents itself as carrying, so it lands on the memo banner
+    (`note_soft` no-ops outside a memo run). Only reached past the key
+    gate, so `settings.has_llm` holds here — without keys the baseline IS
+    the design and this is never called. Lazy imports: `app.agents`
+    imports the valuation service, which imports this module, at load.
+    """
+    from ..agents.log_safety import log_safely, redact
+    from ..agents.safe_runner import note_soft
+    ticker = profile.get("ticker")
+    if exc is not None:
+        log_safely(log, f"sector DCF override LLM call failed for {ticker}", exc)
+        note_soft(
+            "DCF Scenarios",
+            f"sector overrides LLM call failed; generic DCF baseline kept: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
+    else:
+        log.warning("sector DCF override LLM returned no usable output for %s", ticker)
+        note_soft(
+            "DCF Scenarios",
+            "sector overrides LLM returned no usable output; generic DCF baseline kept",
+        )
+
+
 def apply_sector_overrides(
     profile: Dict[str, Any],
     baseline: DCFAssumptions,
@@ -182,9 +211,10 @@ def apply_sector_overrides(
             max_tokens=900,
         )
     except Exception as exc:  # pragma: no cover — never block DCF
-        log.warning("sector DCF override LLM call failed: %s", exc)
+        _fell_back_to_baseline(profile, exc)
         return baseline
     if not isinstance(out, dict):
+        _fell_back_to_baseline(profile, None)
         return baseline
 
     # Build a clamped override dict; fall back to baseline on any

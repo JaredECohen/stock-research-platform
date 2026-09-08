@@ -204,6 +204,36 @@ Output EXACT JSON:
 """
 
 
+def _fell_back_to_deterministic(profile: Dict[str, Any], exc: Optional[BaseException]) -> None:
+    """(b) RP-001: the LLM was configured and asked, and the bull/bear
+    scenarios shipped the sector-templated bumps anyway.
+
+    The memo's bull/bear key points then cite templated drivers as if an
+    analyst had named them, so it lands on the memo banner (`note_soft`
+    no-ops outside a memo run). `build_bull_bear` returns before the LLM
+    call when `settings.has_llm` is false, so this is never reached in
+    deterministic mode, where the templated bumps ARE the design. Lazy
+    imports: `app.agents` imports the DCF engine, which imports this
+    module, at load.
+    """
+    from ..agents.log_safety import log_safely, redact
+    from ..agents.safe_runner import note_soft
+    ticker = profile.get("ticker")
+    if exc is not None:
+        log_safely(log, f"scenario assumptions LLM call failed for {ticker}", exc)
+        note_soft(
+            "DCF Scenarios",
+            f"bull/bear driver LLM call failed; sector-templated bumps used: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
+    else:
+        log.warning("scenario assumptions LLM returned no usable output for %s", ticker)
+        note_soft(
+            "DCF Scenarios",
+            "bull/bear driver LLM returned no usable output; sector-templated bumps used",
+        )
+
+
 def build_bull_bear(
     profile: Dict[str, Any], base: DCFAssumptions,
 ) -> Tuple[DCFAssumptions, List[ScenarioDriver], DCFAssumptions, List[ScenarioDriver]]:
@@ -246,10 +276,11 @@ def build_bull_bear(
             max_tokens=1200,
         )
     except Exception as exc:  # pragma: no cover — never block DCF
-        log.warning("scenario assumptions LLM call failed: %s", exc)
+        _fell_back_to_deterministic(profile, exc)
         return _deterministic_fallback(profile, base)
 
     if not isinstance(out, dict):
+        _fell_back_to_deterministic(profile, None)
         return _deterministic_fallback(profile, base)
 
     def _parse_side(side: Dict[str, Any]) -> Tuple[DCFAssumptions, List[ScenarioDriver]]:
