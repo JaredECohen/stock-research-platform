@@ -18,6 +18,7 @@ once, so a loop that never succeeded was absent rather than flagged.
 """
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import text
 
@@ -112,3 +113,76 @@ def test_index_is_restored_with_the_column():
         for col in (idx.get("column_names") or [])
     }
     assert "regime_at_memo" in indexed
+
+
+# ---------------------------------------------------------------------------
+# FEAT-002 — the additive account columns and tables
+# ---------------------------------------------------------------------------
+
+FEAT_002_TABLES = (
+    "users", "subscriptions", "usage_counters", "usage_events", "admin_overrides",
+    "billing_webhook_events", "rate_limit_windows", "active_actions",
+    "public_samples", "analytics_events",
+)
+
+# (table, column, index name or None) — columns added to tables that
+# already exist in every long-lived database.
+FEAT_002_ADDED_COLUMNS = (
+    ("regen_jobs", "requested_by_user_id", "ix_regen_jobs_requested_by_user_id"),
+    ("regen_jobs", "usage_event_id", None),
+    ("llm_call_logs", "user_id", "ix_llm_call_logs_user_id"),
+    ("llm_call_logs", "feature", None),
+)
+
+
+def test_feat_002_tables_are_created():
+    init_db()
+    existing = set(sa_inspect(engine).get_table_names())
+    missing = [t for t in FEAT_002_TABLES if t not in existing]
+    assert not missing, missing
+
+
+def _drop_column(table: str, column: str, index: str | None) -> None:
+    with engine.begin() as conn:
+        if index:
+            try:
+                conn.execute(text(f"DROP INDEX IF EXISTS {index}"))
+            except Exception:
+                pass
+        try:
+            conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {column}"))
+        except Exception:
+            pass
+
+
+@pytest.mark.parametrize("table,column,index", FEAT_002_ADDED_COLUMNS)
+def test_feat_002_added_columns_are_repaired_on_a_live_table(table, column, index):
+    """The production scenario for this feature: `regen_jobs` and
+    `llm_call_logs` exist in every deployment; the new nullable columns
+    must be added by `reconcile_missing_columns`, not by a migration
+    nobody runs."""
+    init_db()
+    assert column in _columns(table)
+    _drop_column(table, column, index)
+    assert column not in _columns(table), "setup failed"
+
+    added = reconcile_missing_columns()
+    assert f"{table}.{column}" in added
+    assert column in _columns(table)
+    if index:
+        indexed = {
+            col for idx in sa_inspect(engine).get_indexes(table)
+            for col in (idx.get("column_names") or [])
+        }
+        assert column in indexed
+
+
+def test_feat_002_columns_are_all_nullable_or_defaulted():
+    """Nothing added to an existing table may be NOT NULL without a
+    default — that is the one shape `reconcile_missing_columns` refuses."""
+    from app.models import LLMCallLog, RegenJob
+    for model, names in ((RegenJob, ("requested_by_user_id", "usage_event_id")),
+                         (LLMCallLog, ("user_id", "feature"))):
+        for name in names:
+            col = model.__table__.columns[name]
+            assert col.nullable or col.default is not None or col.server_default is not None, f"{model.__tablename__}.{name}"
