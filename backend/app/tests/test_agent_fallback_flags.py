@@ -580,3 +580,65 @@ def test_memory_entry_logs_dropped_structured_facts(caplog):
         rendered = entry.render()
     assert "structured-facts" not in rendered
     assert "structured facts dropped from memory entry 2026-09-07 (earnings)" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# 11. Fundamentals: a degraded earnings feed is announced, never cached
+# ---------------------------------------------------------------------------
+
+def _healthy_nvda_snapshot() -> None:
+    """Make sure a healthy 90-day `company_cold` row exists before a test
+    breaks the feed, so the assertions below distinguish "served an old
+    healthy snapshot" from "served the poisoned one"."""
+    full = get_full_financials("NVDA", force_refresh=True)
+    assert full["earnings"], "demo NVDA earnings must be non-empty for this test"
+
+
+def test_degraded_earnings_build_is_not_cached(monkeypatch):
+    """Regression: the degraded build (earnings={}) used to be written as the
+    quarter-long snapshot, so the banner fired once and every later memo
+    hydrated `earnings={}` with no `note_soft` — a silent failure introduced
+    by the change meant to remove one. A partial build must skip `cache_put`
+    so the very next run retries the feed, exactly as the pre-degrade
+    exception path did."""
+    from app.cache import cache_get
+
+    _healthy_nvda_snapshot()
+    healthy = cache_get("NVDA", "company_cold")
+    assert healthy is not None and healthy.payload["earnings"]
+
+    original = DataService.get_earnings
+    monkeypatch.setattr(DataService, "get_earnings", _boom)
+    log = DegradationLog()
+    with log.activate():
+        degraded = get_full_financials("NVDA", force_refresh=True)
+    assert degraded["earnings"] == {}
+    assert "_partial" not in degraded, "the private marker must not leak to callers"
+    assert log.degraded_agents() == ["Earnings Analyst"]
+    assert log.events()[0]["error_type"] == "RuntimeError"
+
+    # The newest live snapshot is still the healthy one — nothing was written.
+    latest = cache_get("NVDA", "company_cold")
+    assert latest is not None and latest.id == healthy.id
+    assert latest.payload["earnings"]
+
+    # Feed recovers: a plain (non-forced) read serves real earnings again and
+    # records nothing — the reviewer's reproduction, inverted.
+    monkeypatch.setattr(DataService, "get_earnings", original)
+    log2 = DegradationLog()
+    with log2.activate():
+        recovered = get_full_financials("NVDA")
+    assert recovered["earnings"], recovered["earnings"].keys()
+    assert log2.degraded_agents() == []
+
+
+def test_still_dead_earnings_feed_is_announced_on_every_run(monkeypatch):
+    """Because the partial build is not cached, a feed that stays dead is
+    re-announced by each run rather than hidden behind a hydrate."""
+    monkeypatch.setattr(DataService, "get_earnings", _boom)
+    for _ in range(2):
+        log = DegradationLog()
+        with log.activate():
+            full = get_full_financials("NVDA", force_refresh=True)
+        assert full["earnings"] == {}
+        assert log.degraded_agents() == ["Earnings Analyst"]

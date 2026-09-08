@@ -99,6 +99,7 @@ def test_earnings_feed_failure_degrades_the_earnings_analyst(monkeypatch):
     degrades it (`earnings={}` + `note_soft("Earnings Analyst", ...)`)
     instead of failing the whole memo. Pinned here so a later change back
     to fatal is a deliberate choice, not drift."""
+    original = DataService.get_earnings
     monkeypatch.setattr(DataService, "get_earnings", _boom)
     memo = graph.run_stock_memo("NVDA", force_refresh=True)
     assert memo.ticker == "NVDA"
@@ -108,6 +109,13 @@ def test_earnings_feed_failure_degrades_the_earnings_analyst(monkeypatch):
     assert "simulated capability failure" in event["message"]
     # The section still ships — degraded, not replaced by the crash stub.
     assert memo.earnings_agent_view.confidence > 0.0
+    # The degraded build must not have become NVDA's 90-day fundamentals
+    # snapshot: with the feed healthy again, a plain read serves real
+    # earnings (an older snapshot or a fresh fetch), so this test cannot
+    # poison every later test in the session — or every later memo in prod.
+    from app.services.fundamentals_service import get_full_financials
+    monkeypatch.setattr(DataService, "get_earnings", original)
+    assert get_full_financials("NVDA")["earnings"], "degraded build was cached"
 
 
 def test_profile_failure_still_raises_value_error():
