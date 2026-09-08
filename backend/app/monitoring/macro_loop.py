@@ -77,11 +77,13 @@ def run_once() -> Dict:
     # (prior_regime is None) so first-boot doesn't refresh the
     # universe.
     refreshed: List[str] = []
+    gate_errors: List[str] = []
     if prior_regime and prior_regime != regime:
         try:
             from ..services.update_orchestrator import on_regime_shift
             res = on_regime_shift(prior_regime, regime)
             refreshed = res.get("refreshed") or []
+            gate_errors = res.get("gate_errors") or []
         except Exception as exc:  # pragma: no cover
             log.warning("regime-shift trigger failed: %s", exc)
 
@@ -89,7 +91,9 @@ def run_once() -> Dict:
         f" (shifted from {prior_regime}; refreshed {len(refreshed)})"
         if refreshed else ""
     )
-    record_run("macro_loop", note=note)
+    if gate_errors:
+        note += f"; gate errors on {len(gate_errors)}: {', '.join(gate_errors[:5])}"
+    record_run("macro_loop", success=not gate_errors, note=note)
     return {
         "regime": regime,
         "regime_changed": prior_regime != regime,

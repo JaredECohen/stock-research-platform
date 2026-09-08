@@ -50,6 +50,7 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
         tickers = ds.list_tickers()
 
     events: List[dict] = []
+    gate_errors: List[str] = []
     for t in tickers:
         try:
             filings = get_filings(t) or []
@@ -77,13 +78,21 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
             # ticker's poll.
             try:
                 from ..services.update_orchestrator import on_filing_event
-                on_filing_event(t)
+                res = on_filing_event(t)
+                # `kind="gate_error"` means the auto-regen gate crashed
+                # (e.g. a DB error) rather than deciding to skip; count it
+                # so the note stops reading as "nothing to do".
+                if isinstance(res, dict) and res.get("kind") == "gate_error":
+                    gate_errors.append(t)
             except Exception as exc:  # pragma: no cover — diagnostic only
                 log.warning("update_orchestrator filing handler failed for %s: %s", t, exc)
         if accessions:
             _save_seen_accessions(t, accessions | seen)
 
-    record_run("edgar_poller", note=f"{len(events)} new filings")
+    note = f"{len(events)} new filings"
+    if gate_errors:
+        note += f"; gate errors on {len(gate_errors)}: {', '.join(gate_errors[:5])}"
+    record_run("edgar_poller", success=not gate_errors, note=note)
     return events
 
 

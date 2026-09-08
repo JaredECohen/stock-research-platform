@@ -100,7 +100,17 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
         if periods:
             _save_seen_periods(t, periods | seen)
 
-    record_run("transcripts_poller", note=f"{len(events)} new transcripts")
+    # `kind="gate_error"` = the auto-regen gate crashed rather than
+    # decided; surface it in the note instead of letting it pass as a skip.
+    gate_errors = [
+        e["ticker"] for e in events
+        if isinstance(e.get("regenerated"), dict)
+        and e["regenerated"].get("kind") == "gate_error"
+    ]
+    note = f"{len(events)} new transcripts"
+    if gate_errors:
+        note += f"; gate errors on {len(gate_errors)}: {', '.join(gate_errors[:5])}"
+    record_run("transcripts_poller", success=not gate_errors, note=note)
     return events
 
 

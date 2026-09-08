@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 
 def _build_recommendations(
-    profile: Dict, ratios: Dict, dcf_summary: Optional[Dict],
+    profile: Dict, ratios: Dict, dcf_summary: Optional[str],
 ) -> List[RiskRecommendation]:
     """Wave 8H — concrete, actionable recs the graph deterministically
     applies. Each rec ties an observable signal to a specific change in
@@ -93,7 +93,7 @@ def _build_recommendations(
 
 
 def run_risk_agent(
-    profile: Dict, ratios: Dict, dcf_summary: Optional[Dict] = None,
+    profile: Dict, ratios: Dict, dcf_summary: Optional[str] = None,
     *, prior_round_critique: Optional[str] = None,
 ) -> AgentFinding:
     risks: List[str] = profile.get("risks") or []

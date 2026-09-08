@@ -52,6 +52,7 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
         tickers = list(ds.list_tickers())[:10]  # demo universe sample
 
     events: List[dict] = []
+    assessment_failures = 0
     for t in tickers:
         last = _last_run_for(t)
         if last and (datetime.utcnow() - last).total_seconds() < _THROTTLE_SECONDS:
@@ -82,11 +83,18 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
             try:
                 from ..services.update_orchestrator import on_news_alert
                 for alert in material:
-                    on_news_alert(t, alert)
+                    res = on_news_alert(t, alert)
+                    # A dead news-impact LLM used to read as "no material
+                    # news"; the handler now reports it and the note counts it.
+                    if isinstance(res, dict) and res.get("reason") == "assessment_error":
+                        assessment_failures += 1
             except Exception as exc:  # pragma: no cover — diagnostic only
                 log.warning("update_orchestrator failed for %s: %s", t, exc)
 
-    record_run("news_loop", note=f"{len(events)} material events")
+    note = f"{len(events)} material events"
+    if assessment_failures:
+        note += f"; {assessment_failures} assessments failed"
+    record_run("news_loop", success=assessment_failures == 0, note=note)
     return events
 
 

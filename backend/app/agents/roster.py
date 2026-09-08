@@ -113,11 +113,10 @@ AGENTS: Tuple[AgentSpec, ...] = (
     AgentSpec(
         key="risk", display_name="Risk Analyst",
         checkpoint="graph.risk_finding",
-        # The runner's annotation says Optional[Dict] but the graph has always
-        # handed it the DCF's summary *string* (it only does `"bear" in x` and
-        # str(x) on it). Keep the value the same; the annotation is S2's to fix.
+        # The graph has always handed the risk agent the DCF's summary
+        # *string* (it only does `"bear" in x` and str(x) on it).
         run=lambda i, q: run_risk_agent(
-            i.profile, i.ratios, (i.dcf.summary if i.dcf else None),  # type: ignore[arg-type]
+            i.profile, i.ratios, (i.dcf.summary if i.dcf else None),
             prior_round_critique=q,
         ),
         needs=("profile", "ratios", "dcf"),
