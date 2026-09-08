@@ -16,14 +16,23 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..agents.sector_tools import prepare_sector_context
+from ..auth.entitlements import Grant, require_feature
 from ..data_catalog import SERIES_REGISTRY, by_id, list_categories, list_regions, list_sector_tags
 from ..services import company_geography, data_catalog_service, sector_overlays
 from ..services.data_service import get_data_service
+from .gating import customer_wall_on, rate_scope
 
 router = APIRouter()
+
+# FEAT-002: the whole catalog is Pro (`data_catalog`; the middleware
+# refuses Free). Two knobs that spend money on demand are switched off for
+# customers while the login wall is on: `allow_llm` on the geography
+# lookup and `force_refresh` on a series fetch. The admin token never
+# reaches these routes (it opens the admin prefix only), so under the wall
+# every caller is a customer and there is no one to except.
 
 
 @router.get("/api/data-catalog/series")
@@ -34,6 +43,8 @@ def list_series(
     region: str | None = None,
     source: str | None = None,
     keyword: str | None = None,
+    _rate: None = Depends(rate_scope("data")),
+    _grant: Grant = Depends(require_feature("data_catalog", resource_param=None)),
 ) -> list[dict[str, Any]]:
     """Browse the full catalog, optionally filtered."""
     if any([sector, sub_industry, category, region, source, keyword]):
@@ -49,11 +60,18 @@ def list_series(
 
 
 @router.get("/api/data-catalog/series/{series_id}")
-def get_series(series_id: str, force_refresh: bool = False) -> dict[str, Any]:
+def get_series(
+    series_id: str,
+    force_refresh: bool = False,
+    _rate: None = Depends(rate_scope("series")),
+    _grant: Grant = Depends(require_feature("data_catalog", resource_param=None)),
+) -> dict[str, Any]:
     """Fetch a single series snapshot with derived stats."""
     spec = by_id(series_id)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"Unknown series_id: {series_id}")
+    if customer_wall_on():
+        force_refresh = False  # a cache bypass is provider spend; not a customer knob
     snap = data_catalog_service.fetch_series(series_id, force_refresh=force_refresh)
     if snap is None:
         raise HTTPException(status_code=502, detail="No provider responded.")
@@ -61,7 +79,10 @@ def get_series(series_id: str, force_refresh: bool = False) -> dict[str, Any]:
 
 
 @router.get("/api/data-catalog/meta")
-def catalog_meta() -> dict[str, Any]:
+def catalog_meta(
+    _rate: None = Depends(rate_scope("data")),
+    _grant: Grant = Depends(require_feature("data_catalog", resource_param=None)),
+) -> dict[str, Any]:
     """Enumerate the discrete values that can be filtered on."""
     return {
         "categories": list_categories(),
@@ -76,6 +97,8 @@ def catalog_meta() -> dict[str, Any]:
 def ticker_context(
     ticker: str,
     overlays: list[str] | None = Query(default=None),
+    _rate: None = Depends(rate_scope("series")),
+    _grant: Grant = Depends(require_feature("data_catalog", resource_param=None)),
 ) -> dict[str, Any]:
     """Return the same context payload the sector analyst sees for a ticker.
 
@@ -101,8 +124,16 @@ def ticker_context(
 
 
 @router.get("/api/data-catalog/ticker/{ticker}/geography")
-def ticker_geography(ticker: str, allow_llm: bool = False) -> dict[str, Any]:
-    """Return the resolved geographic footprint for a ticker."""
+def ticker_geography(
+    ticker: str,
+    allow_llm: bool = False,
+    _rate: None = Depends(rate_scope("data")),
+    _grant: Grant = Depends(require_feature("data_catalog", resource_param=None)),
+) -> dict[str, Any]:
+    """Return the resolved geographic footprint for a ticker. The LLM
+    fallback is never available to customer accounts (see module note)."""
+    if customer_wall_on():
+        allow_llm = False
     geo = company_geography.get_geography(ticker, allow_llm_fallback=allow_llm)
     if geo is None:
         return {"ticker": ticker.upper(), "available": False, "source": None}
@@ -110,7 +141,12 @@ def ticker_geography(ticker: str, allow_llm: bool = False) -> dict[str, Any]:
 
 
 @router.get("/api/data-catalog/ticker/{ticker}/overlay/{name}")
-def ticker_overlay(ticker: str, name: str) -> dict[str, Any]:
+def ticker_overlay(
+    ticker: str,
+    name: str,
+    _rate: None = Depends(rate_scope("series")),
+    _grant: Grant = Depends(require_feature("data_catalog", resource_param=None)),
+) -> dict[str, Any]:
     """Compute a single named overlay for a ticker."""
     sym = ticker.upper().strip()
     profile: dict[str, Any] = {"ticker": sym}

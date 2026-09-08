@@ -1,10 +1,13 @@
 """Screener endpoints — AI-first, factor-rank, and rule-based custom screen."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from ..agents.llm import llm_call_context
+from ..auth.entitlements import Grant, require_feature
+from ..auth.principal import current_principal
 from ..database import SessionLocal
 from ..models import Company, ScreenerMetric, ScreenerScore
 from ..rate_limit import LIMITS, limiter
@@ -16,6 +19,7 @@ from ..schemas import (
     ScreenerResult,
 )
 from ..services.screener_service import compute_universe_scores
+from .gating import rate_scope
 
 router = APIRouter()
 
@@ -44,6 +48,7 @@ def get_screener(
     sort_by: str | None = "pm_score",
     order: str = "desc",
     limit: int = 50,
+    _rate: None = Depends(rate_scope("data")),
 ) -> ScreenerResult:
     """AI-first screen + factor-rank.
 
@@ -62,7 +67,7 @@ def get_screener(
 
 
 @router.post("/api/screener/run", response_model=ScreenerResult)
-def run_screener(req: ScreenerRequest) -> ScreenerResult:
+def run_screener(req: ScreenerRequest, _rate: None = Depends(rate_scope("data"))) -> ScreenerResult:
     result = compute_universe_scores(theme=req.theme)
     if req.sectors:
         wanted = {s.lower() for s in req.sectors}
@@ -181,6 +186,7 @@ def _execute_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
 @limiter.limit(LIMITS["custom_screen"])
 def run_custom_screen(
     request: Request, response: Response, req: CustomScreenRequest,
+    _rate: None = Depends(rate_scope("data")),
 ) -> CustomScreenResult:
     """Filter the curated universe (S&P 500 + extensions) against a user-defined rule set.
 
@@ -205,6 +211,8 @@ class NLScreenerRequest(BaseModel):
 @limiter.limit(LIMITS["custom_screen"])
 def run_nl_screener(
     request: Request, response: Response, req: NLScreenerRequest,
+    _rate: None = Depends(rate_scope("llm_light")),
+    _grant: Grant = Depends(require_feature("pm_chat", resource_param=None)),
 ) -> dict:
     """Wave 10 — natural-language screener.
 
@@ -214,8 +222,13 @@ def run_nl_screener(
     `theme_exposure`. Returns the inferred request alongside the
     matching rows so the user can audit / refine the translation
     before re-running.
+
+    FEAT-002: Pro only, and the translation is one LLM call — so it is
+    metered as an Ask-the-PM turn (`pm_chat`), same as macro analysis.
     """
     if not (req.query or "").strip():
         raise HTTPException(status_code=400, detail="query is required")
     from ..services import nl_screener
-    return nl_screener.run(req.query)
+    principal = current_principal(request)
+    with llm_call_context(user_id=principal.user_id, feature="pm_chat"):
+        return nl_screener.run(req.query)
