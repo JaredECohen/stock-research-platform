@@ -14,7 +14,7 @@ import re
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from ..cache import cache_get, cache_put, resolved_cost_tokens
 from ..config import settings
@@ -35,7 +35,7 @@ _NEWS_DOMAINS_PATH = (
 )
 
 
-def _load_domain_lists() -> Tuple[Set[str], Set[str]]:
+def _load_domain_lists() -> tuple[set[str], set[str]]:
     """Read the governance file. Returns `(allowed, blocked)` sets, lower-cased.
 
     Falls back to empty sets if the file is missing or malformed — the
@@ -55,11 +55,11 @@ def _load_domain_lists() -> Tuple[Set[str], Set[str]]:
 
 
 @lru_cache(maxsize=1)
-def _domain_lists_cached() -> Tuple[Set[str], Set[str]]:
+def _domain_lists_cached() -> tuple[set[str], set[str]]:
     return _load_domain_lists()
 
 
-def reload_domain_lists() -> Tuple[Set[str], Set[str]]:
+def reload_domain_lists() -> tuple[set[str], set[str]]:
     """Force-reload the governance file. Useful for tests + admin tooling
     after the JSON has been edited live."""
     _domain_lists_cached.cache_clear()
@@ -67,11 +67,11 @@ def reload_domain_lists() -> Tuple[Set[str], Set[str]]:
 
 
 # Public for tests + admin use.
-def allowed_domains() -> Set[str]:
+def allowed_domains() -> set[str]:
     return _domain_lists_cached()[0]
 
 
-def blocked_domains() -> Set[str]:
+def blocked_domains() -> set[str]:
     return _domain_lists_cached()[1]
 
 
@@ -122,14 +122,14 @@ def _company_name(ticker: str) -> str:
         return ""
 
 
-def _name_tokens(name: str) -> List[str]:
+def _name_tokens(name: str) -> list[str]:
     """Lowercase tokens from a company name with corporate suffixes stripped.
     Used to decide whether a grounded item is actually about the company."""
     cleaned = _NAME_SUFFIX_RE.sub(" ", name or "")
     return [t for t in re.split(r"[^a-z0-9&]+", cleaned.lower()) if len(t) >= 4]
 
 
-def _is_about_company(item: Dict[str, Any], ticker: str, name_tokens: List[str]) -> bool:
+def _is_about_company(item: dict[str, Any], ticker: str, name_tokens: list[str]) -> bool:
     """Drop grounded items that don't mention the ticker or any significant
     token of the company name. Gemini's `google_search` tool sometimes
     returns sector roundups or peer-comparison articles where the target
@@ -147,10 +147,10 @@ def _is_about_company(item: Dict[str, Any], ticker: str, name_tokens: List[str])
     return any(tok in text for tok in name_tokens)
 
 
-def _filter_grounded_sources(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _filter_grounded_sources(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     allowed = allowed_domains()
     blocked = blocked_domains()
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for it in items:
         d = _domain_of(it.get("url", ""))
         if not d:
@@ -177,7 +177,7 @@ def _since_window(ticker: str) -> date:
     return date.today() - timedelta(days=60)
 
 
-def run(ticker: str, *, force_refresh: bool = False) -> List[NewsAlert]:
+def run(ticker: str, *, force_refresh: bool = False) -> list[NewsAlert]:
     """Fetch + classify news, cache as `news_hot`. Returns NewsAlert list."""
     cache_subject = f"news_hot:{ticker}"
     today_key = f"news_hot:{ticker}:{date.today().isoformat()}"
@@ -192,7 +192,7 @@ def run(ticker: str, *, force_refresh: bool = False) -> List[NewsAlert]:
                 pass
 
     # Try Gemini-grounded path first; fall back to deterministic news_service.
-    items: List[Dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
     name = _company_name(ticker)
     name_tokens = _name_tokens(name)
     used_gemini = False
@@ -242,7 +242,7 @@ def run(ticker: str, *, force_refresh: bool = False) -> List[NewsAlert]:
 
     items = _filter_grounded_sources(items)
 
-    alerts: List[NewsAlert] = []
+    alerts: list[NewsAlert] = []
     for n in items[:10]:
         title = n.get("title") or n.get("headline") or ""
         summary = n.get("summary") or n.get("description") or ""

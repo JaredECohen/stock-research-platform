@@ -8,9 +8,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any
 
 from sqlalchemy import select
-from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import settings
 from ..finance.dcf import fmt_price, fmt_upside
@@ -60,7 +60,7 @@ def _ticker_re() -> re.Pattern:
     return re.compile(r"\$?\b([A-Z]{1,5})\b")
 
 
-def _extract_tickers(text: str) -> List[str]:
+def _extract_tickers(text: str) -> list[str]:
     universe = set(get_data_service().list_tickers())
     found = []
     for tok in _ticker_re().findall(text):
@@ -85,7 +85,7 @@ def _extract_tickers(text: str) -> List[str]:
     return found
 
 
-def _extract_theme(text: str) -> Optional[str]:
+def _extract_theme(text: str) -> str | None:
     low = text.lower()
     for k, v in KNOWN_THEMES.items():
         if k in low:
@@ -93,7 +93,7 @@ def _extract_theme(text: str) -> Optional[str]:
     return None
 
 
-def classify_intent(message: str) -> Tuple[IntentType, List[str], Optional[str]]:
+def classify_intent(message: str) -> tuple[IntentType, list[str], str | None]:
     """Classify intent. Tries LLM first, falls back to deterministic rules."""
     llm_out = llm.chat_json(
         prompts.INTENT_CLASSIFIER_PROMPT + "\n\nMessage:\n" + message,
@@ -179,7 +179,7 @@ def _render_memo_answer(memo: StockMemoOut) -> str:
     return "\n".join(bullets)
 
 
-def _render_comparison_answer(memos: List[StockMemoOut]) -> str:
+def _render_comparison_answer(memos: list[StockMemoOut]) -> str:
     parts = ["**Cross-comparison from a PM's perspective:**\n"]
     for m in memos:
         parts.append(f"### {m.ticker} — {m.rating_label} (confidence {int(m.confidence_score)})")
@@ -281,7 +281,7 @@ _FOLLOWUP_HINTS = (
 )
 
 
-def _is_conceptual_followup(message: str, history: List[ChatMessage]) -> bool:
+def _is_conceptual_followup(message: str, history: list[ChatMessage]) -> bool:
     """Heuristic — should we route this through the SDK chat agent
     instead of a workflow handler?
 
@@ -302,7 +302,7 @@ def _is_conceptual_followup(message: str, history: List[ChatMessage]) -> bool:
     return False
 
 
-def _try_sdk_chat(message: str, history: Optional[List[ChatMessage]]) -> Optional[str]:
+def _try_sdk_chat(message: str, history: list[ChatMessage] | None) -> str | None:
     """Try the OpenAI Agents SDK chat agent (8 tools); return None on
     any failure so callers can fall back to legacy handlers."""
     if not settings.use_agents_sdk:
@@ -315,7 +315,7 @@ def _try_sdk_chat(message: str, history: Optional[List[ChatMessage]]) -> Optiona
 
 
 class Orchestrator:
-    def chat(self, message: str, history: Optional[List[ChatMessage]] = None) -> ChatResponse:
+    def chat(self, message: str, history: list[ChatMessage] | None = None) -> ChatResponse:
         intent, tickers, theme = classify_intent(message)
         trace = default_agent_trace(intent)
 
@@ -362,7 +362,7 @@ class Orchestrator:
             # comparison with no trace — the user asked about four names
             # and silently read about three. The note rides on `sources`
             # (appended after the cap so it is never truncated away).
-            unavailable: List[str] = []
+            unavailable: list[str] = []
             for t in tickers[:4]:
                 try:
                     memos.append(run_stock_memo(t))
@@ -460,8 +460,8 @@ class Orchestrator:
         return ChatResponse(intent=intent, answer=ans, agent_trace=trace)
 
     def _answer_with_memo_context(
-        self, message: str, history: List[ChatMessage],
-    ) -> Optional[str]:
+        self, message: str, history: list[ChatMessage],
+    ) -> str | None:
         """Wave 8S — answer a free-form follow-up question using the
         memos already produced in this conversation.
 
@@ -492,13 +492,13 @@ class Orchestrator:
         # Pull the latest snapshot memos for each candidate. memo_store
         # serves cached snapshots cheaply — no re-running of the graph.
         from ..services.memo_store import latest_memo, memo_to_pydantic
-        memos: List[Dict[str, Any]] = []
+        memos: list[dict[str, Any]] = []
         # Tickers without a memo still get a "lite" company snapshot
         # (sector, industry, business_description + screener_metrics) so
         # the LLM can answer comparative follow-ups like "which has the
         # strongest moat?" without us having to pre-run a full memo for
         # every ticker the user mentions.
-        company_lites: List[Dict[str, Any]] = []
+        company_lites: list[dict[str, Any]] = []
         seen: set[str] = set()
         for t in candidate_tickers:
             if t in seen:
@@ -603,7 +603,7 @@ class Orchestrator:
         return body
 
 
-def _company_lite_snapshot(ticker: str) -> Optional[Dict[str, Any]]:
+def _company_lite_snapshot(ticker: str) -> dict[str, Any] | None:
     """Compact dossier when no memo exists — sector / industry / market
     cap from the `companies` table, plus screener-tier metrics (P/E,
     margins, ROIC, growth) so the chat LLM can answer comparative
@@ -625,7 +625,7 @@ def _company_lite_snapshot(ticker: str) -> Optional[Dict[str, Any]]:
         # Wave 10 — overlay the live intraday quote so the chat
         # agent's company-lite carries an honest current price, not
         # the 7-day-cached `companies.last_price`.
-        live_price: Optional[float] = c.last_price
+        live_price: float | None = c.last_price
         try:
             from ..services.market_data_service import get_current_price
             live = get_current_price(c.ticker)
@@ -663,7 +663,7 @@ def _company_lite_snapshot(ticker: str) -> Optional[Dict[str, Any]]:
         }
 
 
-def _memo_for_chat_context(m: StockMemoOut) -> Dict[str, Any]:
+def _memo_for_chat_context(m: StockMemoOut) -> dict[str, Any]:
     """Compact memo projection for the free-form chat prompt. Includes
     the dimensions a PM would actually cite when answering 'which is
     the better investment' — rating, stock score, DCF deltas, key

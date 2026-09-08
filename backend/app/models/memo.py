@@ -3,7 +3,6 @@ the mispricing audit."""
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -34,14 +33,14 @@ class MemoSnapshot(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticker: Mapped[str] = mapped_column(String(16), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
-    parent_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    parent_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     trigger: Mapped[str] = mapped_column(String(48), default="full_reanalysis")
     memo_json: Mapped[dict] = mapped_column(JSON, default=dict)
     revision_log: Mapped[list] = mapped_column(JSON, default=list)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True,
     )
-    as_of_date: Mapped[Optional[datetime]] = mapped_column(
+    as_of_date: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True, index=True,
     )
 
@@ -68,12 +67,12 @@ class MemoRunCheckpoint(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(String(64), index=True)
     step_name: Mapped[str] = mapped_column(String(64))
-    ticker: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, index=True)
+    ticker: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True,
     )
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("run_id", "step_name", name="uq_run_step"),
@@ -99,19 +98,19 @@ class MemoOutcome(Base):
     ticker: Mapped[str] = mapped_column(String(16), index=True)
     rating_at_memo: Mapped[str] = mapped_column(String(32), default="")
     confidence_at_memo: Mapped[float] = mapped_column(Float, default=0.0)
-    price_at_memo: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    price_at_memo: Mapped[float | None] = mapped_column(Float, nullable=True)
     horizon_days: Mapped[int] = mapped_column(Integer, index=True)
     evaluated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    forward_return: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    benchmark_return: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    alpha: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    thesis_held: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    forward_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    benchmark_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    alpha: Mapped[float | None] = mapped_column(Float, nullable=True)
+    thesis_held: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
     # Wave 10 — macro regime at memo creation, copied from
     # `MemoSnapshot.memo_json["macro_regime_at_memo"]` at evaluate
     # time. Lets calibration's regime-conditional dashboards bucket
     # outcomes without joining through the snapshot blob.
-    regime_at_memo: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    regime_at_memo: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
 
     __table_args__ = (
         UniqueConstraint(
@@ -141,9 +140,9 @@ class MemoPostmortem(Base):
     verdict: Mapped[str] = mapped_column(String(32), default="")  # right / wrong / mixed / pending
     lesson: Mapped[str] = mapped_column(Text, default="")
     agent_attribution: Mapped[dict] = mapped_column(JSON, default=dict)
-    realized_return: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    benchmark_return: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    regime_at_memo: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    realized_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    benchmark_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    regime_at_memo: Mapped[str | None] = mapped_column(String(32), nullable=True)
     written_to_memory: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

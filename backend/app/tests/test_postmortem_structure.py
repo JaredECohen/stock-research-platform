@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import socket
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
 
@@ -38,7 +38,7 @@ def _offline(monkeypatch):
 
 
 def _seed_snapshot(
-    ticker: str, *, version: int = 1, rating: Optional[str] = "Bullish",
+    ticker: str, *, version: int = 1, rating: str | None = "Bullish",
     days_ago: int = 120, regime: str = "", clear: bool = True,
 ) -> MemoSnapshot:
     with SessionLocal() as db:
@@ -189,11 +189,11 @@ def memory_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def no_llm(monkeypatch) -> List[Dict[str, Any]]:
+def no_llm(monkeypatch) -> list[dict[str, Any]]:
     """Pin `_llm_postmortem` to None so the deterministic branch runs
     regardless of which keys the environment carries; returns the calls
     so a test can prove the driver asked."""
-    calls: List[Dict[str, Any]] = []
+    calls: list[dict[str, Any]] = []
 
     def _none(memo, outcome, horizon_days):
         calls.append({"ticker": memo.get("ticker"), "horizon": horizon_days})
@@ -281,7 +281,7 @@ def test_run_postmortems_with_a_configured_key_uses_only_the_chat_json_seam(memo
     t = "TSTPMLLM"
     monkeypatch.setattr(settings, "openai_api_key", "test-key-not-real")
     assert settings.has_llm is True
-    seen: List[Dict[str, Any]] = []
+    seen: list[dict[str, Any]] = []
 
     def _chat_json(prompt: str, **kwargs: Any):
         seen.append(kwargs)

@@ -1,25 +1,23 @@
 """Comparable-company schemas — peer rows, self-history stats, result."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 from pydantic import BaseModel, Field
 
 
 class CompsRow(BaseModel):
     ticker: str
     company_name: str
-    market_cap: Optional[float] = None
-    revenue_growth: Optional[float] = None
-    gross_margin: Optional[float] = None
-    operating_margin: Optional[float] = None
-    ebitda_margin: Optional[float] = None
-    roic: Optional[float] = None
-    pe: Optional[float] = None
-    ev_revenue: Optional[float] = None
-    ev_ebitda: Optional[float] = None
-    p_fcf: Optional[float] = None
-    fcf_yield: Optional[float] = None
+    market_cap: float | None = None
+    revenue_growth: float | None = None
+    gross_margin: float | None = None
+    operating_margin: float | None = None
+    ebitda_margin: float | None = None
+    roic: float | None = None
+    pe: float | None = None
+    ev_revenue: float | None = None
+    ev_ebitda: float | None = None
+    p_fcf: float | None = None
+    fcf_yield: float | None = None
 
 
 class CompsHistoryStats(BaseModel):
@@ -37,28 +35,28 @@ class CompsHistoryStats(BaseModel):
     """
     lookback_periods: int
     lookback_label: str  # e.g. "20 quarters" / "5y"
-    own_median: Dict[str, Optional[float]] = Field(default_factory=dict)
-    own_p25: Dict[str, Optional[float]] = Field(default_factory=dict)
-    own_p75: Dict[str, Optional[float]] = Field(default_factory=dict)
-    current_percentile: Dict[str, float] = Field(default_factory=dict)
-    current_vs_own_median: Dict[str, float] = Field(default_factory=dict)
+    own_median: dict[str, float | None] = Field(default_factory=dict)
+    own_p25: dict[str, float | None] = Field(default_factory=dict)
+    own_p75: dict[str, float | None] = Field(default_factory=dict)
+    current_percentile: dict[str, float] = Field(default_factory=dict)
+    current_vs_own_median: dict[str, float] = Field(default_factory=dict)
     interpretation: str = ""
 
 
 class CompsResult(BaseModel):
     target: CompsRow
-    peers: List[CompsRow]
+    peers: list[CompsRow]
     median: CompsRow
-    target_percentiles: Dict[str, float] = Field(default_factory=dict)
-    premium_discount: Dict[str, float] = Field(default_factory=dict)
+    target_percentiles: dict[str, float] = Field(default_factory=dict)
+    premium_discount: dict[str, float] = Field(default_factory=dict)
     interpretation: str = ""
     # Wave 3E: optional self-historical context. None when the target lacks
     # enough usable history for any metric (typical for a recent IPO or a
     # sparse demo dataset).
-    history: Optional[CompsHistoryStats] = None
+    history: CompsHistoryStats | None = None
     # Wave 10 — Track B exposure peers. Cross-sector names that share
     # the target's key exposures (AI capex, China consumer, long-rate
     # sensitivity, etc.) — picked at runtime by an LLM with theme-
     # exposure fallback. Empty when no such peers were identified.
-    exposure_peers: List[CompsRow] = Field(default_factory=list)
+    exposure_peers: list[CompsRow] = Field(default_factory=list)
     exposure_rationale: str = ""

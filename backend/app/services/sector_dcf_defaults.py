@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ..config import settings
 from ..schemas import DCFAssumptions
@@ -63,10 +63,10 @@ def _clamp(value: float, key: str) -> float:
 
 
 def _build_payload(
-    profile: Dict[str, Any],
+    profile: dict[str, Any],
     baseline: DCFAssumptions,
-    cycle_position: Optional[str] = None,
-) -> Dict[str, Any]:
+    cycle_position: str | None = None,
+) -> dict[str, Any]:
     return {
         "ticker": profile.get("ticker"),
         "company_name": profile.get("company_name"),
@@ -156,7 +156,7 @@ Return strict JSON:
 """
 
 
-def _fell_back_to_baseline(profile: Dict[str, Any], exc: Optional[BaseException]) -> None:
+def _fell_back_to_baseline(profile: dict[str, Any], exc: BaseException | None) -> None:
     """(b) RP-001: the LLM was configured and asked, and the DCF shipped
     the generic baseline (15x exit, 2.5% tg, CAPM WACC) anyway.
 
@@ -186,10 +186,10 @@ def _fell_back_to_baseline(profile: Dict[str, Any], exc: Optional[BaseException]
 
 
 def apply_sector_overrides(
-    profile: Dict[str, Any],
+    profile: dict[str, Any],
     baseline: DCFAssumptions,
     *,
-    cycle_position: Optional[str] = None,
+    cycle_position: str | None = None,
 ) -> DCFAssumptions:
     """Wave 10i — layer LLM-judged sector overrides on top of the
     deterministic baseline. Returns the baseline unchanged on any

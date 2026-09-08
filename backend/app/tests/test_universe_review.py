@@ -26,10 +26,10 @@ from app.database import SessionLocal, session_scope
 from app.main import app
 from app.models import Company
 from app.providers.fmp_provider import FMPProvider
-from app.seed_universe import UniverseFile, _load_universe, load_universe_file
-from app.services import universe_review
 from app.scripts import refresh_universe_lists
 from app.scripts import universe_review as cli
+from app.seed_universe import UniverseFile, _load_universe, load_universe_file
+from app.services import universe_review
 
 DATA_DIR = Path(universe_review.__file__).resolve().parent.parent / "data"
 SP500_PATH = DATA_DIR / "sp500.json"

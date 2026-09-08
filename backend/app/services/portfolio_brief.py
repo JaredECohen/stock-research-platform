@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
 
 from ..config import settings
 from ..schemas import PortfolioBrief, PortfolioRequest
@@ -47,13 +46,13 @@ def _deterministic_brief(req: PortfolioRequest) -> PortfolioBrief:
     elif "next year" in text or "1 year" in text:
         horizon_years = 1
 
-    themes: List[str] = []
+    themes: list[str] = []
     for theme in _SUPPORTED_THEMES:
         primary = theme.replace("_", " ")
         if primary in text or theme in text:
             themes.append(theme)
 
-    factor_tilts: Dict[str, float] = {
+    factor_tilts: dict[str, float] = {
         "growth": 0.5, "value": 0.5, "quality": 0.6, "momentum": 0.5,
     }
     if any(w in text for w in ["growth", "high-growth", "compounder"]):
@@ -70,7 +69,7 @@ def _deterministic_brief(req: PortfolioRequest) -> PortfolioBrief:
         factor_tilts["quality"] = 0.85
         factor_tilts["growth"] = 0.3
 
-    beta_target: Optional[float] = None
+    beta_target: float | None = None
     m = re.search(r"beta\s*(?:under|<|below)?\s*(\d+\.?\d*)", text)
     if m:
         try:
@@ -80,7 +79,7 @@ def _deterministic_brief(req: PortfolioRequest) -> PortfolioBrief:
     if "low-beta" in text or "defensive" in text:
         beta_target = beta_target or 1.0
 
-    yield_target: Optional[float] = None
+    yield_target: float | None = None
     m = re.search(r"yield\s*(?:of|over|>)?\s*(\d+\.?\d*)\s*%", text)
     if m:
         try:
@@ -88,7 +87,7 @@ def _deterministic_brief(req: PortfolioRequest) -> PortfolioBrief:
         except ValueError:
             yield_target = None
 
-    constraints: List[str] = []
+    constraints: list[str] = []
     if "esg" in text:
         constraints.append("ESG-aware")
     if "tax" in text and "efficient" in text:

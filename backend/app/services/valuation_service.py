@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from ..cache import cache_get, cache_put, resolved_cost_tokens
 from ..finance import comps as comps_engine
@@ -15,7 +14,7 @@ from .fundamentals_service import get_full_financials
 log = logging.getLogger(__name__)
 
 
-def _note_soft(agent: str, reason: str, exc: Optional[BaseException] = None) -> None:
+def _note_soft(agent: str, reason: str, exc: BaseException | None = None) -> None:
     """Record a reader-visible fallback on the active memo run (RP-001 (b)).
 
     Thin shim over `safe_runner.note_soft` with a lazy import: `app.agents`
@@ -37,7 +36,7 @@ def _log_failure(msg: str, exc: BaseException, *, level: int = logging.WARNING) 
     log_safely(log, msg, exc, level=level)
 
 
-def _has_full_financials(fin: Dict) -> bool:
+def _has_full_financials(fin: dict) -> bool:
     """True when income, balance AND cash statements are all present.
 
     `comps_engine.build_row` reads line items from all three, and each is
@@ -49,11 +48,11 @@ def _has_full_financials(fin: Dict) -> bool:
     return all(fin.get(k) for k in ("income", "balance", "cash"))
 
 
-_PEERS_CACHE: Optional[Dict[str, List[str]]] = None
+_PEERS_CACHE: dict[str, list[str]] | None = None
 _EXPOSURE_PEERS_TTL_SECONDS = 30 * 24 * 3600  # Wave 10 — refresh monthly
 
 
-def _peer_groups() -> Dict[str, List[str]]:
+def _peer_groups() -> dict[str, list[str]]:
     global _PEERS_CACHE
     if _PEERS_CACHE is None:
         path = Path(__file__).resolve().parent.parent / "data" / "peer_groups.json"
@@ -62,7 +61,7 @@ def _peer_groups() -> Dict[str, List[str]]:
     return _PEERS_CACHE
 
 
-def get_peers(ticker: str) -> List[str]:
+def get_peers(ticker: str) -> list[str]:
     """Direct competitors — Track A in the two-track design.
 
     Two-tier resolution:
@@ -87,7 +86,7 @@ def get_peers(ticker: str) -> List[str]:
 
 def _derive_peers_by_classification(
     ticker: str, *, top_n: int = 5,
-) -> List[str]:
+) -> list[str]:
     """Auto-derive peers from the companies table.
 
     Order of preference:
@@ -100,7 +99,8 @@ def _derive_peers_by_classification(
     in `companies` or has no classification.
     """
     try:
-        from sqlalchemy import select, desc
+        from sqlalchemy import desc, select
+
         from ..database import SessionLocal
         from ..models import Company
         with SessionLocal() as db:
@@ -137,7 +137,7 @@ def _derive_peers_by_classification(
     return []
 
 
-def get_exposure_peers(ticker: str, *, force_refresh: bool = False) -> List[str]:
+def get_exposure_peers(ticker: str, *, force_refresh: bool = False) -> list[str]:
     """Cross-sector exposure peers — Track B in the two-track design.
 
     Wave 10. The user's specific request: AMZN / GOOGL / MSFT all
@@ -159,7 +159,7 @@ def get_exposure_peers(ticker: str, *, force_refresh: bool = False) -> List[str]
                 return [str(p).upper() for p in peers]
 
     # Try the LLM path first.
-    peers: List[str] = _llm_exposure_peers(ticker.upper()) or []
+    peers: list[str] = _llm_exposure_peers(ticker.upper()) or []
     if not peers:
         peers = _theme_exposure_peers(ticker.upper())
 
@@ -175,7 +175,7 @@ def get_exposure_peers(ticker: str, *, force_refresh: bool = False) -> List[str]
     return peers
 
 
-def _llm_exposure_peers(ticker: str) -> List[str]:
+def _llm_exposure_peers(ticker: str) -> list[str]:
     """Ask the LLM to nominate 3-5 cross-sector exposure peers."""
     try:
         from ..config import settings as _settings
@@ -223,7 +223,7 @@ def _llm_exposure_peers(ticker: str) -> List[str]:
         return []
 
 
-def _theme_exposure_peers(ticker: str) -> List[str]:
+def _theme_exposure_peers(ticker: str) -> list[str]:
     """Fallback: pull peers via the theme_exposure table.
 
     Take this ticker's top-3 themes; collect the top scorers in each;
@@ -231,6 +231,7 @@ def _theme_exposure_peers(ticker: str) -> List[str]:
     """
     try:
         from sqlalchemy import select
+
         from ..database import SessionLocal
         from ..models import ThemeExposure
         from .theme_exposure_service import top_for_theme
@@ -241,7 +242,7 @@ def _theme_exposure_peers(ticker: str) -> List[str]:
                 .order_by(ThemeExposure.score.desc())
                 .limit(3)
             ).scalars().all()
-        peers: List[str] = []
+        peers: list[str] = []
         for r in rows:
             if r.score < 25.0:
                 continue
@@ -259,7 +260,7 @@ def _theme_exposure_peers(ticker: str) -> List[str]:
         return []
 
 
-def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[CompsResult]:
+def build_comps(target_ticker: str, *, force_refresh: bool = False) -> CompsResult | None:
     """Cache-backed comps. Snapshots stored as kind='company_warm:comps'.
 
     TTL 7d. Invalidation cascades from each peer's company_cold snapshot via
@@ -301,8 +302,8 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
         target_inc, target_bs, target_cf, prior_inc,
     )
 
-    peer_rows: List[CompsRow] = []
-    skipped_peers: List[str] = []
+    peer_rows: list[CompsRow] = []
+    skipped_peers: list[str] = []
     for peer in get_peers(target_ticker):
         p = get_full_financials(peer)
         if not _has_full_financials(p):
@@ -389,7 +390,7 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
 
     # Snapshot for re-use; lineage = each peer's company_cold so a peer-side
     # 10-K refresh stales us.
-    parent_ids: List[int] = []
+    parent_ids: list[int] = []
     cold_target = cache_get(target_ticker, "company_cold")
     if cold_target:
         parent_ids.append(cold_target.id)
@@ -428,7 +429,7 @@ def _is_cyclical(profile: dict) -> bool:
     return sector in _CYCLICAL_SECTORS
 
 
-def _cohort_op_margin(ticker: str) -> Optional[float]:
+def _cohort_op_margin(ticker: str) -> float | None:
     """Pull the cohort median operating margin used as the mean-
     reversion target for cyclical names.
 
@@ -454,7 +455,7 @@ def _cohort_op_margin(ticker: str) -> Optional[float]:
     return None
 
 
-def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
+def default_dcf_assumptions(ticker: str) -> DCFAssumptions | None:
     """Default DCF assumptions for `ticker`.
 
     Wave 8I: pulls analyst consensus revenue estimates (when the
@@ -505,7 +506,7 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
     # sector. A software name at unprecedented operating leverage
     # benefits from the same cohort-median anchor.
     use_reversion = _is_cyclical(profile)
-    cycle_pos: Optional[str] = None
+    cycle_pos: str | None = None
     try:
         from .cycle_position import cycle_position
         pos = cycle_position(ticker)
@@ -550,10 +551,10 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
 
 def build_dcf(
     ticker: str,
-    assumptions: Optional[DCFAssumptions] = None,
+    assumptions: DCFAssumptions | None = None,
     *,
     force_refresh: bool = False,
-) -> Optional[DCFResult]:
+) -> DCFResult | None:
     """Cache-backed DCF (kind='company_warm:dcf').
 
     Note: only the *default-assumption* DCF (assumptions=None) is cached, since
@@ -582,7 +583,7 @@ def build_dcf(
     # Wave 10k — pass profile through so bull/bear scenarios run with
     # LLM-driven sector-aware drivers + assumption changes (instead
     # of the prior symmetric ±400bp mechanical bumps).
-    profile_for_dcf: Optional[Dict] = None
+    profile_for_dcf: dict | None = None
     try:
         fin = get_full_financials(ticker)
         profile_for_dcf = fin.get("profile")
@@ -607,7 +608,7 @@ def build_dcf(
             same = False
         if same:
             if not force_refresh:
-                parent_ids: List[int] = []
+                parent_ids: list[int] = []
                 cold = cache_get(ticker, "company_cold")
                 if cold:
                     parent_ids.append(cold.id)

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import JSON, DateTime, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -30,7 +29,7 @@ class DCFModel(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticker: Mapped[str] = mapped_column(String(16), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
-    parent_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    parent_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     trigger: Mapped[str] = mapped_column(String(32), default="initial")
     # Full DCFAssumptions payload (JSON); decoupled from any specific
     # `DCFAssumptions` shape so future fields don't require a migration.

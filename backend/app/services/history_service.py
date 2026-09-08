@@ -21,8 +21,10 @@ never duplicates rows.
 from __future__ import annotations
 
 import logging
-from datetime import date as _date, datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from datetime import date as _date
+from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -71,7 +73,7 @@ def _ensure_tables(db: Session) -> None:
 # Period helpers
 # ---------------------------------------------------------------------------
 
-def _parse_period(period: Any) -> Tuple[Optional[int], Optional[int]]:
+def _parse_period(period: Any) -> tuple[int | None, int | None]:
     """Best-effort extract `(fiscal_year, fiscal_quarter)` from a period
     label. Accepts `2024Q4`, `2024-Q4`, `FY2024`, `2024`, integers."""
     if period is None:
@@ -91,7 +93,7 @@ def _parse_period(period: Any) -> Tuple[Optional[int], Optional[int]]:
         return None, None
 
 
-def _coerce_date(d: Any) -> Optional[_date]:
+def _coerce_date(d: Any) -> _date | None:
     if d is None:
         return None
     if isinstance(d, _date) and not isinstance(d, datetime):
@@ -110,8 +112,8 @@ def _coerce_date(d: Any) -> Optional[_date]:
 
 def _upsert_financial_period(
     db: Session, *, ticker: str, period: str, statement: str,
-    line_item: str, value: Optional[float], period_end: Optional[_date],
-    fiscal_year: Optional[int], fiscal_quarter: Optional[int],
+    line_item: str, value: float | None, period_end: _date | None,
+    fiscal_year: int | None, fiscal_quarter: int | None,
     source: str,
 ) -> bool:
     """Insert-or-update one row. Returns True if an actual write happened."""
@@ -144,15 +146,15 @@ def _upsert_financial_period(
 
 
 def _ingest_statement_rows(
-    db: Session, ticker: str, statement: str, rows: Iterable[Dict[str, Any]],
-    line_whitelist: Tuple[str, ...], source: str,
+    db: Session, ticker: str, statement: str, rows: Iterable[dict[str, Any]],
+    line_whitelist: tuple[str, ...], source: str,
 ) -> int:
     # Dedupe by period — providers occasionally return two rows for the
     # same fiscal period after a restatement (e.g., JNJ FY2023). The
     # later row wins; the earlier one would otherwise collide on the
     # `(ticker, period, statement, line_item)` unique index because we
     # haven't flushed yet inside this transaction.
-    by_period: Dict[str, Dict[str, Any]] = {}
+    by_period: dict[str, dict[str, Any]] = {}
     for row in rows or []:
         period = str(row.get("period") or row.get("date") or "").strip()
         if not period:
@@ -179,7 +181,7 @@ def _ingest_statement_rows(
     return written
 
 
-def _filing_word_count(sections: Dict[str, Any], raw: str) -> int:
+def _filing_word_count(sections: dict[str, Any], raw: str) -> int:
     if raw:
         return len(raw.split())
     total = 0
@@ -193,7 +195,7 @@ def _filing_word_count(sections: Dict[str, Any], raw: str) -> int:
     return total
 
 
-def _ingest_filings(db: Session, ticker: str, filings: List[Dict[str, Any]]) -> int:
+def _ingest_filings(db: Session, ticker: str, filings: list[dict[str, Any]]) -> int:
     """Idempotently store filings. Existing rows are updated; new rows are
     inserted. Returns count of net writes.
 
@@ -203,7 +205,7 @@ def _ingest_filings(db: Session, ticker: str, filings: List[Dict[str, Any]]) -> 
     the same type into company / sector memory. Failures are swallowed
     — memory updates are non-critical to the ingest pipeline.
     """
-    new_filing_ids: List[int] = []
+    new_filing_ids: list[int] = []
     written = 0
     for f in filings or []:
         accession = f.get("accession_number") or f.get("accession") or ""
@@ -262,7 +264,7 @@ def _ingest_filings(db: Session, ticker: str, filings: List[Dict[str, Any]]) -> 
     return written
 
 
-def _transcript_blocks(t: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
+def _transcript_blocks(t: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     """Render a transcript payload into structured blocks + concatenated text.
 
     Accepts three shapes:
@@ -282,8 +284,8 @@ def _transcript_blocks(t: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
         )
         return blocks, text
 
-    blocks: List[Dict[str, Any]] = []
-    parts: List[str] = []
+    blocks: list[dict[str, Any]] = []
+    parts: list[str] = []
 
     def _ingest(field: Any, *, segment: str, default_speaker: str, role: str) -> None:
         if not field:
@@ -322,7 +324,7 @@ def _transcript_blocks(t: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
 
 
 def _ingest_transcripts(
-    db: Session, ticker: str, transcripts: List[Dict[str, Any]],
+    db: Session, ticker: str, transcripts: list[dict[str, Any]],
 ) -> int:
     """Persist transcripts → EarningsTranscript table. New rows are
     embedded into `doc_chunks` via `filing_memory.index_transcript`
@@ -332,7 +334,7 @@ def _ingest_transcripts(
     period yields the same chunks).
     """
     written = 0
-    new_transcript_ids: List[int] = []
+    new_transcript_ids: list[int] = []
     for t in transcripts or []:
         period = str(t.get("period") or "").strip()
         if not period:
@@ -378,7 +380,7 @@ def _ingest_transcripts(
     return written
 
 
-def backfill_ticker(ticker: str, *, db: Optional[Session] = None) -> Dict[str, int]:
+def backfill_ticker(ticker: str, *, db: Session | None = None) -> dict[str, int]:
     """Full backfill of one ticker against the data_service.
 
     Returns a `{financial_periods, filings, transcripts}` dict of net
@@ -428,9 +430,9 @@ def backfill_ticker(ticker: str, *, db: Optional[Session] = None) -> Dict[str, i
 # ---------------------------------------------------------------------------
 
 def get_financial_history(
-    ticker: str, line_items: List[str], *, limit: int = 40,
-    statement: Optional[str] = None, db: Optional[Session] = None,
-) -> Dict[str, List[Dict[str, Any]]]:
+    ticker: str, line_items: list[str], *, limit: int = 40,
+    statement: str | None = None, db: Session | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     """Return long-format history for the requested line items.
 
     Output shape: `{line_item: [{period, period_end, value, fiscal_year,
@@ -443,7 +445,7 @@ def get_financial_history(
         db = SessionLocal()
     try:
         _ensure_tables(db)
-        out: Dict[str, List[Dict[str, Any]]] = {}
+        out: dict[str, list[dict[str, Any]]] = {}
         for line in line_items:
             stmt = (
                 select(FinancialPeriod)
@@ -478,9 +480,9 @@ def get_financial_history(
 
 
 def get_recent_filings(
-    ticker: str, *, limit: int = 12, filing_type: Optional[str] = None,
-    db: Optional[Session] = None,
-) -> List[Dict[str, Any]]:
+    ticker: str, *, limit: int = 12, filing_type: str | None = None,
+    db: Session | None = None,
+) -> list[dict[str, Any]]:
     own = db is None
     if own:
         db = SessionLocal()
@@ -511,8 +513,8 @@ def get_recent_filings(
 
 def get_filing_text(
     ticker: str, accession_number: str, *,
-    section: Optional[str] = None, db: Optional[Session] = None,
-) -> Optional[Dict[str, Any]]:
+    section: str | None = None, db: Session | None = None,
+) -> dict[str, Any] | None:
     """Return the full filing record (or one section's text)."""
     own = db is None
     if own:
@@ -550,9 +552,9 @@ def get_filing_text(
 
 
 def get_transcript(
-    ticker: str, period: Optional[str] = None, *,
-    db: Optional[Session] = None,
-) -> Optional[Dict[str, Any]]:
+    ticker: str, period: str | None = None, *,
+    db: Session | None = None,
+) -> dict[str, Any] | None:
     """Return the transcript for `period`, or the most recent if `period` is None."""
     own = db is None
     if own:
@@ -588,8 +590,8 @@ def get_transcript(
 
 
 def get_recent_transcripts(
-    ticker: str, *, limit: int = 10, db: Optional[Session] = None,
-) -> List[Dict[str, Any]]:
+    ticker: str, *, limit: int = 10, db: Session | None = None,
+) -> list[dict[str, Any]]:
     own = db is None
     if own:
         db = SessionLocal()

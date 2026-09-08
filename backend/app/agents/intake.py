@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from ..config import settings
 from . import llm
@@ -34,8 +34,8 @@ log = logging.getLogger(__name__)
 # Derived from the roster so a new analyst is skippable (and stubbable)
 # without a second hand-maintained list here. The prompt below still
 # spells the eight names out for the model; extend it when the roster grows.
-ALL_SPECIALISTS: List[str] = [spec.key for spec in AGENTS]
-_DISPLAY_NAMES: Dict[str, str] = {spec.key: spec.display_name for spec in AGENTS}
+ALL_SPECIALISTS: list[str] = [spec.key for spec in AGENTS]
+_DISPLAY_NAMES: dict[str, str] = {spec.key: spec.display_name for spec in AGENTS}
 
 # Hard-cap: PM may skip at most this many specialists per memo.
 # Forces the model to keep the rating defensible against the others.
@@ -44,13 +44,13 @@ _MAX_SKIPS = 3
 
 @dataclass
 class IntakeDecision:
-    skipped: Set[str] = field(default_factory=set)
+    skipped: set[str] = field(default_factory=set)
     rationale: str = ""
 
     def runs(self, specialist: str) -> bool:
         return specialist not in self.skipped
 
-    def model_dump(self) -> Dict[str, Any]:
+    def model_dump(self) -> dict[str, Any]:
         return {
             "skipped": sorted(self.skipped),
             "rationale": self.rationale,
@@ -58,10 +58,10 @@ class IntakeDecision:
 
 
 def run_intake(
-    profile: Dict[str, Any],
-    news_alerts: Optional[List[Dict[str, Any]]] = None,
+    profile: dict[str, Any],
+    news_alerts: list[dict[str, Any]] | None = None,
     *,
-    macro_regime: Optional[str] = None,
+    macro_regime: str | None = None,
 ) -> IntakeDecision:
     """Decide which specialists to run for this memo.
 
@@ -121,7 +121,7 @@ def run_intake(
     return decision
 
 
-def stub_finding(specialist: str, rationale: str) -> Dict[str, Any]:
+def stub_finding(specialist: str, rationale: str) -> dict[str, Any]:
     """Build the placeholder AgentFinding payload for a skipped agent.
 
     Returns a dict so callers can `AgentFinding(**stub_finding(...))`.

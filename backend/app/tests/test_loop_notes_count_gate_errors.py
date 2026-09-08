@@ -12,15 +12,15 @@ errors and flip the loop to unhealthy.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import pytest
 
 from app.monitoring import edgar_poller, macro_loop, news_loop, transcripts_poller
 
 
-def _capture(monkeypatch, module) -> List[Tuple[tuple, Dict[str, Any]]]:
-    calls: List[Tuple[tuple, Dict[str, Any]]] = []
+def _capture(monkeypatch, module) -> list[tuple[tuple, dict[str, Any]]]:
+    calls: list[tuple[tuple, dict[str, Any]]] = []
     monkeypatch.setattr(module, "record_run", lambda *a, **k: calls.append((a, k)))
     return calls
 

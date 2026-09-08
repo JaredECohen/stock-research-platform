@@ -15,7 +15,7 @@ Returns the same shape as FRED: `{series_id, name, units, points: [{date, value}
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -28,7 +28,7 @@ V2_BASE = "https://api.eia.gov/v2"
 TIMEOUT = 12.0
 
 
-def _route_for_series(series_id: str) -> Optional[str]:
+def _route_for_series(series_id: str) -> str | None:
     """Map an EIA series_id to a v2 API route.
 
     EIA's v2 schema is route-based with the series identifier broken
@@ -67,7 +67,7 @@ class EIAProvider:
     # Public API
     # ------------------------------------------------------------------
 
-    def get_macro_series(self, series_id: str) -> Optional[Dict[str, Any]]:
+    def get_macro_series(self, series_id: str) -> dict[str, Any] | None:
         """Fetch a time series by EIA series_id. Returns the canonical
         `{series_id, name, units, points}` shape used by all providers."""
         if not series_id:
@@ -83,12 +83,12 @@ class EIAProvider:
             return public
         return None
 
-    def get_petroleum_storage_snapshot(self) -> Optional[Dict[str, Any]]:
+    def get_petroleum_storage_snapshot(self) -> dict[str, Any] | None:
         """Latest US crude oil ending stocks (ex SPR) + 1-week & 1-year delta."""
         series = self.get_macro_series("PET.WCESTUS1.W")
         return self._snapshot_from_series(series, headline="US Crude Oil Inventories")
 
-    def get_natgas_storage_snapshot(self) -> Optional[Dict[str, Any]]:
+    def get_natgas_storage_snapshot(self) -> dict[str, Any] | None:
         """Latest working gas in underground storage (Lower 48)."""
         series = self.get_macro_series("NG.NW2_EPG0_SWO_R48_BCF.W")
         return self._snapshot_from_series(series, headline="US Natural Gas Storage")
@@ -97,7 +97,7 @@ class EIAProvider:
     # Internals
     # ------------------------------------------------------------------
 
-    def _fetch_v2(self, series_id: str) -> Optional[Dict[str, Any]]:
+    def _fetch_v2(self, series_id: str) -> dict[str, Any] | None:
         route = _route_for_series(series_id)
         if route is None:
             return None
@@ -137,7 +137,7 @@ class EIAProvider:
             "points": points,
         }
 
-    def _fetch_public(self, series_id: str) -> Optional[Dict[str, Any]]:
+    def _fetch_public(self, series_id: str) -> dict[str, Any] | None:
         """Public-endpoint fallback for the most-asked series.
 
         Avoids the API-key wall for the basic storage snapshots and the
@@ -155,7 +155,7 @@ class EIAProvider:
             return self._fetch_public_henry_hub()
         return None
 
-    def _fetch_public_petroleum_storage(self) -> Optional[Dict[str, Any]]:
+    def _fetch_public_petroleum_storage(self) -> dict[str, Any] | None:
         url = "https://www.eia.gov/dnav/pet/hist_xls/WCESTUS1w.xls"
         try:
             with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as client:
@@ -172,7 +172,7 @@ class EIAProvider:
             units="thousand barrels",
         )
 
-    def _fetch_public_natgas_storage(self) -> Optional[Dict[str, Any]]:
+    def _fetch_public_natgas_storage(self) -> dict[str, Any] | None:
         url = "https://ir.eia.gov/ngs/wngsr.xls"
         try:
             with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as client:
@@ -192,7 +192,7 @@ class EIAProvider:
             units="Bcf",
         )
 
-    def _fetch_public_wti(self) -> Optional[Dict[str, Any]]:
+    def _fetch_public_wti(self) -> dict[str, Any] | None:
         url = "https://www.eia.gov/dnav/pet/hist_xls/RWTCd.xls"
         try:
             with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as client:
@@ -209,7 +209,7 @@ class EIAProvider:
             units="$/bbl",
         )
 
-    def _fetch_public_henry_hub(self) -> Optional[Dict[str, Any]]:
+    def _fetch_public_henry_hub(self) -> dict[str, Any] | None:
         url = "https://www.eia.gov/dnav/ng/hist_xls/RNGWHHDd.xls"
         try:
             with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as client:
@@ -233,7 +233,7 @@ class EIAProvider:
     @staticmethod
     def _parse_xls_two_column(
         content: bytes, *, series_id: str, name: str, units: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Parse an EIA legacy `.xls` (binary) workbook into points.
 
         EIA still publishes historical CSV/XLS snapshots in the legacy
@@ -243,6 +243,7 @@ class EIAProvider:
         """
         try:
             import io
+
             import xlrd  # type: ignore
         except ImportError:
             return None
@@ -251,7 +252,7 @@ class EIAProvider:
             # EIA's legacy workbooks place the series on sheet index 1
             # ("Data 1") with a 3-row header.
             sheet = book.sheet_by_index(1) if book.nsheets > 1 else book.sheet_by_index(0)
-            points: List[Dict[str, Any]] = []
+            points: list[dict[str, Any]] = []
             for row_idx in range(3, sheet.nrows):
                 row = sheet.row(row_idx)
                 if not row or len(row) < 2:
@@ -281,8 +282,8 @@ class EIAProvider:
 
     @staticmethod
     def _snapshot_from_series(
-        series: Optional[Dict[str, Any]], *, headline: str,
-    ) -> Optional[Dict[str, Any]]:
+        series: dict[str, Any] | None, *, headline: str,
+    ) -> dict[str, Any] | None:
         if not series:
             return None
         points = series.get("points") or []
@@ -326,13 +327,13 @@ class EIAProvider:
     def get_filings(self, ticker: str): return None
     def get_news(self, ticker: str): return None
     def get_estimates(self, ticker: str): return None
-    def list_tickers(self) -> List[str]: return []
-    def list_macro_series(self) -> List[Dict[str, Any]]:
+    def list_tickers(self) -> list[str]: return []
+    def list_macro_series(self) -> list[dict[str, Any]]:
         from ..data_catalog import by_category
         return [s.to_dict() for s in by_category("energy") if s.source == "EIA"]
 
 
-def _coerce_float(value: Any) -> Optional[float]:
+def _coerce_float(value: Any) -> float | None:
     if value in (None, "", "."):
         return None
     try:

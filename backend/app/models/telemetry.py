@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -26,8 +25,8 @@ class LLMCallLog(Base):
     __tablename__ = "llm_call_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    run_id: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
-    ticker: Mapped[Optional[str]] = mapped_column(String(16), index=True, nullable=True)
+    run_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    ticker: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
     agent_name: Mapped[str] = mapped_column(String(64), index=True, default="unknown")
     provider: Mapped[str] = mapped_column(String(16), default="openai")
     model: Mapped[str] = mapped_column(String(64), default="")
@@ -69,7 +68,7 @@ class SDKTrace(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(String(64), index=True)
-    ticker: Mapped[Optional[str]] = mapped_column(String(16), index=True, nullable=True)
+    ticker: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
     # Source surface: "memo" (run_stock_memo path) or "chat" (freeform Q&A).
     surface: Mapped[str] = mapped_column(String(16), default="memo", index=True)
     final_output: Mapped[str] = mapped_column(Text, default="")
@@ -106,11 +105,11 @@ class UILog(Base):
     kind: Mapped[str] = mapped_column(String(32), index=True)
     # Common dimensions surfaced as columns for cheap filtering; everything
     # else (request body, error stack, etc.) rides in `payload`.
-    path: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, index=True)
-    method: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
-    status_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    path: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    method: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
 
 

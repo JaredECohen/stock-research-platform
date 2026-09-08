@@ -12,7 +12,6 @@ each call is ~$0.001-0.002 cheap-tier.
 from __future__ import annotations
 
 import logging
-from typing import Dict
 
 from ..services.filing_memory import weekly_sector_digest_all
 from . import record_run
@@ -20,7 +19,7 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def run_once(*, days_back: int = 7) -> Dict[str, int]:
+def run_once(*, days_back: int = 7) -> dict[str, int]:
     res = weekly_sector_digest_all(days_back=days_back)
     note = (
         f"sectors={res['sectors_checked']} digests={res['digests_written']}"

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from ..schemas import AgentFinding
@@ -15,7 +15,7 @@ from .safe_runner import note_soft
 log = logging.getLogger(__name__)
 
 
-def _flatten_key_points(raw: Any) -> List[str]:
+def _flatten_key_points(raw: Any) -> list[str]:
     """Coerce a structured key_points payload into a flat List[str].
 
     Recognized shapes (cumulative — any of these survives):
@@ -40,7 +40,7 @@ def _flatten_key_points(raw: Any) -> List[str]:
                 break
         return s
 
-    out: List[str] = []
+    out: list[str] = []
 
     def _add(cat: str, text: Any) -> None:
         s = _clean(text)
@@ -99,8 +99,8 @@ def _flatten_key_points(raw: Any) -> List[str]:
 
 
 def run_filing_agent(
-    profile: Dict, filings: List[Dict],
-    *, prior_round_critique: Optional[str] = None,
+    profile: dict, filings: list[dict],
+    *, prior_round_critique: str | None = None,
 ) -> AgentFinding:
     ticker = profile.get("ticker", "")
     if not filings:
@@ -123,14 +123,14 @@ def run_filing_agent(
         if prior_round_critique and len(prior_round_critique) > 8
         else "risk factors growth strategy thesis"
     )
-    retrieved: List[Dict] = []
+    retrieved: list[dict] = []
     # Flags that ride on `data` whichever path (LLM or deterministic)
     # produces the finding. (b) RP-001: a retrieval failure thins what the
     # reader gets — the LLM sees only the front-of-section truncation and
     # the deterministic path loses its substantive MD&A snippet — so it is
     # recorded on the finding and on the memo banner (`note_soft` no-ops
     # outside a memo run) rather than swallowed.
-    finding_flags: Dict[str, Any] = {}
+    finding_flags: dict[str, Any] = {}
 
     def _retrieval_failed(layer: str, exc: BaseException) -> None:
         log_safely(log, f"Filing Analyst {layer} retrieval failed for {ticker}", exc)
@@ -234,7 +234,7 @@ def run_filing_agent(
         # the primary filing's risk_factors / mda sections.
         from ..schemas import Citation
         accession = primary.get("accession_number", "")
-        evidence: List[Citation] = []
+        evidence: list[Citation] = []
         if accession and primary.get("mda"):
             evidence.append(Citation(
                 kind="filing", ref=accession, section="mda",
@@ -356,7 +356,7 @@ _FILING_SECTIONS = frozenset({
 })
 
 
-def _is_filing_chunk(chunk: Dict) -> bool:
+def _is_filing_chunk(chunk: dict) -> bool:
     """True iff `chunk` is sourced from a filing (10-K / 10-Q / 8-K)
     rather than a transcript or news article. Two signals are
     available depending on which retriever produced the chunk:
@@ -375,7 +375,7 @@ def _is_filing_chunk(chunk: Dict) -> bool:
 
 
 def _substantive_filing_snippet(
-    mda_text: str, retrieved_chunks: List[Dict],
+    mda_text: str, retrieved_chunks: list[dict],
 ) -> str:
     """Pick a snippet of MD&A worth showing.
 
@@ -427,8 +427,8 @@ def _substantive_filing_snippet(
 
 
 def _substantive_risk_factors(
-    raw_risks: List[Any], *, top_n: int = 3,
-) -> List[str]:
+    raw_risks: list[Any], *, top_n: int = 3,
+) -> list[str]:
     """Filter out generic risk-section boilerplate.
 
     The Risk Factors section in every 10-K opens with several paragraphs
@@ -436,7 +436,7 @@ def _substantive_risk_factors(
     named risks. We skip rows that start with those phrases and prefer
     ones that name a specific business risk.
     """
-    keep: List[str] = []
+    keep: list[str] = []
     for r in raw_risks:
         text = (str(r) or "").strip()
         if not text:

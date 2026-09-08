@@ -6,10 +6,9 @@ so this is the root of the schema import DAG.
 """
 from __future__ import annotations
 
-from typing import Dict, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel
-
 
 # ---------------------------------------------------------------------------
 # Foundational types
@@ -49,7 +48,7 @@ def rating_from_stock_score(score: float) -> str:
     return "Very Bearish"
 
 
-_RATING_LABEL_TO_SCORE: Dict[str, float] = {
+_RATING_LABEL_TO_SCORE: dict[str, float] = {
     "Very Bullish": 90.0,
     "Bullish": 70.0,
     "Neutral": 50.0,
@@ -58,7 +57,7 @@ _RATING_LABEL_TO_SCORE: Dict[str, float] = {
 }
 
 
-def score_from_rating_label(label: Optional[str]) -> float:
+def score_from_rating_label(label: str | None) -> float:
     """Inverse of `rating_from_stock_score` — bucket centers on 0-100.
 
     Used by the PM rating-blend (Option A) so the LLM's directional call
@@ -88,15 +87,15 @@ class CompanyOut(BaseModel):
     exchange: str
     sector: str
     industry: str
-    sub_industry: Optional[str] = None
+    sub_industry: str | None = None
     country: str = "US"
     currency: str = "USD"
-    market_cap: Optional[float] = None
+    market_cap: float | None = None
     business_description: str = ""
-    last_price: Optional[float] = None
+    last_price: float | None = None
     is_etf: bool = False
-    beta: Optional[float] = None
-    shares_outstanding: Optional[float] = None
+    beta: float | None = None
+    shares_outstanding: float | None = None
     # Universe tier (Phase F + Wave 1B). Frontend uses this to render
     # the appropriate analyze affordance: `auto_analysis` shows a memo
     # immediately, `analyzed_on_demand` shows a cached memo, `data_only`

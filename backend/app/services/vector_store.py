@@ -18,10 +18,12 @@ from __future__ import annotations
 import heapq
 import logging
 import os
+from collections.abc import Sequence
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
-from sqlalchemy import select, text as sa_text
+from sqlalchemy import select
+from sqlalchemy import text as sa_text
 
 from ..database import SessionLocal, engine
 from ..models import DocChunk
@@ -53,7 +55,7 @@ _RSS_LOG_THRESHOLD_MB = 25.0
 PGVECTOR_COLUMN = "embedding_vec"
 
 # Tri-state probe cache: None = not yet probed, True/False = resolved.
-_pgvector_state: Optional[bool] = None
+_pgvector_state: bool | None = None
 
 
 def _numpy():
@@ -110,11 +112,11 @@ def reset_pgvector_probe() -> None:
 def _search_pgvector(
     q_vec: Sequence[float],
     *,
-    ticker: Optional[str],
-    source_types: Optional[Sequence[str]],
-    sections: Optional[Sequence[str]],
+    ticker: str | None,
+    source_types: Sequence[str] | None,
+    sections: Sequence[str] | None,
     top_k: int,
-) -> Optional[List[Dict[str, Any]]]:
+) -> list[dict[str, Any]] | None:
     """Rank inside Postgres; return exactly `top_k` rows, or None to fall back.
 
     `<=>` is pgvector's cosine *distance*, so `1 - distance` reproduces
@@ -127,7 +129,7 @@ def _search_pgvector(
     query degrades to the streaming path instead of breaking retrieval.
     """
     where = [f"{PGVECTOR_COLUMN} IS NOT NULL"]
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "q": "[" + ",".join(repr(float(x)) for x in q_vec) + "]",
         "k": int(top_k),
     }
@@ -253,7 +255,7 @@ def ensure_hnsw_index(*, maintenance_work_mem: str = "128MB") -> bool:
         return False
 
 
-def backfill_and_index(*, batch: int = 2000, max_batches: int = 25) -> Dict[str, Any]:
+def backfill_and_index(*, batch: int = 2000, max_batches: int = 25) -> dict[str, Any]:
     """Populate `embedding_vec` for every eligible row, then build the index.
 
     The full catch-up pass, as opposed to the deliberately tiny sync that
@@ -289,12 +291,12 @@ def backfill_and_index(*, batch: int = 2000, max_batches: int = 25) -> Dict[str,
 
 def upsert_source(
     *,
-    ticker: Optional[str],
+    ticker: str | None,
     source_type: str,
-    source_id: Optional[int],
-    chunks: Sequence[Dict[str, Any]],
-    section: Optional[str] = None,
-    period_end: Optional[date] = None,
+    source_id: int | None,
+    chunks: Sequence[dict[str, Any]],
+    section: str | None = None,
+    period_end: date | None = None,
 ) -> int:
     """Insert chunks for a (source_type, source_id). Replaces any prior
     chunks for the same source so re-ingesting a filing doesn't
@@ -367,12 +369,12 @@ def upsert_source(
 def search(
     query: str,
     *,
-    ticker: Optional[str] = None,
-    source_types: Optional[Sequence[str]] = None,
-    sections: Optional[Sequence[str]] = None,
+    ticker: str | None = None,
+    source_types: Sequence[str] | None = None,
+    sections: Sequence[str] | None = None,
     top_k: int = 8,
     allow_global_scan: bool = False,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Top-K chunks by cosine similarity, optionally filtered.
 
     Returns dicts: id, ticker, source_type, source_id, section,
@@ -411,7 +413,7 @@ def search(
 
     started = memory_probe.rss_mb()
 
-    hits: Optional[List[Dict[str, Any]]] = None
+    hits: list[dict[str, Any]] | None = None
     if pgvector_available():
         hits = _search_pgvector(
             q_vec, ticker=ticker, source_types=source_types,
@@ -451,7 +453,7 @@ def search(
 
 
 def _reject_global_scan(
-    source_types: Optional[Sequence[str]], sections: Optional[Sequence[str]],
+    source_types: Sequence[str] | None, sections: Sequence[str] | None,
 ) -> None:
     """Log a missing-ticker search loudly and return nothing.
 
@@ -482,9 +484,9 @@ def _reject_global_scan(
 def _filtered_stmt(
     stmt,
     *,
-    ticker: Optional[str],
-    source_types: Optional[Sequence[str]],
-    sections: Optional[Sequence[str]],
+    ticker: str | None,
+    source_types: Sequence[str] | None,
+    sections: Sequence[str] | None,
 ):
     """Apply the shared ticker / source_type / section predicates."""
     if ticker:
@@ -499,11 +501,11 @@ def _filtered_stmt(
 def _search_streaming(
     q_vec: Sequence[float],
     *,
-    ticker: Optional[str],
-    source_types: Optional[Sequence[str]],
-    sections: Optional[Sequence[str]],
+    ticker: str | None,
+    source_types: Sequence[str] | None,
+    sections: Sequence[str] | None,
     top_k: int,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Score in bounded batches, keeping only a top-k heap.
 
     Three things keep peak memory flat regardless of corpus size:
@@ -524,7 +526,7 @@ def _search_streaming(
     """
     dim = len(q_vec)
     np = _numpy()
-    heap: List[tuple] = []  # min-heap of (score, id) — smallest score at [0]
+    heap: list[tuple] = []  # min-heap of (score, id) — smallest score at [0]
     truncated = False
     scanned = 0
 
@@ -550,8 +552,8 @@ def _search_streaming(
             q_norm = float(np.linalg.norm(q_arr)) or 1.0
 
         for part in result.partitions(SCORE_BATCH_SIZE):
-            ids: List[int] = []
-            vecs: List[Any] = []
+            ids: list[int] = []
+            vecs: list[Any] = []
             for chunk_id, emb in part:
                 scanned += 1
                 if scanned > MAX_SCAN_CANDIDATES:
@@ -607,7 +609,7 @@ def _search_streaming(
         ).scalars().all()
         by_id = {r.id: r for r in rows}
 
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for _score, chunk_id in ranked:
         row = by_id.get(chunk_id)
         if row is None:  # deleted between the two queries
@@ -616,7 +618,7 @@ def _search_streaming(
     return out
 
 
-def _heap_push(heap: List[tuple], score: float, chunk_id: int, top_k: int) -> None:
+def _heap_push(heap: list[tuple], score: float, chunk_id: int, top_k: int) -> None:
     """Keep `heap` as the running top-`top_k` by score."""
     if len(heap) < top_k:
         heapq.heappush(heap, (score, chunk_id))
@@ -624,7 +626,7 @@ def _heap_push(heap: List[tuple], score: float, chunk_id: int, top_k: int) -> No
         heapq.heapreplace(heap, (score, chunk_id))
 
 
-def _row_to_hit(row: DocChunk, score: float) -> Dict[str, Any]:
+def _row_to_hit(row: DocChunk, score: float) -> dict[str, Any]:
     return {
         "id": row.id,
         "ticker": row.ticker,

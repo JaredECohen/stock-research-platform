@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -18,26 +17,26 @@ class Company(Base):
     exchange: Mapped[str] = mapped_column(String(32), default="NASDAQ")
     sector: Mapped[str] = mapped_column(String(64))
     industry: Mapped[str] = mapped_column(String(128))
-    sub_industry: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    sub_industry: Mapped[str | None] = mapped_column(String(128), nullable=True)
     country: Mapped[str] = mapped_column(String(8), default="US")
     currency: Mapped[str] = mapped_column(String(8), default="USD")
-    market_cap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    cik: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    isin: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    cusip: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cik: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    isin: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cusip: Mapped[str | None] = mapped_column(String(20), nullable=True)
     business_description: Mapped[str] = mapped_column(Text, default="")
     # String(16) — covers month names ("September" is 9 chars, longest is
     # "September"). Earlier String(8) fit the demo dataset's abbreviated
     # values but overflowed in Postgres for AAPL/V/SBUX (live FMP
     # profiles emit the full month name). SQLite was tolerant; Postgres
     # rejects with "value too long for type character varying(8)".
-    fiscal_year_end: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    fiscal_year_end: Mapped[str | None] = mapped_column(String(16), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_etf: Mapped[bool] = mapped_column(Boolean, default=False)
-    beta: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    shares_outstanding: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    last_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    last_price_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    beta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shares_outstanding: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_price_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Universe tiering (Phase F). Three states:
     #   data_only          — provider data ingested; no memo generated unless
     #                        the UI explicitly asks for it. Default for the
@@ -66,7 +65,7 @@ class Company(Base):
         Boolean, default=False, nullable=False, server_default="0",
     )
 
-    memos: Mapped[list["StockMemo"]] = relationship(back_populates="company")
+    memos: Mapped[list[StockMemo]] = relationship(back_populates="company")
 
 
 class StockMemo(Base):
@@ -102,7 +101,7 @@ class ScreenerScore(Base):
     one_line_thesis: Mapped[str] = mapped_column(Text, default="")
     main_catalyst: Mapped[str] = mapped_column(Text, default="")
     main_risk: Mapped[str] = mapped_column(Text, default="")
-    theme: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    theme: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -122,19 +121,19 @@ class ScreenerMetric(Base):
     __tablename__ = "screener_metrics"
 
     ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
-    pe_ttm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    forward_pe: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    peg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    ev_ebitda: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    ev_revenue: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    gross_margin: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    op_margin: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    fcf_margin: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    roic: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    roe: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    debt_to_ebitda: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    revenue_growth_yoy: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    dividend_yield: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    market_cap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    beta: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pe_ttm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    forward_pe: Mapped[float | None] = mapped_column(Float, nullable=True)
+    peg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ev_ebitda: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ev_revenue: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gross_margin: Mapped[float | None] = mapped_column(Float, nullable=True)
+    op_margin: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fcf_margin: Mapped[float | None] = mapped_column(Float, nullable=True)
+    roic: Mapped[float | None] = mapped_column(Float, nullable=True)
+    roe: Mapped[float | None] = mapped_column(Float, nullable=True)
+    debt_to_ebitda: Mapped[float | None] = mapped_column(Float, nullable=True)
+    revenue_growth_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dividend_yield: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    beta: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_updated: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

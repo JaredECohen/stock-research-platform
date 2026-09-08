@@ -22,9 +22,8 @@ from app.agents.fact_extraction import (
     extract_filing_facts,
     extract_transcript_facts,
 )
-from app.memory.longterm import MemoryEntry, _split_structured_facts, _MemoryFile
+from app.memory.longterm import MemoryEntry, _MemoryFile, _split_structured_facts
 from app.services.history_service import backfill_ticker
-
 
 # ---------------------------------------------------------------------------
 # Deterministic regex extractor
@@ -114,7 +113,8 @@ def test_collect_structured_facts_returns_none_when_no_relevant_triggers():
 def test_collect_structured_facts_aggregates_filing_and_transcript():
     backfill_ticker("NVDA")
     from app.services.history_service import (
-        get_recent_filings, get_transcript,
+        get_recent_filings,
+        get_transcript,
     )
     listing = get_recent_filings("NVDA", limit=1)
     transcript = get_transcript("NVDA")
@@ -193,8 +193,8 @@ def test_memory_entry_without_structured_facts_renders_cleanly():
 def test_reflection_attaches_structured_facts_when_filing_triggers(tmp_path, monkeypatch):
     """Force an empty memory and a filing trigger, then verify the resulting
     entry persisted into the company memory carries `structured_facts`."""
-    from app.config import settings
     from app.agents.graph import run_stock_memo
+    from app.config import settings
     from app.memory.longterm import company_memory_path
 
     # Redirect memory to a clean tmp dir so this test is isolated.

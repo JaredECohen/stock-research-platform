@@ -1,7 +1,7 @@
 """Macro endpoints."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter
 
@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 @router.get("/api/macro/series")
-def macro_series(series_id: Optional[str] = None) -> Any:
+def macro_series(series_id: str | None = None) -> Any:
     if series_id:
         s = get_series(series_id)
         return s or {}

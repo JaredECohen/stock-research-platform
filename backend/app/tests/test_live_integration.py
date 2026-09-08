@@ -25,7 +25,6 @@ import pytest
 
 from app.config import settings
 
-
 pytestmark = pytest.mark.live
 
 

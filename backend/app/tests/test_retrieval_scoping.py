@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from app.agents.chat_sdk import _profile_for
 
-
 # ---------------------------------------------------------------------------
 # chat_sdk._profile_for — the actual entry point of the production bug
 # ---------------------------------------------------------------------------

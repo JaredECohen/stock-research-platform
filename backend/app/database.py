@@ -5,8 +5,8 @@ DATABASE_URL=postgresql+psycopg2://user:pass@host:5432/db
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -95,7 +95,9 @@ def reconcile_missing_columns() -> list[str]:
     Returns the list of `table.column` strings added.
     """
     import logging
-    from sqlalchemy import inspect as sa_inspect, text
+
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import text
     log = logging.getLogger(__name__)
 
     from . import models  # noqa: F401
@@ -191,6 +193,7 @@ def ensure_pgvector() -> bool:
     Idempotent — safe on every boot.
     """
     import logging
+
     from sqlalchemy import text
     log = logging.getLogger(__name__)
     if engine.dialect.name != "postgresql":
@@ -272,6 +275,7 @@ def _ensure_added_columns() -> None:
     scraping catches them.
     """
     import logging
+
     from sqlalchemy import text
     log = logging.getLogger(__name__)
     dialect = engine.dialect.name  # "postgresql", "sqlite", "mysql", ...

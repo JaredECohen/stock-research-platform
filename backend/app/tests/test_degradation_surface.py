@@ -14,7 +14,7 @@ real client can never be constructed and CI (no keys) stays deterministic.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import PropertyMock
 
 import pytest
@@ -212,7 +212,7 @@ def test_first_stage_of_the_inner_body_already_sees_the_memo_log(monkeypatch):
     first stage, runs under the *same* log whose events land on the memo.
     Pin that end to end so a later move of the wrapper (S3 splits the inner
     into stages) cannot open a gap at the top of the run."""
-    seen: List[Any] = []
+    seen: list[Any] = []
     real_fundamentals = graph._checkpointed_fundamentals
 
     def spy(*args: Any, **kwargs: Any):
@@ -240,7 +240,7 @@ def test_first_stage_of_the_inner_body_already_sees_the_memo_log(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_pm_paths_flag_deterministic_fallback_when_llm_returns_nothing(monkeypatch):
-    constructed: List[str] = []
+    constructed: list[str] = []
 
     def _forbid(name: str):
         def _factory(*args: Any, **kwargs: Any) -> None:
@@ -266,7 +266,7 @@ def test_pm_paths_flag_deterministic_fallback_when_llm_returns_nothing(monkeypat
     assert constructed == [], constructed
     assert "PM Synthesis" in memo.degraded_agents
     assert "PM DCF Adjuster" in memo.degraded_agents
-    by_agent: Dict[str, Dict[str, Any]] = {e["agent"]: e for e in memo.degradation_events}
+    by_agent: dict[str, dict[str, Any]] = {e["agent"]: e for e in memo.degradation_events}
     assert by_agent["PM Synthesis"]["error_type"] == "DeterministicFallback"
     assert by_agent["PM DCF Adjuster"]["error_type"] == "DeterministicFallback"
     assert "no usable proposal" in by_agent["PM DCF Adjuster"]["message"]

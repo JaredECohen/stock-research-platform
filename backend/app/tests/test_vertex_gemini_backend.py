@@ -18,7 +18,6 @@ from app.agents import llm as llm_mod
 from app.agents.llm import _gemini_client, _resolve_gemini_model
 from app.config import settings
 
-
 # ---------------------------------------------------------------------------
 # Backend selection
 # ---------------------------------------------------------------------------

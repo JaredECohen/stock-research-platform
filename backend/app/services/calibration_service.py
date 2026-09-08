@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import statistics
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select
 
@@ -34,11 +34,11 @@ log = logging.getLogger(__name__)
 
 
 # Stable rating order for consistent display.
-RATING_ORDER: List[str] = [
+RATING_ORDER: list[str] = [
     "Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish",
 ]
 
-ALL_AGENTS: List[str] = [
+ALL_AGENTS: list[str] = [
     "sector", "earnings", "filing", "valuation",
     "comps", "macro", "risk", "technical",
 ]
@@ -48,7 +48,7 @@ ALL_AGENTS: List[str] = [
 # Calibration: per-rating realized excess returns
 # ---------------------------------------------------------------------------
 
-def _percentile(values: List[float], pct: float) -> Optional[float]:
+def _percentile(values: list[float], pct: float) -> float | None:
     if not values:
         return None
     sorted_vals = sorted(values)
@@ -58,7 +58,7 @@ def _percentile(values: List[float], pct: float) -> Optional[float]:
     return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
 
 
-def calibration_by_rating(*, horizon_days: int = 90) -> Dict[str, Any]:
+def calibration_by_rating(*, horizon_days: int = 90) -> dict[str, Any]:
     """Bucket realized alpha by memo's rating_label.
 
     Returns: {
@@ -71,7 +71,7 @@ def calibration_by_rating(*, horizon_days: int = 90) -> Dict[str, Any]:
     }
     win_rate is the fraction of memos with alpha > 0 in this bucket.
     """
-    buckets: Dict[str, List[float]] = {r: [] for r in RATING_ORDER}
+    buckets: dict[str, list[float]] = {r: [] for r in RATING_ORDER}
     with SessionLocal() as db:
         rows = db.execute(
             select(MemoOutcome, MemoSnapshot)
@@ -86,7 +86,7 @@ def calibration_by_rating(*, horizon_days: int = 90) -> Dict[str, Any]:
             if rating in buckets:
                 buckets[rating].append(float(outcome.alpha))
 
-    out_buckets: Dict[str, Dict[str, Any]] = {}
+    out_buckets: dict[str, dict[str, Any]] = {}
     for rating in RATING_ORDER:
         vals = buckets[rating]
         if not vals:
@@ -115,16 +115,16 @@ def calibration_by_rating(*, horizon_days: int = 90) -> Dict[str, Any]:
 # Per-agent attribution
 # ---------------------------------------------------------------------------
 
-def per_agent_attribution(*, horizon_days: int = 90) -> Dict[str, Any]:
+def per_agent_attribution(*, horizon_days: int = 90) -> dict[str, Any]:
     """Aggregate per-agent attribution scores from `memo_postmortems`.
 
     Each postmortem stores `agent_attribution: {agent: -1..1}` set by
     the LLM postmortem call (or empty when LLM was unavailable).
     Returns mean attribution per agent + count of postmortems.
     """
-    sums: Dict[str, float] = {a: 0.0 for a in ALL_AGENTS}
-    counts: Dict[str, int] = {a: 0 for a in ALL_AGENTS}
-    contrib_when_right: Dict[str, int] = {a: 0 for a in ALL_AGENTS}
+    sums: dict[str, float] = {a: 0.0 for a in ALL_AGENTS}
+    counts: dict[str, int] = {a: 0 for a in ALL_AGENTS}
+    contrib_when_right: dict[str, int] = {a: 0 for a in ALL_AGENTS}
     total_right = 0
 
     with SessionLocal() as db:
@@ -147,7 +147,7 @@ def per_agent_attribution(*, horizon_days: int = 90) -> Dict[str, Any]:
                 if verdict_right and float(score) > 0.2:
                     contrib_when_right[agent] += 1
 
-    agents_out: Dict[str, Dict[str, Any]] = {}
+    agents_out: dict[str, dict[str, Any]] = {}
     for agent in ALL_AGENTS:
         n = counts[agent]
         agents_out[agent] = {
@@ -171,7 +171,7 @@ def per_agent_attribution(*, horizon_days: int = 90) -> Dict[str, Any]:
 # Regime-conditional accuracy
 # ---------------------------------------------------------------------------
 
-def regime_conditional_accuracy(*, horizon_days: int = 90) -> Dict[str, Any]:
+def regime_conditional_accuracy(*, horizon_days: int = 90) -> dict[str, Any]:
     """Bucket memo outcomes by the macro regime at memo-creation time.
 
     Reads regime_at_memo from `memo_postmortems` (set by the LLM
@@ -179,7 +179,7 @@ def regime_conditional_accuracy(*, horizon_days: int = 90) -> Dict[str, Any]:
     Surfaces systematic regime weaknesses ("model overestimates growth
     in sticky-inflation environments").
     """
-    by_regime: Dict[str, Dict[str, Any]] = {}
+    by_regime: dict[str, dict[str, Any]] = {}
     with SessionLocal() as db:
         rows = db.execute(
             select(MemoPostmortem)
@@ -218,7 +218,7 @@ def regime_conditional_accuracy(*, horizon_days: int = 90) -> Dict[str, Any]:
 # Top-level summary
 # ---------------------------------------------------------------------------
 
-def summary(*, horizon_days: int = 90) -> Dict[str, Any]:
+def summary(*, horizon_days: int = 90) -> dict[str, Any]:
     """One-call aggregator that returns calibration + per-agent +
     regime stats. Powers the future track-record dashboard."""
     return {

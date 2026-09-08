@@ -17,8 +17,6 @@ tests + local dev).
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address

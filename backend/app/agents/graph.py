@@ -32,10 +32,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, TypeVar
 
 from ..config import settings
+from ..finance.dcf import fmt_price, fmt_upside
 from ..schemas import (
     AgentFinding,
     AgentTrace,
@@ -50,18 +52,17 @@ from ..schemas import (
     StockMemoOut,
     ValuationVerdict,
 )  # CriticReview imported for the safe-runner fallback path  # noqa: F401
+from ..services.checkpoint_store import checkpointed
+from ..services.filings_service import get_filings
 from ..services.fundamentals_service import get_full_financials
 from ..services.market_data_service import get_basic_stats
 from ..services.transcripts_service import latest_transcript
-from ..services.filings_service import get_filings
-from ..finance.dcf import fmt_price, fmt_upside
-from ..services.checkpoint_store import checkpointed
 from ..services.valuation_service import build_comps, build_dcf
 from . import llm, prompts, roster
 from .critic_agent import run_critic
+from .log_safety import redact
 from .memo_context import AnalystRound, DCFStage, DegradationNote, MemoInputs, VerdictOutcome
 from .risk_agent import derive_risk_items, risk_item_from_text
-from .log_safety import redact
 from .safe_runner import (
     DegradationLog,
     note_soft,
@@ -107,7 +108,7 @@ def _looks_like_anti_pattern_thesis(text: str) -> bool:
     return bool(_THESIS_ANTI_PATTERN.match(text.strip()))
 
 
-def _verdict_word(rating: Optional[str], upside: Optional[float]) -> str:
+def _verdict_word(rating: str | None, upside: float | None) -> str:
     """Map the memo's headline rating to the thesis verdict word so the
     one-liner can never contradict the rating badge the reader sees.
 
@@ -133,9 +134,9 @@ def _verdict_word(rating: Optional[str], upside: Optional[float]) -> str:
 
 
 def _refresh_dcf_references(
-    finding: Optional[AgentFinding],
-    old: Optional[DCFResult],
-    new: Optional[DCFResult],
+    finding: AgentFinding | None,
+    old: DCFResult | None,
+    new: DCFResult | None,
 ) -> None:
     """Rewrite stale DCF numbers baked into an agent finding's prose (B2).
 
@@ -150,7 +151,7 @@ def _refresh_dcf_references(
     if finding is None or old is None or new is None or old is new:
         return
 
-    def _pct_strs(x: Optional[float]) -> tuple:
+    def _pct_strs(x: float | None) -> tuple:
         # Signed forms first (what the deterministic path emits), then the
         # one-decimal unsigned form LLM prose tends to use. The unsigned
         # integer form ("49%") is deliberately excluded — too collision-
@@ -163,12 +164,12 @@ def _refresh_dcf_references(
         return (f"{x:+.0%}", f"{x:+.1%}", f"{x * 100:+.0f}%",
                 f"{x * 100:+.1f}%", f"{x * 100:.1f}%")
 
-    def _usd_strs(x: Optional[float]) -> tuple:
+    def _usd_strs(x: float | None) -> tuple:
         if x is None:
             return ()
         return (f"${x:,.2f}", f"${x:,.0f}")
 
-    pairs: List[tuple] = []
+    pairs: list[tuple] = []
     for o_s, n_s in ((old.base, new.base), (old.bull, new.bull), (old.bear, new.bear)):
         if o_s is None or n_s is None:
             continue
@@ -207,7 +208,7 @@ def _refresh_dcf_references(
         finding.key_points = list(finding.key_points) + [note]
 
 
-def _risk_items_from_bear_case(bear: Optional[BullBearCase]) -> List[RiskItem]:
+def _risk_items_from_bear_case(bear: BullBearCase | None) -> list[RiskItem]:
     """Backfill `key_risks` from the bear case when profile-driven risk
     extraction returned nothing (B4).
 
@@ -220,7 +221,7 @@ def _risk_items_from_bear_case(bear: Optional[BullBearCase]) -> List[RiskItem]:
     """
     if bear is None:
         return []
-    items: List[RiskItem] = []
+    items: list[RiskItem] = []
     seen: set = set()
     for point in bear.key_points or []:
         text = (point or "").strip()
@@ -237,7 +238,7 @@ def _risk_items_from_bear_case(bear: Optional[BullBearCase]) -> List[RiskItem]:
 
 
 def _build_valuation_verdict(
-    memo: StockMemoOut, comps: Optional[CompsResult],
+    memo: StockMemoOut, comps: CompsResult | None,
 ) -> ValuationVerdict:
     """Theme 1 — compute the memo's single reconciled valuation call.
 
@@ -256,7 +257,7 @@ def _build_valuation_verdict(
         word, "fairly_priced",
     )
 
-    parts: List[str] = []
+    parts: list[str] = []
     if dcf_up is not None:
         parts.append(f"DCF base case {dcf_up:+.0%} to fair value")
     else:
@@ -310,7 +311,7 @@ def _build_mispricing_fallback(memo: StockMemoOut) -> MispricingThesis:
     vv = memo.valuation_verdict
     ticker = memo.ticker
 
-    consensus_bits: List[str] = []
+    consensus_bits: list[str] = []
     if vv.comps_ev_ebitda_premium is not None:
         d = "premium" if vv.comps_ev_ebitda_premium > 0 else "discount"
         consensus_bits.append(
@@ -351,9 +352,9 @@ def _build_mispricing_fallback(memo: StockMemoOut) -> MispricingThesis:
 
 def _mispricing_lever_clause(
     verdict_word: str,
-    upside: Optional[float],
-    drivers: List[str],
-    risks: List[str],
+    upside: float | None,
+    drivers: list[str],
+    risks: list[str],
 ) -> str:
     """Sentence-2 lever clause for a mispriced name.
 
@@ -401,11 +402,11 @@ def _gap_clause_agrees(gap_clause: str, verdict_word: str) -> bool:
 
 
 def _build_thesis_from_findings(
-    profile: Dict,
-    findings: Dict[str, "AgentFinding"],
-    dcf: Optional[DCFResult],
+    profile: dict,
+    findings: dict[str, AgentFinding],
+    dcf: DCFResult | None,
     ticker: str,
-    rating: Optional[str] = None,
+    rating: str | None = None,
 ) -> str:
     """Compose a short-form thesis (2-3 sentences) from the specialists'
     findings. Mirrors the structure required by PM_SYNTHESIS_PROMPT so
@@ -425,7 +426,7 @@ def _build_thesis_from_findings(
     risks = profile.get("risks") or []
     ticker_sym = (profile.get("ticker") or ticker or "").upper()
 
-    def _claim_from_finding(f: "Optional[AgentFinding]") -> Optional[str]:
+    def _claim_from_finding(f: AgentFinding | None) -> str | None:
         if f is None:
             return None
         head = (getattr(f, "headline", "") or "").strip().rstrip(".,;:")
@@ -445,7 +446,7 @@ def _build_thesis_from_findings(
         return head
 
     sector_finding = findings.get("sector")
-    bull_headline: Optional[str] = None
+    bull_headline: str | None = None
     if sector_finding is not None and isinstance(sector_finding.data, dict):
         bb = sector_finding.data.get("bull_bear_analysis") or {}
         if isinstance(bb, dict):
@@ -544,7 +545,7 @@ def _build_thesis_from_findings(
 
 
 def _market_gap_clause(
-    profile: Dict, dcf: Optional[DCFResult], ticker: str,
+    profile: dict, dcf: DCFResult | None, ticker: str,
 ) -> str:
     """Wave 8R — write the "what the market is missing" sentence.
 
@@ -611,9 +612,9 @@ def _market_gap_clause(
 def _build_scores_dict(
     *, blended_confidence: float, raw_confidence: float, ev_q: float,
     sector_finding: AgentFinding, valuation_finding: AgentFinding,
-    risk_finding: AgentFinding, earnings_finding: Optional[AgentFinding] = None,
-    profile: Dict, ratios: Dict, earnings: Dict,
-) -> Dict[str, float]:
+    risk_finding: AgentFinding, earnings_finding: AgentFinding | None = None,
+    profile: dict, ratios: dict, earnings: dict,
+) -> dict[str, float]:
     """Wave 8M — assemble `memo.scores` so the UI can render every
     category score next to the headline confidence number.
 
@@ -644,7 +645,7 @@ def _build_scores_dict(
     # Pull the LLM-extracted latest guidance changes so beat-AND-raise
     # registers as a momentum bonus. Falls back to surprise-only when
     # the earnings analyst didn't emit structured output.
-    latest_guidance: List[Dict[str, Any]] = []
+    latest_guidance: list[dict[str, Any]] = []
     if earnings_finding is not None and isinstance(earnings_finding.data, dict):
         structured = earnings_finding.data.get("structured")
         if isinstance(structured, dict):
@@ -697,7 +698,7 @@ def _build_scores_dict(
 
 def _apply_risk_recommendations(
     memo: StockMemoOut, risk_finding: AgentFinding,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Wave 8H — deterministic enforcement of risk-agent recommendations.
 
     The PM synthesis prompt is one channel for the risk lens to influence
@@ -722,7 +723,7 @@ def _apply_risk_recommendations(
     raw = risk_finding.data.get("recommendations") or []
     if not isinstance(raw, list):
         return []
-    applied: List[Dict[str, Any]] = []
+    applied: list[dict[str, Any]] = []
 
     rating_ladder = [
         "Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish",
@@ -797,7 +798,7 @@ def _apply_risk_recommendations(
     return applied
 
 
-def _bull_bear_from_sector(sector_finding: AgentFinding) -> Optional[Dict[str, Any]]:
+def _bull_bear_from_sector(sector_finding: AgentFinding) -> dict[str, Any] | None:
     """Wave 3A: pluck the structured bull_bear_analysis out of the sector
     finding's data payload, if present. Returns the dict (not the Pydantic
     model) so the caller can pull out the raw `bull_case`/`bear_case`
@@ -809,9 +810,9 @@ def _bull_bear_from_sector(sector_finding: AgentFinding) -> Optional[Dict[str, A
 
 
 def _findings_signal_lines(
-    finding: Optional[AgentFinding], *, polarity: str,
+    finding: AgentFinding | None, *, polarity: str,
     max_items: int = 3, prefix: str = "",
-) -> List[str]:
+) -> list[str]:
     """Pull the most signal-bearing key_points / signals from an agent
     finding, scoped by polarity.
 
@@ -837,7 +838,7 @@ def _findings_signal_lines(
         "elevated", "fragile", "slip", "underperform", "regulator",
         "antitrust", "litigation", "competit",
     )
-    out: List[str] = []
+    out: list[str] = []
     candidates = list(finding.key_points or [])
     # Also consider sentence fragments from the summary as a fallback
     # source — lots of value lives there for short-key_points findings.
@@ -861,9 +862,9 @@ def _findings_signal_lines(
     return out
 
 
-def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
-               sector_finding: Optional[AgentFinding] = None,
-               findings: Optional[Dict[str, AgentFinding]] = None) -> BullBearCase:
+def _bull_case(profile: dict, valuation: AgentFinding, dcf: DCFResult | None,
+               sector_finding: AgentFinding | None = None,
+               findings: dict[str, AgentFinding] | None = None) -> BullBearCase:
     """Build the memo's bull case.
 
     Preference order:
@@ -875,7 +876,7 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
     sector_bb = _bull_bear_from_sector(sector_finding) if sector_finding else None
     # Wave 10k — pull DCF scenario drivers (LLM-named) so the prose
     # tile cites the same drivers the assumption changes baked in.
-    dcf_drivers: List[str] = []
+    dcf_drivers: list[str] = []
     if dcf and dcf.bull and dcf.bull.drivers:
         dcf_drivers = [
             f"DCF driver — {d.name}: {d.rationale}".rstrip(": ")
@@ -883,7 +884,7 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
         ][:3]
     if sector_bb and isinstance(sector_bb.get("bull_case"), dict):
         bull = sector_bb["bull_case"]
-        points: List[str] = list(bull.get("key_points") or [])
+        points: list[str] = list(bull.get("key_points") or [])
         points.extend(dcf_drivers)
         if dcf:
             points.append(
@@ -926,15 +927,15 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
     return BullBearCase(headline=headline, key_points=points[:6])
 
 
-def _bear_case(profile: Dict, dcf: Optional[DCFResult],
-               sector_finding: Optional[AgentFinding] = None,
-               findings: Optional[Dict[str, AgentFinding]] = None) -> BullBearCase:
+def _bear_case(profile: dict, dcf: DCFResult | None,
+               sector_finding: AgentFinding | None = None,
+               findings: dict[str, AgentFinding] | None = None) -> BullBearCase:
     """Build the memo's bear case. Mirror of `_bull_case` — prefers the
     sector LLM's bear, otherwise lifts bear-polarity signals from
     sector / risk / filing findings + DCF downside."""
     sector_bb = _bull_bear_from_sector(sector_finding) if sector_finding else None
     # Wave 10k — DCF bear-case drivers from the scenario builder.
-    dcf_drivers: List[str] = []
+    dcf_drivers: list[str] = []
     if dcf and dcf.bear and dcf.bear.drivers:
         dcf_drivers = [
             f"DCF driver — {d.name}: {d.rationale}".rstrip(": ")
@@ -942,7 +943,7 @@ def _bear_case(profile: Dict, dcf: Optional[DCFResult],
         ][:3]
     if sector_bb and isinstance(sector_bb.get("bear_case"), dict):
         bear = sector_bb["bear_case"]
-        points: List[str] = list(bear.get("key_points") or [])
+        points: list[str] = list(bear.get("key_points") or [])
         points.extend(dcf_drivers)
         if dcf:
             points.append(
@@ -978,10 +979,10 @@ def _bear_case(profile: Dict, dcf: Optional[DCFResult],
 
 
 def _catalysts(
-    profile: Dict, transcript: Optional[Dict],
-    findings: Optional[Dict[str, AgentFinding]] = None,
-    earnings: Optional[Dict] = None,
-) -> List[CatalystItem]:
+    profile: dict, transcript: dict | None,
+    findings: dict[str, AgentFinding] | None = None,
+    earnings: dict | None = None,
+) -> list[CatalystItem]:
     """Surface near-term + medium-term catalysts.
 
     Wave 9b — derives catalysts from findings (earnings tone, sector
@@ -989,7 +990,7 @@ def _catalysts(
     the next earnings date as a concrete near-term watch item when
     we have it (FMP earnings endpoint or AV).
     """
-    items: List[CatalystItem] = []
+    items: list[CatalystItem] = []
     findings = findings or {}
 
     # Sector / news positive catalysts.
@@ -1037,7 +1038,7 @@ def _catalysts(
     return items[:6]
 
 
-def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optional[DCFResult]) -> Dict:
+def _pm_synthesis(profile: dict, findings: dict[str, AgentFinding], dcf: DCFResult | None) -> dict:
     # PM uses its dedicated model (OPENAI_PM_MODEL — gpt-5.5-pro by default).
     # Wave 10 — read PM brain + company / sector memory + research_notes.
     from .pm_context import build_pm_context
@@ -1116,7 +1117,7 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
     )
 
 
-def _portfolio_fit(profile: Dict, rating: str) -> str:
+def _portfolio_fit(profile: dict, rating: str) -> str:
     sector = profile.get("sector", "")
     return (
         f"In a balanced model portfolio, {profile.get('ticker', '')} fits the '{sector}' sleeve. "
@@ -1145,22 +1146,22 @@ def _portfolio_fit(profile: Dict, rating: str) -> str:
 
 
 @checkpointed("graph.fundamentals", return_type=None)
-def _checkpointed_fundamentals(ticker: str, *, force_refresh: bool) -> Dict[str, Any]:
+def _checkpointed_fundamentals(ticker: str, *, force_refresh: bool) -> dict[str, Any]:
     return get_full_financials(ticker, force_refresh=force_refresh)
 
 
 @checkpointed("graph.dcf", return_type=DCFResult)
-def _checkpointed_dcf(ticker: str, *, force_refresh: bool) -> Optional[DCFResult]:
+def _checkpointed_dcf(ticker: str, *, force_refresh: bool) -> DCFResult | None:
     return build_dcf(ticker, force_refresh=force_refresh)
 
 
 @checkpointed("graph.comps", return_type=CompsResult)
-def _checkpointed_comps(ticker: str, *, force_refresh: bool) -> Optional[CompsResult]:
+def _checkpointed_comps(ticker: str, *, force_refresh: bool) -> CompsResult | None:
     return build_comps(ticker, force_refresh=force_refresh)
 
 
 @checkpointed("graph.critic", return_type=CriticReview)
-def _checkpointed_critic(memo_dict: Dict[str, Any]) -> Optional[CriticReview]:
+def _checkpointed_critic(memo_dict: dict[str, Any]) -> CriticReview | None:
     # None is a legitimate outcome (ENABLE_AGENT_CRITIC=false); `safe_critic`
     # passes it through rather than treating it as a failure.
     return run_critic(memo_dict)
@@ -1179,8 +1180,8 @@ def _run_reflection_step(memo: StockMemoOut):
 
 def run_stock_memo(
     ticker: str, *, scenario: str = "soft_landing", force_refresh: bool = False,
-    run_id: Optional[str] = None,
-    as_of_date: Optional[Any] = None,
+    run_id: str | None = None,
+    as_of_date: Any | None = None,
 ) -> StockMemoOut:
     """Generate a stock memo. When `force_refresh=True`, every cached snapshot
     in the dependency tree is bypassed; otherwise, fundamentals/sector/comps/DCF
@@ -1197,7 +1198,8 @@ def run_stock_memo(
     service so backtests truly see only past data.
     """
     import uuid
-    from datetime import date as _date_cls, datetime as _dt_cls
+    from datetime import date as _date_cls
+    from datetime import datetime as _dt_cls
     if run_id is None:
         run_id = str(uuid.uuid4())
     # Coerce datetime → date if a caller hands us a datetime.
@@ -1206,9 +1208,9 @@ def run_stock_memo(
     if as_of_date is not None and as_of_date > _date_cls.today():
         raise ValueError(f"as_of_date {as_of_date} is in the future")
 
-    from .llm import llm_call_context
-    from ..services.data_service import as_of_context
     from ..services import memory_probe
+    from ..services.data_service import as_of_context
+    from .llm import llm_call_context
     # RSS breadcrumbs around the most memory-hungry operation in the
     # process. A Render OOM-kill is a SIGKILL, so Python never gets to log
     # anything on the way down — these two lines are what turns the next
@@ -1238,8 +1240,8 @@ def run_stock_memo(
 
 def _run_stock_memo_inner(
     ticker: str, *, scenario: str, force_refresh: bool, run_id: str,
-    as_of_date: Optional[Any] = None,
-    degradation: Optional[DegradationLog] = None,
+    as_of_date: Any | None = None,
+    degradation: DegradationLog | None = None,
 ) -> StockMemoOut:
     """The memo pipeline as a sequence of stage calls (RP-002).
 
@@ -1290,7 +1292,7 @@ def _run_stock_memo_inner(
 
 def _gather_inputs(
     ticker: str, *, scenario: str, force_refresh: bool, run_id: str,
-    as_of_date: Optional[Any], degradation: DegradationLog,
+    as_of_date: Any | None, degradation: DegradationLog,
 ) -> MemoInputs:
     """Fundamentals, transcript, filings, DCF and comps for one ticker.
 
@@ -1312,7 +1314,7 @@ def _gather_inputs(
 
     transcript = safe_call(latest_transcript, ticker, fallback=None,
                            name="Transcript Service", log_to=degradation)
-    filings: List[Dict[str, Any]] = safe_call(
+    filings: list[dict[str, Any]] = safe_call(
         get_filings, ticker, fallback=[], name="Filings Service", log_to=degradation,
     )
     earnings = fin.get("earnings", {})
@@ -1359,7 +1361,7 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
     # agent_name in LLMCallLog (Wave 1A). (Technicals, by design, do NOT
     # influence the rating — positioning context only.)
     from .llm import llm_call_context
-    findings: Dict[str, AgentFinding] = {}
+    findings: dict[str, AgentFinding] = {}
     for spec in roster.AGENTS:
         if not intake.runs(spec.key):
             findings[spec.key] = AgentFinding(**stub_finding(spec.key, intake.rationale))
@@ -1374,7 +1376,7 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
     # above; rounds 1+ critique + re-fire targeted specialists with the
     # PM's question prepended to their prompt. Skipped on backtests
     # (`as_of_date` set) so we don't burn LLM budget retroactively.
-    round_findings: List[RoundFindings] = []
+    round_findings: list[RoundFindings] = []
     if settings.enable_deep_research and inputs.as_of_date is None:
         from .deep_research import run_dialog_loop
 
@@ -1387,14 +1389,14 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
         # Loop reads `findings` keyed by short agent name — same as the
         # `re_fire` map. Returns the latest-per-agent findings dict + the
         # full round-by-round audit trail for persistence.
-        def _run_loop() -> Tuple[Dict[str, AgentFinding], List[RoundFindings]]:
+        def _run_loop() -> tuple[dict[str, AgentFinding], list[RoundFindings]]:
             return run_dialog_loop(
                 run_id=run_id,
                 initial_findings=findings,
                 re_fire=re_fire,
             )
 
-        no_rounds: List[RoundFindings] = []
+        no_rounds: list[RoundFindings] = []
         loop_out = safe_call(
             _run_loop,
             fallback=(findings, no_rounds),
@@ -1465,11 +1467,11 @@ def _adjust_dcf(inputs: MemoInputs, analysts: AnalystRound) -> DCFStage:
     """
     dcf = inputs.dcf
     initial_dcf = dcf
-    pm_dcf_adjustments: List[Dict[str, Any]] = []
+    pm_dcf_adjustments: list[dict[str, Any]] = []
     pm_dcf_headline = ""
     if dcf is not None and inputs.as_of_date is None and settings.has_llm:
         from .dcf_pm_adjuster import adjust_dcf_for_pm_view
-        no_adjustment: Tuple[Optional[DCFResult], List[Dict[str, Any]], str] = (None, [], "")
+        no_adjustment: tuple[DCFResult | None, list[dict[str, Any]], str] = (None, [], "")
         adj_out = safe_call(
             adjust_dcf_for_pm_view,
             ticker=inputs.profile.get("ticker", inputs.ticker), initial_dcf=dcf,
@@ -1497,7 +1499,7 @@ def _adjust_dcf(inputs: MemoInputs, analysts: AnalystRound) -> DCFStage:
 # Stage 4 — compose
 # ---------------------------------------------------------------------------
 
-def _summarize_dcf(d: Optional[DCFResult]) -> Dict[str, Any]:
+def _summarize_dcf(d: DCFResult | None) -> dict[str, Any]:
     if d is None:
         return {}
     return dict(
@@ -1541,11 +1543,11 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     bear = safe_call(_bear_case, profile, dcf, sector_finding, findings,
                      fallback=BullBearCase(headline="Bear case unavailable.", key_points=[]),
                      name="Bear Case Builder", log_to=degradation)
-    catalysts: List[CatalystItem] = safe_call(
+    catalysts: list[CatalystItem] = safe_call(
         _catalysts, profile, inputs.transcript, findings, inputs.earnings,
         fallback=[], name="Catalyst Builder", log_to=degradation,
     )
-    risks: List[RiskItem] = safe_call(
+    risks: list[RiskItem] = safe_call(
         derive_risk_items, profile, fallback=[], name="Risk Item Builder", log_to=degradation,
     )
     # B4 — live profiles carry no `risks` field, so the profile-driven
@@ -1562,14 +1564,14 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     thesis_breakers = [r for r in risks if r.severity == "high"][:3]
 
     from .llm import llm_call_context
-    synth_fallback: Dict[str, Any] = {
+    synth_fallback: dict[str, Any] = {
         "final_pm_view": "PM synthesis unavailable; relying on specialist findings only.",
         "one_sentence_thesis": f"Research draft for {profile.get('ticker', ticker)}.",
         "rating_label": "Neutral",
         "confidence_score": 50,
     }
     with llm_call_context(agent_name="PM Synthesis", run_id=inputs.run_id, route="strong"):
-        synth: Dict[str, Any] = safe_call(
+        synth: dict[str, Any] = safe_call(
             _pm_synthesis, profile, findings, dcf,
             fallback=synth_fallback, name="PM Synthesis", log_to=degradation,
         )
@@ -1622,7 +1624,7 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     # the live quote and show drift. Best-effort: null when the quote
     # chain misses (the live-overlay path then has nothing to compare
     # against, which is fine).
-    price_at_memo: Optional[float] = None
+    price_at_memo: float | None = None
     try:
         from ..services.market_data_service import get_current_price
         price_at_memo = get_current_price(profile.get("ticker", ticker))
@@ -1631,7 +1633,7 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
 
     # Wave 10 — forward catalyst calendar (next 90d). Best-effort —
     # the table may be empty until the cron has run at least once.
-    forward_catalysts: List[Dict[str, Any]] = []
+    forward_catalysts: list[dict[str, Any]] = []
     try:
         from ..services.catalyst_service import get_upcoming
         forward_catalysts = get_upcoming(profile.get("ticker", ticker), days_ahead=90)
@@ -1644,7 +1646,7 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     # Wave 10 — earnings quarter-over-quarter delta. Reads the
     # earnings agent's structured payload and walks back through the
     # memo history for prior-quarter context. None when no prior data.
-    earnings_qoq: Optional[AgentFinding] = None
+    earnings_qoq: AgentFinding | None = None
     try:
         from .earnings_qoq import run_earnings_qoq_delta
         earnings_struct = (earnings_finding.data or {}).get("structured") if earnings_finding else None
@@ -1665,7 +1667,7 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     # finding's confidence + tone; deterministic, no extra LLM cost.
     # Powers per-agent attribution dashboards + the PM's eventual
     # "discount this specialist" feedback loop.
-    agent_influence: Dict[str, float] = {}
+    agent_influence: dict[str, float] = {}
     try:
         from .influence import compute_influence
         agent_influence = compute_influence(findings)
@@ -1675,7 +1677,7 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     # Wave 10 — freeze the macro context that produced this rating.
     # Lets postmortem regime-conditional bucketing work even after
     # the macro broadcast cache rolls over.
-    macro_snapshot_at_memo: Dict[str, float] = {}
+    macro_snapshot_at_memo: dict[str, float] = {}
     macro_regime_at_memo: str = ""
     try:
         from ..cache import cache_get
@@ -1694,10 +1696,10 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     # Each analyst lands on the memo field its spec names; an analyst with
     # no dedicated field rides in `extra_agent_views` (none today — the risk
     # read is deliberately unsurfaced, see `roster.NO_MEMO_VIEW`).
-    views: Dict[str, Any] = {
+    views: dict[str, Any] = {
         spec.memo_field: findings[spec.key] for spec in roster.AGENTS if spec.memo_field
     }
-    extra_views: Dict[str, AgentFinding] = {
+    extra_views: dict[str, AgentFinding] = {
         spec.key: findings[spec.key] for spec in roster.AGENTS
         if spec.memo_field is None and spec.key not in roster.NO_MEMO_VIEW
     }
@@ -1868,8 +1870,8 @@ def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound)
 
 def _build_verdict(
     memo: StockMemoOut, *,
-    comps: Optional[CompsResult], dcf: Optional[DCFResult],
-    profile: Dict[str, Any], findings: Dict[str, AgentFinding], ticker: str,
+    comps: CompsResult | None, dcf: DCFResult | None,
+    profile: dict[str, Any], findings: dict[str, AgentFinding], ticker: str,
 ) -> VerdictOutcome:
     """Reconcile the memo's valuation call, thesis, mispricing card and
     final verdict from the post-review memo.
@@ -1883,7 +1885,7 @@ def _build_verdict(
     reports through `note_soft` on the run's active log (a no-op outside
     a memo run).
     """
-    notes: List[DegradationNote] = []
+    notes: list[DegradationNote] = []
 
     def _guarded(name: str, fn: Callable[..., T], *args: Any, fallback: T) -> T:
         # `safe_call` without a log: the same warning + redacted record shape
@@ -1995,7 +1997,7 @@ def _build_verdict(
     # finding into the PM memo so users see related-name implications without
     # a second model call. Cohort placement is already in the sector view.
     sector_finding = findings["sector"]
-    cross_relevance: List[str] = []
+    cross_relevance: list[str] = []
     if isinstance(sector_finding.data, dict):
         cross_relevance = sector_finding.data.get("cross_sector_relevance") or []
     cross_relevance_blurb = (
@@ -2031,7 +2033,7 @@ def _build_verdict(
         f"{cohort_blurb}{cross_relevance_blurb}{sector_lean_blurb} "
         f"Watch items: {', '.join(r.title for r in memo.thesis_breakers) or 'none flagged.'}"
     )
-    extra_scores: Dict[str, float] = (
+    extra_scores: dict[str, float] = (
         {"cross_sector_relevance_count": float(len(cross_relevance))} if cross_relevance else {}
     )
     return VerdictOutcome(
@@ -2108,7 +2110,7 @@ def _absorb_failover_events(degradation: DegradationLog) -> None:
         )
 
 
-def _persist_memo_snapshot(memo: StockMemoOut, as_of_date: Optional[Any] = None) -> None:
+def _persist_memo_snapshot(memo: StockMemoOut, as_of_date: Any | None = None) -> None:
     """Indirection so safe_call wraps DB I/O. Lazy-import keeps graph.py from
     pulling the ORM at module import time (it's already loaded via models).
 
@@ -2130,7 +2132,7 @@ def _persist_memo_snapshot(memo: StockMemoOut, as_of_date: Optional[Any] = None)
 # Agent trace helper
 # ---------------------------------------------------------------------------
 
-def default_agent_trace(intent: str) -> List[AgentTrace]:
+def default_agent_trace(intent: str) -> list[AgentTrace]:
     base = [
         AgentTrace(agent="PM Orchestrator", status="done", detail=f"Intent classified as {intent}."),
     ]

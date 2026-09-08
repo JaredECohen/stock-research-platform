@@ -14,8 +14,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Iterable
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -59,15 +60,15 @@ class ResearchSnapshot(Base):
     subject: Mapped[str] = mapped_column(String(128), index=True)
     kind: Mapped[str] = mapped_column(String(64), index=True)
     schema_version: Mapped[int] = mapped_column(Integer, default=1)
-    payload: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     sources_hash: Mapped[str] = mapped_column(String(64), default="")
-    sources_used: Mapped[List[str]] = mapped_column(JSON, default=list)
+    sources_used: Mapped[list[str]] = mapped_column(JSON, default=list)
     generated_by: Mapped[str] = mapped_column(String(128), default="")
     cost_tokens: Mapped[int] = mapped_column(Integer, default=0)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    invalidated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    parent_snapshot_ids: Mapped[List[int]] = mapped_column(JSON, default=list)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    parent_snapshot_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
     stale: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
@@ -102,7 +103,7 @@ def sources_fingerprint(sources_used: Iterable[Any]) -> str:
     Stable across process restarts. Order-independent (sorted before hashing)
     so re-shuffling parent lookups doesn't invalidate caches.
     """
-    items: List[str] = []
+    items: list[str] = []
     for s in sources_used or []:
         if s is None:
             continue
@@ -146,7 +147,7 @@ def _as_of_subject(subject: str) -> str:
     return f"{subject}:asof:{as_of.isoformat()}"
 
 
-def _is_expired(snap: ResearchSnapshot, max_age_seconds: Optional[int]) -> bool:
+def _is_expired(snap: ResearchSnapshot, max_age_seconds: int | None) -> bool:
     if snap.expires_at and _now() >= snap.expires_at:
         return True
     if max_age_seconds is not None:
@@ -163,9 +164,9 @@ def cache_get(
     subject: str,
     kind: str,
     *,
-    max_age_seconds: Optional[int] = None,
-    db: Optional[Session] = None,
-) -> Optional[ResearchSnapshot]:
+    max_age_seconds: int | None = None,
+    db: Session | None = None,
+) -> ResearchSnapshot | None:
     """Look up the freshest non-stale, non-invalidated snapshot for the key.
 
     Returns None if no usable snapshot exists. Callers should treat the return
@@ -231,14 +232,14 @@ def cache_get(
 def cache_put(
     subject: str,
     kind: str,
-    payload: Dict[str, Any],
-    sources_used: Optional[List[Any]] = None,
+    payload: dict[str, Any],
+    sources_used: list[Any] | None = None,
     generated_by: str = "",
     cost_tokens: int = 0,
-    parent_snapshots: Optional[List[int]] = None,
-    ttl_seconds: Optional[int] = None,
+    parent_snapshots: list[int] | None = None,
+    ttl_seconds: int | None = None,
     schema_version: int = 1,
-    db: Optional[Session] = None,
+    db: Session | None = None,
 ) -> ResearchSnapshot:
     """Store a new snapshot. Returns the persisted row with .id populated.
 
@@ -296,9 +297,9 @@ def cache_put(
 
 def invalidate(
     subject: str,
-    kind: Optional[str] = None,
+    kind: str | None = None,
     *,
-    db: Optional[Session] = None,
+    db: Session | None = None,
 ) -> int:
     """Mark all live snapshots for `subject` (and optional `kind`) invalidated.
 
@@ -334,7 +335,7 @@ def invalidate(
             db.close()
 
 
-def mark_stale_descendants(snapshot_id: int, *, db: Optional[Session] = None) -> int:
+def mark_stale_descendants(snapshot_id: int, *, db: Session | None = None) -> int:
     """Mark every snapshot whose lineage references `snapshot_id` as stale.
 
     BFS through parent_snapshot_ids since SQLite JSON doesn't support GIN/JSONB
@@ -375,7 +376,7 @@ def log_cost(
     cost_tokens: int,
     *,
     note: str = "",
-    db: Optional[Session] = None,
+    db: Session | None = None,
 ) -> None:
     """Append a cost row to the cache cost ledger."""
     own = db is None
@@ -396,9 +397,9 @@ def log_cost(
 
 def total_token_cost(
     *,
-    since: Optional[datetime] = None,
+    since: datetime | None = None,
     exclude_hits: bool = True,
-    db: Optional[Session] = None,
+    db: Session | None = None,
 ) -> int:
     """Sum cost_tokens since `since`. Useful for the smoke evaluation gate."""
     own = db is None

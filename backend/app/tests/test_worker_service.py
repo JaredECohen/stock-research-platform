@@ -43,6 +43,7 @@ def test_worker_main_exits_promptly_when_shutdown_is_already_set(monkeypatch):
     reaches its shutdown check without waiting for it.
     """
     import time
+
     import app.worker as worker
 
     def _slow_seed(*a, **k):

@@ -8,7 +8,6 @@ has a row in `memo_outcomes`, the evaluator skips it silently.
 from __future__ import annotations
 
 import logging
-from typing import Dict
 
 from ..services.outcome_service import evaluate_all_due
 from . import record_run
@@ -16,7 +15,7 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def run_once() -> Dict[str, int]:
+def run_once() -> dict[str, int]:
     res = evaluate_all_due()
     note = (
         f"evaluated={res['evaluated']} due={res['due']} "

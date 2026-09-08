@@ -74,11 +74,11 @@ def test_repo_config_env_is_loaded_at_app_startup():
     """Smoke check: `app.config.settings` actually reads our committed
     config.env (verified by the per-agent model defaults landing on the
     spec values)."""
-    from app.config import settings as live_settings
     # These come from config.env — if the file weren't being loaded the
     # field defaults in Settings would still match because we set them
     # there too. So instead test that the env_file list contains config.env.
     from app.config import _project_env_files
+    from app.config import settings as live_settings
     paths = _project_env_files()
     assert any(p.endswith("config.env") for p in paths), (
         f"config.env should appear in env_file list: {paths}"

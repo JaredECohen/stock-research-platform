@@ -18,7 +18,8 @@ once, so a loop that never succeeded was absent rather than flagged.
 """
 from __future__ import annotations
 
-from sqlalchemy import inspect as sa_inspect, text
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import text
 
 from app.database import Base, engine, init_db, reconcile_missing_columns
 

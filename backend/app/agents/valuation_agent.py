@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, Optional
 
 from ..config import settings
 from ..finance.dcf import fmt_price, fmt_upside
@@ -13,8 +12,8 @@ from . import llm, prompts
 
 
 def run_valuation_agent(
-    profile: Dict, ratios: Dict, dcf: Optional[DCFResult],
-    *, prior_round_critique: Optional[str] = None,
+    profile: dict, ratios: dict, dcf: DCFResult | None,
+    *, prior_round_critique: str | None = None,
 ) -> AgentFinding:
     # Pull a fresh intraday quote rather than the 7-day-cached
     # `profile.last_price`. Falls back to last close if the quote

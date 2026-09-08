@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select
 
@@ -95,7 +95,7 @@ def upsert_earnings_dates_for(ticker: str) -> int:
 
 def get_upcoming(
     ticker: str, *, days_ahead: int = 90,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Forward calendar for a single ticker — `days_ahead` window.
 
     Returns dicts ready for memo / chat consumption.
@@ -126,7 +126,7 @@ def get_upcoming(
     ]
 
 
-def refresh_universe(*, limit: Optional[int] = None) -> Dict[str, int]:
+def refresh_universe(*, limit: int | None = None) -> dict[str, int]:
     """Pull earnings dates for the screener universe. Suitable for a
     daily cron. Returns a small summary dict."""
     from ..models import Company

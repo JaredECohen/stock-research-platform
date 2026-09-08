@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -69,10 +69,10 @@ def save_memo(
     memo: StockMemoOut,
     *,
     trigger: str = "full_reanalysis",
-    parent_version: Optional[int] = None,
-    revision_log: Optional[List[Dict[str, Any]]] = None,
-    as_of_date: Optional[Any] = None,
-    db: Optional[Session] = None,
+    parent_version: int | None = None,
+    revision_log: list[dict[str, Any]] | None = None,
+    as_of_date: Any | None = None,
+    db: Session | None = None,
 ) -> MemoSnapshot:
     """Persist a memo as a new version. Returns the inserted snapshot row.
 
@@ -94,7 +94,7 @@ def save_memo(
     try:
         # Round-trip through json to make the payload safe for SQLite's JSON
         # column even when fields contain non-serializable types like datetime.
-        memo_payload: Dict[str, Any] = json.loads(memo.model_dump_json())
+        memo_payload: dict[str, Any] = json.loads(memo.model_dump_json())
         version = _next_version(db, memo.ticker)
         # Coerce date → datetime for SQLite (DateTime column).
         as_of_dt = None
@@ -134,8 +134,8 @@ def save_memo(
 def latest_memo(
     ticker: str, *,
     include_backtests: bool = False,
-    db: Optional[Session] = None,
-) -> Optional[MemoSnapshot]:
+    db: Session | None = None,
+) -> MemoSnapshot | None:
     """Return the highest-version snapshot for `ticker`, or None.
 
     By default, backtest snapshots (those with `as_of_date` set) are
@@ -167,8 +167,8 @@ def latest_memo(
 
 
 def memo_freshness(
-    memo: MemoSnapshot, *, db: Optional[Session] = None,
-) -> Dict[str, Any]:
+    memo: MemoSnapshot, *, db: Session | None = None,
+) -> dict[str, Any]:
     """Return staleness verdict for `memo` (Wave 9b Phase 2d).
 
     A memo is considered stale when a 10-Q / 10-K / 8-K filing has been
@@ -234,8 +234,8 @@ def memo_freshness(
 
 
 def memo_history(
-    ticker: str, *, limit: int = 50, db: Optional[Session] = None,
-) -> List[MemoSnapshot]:
+    ticker: str, *, limit: int = 50, db: Session | None = None,
+) -> list[MemoSnapshot]:
     """Return the timeline of memo versions for `ticker`, newest first."""
     own = db is None
     if own:

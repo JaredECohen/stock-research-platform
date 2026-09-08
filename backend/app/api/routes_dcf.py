@@ -1,7 +1,7 @@
 """DCF endpoints."""
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -26,7 +26,7 @@ def get_default_assumptions(ticker: str) -> DCFAssumptions:
 
 
 @router.get("/api/dcf/{ticker}/consensus")
-def get_consensus_baseline(ticker: str) -> Dict[str, Any]:
+def get_consensus_baseline(ticker: str) -> dict[str, Any]:
     """Wave 8Q — return the analyst-consensus 5-year growth path that
     the engine uses as a starting point, plus the trailing 3-year op
     margin (which is held flat by default). The DCF Lab renders this
@@ -64,7 +64,7 @@ def get_consensus_baseline(ticker: str) -> Dict[str, Any]:
 
 
 @router.get("/api/dcf/{ticker}/saved")
-def get_saved_assumptions(ticker: str) -> Dict[str, Any]:
+def get_saved_assumptions(ticker: str) -> dict[str, Any]:
     """Wave 8J — return the latest persisted DCF version's assumptions.
 
     Used by the DCF Lab to pre-populate the editor with what the
@@ -93,7 +93,7 @@ def get_saved_assumptions(ticker: str) -> Dict[str, Any]:
 
 
 @router.post("/api/dcf/{ticker}", response_model=DCFResult)
-def run_dcf(ticker: str, assumptions: Optional[DCFAssumptions] = None) -> DCFResult:
+def run_dcf(ticker: str, assumptions: DCFAssumptions | None = None) -> DCFResult:
     """Compute a DCF result from `assumptions`. Wave 8J: edits made in
     the DCF Lab are explicitly **non-persistent** when the supplied
     assumptions diverge from the engine defaults — `valuation_service.build_dcf`

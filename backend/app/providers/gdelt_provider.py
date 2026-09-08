@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -48,7 +48,7 @@ class GDELTProvider:
             capabilities=["news"],
         )
 
-    def get_news(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
+    def get_news(self, ticker: str) -> list[dict[str, Any]] | None:
         if not ticker:
             return None
         return self.search_news(query=ticker.upper(), tickers=[ticker.upper()])
@@ -57,10 +57,10 @@ class GDELTProvider:
         self,
         *,
         query: str,
-        tickers: Optional[List[str]] = None,
+        tickers: list[str] | None = None,
         limit: int = 25,
         max_age_days: int = 30,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Run an arbitrary GDELT DOC query and return normalized articles.
 
         `query` follows GDELT's query syntax (free text, with optional
@@ -97,7 +97,7 @@ class GDELTProvider:
             return []
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         seen_urls: set[str] = set()
         for art in articles_raw:
             if not isinstance(art, dict):
@@ -136,14 +136,14 @@ class GDELTProvider:
     def get_filings(self, ticker: str): return None
     def get_estimates(self, ticker: str): return None
     def get_macro_series(self, series_id: str): return None
-    def list_tickers(self) -> List[str]: return []
-    def list_macro_series(self) -> List[Dict[str, Any]]: return []
+    def list_tickers(self) -> list[str]: return []
+    def list_macro_series(self) -> list[dict[str, Any]]: return []
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    def _build_query(self, query: str, *, tickers: Optional[List[str]]) -> str:
+    def _build_query(self, query: str, *, tickers: list[str] | None) -> str:
         """Construct a GDELT query that is specific to a single ticker.
 
         For a plain ticker, GDELT will happily match the letters as words
@@ -153,7 +153,7 @@ class GDELTProvider:
         """
         symbol = (tickers[0] if tickers else query).upper()
         company_name = self._lookup_company_name(symbol)
-        terms: List[str] = []
+        terms: list[str] = []
         if company_name:
             terms.append(f'"{company_name}"')
         # Always include the ticker in cashtag form so we catch "$AAPL" style.
@@ -164,7 +164,7 @@ class GDELTProvider:
         joined = " OR ".join(terms)
         return f"({joined}) sourcelang:eng"
 
-    def _lookup_company_name(self, ticker: str) -> Optional[str]:
+    def _lookup_company_name(self, ticker: str) -> str | None:
         try:
             from ..database import SessionLocal
             from ..models import Company
@@ -177,7 +177,7 @@ class GDELTProvider:
         return None
 
 
-def _parse_gdelt_ts(token: Any) -> Optional[datetime]:
+def _parse_gdelt_ts(token: Any) -> datetime | None:
     """GDELT timestamps come as `YYYYMMDDTHHMMSSZ`."""
     if not token:
         return None
@@ -194,7 +194,7 @@ def _parse_gdelt_ts(token: Any) -> Optional[datetime]:
         return None
 
 
-def _coerce_float(value: Any) -> Optional[float]:
+def _coerce_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
     try:

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
 
 from ..config import settings
 from ..schemas import (
@@ -93,10 +93,10 @@ def _format_finding_for_critique(name: str, f: AgentFinding) -> str:
     )
 
 
-def _format_prior_rounds(rounds: List[RoundFindings]) -> str:
+def _format_prior_rounds(rounds: list[RoundFindings]) -> str:
     if not rounds or all(r.round == 0 for r in rounds):
         return "(no prior critique rounds — this is round 1)"
-    lines: List[str] = []
+    lines: list[str] = []
     for r in rounds:
         if r.round == 0:
             continue
@@ -106,8 +106,8 @@ def _format_prior_rounds(rounds: List[RoundFindings]) -> str:
 
 
 def pm_critique(
-    *, round_num: int, current_findings: Dict[str, AgentFinding],
-    rounds_so_far: List[RoundFindings], run_id: str,
+    *, round_num: int, current_findings: dict[str, AgentFinding],
+    rounds_so_far: list[RoundFindings], run_id: str,
 ) -> CritiqueOutput:
     """Single PM critique step. Inspects current findings + dialog
     history, returns a structured `CritiqueOutput` with 0-N questions.
@@ -147,7 +147,7 @@ def pm_critique(
             ),
         )
 
-    questions: List[CritiqueQuestion] = []
+    questions: list[CritiqueQuestion] = []
     for raw in (out.get("questions") or [])[: settings.deep_research_max_questions_per_round]:
         if not isinstance(raw, dict):
             continue
@@ -172,10 +172,10 @@ def pm_critique(
 
 def run_dialog_loop(
     *, run_id: str,
-    initial_findings: Dict[str, AgentFinding],
-    re_fire: Dict[str, AgentDispatcher],
-    max_rounds: Optional[int] = None,
-) -> Tuple[Dict[str, AgentFinding], List[RoundFindings]]:
+    initial_findings: dict[str, AgentFinding],
+    re_fire: dict[str, AgentDispatcher],
+    max_rounds: int | None = None,
+) -> tuple[dict[str, AgentFinding], list[RoundFindings]]:
     """Run the PM↔specialist dialog. Returns the final-round findings
     + the full round_findings list for persistence.
 
@@ -196,7 +196,7 @@ def run_dialog_loop(
 
     # Round 0 — the existing parallel fan-out. Persist it as round 0 with
     # no PM questions so the audit log is complete.
-    rounds: List[RoundFindings] = [
+    rounds: list[RoundFindings] = [
         RoundFindings(round=0, pm_questions=[], findings=dict(initial_findings)),
     ]
     current = dict(initial_findings)
@@ -219,7 +219,7 @@ def run_dialog_loop(
 
         # Re-fire each targeted specialist. Skip questions for agents we
         # don't have a re-fire dispatcher for (defensive).
-        new_findings: Dict[str, AgentFinding] = {}
+        new_findings: dict[str, AgentFinding] = {}
         any_success = False
         for q in critique.questions:
             disp = re_fire.get(q.target_agent)

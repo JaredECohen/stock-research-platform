@@ -1,13 +1,10 @@
 """Screener service: compute factor scores for the universe and persist."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 from ..finance import factor_scores as fs
-from ..schemas import ScreenerRow, ScreenerResult
+from ..schemas import ScreenerResult, ScreenerRow
 from .data_service import get_data_service
 from .fundamentals_service import get_full_financials
-
 
 # ---------------------------------------------------------------------------
 # Theme matchers — used to bias macro_fit per theme
@@ -20,7 +17,7 @@ from .fundamentals_service import get_full_financials
 THEME_EXPOSURE_FLOOR: float = 30.0
 
 
-THEME_BIAS: Dict[str, Dict[str, float]] = {
+THEME_BIAS: dict[str, dict[str, float]] = {
     "ai_infrastructure": {
         "Technology": 1.4, "Communication Services": 1.1, "Industrials": 1.1, "Utilities": 1.05,
     },
@@ -45,19 +42,19 @@ THEME_BIAS: Dict[str, Dict[str, float]] = {
 }
 
 
-def _theme_label(theme: Optional[str]) -> Optional[str]:
+def _theme_label(theme: str | None) -> str | None:
     if not theme:
         return None
     t = theme.lower().replace("-", "_").replace(" ", "_")
     return t if t in THEME_BIAS else theme
 
 
-def _one_line_thesis(profile: Dict) -> str:
+def _one_line_thesis(profile: dict) -> str:
     drivers = profile.get("drivers") or []
     return f"{profile.get('industry', 'Sector')} name leveraged to {drivers[0] if drivers else 'durable demand'}."
 
 
-def compute_universe_scores(theme: Optional[str] = None) -> ScreenerResult:
+def compute_universe_scores(theme: str | None = None) -> ScreenerResult:
     """Compute scores for the curated screener universe (auto_analysis only).
 
     Wave 9b — research-on-demand and demoted-class tickers stay out of
@@ -88,14 +85,14 @@ def compute_universe_scores(theme: Optional[str] = None) -> ScreenerResult:
                 Company.universe_tier == "auto_analysis",
             ).all()
         ]
-    rows: List[ScreenerRow] = []
+    rows: list[ScreenerRow] = []
     theme_key = _theme_label(theme)
     bias = THEME_BIAS.get(theme_key or "", {})
 
     # Precompute the theme-exposure map for this theme (one query per
     # screen, not one per ticker) and the set of theme-favored sectors
     # used as the fallback filter when no exposures are on file.
-    theme_exposure_map: Dict[str, float] = {}
+    theme_exposure_map: dict[str, float] = {}
     if theme_key:
         try:
             from ..models import ThemeExposure
@@ -177,7 +174,7 @@ def compute_universe_scores(theme: Optional[str] = None) -> ScreenerResult:
         # show users WHY a name surfaces under a theme. Pulled from the
         # precomputed map; `None` when no exposure data exists for the
         # theme or this ticker.
-        theme_exposure_score: Optional[float] = (
+        theme_exposure_score: float | None = (
             theme_exposure_map.get(ticker.upper())
             if theme_key and have_exposure_data
             else None
@@ -210,7 +207,7 @@ def compute_universe_scores(theme: Optional[str] = None) -> ScreenerResult:
     return ScreenerResult(theme=theme_key, rows=rows)
 
 
-def get_universe_dicts(theme: Optional[str] = None) -> List[Dict]:
+def get_universe_dicts(theme: str | None = None) -> list[dict]:
     """Return scored universe as a list of dicts (used by portfolio agent)."""
     result = compute_universe_scores(theme)
     return [r.model_dump() for r in result.rows]

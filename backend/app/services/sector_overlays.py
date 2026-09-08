@@ -16,9 +16,9 @@ sector agent can call them speculatively.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from . import data_catalog_service, company_geography, factor_analytics
+from . import company_geography, data_catalog_service, factor_analytics
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +41,8 @@ _METRO_HPI_SERIES = {
 
 
 def compute_real_estate_overlay(
-    ticker: str, *, profile: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    ticker: str, *, profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """National housing snapshot + REIT-specific metro overlay when geography is known."""
     sector = (profile or {}).get("sector") or ""
     sub_industry = (profile or {}).get("sub_industry") or ""
@@ -53,8 +53,8 @@ def compute_real_estate_overlay(
 
     geo = company_geography.get_geography(ticker, allow_llm_fallback=False)
 
-    metro_block: List[Dict[str, Any]] = []
-    weighted_yoy: Optional[float] = None
+    metro_block: list[dict[str, Any]] = []
+    weighted_yoy: float | None = None
     if geo and geo.get("metros"):
         weights = geo["metros"]
         total_weight = 0.0
@@ -77,7 +77,7 @@ def compute_real_estate_overlay(
         if total_weight > 0:
             weighted_yoy = weighted_sum / total_weight
 
-    narrative: List[str] = []
+    narrative: list[str] = []
     case_shiller = next((s for s in national if s.series_id == "CSUSHPISA"), None)
     mortgage = next((s for s in national if s.series_id == "MORTGAGE30US"), None)
     starts = next((s for s in national if s.series_id == "HOUST"), None)
@@ -125,8 +125,8 @@ _CORE_ENERGY_SERIES = [
 
 
 def compute_energy_overlay(
-    ticker: str, *, profile: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    ticker: str, *, profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Petroleum + natural-gas storage + WTI + Henry Hub snapshot."""
     sector = (profile or {}).get("sector") or ""
     sub_industry = (profile or {}).get("sub_industry") or ""
@@ -145,7 +145,7 @@ def compute_energy_overlay(
     petroleum_snap = eia.get_petroleum_storage_snapshot() if eia else None
     natgas_snap = eia.get_natgas_storage_snapshot() if eia else None
 
-    narrative: List[str] = []
+    narrative: list[str] = []
     wti = next((s for s in series if s.series_id == "PET.RWTC.D"), None)
     hh = next((s for s in series if s.series_id == "NG.RNGWHHD.D"), None)
     crude = next((s for s in series if s.series_id == "PET.WCESTUS1.W"), None)
@@ -196,8 +196,8 @@ _CENSUS_RETAIL_SERIES = [
 
 
 def compute_consumer_overlay(
-    ticker: str, *, profile: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    ticker: str, *, profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Consumer health + retail trade by category + footprint state unemployment."""
     sector = (profile or {}).get("sector") or ""
     sub_industry = (profile or {}).get("sub_industry") or ""
@@ -206,8 +206,8 @@ def compute_consumer_overlay(
     retail_categories = data_catalog_service.fetch_snapshots(_CENSUS_RETAIL_SERIES)
 
     # State-level unemployment for the ticker's footprint
-    state_block: List[Dict[str, Any]] = []
-    weighted_unemployment: Optional[float] = None
+    state_block: list[dict[str, Any]] = []
+    weighted_unemployment: float | None = None
     geo = company_geography.get_geography(ticker, allow_llm_fallback=False)
     if geo and geo.get("states"):
         state_to_series = {
@@ -238,7 +238,7 @@ def compute_consumer_overlay(
         if total_weight > 0:
             weighted_unemployment = weighted_sum / total_weight
 
-    narrative: List[str] = []
+    narrative: list[str] = []
     retail_total = next((s for s in national_consumer if s.series_id == "RSAFS"), None)
     saving = next((s for s in national_consumer if s.series_id == "PSAVERT"), None)
     delinq = next((s for s in national_consumer if s.series_id == "DRCCLACBS"), None)
@@ -289,12 +289,12 @@ _INFLATION_SERIES = [
 
 
 def compute_inflation_overlay(
-    ticker: str, *, profile: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    ticker: str, *, profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Headline + category inflation prints. Drives pricing-power narrative."""
     series = data_catalog_service.fetch_snapshots(_INFLATION_SERIES)
     payload = [s.to_dict() for s in series]
-    narrative: List[str] = []
+    narrative: list[str] = []
     sticky = next((s for s in series if s.series_id == "CORESTICKM159SFRBATL"), None)
     pce = next((s for s in series if s.series_id == "PCEPI"), None)
     if sticky and sticky.latest:
@@ -319,11 +319,11 @@ _CREDIT_SERIES = [
 
 
 def compute_credit_overlay(
-    ticker: str, *, profile: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    ticker: str, *, profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     series = data_catalog_service.fetch_snapshots(_CREDIT_SERIES)
     payload = [s.to_dict() for s in series]
-    narrative: List[str] = []
+    narrative: list[str] = []
     hy = next((s for s in series if s.series_id == "BAMLH0A0HYM2"), None)
     curve = next((s for s in series if s.series_id == "T10Y2Y"), None)
     if hy and hy.latest:
@@ -349,7 +349,7 @@ def compute_credit_overlay(
 # Sector-aware dispatcher
 # ---------------------------------------------------------------------------
 
-_OVERLAY_PRIORITY_BY_SECTOR: Dict[str, List[str]] = {
+_OVERLAY_PRIORITY_BY_SECTOR: dict[str, list[str]] = {
     "Real Estate":              ["real_estate", "credit", "factor"],
     "Energy":                   ["energy", "credit", "factor"],
     "Utilities":                ["energy", "credit", "factor"],
@@ -366,10 +366,10 @@ _OVERLAY_PRIORITY_BY_SECTOR: Dict[str, List[str]] = {
 
 def compute_sector_overlays(
     ticker: str, *,
-    profile: Optional[Dict[str, Any]] = None,
-    explicit_overlays: Optional[List[str]] = None,
+    profile: dict[str, Any] | None = None,
+    explicit_overlays: list[str] | None = None,
     max_overlays: int = 3,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Dispatch the right overlays for a ticker's sector.
 
     Returns a dict keyed by overlay name. `available=False` overlays are
@@ -380,7 +380,7 @@ def compute_sector_overlays(
     chosen = list(explicit_overlays) if explicit_overlays else (
         _OVERLAY_PRIORITY_BY_SECTOR.get(sector, ["credit", "inflation"])[:max_overlays]
     )
-    bundles: Dict[str, Any] = {}
+    bundles: dict[str, Any] = {}
     for name in chosen:
         fn = _OVERLAY_FUNCS.get(name)
         if fn is None:
@@ -399,8 +399,8 @@ def compute_sector_overlays(
 
 
 def compute_factor_overlay(
-    ticker: str, *, profile: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    ticker: str, *, profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Fama-French 5 + momentum decomposition of the ticker's recent excess returns.
 
     Returns the same dict shape every other overlay does so the sector

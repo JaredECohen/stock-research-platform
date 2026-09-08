@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date as _date
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from sqlalchemy import select
@@ -80,8 +80,8 @@ def _company_tier(ticker: str) -> str:
     return (row[0] if row else "data_only") or "data_only"
 
 
-@router.get("/api/stocks", response_model=List[CompanyOut])
-def list_stocks() -> List[CompanyOut]:
+@router.get("/api/stocks", response_model=list[CompanyOut])
+def list_stocks() -> list[CompanyOut]:
     """Return every ticker the platform knows about.
 
     Wave 9b — reads the `companies` table directly so the dropdown gets
@@ -101,7 +101,7 @@ def list_stocks() -> List[CompanyOut]:
     )
     with SessionLocal() as db:
         rows = db.execute(select(Company)).scalars().all()
-        out: List[CompanyOut] = []
+        out: list[CompanyOut] = []
         for row in rows:
             payload = {f: getattr(row, f, None) for f in fields}
             payload["universe_tier"] = payload.get("universe_tier") or "data_only"
@@ -111,7 +111,7 @@ def list_stocks() -> List[CompanyOut]:
 
 
 @router.get("/api/stocks/{ticker}")
-def get_stock(ticker: str) -> Dict[str, Any]:
+def get_stock(ticker: str) -> dict[str, Any]:
     fin = get_full_financials(ticker.upper())
     if not fin.get("profile"):
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -135,14 +135,14 @@ def get_stock(ticker: str) -> Dict[str, Any]:
 
 
 @router.get("/api/stocks/{ticker}/prices")
-def get_stock_prices(ticker: str, days: int = 252) -> List[Dict[str, Any]]:
+def get_stock_prices(ticker: str, days: int = 252) -> list[dict[str, Any]]:
     rows = get_price_series(ticker.upper(), days)
     if not rows:
         raise HTTPException(status_code=404, detail=f"No prices for {ticker}")
     return rows
 
 
-def _parse_as_of(as_of: Optional[str]) -> Optional[_date]:
+def _parse_as_of(as_of: str | None) -> _date | None:
     """Parse + validate `?as_of=YYYY-MM-DD`. Future dates are rejected."""
     if not as_of:
         return None
@@ -165,7 +165,7 @@ def get_stock_memo(
     response: Response,
     scenario: str = "soft_landing",
     ondemand: bool = False,
-    as_of: Optional[str] = Query(None, description="YYYY-MM-DD; backtest mode"),
+    as_of: str | None = Query(None, description="YYYY-MM-DD; backtest mode"),
 ) -> StockMemoOut:
     """Return the latest memo for `ticker`.
 
@@ -244,7 +244,7 @@ def get_stock_memo(
 
 
 @router.get("/api/stocks/{ticker}/memory")
-def get_stock_memory(ticker: str, limit: int = 10) -> Dict[str, Any]:
+def get_stock_memory(ticker: str, limit: int = 10) -> dict[str, Any]:
     """Wave 8D — surface long-term memory entries for the UI.
 
     Returns the most recent `limit` entries from `memory/companies/<T>.md`
@@ -273,7 +273,7 @@ def get_stock_memory(ticker: str, limit: int = 10) -> Dict[str, Any]:
 
 
 @router.get("/api/stocks/{ticker}/memos")
-def get_stock_memo_history(ticker: str, limit: int = 25) -> List[Dict[str, Any]]:
+def get_stock_memo_history(ticker: str, limit: int = 25) -> list[dict[str, Any]]:
     """Memo timeline for `ticker`, newest-first.
 
     Returns the metadata only (version / trigger / parent_version /
@@ -301,9 +301,9 @@ def analyze_stock(
     request: Request,
     response: Response,
     ticker: str,
-    scenario: Optional[str] = None,
+    scenario: str | None = None,
     sync: bool = Query(False, description="If True, run synchronously and return the memo (will 504 on prod for full memos > 100s)."),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Trigger a fresh full memo regeneration.
 
     Returns 202 immediately by default after enqueuing a durable
@@ -365,7 +365,7 @@ def analyze_stock(
 
 
 @router.get("/api/stocks/{ticker}/analyze/status")
-def analyze_status(ticker: str) -> Dict[str, Any]:
+def analyze_status(ticker: str) -> dict[str, Any]:
     """Poll target for the async analyze flow.
 
     Returns:

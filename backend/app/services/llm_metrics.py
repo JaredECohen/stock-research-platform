@@ -13,7 +13,7 @@ pricing changes.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -21,11 +21,10 @@ from sqlalchemy.orm import Session
 from ..database import SessionLocal
 from ..models import LLMCallLog
 
-
 # Best-effort prices per million tokens (USD), input / output.
 # Edit when a provider's official pricing changes; not load-bearing for
 # any logic — only the cost estimate output uses these.
-MODEL_PRICES_PER_MTOK: Dict[str, Tuple[float, float]] = {
+MODEL_PRICES_PER_MTOK: dict[str, tuple[float, float]] = {
     # OpenAI
     "gpt-5":           (3.50, 14.00),
     "gpt-5.4":         (5.00, 20.00),
@@ -44,7 +43,7 @@ MODEL_PRICES_PER_MTOK: Dict[str, Tuple[float, float]] = {
 }
 
 # Provider-level fallback (when the specific model isn't tabulated).
-PROVIDER_PRICE_FALLBACK: Dict[str, Tuple[float, float]] = {
+PROVIDER_PRICE_FALLBACK: dict[str, tuple[float, float]] = {
     "openai":    (3.00, 12.00),
     "anthropic": (3.00, 15.00),
     "gemini":    (3.00, 12.00),
@@ -69,7 +68,7 @@ def _ensure_table(db: Session) -> None:
     LLMCallLog.__table__.create(bind=db.get_bind(), checkfirst=True)
 
 
-def cost_per_run(run_id: str, *, db: Optional[Session] = None) -> Dict[str, Any]:
+def cost_per_run(run_id: str, *, db: Session | None = None) -> dict[str, Any]:
     """Per-call detail + totals for one memo run."""
     own = db is None
     if own:
@@ -110,8 +109,8 @@ def cost_per_run(run_id: str, *, db: Optional[Session] = None) -> Dict[str, Any]
             db.close()
 
 
-def cost_per_agent(*, since: Optional[datetime] = None,
-                   db: Optional[Session] = None) -> Dict[str, Dict[str, int]]:
+def cost_per_agent(*, since: datetime | None = None,
+                   db: Session | None = None) -> dict[str, dict[str, int]]:
     """Aggregate by agent_name. Returns {agent: {n_calls, tokens, duration_ms_total, n_failures}}."""
     own = db is None
     if own:
@@ -122,7 +121,7 @@ def cost_per_agent(*, since: Optional[datetime] = None,
         if since:
             stmt = stmt.where(LLMCallLog.generated_at >= since)
         rows = list(db.execute(stmt).scalars().all())
-        agg: Dict[str, Dict[str, Any]] = {}
+        agg: dict[str, dict[str, Any]] = {}
         for r in rows:
             a = agg.setdefault(r.agent_name, {
                 "n_calls": 0, "tokens_in": 0, "tokens_out": 0,
@@ -145,8 +144,8 @@ def cost_per_agent(*, since: Optional[datetime] = None,
             db.close()
 
 
-def cost_per_provider(*, since: Optional[datetime] = None,
-                      db: Optional[Session] = None) -> Dict[str, Dict[str, Any]]:
+def cost_per_provider(*, since: datetime | None = None,
+                      db: Session | None = None) -> dict[str, dict[str, Any]]:
     """Aggregate by provider name."""
     own = db is None
     if own:
@@ -157,7 +156,7 @@ def cost_per_provider(*, since: Optional[datetime] = None,
         if since:
             stmt = stmt.where(LLMCallLog.generated_at >= since)
         rows = list(db.execute(stmt).scalars().all())
-        agg: Dict[str, Dict[str, Any]] = {}
+        agg: dict[str, dict[str, Any]] = {}
         for r in rows:
             a = agg.setdefault(r.provider, {
                 "n_calls": 0, "tokens_in": 0, "tokens_out": 0,
@@ -179,8 +178,8 @@ def cost_per_provider(*, since: Optional[datetime] = None,
             db.close()
 
 
-def slowest_calls(*, since: Optional[datetime] = None, n: int = 20,
-                  db: Optional[Session] = None) -> List[Dict[str, Any]]:
+def slowest_calls(*, since: datetime | None = None, n: int = 20,
+                  db: Session | None = None) -> list[dict[str, Any]]:
     """Top-N slowest calls in the window. Useful for finding pathological prompts."""
     own = db is None
     if own:
@@ -206,7 +205,7 @@ def slowest_calls(*, since: Optional[datetime] = None, n: int = 20,
             db.close()
 
 
-def gc_old(*, max_age_days: int = 90, db: Optional[Session] = None) -> int:
+def gc_old(*, max_age_days: int = 90, db: Session | None = None) -> int:
     """Delete rows older than `max_age_days`. Returns count deleted.
 
     Default 90 days per locked decision in MASTER_PLAN §5. Idempotent.

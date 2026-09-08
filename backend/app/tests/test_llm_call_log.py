@@ -13,14 +13,14 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import select
 
 from app.agents import llm as llm_mod
-from app.agents.llm import llm_call_context, _record_usage
+from app.agents.llm import _record_usage, llm_call_context
 from app.config import settings
 from app.database import SessionLocal
 from app.models import LLMCallLog
 from app.services import llm_metrics
-from sqlalchemy import select
 
 
 def _count_rows() -> int:

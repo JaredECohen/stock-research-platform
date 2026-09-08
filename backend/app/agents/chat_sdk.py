@@ -26,7 +26,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from . import llm
@@ -50,7 +50,7 @@ def _can_use_sdk() -> bool:
         return False
 
 
-def _profile_for(fin: Dict[str, Any], ticker: str) -> Dict[str, Any]:
+def _profile_for(fin: dict[str, Any], ticker: str) -> dict[str, Any]:
     """Extract the profile from a `get_full_financials` result, guaranteeing
     a `ticker` key.
 
@@ -74,7 +74,7 @@ def _profile_for(fin: Dict[str, Any], ticker: str) -> Dict[str, Any]:
     return profile
 
 
-def _build_chat_agent() -> Optional[Any]:
+def _build_chat_agent() -> Any | None:
     """Wire an `Agent` with the four data-fetch tools the chat handler
     might need. Returns None if the SDK isn't usable."""
     if not _can_use_sdk():
@@ -83,7 +83,7 @@ def _build_chat_agent() -> Optional[Any]:
         from agents import Agent, function_tool
 
         @function_tool
-        def get_memo(ticker: str) -> Dict[str, Any]:
+        def get_memo(ticker: str) -> dict[str, Any]:
             """Return the latest cached investment memo for `ticker`. The
             response is the compact projection that includes the rating,
             stock score, one-sentence thesis, key risks, the bull/bear
@@ -102,7 +102,7 @@ def _build_chat_agent() -> Optional[Any]:
             return _memo_for_chat_context(m)
 
         @function_tool
-        def get_dcf_summary(ticker: str) -> Dict[str, Any]:
+        def get_dcf_summary(ticker: str) -> dict[str, Any]:
             """Return the latest DCF for `ticker` — both the PM-adjusted
             view (used by the memo's rating) and the consensus-anchored
             initial view, plus the audit trail of which assumptions the
@@ -126,7 +126,7 @@ def _build_chat_agent() -> Optional[Any]:
             }
 
         @function_tool
-        def get_comps(ticker: str) -> Dict[str, Any]:
+        def get_comps(ticker: str) -> dict[str, Any]:
             """Return the peer-comparison data for `ticker`: peer set,
             target metrics vs peer median, premium/discount on each
             multiple, and (when available) target's own multi-year
@@ -151,13 +151,13 @@ def _build_chat_agent() -> Optional[Any]:
             }
 
         @function_tool
-        def get_macro_snapshot() -> Dict[str, Any]:
+        def get_macro_snapshot() -> dict[str, Any]:
             """Return the current macro snapshot (FRED data — Fed Funds,
             10y yield, core sticky CPI, unemployment, etc.) plus the
             most recent regime broadcast. Use when the user asks about
             macro context or how a regime change affects a sector/name."""
-            from ..services.macro_service import macro_snapshot
             from ..cache import cache_get
+            from ..services.macro_service import macro_snapshot
             snap = macro_snapshot() or {}
             broadcast = cache_get("macro:global", "macro_broadcast")
             return {
@@ -169,7 +169,7 @@ def _build_chat_agent() -> Optional[Any]:
             }
 
         @function_tool
-        def get_company_lite(ticker: str) -> Dict[str, Any]:
+        def get_company_lite(ticker: str) -> dict[str, Any]:
             """Return a compact company dossier — sector / industry /
             market cap / business description plus screener-tier metrics
             (P/E, ROIC, margins, growth) and AI-ranked factor scores.
@@ -184,7 +184,7 @@ def _build_chat_agent() -> Optional[Any]:
             return snap
 
         @function_tool
-        def list_universe(sector: Optional[str] = None) -> Dict[str, Any]:
+        def list_universe(sector: str | None = None) -> dict[str, Any]:
             """List the curated screener universe (S&P 500 + curated extensions). Optionally
             filter by sector ('Technology', 'Healthcare', etc.). Use
             when the user asks "what stocks does the platform cover" or
@@ -207,11 +207,11 @@ def _build_chat_agent() -> Optional[Any]:
 
         @function_tool
         def screener_query(
-            sort_by: Optional[str] = None,
-            sector: Optional[str] = None,
-            theme: Optional[str] = None,
+            sort_by: str | None = None,
+            sector: str | None = None,
+            theme: str | None = None,
             limit: int = 10,
-        ) -> Dict[str, Any]:
+        ) -> dict[str, Any]:
             """Fetch the AI-ranked screener results. `sort_by` ∈ {pm_score,
             quality, growth, valuation, earnings_momentum, risk,
             macro_fit}; default pm_score. Use when the user asks for
@@ -249,7 +249,7 @@ def _build_chat_agent() -> Optional[Any]:
             }
 
         @function_tool
-        def custom_screen(rules_json: str, limit: int = 10) -> Dict[str, Any]:
+        def custom_screen(rules_json: str, limit: int = 10) -> dict[str, Any]:
             """Run a rule-based custom screen against the 15-metric raw
             snapshot table. `rules_json` is a JSON-encoded list of
             `{"metric": "...", "op": "...", "value": ...}` rules
@@ -263,8 +263,8 @@ def _build_chat_agent() -> Optional[Any]:
                 rules = json.loads(rules_json) if isinstance(rules_json, str) else rules_json
             except Exception as exc:
                 return {"error": f"rules_json must be a JSON list: {exc}"}
-            from ..schemas import CustomScreenRequest
             from ..api.routes_screener import _execute_custom_screen
+            from ..schemas import CustomScreenRequest
             try:
                 req = CustomScreenRequest(rules=rules, limit=limit)
                 result = _execute_custom_screen(req)
@@ -283,14 +283,14 @@ def _build_chat_agent() -> Optional[Any]:
         # individually, each tool is one LLM call against a specialist.
 
         @function_tool
-        def ask_sector(ticker: str, question: str) -> Dict[str, Any]:
+        def ask_sector(ticker: str, question: str) -> dict[str, Any]:
             """Re-fire the sector analyst on `ticker` with a follow-up
             question. Use when you need a sector-grounded view that
             isn't in the cached memo (e.g. "what would change if rates
             fell 100bps?", "is the cohort margin trend reversing?").
             Returns the analyst's headline + key_points."""
-            from .sector_agents import run_sector_agent
             from ..services.fundamentals_service import get_full_financials
+            from .sector_agents import run_sector_agent
             try:
                 fin = get_full_financials((ticker or "").upper())
                 profile = _profile_for(fin, ticker)
@@ -305,14 +305,14 @@ def _build_chat_agent() -> Optional[Any]:
             }
 
         @function_tool
-        def ask_earnings(ticker: str, question: str) -> Dict[str, Any]:
+        def ask_earnings(ticker: str, question: str) -> dict[str, Any]:
             """Re-fire the earnings analyst on `ticker` with a follow-up
             question grounded in the latest transcript ("what did the
             CEO defend most?", "did guidance change tone QoQ?"). Returns
             the analyst's headline + key_points."""
-            from .earnings_agent import run_earnings_agent
-            from ..services.fundamentals_service import get_full_financials
             from ..services.data_service import get_data_service
+            from ..services.fundamentals_service import get_full_financials
+            from .earnings_agent import run_earnings_agent
             try:
                 fin = get_full_financials((ticker or "").upper())
                 profile = _profile_for(fin, ticker)
@@ -332,13 +332,13 @@ def _build_chat_agent() -> Optional[Any]:
             }
 
         @function_tool
-        def ask_filings(ticker: str, question: str) -> Dict[str, Any]:
+        def ask_filings(ticker: str, question: str) -> dict[str, Any]:
             """Re-fire the filings analyst on `ticker` with a follow-up
             grounded in the most recent 10-K/Q ("what's the new risk
             factor?", "did segment X get more disclosure this year?")."""
-            from .filing_agent import run_filing_agent
-            from ..services.fundamentals_service import get_full_financials
             from ..services.data_service import get_data_service
+            from ..services.fundamentals_service import get_full_financials
+            from .filing_agent import run_filing_agent
             try:
                 fin = get_full_financials((ticker or "").upper())
                 profile = _profile_for(fin, ticker)
@@ -356,14 +356,14 @@ def _build_chat_agent() -> Optional[Any]:
             }
 
         @function_tool
-        def ask_valuation(ticker: str, question: str) -> Dict[str, Any]:
+        def ask_valuation(ticker: str, question: str) -> dict[str, Any]:
             """Re-fire the valuation analyst on `ticker` with a follow-up
             question grounded in the live DCF + ratios ("why is the
             terminal multiple at 15x?", "what would a 50bps WACC change
             do to the implied price?")."""
-            from .valuation_agent import run_valuation_agent
             from ..services.fundamentals_service import get_full_financials
             from ..services.valuation_service import build_dcf
+            from .valuation_agent import run_valuation_agent
             try:
                 fin = get_full_financials((ticker or "").upper())
                 profile = _profile_for(fin, ticker)
@@ -382,14 +382,14 @@ def _build_chat_agent() -> Optional[Any]:
             }
 
         @function_tool
-        def ask_macro(question: str, ticker: Optional[str] = None) -> Dict[str, Any]:
+        def ask_macro(question: str, ticker: str | None = None) -> dict[str, Any]:
             """Re-fire the macro analyst with a follow-up. If `ticker`
             is supplied, run the per-company macro pass (sensitivity to
             current regime); otherwise run the scenario pass."""
             try:
                 if ticker:
-                    from .macro_agent import run_macro_agent
                     from ..services.fundamentals_service import get_full_financials
+                    from .macro_agent import run_macro_agent
                     fin = get_full_financials((ticker or "").upper())
                     profile = _profile_for(fin, ticker)
                     finding = run_macro_agent(
@@ -494,8 +494,8 @@ def _build_chat_agent() -> Optional[Any]:
 
 
 def answer_via_sdk(
-    *, message: str, history: List[Any],
-) -> Optional[str]:
+    *, message: str, history: list[Any],
+) -> str | None:
     """Run the chat agent and return its final markdown answer.
 
     Returns None if the SDK isn't usable or the run failed. Caller
@@ -525,8 +525,8 @@ def answer_via_sdk(
     # brain + research_notes load unconditionally.
     pm_ctx = ""
     try:
-        from .pm_context import build_pm_context
         from .orchestrator import _extract_tickers
+        from .pm_context import build_pm_context
         ticks = _extract_tickers(message + " " + history_block)
         first_ticker = ticks[0] if ticks else None
         first_sector = None

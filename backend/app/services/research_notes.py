@@ -47,7 +47,7 @@ import re
 from datetime import date as _date
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -68,13 +68,13 @@ class NoteFrontmatter(BaseModel):
     somewhere obvious (sector agent, all sectors, weight 0.5)."""
     title: str
     source: str = ""
-    date: Optional[str] = None  # YYYY-MM-DD
-    applies_to_agents: List[str] = Field(default_factory=lambda: ["sector"])
-    applies_to_sectors: List[str] = Field(default_factory=lambda: ["*"])
-    applies_to_sub_industries: List[str] = Field(default_factory=list)
-    applies_to_tickers: List[str] = Field(default_factory=list)
+    date: str | None = None  # YYYY-MM-DD
+    applies_to_agents: list[str] = Field(default_factory=lambda: ["sector"])
+    applies_to_sectors: list[str] = Field(default_factory=lambda: ["*"])
+    applies_to_sub_industries: list[str] = Field(default_factory=list)
+    applies_to_tickers: list[str] = Field(default_factory=list)
     weight: float = 0.5
-    expires: Optional[str] = None  # YYYY-MM-DD
+    expires: str | None = None  # YYYY-MM-DD
     status: str = "active"  # active | archived | superseded
     chars: int = 0
     summary: str = ""
@@ -110,8 +110,8 @@ class NoteSummary(BaseModel):
     source: str = ""
     summary: str = ""
     weight: float = 0.5
-    applies_to_agents: List[str] = Field(default_factory=list)
-    applies_to_sectors: List[str] = Field(default_factory=list)
+    applies_to_agents: list[str] = Field(default_factory=list)
+    applies_to_sectors: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +126,7 @@ def _root_default() -> Path:
     return repo_root / "research_notes"
 
 
-def _parse_frontmatter(text: str) -> tuple[Dict[str, Any], str]:
+def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Split a markdown file into `(frontmatter_dict, body)`.
 
     Returns `({}, full_text)` when no frontmatter delimiter is found —
@@ -147,7 +147,7 @@ def _parse_frontmatter(text: str) -> tuple[Dict[str, Any], str]:
     return data, body
 
 
-def parse_note(path: Path) -> Optional[ResearchNote]:
+def parse_note(path: Path) -> ResearchNote | None:
     """Read + parse one .md file. Returns None on read failure."""
     try:
         text = path.read_text(encoding="utf-8")
@@ -193,7 +193,7 @@ def _deterministic_summary(body: str, max_chars: int = 200) -> str:
     return para
 
 
-def list_notes(corpus_root: Optional[Path] = None) -> List[ResearchNote]:
+def list_notes(corpus_root: Path | None = None) -> list[ResearchNote]:
     """Walk the corpus, return all parseable notes.
 
     Recurses into subfolders. Files not ending in `.md` are skipped.
@@ -201,7 +201,7 @@ def list_notes(corpus_root: Optional[Path] = None) -> List[ResearchNote]:
     root = Path(corpus_root) if corpus_root else _root_default()
     if not root.exists():
         return []
-    out: List[ResearchNote] = []
+    out: list[ResearchNote] = []
     for path in sorted(root.rglob("*.md")):
         note = parse_note(path)
         if note is not None:
@@ -214,7 +214,7 @@ def list_notes(corpus_root: Optional[Path] = None) -> List[ResearchNote]:
 # ---------------------------------------------------------------------------
 
 def _matches_filter(
-    note_tags: List[str], target: Optional[str],
+    note_tags: list[str], target: str | None,
     *, empty_means_no_restriction: bool = False,
 ) -> bool:
     """Tag-list match with wildcard support.
@@ -240,7 +240,7 @@ def _matches_filter(
     return any(str(t).strip().lower() == target_norm for t in note_tags)
 
 
-def _is_active(fm: NoteFrontmatter, today: Optional[_date] = None) -> bool:
+def _is_active(fm: NoteFrontmatter, today: _date | None = None) -> bool:
     if fm.status != "active":
         return False
     if not fm.expires:
@@ -255,13 +255,13 @@ def _is_active(fm: NoteFrontmatter, today: Optional[_date] = None) -> bool:
 
 def select_for(
     agent_name: str, *,
-    sector: Optional[str] = None,
-    sub_industry: Optional[str] = None,
-    ticker: Optional[str] = None,
-    corpus_root: Optional[Path] = None,
+    sector: str | None = None,
+    sub_industry: str | None = None,
+    ticker: str | None = None,
+    corpus_root: Path | None = None,
     max_notes: int = 6,
-    today: Optional[_date] = None,
-) -> List[NoteSummary]:
+    today: _date | None = None,
+) -> list[NoteSummary]:
     """Filter the corpus to notes relevant to this run, sorted by weight.
 
     Filter dimensions cascade — every supplied dimension must match.
@@ -269,7 +269,7 @@ def select_for(
     alphabetically for determinism.
     """
     notes = list_notes(corpus_root=corpus_root)
-    out: List[NoteSummary] = []
+    out: list[NoteSummary] = []
     for n in notes:
         fm = n.frontmatter
         if not _is_active(fm, today=today):
@@ -299,7 +299,7 @@ def select_for(
     return out[:max_notes]
 
 
-def render_summary_block(notes: List[NoteSummary]) -> str:
+def render_summary_block(notes: list[NoteSummary]) -> str:
     """Render a markdown block to splice into an agent prompt.
 
     Returns the empty string when `notes` is empty so callers can
@@ -336,8 +336,8 @@ _BODY_CHAR_CAP = 4096
 
 
 def _bm25_score_body(
-    query_tokens: List[str], doc_tokens: List[str],
-    df: Dict[str, int], n_docs: int, avgdl: float,
+    query_tokens: list[str], doc_tokens: list[str],
+    df: dict[str, int], n_docs: int, avgdl: float,
     k1: float = 1.5, b: float = 0.75,
 ) -> float:
     """Vendored BM25 — same form as `services/retrieval_service._bm25_score`
@@ -360,20 +360,20 @@ def _bm25_score_body(
 _BODY_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]+")
 
 
-def _tokenize_body(text: str) -> List[str]:
+def _tokenize_body(text: str) -> list[str]:
     return [t.lower() for t in _BODY_TOKEN_RE.findall(text or "")]
 
 
 def select_bodies(
     agent_name: str, query: str, *,
-    sector: Optional[str] = None,
-    sub_industry: Optional[str] = None,
-    ticker: Optional[str] = None,
-    corpus_root: Optional[Path] = None,
+    sector: str | None = None,
+    sub_industry: str | None = None,
+    ticker: str | None = None,
+    corpus_root: Path | None = None,
     top_k: int = 2,
     char_cap: int = _BODY_CHAR_CAP,
-    today: Optional[_date] = None,
-) -> List[NoteExcerpt]:
+    today: _date | None = None,
+) -> list[NoteExcerpt]:
     """Wave 7B: BM25 over note bodies, returns top-K most-relevant excerpts.
 
     The same routing filter that gates `select_for` runs first — bodies
@@ -391,7 +391,7 @@ def select_bodies(
     matches no notes — caller falls through to summaries-only injection.
     """
     notes = list_notes(corpus_root=corpus_root)
-    eligible: List[ResearchNote] = []
+    eligible: list[ResearchNote] = []
     for n in notes:
         fm = n.frontmatter
         if not _is_active(fm, today=today):
@@ -417,7 +417,7 @@ def select_bodies(
     # BM25 stats over the eligible subset.
     docs = [(_tokenize_body(n.body), n) for n in eligible]
     from collections import defaultdict
-    df: Dict[str, int] = defaultdict(int)
+    df: dict[str, int] = defaultdict(int)
     for tokens, _ in docs:
         for t in set(tokens):
             df[t] += 1
@@ -425,7 +425,7 @@ def select_bodies(
     avgdl = sum(len(t) for t, _ in docs) / max(1, n_docs)
     q_tokens = _tokenize_body(query)
 
-    scored: List[tuple[float, ResearchNote]] = []
+    scored: list[tuple[float, ResearchNote]] = []
     for tokens, note in docs:
         s = _bm25_score_body(q_tokens, tokens, df, n_docs, avgdl)
         if s > 0:
@@ -437,7 +437,7 @@ def select_bodies(
         ),
     )
 
-    out: List[NoteExcerpt] = []
+    out: list[NoteExcerpt] = []
     used = 0
     for score, note in scored[: max(top_k * 2, top_k)]:
         if len(out) >= top_k:
@@ -462,7 +462,7 @@ def select_bodies(
     return out
 
 
-def render_body_block(excerpts: List[NoteExcerpt]) -> str:
+def render_body_block(excerpts: list[NoteExcerpt]) -> str:
     """Markdown block of the top-K full bodies. Empty string when no excerpts."""
     if not excerpts:
         return ""
@@ -479,12 +479,12 @@ def render_body_block(excerpts: List[NoteExcerpt]) -> str:
 # ---------------------------------------------------------------------------
 
 def build_notes_block_for_agent(
-    agent_name: str, profile: Optional[Dict[str, Any]] = None, *,
+    agent_name: str, profile: dict[str, Any] | None = None, *,
     extra_query: str = "",
     max_summaries: int = 6,
     top_k_bodies: int = 2,
     body_char_cap: int = _BODY_CHAR_CAP,
-    today: Optional[_date] = None,
+    today: _date | None = None,
 ) -> str:
     """Wave 7C: one-call entry point for any specialist agent.
 

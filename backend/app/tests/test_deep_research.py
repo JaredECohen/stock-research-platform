@@ -15,8 +15,6 @@ dispatchers — nothing else.
 """
 from __future__ import annotations
 
-from typing import List
-
 import pytest
 
 from app.agents import deep_research as dr
@@ -62,7 +60,7 @@ def test_round_zero_persisted_as_audit_anchor(monkeypatch):
 
 
 def test_pm_no_further_questions_stops_loop_after_one_round(monkeypatch):
-    calls: List[str] = []
+    calls: list[str] = []
 
     def fake_critique(**kwargs):
         calls.append("called")
@@ -174,7 +172,7 @@ def test_unknown_target_agent_skipped_safely(monkeypatch):
             ],
         ),
     )
-    fired: List[str] = []
+    fired: list[str] = []
 
     def refire(q: str) -> AgentFinding:
         fired.append(q)

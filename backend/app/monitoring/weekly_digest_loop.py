@@ -14,7 +14,6 @@ given week (~5-15 typically; up to ~100 during 10-Q season).
 from __future__ import annotations
 
 import logging
-from typing import Dict
 
 from ..services.filing_memory import weekly_digest_universe
 from . import record_run
@@ -22,7 +21,7 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def run_once(*, days_back: int = 7) -> Dict[str, int]:
+def run_once(*, days_back: int = 7) -> dict[str, int]:
     res = weekly_digest_universe(days_back=days_back)
     note = (
         f"tickers={res['tickers_checked']} "

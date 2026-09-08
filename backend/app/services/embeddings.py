@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-from typing import Iterable, List, Optional, Sequence
+from collections.abc import Sequence
 
 from ..config import settings
 
@@ -35,7 +35,7 @@ def _is_openai_available() -> bool:
     return bool(getattr(settings, "openai_api_key", None))
 
 
-def _hash_embed(text: str, dim: int = FALLBACK_DIM) -> List[float]:
+def _hash_embed(text: str, dim: int = FALLBACK_DIM) -> list[float]:
     """Deterministic, content-derived 'embedding' for tests.
 
     Hash the text into `dim/8` 64-bit integers, normalize to unit length.
@@ -45,7 +45,7 @@ def _hash_embed(text: str, dim: int = FALLBACK_DIM) -> List[float]:
     h = hashlib.sha512(text.encode("utf-8", errors="ignore")).digest()
     while len(h) * 8 < dim * 8:
         h += hashlib.sha512(h).digest()
-    nums: List[float] = []
+    nums: list[float] = []
     for i in range(dim):
         chunk = h[i * 4 : i * 4 + 4]
         if len(chunk) < 4:
@@ -55,7 +55,7 @@ def _hash_embed(text: str, dim: int = FALLBACK_DIM) -> List[float]:
     return [x / norm for x in nums]
 
 
-def embed(texts: Sequence[str]) -> List[List[float]]:
+def embed(texts: Sequence[str]) -> list[list[float]]:
     """Return one embedding per input text.
 
     OpenAI when configured; deterministic hash fallback otherwise. The
@@ -75,7 +75,7 @@ def embed(texts: Sequence[str]) -> List[List[float]]:
     return [_hash_embed(t) for t in texts]
 
 
-def embed_one(text: str) -> List[float]:
+def embed_one(text: str) -> list[float]:
     return embed([text])[0]
 
 
@@ -90,7 +90,7 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 
 def chunk_text(
     text: str, *, target_tokens: int = 500, overlap_tokens: int = 50,
-) -> List[str]:
+) -> list[str]:
     """Naive token-budgeted chunker — words as a token proxy.
 
     Sufficient for filing / transcript chunking; if a follow-up wants
@@ -100,7 +100,7 @@ def chunk_text(
     if not text:
         return []
     words = text.split()
-    chunks: List[str] = []
+    chunks: list[str] = []
     i = 0
     step = max(1, target_tokens - overlap_tokens)
     while i < len(words):

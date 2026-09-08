@@ -16,7 +16,7 @@ Covers:
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -59,7 +59,7 @@ def _seed_snapshot(
         return snap
 
 
-def _stub_prices(rows_by_ticker: Dict[str, List[Dict[str, Any]]]):
+def _stub_prices(rows_by_ticker: dict[str, list[dict[str, Any]]]):
     """Patch market_data_service.get_price_series to return stub data."""
     from app.services import market_data_service
     def fake(ticker: str, days: int = 252):

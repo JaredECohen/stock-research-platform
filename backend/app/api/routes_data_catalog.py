@@ -14,13 +14,13 @@ The agent itself uses the same functions directly via
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
 from ..agents.sector_tools import prepare_sector_context
 from ..data_catalog import SERIES_REGISTRY, by_id, list_categories, list_regions, list_sector_tags
-from ..services import data_catalog_service, company_geography, sector_overlays
+from ..services import company_geography, data_catalog_service, sector_overlays
 from ..services.data_service import get_data_service
 
 router = APIRouter()
@@ -28,13 +28,13 @@ router = APIRouter()
 
 @router.get("/api/data-catalog/series")
 def list_series(
-    sector: Optional[str] = None,
-    sub_industry: Optional[str] = None,
-    category: Optional[str] = None,
-    region: Optional[str] = None,
-    source: Optional[str] = None,
-    keyword: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    sector: str | None = None,
+    sub_industry: str | None = None,
+    category: str | None = None,
+    region: str | None = None,
+    source: str | None = None,
+    keyword: str | None = None,
+) -> list[dict[str, Any]]:
     """Browse the full catalog, optionally filtered."""
     if any([sector, sub_industry, category, region, source, keyword]):
         return data_catalog_service.discover_by_query(
@@ -49,7 +49,7 @@ def list_series(
 
 
 @router.get("/api/data-catalog/series/{series_id}")
-def get_series(series_id: str, force_refresh: bool = False) -> Dict[str, Any]:
+def get_series(series_id: str, force_refresh: bool = False) -> dict[str, Any]:
     """Fetch a single series snapshot with derived stats."""
     spec = by_id(series_id)
     if spec is None:
@@ -61,7 +61,7 @@ def get_series(series_id: str, force_refresh: bool = False) -> Dict[str, Any]:
 
 
 @router.get("/api/data-catalog/meta")
-def catalog_meta() -> Dict[str, Any]:
+def catalog_meta() -> dict[str, Any]:
     """Enumerate the discrete values that can be filtered on."""
     return {
         "categories": list_categories(),
@@ -75,8 +75,8 @@ def catalog_meta() -> Dict[str, Any]:
 @router.get("/api/data-catalog/ticker/{ticker}/context")
 def ticker_context(
     ticker: str,
-    overlays: Optional[List[str]] = Query(default=None),
-) -> Dict[str, Any]:
+    overlays: list[str] | None = Query(default=None),
+) -> dict[str, Any]:
     """Return the same context payload the sector analyst sees for a ticker.
 
     Pass `?overlays=energy&overlays=credit` to override the default sector-
@@ -84,7 +84,7 @@ def ticker_context(
     """
     sym = ticker.upper().strip()
     # Try to grab the company profile so discovery routes correctly.
-    profile: Dict[str, Any] = {}
+    profile: dict[str, Any] = {}
     try:
         p = get_data_service().get_company_profile(sym)
         if isinstance(p, dict):
@@ -101,7 +101,7 @@ def ticker_context(
 
 
 @router.get("/api/data-catalog/ticker/{ticker}/geography")
-def ticker_geography(ticker: str, allow_llm: bool = False) -> Dict[str, Any]:
+def ticker_geography(ticker: str, allow_llm: bool = False) -> dict[str, Any]:
     """Return the resolved geographic footprint for a ticker."""
     geo = company_geography.get_geography(ticker, allow_llm_fallback=allow_llm)
     if geo is None:
@@ -110,10 +110,10 @@ def ticker_geography(ticker: str, allow_llm: bool = False) -> Dict[str, Any]:
 
 
 @router.get("/api/data-catalog/ticker/{ticker}/overlay/{name}")
-def ticker_overlay(ticker: str, name: str) -> Dict[str, Any]:
+def ticker_overlay(ticker: str, name: str) -> dict[str, Any]:
     """Compute a single named overlay for a ticker."""
     sym = ticker.upper().strip()
-    profile: Dict[str, Any] = {"ticker": sym}
+    profile: dict[str, Any] = {"ticker": sym}
     try:
         p = get_data_service().get_company_profile(sym)
         if isinstance(p, dict):

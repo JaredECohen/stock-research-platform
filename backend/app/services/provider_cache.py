@@ -38,9 +38,10 @@ import json
 import logging
 import random
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from functools import lru_cache
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -54,7 +55,7 @@ log = logging.getLogger(__name__)
 
 
 # In-seconds. None = never expires (always reuse cache).
-TTL_BY_CAPABILITY: Dict[str, int] = {
+TTL_BY_CAPABILITY: dict[str, int] = {
     "profile":   7 * 86400,
     "prices":         86400,
     "quote":             60,
@@ -69,7 +70,7 @@ TTL_BY_CAPABILITY: Dict[str, int] = {
 # Roughly "how long before this data is worse than no data": a month-old
 # profile is still the right company, a week-old price series is a
 # usable backdrop, but an hour-old quote is not intraday anymore.
-MAX_STALE_BY_CAPABILITY: Dict[str, int] = {
+MAX_STALE_BY_CAPABILITY: dict[str, int] = {
     "profile":   30 * 86400,
     "prices":     7 * 86400,
     "quote":           3600,
@@ -107,12 +108,12 @@ def _parse_duration(text: str) -> int:
 
 
 @lru_cache(maxsize=8)
-def _parse_max_stale_overrides(raw: str) -> Dict[str, int]:
+def _parse_max_stale_overrides(raw: str) -> dict[str, int]:
     """Parse `PROVIDER_CACHE_MAX_STALE` leniently: one bad entry must not
     take the others down with it, and must not fail startup. Memoised on
     the raw string so a malformed entry is warned about once, not on
     every cache lookup."""
-    overrides: Dict[str, int] = {}
+    overrides: dict[str, int] = {}
     for entry in raw.replace(";", ",").split(","):
         entry = entry.strip()
         if not entry:
@@ -141,13 +142,13 @@ def max_stale_seconds(capability: str) -> int:
     return MAX_STALE_BY_CAPABILITY.get(capability, DEFAULT_MAX_STALE_SECONDS)
 
 
-def _is_fresh(fetched_at: datetime, ttl_seconds: Optional[int]) -> bool:
+def _is_fresh(fetched_at: datetime, ttl_seconds: int | None) -> bool:
     if ttl_seconds is None:
         return True  # never-expire mode
     return _now() - fetched_at < timedelta(seconds=ttl_seconds)
 
 
-def _read_row(capability: str, key: str) -> Optional[Tuple[Any, datetime]]:
+def _read_row(capability: str, key: str) -> tuple[Any, datetime] | None:
     """(payload, fetched_at) for the row, or None when absent."""
     with SessionLocal() as db:
         row = db.execute(
@@ -163,10 +164,10 @@ def _read_row(capability: str, key: str) -> Optional[Tuple[Any, datetime]]:
 
 def _lookup(
     capability: str, key: str,
-    *, ttl_seconds: Optional[int],
+    *, ttl_seconds: int | None,
     serve_stale: bool,
-    max_age_seconds: Optional[int],
-) -> Tuple[Optional[Any], Optional[int]]:
+    max_age_seconds: int | None,
+) -> tuple[Any | None, int | None]:
     """The one place the fresh / stale / too-stale decision is made, so
     `get` and `cached_call` cannot drift apart on the age cap.
 
@@ -191,10 +192,10 @@ def _lookup(
 
 def get(
     capability: str, key: str,
-    *, ttl_seconds: Optional[int] = None,
+    *, ttl_seconds: int | None = None,
     serve_stale: bool = False,
-    max_age_seconds: Optional[int] = None,
-) -> Optional[Any]:
+    max_age_seconds: int | None = None,
+) -> Any | None:
     """Read the cached payload for `(capability, key)`.
 
     Returns None when no row exists. When a row exists but is past
@@ -265,7 +266,7 @@ def put(capability: str, key: str, payload: Any) -> None:
             _backoff(attempt)
 
 
-def invalidate(capability: str, key: Optional[str] = None) -> int:
+def invalidate(capability: str, key: str | None = None) -> int:
     """Drop rows. Pass `key=None` to clear every row for `capability`.
 
     Returns the number of rows deleted.
@@ -300,9 +301,9 @@ def _record_stale(kind: str, capability: str, key: str, age_seconds: int) -> Non
 
 def cached_call(
     capability: str, key: str, fetcher: Callable[[], Any],
-    *, ttl_seconds: Optional[int] = None,
+    *, ttl_seconds: int | None = None,
     force_refresh: bool = False,
-) -> Optional[Any]:
+) -> Any | None:
     """Read-through: cache hit → return; miss → call `fetcher`, write,
     return; provider miss → fall back to a stale cached row no older
     than `max_stale_seconds(capability)`, else None.
@@ -357,13 +358,13 @@ def cached_call(
 STALE_STATS_ROW_LIMIT = 5000
 
 
-def stale_stats(window_hours: int = 24) -> Dict[str, Any]:
+def stale_stats(window_hours: int = 24) -> dict[str, Any]:
     """Aggregate the stale-serve ledger over the trailing window.
 
     One bounded query; never raises — a failure returns zeros plus an
     `error` key so the status endpoint stays up when the DB doesn't.
     """
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "window_hours": window_hours,
         "stale_served": 0,
         "stale_refused": 0,
@@ -388,8 +389,8 @@ def stale_stats(window_hours: int = 24) -> Dict[str, Any]:
             result["truncated"] = True
             rows = rows[:STALE_STATS_ROW_LIMIT]
 
-        by_cap: Dict[str, Dict[str, Any]] = result["by_capability"]
-        oldest_served: Optional[int] = None
+        by_cap: dict[str, dict[str, Any]] = result["by_capability"]
+        oldest_served: int | None = None
         for kind, note in rows:
             try:
                 info = json.loads(note or "{}")

@@ -11,7 +11,6 @@ display + edit / re-run.
 from __future__ import annotations
 
 import logging
-from typing import List, Tuple
 
 from ..finance.portfolio_construction import build_portfolio
 from ..schemas import ModelPortfolio, PortfolioBrief, PortfolioRequest
@@ -23,8 +22,8 @@ log = logging.getLogger(__name__)
 
 
 def _apply_brief(
-    candidates: List[dict], brief: PortfolioBrief,
-) -> List[dict]:
+    candidates: list[dict], brief: PortfolioBrief,
+) -> list[dict]:
     """Reshape candidate scores in-place using the brief.
 
     Today's `build_portfolio` only knows about a 5-key scenario tag;
@@ -42,7 +41,7 @@ def _apply_brief(
         except Exception as exc:  # pragma: no cover
             log.debug("theme exposure lookup failed for %s: %s", theme, exc)
             theme_tickers[theme] = set()
-    boosted: List[dict] = []
+    boosted: list[dict] = []
     for c in candidates:
         c = dict(c)  # shallow copy so we don't mutate caller state
         ticker = c.get("ticker", "").upper()
@@ -89,7 +88,7 @@ def build_model_portfolio(request: PortfolioRequest) -> ModelPortfolio:
 
 def build_model_portfolio_with_brief(
     request: PortfolioRequest,
-) -> Tuple[ModelPortfolio, PortfolioBrief]:
+) -> tuple[ModelPortfolio, PortfolioBrief]:
     """Brief-driven build. Returns (portfolio, brief) so the UI / API
     can render the inferred brief alongside the holdings."""
     brief = extract_brief(request)
@@ -108,7 +107,7 @@ def build_model_portfolio_with_brief(
         "excluded_sectors": excluded_sectors,
         "risk_level": brief.risk or request.risk_level,
     })
-    candidates: List[dict] = get_universe_dicts(theme=None)
+    candidates: list[dict] = get_universe_dicts(theme=None)
     candidates = _apply_brief(candidates, brief)
     portfolio = build_portfolio(effective, candidates, name="Brief-driven Portfolio")
     return portfolio, brief

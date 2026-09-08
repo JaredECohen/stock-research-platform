@@ -27,8 +27,9 @@ Contract notes
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Dict, Optional, Tuple
+from typing import TYPE_CHECKING
 
 from ..schemas import AgentFinding
 from ..services.checkpoint_store import checkpointed
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
 
 # (inputs, prior_round_critique) -> finding. `prior_round_critique` is None
 # on round 0 and the PM's question on deep-research re-fires.
-AgentRunner = Callable[["MemoInputs", Optional[str]], AgentFinding]
+AgentRunner = Callable[["MemoInputs", str | None], AgentFinding]
 
 
 @dataclass(frozen=True)
@@ -55,8 +56,8 @@ class AgentSpec:
     display_name: str                 # llm_call_context agent_name; degraded_agents entry
     checkpoint: str                   # MemoRunCheckpoint step name — FROZEN (see KNOWN_STEPS)
     run: AgentRunner                  # (inputs, prior_round_critique) -> AgentFinding
-    needs: Tuple[str, ...] = ()       # MemoInputs attribute names the runner reads
-    memo_field: Optional[str] = None  # StockMemoOut attribute, or None -> extra_agent_views[key]
+    needs: tuple[str, ...] = ()       # MemoInputs attribute names the runner reads
+    memo_field: str | None = None  # StockMemoOut attribute, or None -> extra_agent_views[key]
     uses_llm_round0: bool = True      # False when round 0 is deterministic by design
 
     @property
@@ -69,7 +70,7 @@ class AgentSpec:
         return f"Long-form ({self.display_name.replace(' Analyst', '')})"
 
 
-AGENTS: Tuple[AgentSpec, ...] = (
+AGENTS: tuple[AgentSpec, ...] = (
     AgentSpec(
         key="sector", display_name="Sector Analyst",
         checkpoint="graph.sector_finding",
@@ -134,7 +135,7 @@ AGENTS: Tuple[AgentSpec, ...] = (
     ),
 )
 
-AGENTS_BY_KEY: Dict[str, AgentSpec] = {spec.key: spec for spec in AGENTS}
+AGENTS_BY_KEY: dict[str, AgentSpec] = {spec.key: spec for spec in AGENTS}
 
 # Roster keys whose finding is deliberately NOT surfaced on the memo, even
 # though `memo_field` is None. The risk analyst predates `extra_agent_views`
@@ -147,24 +148,24 @@ NO_MEMO_VIEW: frozenset = frozenset({"risk"})
 # Non-roster steps the graph checkpoints under the same run_id. They stay
 # hand-written in graph.py because their return types differ (a dict, a
 # DCFResult, a CompsResult, an Optional[CriticReview]).
-GATHER_STEPS: Tuple[str, ...] = ("graph.fundamentals", "graph.dcf", "graph.comps")
+GATHER_STEPS: tuple[str, ...] = ("graph.fundamentals", "graph.dcf", "graph.comps")
 CRITIC_STEP = "graph.critic"
 
 # Every checkpoint name the memo run can write, frozen. Resume, the status
 # endpoint and the worker's progress merge all key on these strings.
-KNOWN_STEPS: Tuple[str, ...] = (
+KNOWN_STEPS: tuple[str, ...] = (
     *GATHER_STEPS,
     *(spec.checkpoint for spec in AGENTS),
     CRITIC_STEP,
 )
 
 
-def _build_checkpointed(spec: AgentSpec) -> Callable[["MemoInputs"], AgentFinding]:
+def _build_checkpointed(spec: AgentSpec) -> Callable[[MemoInputs], AgentFinding]:
     # `run_id` is read by the decorator from `llm_call_context` at call
     # time, so this wrapper checkpoints exactly like the hand-written ones
     # did: cached under (run_id, spec.checkpoint), fall-through without a
     # run_id. Round 0 passes no critique.
-    def _round0(inputs: "MemoInputs") -> AgentFinding:
+    def _round0(inputs: MemoInputs) -> AgentFinding:
         return spec.run(inputs, None)
 
     _round0.__name__ = f"checkpointed_{spec.key}"
@@ -173,12 +174,12 @@ def _build_checkpointed(spec: AgentSpec) -> Callable[["MemoInputs"], AgentFindin
 
 # Built once at import for the roster; a spec that is not on `AGENTS`
 # (a test appending a fake analyst) gets its wrapper built on first use.
-_CHECKPOINTED: Dict[AgentSpec, Callable[["MemoInputs"], AgentFinding]] = {
+_CHECKPOINTED: dict[AgentSpec, Callable[[MemoInputs], AgentFinding]] = {
     spec: _build_checkpointed(spec) for spec in AGENTS
 }
 
 
-def checkpointed_runner(spec: AgentSpec) -> Callable[["MemoInputs"], AgentFinding]:
+def checkpointed_runner(spec: AgentSpec) -> Callable[[MemoInputs], AgentFinding]:
     """The round-0 runner for `spec`, wrapped in the checkpoint store."""
     fn = _CHECKPOINTED.get(spec)
     if fn is None:

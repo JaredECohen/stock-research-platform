@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -30,7 +30,7 @@ class PolygonProvider:
             capabilities=["prices", "quote", "news"],
         )
 
-    def _get(self, path: str, **params: Any) -> Optional[Any]:
+    def _get(self, path: str, **params: Any) -> Any | None:
         if not self.api_key:
             return None
         try:
@@ -44,7 +44,7 @@ class PolygonProvider:
             log_safely(log, f"Polygon fetch failed for {path}", exc)
             return None
 
-    def get_quote(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_quote(self, ticker: str) -> dict[str, Any] | None:
         """Snapshot endpoint — last trade + previous-day close.
 
         Free tier limits to 5 calls/min; paid tiers are real-time.
@@ -70,7 +70,7 @@ class PolygonProvider:
             timestamp=last_trade.get("t"),
         )
 
-    def get_price_history(self, ticker: str, days: int = 252) -> Optional[List[Dict[str, Any]]]:
+    def get_price_history(self, ticker: str, days: int = 252) -> list[dict[str, Any]] | None:
         end = date.today()
         start = end - timedelta(days=int(days * 1.6))
         data = self._get(f"/v2/aggs/ticker/{ticker.upper()}/range/1/day/{start.isoformat()}/{end.isoformat()}")
@@ -89,7 +89,7 @@ class PolygonProvider:
             for r in data["results"]
         ][-days:]
 
-    def get_news(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
+    def get_news(self, ticker: str) -> list[dict[str, Any]] | None:
         data = self._get("/v2/reference/news", ticker=ticker.upper(), limit=20)
         if not data or "results" not in data:
             return None
@@ -117,4 +117,4 @@ class PolygonProvider:
     def get_filings(self, ticker: str): return None
     def get_estimates(self, ticker: str): return None
     def get_macro_series(self, series_id: str): return None
-    def list_tickers(self) -> List[str]: return []
+    def list_tickers(self) -> list[str]: return []

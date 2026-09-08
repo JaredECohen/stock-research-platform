@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from ..schemas import AgentFinding
@@ -36,13 +36,13 @@ def _heading_for(agent_name: str, ticker: str) -> str:
     return f"## {agent_name} — {ticker} drill-down"
 
 
-def _bulleted(points: Optional[list]) -> str:
+def _bulleted(points: list | None) -> str:
     if not points:
         return ""
     return "\n".join(f"- {p}" for p in points)
 
 
-def _format_data_evidence(data: Dict[str, Any]) -> str:
+def _format_data_evidence(data: dict[str, Any]) -> str:
     """Pull a few of the most useful structured fields out of `finding.data`.
 
     Different agents stash different shapes — this is best-effort: if a
@@ -239,7 +239,7 @@ def _fmt_metric_value(key: str, value: Any) -> str:
 
 def deterministic_long_form(
     finding: AgentFinding, *, ticker: str, agent_name: str,
-    profile: Optional[Dict[str, Any]] = None,
+    profile: dict[str, Any] | None = None,
 ) -> str:
     """Compose markdown from the structured fields. Always succeeds; no LLM.
 
@@ -281,7 +281,7 @@ def deterministic_long_form(
 
 
 def _agent_intro(
-    agent_name: str, profile: Dict[str, Any], finding: AgentFinding,
+    agent_name: str, profile: dict[str, Any], finding: AgentFinding,
 ) -> str:
     """Per-agent context paragraph. Says what this lens cares about for
     *this specific company* — driver list, risk list, regime, etc."""
@@ -360,7 +360,7 @@ def _agent_intro(
 
 
 def _what_would_change_view(
-    agent_name: str, profile: Dict[str, Any], finding: AgentFinding,
+    agent_name: str, profile: dict[str, Any], finding: AgentFinding,
 ) -> str:
     """Per-agent 'what to monitor' list — the falsifiable tests that
     could move the lens's read in either direction."""
@@ -422,7 +422,7 @@ def _what_would_change_view(
     return ""
 
 
-def _format_sources(sources: List[Any]) -> str:
+def _format_sources(sources: list[Any]) -> str:
     """Pretty-print the source list, dropping bare `key:` entries with no value."""
     if not sources:
         return ""
@@ -456,8 +456,8 @@ _ENRICH_PROMPT = (
 
 def _enriched_long_form(
     finding: AgentFinding, *, ticker: str, agent_name: str,
-    profile: Optional[Dict[str, Any]] = None,
-) -> Optional[str]:
+    profile: dict[str, Any] | None = None,
+) -> str | None:
     payload = {
         "ticker": ticker,
         "agent": agent_name,
@@ -488,7 +488,7 @@ def _enriched_long_form(
 
 def build_long_form_report(
     finding: AgentFinding, *, ticker: str, agent_name: str,
-    profile: Optional[Dict[str, Any]] = None,
+    profile: dict[str, Any] | None = None,
 ) -> str:
     """Public entrypoint. Always returns a markdown string.
 
@@ -510,9 +510,9 @@ def build_long_form_report(
 
 
 def attach_long_form(
-    finding: Optional[AgentFinding], *, ticker: str, agent_name: str,
-    profile: Optional[Dict[str, Any]] = None,
-) -> Optional[AgentFinding]:
+    finding: AgentFinding | None, *, ticker: str, agent_name: str,
+    profile: dict[str, Any] | None = None,
+) -> AgentFinding | None:
     """Mutate a finding's `long_form_report` in place and return it.
 
     No-ops on None so callers don't need to guard the optional

@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import pathlib
 import socket
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import httpx
 import pytest
@@ -68,13 +68,13 @@ def _text(name: str) -> str:
     return (FIXTURES / name).read_text()
 
 
-def _rows(name: str) -> List[Dict[str, Any]]:
+def _rows(name: str) -> list[dict[str, Any]]:
     return json.loads(_text(name))
 
 
 class _Route:
-    def __init__(self, body: str, status: int, headers: Dict[str, str],
-                 exc: Optional[Exception]) -> None:
+    def __init__(self, body: str, status: int, headers: dict[str, str],
+                 exc: Exception | None) -> None:
         self.body, self.status, self.headers, self.exc = body, status, headers, exc
 
 
@@ -82,12 +82,12 @@ class _Router:
     """`/stable/<path>` → canned response; records every request."""
 
     def __init__(self) -> None:
-        self.routes: Dict[str, _Route] = {}
-        self.calls: List[Tuple[str, Dict[str, str]]] = []
+        self.routes: dict[str, _Route] = {}
+        self.calls: list[tuple[str, dict[str, str]]] = []
 
     def add(self, path: str, body: str = "[]", *, status: int = 200,
-            headers: Optional[Dict[str, str]] = None,
-            exc: Optional[Exception] = None) -> None:
+            headers: dict[str, str] | None = None,
+            exc: Exception | None = None) -> None:
         self.routes[path] = _Route(body, status, headers or {}, exc)
 
     def add_fixture(self, path: str, name: str) -> None:

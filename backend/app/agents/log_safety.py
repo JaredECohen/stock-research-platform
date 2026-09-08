@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
 
 # Anything longer than this is not a useful log line, and a truncated
 # secret is still a secret — so redact first, then cut.
@@ -88,7 +88,7 @@ def safe_exc(exc: BaseException) -> str:
 def log_safely(
     log: logging.Logger,
     msg: str,
-    exc: Optional[BaseException],
+    exc: BaseException | None,
     *,
     level: int = logging.WARNING,
 ) -> None:

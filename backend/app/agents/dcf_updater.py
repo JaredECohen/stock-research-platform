@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from ..schemas import DCFAssumptions, DCFResult
@@ -61,7 +61,7 @@ def _clamp_delta(prior: float, proposed: float) -> float:
     return max(prior - cap, min(prior + cap, proposed))
 
 
-def _shift_forecast_forward(prior: List[float]) -> List[float]:
+def _shift_forecast_forward(prior: list[float]) -> list[float]:
     """Roll the explicit forecast list forward by one period.
 
     The first-year value drops off (it's now an actual, not a forecast),
@@ -87,10 +87,10 @@ def _deterministic_roll_forward(prior: DCFAssumptions) -> DCFAssumptions:
 
 def _build_change_rows(
     prior: DCFAssumptions, updated: DCFAssumptions,
-    rationale_by_field: Dict[str, str],
-) -> List[Dict[str, Any]]:
+    rationale_by_field: dict[str, str],
+) -> list[dict[str, Any]]:
     """Diff prior → updated and emit one row per non-zero change."""
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     prior_d = prior.model_dump()
     updated_d = updated.model_dump()
     for field in _ADJUSTABLE_FIELDS:
@@ -151,9 +151,9 @@ _UPDATER_PROMPT = (
 
 
 def _llm_propose_updates(
-    ticker: str, prior: DCFAssumptions, actuals: Dict[str, Any],
+    ticker: str, prior: DCFAssumptions, actuals: dict[str, Any],
     rolled: DCFAssumptions,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     if not settings.has_llm:
         return None
     payload = {
@@ -182,13 +182,13 @@ def _llm_propose_updates(
 
 
 def _apply_updates(
-    rolled: DCFAssumptions, updates: Dict[str, Any], rationales: Dict[str, str],
-) -> tuple[DCFAssumptions, Dict[str, str]]:
+    rolled: DCFAssumptions, updates: dict[str, Any], rationales: dict[str, str],
+) -> tuple[DCFAssumptions, dict[str, str]]:
     """Apply LLM-proposed updates to the rolled-forward assumptions, with
     per-field rationale + ±20% clamp. Returns (new_assumptions, accepted_rationales).
     """
     new = rolled.model_copy(deep=True)
-    accepted: Dict[str, str] = {}
+    accepted: dict[str, str] = {}
     for field, value in (updates or {}).items():
         if field not in _ADJUSTABLE_FIELDS:
             continue
@@ -220,8 +220,8 @@ def _apply_updates(
 # ---------------------------------------------------------------------------
 
 def update_for_new_period(
-    ticker: str, prior: DCFAssumptions, actuals: Dict[str, Any],
-) -> tuple[DCFAssumptions, List[Dict[str, Any]]]:
+    ticker: str, prior: DCFAssumptions, actuals: dict[str, Any],
+) -> tuple[DCFAssumptions, list[dict[str, Any]]]:
     """Roll the DCF forward one period + apply LLM-proposed adjustments.
 
     Returns `(new_assumptions, assumption_changes)` where
@@ -245,7 +245,7 @@ def update_for_new_period(
     # rationale falls through from `accepted`; for fields the LLM didn't
     # touch but the deterministic roll moved (the explicit-forecast lists),
     # we tag them as the deterministic shift.
-    rationale_by_field: Dict[str, str] = {
+    rationale_by_field: dict[str, str] = {
         "revenue_growth": "explicit forecast shifted forward + LLM adjustment"
         if "revenue_growth" in accepted else "deterministic roll-forward",
         "operating_margin": "explicit forecast shifted forward + LLM adjustment"
@@ -256,7 +256,7 @@ def update_for_new_period(
     return new, change_rows
 
 
-def actuals_from_history(ticker: str) -> Dict[str, Any]:
+def actuals_from_history(ticker: str) -> dict[str, Any]:
     """Pull a small actuals payload (revenue, op margin, capex %, FCF margin)
     out of the Wave 2 history tables. Returns the latest period's values
     plus a 4-period trailing average for context."""
@@ -267,7 +267,7 @@ def actuals_from_history(ticker: str) -> Dict[str, Any]:
         "depreciation_and_amortization",
     )
     h = get_financial_history(ticker, list(fields), limit=8)
-    actuals: Dict[str, Any] = {}
+    actuals: dict[str, Any] = {}
     for f in fields:
         rows = h.get(f, [])
         if not rows:

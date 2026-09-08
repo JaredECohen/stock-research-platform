@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select
 
@@ -33,7 +33,7 @@ from ..schemas import AgentFinding
 log = logging.getLogger(__name__)
 
 
-def _prior_structured_extraction(ticker: str, current_period: str) -> Optional[Dict[str, Any]]:
+def _prior_structured_extraction(ticker: str, current_period: str) -> dict[str, Any] | None:
     """Pull the structured extraction from the prior quarter's memo.
 
     The earnings agent stores it under `data.structured` of the memo's
@@ -70,8 +70,8 @@ def _prior_structured_extraction(ticker: str, current_period: str) -> Optional[D
 
 
 def _deterministic_delta(
-    current: Dict[str, Any], prior: Dict[str, Any],
-) -> Dict[str, Any]:
+    current: dict[str, Any], prior: dict[str, Any],
+) -> dict[str, Any]:
     """Lightweight comparison for use without an LLM.
 
     Captures the most mechanical signals — tone shift, count changes
@@ -83,7 +83,7 @@ def _deterministic_delta(
 
     cur_tone = (current.get("overall_tone") or "").strip()
     prior_tone = (prior.get("overall_tone") or "").strip()
-    delta: Dict[str, Any] = {
+    delta: dict[str, Any] = {
         "current_period": current.get("period"),
         "prior_period": prior.get("period"),
         "tone_shift": (
@@ -115,8 +115,8 @@ def _deterministic_delta(
 
 
 def _llm_delta(
-    current: Dict[str, Any], prior: Dict[str, Any], ticker: str,
-) -> Optional[Dict[str, Any]]:
+    current: dict[str, Any], prior: dict[str, Any], ticker: str,
+) -> dict[str, Any] | None:
     """Ask the LLM to spot the highest-signal differences."""
     if not getattr(settings, "openai_api_key", None):
         return None
@@ -147,8 +147,8 @@ def _llm_delta(
 
 
 def run_earnings_qoq_delta(
-    ticker: str, current_structured: Optional[Dict[str, Any]],
-) -> Optional[AgentFinding]:
+    ticker: str, current_structured: dict[str, Any] | None,
+) -> AgentFinding | None:
     """Build a QoQ delta finding. Returns None when prior data is
     unavailable so the memo path can skip the tile."""
     if not isinstance(current_structured, dict):
@@ -164,7 +164,7 @@ def run_earnings_qoq_delta(
     silent_drops = [str(r) for r in (llm_out.get("silent_drops") or []) if str(r).strip()]
     net_signal = (llm_out.get("net_signal") or "no_change").strip()
     takeaway = str(llm_out.get("one_line_takeaway") or "").strip()
-    summary_parts: List[str] = []
+    summary_parts: list[str] = []
     if takeaway:
         summary_parts.append(takeaway)
     if deterministic.get("tone_shift"):
@@ -175,7 +175,7 @@ def run_earnings_qoq_delta(
         f"QoQ delta computed vs {prior.get('period', 'prior quarter')}; "
         f"no major reversals detected."
     )
-    key_points: List[str] = []
+    key_points: list[str] = []
     if reversals:
         key_points.extend(f"Reversed: {r}" for r in reversals[:3])
     if tone_shifts:

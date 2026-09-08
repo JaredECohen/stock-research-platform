@@ -10,7 +10,7 @@ after the defaults are laid down.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from app.agents.memo_context import MemoInputs
 from app.agents.safe_runner import DegradationLog
@@ -24,7 +24,7 @@ from app.schemas import (
 
 
 def make_finding(agent: str = "Sector Analyst", **overrides: Any) -> AgentFinding:
-    base: Dict[str, Any] = dict(
+    base: dict[str, Any] = dict(
         agent=agent,
         headline=f"{agent} headline",
         summary=f"{agent} summary.",
@@ -37,7 +37,7 @@ def make_finding(agent: str = "Sector Analyst", **overrides: Any) -> AgentFindin
     return AgentFinding(**base)
 
 
-def make_findings(**overrides: AgentFinding) -> Dict[str, AgentFinding]:
+def make_findings(**overrides: AgentFinding) -> dict[str, AgentFinding]:
     """One plain finding per roster analyst, keyed by `AgentSpec.key` in
     roster order — the shape `AnalystRound.findings` carries."""
     from app.agents.roster import AGENTS
@@ -46,8 +46,8 @@ def make_findings(**overrides: AgentFinding) -> Dict[str, AgentFinding]:
     return findings
 
 
-def make_profile(ticker: str = "TEST", **overrides: Any) -> Dict[str, Any]:
-    base: Dict[str, Any] = {
+def make_profile(ticker: str = "TEST", **overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
         "ticker": ticker,
         "company_name": f"{ticker} Corp",
         "sector": "Technology",
@@ -67,7 +67,7 @@ def make_memo(**overrides: Any) -> StockMemoOut:
     `mispricing_thesis` and `final_verdict` default to empty so a test can
     assert what `_build_verdict` fills in.
     """
-    base: Dict[str, Any] = dict(
+    base: dict[str, Any] = dict(
         ticker="TEST",
         company_name="TEST Corp",
         sector="Technology",
@@ -99,10 +99,10 @@ def make_memo(**overrides: Any) -> StockMemoOut:
     return StockMemoOut(**base)
 
 
-def make_inputs(ticker: str = "TEST", *, profile: Optional[Dict[str, Any]] = None,
+def make_inputs(ticker: str = "TEST", *, profile: dict[str, Any] | None = None,
                 **overrides: Any) -> MemoInputs:
     """A `MemoInputs` with demo-shaped dicts and no DCF / comps."""
-    base: Dict[str, Any] = dict(
+    base: dict[str, Any] = dict(
         ticker=ticker, run_id="test-run", scenario="soft_landing", force_refresh=False,
         as_of_date=None, fin={}, profile=profile if profile is not None else make_profile(ticker),
         ratios={}, earnings={}, transcript=None, filings=[], dcf=None, comps=None,

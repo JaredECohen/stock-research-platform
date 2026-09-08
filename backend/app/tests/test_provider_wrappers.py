@@ -12,8 +12,8 @@ from unittest.mock import patch
 import pytest
 
 from app.agents import llm as llm_mod
-from app.agents.critic_agent import run_critic
 from app.agents import news_agent, social_agent
+from app.agents.critic_agent import run_critic
 from app.cache import cache_get
 
 

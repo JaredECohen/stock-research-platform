@@ -17,7 +17,7 @@ import logging
 import re
 import time
 from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import httpx
 
@@ -42,7 +42,7 @@ class _HTMLStripper(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self._chunks: List[str] = []
+        self._chunks: list[str] = []
         self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs) -> None:
@@ -87,7 +87,7 @@ _ITEM_HEADER = re.compile(
 )
 
 
-def _extract_sections(text: str) -> Tuple[Dict[str, str], List[str]]:
+def _extract_sections(text: str) -> tuple[dict[str, str], list[str]]:
     """Slice the filing text into Item-keyed sections.
 
     Returns (sections_dict, risk_factors_bullets). Falls back to empty
@@ -96,7 +96,7 @@ def _extract_sections(text: str) -> Tuple[Dict[str, str], List[str]]:
     matches = list(_ITEM_HEADER.finditer(text))
     if not matches:
         return {}, []
-    sections: Dict[str, str] = {}
+    sections: dict[str, str] = {}
     for i, m in enumerate(matches):
         item_num = m.group(1).lower()
         item_title = m.group(2).strip().rstrip(".").lower()
@@ -130,7 +130,7 @@ def _extract_sections(text: str) -> Tuple[Dict[str, str], List[str]]:
     # split on double-newlines and keep paragraphs that look like risk
     # statements (100-1500 chars). Caps to 15 bullets for LLM context.
     risks_text = sections.get("risk_factors", "")
-    bullets: List[str] = []
+    bullets: list[str] = []
     if risks_text:
         # Split on blank lines OR sentence-end-then-cap-letter (reflows a
         # filing whose paragraphs got run together by HTML stripping).
@@ -157,7 +157,7 @@ class SECEdgarProvider:
 
     def __init__(self) -> None:
         self.user_agent = settings.sec_user_agent
-        self._ticker_cik_map: Optional[Dict[str, str]] = None
+        self._ticker_cik_map: dict[str, str] | None = None
 
     def status(self) -> ProviderStatus:
         return ProviderStatus(
@@ -168,10 +168,10 @@ class SECEdgarProvider:
             capabilities=["filings"],
         )
 
-    def _headers(self, accept: str = "application/json") -> Dict[str, str]:
+    def _headers(self, accept: str = "application/json") -> dict[str, str]:
         return {"User-Agent": self.user_agent, "Accept": accept}
 
-    def lookup_cik(self, ticker: str) -> Optional[str]:
+    def lookup_cik(self, ticker: str) -> str | None:
         ticker = ticker.upper().replace(".", "-")  # SEC uses BRK-B format
         if self._ticker_cik_map is None:
             try:
@@ -190,7 +190,7 @@ class SECEdgarProvider:
                 return None
         return self._ticker_cik_map.get(ticker)
 
-    def fetch_filing_text(self, url: str) -> Optional[str]:
+    def fetch_filing_text(self, url: str) -> str | None:
         """Download a primary filing document and return plain text.
 
         Caps the result at MAX_TEXT_BYTES so a 5MB 10-K doesn't blow up
@@ -214,9 +214,9 @@ class SECEdgarProvider:
         return text
 
     def get_filings(
-        self, ticker: str, *, cik: Optional[str] = None,
+        self, ticker: str, *, cik: str | None = None,
         fetch_text: bool = True,
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         """Return up to 10 recent filings with full text body.
 
         Wave 9b — fetches the document body for every form returned
@@ -249,7 +249,7 @@ class SECEdgarProvider:
             accs = recent.get("accessionNumber", [])
             primary = recent.get("primaryDocument", [])
             period_ends = recent.get("reportDate", []) or recent.get("primaryDocDescription", [])
-            results: List[Dict[str, Any]] = []
+            results: list[dict[str, Any]] = []
             for form, date_, acc, doc, pe in zip(forms, dates, accs, primary, period_ends):
                 if form not in ("10-K", "10-Q", "8-K"):
                     continue
@@ -301,7 +301,7 @@ class SECEdgarProvider:
         return results
 
     # All other BaseProvider methods return None
-    def get_company_profile(self, ticker: str) -> Optional[Dict[str, Any]]: return None
+    def get_company_profile(self, ticker: str) -> dict[str, Any] | None: return None
     def get_price_history(self, ticker: str, days: int = 252): return None
     def get_financial_statements(self, ticker: str): return None
     def get_ratios(self, ticker: str): return None
@@ -311,4 +311,4 @@ class SECEdgarProvider:
     def get_news(self, ticker: str): return None
     def get_estimates(self, ticker: str): return None
     def get_macro_series(self, series_id: str): return None
-    def list_tickers(self) -> List[str]: return []
+    def list_tickers(self) -> list[str]: return []

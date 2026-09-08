@@ -30,7 +30,7 @@ import json
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from . import provider_cache
 
@@ -41,7 +41,7 @@ _GEOGRAPHY_TTL = 30 * 86400  # 30 days
 
 
 @lru_cache(maxsize=1)
-def _load_seed() -> Dict[str, Dict[str, Any]]:
+def _load_seed() -> dict[str, dict[str, Any]]:
     try:
         with _SEED_PATH.open("r", encoding="utf-8") as fh:
             raw = json.load(fh)
@@ -56,7 +56,7 @@ def _load_seed() -> Dict[str, Dict[str, Any]]:
 
 def get_geography(
     ticker: str, *, allow_llm_fallback: bool = True,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Resolve a ticker's geographic footprint via seed -> cache -> LLM."""
     if not ticker:
         return None
@@ -86,7 +86,7 @@ def list_seeded_tickers() -> list[str]:
     return sorted(_load_seed().keys())
 
 
-def _extract_from_filings(ticker: str) -> Optional[Dict[str, Any]]:
+def _extract_from_filings(ticker: str) -> dict[str, Any] | None:
     """Pull recent 10-K text and ask the LLM to extract geographic weights.
 
     Returns the same {type, sub_type, metros, states, notes} shape the
@@ -95,8 +95,8 @@ def _extract_from_filings(ticker: str) -> Optional[Dict[str, Any]]:
     "geography unavailable" without raising.
     """
     try:
-        from .history_service import get_recent_filings, get_filing_text
         from ..agents import llm
+        from .history_service import get_filing_text, get_recent_filings
     except Exception:  # pragma: no cover
         return None
 
@@ -114,7 +114,7 @@ def _extract_from_filings(ticker: str) -> Optional[Dict[str, Any]]:
     if not full:
         return None
 
-    sections: Dict[str, Any] = full.get("sections") or {}
+    sections: dict[str, Any] = full.get("sections") or {}
     raw_text = full.get("raw_text") or ""
 
     # Pull the most-likely-relevant sections; cap at ~12K characters total
@@ -175,7 +175,7 @@ def _extract_from_filings(ticker: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def _coerce_weight(value: Any) -> Optional[float]:
+def _coerce_weight(value: Any) -> float | None:
     try:
         v = float(value)
     except (TypeError, ValueError):

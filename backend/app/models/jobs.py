@@ -3,7 +3,6 @@ regen queue and the cross-process cron liveness record."""
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Optional
 
 from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -98,10 +97,10 @@ class RegenJob(Base):
     enqueued_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True,
     )
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Version of the MemoSnapshot the job produced (success only).
-    memo_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    memo_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_type: Mapped[str] = mapped_column(String(64), default="")
     error_message: Mapped[str] = mapped_column(Text, default="")
     traceback_tail: Mapped[str] = mapped_column(Text, default="")

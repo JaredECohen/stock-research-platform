@@ -162,8 +162,8 @@ def test_a_loop_that_never_ran_is_reported_as_stale_not_omitted():
     endpoint listed only loops with rows, making a dead loop
     indistinguishable from a healthy one.
     """
-    from app.monitoring import KNOWN_LOOPS
     from app.api.routes_admin import cron_health_endpoint
+    from app.monitoring import KNOWN_LOOPS
 
     with SessionLocal() as db:
         db.query(CronLoopRun).filter(

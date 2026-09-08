@@ -10,7 +10,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -41,8 +41,8 @@ class _Calls:
     """Fake provider wrappers that record the model they were handed."""
 
     def __init__(self, openai_result: Any, anthropic_result: Any):
-        self.openai_calls: List[Dict[str, Any]] = []
-        self.anthropic_calls: List[Dict[str, Any]] = []
+        self.openai_calls: list[dict[str, Any]] = []
+        self.anthropic_calls: list[dict[str, Any]] = []
         self._openai_result = openai_result
         self._anthropic_result = anthropic_result
 
@@ -264,7 +264,7 @@ def test_breaker_state_carries_failover_unless_told_otherwise():
 
 
 def test_failover_is_logged_at_warning_through_log_safety(monkeypatch, caplog):
-    seen: List[tuple] = []
+    seen: list[tuple] = []
     real = llm.log_safely
 
     def _spy(log, msg, exc, **kw):

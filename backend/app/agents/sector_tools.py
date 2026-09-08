@@ -23,7 +23,8 @@ the context.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from ..services import data_catalog_service, sector_overlays
 
@@ -42,10 +43,10 @@ DEFAULT_MAX_PREFETCH_TOTAL = 16
 def discover_relevant_data(
     ticker: str,
     *,
-    profile: Optional[Dict[str, Any]] = None,
-    extra_categories: Optional[Iterable[str]] = None,
+    profile: dict[str, Any] | None = None,
+    extra_categories: Iterable[str] | None = None,
     max_per_axis: int = 8,
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> dict[str, list[dict[str, Any]]]:
     return data_catalog_service.discover_for_ticker(
         ticker, profile=profile,
         extra_categories=extra_categories, max_per_axis=max_per_axis,
@@ -54,7 +55,7 @@ def discover_relevant_data(
 
 def fetch_data_snapshot(
     series_ids: Iterable[str], *, force_refresh: bool = False,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     return [
         snap.to_dict() for snap in
         data_catalog_service.fetch_snapshots(series_ids, force_refresh=force_refresh)
@@ -64,10 +65,10 @@ def fetch_data_snapshot(
 def compute_overlays(
     ticker: str,
     *,
-    profile: Optional[Dict[str, Any]] = None,
-    names: Optional[List[str]] = None,
+    profile: dict[str, Any] | None = None,
+    names: list[str] | None = None,
     max_overlays: int = 3,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return sector_overlays.compute_sector_overlays(
         ticker, profile=profile,
         explicit_overlays=names, max_overlays=max_overlays,
@@ -81,11 +82,11 @@ def compute_overlays(
 def prepare_sector_context(
     ticker: str,
     *,
-    profile: Optional[Dict[str, Any]] = None,
+    profile: dict[str, Any] | None = None,
     prefetch_per_axis: int = DEFAULT_PREFETCH_PER_AXIS,
     max_prefetch_total: int = DEFAULT_MAX_PREFETCH_TOTAL,
-    overlay_names: Optional[List[str]] = None,
-) -> Dict[str, Any]:
+    overlay_names: list[str] | None = None,
+) -> dict[str, Any]:
     """Build a one-shot context payload the sector LLM can read directly.
 
     Shape:
@@ -105,7 +106,7 @@ def prepare_sector_context(
           "errors": ["..."]
         }
     """
-    errors: List[str] = []
+    errors: list[str] = []
 
     try:
         discovered = discover_relevant_data(
@@ -117,7 +118,7 @@ def prepare_sector_context(
         errors.append(f"discover_relevant_data: {exc}")
 
     # Pick the top-K series across axes (sector_relevant first), capped.
-    prefetch_ids: List[str] = []
+    prefetch_ids: list[str] = []
     seen: set[str] = set()
     for axis in ("sector_relevant", "sub_industry_relevant",
                  "geography_relevant", "category_relevant"):
@@ -159,7 +160,7 @@ def prepare_sector_context(
 # Compact prompt block (used by sector_agents.py)
 # ---------------------------------------------------------------------------
 
-def render_prompt_block(context: Dict[str, Any], *, max_chars: int = 5000) -> str:
+def render_prompt_block(context: dict[str, Any], *, max_chars: int = 5000) -> str:
     """Render the composite context as a markdown block for the prompt.
 
     Keeps the prompt readable instead of dumping raw JSON. The LLM can
@@ -168,7 +169,7 @@ def render_prompt_block(context: Dict[str, Any], *, max_chars: int = 5000) -> st
     """
     if not context:
         return ""
-    lines: List[str] = ["## Sector data context"]
+    lines: list[str] = ["## Sector data context"]
     discovered = context.get("discovered_catalog") or {}
 
     def _axis_block(label: str, key: str) -> None:

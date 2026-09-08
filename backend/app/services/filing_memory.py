@@ -29,15 +29,15 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select
 
 from ..config import settings
 from ..database import SessionLocal
 from ..models import FilingDoc
-from . import vector_store
 from . import embeddings as emb_svc
+from . import vector_store
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ def index_filing(filing: FilingDoc) -> int:
     same filing replaces its prior chunks.
     """
     sections = filing.sections or {}
-    chunks: List[Dict[str, Any]] = []
+    chunks: list[dict[str, Any]] = []
     for section_name, section_text in sections.items():
         if not isinstance(section_text, str) or not section_text.strip():
             continue
@@ -108,8 +108,8 @@ def index_transcript(transcript) -> int:
     from ..models import EarningsTranscript
     if not isinstance(transcript, EarningsTranscript):
         return 0
-    chunks: List[Dict[str, Any]] = []
-    period_end: Optional[date] = None
+    chunks: list[dict[str, Any]] = []
+    period_end: date | None = None
     if transcript.call_date:
         period_end = transcript.call_date
     blocks = transcript.blocks or []
@@ -161,7 +161,7 @@ def index_transcript(transcript) -> int:
 # Diffing
 # ---------------------------------------------------------------------------
 
-def _prior_filing_of_same_type(filing: FilingDoc) -> Optional[FilingDoc]:
+def _prior_filing_of_same_type(filing: FilingDoc) -> FilingDoc | None:
     with SessionLocal() as db:
         row = db.execute(
             select(FilingDoc)
@@ -176,13 +176,13 @@ def _prior_filing_of_same_type(filing: FilingDoc) -> Optional[FilingDoc]:
         return row
 
 
-def _deterministic_diff(prior: FilingDoc, new: FilingDoc) -> List[str]:
+def _deterministic_diff(prior: FilingDoc, new: FilingDoc) -> list[str]:
     """Falls back to section-level length deltas + top novel sentences.
 
     Light enough to never fail. Captures the obvious cases — risk
     factors got longer, segments section split, etc. — without an LLM.
     """
-    bullets: List[str] = []
+    bullets: list[str] = []
     p_secs = prior.sections or {}
     n_secs = new.sections or {}
     keys = set(p_secs.keys()) | set(n_secs.keys())
@@ -204,7 +204,7 @@ def _deterministic_diff(prior: FilingDoc, new: FilingDoc) -> List[str]:
     return bullets[:6]
 
 
-def _llm_diff(prior: FilingDoc, new: FilingDoc) -> Optional[Dict[str, Any]]:
+def _llm_diff(prior: FilingDoc, new: FilingDoc) -> dict[str, Any] | None:
     """Ask the LLM for a structured what-changed summary.
 
     Wave 10 — output now includes structured risk-factor add / remove /
@@ -269,7 +269,7 @@ def _llm_diff(prior: FilingDoc, new: FilingDoc) -> Optional[Dict[str, Any]]:
 # Memory writers
 # ---------------------------------------------------------------------------
 
-def _write_to_company_memory(ticker: str, filing: FilingDoc, bullets: List[str]) -> None:
+def _write_to_company_memory(ticker: str, filing: FilingDoc, bullets: list[str]) -> None:
     if not bullets:
         return
     try:
@@ -288,7 +288,7 @@ def _write_to_company_memory(ticker: str, filing: FilingDoc, bullets: List[str])
 
 
 def _write_to_sector_memory(
-    sector: Optional[str], filing: FilingDoc, sector_pattern: str,
+    sector: str | None, filing: FilingDoc, sector_pattern: str,
 ) -> None:
     if not sector or not sector_pattern.strip():
         return
@@ -310,7 +310,7 @@ def _write_to_sector_memory(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def post_pass(filing: FilingDoc, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def post_pass(filing: FilingDoc, profile: dict[str, Any] | None = None) -> dict[str, Any]:
     """Run the full pipeline for one filing: index + diff + memory.
 
     Idempotent: re-running the same filing replaces its chunks and
@@ -318,7 +318,7 @@ def post_pass(filing: FilingDoc, profile: Optional[Dict[str, Any]] = None) -> Di
 
     Returns a small report dict for callers / observability.
     """
-    report: Dict[str, Any] = {
+    report: dict[str, Any] = {
         "ticker": filing.ticker,
         "filing_type": filing.filing_type,
         "indexed_chunks": 0,
@@ -343,11 +343,11 @@ def post_pass(filing: FilingDoc, profile: Optional[Dict[str, Any]] = None) -> Di
         return report
 
     llm_out = _llm_diff(prior, filing)
-    bullets: List[str] = []
+    bullets: list[str] = []
     sector_pattern = ""
-    risk_additions: List[str] = []
-    risk_removals: List[str] = []
-    risk_expanded: List[str] = []
+    risk_additions: list[str] = []
+    risk_removals: list[str] = []
+    risk_expanded: list[str] = []
     if llm_out:
         bullets = [str(b) for b in (llm_out.get("bullets") or []) if str(b).strip()][:5]
         risk_additions = [str(b)[:300] for b in (llm_out.get("risk_additions") or []) if str(b).strip()][:4]
@@ -391,7 +391,7 @@ def weekly_digest(
     *,
     days_back: int = 7,
     write_memory: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — consolidate the week's filings into a single memory
     entry per ticker.
 
@@ -491,7 +491,7 @@ def weekly_digest(
     }
 
 
-def weekly_sector_digest(sector: str, *, days_back: int = 7) -> Dict[str, Any]:
+def weekly_sector_digest(sector: str, *, days_back: int = 7) -> dict[str, Any]:
     """Wave 10 — weekly digest at the SECTOR level.
 
     Aggregates all filings landed for the sector's universe in the
@@ -504,7 +504,9 @@ def weekly_sector_digest(sector: str, *, days_back: int = 7) -> Dict[str, Any]:
     (date, body) so re-running mid-week collapses duplicates.
     """
     from datetime import timedelta
+
     from sqlalchemy import select as _select
+
     from ..models import Company
     cutoff = date.today() - timedelta(days=days_back)
     with SessionLocal() as db:
@@ -536,7 +538,7 @@ def weekly_sector_digest(sector: str, *, days_back: int = 7) -> Dict[str, Any]:
             "wrote_memory": False,
         }
 
-    grouped: Dict[str, list] = {}
+    grouped: dict[str, list] = {}
     for f in filings:
         grouped.setdefault(f.ticker, []).append(f)
 
@@ -610,10 +612,11 @@ def weekly_sector_digest(sector: str, *, days_back: int = 7) -> Dict[str, Any]:
     }
 
 
-def weekly_sector_digest_all(*, days_back: int = 7) -> Dict[str, Any]:
+def weekly_sector_digest_all(*, days_back: int = 7) -> dict[str, Any]:
     """Run the sector-level digest across every distinct sector in
     the curated universe."""
     from sqlalchemy import select as _select
+
     from ..models import Company
     with SessionLocal() as db:
         sector_rows = db.execute(
@@ -634,10 +637,11 @@ def weekly_sector_digest_all(*, days_back: int = 7) -> Dict[str, Any]:
     return {"sectors_checked": len(sectors), "digests_written": written}
 
 
-def weekly_digest_universe(*, days_back: int = 7) -> Dict[str, int]:
+def weekly_digest_universe(*, days_back: int = 7) -> dict[str, int]:
     """Run `weekly_digest` over the curated universe. Suitable for a
     weekly cron (Sundays 05:00 UTC). Returns small summary dict."""
     from sqlalchemy import select as _select
+
     from ..models import Company
     with SessionLocal() as db:
         tickers = [

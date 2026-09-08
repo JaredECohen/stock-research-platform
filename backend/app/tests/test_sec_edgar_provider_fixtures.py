@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pathlib
 import socket
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 import pytest
@@ -40,7 +40,7 @@ def _load(name: str) -> str:
 
 
 class _Route:
-    def __init__(self, body: str, status: int, exc: Optional[Exception]) -> None:
+    def __init__(self, body: str, status: int, exc: Exception | None) -> None:
         self.body, self.status, self.exc = body, status, exc
 
 
@@ -48,11 +48,11 @@ class _Router:
     """URL → canned response table used as the MockTransport handler."""
 
     def __init__(self) -> None:
-        self.routes: Dict[str, _Route] = {}
-        self.calls: List[httpx.Request] = []
+        self.routes: dict[str, _Route] = {}
+        self.calls: list[httpx.Request] = []
 
     def add(self, url: str, body: str = "", *, status: int = 200,
-            exc: Optional[Exception] = None) -> None:
+            exc: Exception | None = None) -> None:
         self.routes[url] = _Route(body, status, exc)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:

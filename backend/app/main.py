@@ -170,6 +170,7 @@ def create_app() -> FastAPI:
         if settings.enable_monitoring:
             try:
                 from apscheduler.schedulers.background import BackgroundScheduler  # type: ignore
+
                 from .monitoring import register_all
                 scheduler = BackgroundScheduler(daemon=True)
                 register_all(scheduler)
