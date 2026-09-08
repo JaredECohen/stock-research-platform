@@ -125,23 +125,28 @@ def create_app() -> FastAPI:
     # in one timeline.
     app.middleware("http")(_http_logging_middleware)
 
-    # Admin/ops auth. Registered AFTER the logging middleware, which with
-    # Starlette's stack means it runs INSIDE it — so rejected admin calls
-    # are still traced (a 401 spike on /api/admin is exactly what you want
-    # in the log), while the auth check itself stays outside the routers.
+    # Admin/ops auth. Starlette runs the LAST-registered
+    # `app.middleware("http")` OUTERMOST (verified with a two-middleware
+    # probe on starlette 1.0 — an earlier comment here claimed the
+    # opposite), so this runs OUTSIDE the request logger: a rejected admin
+    # call gets a uvicorn access-log line and the WARNING `admin_auth`
+    # emits, but no ui_logs row. Acceptable for a login wall — persisting
+    # a row per unauthenticated probe is a cheap way to fill the database.
     # Applied as middleware rather than per-route dependencies so a newly
     # added admin endpoint is covered the moment it is mounted; see
     # `admin_auth` and `test_admin_auth.py`.
     app.middleware("http")(admin_auth_middleware)
 
-    # FEAT-002 customer auth. Registered AFTER `admin_auth_middleware`, so
-    # it runs INSIDE it: admin-token traffic has already been accepted or
-    # rejected by the time this runs, and `auth/policy.py` classifies the
-    # admin prefix as "not mine" — the two guards never overlap, so the
-    # admin token never satisfies a customer route and a customer JWT
-    # never satisfies `/api/admin/*`. With AUTH_ENABLED=false it is a
-    # pass-through that still attaches an anonymous `request.state.principal`
-    # so route code has one code path.
+    # FEAT-002 customer auth. Registered LAST, so it runs OUTERMOST —
+    # before `admin_auth_middleware` and before the request logger.
+    # `auth/policy.py` classifies the admin prefix as "not mine", so
+    # /api/admin/* passes through untouched for admin_auth to judge: the
+    # two guards never overlap, the admin token never satisfies a customer
+    # route and a customer JWT never satisfies `/api/admin/*`. Its own
+    # refusals (401/503) reach the access log but not ui_logs, for the
+    # same reason as above. With AUTH_ENABLED=false it is a pass-through
+    # that still attaches an anonymous `request.state.principal` so route
+    # code has one code path. See `auth/middleware.py` for the order note.
     app.middleware("http")(customer_auth_middleware)
 
     app.include_router(routes_health.router, tags=["system"])
