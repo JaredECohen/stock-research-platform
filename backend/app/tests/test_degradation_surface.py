@@ -194,6 +194,36 @@ def test_run_stock_memo_activates_the_log_for_helpers_without_a_handle(monkeypat
     assert "Thesis Builder" not in clean.degraded_agents
 
 
+def test_first_stage_of_the_inner_body_already_sees_the_memo_log(monkeypatch):
+    """Activation lives in `run_stock_memo`'s outer `with` (alongside
+    `as_of_context` / `llm_call_context`) rather than inside
+    `_run_stock_memo_inner` — the spec's wording. The guarantee that wording
+    asked for is what matters: every line of the inner body, from its very
+    first stage, runs under the *same* log whose events land on the memo.
+    Pin that end to end so a later move of the wrapper (S3 splits the inner
+    into stages) cannot open a gap at the top of the run."""
+    seen: List[Any] = []
+    real_fundamentals = graph._checkpointed_fundamentals
+
+    def spy(*args: Any, **kwargs: Any):
+        seen.append(active_log())
+        return real_fundamentals(*args, **kwargs)
+
+    monkeypatch.setattr(graph, "_checkpointed_fundamentals", spy)
+    # A late-run soft failure gives the log a known entry to compare on.
+    monkeypatch.setattr(graph, "_market_gap_clause", _boom)
+
+    memo = graph.run_stock_memo("NVDA")
+
+    assert len(seen) == 1, "fundamentals is the first stage and runs once"
+    assert isinstance(seen[0], DegradationLog)
+    # Same accumulator object, start to finish: what the first stage could
+    # have written to is exactly what the memo reports.
+    assert seen[0].events() == memo.degradation_events
+    assert "Thesis Builder" in memo.degraded_agents
+    assert active_log() is None
+
+
 # ---------------------------------------------------------------------------
 # 3. LLM configured but returning nothing: the PM paths say so — with no
 #    real client ever constructed
