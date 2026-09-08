@@ -29,7 +29,6 @@ been divided by 100 from the raw CSV's percent values.
 """
 from __future__ import annotations
 
-import csv
 import io
 import logging
 import zipfile
@@ -266,7 +265,8 @@ def _coerce_date(token: str, *, monthly: bool) -> str | None:
         return None
     if monthly and len(s) == 6:
         try:
-            year = int(s[:4]); month = int(s[4:6])
+            year = int(s[:4])
+            month = int(s[4:6])
             if not 1 <= month <= 12:
                 return None
             # End-of-month so sort order matches the rest of our monthly series.
@@ -280,7 +280,9 @@ def _coerce_date(token: str, *, monthly: bool) -> str | None:
             return None
     if (not monthly) and len(s) == 8:
         try:
-            year = int(s[:4]); month = int(s[4:6]); day = int(s[6:8])
+            year = int(s[:4])
+            month = int(s[4:6])
+            day = int(s[6:8])
             return date(year, month, day).isoformat()
         except (TypeError, ValueError):
             return None

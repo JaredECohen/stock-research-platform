@@ -13,9 +13,6 @@ Covers:
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from app.agents.fact_extraction import (
     collect_structured_facts,
     deterministic_facts,

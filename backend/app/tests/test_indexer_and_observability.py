@@ -14,12 +14,8 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
 
 from app.monitoring import history_backfill
-from app.services import history_service
 
 
 def _seed_minimal_note(tmp: Path) -> Path:

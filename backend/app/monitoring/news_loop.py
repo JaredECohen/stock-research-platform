@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from ..agents import news_agent
 from ..cache import cache_get, cache_put, invalidate

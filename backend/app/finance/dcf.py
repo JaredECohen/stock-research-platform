@@ -197,7 +197,6 @@ def derive_default_assumptions(
 
     revenues = [r.get("revenue", 0.0) or 0.0 for r in income_statements]
     op_incomes = [r.get("operating_income", 0.0) or 0.0 for r in income_statements]
-    net_incomes = [r.get("net_income", 0.0) or 0.0 for r in income_statements]
     pretax = [r.get("pretax_income", 0.0) or 0.0 for r in income_statements]
     tax_exp = [r.get("tax_expense", 0.0) or 0.0 for r in income_statements]
     capex_vals = [abs(r.get("capex", 0.0) or 0.0) for r in cash_flows]

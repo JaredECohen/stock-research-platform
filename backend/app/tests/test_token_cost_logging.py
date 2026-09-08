@@ -15,7 +15,7 @@ Covers:
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from app.database import SessionLocal
 from app.models import LLMCallLog

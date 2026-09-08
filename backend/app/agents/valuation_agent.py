@@ -7,7 +7,6 @@ from ..config import settings
 from ..finance.dcf import fmt_price, fmt_upside
 from ..schemas import AgentFinding, DCFResult
 from ..services.market_data_service import get_current_price
-from ..services.valuation_service import build_dcf
 from . import llm, prompts
 
 

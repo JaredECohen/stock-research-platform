@@ -18,7 +18,6 @@ No new LLM calls — pure deterministic plumbing on top of existing data.
 from __future__ import annotations
 
 import logging
-from datetime import date as _date
 from statistics import median
 from typing import Any
 
@@ -249,7 +248,6 @@ def build_history_stats(
     # Recompute every period's metrics.
     per_period_metrics: list[dict[str, float | None]] = []
     last_revenue: float | None = None
-    last_period_end: str | None = None
     for row in period_rows:
         period_end = row["period_end"]
         # Market cap for this period.
@@ -265,7 +263,6 @@ def build_history_stats(
         if last_revenue is not None and cur_rev is not None and last_revenue != 0:
             recomputed["revenue_growth"] = (cur_rev - last_revenue) / abs(last_revenue)
         last_revenue = cur_rev
-        last_period_end = period_end
         per_period_metrics.append(recomputed)
 
     # Aggregate distribution stats per metric.

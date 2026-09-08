@@ -6,11 +6,9 @@ the application boots even with a completely empty environment.
 """
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

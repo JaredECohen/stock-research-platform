@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 from app.agents import llm as llm_mod
 from app.agents.llm import _gemini_client, _resolve_gemini_model
 from app.config import settings

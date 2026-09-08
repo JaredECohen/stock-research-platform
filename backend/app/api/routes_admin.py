@@ -17,7 +17,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from ..monitoring import KNOWN_LOOPS, _process_role, status_snapshot
@@ -1026,7 +1026,7 @@ def fix_postgres_sequences() -> dict[str, Any]:
                 # value=max_id.
                 new_val = max_id + 1
                 conn.execute(text(
-                    f"SELECT setval(:seq, :val, false)"
+                    "SELECT setval(:seq, :val, false)"
                 ), {"seq": seq_name, "val": new_val})
                 fixed.append({
                     "table": table_name,

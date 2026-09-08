@@ -99,7 +99,7 @@ def blended_sector_weights(market_view: str) -> dict[str, float]:
     # Weighted average across regimes for each sector bucket.
     blended: dict[str, float] = {}
     seen_buckets: set[str] = set()
-    for regime, weight in probs.items():
+    for regime, _weight in probs.items():
         for bucket in SCENARIO_KEYWORDS.get(regime, {}):
             seen_buckets.add(bucket)
     for bucket in seen_buckets:

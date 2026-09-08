@@ -55,7 +55,6 @@ from ..schemas import (
 from ..services.checkpoint_store import checkpointed
 from ..services.filings_service import get_filings
 from ..services.fundamentals_service import get_full_financials
-from ..services.market_data_service import get_basic_stats
 from ..services.transcripts_service import latest_transcript
 from ..services.valuation_service import build_comps, build_dcf
 from . import llm, prompts, roster
@@ -1049,7 +1048,7 @@ def _pm_synthesis(profile: dict, findings: dict[str, AgentFinding], dcf: DCFResu
     )
     llm_out = llm.chat_json(
         prompts.PM_SYNTHESIS_PROMPT
-        + ((("\n\n" + pm_ctx) if pm_ctx else ""))
+        + (("\n\n" + pm_ctx) if pm_ctx else "")
         + "\n\nFindings:\n"
         + json.dumps({k: v.model_dump() for k, v in findings.items()}, default=str)[: settings.max_agent_context_chars],
         system=prompts.PM_SYSTEM, route="strong",

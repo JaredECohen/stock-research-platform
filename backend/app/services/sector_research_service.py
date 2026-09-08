@@ -314,7 +314,6 @@ def aggregate_cohort_filing_themes(cohort_tickers: list[str]) -> list[dict[str, 
 
 def industry_structure(cohort_with_target: list[dict]) -> dict[str, Any]:
     """Approximate concentration via revenue-share Herfindahl on the cohort."""
-    revs = [(r["ticker"], r.get("ratios", {}).get("PS") and (r.get("market_cap") or 0)) for r in cohort_with_target]
     revenues = []
     for r in cohort_with_target:
         income = sorted(r.get("financials", {}).get("income", []) or [], key=lambda x: x.get("period", ""))

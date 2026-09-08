@@ -20,7 +20,6 @@ from ..schemas import (
     CustomScreenRequest,
     CustomScreenResult,
     ScreenerMetricName,
-    ScreenerOp,
     ScreenerRule,
 )
 

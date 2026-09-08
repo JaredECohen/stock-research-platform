@@ -7,13 +7,12 @@ contents — those are tested in their respective wave's PR.
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.database import SessionLocal
 from app.main import app
-from app.models import DCFModel, MemoRunCheckpoint, MemoSnapshot
+from app.models import DCFModel, MemoSnapshot
 from app.schemas import DCFAssumptions
 from app.services import dcf_store, update_orchestrator
 

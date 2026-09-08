@@ -203,7 +203,7 @@ def regime_conditional_accuracy(*, horizon_days: int = 90) -> dict[str, Any]:
                     row.realized_return - row.benchmark_return
                 )
 
-    for regime, entry in by_regime.items():
+    for _regime, entry in by_regime.items():
         n = entry["n"] or 1
         entry["accuracy"] = entry["right"] / n
         entry["mean_alpha"] = entry["alpha_sum"] / n

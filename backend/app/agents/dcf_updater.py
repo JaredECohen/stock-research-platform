@@ -27,7 +27,7 @@ import logging
 from typing import Any
 
 from ..config import settings
-from ..schemas import DCFAssumptions, DCFResult
+from ..schemas import DCFAssumptions
 from . import llm
 
 log = logging.getLogger(__name__)

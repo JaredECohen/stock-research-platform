@@ -20,7 +20,6 @@ Design points (locked in `docs/DEEP_RESEARCH_DESIGN.md`):
 """
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable
 
@@ -30,7 +29,6 @@ from ..schemas import (
     CritiqueOutput,
     CritiqueQuestion,
     RoundFindings,
-    StockMemoOut,
 )
 from . import llm
 from .llm import llm_call_context

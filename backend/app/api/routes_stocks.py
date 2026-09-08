@@ -148,9 +148,9 @@ def _parse_as_of(as_of: str | None) -> _date | None:
         return None
     try:
         d = _date.fromisoformat(as_of)
-    except ValueError:
+    except ValueError as exc:
         raise HTTPException(status_code=422,
-                            detail=f"as_of must be YYYY-MM-DD; got {as_of!r}")
+                            detail=f"as_of must be YYYY-MM-DD; got {as_of!r}") from exc
     if d > _date.today():
         raise HTTPException(status_code=422,
                             detail=f"as_of {d} is in the future")
@@ -220,7 +220,7 @@ def get_stock_memo(
     try:
         memo = run_stock_memo(t, scenario=scenario, as_of_date=as_of_date)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     # Promote `data_only` → `analyzed_on_demand` so subsequent calls use
     # the cached memo and don't re-trigger an expensive run automatically.
@@ -326,7 +326,7 @@ def analyze_stock(
         try:
             memo = run_stock_memo(t, scenario=sc, force_refresh=True)
         except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         snap = memo_store.latest_memo(t)
         if snap is not None:
             response.headers["X-Memo-Version"] = str(snap.version)

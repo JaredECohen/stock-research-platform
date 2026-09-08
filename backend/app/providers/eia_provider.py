@@ -242,8 +242,6 @@ class EIAProvider:
         treats the snapshot as unavailable rather than throwing.
         """
         try:
-            import io
-
             import xlrd  # type: ignore
         except ImportError:
             return None

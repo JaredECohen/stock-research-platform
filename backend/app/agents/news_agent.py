@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any

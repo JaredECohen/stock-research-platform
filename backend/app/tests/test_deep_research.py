@@ -15,8 +15,6 @@ dispatchers — nothing else.
 """
 from __future__ import annotations
 
-import pytest
-
 from app.agents import deep_research as dr
 from app.schemas import AgentFinding, CritiqueOutput, CritiqueQuestion
 

@@ -22,14 +22,11 @@ from sqlalchemy import (
     JSON,
     Boolean,
     DateTime,
-    Float,
     Index,
     Integer,
     String,
     Text,
-    delete,
     select,
-    update,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column
 

@@ -19,8 +19,6 @@ its key would be lying about provider coverage).
 """
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from app.config import settings

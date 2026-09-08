@@ -30,7 +30,6 @@ from typing import Any
 
 from ..data_catalog import (
     SERIES_REGISTRY,
-    SeriesSpec,
     by_id,
     by_sector_tag,
     by_sub_industry_tag,

@@ -6,8 +6,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 # The harness lives outside `app/` (in `backend/qa/`) to make it clear
 # it's a sibling tool, not application code. Add backend/ to sys.path
 # so `import qa.run_matrix` works.

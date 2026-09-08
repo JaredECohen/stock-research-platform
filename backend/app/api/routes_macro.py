@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from ..agents.macro_agent import run_macro_scenario
-from ..schemas import MacroScenarioRequest, MacroScenarioResult, MacroSeries
+from ..schemas import MacroScenarioRequest, MacroScenarioResult
 from ..services.macro_service import get_series, list_series
 
 router = APIRouter()

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from ..finance import factor_scores as fs
 from ..schemas import ScreenerResult, ScreenerRow
-from .data_service import get_data_service
 from .fundamentals_service import get_full_financials
 
 # ---------------------------------------------------------------------------
@@ -127,11 +126,6 @@ def compute_universe_scores(theme: str | None = None) -> ScreenerResult:
             # else: theme has no bias/exposure data — leave full universe
             # in (rare; only happens for an unknown theme string).
         ratios = fin["ratios"] or {}
-        income = sorted(fin["income"], key=lambda r: r.get("period", ""))
-        cash = sorted(fin["cash"], key=lambda r: r.get("period", ""))
-        latest_inc = income[-1] if income else {}
-        latest_cf = cash[-1] if cash else {}
-        market_cap = profile.get("market_cap") or 0
         rev_growth = ratios.get("revenue_growth")
         op_margin = ratios.get("operating_margin")
         gross_margin = ratios.get("gross_margin")

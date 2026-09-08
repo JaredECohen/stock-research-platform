@@ -248,8 +248,8 @@ def _deterministic_bull_bear_analysis(
     falsifiable = [
         FalsifiableTest(
             statement=(
-                f"Cohort revenue growth turns negative for two consecutive quarters "
-                f"AND target margin compresses with it."
+                "Cohort revenue growth turns negative for two consecutive quarters "
+                "AND target margin compresses with it."
             ),
             invalidates_side="bull",
         ),
@@ -279,8 +279,8 @@ def _deterministic_bull_bear_analysis(
         f"Sector lean is {lean} based on cohort placement; PM should weigh other findings."
     )
     key_disagreement = (
-        f"Bears price in cohort margin compression flowing through to this name; "
-        f"bulls price in this name continuing to outpace cohort on the dominant driver."
+        "Bears price in cohort margin compression flowing through to this name; "
+        "bulls price in this name continuing to outpace cohort on the dominant driver."
     )
 
     return BullBearAnalysis(

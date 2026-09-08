@@ -15,7 +15,6 @@ from sqlalchemy import select
 from ..config import settings
 from ..finance.dcf import fmt_price, fmt_upside
 from ..schemas import (
-    AgentTrace,
     ChatMessage,
     ChatResponse,
     DCFResult,
@@ -23,7 +22,6 @@ from ..schemas import (
     MacroScenarioResult,
     ModelPortfolio,
     PortfolioRequest,
-    ScreenerRequest,
     ScreenerResult,
     StockMemoOut,
 )
@@ -579,7 +577,7 @@ class Orchestrator:
         prompt = (
             ((pm_ctx + "\n\n") if pm_ctx else "")
             + "\n\n".join(context_blocks)
-            + f"\n\nConversation history (last few turns):\n"
+            + "\n\nConversation history (last few turns):\n"
             + "\n".join(f"- {h.role}: {(h.content or '')[:300]}" for h in history[-6:])
             + f"\n\nUser's new question:\n{message}"
         )

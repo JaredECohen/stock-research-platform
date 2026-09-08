@@ -23,7 +23,6 @@ Method (deterministic, transparent):
 from __future__ import annotations
 
 import logging
-import re
 
 from ..schemas import AgentFinding
 

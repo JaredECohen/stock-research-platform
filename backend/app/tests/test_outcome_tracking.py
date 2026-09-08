@@ -15,7 +15,7 @@ Covers:
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from unittest.mock import patch
 
@@ -267,7 +267,7 @@ def test_backtest_snapshots_are_skipped():
         "SPY": [{"date": "2099-01-01", "close": 500.0}],
     }
     with _stub_prices(prices):
-        res = outcome_service.evaluate_all_due(today=today)
+        outcome_service.evaluate_all_due(today=today)
     rows = outcome_service.get_outcomes_for_snapshot(snap.id)
     assert rows == []  # backtest → no outcomes
 

@@ -27,7 +27,7 @@ from sqlalchemy import select
 
 from ..config import settings
 from ..database import SessionLocal
-from ..models import EarningsTranscript, MemoSnapshot
+from ..models import MemoSnapshot
 from ..schemas import AgentFinding
 
 log = logging.getLogger(__name__)

@@ -23,7 +23,7 @@ roughly every 15 minutes.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -96,7 +96,7 @@ class GDELTProvider:
         if not articles_raw:
             return []
 
-        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
         out: list[dict[str, Any]] = []
         seen_urls: set[str] = set()
         for art in articles_raw:
@@ -188,7 +188,7 @@ def _parse_gdelt_ts(token: Any) -> datetime | None:
         return datetime(
             int(s[0:4]), int(s[4:6]), int(s[6:8]),
             int(s[9:11]), int(s[11:13]), int(s[13:15]),
-            tzinfo=timezone.utc,
+            tzinfo=UTC,
         )
     except (TypeError, ValueError):
         return None

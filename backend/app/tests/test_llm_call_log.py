@@ -12,7 +12,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-import pytest
 from sqlalchemy import select
 
 from app.agents import llm as llm_mod

@@ -8,13 +8,13 @@ not in escaped triple-quotes.
 """
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 PROMPTS_DIR = Path(__file__).parent
 
 
-@lru_cache(maxsize=None)
+@cache
 def load_prompt(name: str) -> str | None:
     """Read `<name>.md` from this package.
 

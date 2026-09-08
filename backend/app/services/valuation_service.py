@@ -615,7 +615,7 @@ def build_dcf(
                 cache_put(
                     ticker, "company_warm:dcf",
                     payload=result.model_dump(mode="json"),
-                    sources_used=[f"target:{ticker}", f"assumptions:default"],
+                    sources_used=[f"target:{ticker}", "assumptions:default"],
                     generated_by="valuation_service.build_dcf",
                     cost_tokens=resolved_cost_tokens(60),
                     parent_snapshots=parent_ids,

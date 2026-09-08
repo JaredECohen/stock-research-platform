@@ -219,6 +219,6 @@ def test_long_form_reports_default_on():
     """Wave 8A flips the master-plan-recommended default. Verify the
     settings object reads True out of the box."""
     # Tests use an isolated settings object; we just check the class default.
-    from app.config import Settings, settings
+    from app.config import Settings
     fresh = Settings()
     assert fresh.enable_long_form_reports is True

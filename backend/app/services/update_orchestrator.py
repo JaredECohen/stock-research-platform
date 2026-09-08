@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict, deque
-from datetime import date as _date
 from datetime import datetime
 from typing import Any
 

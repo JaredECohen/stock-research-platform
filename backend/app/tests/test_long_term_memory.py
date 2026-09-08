@@ -14,9 +14,6 @@ Cover:
 """
 from __future__ import annotations
 
-from datetime import date
-from pathlib import Path
-
 import pytest
 
 from app.config import settings

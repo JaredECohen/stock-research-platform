@@ -197,7 +197,8 @@ def _period_to_iso(period: str) -> str | None:
     s = str(period).strip()
     if len(s) == 7 and s[4] == "-":
         try:
-            year = int(s[:4]); month = int(s[5:7])
+            year = int(s[:4])
+            month = int(s[5:7])
             # End-of-month so sort order matches other monthly series.
             if month == 12:
                 eom = date(year, 12, 31)

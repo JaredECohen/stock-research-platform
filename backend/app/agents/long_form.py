@@ -310,18 +310,18 @@ def _agent_intro(
         )
     if agent_name == "Filing Analyst":
         return (
-            f"What the SEC filing actually discloses. The lens pulls risk "
-            f"factors, MD&A highlights, segment + customer-concentration "
-            f"disclosures, and any legal/regulatory exposure. Cross-references "
-            f"against the thesis-relevant lines that would change a rating."
+            "What the SEC filing actually discloses. The lens pulls risk "
+            "factors, MD&A highlights, segment + customer-concentration "
+            "disclosures, and any legal/regulatory exposure. Cross-references "
+            "against the thesis-relevant lines that would change a rating."
         )
     if agent_name == "Valuation Analyst":
         return (
-            f"What's priced in vs. what isn't. The lens triangulates DCF "
-            f"(base/bull/bear scenarios) against trading multiples (P/E, EV/"
-            f"EBITDA, P/FCF, FCF yield) and prior-period history. Especially "
-            f"sensitive to: terminal-growth + WACC fragility, multiple "
-            f"compression risk, FCF cushion."
+            "What's priced in vs. what isn't. The lens triangulates DCF "
+            "(base/bull/bear scenarios) against trading multiples (P/E, EV/"
+            "EBITDA, P/FCF, FCF yield) and prior-period history. Especially "
+            "sensitive to: terminal-growth + WACC fragility, multiple "
+            "compression risk, FCF cushion."
         )
     if agent_name == "Comps Analyst":
         return (
@@ -348,10 +348,10 @@ def _agent_intro(
         )
     if agent_name == "Technical Analyst":
         return (
-            f"Positioning context — NOT a trade signal. The lens computes "
-            f"SMA 50/200, EMA 10/20, RSI(14), MACD(12/26/9), Bollinger Bands, "
-            f"VWMA, and 52-week placement. Frames the regime so the user "
-            f"knows where the chart sits relative to the fundamental thesis."
+            "Positioning context — NOT a trade signal. The lens computes "
+            "SMA 50/200, EMA 10/20, RSI(14), MACD(12/26/9), Bollinger Bands, "
+            "VWMA, and 52-week placement. Frames the regime so the user "
+            "knows where the chart sits relative to the fundamental thesis."
         )
     return (
         f"{agent_name}'s framework applied to {name}. Drivers in scope: "
