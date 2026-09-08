@@ -27,13 +27,15 @@ from typing import Any, Dict, List, Optional, Set
 
 from ..config import settings
 from . import llm
+from .roster import AGENTS
 
 log = logging.getLogger(__name__)
 
-ALL_SPECIALISTS: List[str] = [
-    "sector", "earnings", "filing", "valuation", "comps",
-    "macro", "risk", "technical",
-]
+# Derived from the roster so a new analyst is skippable (and stubbable)
+# without a second hand-maintained list here. The prompt below still
+# spells the eight names out for the model; extend it when the roster grows.
+ALL_SPECIALISTS: List[str] = [spec.key for spec in AGENTS]
+_DISPLAY_NAMES: Dict[str, str] = {spec.key: spec.display_name for spec in AGENTS}
 
 # Hard-cap: PM may skip at most this many specialists per memo.
 # Forces the model to keep the rating defensible against the others.
@@ -124,12 +126,7 @@ def stub_finding(specialist: str, rationale: str) -> Dict[str, Any]:
 
     Returns a dict so callers can `AgentFinding(**stub_finding(...))`.
     """
-    pretty = {
-        "sector": "Sector Analyst", "earnings": "Earnings Analyst",
-        "filing": "Filing Analyst", "valuation": "Valuation Analyst",
-        "comps": "Comps Analyst", "macro": "Macro Analyst",
-        "risk": "Risk Analyst", "technical": "Technical Analyst",
-    }.get(specialist, specialist.title())
+    pretty = _DISPLAY_NAMES.get(specialist, specialist.title())
     return {
         "agent": pretty,
         "headline": f"{pretty} — skipped per PM intake.",

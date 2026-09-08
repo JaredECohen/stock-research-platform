@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.agents import graph
+from app.agents import graph, roster
 from app.agents.safe_runner import (
     DegradationLog,
     safe_call,
@@ -75,10 +75,20 @@ def test_safe_critic_passes_through_none_when_critic_disabled():
 # End-to-end: run_stock_memo survives every specialist failing in turn
 # ---------------------------------------------------------------------------
 
+def _patch_target(agent_attr: str):
+    """Where a runner is looked up at call time.
+
+    RP-003 moved the eight analyst runners behind `roster.AGENTS`; graph.py
+    no longer imports them, so patching `graph.run_sector_agent` would be a
+    silent no-op (D5). The critic is not on the roster and stays on graph.
+    """
+    return graph if agent_attr == "run_critic" else roster
+
+
 def _run_with(monkeypatch, agent_attr: str):
     """Run the NVDA memo with `agent_attr` patched to raise. Assert the memo
     still comes back and `degraded_agents` includes the failed agent."""
-    monkeypatch.setattr(graph, agent_attr, _boom)
+    monkeypatch.setattr(_patch_target(agent_attr), agent_attr, _boom)
     memo = graph.run_stock_memo("NVDA")
     return memo
 
@@ -138,8 +148,8 @@ def test_memo_survives_critic_failure(monkeypatch):
 def test_memo_survives_three_simultaneous_failures(monkeypatch):
     """Worst case: sector + valuation + critic all blow up. The memo must
     still come back populated, with all three names in `degraded_agents`."""
-    monkeypatch.setattr(graph, "run_sector_agent", _boom)
-    monkeypatch.setattr(graph, "run_valuation_agent", _boom)
+    monkeypatch.setattr(roster, "run_sector_agent", _boom)
+    monkeypatch.setattr(roster, "run_valuation_agent", _boom)
     monkeypatch.setattr(graph, "run_critic", _boom)
     memo = graph.run_stock_memo("NVDA")
     assert memo.ticker == "NVDA"

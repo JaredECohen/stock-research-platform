@@ -1,13 +1,16 @@
-"""Wave 8A tests — apply @checkpointed to graph steps.
+"""Wave 8A tests — @checkpointed on the graph steps, now via the roster.
 
-Wave 6A shipped the decorator + table; this PR wires it into every major
-graph step. These tests verify that the wiring actually skips re-execution
-on a retried run with the same `run_id`.
+Wave 6A shipped the decorator + table; Wave 8A wired it into every major
+graph step; RP-003 moved the eight analyst wrappers onto
+`roster.AGENTS` (built once at import from each spec's frozen
+`checkpoint` name). These tests verify the wiring still skips
+re-execution on a retried run with the same `run_id`.
 
 Two modes of evidence:
-1. Direct: call `_checkpointed_*` twice within the same `llm_call_context`
-   (run_id) and confirm the underlying specialist runs only once. We patch
-   the specialist function to count invocations.
+1. Direct: call the roster's checkpointed runner twice within the same
+   `llm_call_context` (run_id) and confirm the underlying specialist runs
+   only once. We patch the runner on `roster` — graph.py no longer
+   imports it, so a patch there would be a silent no-op (D5).
 2. End-to-end: run `run_stock_memo(ticker, run_id=X)` once, then call it
    again with the same `run_id` and verify a checkpointed wrapper hits
    the cache instead of the agent.
@@ -20,10 +23,12 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from app.agents import graph as graph_module
+from app.agents import roster
 from app.agents.llm import llm_call_context
 from app.database import SessionLocal
 from app.models import MemoRunCheckpoint
 from app.schemas import AgentFinding
+from app.tests.factories import make_inputs
 
 
 def _reset_checkpoints() -> None:
@@ -38,6 +43,10 @@ def _stub_finding(name: str = "Test") -> AgentFinding:
     return AgentFinding(agent=name, headline="h", summary="s", confidence=0.6)
 
 
+def _sector_runner():
+    return roster.checkpointed_runner(roster.AGENTS_BY_KEY["sector"])
+
+
 # ---------------------------------------------------------------------------
 # Direct wrapper tests — every specialist stub fires once per run_id
 # ---------------------------------------------------------------------------
@@ -46,15 +55,16 @@ def test_checkpointed_sector_caches_within_run():
     _reset_checkpoints()
     calls = []
 
-    def stub(profile, ratios):
+    def stub(profile, ratios, **kw):
         calls.append(1)
         return _stub_finding("Sector Analyst")
 
-    with patch.object(graph_module, "run_sector_agent", side_effect=stub):
+    inputs = make_inputs("X")
+    with patch.object(roster, "run_sector_agent", side_effect=stub):
         # First call within run_id="r-A" hits the underlying agent.
         with llm_call_context(run_id="r-A"):
-            graph_module._checkpointed_sector({"ticker": "X"}, {})
-            graph_module._checkpointed_sector({"ticker": "X"}, {})
+            _sector_runner()(inputs)
+            _sector_runner()(inputs)
     assert len(calls) == 1, "second call within same run_id should hit cache"
 
 
@@ -62,15 +72,16 @@ def test_checkpointed_sector_runs_per_distinct_run_id():
     _reset_checkpoints()
     calls = []
 
-    def stub(profile, ratios):
+    def stub(profile, ratios, **kw):
         calls.append(1)
         return _stub_finding("Sector Analyst")
 
-    with patch.object(graph_module, "run_sector_agent", side_effect=stub):
+    inputs = make_inputs("X")
+    with patch.object(roster, "run_sector_agent", side_effect=stub):
         with llm_call_context(run_id="r-A"):
-            graph_module._checkpointed_sector({"ticker": "X"}, {})
+            _sector_runner()(inputs)
         with llm_call_context(run_id="r-B"):
-            graph_module._checkpointed_sector({"ticker": "X"}, {})
+            _sector_runner()(inputs)
     assert len(calls) == 2
 
 
@@ -82,13 +93,14 @@ def test_checkpointed_falls_through_without_run_id():
     _reset_checkpoints()
     calls = []
 
-    def stub(profile, ratios):
+    def stub(profile, ratios, **kw):
         calls.append(1)
         return _stub_finding("Sector Analyst")
 
-    with patch.object(graph_module, "run_sector_agent", side_effect=stub):
-        graph_module._checkpointed_sector({"ticker": "X"}, {})
-        graph_module._checkpointed_sector({"ticker": "X"}, {})
+    inputs = make_inputs("X")
+    with patch.object(roster, "run_sector_agent", side_effect=stub):
+        _sector_runner()(inputs)
+        _sector_runner()(inputs)
     assert len(calls) == 2
 
 
@@ -96,14 +108,16 @@ def test_checkpointed_valuation_caches_within_run():
     _reset_checkpoints()
     calls = []
 
-    def stub(profile, ratios, dcf):
+    def stub(profile, ratios, dcf, **kw):
         calls.append(1)
         return _stub_finding("Valuation Analyst")
 
-    with patch.object(graph_module, "run_valuation_agent", side_effect=stub):
+    runner = roster.checkpointed_runner(roster.AGENTS_BY_KEY["valuation"])
+    inputs = make_inputs("X")
+    with patch.object(roster, "run_valuation_agent", side_effect=stub):
         with llm_call_context(run_id="r-V"):
-            graph_module._checkpointed_valuation({"ticker": "X"}, {}, None)
-            graph_module._checkpointed_valuation({"ticker": "X"}, {}, None)
+            runner(inputs)
+            runner(inputs)
     assert len(calls) == 1
 
 
@@ -123,6 +137,22 @@ def test_checkpointed_critic_caches_within_run():
     assert len(calls) == 1
 
 
+def test_roster_wrappers_use_the_frozen_step_names():
+    """A retried run resumes only if the step names match what the
+    interrupted run saved, so the roster must checkpoint under exactly the
+    names `KNOWN_STEPS` freezes."""
+    _reset_checkpoints()
+    inputs = make_inputs("X")
+    with patch.object(roster, "run_sector_agent",
+                      side_effect=lambda *a, **k: _stub_finding("Sector Analyst")):
+        with llm_call_context(run_id="r-names"):
+            _sector_runner()(inputs)
+    with SessionLocal() as db:
+        saved = {r.step_name for r in db.query(MemoRunCheckpoint).filter_by(run_id="r-names")}
+    assert saved == {"graph.sector_finding"}
+    assert "graph.sector_finding" in roster.KNOWN_STEPS
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: full memo run + retry with same run_id
 # ---------------------------------------------------------------------------
@@ -134,13 +164,13 @@ def test_run_stock_memo_retry_with_same_run_id_hits_checkpoints():
     _reset_checkpoints()
     sector_calls = []
 
-    real_sector = graph_module.run_sector_agent
+    real_sector = roster.run_sector_agent
 
-    def counting_sector(profile, ratios):
+    def counting_sector(profile, ratios, **kw):
         sector_calls.append(1)
-        return real_sector(profile, ratios)
+        return real_sector(profile, ratios, **kw)
 
-    with patch.object(graph_module, "run_sector_agent", side_effect=counting_sector):
+    with patch.object(roster, "run_sector_agent", side_effect=counting_sector):
         run_id = "deterministic-run-id-for-test"
         memo1 = graph_module.run_stock_memo("MSFT", run_id=run_id)
         memo2 = graph_module.run_stock_memo("MSFT", run_id=run_id)
@@ -156,16 +186,29 @@ def test_run_stock_memo_distinct_run_ids_re_execute_specialists():
     specialists. Sanity check: caching isn't leaking across runs."""
     _reset_checkpoints()
     sector_calls = []
-    real_sector = graph_module.run_sector_agent
+    real_sector = roster.run_sector_agent
 
-    def counting_sector(profile, ratios):
+    def counting_sector(profile, ratios, **kw):
         sector_calls.append(1)
-        return real_sector(profile, ratios)
+        return real_sector(profile, ratios, **kw)
 
-    with patch.object(graph_module, "run_sector_agent", side_effect=counting_sector):
+    with patch.object(roster, "run_sector_agent", side_effect=counting_sector):
         graph_module.run_stock_memo("MSFT", run_id="run-1")
         graph_module.run_stock_memo("MSFT", run_id="run-2")
     assert len(sector_calls) == 2
+
+
+def test_run_stock_memo_saves_only_known_steps():
+    """Every checkpoint a memo run writes is a `KNOWN_STEPS` name — the
+    set the worker's progress merge and the status endpoint understand."""
+    _reset_checkpoints()
+    run_id = "known-steps-run"
+    graph_module.run_stock_memo("MSFT", run_id=run_id)
+    with SessionLocal() as db:
+        saved = {r.step_name for r in db.query(MemoRunCheckpoint).filter_by(run_id=run_id)}
+    assert saved, "a memo run must checkpoint at least its gather steps"
+    assert saved <= set(roster.KNOWN_STEPS), sorted(saved - set(roster.KNOWN_STEPS))
+    assert set(roster.GATHER_STEPS) <= saved
 
 
 # ---------------------------------------------------------------------------

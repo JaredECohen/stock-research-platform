@@ -33,9 +33,7 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-
-log = logging.getLogger(__name__)
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..config import settings
 from ..schemas import (
@@ -48,6 +46,7 @@ from ..schemas import (
     DCFResult,
     MispricingThesis,
     RiskItem,
+    RoundFindings,
     StockMemoOut,
     ValuationVerdict,
 )  # CriticReview imported for the safe-runner fallback path  # noqa: F401
@@ -56,14 +55,12 @@ from ..services.market_data_service import get_basic_stats
 from ..services.transcripts_service import latest_transcript
 from ..services.filings_service import get_filings
 from ..finance.dcf import fmt_price, fmt_upside
+from ..services.checkpoint_store import checkpointed
 from ..services.valuation_service import build_comps, build_dcf
-from . import llm, prompts
-from .comps_agent import run_comps_agent
+from . import llm, prompts, roster
 from .critic_agent import run_critic
-from .earnings_agent import run_earnings_agent
-from .filing_agent import run_filing_agent
-from .macro_agent import run_macro_agent
-from .risk_agent import derive_risk_items, risk_item_from_text, run_risk_agent
+from .memo_context import MemoInputs
+from .risk_agent import derive_risk_items, risk_item_from_text
 from .log_safety import redact
 from .safe_runner import (
     DegradationLog,
@@ -72,10 +69,9 @@ from .safe_runner import (
     safe_critic,
     safe_finding,
 )
-from .sector_agents import run_sector_agent
-from .technical_agent import run_technical_agent
 from .tools import evidence_quality
-from .valuation_agent import run_valuation_agent
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -1129,76 +1125,42 @@ def _portfolio_fit(profile: Dict, rating: str) -> str:
 # ---------------------------------------------------------------------------
 # Wave 8A: per-step checkpointing
 # ---------------------------------------------------------------------------
-# Each specialist gets a thin checkpointed wrapper that the safe-runner calls.
+# Each step the memo run can resume from gets a thin checkpointed wrapper.
 # When `run_id` is in scope (always, since `run_stock_memo` sets it), the
-# decorator caches each step's `AgentFinding` under `(run_id, step_name)` so
-# a retried run with the same `run_id` skips the underlying work.
+# decorator caches the step's result under `(run_id, step_name)` so a
+# retried run with the same `run_id` skips the underlying work.
 #
-# Why thin wrappers vs. decorating each agent at definition: keeping the
-# specialist functions un-decorated lets other callers (tests, ad-hoc
+# The eight analysts' wrappers live on the roster (`roster.checkpointed_runner`)
+# and are built from `AgentSpec.checkpoint`; only the four steps whose
+# return types differ from `AgentFinding` stay hand-written here. Their
+# step names are the `roster.GATHER_STEPS` / `roster.CRITIC_STEP` literals —
+# frozen, because resume and the status endpoint key on them.
+#
+# Why thin wrappers vs. decorating each function at definition: keeping the
+# underlying functions un-decorated lets other callers (tests, ad-hoc
 # scripts, future workers) use them without checkpoint side effects. The
 # checkpoint behavior is deliberately scoped to the graph entry path.
 
-from ..services.checkpoint_store import checkpointed
-
 
 @checkpointed("graph.fundamentals", return_type=None)
-def _checkpointed_fundamentals(ticker: str, *, force_refresh: bool):
+def _checkpointed_fundamentals(ticker: str, *, force_refresh: bool) -> Dict[str, Any]:
     return get_full_financials(ticker, force_refresh=force_refresh)
 
 
 @checkpointed("graph.dcf", return_type=DCFResult)
-def _checkpointed_dcf(ticker: str, *, force_refresh: bool):
+def _checkpointed_dcf(ticker: str, *, force_refresh: bool) -> Optional[DCFResult]:
     return build_dcf(ticker, force_refresh=force_refresh)
 
 
 @checkpointed("graph.comps", return_type=CompsResult)
-def _checkpointed_comps(ticker: str, *, force_refresh: bool):
+def _checkpointed_comps(ticker: str, *, force_refresh: bool) -> Optional[CompsResult]:
     return build_comps(ticker, force_refresh=force_refresh)
 
 
-@checkpointed("graph.sector_finding", return_type=AgentFinding)
-def _checkpointed_sector(profile: Dict, ratios: Dict) -> AgentFinding:
-    return run_sector_agent(profile, ratios)
-
-
-@checkpointed("graph.earnings_finding", return_type=AgentFinding)
-def _checkpointed_earnings(profile, transcript, earnings) -> AgentFinding:
-    return run_earnings_agent(profile, transcript, earnings)
-
-
-@checkpointed("graph.filing_finding", return_type=AgentFinding)
-def _checkpointed_filing(profile, filings) -> AgentFinding:
-    return run_filing_agent(profile, filings)
-
-
-@checkpointed("graph.valuation_finding", return_type=AgentFinding)
-def _checkpointed_valuation(profile, ratios, dcf) -> AgentFinding:
-    return run_valuation_agent(profile, ratios, dcf)
-
-
-@checkpointed("graph.comps_finding", return_type=AgentFinding)
-def _checkpointed_comps_agent(profile, comps) -> AgentFinding:
-    return run_comps_agent(profile, comps)
-
-
-@checkpointed("graph.macro_finding", return_type=AgentFinding)
-def _checkpointed_macro(profile, scenario: str) -> AgentFinding:
-    return run_macro_agent(profile, scenario)
-
-
-@checkpointed("graph.risk_finding", return_type=AgentFinding)
-def _checkpointed_risk(profile, ratios, dcf_summary) -> AgentFinding:
-    return run_risk_agent(profile, ratios, dcf_summary)
-
-
-@checkpointed("graph.technical_finding", return_type=AgentFinding)
-def _checkpointed_technical(profile) -> AgentFinding:
-    return run_technical_agent(profile)
-
-
 @checkpointed("graph.critic", return_type=CriticReview)
-def _checkpointed_critic(memo_dict: Dict) -> CriticReview:
+def _checkpointed_critic(memo_dict: Dict[str, Any]) -> Optional[CriticReview]:
+    # None is a legitimate outcome (ENABLE_AGENT_CRITIC=false); `safe_critic`
+    # passes it through rather than treating it as a failure.
     return run_critic(memo_dict)
 
 
@@ -1318,6 +1280,16 @@ def _run_stock_memo_inner(
     comps = safe_call(_checkpointed_comps, ticker, force_refresh=force_refresh, fallback=None,
                       name="Comps Engine", log_to=degradation)
 
+    # The roster reads its inputs off one object. `profile` and the findings
+    # built below are shared, mutated in place downstream — see the
+    # mutation contract in `memo_context`.
+    inputs = MemoInputs(
+        ticker=ticker, run_id=run_id, scenario=scenario, force_refresh=force_refresh,
+        as_of_date=as_of_date, fin=fin, profile=profile, ratios=ratios,
+        earnings=earnings, transcript=transcript, filings=filings,
+        dcf=dcf, comps=comps, degradation=degradation,
+    )
+
     # Wave 10 — PM intake step. Lets the PM deprioritize up to 3
     # specialists for this memo (e.g., skip technicals on a regulated
     # bank, skip filings re-pass when nothing material has changed).
@@ -1325,135 +1297,48 @@ def _run_stock_memo_inner(
     from .intake import run_intake, stub_finding
     intake = run_intake(profile)
 
-    # Each specialist runs with its own llm_call_context so any LLM calls it
-    # makes get tagged with the right agent_name in LLMCallLog (Wave 1A).
+    # Round 0 fan-out, in roster order. Each specialist runs with its own
+    # llm_call_context so any LLM calls it makes get tagged with the right
+    # agent_name in LLMCallLog (Wave 1A). (Technicals, by design, do NOT
+    # influence the rating — positioning context only.)
     from .llm import llm_call_context
-    if intake.runs("sector"):
-        with llm_call_context(agent_name="Sector Analyst", run_id=run_id):
-            sector_finding = safe_finding("Sector Analyst", _checkpointed_sector,
-                                          profile, ratios, log_to=degradation)
-    else:
-        sector_finding = AgentFinding(**stub_finding("sector", intake.rationale))
-    if intake.runs("earnings"):
-        with llm_call_context(agent_name="Earnings Analyst", run_id=run_id):
-            earnings_finding = safe_finding("Earnings Analyst", _checkpointed_earnings,
-                                            profile, transcript, earnings, log_to=degradation)
-    else:
-        earnings_finding = AgentFinding(**stub_finding("earnings", intake.rationale))
-    if intake.runs("filing"):
-        with llm_call_context(agent_name="Filing Analyst", run_id=run_id):
-            filing_finding = safe_finding("Filing Analyst", _checkpointed_filing,
-                                          profile, filings, log_to=degradation)
-    else:
-        filing_finding = AgentFinding(**stub_finding("filing", intake.rationale))
-    if intake.runs("valuation"):
-        with llm_call_context(agent_name="Valuation Analyst", run_id=run_id):
-            valuation_finding = safe_finding("Valuation Analyst", _checkpointed_valuation,
-                                             profile, ratios, dcf, log_to=degradation)
-    else:
-        valuation_finding = AgentFinding(**stub_finding("valuation", intake.rationale))
-    if intake.runs("comps"):
-        with llm_call_context(agent_name="Comps Analyst", run_id=run_id):
-            comps_finding = safe_finding("Comps Analyst", _checkpointed_comps_agent,
-                                         profile, comps, log_to=degradation)
-    else:
-        comps_finding = AgentFinding(**stub_finding("comps", intake.rationale))
-    if intake.runs("macro"):
-        with llm_call_context(agent_name="Macro Analyst", run_id=run_id):
-            macro_finding = safe_finding("Macro Analyst", _checkpointed_macro,
-                                         profile, scenario, log_to=degradation)
-    else:
-        macro_finding = AgentFinding(**stub_finding("macro", intake.rationale))
-    if intake.runs("risk"):
-        with llm_call_context(agent_name="Risk Analyst", run_id=run_id):
-            risk_finding = safe_finding(
-                "Risk Analyst", _checkpointed_risk,
-                profile, ratios, (dcf.summary if dcf else None), log_to=degradation,
-            )
-    else:
-        risk_finding = AgentFinding(**stub_finding("risk", intake.rationale))
-    # Wave 3B — Technical Analyst. By design technicals do NOT influence
-    # the rating; they're positioning context only. The agent gets its own
-    # llm_call_context so the LLM narrative pass is attributed correctly.
-    if intake.runs("technical"):
-        with llm_call_context(agent_name="Technical Analyst", run_id=run_id):
-            technical_finding = safe_finding(
-                "Technical Analyst", _checkpointed_technical, profile,
+    findings: Dict[str, AgentFinding] = {}
+    for spec in roster.AGENTS:
+        if not intake.runs(spec.key):
+            findings[spec.key] = AgentFinding(**stub_finding(spec.key, intake.rationale))
+            continue
+        with llm_call_context(agent_name=spec.display_name, run_id=run_id):
+            findings[spec.key] = safe_finding(
+                spec.display_name, roster.checkpointed_runner(spec), inputs,
                 log_to=degradation,
             )
-    else:
-        technical_finding = AgentFinding(**stub_finding("technical", intake.rationale))
-
-    findings = {
-        "sector": sector_finding,
-        "earnings": earnings_finding,
-        "filing": filing_finding,
-        "valuation": valuation_finding,
-        "comps": comps_finding,
-        "macro": macro_finding,
-        "risk": risk_finding,
-        "technical": technical_finding,
-    }
 
     # Wave 9 — PM↔specialist deep-research dialog. Round 0 is the fan-out
     # above; rounds 1+ critique + re-fire targeted specialists with the
     # PM's question prepended to their prompt. Skipped on backtests
     # (`as_of_date` set) so we don't burn LLM budget retroactively.
-    round_findings: List[Any] = []
+    round_findings: List[RoundFindings] = []
     if settings.enable_deep_research and as_of_date is None:
         from .deep_research import run_dialog_loop
 
-        def _refire_sector(q: str) -> AgentFinding:
-            return run_sector_agent(profile, ratios, prior_round_critique=q)
-
-        def _refire_earnings(q: str) -> AgentFinding:
-            return run_earnings_agent(
-                profile, transcript, earnings, prior_round_critique=q,
-            )
-
-        def _refire_filing(q: str) -> AgentFinding:
-            return run_filing_agent(profile, filings, prior_round_critique=q)
-
-        def _refire_valuation(q: str) -> AgentFinding:
-            return run_valuation_agent(profile, ratios, dcf, prior_round_critique=q)
-
-        def _refire_comps(q: str) -> AgentFinding:
-            return run_comps_agent(profile, comps, prior_round_critique=q)
-
-        def _refire_macro(q: str) -> AgentFinding:
-            return run_macro_agent(profile, scenario, prior_round_critique=q)
-
-        def _refire_risk(q: str) -> AgentFinding:
-            return run_risk_agent(
-                profile, ratios, (dcf.summary if dcf else None),
-                prior_round_critique=q,
-            )
-
-        def _refire_technical(q: str) -> AgentFinding:
-            return run_technical_agent(profile, prior_round_critique=q)
-
-        re_fire = {
-            "sector": _refire_sector,
-            "earnings": _refire_earnings,
-            "filing": _refire_filing,
-            "valuation": _refire_valuation,
-            "comps": _refire_comps,
-            "macro": _refire_macro,
-            "risk": _refire_risk,
-            "technical": _refire_technical,
+        # Same runner as round 0, with the PM's question threaded through.
+        # `s=spec` pins each lambda to its own spec (late binding otherwise
+        # makes every entry re-fire the last analyst on the roster).
+        re_fire: Dict[str, Callable[[str], AgentFinding]] = {
+            spec.key: (lambda q, s=spec: s.run(inputs, q)) for spec in roster.AGENTS
         }
 
         # Loop reads `findings` keyed by short agent name — same as the
         # `re_fire` map. Returns the latest-per-agent findings dict + the
         # full round-by-round audit trail for persistence.
-        def _run_loop():
+        def _run_loop() -> Tuple[Dict[str, AgentFinding], List[RoundFindings]]:
             return run_dialog_loop(
                 run_id=run_id,
                 initial_findings=findings,
                 re_fire=re_fire,
             )
 
-        loop_out = safe_call(
+        loop_out: Tuple[Dict[str, AgentFinding], List[RoundFindings]] = safe_call(
             _run_loop,
             fallback=(findings, []),
             name="Deep Research Loop", log_to=degradation,
@@ -1465,23 +1350,24 @@ def _run_stock_memo_inner(
             # downstream synthesis (PM, critic) sees the freshest read.
             for name, finding in current.items():
                 findings[name] = finding
-            sector_finding = findings["sector"]
-            earnings_finding = findings["earnings"]
-            filing_finding = findings["filing"]
-            valuation_finding = findings["valuation"]
-            comps_finding = findings["comps"]
-            macro_finding = findings["macro"]
-            risk_finding = findings["risk"]
-            technical_finding = findings["technical"]
 
     # B3 / Theme 2 — promote silent deterministic fallbacks into the
     # degradation log. An agent whose LLM call returned nothing usable
     # ships boilerplate while presenting as a real analyst view; that is
     # a degradation event the UI must surface, same as a crash. Only when
     # an LLM was supposed to run — in deterministic mode (no keys) the
-    # fallback IS the expected path, not a degradation.
+    # fallback IS the expected path, not a degradation — and only for an
+    # analyst an LLM was expected of: comps and risk are deterministic at
+    # round 0 by design (`uses_llm_round0=False`), so their flag counts
+    # only once the PM re-fired them in a deep-research round.
     if settings.has_llm:
-        for _f in findings.values():
+        refired = {
+            key for r in round_findings if r.round > 0 for key in r.findings
+        }
+        for spec in roster.AGENTS:
+            _f = findings[spec.key]
+            if not (spec.uses_llm_round0 or spec.key in refired):
+                continue
             if isinstance(_f.data, dict) and _f.data.get("deterministic_fallback"):
                 degradation.record_soft(_f.agent, str(_f.data["deterministic_fallback"]))
 
@@ -1495,25 +1381,20 @@ def _run_stock_memo_inner(
     # Wave 3C: drill-down long-form reports. The deterministic build is
     # cheap and always populates the field; LLM enrichment runs only when
     # ENABLE_LONG_FORM_REPORTS=true. safe_call wraps so a failure never
-    # blocks the memo.
+    # blocks the memo. Mutates each finding's `long_form_report` in place.
     from .long_form import attach_long_form
     _t = profile.get("ticker", ticker)
-    safe_call(attach_long_form, sector_finding, ticker=_t, agent_name="Sector Analyst",
-              profile=profile, fallback=None, name="Long-form (Sector)", log_to=degradation)
-    safe_call(attach_long_form, earnings_finding, ticker=_t, agent_name="Earnings Analyst",
-              profile=profile, fallback=None, name="Long-form (Earnings)", log_to=degradation)
-    safe_call(attach_long_form, filing_finding, ticker=_t, agent_name="Filing Analyst",
-              profile=profile, fallback=None, name="Long-form (Filing)", log_to=degradation)
-    safe_call(attach_long_form, valuation_finding, ticker=_t, agent_name="Valuation Analyst",
-              profile=profile, fallback=None, name="Long-form (Valuation)", log_to=degradation)
-    safe_call(attach_long_form, comps_finding, ticker=_t, agent_name="Comps Analyst",
-              profile=profile, fallback=None, name="Long-form (Comps)", log_to=degradation)
-    safe_call(attach_long_form, macro_finding, ticker=_t, agent_name="Macro Analyst",
-              profile=profile, fallback=None, name="Long-form (Macro)", log_to=degradation)
-    safe_call(attach_long_form, risk_finding, ticker=_t, agent_name="Risk Analyst",
-              profile=profile, fallback=None, name="Long-form (Risk)", log_to=degradation)
-    safe_call(attach_long_form, technical_finding, ticker=_t, agent_name="Technical Analyst",
-              profile=profile, fallback=None, name="Long-form (Technical)", log_to=degradation)
+    for spec in roster.AGENTS:
+        safe_call(attach_long_form, findings[spec.key], ticker=_t,
+                  agent_name=spec.display_name, profile=profile, fallback=None,
+                  name=spec.long_form_name, log_to=degradation)
+
+    # From here on no entry of `findings` is replaced, only mutated in
+    # place, so these aliases stay current for the rest of the run.
+    sector_finding = findings["sector"]
+    earnings_finding = findings["earnings"]
+    valuation_finding = findings["valuation"]
+    risk_finding = findings["risk"]
 
     # Wave 10 — PM-driven DCF assumption adjustment. The PM has the team's
     # full read at this point (round 0 + Wave 9 dialog rounds). Now is when
@@ -1714,6 +1595,16 @@ def _run_stock_memo_inner(
                 }
     except Exception as exc:  # pragma: no cover
         log.debug("macro snapshot freeze failed: %s", exc)
+    # Each analyst lands on the memo field its spec names; an analyst with
+    # no dedicated field rides in `extra_agent_views` (none today — the risk
+    # read is deliberately unsurfaced, see `roster.NO_MEMO_VIEW`).
+    views: Dict[str, Any] = {
+        spec.memo_field: findings[spec.key] for spec in roster.AGENTS if spec.memo_field
+    }
+    extra_views: Dict[str, AgentFinding] = {
+        spec.key: findings[spec.key] for spec in roster.AGENTS
+        if spec.memo_field is None and spec.key not in roster.NO_MEMO_VIEW
+    }
     memo = StockMemoOut(
         ticker=profile.get("ticker"),
         company_name=profile.get("company_name", ticker),
@@ -1726,13 +1617,8 @@ def _run_stock_memo_inner(
         price_at_memo=price_at_memo,
         price_at_memo_at=(datetime.utcnow() if price_at_memo is not None else None),
         business_summary=profile.get("business_description", ""),
-        sector_agent_view=sector_finding,
-        earnings_agent_view=earnings_finding,
-        filing_agent_view=filing_finding,
-        valuation_agent_view=valuation_finding,
-        comps_agent_view=comps_finding,
-        macro_sensitivity=macro_finding,
-        technical_agent_view=technical_finding,
+        **views,
+        extra_agent_views=extra_views,
         bull_case=bull,
         bear_case=bear,
         catalysts=catalysts,
