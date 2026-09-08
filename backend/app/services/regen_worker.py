@@ -44,9 +44,12 @@ from typing import Any
 from sqlalchemy import select, update
 
 from ..agents.graph import run_stock_memo
+from ..agents.llm import llm_call_context
 from ..config import settings
 from ..database import SessionLocal
-from ..models import MemoRunCheckpoint, RegenJob
+from ..models import Company, MemoRunCheckpoint, RegenJob
+from ..seed_universe import ensure_company_in_universe
+from ..services.history_service import backfill_ticker
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +89,8 @@ def _job_dict(job: RegenJob) -> dict[str, Any]:
         "error_message": job.error_message or "",
         "traceback_tail": job.traceback_tail or "",
         "progress": list(job.progress or []),
+        "requested_by_user_id": job.requested_by_user_id,
+        "usage_event_id": job.usage_event_id,
     }
 
 
@@ -95,6 +100,7 @@ def _job_dict(job: RegenJob) -> dict[str, Any]:
 
 def enqueue(
     ticker: str, scenario: str = "soft_landing", *, source: str = "user",
+    requested_by_user_id: int | None = None, usage_event_id: int | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Queue a regen for `ticker`. Returns `(job, created)`.
 
@@ -108,6 +114,13 @@ def enqueue(
     `source` tags the job's initial waypoint so telemetry can tell
     user-requested regens from scheduler-driven ones (`filing_event`,
     `transcript_event`, `regime_shift`, `admin_rerun`).
+
+    `requested_by_user_id` / `usage_event_id` (FEAT-002) ride on the row
+    only when this call created it: the reservation belongs to the
+    request that made it, and the worker commits or releases it by id
+    when the job finishes. A coalesced caller gets the existing job back
+    untouched and must release its own reservation — it is riding on
+    someone else's run.
     """
     t = ticker.upper()
     with _ENQUEUE_LOCK, SessionLocal() as db:
@@ -127,6 +140,8 @@ def enqueue(
             progress=[{
                 "step": "enqueued", "at": _utcnow().isoformat(), "source": source,
             }],
+            requested_by_user_id=requested_by_user_id,
+            usage_event_id=usage_event_id,
         )
         db.add(job)
         db.commit()
@@ -257,6 +272,58 @@ def _append_progress(job_id: int, step: str) -> None:
         log.debug("progress append failed for job %d", job_id, exc_info=True)
 
 
+def _finalize_charge(usage_event_id: int | None, *, commit: bool, job_id: int) -> None:
+    """Commit (memo persisted) or release (nothing delivered) the
+    `usage_events` reservation a job carries. Both are conditional
+    UPDATEs on `status='reserved'`, so calling this twice — or after a
+    crash-and-resume — is harmless. Never raises: the job outcome is
+    already recorded, and a charge that could not be finalised is what
+    `billing_loop` reconciles from the stale-reservation sweep."""
+    if usage_event_id is None:
+        return
+    try:
+        from ..auth import usage  # lazy: keeps the ORM-heavy auth package off the worker's import path
+        with SessionLocal() as db:
+            done = usage.commit(db, usage_event_id) if commit else usage.release(db, usage_event_id)
+        log.info("regen job %d %s usage event %d (%s)", job_id,
+                 "committed" if commit else "released", usage_event_id,
+                 "applied" if done else "already final")
+    except Exception as exc:
+        log.warning("regen job %d could not %s usage event %d: %s", job_id,
+                    "commit" if commit else "release", usage_event_id, type(exc).__name__)
+
+
+def _introduce_ticker(job_id: int, ticker: str) -> None:
+    """Lazy universe resolution, worker-side (FEAT-002).
+
+    `POST /analyze` used to resolve an unknown ticker in the request —
+    a live profile lookup plus a 5-year provider backfill — before any
+    charge existed. That is provider spend, so with the login wall on
+    the route enqueues first and this runs here, inside the job that
+    was charged for it. Tickers already in `companies` (the whole
+    curated universe, so every scheduler-driven job) cost one SELECT.
+    A symbol the provider chain rejects raises, which fails the job and
+    releases the charge — the same 404 the route used to produce, now
+    visible in `/analyze/status.last_failure`.
+    """
+    with SessionLocal() as db:
+        known = db.execute(select(Company.ticker).where(Company.ticker == ticker)).first()
+    if known:
+        return
+    _append_progress(job_id, "introducing_ticker")
+    profile = ensure_company_in_universe(ticker)
+    if profile is None:
+        raise ValueError(f"{ticker}: provider chain rejected this symbol.")
+    # Heavy load (financials + filings + transcripts) so the agent graph
+    # has data to work with. Best-effort, as in the route it replaces —
+    # a capability that 403s still leaves a memo worth generating.
+    try:
+        backfill_ticker(ticker)
+    except Exception as exc:
+        log.warning("backfill for %s failed before regen job %d: %s", ticker, job_id, type(exc).__name__)
+    _append_progress(job_id, "ticker_introduced")
+
+
 def recover_orphans() -> dict[str, int]:
     """Startup pass over jobs the previous process left behind.
 
@@ -268,8 +335,13 @@ def recover_orphans() -> dict[str, int]:
     - `queued` rows older than the max queue age are expired rather
       than executed: nobody is watching a poll loop from hours ago, and
       silently running a backlog after downtime is pure LLM spend.
+
+    A job that ends here as `failed` delivered nothing, so its research-
+    run reservation (FEAT-002) is released; a requeued job keeps its
+    reservation because the retry may still deliver.
     """
     requeued = failed = expired = 0
+    released: list[tuple[int, int]] = []
     with SessionLocal() as db:
         _ensure_table(db)
         now = _utcnow()
@@ -295,6 +367,8 @@ def recover_orphans() -> dict[str, int]:
                     "headroom and re-trigger manually."
                 )
                 failed += 1
+                if job.usage_event_id is not None:
+                    released.append((job.id, job.usage_event_id))
         cutoff = now - timedelta(minutes=settings.regen_queue_max_age_minutes)
         for job in db.execute(
             select(RegenJob).where(
@@ -310,7 +384,11 @@ def recover_orphans() -> dict[str, int]:
                 "instead of running stale."
             )
             expired += 1
+            if job.usage_event_id is not None:
+                released.append((job.id, job.usage_event_id))
         db.commit()
+    for job_id, event_id in released:
+        _finalize_charge(event_id, commit=False, job_id=job_id)
     if requeued or failed or expired:
         log.warning(
             "regen recovery: %d requeued, %d failed (repeat orphan), %d expired",
@@ -353,6 +431,7 @@ def execute_job(job_id: int) -> dict[str, Any]:
         if job is None:
             return {}
         ticker, scenario, run_id = job.ticker, job.scenario, job.run_id
+        user_id, usage_event_id = job.requested_by_user_id, job.usage_event_id
     started = _utcnow()
     _append_progress(job_id, "worker_claimed")
     from . import memory_probe
@@ -360,10 +439,16 @@ def execute_job(job_id: int) -> dict[str, Any]:
     log.info("regen job %d STARTING for %s (scenario=%s, run_id=%s)",
              job_id, ticker, scenario, run_id)
     try:
+        _introduce_ticker(job_id, ticker)
         _append_progress(job_id, "calling_run_stock_memo")
-        memo = run_stock_memo(
-            ticker, scenario=scenario, force_refresh=True, run_id=run_id,
-        )
+        # FEAT-002: every LLM call the run makes is attributed to the
+        # customer who asked and to `research_run`, so per-plan margin can
+        # be read from `llm_call_logs`; the graph layers its own agent
+        # names and run_id on top of this.
+        with llm_call_context(user_id=user_id, feature="research_run", run_id=run_id):
+            memo = run_stock_memo(
+                ticker, scenario=scenario, force_refresh=True, run_id=run_id,
+            )
         _append_progress(
             job_id, f"run_stock_memo_returned rating={memo.rating_label}",
         )
@@ -377,6 +462,10 @@ def execute_job(job_id: int) -> dict[str, Any]:
                 row.memo_version = snap.version if snap else None
                 row.error_type = ""
                 db.commit()
+        # The memo is persisted: the charge sticks. Committed after the
+        # job row so a crash between the two leaves a `reserved` event on
+        # a succeeded job — reconcilable — rather than a paid-for nothing.
+        _finalize_charge(usage_event_id, commit=True, job_id=job_id)
         _append_progress(job_id, "job_succeeded")
         log.info("regen job %d SUCCEEDED for %s in %.1fs (version=%s)",
                  job_id, ticker, (_utcnow() - started).total_seconds(),
@@ -403,6 +492,8 @@ def execute_job(job_id: int) -> dict[str, Any]:
                 row.error_message = str(exc)[:500]
                 row.traceback_tail = tb[-1500:]
                 db.commit()
+        # Nothing was delivered: the customer gets the run back.
+        _finalize_charge(usage_event_id, commit=False, job_id=job_id)
     # A memo run is the largest allocator in the process — 26+ LLM
     # round-trips, filing bodies, and (pre-2026-08-12) tens of MB of chunk
     # embeddings per specialist. CPython hands those objects back to its
