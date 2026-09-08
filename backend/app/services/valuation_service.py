@@ -15,6 +15,28 @@ from .fundamentals_service import get_full_financials
 log = logging.getLogger(__name__)
 
 
+def _note_soft(agent: str, reason: str, exc: Optional[BaseException] = None) -> None:
+    """Record a reader-visible fallback on the active memo run (RP-001 (b)).
+
+    Thin shim over `safe_runner.note_soft` with a lazy import: `app.agents`
+    imports this module at load time (orchestrator → build_comps/build_dcf),
+    so a top-level import here would be a cycle. When `exc` is given the
+    record carries its type and redacted message, so the banner shows the
+    real cause rather than a generic "DeterministicFallback".
+    """
+    from ..agents.log_safety import redact
+    from ..agents.safe_runner import note_soft
+    if exc is None:
+        note_soft(agent, reason)
+    else:
+        note_soft(agent, f"{reason}: {redact(exc)}", kind=type(exc).__name__)
+
+
+def _log_failure(msg: str, exc: BaseException, *, level: int = logging.WARNING) -> None:
+    from ..agents.log_safety import log_safely
+    log_safely(log, msg, exc, level=level)
+
+
 def _has_full_financials(fin: Dict) -> bool:
     """True when income, balance AND cash statements are all present.
 
@@ -106,8 +128,12 @@ def _derive_peers_by_classification(
                 peers = [t for (t,) in db.execute(stmt).all()]
                 if peers:
                     return peers
-    except Exception:  # pragma: no cover — fail-safe to no-peers
-        pass
+    except Exception as exc:  # pragma: no cover — fail-safe to no-peers
+        # (b) no peers → `build_comps` returns None → the memo's comps
+        # card is the "no peer data" stub. That is a reader-visible loss,
+        # not a quiet default, so it lands on the memo banner.
+        _log_failure(f"peer lookup failed for {ticker}", exc)
+        _note_soft("Comps Engine", "peer lookup failed", exc)
     return []
 
 
@@ -189,7 +215,11 @@ def _llm_exposure_peers(ticker: str) -> List[str]:
             str(p).upper() for p in peers
             if isinstance(p, str) and p.upper() != ticker
         ][:5]
-    except Exception:  # pragma: no cover
+    except Exception as exc:  # pragma: no cover
+        # (b) the cross-sector exposure peers fall back to the theme table
+        # (or to none) — a thinner Track B than the one the memo presents.
+        _log_failure(f"LLM exposure-peer nomination failed for {ticker}", exc)
+        _note_soft("Comps Engine", "exposure peers (LLM) unavailable", exc)
         return []
 
 
@@ -221,7 +251,11 @@ def _theme_exposure_peers(ticker: str) -> List[str]:
                 if len(peers) >= 5:
                     return peers
         return peers
-    except Exception:  # pragma: no cover
+    except Exception as exc:  # pragma: no cover
+        # (b) same reader-visible effect as the LLM path above: no
+        # exposure peers on the comps card.
+        _log_failure(f"theme exposure-peer lookup failed for {ticker}", exc)
+        _note_soft("Comps Engine", "exposure peers (theme table) unavailable", exc)
         return []
 
 
@@ -240,8 +274,12 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
                 payload = dict(cached.payload)
                 payload.pop("schema_version", None)
                 return CompsResult.model_validate(payload)
-            except Exception:
-                pass
+            except Exception as exc:
+                # (a) a stale-schema snapshot is simply recomputed below.
+                _log_failure(
+                    f"cached comps for {target_ticker} failed to hydrate; recomputing",
+                    exc, level=logging.DEBUG,
+                )
 
     target = get_full_financials(target_ticker)
     # All three statements are required — `build_row` reads balance-sheet and
@@ -303,12 +341,18 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
     try:
         from .history_service import backfill_ticker
         backfill_ticker(target_ticker)
-    except Exception:  # pragma: no cover — diagnostic only
-        pass
+    except Exception as exc:  # pragma: no cover — diagnostic only
+        # (a) the history tables keep whatever they had; the stats below
+        # are built from that.
+        _log_failure(f"comps history backfill failed for {target_ticker}", exc,
+                     level=logging.DEBUG)
     try:
         from ..finance.comps_history import build_history_stats
         result.history = build_history_stats(target_ticker, target_row)
-    except Exception:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover — defensive
+        # (a) the self-historical lens is optional (None is a legitimate
+        # "not enough history"), but a crash is worth an operational line.
+        _log_failure(f"comps history stats failed for {target_ticker}", exc)
         result.history = None
 
     # Wave 10 — Track B exposure peers. Cross-sector names that share
@@ -338,8 +382,10 @@ def build_comps(target_ticker: str, *, force_refresh: bool = False) -> Optional[
                 "Selected at runtime — sector-mechanical comps still "
                 "live in the `peers` list above."
             )
-    except Exception:  # pragma: no cover
-        pass
+    except Exception as exc:  # pragma: no cover
+        # (b) the comps card ships without its Track B exposure peers.
+        _log_failure(f"exposure-peer rows failed for {target_ticker}", exc)
+        _note_soft("Comps Engine", "exposure peers unavailable", exc)
 
     # Snapshot for re-use; lineage = each peer's company_cold so a peer-side
     # 10-K refresh stales us.
@@ -400,8 +446,11 @@ def _cohort_op_margin(ticker: str) -> Optional[float]:
         v = median.get("operating_margin")
         if isinstance(v, (int, float)) and 0.0 < v < 1.0:
             return float(v)
-    except Exception:  # pragma: no cover — never block default DCF
-        pass
+    except Exception as exc:  # pragma: no cover — never block default DCF
+        # (b) the mean-reversion glide anchors on the generic 0.18 margin
+        # instead of the cohort's — a different implied price.
+        _log_failure(f"cohort margin read failed for {ticker}", exc)
+        _note_soft("DCF Engine", "sector margin default unavailable", exc)
     return None
 
 
@@ -428,7 +477,13 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
     try:
         from .data_service import get_data_service
         estimates = get_data_service().get_estimates(ticker)
-    except Exception:  # pragma: no cover — estimates are optional
+    except Exception as exc:  # pragma: no cover — estimates are optional
+        # (b) the DCF's growth path loses its consensus anchor and falls
+        # back to the trailing-history derivation — a different implied
+        # price, presented identically. Optional to the engine, not to
+        # the reader.
+        _log_failure(f"consensus estimates failed for {ticker}", exc)
+        _note_soft("DCF Engine", "consensus estimates unavailable", exc)
         estimates = None
     # Live intraday quote (60s TTL) feeds the DCF's `current_price`
     # so `upside_pct` reflects today's tape, not the 7-day-cached
@@ -457,8 +512,11 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
         cycle_pos = pos.get("position")
         if cycle_pos == "peak":
             use_reversion = True
-    except Exception:  # pragma: no cover — defensive
-        pass
+    except Exception as exc:  # pragma: no cover — defensive
+        # (b) a peak-margin name silently keeps hold-flat margins — the
+        # over-valuation the reversion default exists to prevent.
+        _log_failure(f"cycle position read failed for {ticker}", exc)
+        _note_soft("DCF Engine", "cycle position unavailable", exc)
     cohort_target = _cohort_op_margin(ticker) if use_reversion else None
 
     baseline = dcf_engine.derive_default_assumptions(
@@ -481,7 +539,12 @@ def default_dcf_assumptions(ticker: str) -> Optional[DCFAssumptions]:
     try:
         from .sector_dcf_defaults import apply_sector_overrides
         return apply_sector_overrides(profile, baseline, cycle_position=cycle_pos)
-    except Exception:  # pragma: no cover — never block DCF
+    except Exception as exc:  # pragma: no cover — never block DCF
+        # (b) the generic baseline (15x exit, 2.5% tg) stands in for the
+        # sector-appropriate knobs; `apply_sector_overrides` handles its
+        # own LLM failures, so reaching here means the layer itself broke.
+        _log_failure(f"sector DCF overrides crashed for {ticker}", exc)
+        _note_soft("DCF Engine", "sector overrides unavailable", exc)
         return baseline
 
 
@@ -505,8 +568,12 @@ def build_dcf(
                 payload = dict(cached.payload)
                 payload.pop("schema_version", None)
                 return DCFResult.model_validate(payload)
-            except Exception:
-                pass
+            except Exception as exc:
+                # (a) a stale-schema snapshot is simply recomputed below.
+                _log_failure(
+                    f"cached DCF for {ticker} failed to hydrate; recomputing",
+                    exc, level=logging.DEBUG,
+                )
 
     if assumptions is None:
         assumptions = default_dcf_assumptions(ticker)
@@ -519,7 +586,11 @@ def build_dcf(
     try:
         fin = get_full_financials(ticker)
         profile_for_dcf = fin.get("profile")
-    except Exception:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover — defensive
+        # (b) without a profile the bull/bear builder runs sector-blind
+        # (generic bumps, no named drivers) — the scenario prose changes.
+        _log_failure(f"profile for DCF scenarios failed for {ticker}", exc)
+        _note_soft("DCF Engine", "profile unavailable for scenario drivers", exc)
         profile_for_dcf = None
     result = dcf_engine.build_full_dcf(ticker, assumptions, profile=profile_for_dcf)
 
@@ -529,7 +600,10 @@ def build_dcf(
         try:
             default = default_dcf_assumptions(ticker)
             same = default and default.model_dump() == assumptions.model_dump()
-        except Exception:
+        except Exception as exc:
+            # (a) treated as a user scenario: not cached, not versioned.
+            _log_failure(f"default-assumption compare failed for {ticker}", exc,
+                         level=logging.DEBUG)
             same = False
         if same:
             if not force_refresh:
@@ -562,6 +636,13 @@ def build_dcf(
                     trigger=trigger, parent_version=parent_version,
                 )
             except Exception as exc:  # pragma: no cover — diagnostic only
-                # DCF build must not be blocked by a persistence hiccup.
-                pass
+                # D4: the DCF build must not be blocked by a persistence
+                # hiccup (unlike the memo store, which raises), but the
+                # DCF Versions page and the assumption updater now lag
+                # behind the memo without any trace — so it is an ERROR
+                # and lands on the memo banner. Revisit raising after a
+                # month of logs.
+                _log_failure(f"DCF version persistence failed for {ticker}", exc,
+                             level=logging.ERROR)
+                _note_soft("DCF Store", "DCF version not persisted", exc)
     return result

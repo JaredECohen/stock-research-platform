@@ -71,19 +71,10 @@ CAPABILITY_CASES = [
     # The memo path reaches news only through the filing analyst's BM25
     # retrieval, so today the failure is attributed to that analyst.
     pytest.param("get_news", "Filing Analyst", id="news"),
-    pytest.param(
-        "get_estimates", "DCF Engine", id="estimates",
-        marks=pytest.mark.xfail(
-            strict=False,
-            reason=(
-                "consensus estimates are swallowed at valuation_service.py "
-                "(`except Exception: estimates = None`); the DCF silently loses "
-                "its consensus anchor. S2 owns that file and adds "
-                "note_soft('DCF Engine', ...) there — flip this to a plain "
-                "assertion when it lands."
-            ),
-        ),
-    ),
+    # Consensus estimates are optional to the DCF engine but not to the
+    # reader: `default_dcf_assumptions` records the lost anchor via
+    # `note_soft("DCF Engine", ...)`.
+    pytest.param("get_estimates", "DCF Engine", id="estimates"),
 ]
 
 
@@ -100,15 +91,23 @@ def test_capability_failure_lands_in_degraded_agents(monkeypatch, method, expect
     assert "simulated capability failure" in event["message"]
 
 
-def test_earnings_feed_failure_is_fatal_like_profile(monkeypatch):
+def test_earnings_feed_failure_degrades_the_earnings_analyst(monkeypatch):
     """The earnings feed is fetched inside the fundamentals stage, which is
     the one stage `run_stock_memo` does not wrap in a safe-runner: without
-    it there is no profile, hence no memo. A raising earnings feed therefore
-    fails the run outright rather than degrading it — pinned here so a
-    later softening of that stage is a deliberate choice, not drift."""
+    a profile there is no memo. The earnings feed is not the profile,
+    though — it only informs one section — so `_build_full_financials`
+    degrades it (`earnings={}` + `note_soft("Earnings Analyst", ...)`)
+    instead of failing the whole memo. Pinned here so a later change back
+    to fatal is a deliberate choice, not drift."""
     monkeypatch.setattr(DataService, "get_earnings", _boom)
-    with pytest.raises(RuntimeError, match="simulated capability failure"):
-        graph.run_stock_memo("NVDA", force_refresh=True)
+    memo = graph.run_stock_memo("NVDA", force_refresh=True)
+    assert memo.ticker == "NVDA"
+    assert "Earnings Analyst" in memo.degraded_agents, memo.degraded_agents
+    event = next(e for e in memo.degradation_events if e["agent"] == "Earnings Analyst")
+    assert event["error_type"] == "RuntimeError"
+    assert "simulated capability failure" in event["message"]
+    # The section still ships — degraded, not replaced by the crash stub.
+    assert memo.earnings_agent_view.confidence > 0.0
 
 
 def test_profile_failure_still_raises_value_error():

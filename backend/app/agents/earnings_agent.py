@@ -2,11 +2,21 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 from ..config import settings
 from ..schemas import AgentFinding
 from . import llm, prompts
+from .log_safety import log_safely, redact, safe_exc
+from .safe_runner import note_soft
+
+log = logging.getLogger(__name__)
+
+# Marker key `_multi_pass_qa_addendum` uses to report that its second pass
+# crashed. `run_earnings_agent` pops it into `data["qa_pass_failed"]` so the
+# addendum dict handed to the prompt stays exactly the shape it was before.
+_QA_PASS_FAILED = "qa_pass_failed"
 
 
 def _multi_pass_qa_addendum(
@@ -66,8 +76,12 @@ def _multi_pass_qa_addendum(
                 str(t)[:240] for t in (out.get("management_deflections") or [])
             ][:4],
         }
-    except Exception:  # pragma: no cover — never block the main pass
-        return {}
+    except Exception as exc:  # pragma: no cover — never block the main pass
+        # (b) RP-001: the back half of a long call silently vanished from
+        # the analysis. The main pass still runs; the finding carries the
+        # flag so the reader can tell a partial read from a full one.
+        log_safely(log, f"Earnings Analyst Q&A second pass failed for {ticker}", exc)
+        return {_QA_PASS_FAILED: safe_exc(exc)}
 
 
 def _coerce_structured_enums(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -189,6 +203,13 @@ def run_earnings_agent(
         prepared=str(prepared),
         qa=str(qa),
     )
+    # Flags that ride on `data` whichever path (LLM or deterministic)
+    # produces the finding — a failure in an enrichment pass is part of
+    # the finding's provenance, not of its prose.
+    finding_flags: Dict[str, Any] = {}
+    qa_pass_failed = multipass_addendum.pop(_QA_PASS_FAILED, None)
+    if qa_pass_failed:
+        finding_flags["qa_pass_failed"] = qa_pass_failed
     # Semantic retrieval over the indexed transcript. When a PM follow-up
     # question is supplied, use it as the query so the most relevant
     # blocks float up; otherwise fall back to a general guidance /
@@ -222,7 +243,17 @@ def run_earnings_agent(
             }
             for h in vec_hits
         ]
-    except Exception:  # pragma: no cover — retrieval is best-effort
+    except Exception as exc:  # pragma: no cover — retrieval is best-effort
+        # (b) RP-001: the LLM still runs, but on the front-of-call text
+        # only — the thesis-relevant blocks it would have been handed are
+        # gone. That thins what the reader gets, so it lands on the banner
+        # (`note_soft` no-ops outside a memo run) and on the finding.
+        log_safely(log, f"Earnings Analyst retrieval failed for {profile.get('ticker')}", exc)
+        note_soft(
+            "Earnings Analyst", f"retrieval unavailable: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
+        finding_flags["retrieval_failed"] = safe_exc(exc)
         retrieved_chunks = []
 
     payload = {
@@ -290,7 +321,15 @@ def run_earnings_agent(
                     most_pressed_segment=raw_struct.get("most_pressed_segment") or {},
                     forward_catalysts=raw_struct.get("forward_catalysts") or [],
                 ).model_dump()
-            except Exception:  # pragma: no cover — drop the structure rather than fail
+            except Exception as exc:  # pragma: no cover — drop the structure rather than fail
+                # (b) RP-001: the guidance / tone / Q&A tables the UI
+                # renders under the earnings tile are gone for this run.
+                log_safely(
+                    log,
+                    f"Earnings Analyst structured block failed validation for {profile.get('ticker')}",
+                    exc,
+                )
+                finding_flags["structured_parse_failed"] = safe_exc(exc)
                 structured_payload = {}
         # Wave 10 — emit citations for the prepared remarks + Q&A
         # sections + back-half multi-pass when we ran one.
@@ -321,7 +360,10 @@ def run_earnings_agent(
             confidence=float(llm_out.get("confidence", 0.7)),
             sources=[f"transcript:{transcript.get('period', '')}"],
             evidence=evidence[:6],
-            data={"structured": structured_payload} if structured_payload else {},
+            data={
+                **({"structured": structured_payload} if structured_payload else {}),
+                **finding_flags,
+            },
         )
 
     # Deterministic fallback — used only when the LLM call fails or
@@ -350,6 +392,15 @@ def run_earnings_agent(
         summary = (
             f"No substantive transcript text available for {period}." + next_line
         )
+    if settings.has_llm:
+        # (b) RP-001: an LLM was configured and returned nothing usable, so
+        # this canned text stands in for the analyst's read. The graph
+        # promotes the flag into `degraded_agents`; in deterministic mode
+        # (no keys) the fallback IS the design and is not flagged.
+        finding_flags["deterministic_fallback"] = (
+            "Earnings LLM returned no usable output; deterministic "
+            "transcript summary shipped instead."
+        )
     return AgentFinding(
         agent="Earnings Analyst",
         headline=f"{profile.get('ticker', '')}: transcript pending LLM analysis.",
@@ -357,4 +408,5 @@ def run_earnings_agent(
         key_points=[],
         confidence=0.4,
         sources=[f"transcript:{transcript.get('period', '')}"],
+        data=dict(finding_flags),
     )

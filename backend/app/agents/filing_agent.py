@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 from ..config import settings
 from ..schemas import AgentFinding
 from ..services import retrieval_service
 from . import llm, prompts
+from .log_safety import log_safely, redact, safe_exc
+from .safe_runner import note_soft
+
+log = logging.getLogger(__name__)
 
 
 def _flatten_key_points(raw: Any) -> List[str]:
@@ -119,6 +124,22 @@ def run_filing_agent(
         else "risk factors growth strategy thesis"
     )
     retrieved: List[Dict] = []
+    # Flags that ride on `data` whichever path (LLM or deterministic)
+    # produces the finding. (b) RP-001: a retrieval failure thins what the
+    # reader gets — the LLM sees only the front-of-section truncation and
+    # the deterministic path loses its substantive MD&A snippet — so it is
+    # recorded on the finding and on the memo banner (`note_soft` no-ops
+    # outside a memo run) rather than swallowed.
+    finding_flags: Dict[str, Any] = {}
+
+    def _retrieval_failed(layer: str, exc: BaseException) -> None:
+        log_safely(log, f"Filing Analyst {layer} retrieval failed for {ticker}", exc)
+        note_soft(
+            "Filing Analyst", f"retrieval unavailable: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
+        finding_flags["retrieval_failed"] = safe_exc(exc)
+
     try:
         from ..services import vector_store
         # `ticker` is `profile.get("ticker", "")` — empty when the profile
@@ -136,7 +157,8 @@ def run_filing_agent(
             }
             for h in vec_hits
         ]
-    except Exception:
+    except Exception as exc:
+        _retrieval_failed("vector", exc)
         retrieved = []
     if not retrieved:
         # BM25 fallback returns filings + transcripts + news in one
@@ -145,7 +167,17 @@ def run_filing_agent(
         # MD&A snippet — observed in prod with MSTR news appearing in
         # an ADBE memo. Filter at the call site so downstream code
         # never sees off-source chunks.
-        raw = retrieval_service.search(ticker, retrieval_query, limit=8) or []
+        #
+        # The BM25 layer reads the news feed too, so a dead news provider
+        # used to surface here as a hard Filing Analyst failure (the whole
+        # section replaced by the "unavailable" stub). The filing body is
+        # still on hand, so the analyst runs without retrieved chunks and
+        # the loss is recorded softly instead.
+        try:
+            raw = retrieval_service.search(ticker, retrieval_query, limit=8) or []
+        except Exception as exc:
+            _retrieval_failed("BM25", exc)
+            raw = []
         retrieved = [c for c in raw if _is_filing_chunk(c)][:4]
     primary = next((f for f in filings if f.get("type") == "10-K"), filings[0])
 
@@ -237,6 +269,7 @@ def run_filing_agent(
             confidence=float(llm_out.get("confidence", 0.7)),
             sources=[f"filing:{accession}"],
             evidence=evidence[:6],
+            data=dict(finding_flags),
         )
 
     # Deterministic fallback. Skip past SEC boilerplate openers and
@@ -265,6 +298,15 @@ def run_filing_agent(
     summary = " ".join(summary_parts)
 
     key_points = [f"Risk: {r}" for r in risks] or ["See filing for detail."]
+    if settings.has_llm:
+        # (b) RP-001: an LLM was configured and returned nothing usable, so
+        # this MD&A/risk-factor extract stands in for the analyst's read.
+        # The graph promotes the flag into `degraded_agents`; without keys
+        # the extract IS the design and is not flagged.
+        finding_flags["deterministic_fallback"] = (
+            "Filing LLM returned no usable output; deterministic MD&A / "
+            "risk-factor extract shipped instead."
+        )
     return AgentFinding(
         agent="Filing Analyst",
         headline=f"{ticker} {primary.get('type', '10-K')} highlights",
@@ -272,6 +314,7 @@ def run_filing_agent(
         key_points=key_points,
         confidence=0.6,
         sources=[f"filing:{primary.get('accession_number', '')}"],
+        data=dict(finding_flags),
     )
 
 

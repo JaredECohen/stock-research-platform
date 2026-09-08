@@ -23,6 +23,8 @@ from ..finance.technicals import compute_technical_signals
 from ..schemas import AgentFinding, TechnicalSignals
 from ..services.market_data_service import get_price_series
 from . import llm, prompts
+from .log_safety import log_safely, redact, safe_exc
+from .safe_runner import note_soft
 
 log = logging.getLogger(__name__)
 
@@ -99,12 +101,42 @@ def run_technical_agent(
             confidence=0.3,
         )
 
+    # (b) RP-001: a dead or empty price feed means every indicator below
+    # is unavailable. The finding still ships (technicals are positioning
+    # context, never a rating driver — the memo is complete without them)
+    # but it must say so: `data["degraded"]` for the UI, a confidence no
+    # reader can mistake for a real read, and a banner entry via
+    # `note_soft` (a no-op outside a memo run). A short-but-present series
+    # is an honest data limit, not a failure, and keeps the plain
+    # "insufficient history" stub below.
+    degraded_reason: Optional[str] = None
     try:
         rows = get_price_series(ticker, days)
     except Exception as exc:  # pragma: no cover — defensive
-        log.warning("Technical analyst price fetch failed for %s: %s", ticker, exc)
+        log_safely(log, f"Technical analyst price fetch failed for {ticker}", exc)
+        note_soft(
+            "Technical Analyst", f"price series unavailable: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
+        degraded_reason = safe_exc(exc)
         rows = []
-    raw = compute_technical_signals(rows or [])
+    if not rows:
+        if degraded_reason is None:
+            log.warning("Technical analyst got no price rows for %s", ticker)
+            note_soft("Technical Analyst", "price series empty")
+            degraded_reason = "price series empty"
+        return AgentFinding(
+            agent="Technical Analyst",
+            headline=f"{ticker}: price series unavailable for technical read.",
+            summary=(
+                "No daily bars reached the technical analyst on this run, so no "
+                "indicators were computed. Treat this run as fundamentals-only."
+            ),
+            confidence=0.3,
+            sources=[f"prices:{ticker}"],
+            data={"degraded": True, "error": degraded_reason},
+        )
+    raw = compute_technical_signals(rows)
     if not raw:
         return AgentFinding(
             agent="Technical Analyst",
@@ -138,7 +170,20 @@ def run_technical_agent(
         model=settings.openai_tool_model,
     )
 
-    narrative = llm_out if llm_out else _deterministic_summary(profile, signals)
+    data: Dict[str, Any] = {"signals": signals.model_dump()}
+    if llm_out:
+        narrative = llm_out
+    else:
+        narrative = _deterministic_summary(profile, signals)
+        if settings.has_llm:
+            # (b) RP-001: an LLM was configured and returned nothing usable,
+            # so the indicator read-out stands in for the analyst's
+            # narrative. The graph promotes the flag into `degraded_agents`;
+            # without keys the read-out IS the design and is not flagged.
+            data["deterministic_fallback"] = (
+                "Technical LLM returned no usable output; deterministic "
+                "indicator read-out shipped instead."
+            )
 
     return AgentFinding(
         agent="Technical Analyst",
@@ -147,5 +192,5 @@ def run_technical_agent(
         key_points=[str(p) for p in (narrative.get("key_points") or [])][:8],
         confidence=float(narrative.get("confidence", 0.6)),
         sources=[f"prices:{ticker}"],
-        data={"signals": signals.model_dump()},
+        data=data,
     )

@@ -8,7 +8,10 @@ warm snapshots that depend on it (sector_warm, company_warm:dcf, …) auto-stale
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
+
+log = logging.getLogger(__name__)
 
 
 def _gather_sources(ticker: str) -> List[str]:
@@ -48,7 +51,24 @@ def _build_full_financials(ticker: str) -> Dict[str, Any]:
     statements = ds.get_financial_statements(ticker) or {}
     ratios = ds.get_ratios(ticker) or {}
     profile = ds.get_company_profile(ticker) or {}
-    earnings = ds.get_earnings(ticker) or {}
+    try:
+        earnings = ds.get_earnings(ticker) or {}
+    except Exception as exc:
+        # (b) RP-001: the earnings feed (next-earnings date, EPS history)
+        # only informs the earnings analyst's view; it is not what makes a
+        # memo possible (the profile is). A dead feed used to fail the
+        # whole fundamentals stage — hence the whole memo — rather than
+        # cost the one section. Degrade instead and say so on the banner
+        # (`note_soft` no-ops outside a memo run). Lazy import: the agents
+        # package imports this module at load time.
+        from ..agents.log_safety import log_safely, redact
+        from ..agents.safe_runner import note_soft
+        log_safely(log, f"earnings feed failed for {ticker}", exc)
+        note_soft(
+            "Earnings Analyst", f"earnings feed unavailable: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
+        earnings = {}
     return dict(
         ticker=ticker,
         profile=profile,

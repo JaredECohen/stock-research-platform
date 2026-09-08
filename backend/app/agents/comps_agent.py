@@ -9,9 +9,13 @@ Two valuation lenses, both surfaced when available (Wave 3E):
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from ..schemas import AgentFinding, CompsHistoryStats, CompsResult
+from .log_safety import log_safely, safe_exc
+
+log = logging.getLogger(__name__)
 
 
 def _peer_relative_points(comps: CompsResult) -> List[str]:
@@ -237,8 +241,12 @@ def run_comps_agent(
             )
             if isinstance(narr, dict) and narr.get("narrative"):
                 finding_data["narrative"] = str(narr["narrative"]).strip()
-        except Exception:  # pragma: no cover — narrative is best-effort
-            pass
+        except Exception as exc:  # pragma: no cover — narrative is best-effort
+            # (b) RP-001: the prose summary above the comps tile is gone
+            # for this run. Round 0 is deterministic by design, so this is
+            # not a degraded-agent entry — but it is no longer silent.
+            log_safely(log, f"Comps Analyst narrative failed for {ticker}", exc)
+            finding_data["narrative_failed"] = safe_exc(exc)
 
     # Wave 10 — typed citations for peer rows + own-history.
     from ..schemas import Citation
@@ -317,7 +325,30 @@ def run_comps_agent(
                         sources=finding.sources,
                         data=finding_data,
                     )
-            except Exception:  # pragma: no cover — defensive
-                pass
+                else:
+                    _refire_fell_through(finding, ticker, None)
+            except Exception as exc:  # pragma: no cover — defensive
+                _refire_fell_through(finding, ticker, exc)
 
     return finding
+
+
+def _refire_fell_through(
+    finding: AgentFinding, ticker: str, exc: Optional[BaseException],
+) -> None:
+    """(b) RP-001: the PM asked a follow-up and got the round-0 text back.
+
+    On the deep-research re-fire path an LLM answer *was* expected, so
+    shipping the unchanged deterministic finding is a degradation the
+    graph must promote into `degraded_agents` — unlike round 0, where the
+    deterministic comps read is the design and is never flagged.
+    `finding.data` is mutated in place: pydantic copied `finding_data` at
+    construction, so writing to the local dict would not reach the memo.
+    """
+    if exc is not None:
+        log_safely(log, f"Comps Analyst re-fire failed for {ticker}", exc)
+        reason = f"deep-research re-fire failed ({safe_exc(exc)}); round-0 comps read kept"
+    else:
+        log.warning("Comps Analyst re-fire for %s returned no usable output", ticker)
+        reason = "deep-research re-fire returned no usable output; round-0 comps read kept"
+    finding.data["deterministic_fallback"] = reason

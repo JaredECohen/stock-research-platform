@@ -7,6 +7,7 @@ exercised both by the /api/dcf endpoint and the valuation agent.
 from __future__ import annotations
 
 import copy
+import logging
 from typing import Dict, Iterable, List, Optional
 
 from ..schemas import (
@@ -18,6 +19,8 @@ from ..schemas import (
     DCFYearProjection,
     SensitivityCell,
 )
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -686,8 +689,23 @@ def check_dcf_realism(
                         value=implied_y5_multiple,
                         cohort_p90=cohort_p90,
                     ))
-    except Exception:  # pragma: no cover — guardrails never fail loudly
-        pass
+    except Exception as exc:  # pragma: no cover — guardrails never fail loudly
+        # (b) RP-001: `DCFResult.guardrails` is what the reader audits the
+        # model against, so a check that crashed must not read as "the
+        # check passed". Never raises — the DCF itself is still valid.
+        # Lazy import: `app.agents` pulls this module in at load time.
+        from ..agents.log_safety import log_safely, safe_exc
+        log_safely(log, f"DCF realism guardrail crashed for {ticker or '?'}", exc)
+        guardrails.append(DCFGuardrail(
+            severity="warn",
+            metric="guardrail_error",
+            message=(
+                "The cohort EV/EBITDA realism check could not run "
+                f"({safe_exc(exc)}); the implied year-5 multiple was not "
+                "audited against peers on this run."
+            ),
+            value=None,
+        ))
 
     # 3) Missing or absurd implied price
     if base.implied_share_price is None:

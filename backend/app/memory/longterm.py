@@ -120,8 +120,17 @@ class MemoryEntry:
             try:
                 blob = _json.dumps(self.structured_facts, indent=2, default=str, sort_keys=True)
                 out += f"\n```structured-facts\n{blob}\n```\n"
-            except Exception:
-                pass
+            except Exception as exc:
+                # (a) RP-001: the entry still renders, but the structured
+                # facts the reflection step extracted are dropped from the
+                # memory file for good — that must not happen silently.
+                # Lazy import: `app.agents` imports this package at load.
+                from ..agents.log_safety import log_safely
+                log_safely(
+                    log,
+                    f"structured facts dropped from memory entry {self.date} ({self.trigger})",
+                    exc,
+                )
         return out
 
 

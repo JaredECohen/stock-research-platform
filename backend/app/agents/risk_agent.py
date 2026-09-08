@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 from ..config import settings
 from ..schemas import AgentFinding, RiskItem, RiskRecommendation
+from .log_safety import log_safely, safe_exc
+
+log = logging.getLogger(__name__)
 
 
 def _build_recommendations(
@@ -176,8 +180,12 @@ def run_risk_agent(
                         "thesis_breaker": tb,
                         "watch_for": wf,
                     }
-        except Exception:  # pragma: no cover — narrative is best-effort
-            pass
+        except Exception as exc:  # pragma: no cover — narrative is best-effort
+            # (b) RP-001: the thesis-breaker callout is gone for this run.
+            # Round 0 is deterministic by design, so this is not a
+            # degraded-agent entry — but it is no longer silent.
+            log_safely(log, f"Risk Analyst narrative failed for {profile.get('ticker')}", exc)
+            finding_data["narrative_failed"] = safe_exc(exc)
 
     # Wave 10 — typed citations for the structural risks + ratio
     # signals the agent is grounding its read on.
@@ -246,10 +254,33 @@ def run_risk_agent(
                     sources=finding.sources,
                     data=finding_data,
                 )
-        except Exception:  # pragma: no cover — defensive; fall through to deterministic
-            pass
+            else:
+                _refire_fell_through(finding, profile.get("ticker", ""), None)
+        except Exception as exc:  # pragma: no cover — defensive; fall through to deterministic
+            _refire_fell_through(finding, profile.get("ticker", ""), exc)
 
     return finding
+
+
+def _refire_fell_through(
+    finding: AgentFinding, ticker: str, exc: Optional[BaseException],
+) -> None:
+    """(b) RP-001: the PM asked a follow-up and got the round-0 text back.
+
+    On the deep-research re-fire path an LLM answer *was* expected, so
+    shipping the unchanged deterministic finding is a degradation the
+    graph must promote into `degraded_agents` — unlike round 0, where the
+    deterministic risk read is the design and is never flagged.
+    `finding.data` is mutated in place: pydantic copied `finding_data` at
+    construction, so writing to the local dict would not reach the memo.
+    """
+    if exc is not None:
+        log_safely(log, f"Risk Analyst re-fire failed for {ticker}", exc)
+        reason = f"deep-research re-fire failed ({safe_exc(exc)}); round-0 risk read kept"
+    else:
+        log.warning("Risk Analyst re-fire for %s returned no usable output", ticker)
+        reason = "deep-research re-fire returned no usable output; round-0 risk read kept"
+    finding.data["deterministic_fallback"] = reason
 
 
 def risk_item_from_text(text: str) -> RiskItem:

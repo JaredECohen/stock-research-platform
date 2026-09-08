@@ -13,6 +13,7 @@ Workflow:
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 from ..cache import cache_get
@@ -27,6 +28,9 @@ from ..schemas import (
 from ..services.data_service import get_data_service
 from ..services.sector_research_service import run_sector_research
 from . import llm, prompts, sector_tools
+from .log_safety import log_safely
+
+log = logging.getLogger(__name__)
 
 
 def _format_kpi_summary(placements: Dict) -> List[str]:
@@ -167,7 +171,12 @@ def _coerce_bull_bear_analysis(raw: Any) -> Optional[BullBearAnalysis]:
             sector_synthesis=str(raw.get("sector_synthesis", "")).strip(),
             sector_lean=lean,
         )
-    except Exception:
+    except Exception as exc:
+        # The caller logs the reader-visible outcome (structured bull/bear
+        # replaced by the deterministic builder) at WARNING; the validation
+        # detail only matters when debugging the prompt, so it stays at DEBUG.
+        log_safely(log, "sector bull/bear block failed validation", exc,
+                   level=logging.DEBUG)
         return None
 
 
@@ -450,6 +459,17 @@ def run_sector_agent(
         # always satisfied.
         bb = _coerce_bull_bear_analysis(llm_out.get("bull_bear_analysis"))
         if bb is None:
+            # (b) RP-001: the reader gets a cohort-templated bull/bear in
+            # place of the analyst's, presented identically. Flag it on the
+            # finding so the drop is visible instead of silent.
+            log.warning(
+                "Sector Analyst bull/bear block for %s missing or malformed; "
+                "deterministic bull/bear used", ticker,
+            )
+            finding_data["bull_bear_parse_failed"] = (
+                "LLM bull_bear_analysis block missing or malformed; "
+                "cohort-grounded deterministic bull/bear shipped instead"
+            )
             bb = _deterministic_bull_bear_analysis(profile, research)
         finding_data["bull_bear_analysis"] = bb.model_dump()
         # Wave 10 — typed citations for cohort peers + sector regime.
@@ -536,6 +556,16 @@ def run_sector_agent(
     finding_data["bull_bear_analysis"] = (
         _deterministic_bull_bear_analysis(profile, research).model_dump()
     )
+    if settings.has_llm:
+        # (b) RP-001: an LLM was configured and produced nothing usable, so
+        # the cohort-templated prose below stands in for an analyst view.
+        # The graph promotes this flag into `degraded_agents`; in
+        # deterministic mode (no keys) this path IS the design and is not
+        # flagged.
+        finding_data["deterministic_fallback"] = (
+            "Sector LLM returned no usable output; cohort-grounded "
+            "deterministic summary shipped instead."
+        )
 
     # Pull a handful of overlay narrative hints into key_points so even
     # the no-LLM path surfaces concrete numbers (footprint-weighted HPI,

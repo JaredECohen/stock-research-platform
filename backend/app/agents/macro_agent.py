@@ -364,6 +364,16 @@ def run_macro_agent(
         kind="macro", ref=f"regime:{s.scenario}",
         excerpt=(s.narrative or "")[:300],
     )]
+    data: Dict[str, str] = {}
+    if settings.has_llm:
+        # (b) RP-001: the LLM branch above ran and produced no usable
+        # summary, so the regime template stands in for a company-specific
+        # macro read. The graph promotes the flag into `degraded_agents`;
+        # without keys this template IS the design and is not flagged.
+        data["deterministic_fallback"] = (
+            "Macro LLM returned no usable output; regime template "
+            "shipped instead of a company-specific read."
+        )
     return AgentFinding(
         agent="Macro Analyst",
         headline=f"Macro scenario: {s.scenario}",
@@ -372,4 +382,5 @@ def run_macro_agent(
         confidence=0.75,
         sources=["macro_scenario_framework"],
         evidence=evidence,
+        data=data,
     )
