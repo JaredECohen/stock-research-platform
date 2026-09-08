@@ -482,6 +482,12 @@ export interface StockMemoOut {
   // everything ran normally; populated by the backend safe-runner so the UI
   // can surface "X analyst unavailable" instead of dropping the memo.
   degraded_agents?: string[];
+  // RP-001 — why each `degraded_agents` entry is there, same order. Absent
+  // on memos that pre-date the field; not rendered yet.
+  degradation_events?: Array<{ agent: string; error_type: string; message: string }>;
+  // RP-003 — findings from roster agents that have no dedicated field
+  // above, keyed by roster key. Empty for the current roster; not rendered.
+  extra_agent_views?: Record<string, AgentFinding>;
   // Wave 9 — PM↔specialist deep-research dialog. Empty when the loop is
   // disabled (default) or the memo is from a backtest run.
   round_findings?: RoundFindings[];
