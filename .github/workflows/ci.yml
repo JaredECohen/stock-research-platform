@@ -40,8 +40,7 @@ jobs:
       - name: Lint (ruff)
         working-directory: backend
         # Blocking. The select/ignore list lives in pyproject.toml
-        # [tool.ruff]; the "temporary until RP-005" block there is the
-        # only reason a UP/I/F finding is not an error today.
+        # [tool.ruff]; every remaining ignore there carries its reason inline.
         run: |
           pip install "ruff==0.12.0"
           ruff check app
