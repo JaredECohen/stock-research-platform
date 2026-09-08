@@ -320,7 +320,8 @@ _USAGE_STATE = threading.local()
 # keep older callers working unchanged.
 
 _CALL_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
-    "llm_call_context", default={"agent_name": "unknown", "run_id": None, "route": ""}
+    "llm_call_context",
+    default={"agent_name": "unknown", "run_id": None, "route": "", "user_id": None, "feature": None},
 )
 # Failover events for the current context; `None` default (not `[]`) so a
 # shared mutable default can't leak events across contexts.
@@ -338,8 +339,15 @@ class llm_call_context:
     """
 
     def __init__(self, *, agent_name: str = "unknown", run_id: str | None = None,
-                 route: str = "") -> None:
-        self._values = {"agent_name": agent_name, "run_id": run_id, "route": route}
+                 route: str = "", user_id: int | None = None,
+                 feature: str | None = None) -> None:
+        # `user_id` / `feature` (FEAT-002) attribute spend to the customer
+        # and product feature that caused it; the worker sets them from
+        # the RegenJob row, the chat route from the request principal.
+        self._values = {
+            "agent_name": agent_name, "run_id": run_id, "route": route,
+            "user_id": user_id, "feature": feature,
+        }
         self._token: contextvars.Token | None = None
 
     def __enter__(self) -> llm_call_context:
@@ -403,6 +411,8 @@ def _record_usage(
                 duration_ms=int(duration_ms or 0),
                 success=bool(success),
                 error=str(error or "")[:500],
+                user_id=ctx.get("user_id"),
+                feature=ctx.get("feature"),
             ))
             db.commit()
     except Exception as exc:  # pragma: no cover - defense in depth

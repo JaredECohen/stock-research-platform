@@ -106,6 +106,12 @@ class RegenJob(Base):
     traceback_tail: Mapped[str] = mapped_column(Text, default="")
     # Coarse waypoint trace: [{"step": ..., "at": iso-ts}, ...], capped.
     progress: Mapped[list] = mapped_column(JSON, default=list)
+    # FEAT-002: who asked, and which `usage_events` reservation the worker
+    # commits on success / releases on failure. Both nullable so rows from
+    # sweeps and pre-accounts deployments read as "system" — and so
+    # `reconcile_missing_columns` can add them to a live table.
+    requested_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    usage_event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 Index("ix_regen_jobs_ticker_status", RegenJob.ticker, RegenJob.status)

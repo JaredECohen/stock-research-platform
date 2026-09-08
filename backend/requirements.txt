@@ -150,7 +150,9 @@ pydantic-settings==2.15.0
 pygments==2.21.0
     # via pytest
 pyjwt==2.13.0
-    # via mcp
+    # via
+    #   alphacouncil-backend (pyproject.toml)
+    #   mcp
 pytest==9.1.1
     # via
     #   alphacouncil-backend (pyproject.toml)
