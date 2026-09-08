@@ -291,7 +291,7 @@ def cron_health_endpoint() -> dict[str, Any]:
         snap.setdefault(name, {"last_run_at": None, "success": None, "note": "never run"})
     out_loops: list[dict[str, Any]] = []
     now = datetime.utcnow()
-    weekly_loops = {"weekly_digest_loop", "sector_digest_loop"}
+    weekly_loops = {"weekly_digest_loop", "sector_digest_loop", "sample_build_loop"}
     monthly_loops = {"theme_exposure_loop"}
     for loop_name, info in snap.items():
         last_run_str = info.get("last_run_at") if isinstance(info, dict) else None
