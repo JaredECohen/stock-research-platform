@@ -210,9 +210,105 @@ def test_gc_drops_expired_windows_and_leases():
         assert ratelimit.gc_expired(db, now=NOW + timedelta(seconds=61)) >= 2
 
 
-def test_client_ip_prefers_forwarded_for():
-    scope = {"type": "http", "method": "GET", "path": "/", "query_string": b"",
-             "headers": [(b"x-forwarded-for", b"203.0.113.9, 10.0.0.1")], "client": ("10.0.0.1", 1)}
-    assert ratelimit.client_ip(Request(scope)) == "203.0.113.9"
-    scope["headers"] = []
-    assert ratelimit.client_ip(Request(scope)) == "10.0.0.1"
+# ---------------------------------------------------------------------------
+# The caller's address, through the proxy
+# ---------------------------------------------------------------------------
+
+def _peer_request(headers: list[tuple[bytes, bytes]], client: tuple[str, int] = ("10.0.0.1", 1)) -> Request:
+    return Request({"type": "http", "method": "GET", "path": "/", "query_string": b"",
+                    "headers": headers, "client": client})
+
+
+def test_client_ip_is_one_definition_shared_with_slowapi():
+    """One notion of "the caller" for the per-IP DB buckets, slowapi's
+    ceilings and the bootstrap IP hash — they must never disagree."""
+    import app.rate_limit as slow
+
+    assert ratelimit.client_ip is slow.client_ip
+    assert slow._key_func(_peer_request([(b"x-forwarded-for", b"203.0.113.9")])) == "203.0.113.9"
+
+
+def test_client_ip_takes_the_entry_the_trusted_proxy_appended(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 1)
+    assert ratelimit.client_ip(_peer_request([(b"x-forwarded-for", b"203.0.113.9")])) == "203.0.113.9"
+    # Render appends the peer it saw AFTER whatever the client sent.
+    assert ratelimit.client_ip(_peer_request([(b"x-forwarded-for", b"1.2.3.4, 203.0.113.9")])) == "203.0.113.9"
+    assert ratelimit.client_ip(_peer_request([(b"x-forwarded-for", b" 1.2.3.4 ,203.0.113.9 ,")])) == "203.0.113.9"
+    assert ratelimit.client_ip(_peer_request([])) == "10.0.0.1"
+    assert ratelimit.client_ip(_peer_request([], client=None)) == "unknown"
+
+
+def test_client_ip_cannot_be_chosen_by_the_client(monkeypatch):
+    """Regression: the first version read the FIRST entry, so
+    `X-Forwarded-For: <random>` gave each request its own per-IP bucket
+    and each trial a unique bootstrap_ip_hash."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 1)
+    seen = {
+        ratelimit.client_ip(_peer_request([(b"x-forwarded-for", f"10.{i}.0.1, 203.0.113.9".encode())]))
+        for i in range(5)
+    }
+    assert seen == {"203.0.113.9"}
+
+
+def test_client_ip_hops_zero_ignores_the_header(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 0)
+    assert ratelimit.client_ip(_peer_request([(b"x-forwarded-for", b"203.0.113.9")])) == "10.0.0.1"
+
+
+def test_client_ip_counts_hops_from_the_right(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 2)
+    hdr = b"spoofed, 203.0.113.9, 198.51.100.7"  # client, CDN-observed peer, Render-observed CDN
+    assert ratelimit.client_ip(_peer_request([(b"x-forwarded-for", hdr)])) == "203.0.113.9"
+    # Fewer entries than trusted hops: our proxies did not write this header.
+    assert ratelimit.client_ip(_peer_request([(b"x-forwarded-for", b"203.0.113.9")])) == "10.0.0.1"
+
+
+def test_ip_buckets_follow_the_forwarded_client(monkeypatch):
+    """`enforce()`'s ip: bucket keys on the proxy-derived address, so two
+    callers behind Render are independent and a spoof prefix changes nothing."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 1)
+    monkeypatch.setattr(settings, "rate_limit_overrides_json", '{"bootstrap": "1/hour"}')
+    a, b = f"203.0.113.{uuid.uuid4().int % 250 + 1}", f"198.51.100.{uuid.uuid4().int % 250 + 1}"
+
+    def req(xff: str) -> Request:
+        r = _peer_request([(b"x-forwarded-for", xff.encode())], client=("10.0.0.1", 1))  # same socket peer
+        r.scope["state"] = {}
+        return r
+
+    with SessionLocal() as db:
+        ratelimit.enforce(db, req(a), "bootstrap", user_id=None, now=NOW)
+        ratelimit.enforce(db, req(b), "bootstrap", user_id=None, now=NOW)  # other caller, same proxy: allowed
+        with pytest.raises(ratelimit.RateLimited):
+            ratelimit.enforce(db, req(f"10.9.9.9, {a}"), "bootstrap", user_id=None, now=NOW)
+
+
+def test_slowapi_limiter_keys_on_the_forwarded_client(monkeypatch):
+    """The REAL limiter's key function. Behind Render every socket peer is
+    the proxy, so keying on `request.client` made the 3/hour bootstrap
+    cap a site-wide one: the fourth signup from anyone got a 429."""
+    from app.config import settings
+    from app.rate_limit import _key_func
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 1)
+    limiter = Limiter(key_func=_key_func, storage_uri="memory://", enabled=True,
+                      default_limits=["1/minute"], headers_enabled=True)
+    mini = FastAPI()
+    mini.state.limiter = limiter
+    mini.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+    mini.add_middleware(SlowAPIMiddleware)
+
+    @mini.get("/z")
+    def z():
+        return {"ok": True}
+
+    c = TestClient(mini)  # every request shares one socket peer, like behind a proxy
+    assert c.get("/z", headers={"X-Forwarded-For": "203.0.113.1"}).status_code == 200
+    assert c.get("/z", headers={"X-Forwarded-For": "203.0.113.2"}).status_code == 200, \
+        "a second caller behind the same proxy has its own bucket"
+    assert c.get("/z", headers={"X-Forwarded-For": "203.0.113.1"}).status_code == 429
+    assert c.get("/z", headers={"X-Forwarded-For": "10.9.9.9, 203.0.113.1"}).status_code == 429, \
+        "a client-supplied prefix does not escape the bucket"

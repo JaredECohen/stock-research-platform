@@ -103,6 +103,17 @@ services:
       # replica; set RATE_LIMIT_STORAGE_URL=redis://… when scaling out.
       - key: RATE_LIMIT_ENABLED
         value: "true"
+      # Render terminates TLS and proxies to the container, so the socket
+      # peer uvicorn sees is Render's proxy on every request; the caller
+      # is the LAST X-Forwarded-For entry (the one the proxy appended).
+      # `app/rate_limit.client_ip` reads that entry for slowapi's per-IP
+      # ceilings, the DB limiter's ip: buckets and the bootstrap IP hash —
+      # without it the "3 signups per hour per IP" cap was 3 per hour for
+      # the whole site. Exactly one hop here; a CDN in front makes it 2.
+      # Do NOT reach for FORWARDED_ALLOW_IPS="*" instead: uvicorn's
+      # always-trust mode takes the FIRST entry, which the client controls.
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
       # Long-term agent memory writes to memory/companies/<TICKER>.md.
       # Render's container disk is ephemeral — disable by default to
       # avoid silently losing entries on every redeploy. Set "true"

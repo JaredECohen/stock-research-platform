@@ -38,6 +38,13 @@ from starlette.requests import Request
 
 from ..config import settings
 from ..models.accounts import ActiveAction, RateLimitWindow
+
+# One definition of "the caller's address" for slowapi's per-IP limits,
+# the `ip:` buckets below and the bootstrap IP hash — proxy-aware, and
+# reading X-Forwarded-For from the right so a client cannot pick its own
+# bucket. It lives in `rate_limit.py` (no ORM import) and is re-exported
+# here for the callers that think of it as part of the limiter.
+from ..rate_limit import client_ip
 from .sanitize import safe_logger
 
 log = safe_logger(__name__)
@@ -182,19 +189,6 @@ def _upsert_count(db: Session, key: str, expires: datetime) -> int:
     db.execute(update(RateLimitWindow).where(RateLimitWindow.key == key)
                .values(count=RateLimitWindow.count + 1))
     return int(db.execute(select(RateLimitWindow.count).where(RateLimitWindow.key == key)).scalar_one())
-
-
-def client_ip(request: Request) -> str:
-    """Caller address, honouring the proxy header Render sets. The header
-    is only trusted for the FIRST hop (the value Render appends is last),
-    which matches what slowapi's `get_remote_address` does."""
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first
-    client = request.client
-    return client.host if client else "unknown"
 
 
 class RateLimited(HTTPException):

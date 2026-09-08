@@ -279,6 +279,15 @@ class Settings(BaseSettings):
     # later; salting keeps them from being a rainbow-table lookup of the
     # visitor's IP. Rotate to invalidate. Empty salt still hashes (dev).
     abuse_hash_salt: str = ""
+    # How many proxies sit between the internet and uvicorn — i.e. how
+    # many trailing `X-Forwarded-For` entries were written by infrastructure
+    # we trust. Render is exactly one hop, so the caller is the LAST entry
+    # (the one Render appended); anything left of it came from the client
+    # and proves nothing. Read by `rate_limit.client_ip`, which keys every
+    # per-IP ceiling and the bootstrap IP hash. 0 ignores the header and
+    # uses the socket peer: right for a directly exposed dev server, wrong
+    # behind any proxy (every caller then looks like the proxy).
+    trusted_proxy_hops: int = 1
 
     @property
     def auth_configured(self) -> bool:

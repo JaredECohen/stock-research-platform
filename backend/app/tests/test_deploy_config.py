@@ -146,6 +146,23 @@ def test_feat_002_secrets_are_dashboard_placeholders_on_web():
         )
 
 
+def test_web_reads_the_caller_through_exactly_one_proxy():
+    """Render fronts the web service with one proxy, so the socket peer is
+    the proxy on every request. `rate_limit.client_ip` keys every per-IP
+    ceiling (slowapi's, the DB limiter's ip: buckets, the trial-bootstrap
+    cap and its IP hash) on the X-Forwarded-For entry TRUSTED_PROXY_HOPS
+    from the end; without the pin those become site-wide limits. And
+    FORWARDED_ALLOW_IPS="*" is not a substitute: uvicorn's always-trust
+    mode takes the FIRST entry, which the client controls."""
+    web, _ = _web_and_worker()
+    env = {e["key"]: e.get("value") for e in web.get("envVars", []) if "value" in e}
+    assert env.get("TRUSTED_PROXY_HOPS") == "1", "web must pin TRUSTED_PROXY_HOPS: \"1\" for Render's single proxy"
+    assert env.get("FORWARDED_ALLOW_IPS") != "*", "always-trust proxy headers let the client pick its address"
+    assert not re.search(r"--forwarded-allow-ips[=\"',\s]*\*", DOCKERFILE.read_text()), (
+        "Dockerfile CMD must not run uvicorn with --forwarded-allow-ips '*'"
+    )
+
+
 def test_worker_never_sees_clerk_or_stripe():
     """The worker reads no JWT and no webhook; a Clerk/Stripe value there
     is secret surface with no consumer (and, for the SDK-free Stripe

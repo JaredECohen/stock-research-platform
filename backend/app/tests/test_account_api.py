@@ -153,6 +153,57 @@ def test_bootstrap_requires_a_token(client, auth_on):
     assert client.post("/api/me/bootstrap").status_code == 401
 
 
+def test_bootstrap_ip_hash_is_the_forwarded_client_not_the_proxy(client, auth_on, monkeypatch):
+    """Behind Render the socket peer is the proxy; the abuse marker must
+    hash the address Render appended to X-Forwarded-For, and a prefix the
+    client adds must not change it (or every trial would hash unique)."""
+    import hashlib
+
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 1)
+    monkeypatch.setattr(settings, "abuse_hash_salt", "test-salt")
+    subs = [new_sub(), new_sub()]
+    client.post("/api/me/bootstrap", headers={
+        **bearer(auth_on.token(sub=subs[0], email=new_email())), "X-Forwarded-For": "203.0.113.5"})
+    client.post("/api/me/bootstrap", headers={
+        **bearer(auth_on.token(sub=subs[1], email=new_email())), "X-Forwarded-For": "10.1.1.1, 203.0.113.5"})
+    with SessionLocal() as db:
+        hashes = {u.bootstrap_ip_hash for u in db.query(User).filter(User.external_id.in_(subs))}
+    assert hashes == {hashlib.sha256(b"test-salt|203.0.113.5").hexdigest()}
+
+
+def test_abuse_report_counts_trials_per_ip_hash_and_429s(client, auth_on, monkeypatch):
+    """The numbers behind GET /api/admin/abuse-telemetry (route wired by
+    the admin router owner), exercised directly."""
+    import hashlib
+    import uuid
+
+    from app.auth import analytics
+    from app.auth.principal import Principal
+
+    salt = uuid.uuid4().hex  # unique hash per run on the shared sqlite file
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 1)
+    monkeypatch.setattr(settings, "abuse_hash_salt", salt)
+    for _ in range(2):
+        resp = client.post("/api/me/bootstrap", headers={
+            **bearer(auth_on.token(sub=new_sub(), email=new_email())), "X-Forwarded-For": "203.0.113.77"})
+        assert resp.json()["trial_started_now"] is True, resp.text
+    route = "/api/me/bootstrap-" + salt[:8]
+    with SessionLocal() as db:
+        assert analytics.track("rate_limit_hit", db=db, principal=Principal.anonymous(),
+                               props={"scope": "ip:bootstrap", "kind": "ip", "route": route, "method": "POST"})
+        report = analytics.abuse_report(db, hours=24)
+    expected = hashlib.sha256(f"{salt}|203.0.113.77".encode()).hexdigest()
+    row = next(r for r in report["trials_per_ip_hash"] if r["ip_hash"] == expected)
+    assert row["trials"] == 2
+    assert report["trials_started"] >= 2 and report["window_hours"] == 24
+    assert report["rate_limit_hits"]["by_scope"].get("ip:bootstrap", 0) >= 1
+    assert report["rate_limit_hits"]["by_route"].get(f"POST {route}") == 1
+    assert report["rate_limit_hits"]["by_plan"].get("anon", 0) >= 1
+    assert set(report) >= {"quota_hits", "api_requests_non_public", "api_requests_429", "share_429"}
+    assert 0.0 <= report["share_429"] <= 1.0
+    assert "203.0.113.77" not in str(report), "the report carries hashes, never addresses"
+
+
 # ---------------------------------------------------------------------------
 # /api/me/usage
 # ---------------------------------------------------------------------------
