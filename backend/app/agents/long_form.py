@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from ..schemas import AgentFinding
@@ -36,13 +36,13 @@ def _heading_for(agent_name: str, ticker: str) -> str:
     return f"## {agent_name} — {ticker} drill-down"
 
 
-def _bulleted(points: Optional[list]) -> str:
+def _bulleted(points: list | None) -> str:
     if not points:
         return ""
     return "\n".join(f"- {p}" for p in points)
 
 
-def _format_data_evidence(data: Dict[str, Any]) -> str:
+def _format_data_evidence(data: dict[str, Any]) -> str:
     """Pull a few of the most useful structured fields out of `finding.data`.
 
     Different agents stash different shapes — this is best-effort: if a
@@ -239,7 +239,7 @@ def _fmt_metric_value(key: str, value: Any) -> str:
 
 def deterministic_long_form(
     finding: AgentFinding, *, ticker: str, agent_name: str,
-    profile: Optional[Dict[str, Any]] = None,
+    profile: dict[str, Any] | None = None,
 ) -> str:
     """Compose markdown from the structured fields. Always succeeds; no LLM.
 
@@ -281,7 +281,7 @@ def deterministic_long_form(
 
 
 def _agent_intro(
-    agent_name: str, profile: Dict[str, Any], finding: AgentFinding,
+    agent_name: str, profile: dict[str, Any], finding: AgentFinding,
 ) -> str:
     """Per-agent context paragraph. Says what this lens cares about for
     *this specific company* — driver list, risk list, regime, etc."""
@@ -310,18 +310,18 @@ def _agent_intro(
         )
     if agent_name == "Filing Analyst":
         return (
-            f"What the SEC filing actually discloses. The lens pulls risk "
-            f"factors, MD&A highlights, segment + customer-concentration "
-            f"disclosures, and any legal/regulatory exposure. Cross-references "
-            f"against the thesis-relevant lines that would change a rating."
+            "What the SEC filing actually discloses. The lens pulls risk "
+            "factors, MD&A highlights, segment + customer-concentration "
+            "disclosures, and any legal/regulatory exposure. Cross-references "
+            "against the thesis-relevant lines that would change a rating."
         )
     if agent_name == "Valuation Analyst":
         return (
-            f"What's priced in vs. what isn't. The lens triangulates DCF "
-            f"(base/bull/bear scenarios) against trading multiples (P/E, EV/"
-            f"EBITDA, P/FCF, FCF yield) and prior-period history. Especially "
-            f"sensitive to: terminal-growth + WACC fragility, multiple "
-            f"compression risk, FCF cushion."
+            "What's priced in vs. what isn't. The lens triangulates DCF "
+            "(base/bull/bear scenarios) against trading multiples (P/E, EV/"
+            "EBITDA, P/FCF, FCF yield) and prior-period history. Especially "
+            "sensitive to: terminal-growth + WACC fragility, multiple "
+            "compression risk, FCF cushion."
         )
     if agent_name == "Comps Analyst":
         return (
@@ -348,10 +348,10 @@ def _agent_intro(
         )
     if agent_name == "Technical Analyst":
         return (
-            f"Positioning context — NOT a trade signal. The lens computes "
-            f"SMA 50/200, EMA 10/20, RSI(14), MACD(12/26/9), Bollinger Bands, "
-            f"VWMA, and 52-week placement. Frames the regime so the user "
-            f"knows where the chart sits relative to the fundamental thesis."
+            "Positioning context — NOT a trade signal. The lens computes "
+            "SMA 50/200, EMA 10/20, RSI(14), MACD(12/26/9), Bollinger Bands, "
+            "VWMA, and 52-week placement. Frames the regime so the user "
+            "knows where the chart sits relative to the fundamental thesis."
         )
     return (
         f"{agent_name}'s framework applied to {name}. Drivers in scope: "
@@ -360,7 +360,7 @@ def _agent_intro(
 
 
 def _what_would_change_view(
-    agent_name: str, profile: Dict[str, Any], finding: AgentFinding,
+    agent_name: str, profile: dict[str, Any], finding: AgentFinding,
 ) -> str:
     """Per-agent 'what to monitor' list — the falsifiable tests that
     could move the lens's read in either direction."""
@@ -422,7 +422,7 @@ def _what_would_change_view(
     return ""
 
 
-def _format_sources(sources: List[Any]) -> str:
+def _format_sources(sources: list[Any]) -> str:
     """Pretty-print the source list, dropping bare `key:` entries with no value."""
     if not sources:
         return ""
@@ -456,8 +456,8 @@ _ENRICH_PROMPT = (
 
 def _enriched_long_form(
     finding: AgentFinding, *, ticker: str, agent_name: str,
-    profile: Optional[Dict[str, Any]] = None,
-) -> Optional[str]:
+    profile: dict[str, Any] | None = None,
+) -> str | None:
     payload = {
         "ticker": ticker,
         "agent": agent_name,
@@ -488,7 +488,7 @@ def _enriched_long_form(
 
 def build_long_form_report(
     finding: AgentFinding, *, ticker: str, agent_name: str,
-    profile: Optional[Dict[str, Any]] = None,
+    profile: dict[str, Any] | None = None,
 ) -> str:
     """Public entrypoint. Always returns a markdown string.
 
@@ -510,9 +510,9 @@ def build_long_form_report(
 
 
 def attach_long_form(
-    finding: Optional[AgentFinding], *, ticker: str, agent_name: str,
-    profile: Optional[Dict[str, Any]] = None,
-) -> Optional[AgentFinding]:
+    finding: AgentFinding | None, *, ticker: str, agent_name: str,
+    profile: dict[str, Any] | None = None,
+) -> AgentFinding | None:
     """Mutate a finding's `long_form_report` in place and return it.
 
     No-ops on None so callers don't need to guard the optional

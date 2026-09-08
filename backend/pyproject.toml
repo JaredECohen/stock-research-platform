@@ -126,28 +126,12 @@ ignore = [
     "DTZ012",   # aware is a behavior change, not a lint fix.
     "B905",     # zip(strict=) raises on unequal lengths: a behavior change
     "B008",     # FastAPI `Query()` / `Depends()` call-in-default is the idiom
-    # --- temporary until RP-005 (the typing sweep, slice S5) -----------------
-    # These are the findings the mechanical `Dict -> dict` / `Optional -> |`
-    # rewrite (and the F401/I001 cleanup that follows it) removes. They are
-    # ignored rather than fixed here so this slice stays config-only and S5
-    # lands as one revertible commit. S5 deletes this whole block.
-    "UP006",    # `List[...]` -> `list[...]` (~2,400 sites)
-    "UP007",    # `Union[...]` -> `X | Y`
-    "UP045",    # `Optional[X]` -> `X | None`
-    "UP035",    # deprecated `typing` imports, gone once UP006/UP045 land
-    "UP037",    # quoted annotations under `from __future__ import annotations`
-    "UP038",    # `isinstance(x, (A, B))` -> `isinstance(x, A | B)`
-    "UP017",    # `timezone.utc` -> `datetime.UTC`
-    "I001",     # import ordering: one sweep after the typing rewrite
-    "F401",     # unused imports: mostly `Dict/List/Optional` that S5 removes
-    "F541",     # f-string without placeholders
-    "F841",     # unused local
-    "B904",     # `raise ... from err` inside `except`
-    "B007",     # unused loop variable
-    "E702",     # multiple statements on one line (semicolon)
+    # --- residue that a fix would not improve ------------------------------
+    "UP038",    # `isinstance(x, (A, B))` -> `isinstance(x, A | B)`: the rule is
+                # deprecated upstream (ruff 0.12 warns when it is named), the
+                # tuple form is the faster one, and 19 rewrites for no gain
+                # are not worth reviewing. Drop the ignore if ruff removes it.
     # --- temporary, owned by other slices ------------------------------------
-    "UP033",    # `lru_cache(maxsize=None)` -> `cache` in app/prompts/__init__.py
-    "UP034",    # extraneous parentheses in agents/graph.py (S1/S3 own the file)
     "B039",     # mutable ContextVar default in agents/llm.py (Phase 2 owns llm.py)
 ]
 

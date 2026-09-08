@@ -21,7 +21,7 @@ every 30 minutes burns FMP rate-limit budget for no signal. Daily at
 from __future__ import annotations
 
 import logging
-from typing import Iterable, List, Optional, Set
+from collections.abc import Iterable
 
 from ..cache import cache_get, cache_put
 from ..monitoring import record_run
@@ -31,14 +31,14 @@ from ..services.transcripts_service import get_transcripts
 log = logging.getLogger(__name__)
 
 
-def _seen_periods(ticker: str) -> Set[str]:
+def _seen_periods(ticker: str) -> set[str]:
     snap = cache_get(ticker, "transcripts_seen_periods")
     if snap is None or not isinstance(snap.payload, dict):
         return set()
     return set(snap.payload.get("periods", []))
 
 
-def _save_seen_periods(ticker: str, periods: Set[str]) -> None:
+def _save_seen_periods(ticker: str, periods: set[str]) -> None:
     cache_put(
         ticker, "transcripts_seen_periods",
         payload={"periods": sorted(periods)},
@@ -47,7 +47,7 @@ def _save_seen_periods(ticker: str, periods: Set[str]) -> None:
     )
 
 
-def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
+def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     """Poll for new earnings transcripts once. Returns
     `[{ticker, new_periods, regenerated}]` events.
 
@@ -63,7 +63,7 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
         ds = get_data_service()
         tickers = ds.list_tickers()
 
-    events: List[dict] = []
+    events: list[dict] = []
     for t in tickers:
         try:
             transcripts = get_transcripts(t) or []
@@ -73,7 +73,7 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
 
         # Period is the canonical key — providers return e.g.
         # "2025Q4". We track the set of periods seen per ticker.
-        periods: Set[str] = set()
+        periods: set[str] = set()
         for tr in transcripts:
             p = tr.get("period") or tr.get("date") or ""
             if isinstance(p, str) and p:

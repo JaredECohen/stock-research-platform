@@ -35,7 +35,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from .database import init_db, session_scope
 from .models import Company, ScreenerScore
@@ -54,21 +54,21 @@ class UniverseFile:
     live. `path` is None when neither sp500.json nor sp100.json exists.
     """
 
-    path: Optional[Path]
-    tickers: List[str] = field(default_factory=list)
-    auto_update: List[str] = field(default_factory=list)
-    as_of: Optional[str] = None
-    last_reviewed: Optional[str] = None
-    review_source: Optional[str] = None
-    review_cadence_days: Optional[int] = None
-    status: Optional[str] = None
+    path: Path | None
+    tickers: list[str] = field(default_factory=list)
+    auto_update: list[str] = field(default_factory=list)
+    as_of: str | None = None
+    last_reviewed: str | None = None
+    review_source: str | None = None
+    review_cadence_days: int | None = None
+    status: str | None = None
 
     @property
     def legacy_fallback(self) -> bool:
         return self.path is not None and self.path.name == "sp100.json"
 
 
-def load_universe_file(path: Optional[Path] = None) -> UniverseFile:
+def load_universe_file(path: Path | None = None) -> UniverseFile:
     """Parse sp500.json (or the sp100.json fallback) without side effects.
 
     Falls back to sp100.json when sp500.json is missing so a stale
@@ -86,7 +86,7 @@ def load_universe_file(path: Optional[Path] = None) -> UniverseFile:
         path = sp500_path if sp500_path.exists() else sp100_path
     if not path.exists():
         return UniverseFile(path=None)
-    cfg: Dict[str, Any] = json.loads(path.read_text())
+    cfg: dict[str, Any] = json.loads(path.read_text())
     universe = [t.upper() for t in (cfg.get("tickers") or [])]
     # auto-update list — explicit top-N override. Empty list means "no
     # tickers pinned to auto-update", and gating falls back to the
@@ -107,7 +107,7 @@ def load_universe_file(path: Optional[Path] = None) -> UniverseFile:
     )
 
 
-def _load_universe() -> tuple[List[str], List[str]]:
+def _load_universe() -> tuple[list[str], list[str]]:
     """Load (universe_tickers, auto_update_tickers) from the universe file.
 
     Thin tuple view over `load_universe_file` kept for the seeder and the
@@ -122,7 +122,7 @@ def _load_universe() -> tuple[List[str], List[str]]:
     return uf.tickers, uf.auto_update
 
 
-def _profile_to_company_kwargs(profile: Dict, ticker: str) -> Dict:
+def _profile_to_company_kwargs(profile: dict, ticker: str) -> dict:
     """Map the data_service profile shape onto Company columns."""
     return dict(
         company_name=profile.get("company_name") or ticker,
@@ -145,7 +145,7 @@ def _profile_to_company_kwargs(profile: Dict, ticker: str) -> Dict:
     )
 
 
-def seed_universe(refresh: bool = False) -> Dict[str, int]:
+def seed_universe(refresh: bool = False) -> dict[str, int]:
     """Upsert the curated universe (S&P 500 + extensions) from the live provider chain.
 
     Behavior:
@@ -167,13 +167,13 @@ def seed_universe(refresh: bool = False) -> Dict[str, int]:
                 "missing_profile": 0, "auto_analysis": 0, "total_in_db": 0}
 
     ds = get_data_service()
-    universe_set: Set[str] = set(tickers)
-    auto_update_set: Set[str] = set(auto_update_tickers)
+    universe_set: set[str] = set(tickers)
+    auto_update_set: set[str] = set(auto_update_tickers)
     inserted = refreshed = skipped = missing = 0
 
     with session_scope() as db:
         for ticker in tickers:
-            existing: Optional[Company] = db.get(Company, ticker)
+            existing: Company | None = db.get(Company, ticker)
             wants_auto_update = ticker in auto_update_set
             if existing and not refresh:
                 # Warm start — leave row alone, just ensure tier is right
@@ -249,7 +249,7 @@ def seed_universe(refresh: bool = False) -> Dict[str, int]:
     }
 
 
-def ensure_company_in_universe(ticker: str) -> Optional[Dict]:
+def ensure_company_in_universe(ticker: str) -> dict | None:
     """Lazy-introduce a ticker that isn't in the curated universe.
 
     Used by the research route when the user submits an arbitrary
@@ -269,7 +269,7 @@ def ensure_company_in_universe(ticker: str) -> Optional[Dict]:
     """
     ticker = ticker.upper()
     with session_scope() as db:
-        existing: Optional[Company] = db.get(Company, ticker)
+        existing: Company | None = db.get(Company, ticker)
         if existing is not None:
             return _profile_to_company_kwargs(
                 {

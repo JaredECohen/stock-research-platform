@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from ..schemas import AgentFinding, RiskItem, RiskRecommendation
@@ -13,12 +13,12 @@ log = logging.getLogger(__name__)
 
 
 def _build_recommendations(
-    profile: Dict, ratios: Dict, dcf_summary: Optional[str],
-) -> List[RiskRecommendation]:
+    profile: dict, ratios: dict, dcf_summary: str | None,
+) -> list[RiskRecommendation]:
     """Wave 8H — concrete, actionable recs the graph deterministically
     applies. Each rec ties an observable signal to a specific change in
     the final memo."""
-    recs: List[RiskRecommendation] = []
+    recs: list[RiskRecommendation] = []
     risks = profile.get("risks") or []
     debt_to_eb = ratios.get("debt_to_ebitda")
     ev_ebitda = ratios.get("EV_EBITDA") or 0
@@ -93,11 +93,11 @@ def _build_recommendations(
 
 
 def run_risk_agent(
-    profile: Dict, ratios: Dict, dcf_summary: Optional[str] = None,
-    *, prior_round_critique: Optional[str] = None,
+    profile: dict, ratios: dict, dcf_summary: str | None = None,
+    *, prior_round_critique: str | None = None,
 ) -> AgentFinding:
-    risks: List[str] = profile.get("risks") or []
-    summary_lines: List[str] = []
+    risks: list[str] = profile.get("risks") or []
+    summary_lines: list[str] = []
 
     debt_to_eb = ratios.get("debt_to_ebitda")
     if debt_to_eb and debt_to_eb > 3.5:
@@ -130,7 +130,7 @@ def run_risk_agent(
     notes_block = build_notes_block_for_agent(
         "risk", profile, extra_query="thesis breakers downside survivable",
     )
-    finding_data: Dict[str, Any] = {
+    finding_data: dict[str, Any] = {
         "recommendations": [r.model_dump() for r in recommendations],
     }
     if notes_block:
@@ -190,7 +190,7 @@ def run_risk_agent(
     # Wave 10 — typed citations for the structural risks + ratio
     # signals the agent is grounding its read on.
     from ..schemas import Citation
-    evidence: List[Citation] = []
+    evidence: list[Citation] = []
     for r in (profile.get("risks") or [])[:4]:
         evidence.append(Citation(
             kind="other", ref="profile.risks", excerpt=str(r)[:300],
@@ -263,7 +263,7 @@ def run_risk_agent(
 
 
 def _refire_fell_through(
-    finding: AgentFinding, ticker: str, exc: Optional[BaseException],
+    finding: AgentFinding, ticker: str, exc: BaseException | None,
 ) -> None:
     """(b) RP-001: the PM asked a follow-up and got the round-0 text back.
 
@@ -302,6 +302,6 @@ def risk_item_from_text(text: str) -> RiskItem:
     return RiskItem(title=text[:80], detail=text, severity=sev, type=type_)
 
 
-def derive_risk_items(profile: Dict) -> List[RiskItem]:
+def derive_risk_items(profile: dict) -> list[RiskItem]:
     risks = profile.get("risks") or []
     return [risk_item_from_text(r) for r in risks[:6]]

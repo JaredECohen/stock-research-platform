@@ -17,7 +17,7 @@ Covers:
 """
 from __future__ import annotations
 
-from datetime import date as _date, datetime, timedelta
+from datetime import datetime
 from unittest.mock import patch
 
 from app.agents import news_impact_agent

@@ -19,16 +19,15 @@ can unconditionally concatenate.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
 
 def build_pm_context(
     *,
-    ticker: Optional[str] = None,
-    sector: Optional[str] = None,
-    profile: Optional[dict] = None,
+    ticker: str | None = None,
+    sector: str | None = None,
+    profile: dict | None = None,
     max_chars_each: int = 3000,
 ) -> str:
     """Render the markdown context the PM should read.
@@ -93,7 +92,10 @@ def build_pm_context(
     # ("you've been wrong in recessions; be more cautious").
     try:
         from ..services.mispricing_audit import (
-            latest_pattern_observation, prompt_fragment as _audit_fragment,
+            latest_pattern_observation,
+        )
+        from ..services.mispricing_audit import (
+            prompt_fragment as _audit_fragment,
         )
         obs = latest_pattern_observation(max_age_days=14)
         if obs and obs.strip():
@@ -126,9 +128,9 @@ def build_pm_context(
         log.debug("specialist reliability read failed: %s", exc)
 
     try:
-        from ..services.calibration_service import regime_conditional_accuracy
         # Only inject when there's a current regime tag worth conditioning on.
         from ..cache import cache_get
+        from ..services.calibration_service import regime_conditional_accuracy
         broadcast = cache_get("macro:global", "macro_broadcast")
         current_regime = (
             (broadcast.payload or {}).get("regime")

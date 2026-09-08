@@ -16,8 +16,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 
 def test_live_marker_is_registered():
     """The `live` marker must be in the registered set so unrecognized-

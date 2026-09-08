@@ -31,7 +31,7 @@ reliability" block in the PM's prompt context. Read-only against
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select
 
@@ -60,7 +60,7 @@ def _alignment(influence: float, rating: str, verdict: str) -> int:
     return -1 if pulled_with_rating else +1  # verdict == "wrong"
 
 
-def specialist_reliability(*, lookback: int = 30) -> Dict[str, Any]:
+def specialist_reliability(*, lookback: int = 30) -> dict[str, Any]:
     """Compute per-specialist reliability over the last `lookback`
     postmortemmed memos. Returns:
         {
@@ -68,7 +68,7 @@ def specialist_reliability(*, lookback: int = 30) -> Dict[str, Any]:
           per_agent: { agent: { reliability: -1..1, n_evaluated: int } },
         }
     """
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     with SessionLocal() as db:
         pm_rows = db.execute(
             select(MemoPostmortem)
@@ -97,7 +97,7 @@ def specialist_reliability(*, lookback: int = 30) -> Dict[str, Any]:
                 "influence": influence,
             })
 
-    aggregate: Dict[str, List[int]] = {}
+    aggregate: dict[str, list[int]] = {}
     for row in rows:
         for agent, pull in (row["influence"] or {}).items():
             if not isinstance(pull, (int, float)):
@@ -105,7 +105,7 @@ def specialist_reliability(*, lookback: int = 30) -> Dict[str, Any]:
             score = _alignment(float(pull), row["rating"], row["verdict"])
             aggregate.setdefault(agent, []).append(score)
 
-    per_agent: Dict[str, Dict[str, Any]] = {}
+    per_agent: dict[str, dict[str, Any]] = {}
     for agent, scores in aggregate.items():
         if not scores:
             continue
@@ -128,7 +128,7 @@ def reliability_prompt_block(*, lookback: int = 30, threshold: float = -0.2) -> 
     stats = specialist_reliability(lookback=lookback)
     if stats.get("n", 0) < 5:
         return ""
-    flagged: List[Dict[str, Any]] = []
+    flagged: list[dict[str, Any]] = []
     for agent, payload in stats.get("per_agent", {}).items():
         if payload.get("reliability", 1.0) <= threshold and payload.get("n_evaluated", 0) >= 3:
             flagged.append({"agent": agent, **payload})

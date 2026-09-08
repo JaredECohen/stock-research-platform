@@ -26,9 +26,10 @@ from __future__ import annotations
 
 import contextvars
 import logging
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, List, Optional, TypeVar
+from typing import Any, TypeVar
 
 from ..schemas import AgentFinding, CriticReview
 from .log_safety import redact
@@ -52,7 +53,7 @@ T = TypeVar("T")
 # in `finally`, so a run can never inherit a stale log. Nothing crosses the
 # web/worker process boundary here — a memo run is single-process end to
 # end — so this does not belong in the database (see CLAUDE.md).
-_ACTIVE_LOG: contextvars.ContextVar[Optional["DegradationLog"]] = contextvars.ContextVar(
+_ACTIVE_LOG: contextvars.ContextVar[DegradationLog | None] = contextvars.ContextVar(
     "degradation_log", default=None,
 )
 
@@ -60,10 +61,10 @@ _ACTIVE_LOG: contextvars.ContextVar[Optional["DegradationLog"]] = contextvars.Co
 @dataclass
 class DegradationLog:
     """Accumulator passed through `run_stock_memo` so failed agents surface."""
-    failures: List[dict] = field(default_factory=list)
+    failures: list[dict] = field(default_factory=list)
 
     @contextmanager
-    def activate(self) -> Iterator["DegradationLog"]:
+    def activate(self) -> Iterator[DegradationLog]:
         """Make this log the target of `note_soft` for the enclosed block.
 
         `run_stock_memo` wraps the whole memo run in it so service code that
@@ -105,10 +106,10 @@ class DegradationLog:
             "message": reason[:300],
         })
 
-    def degraded_agents(self) -> List[str]:
+    def degraded_agents(self) -> list[str]:
         return [f["agent"] for f in self.failures]
 
-    def events(self) -> List[dict]:
+    def events(self) -> list[dict]:
         """Copy of the failure records for `StockMemoOut.degradation_events`.
 
         Same `{agent, error_type, message}` shape as `failures`, copied so
@@ -118,7 +119,7 @@ class DegradationLog:
         return [dict(f) for f in self.failures]
 
 
-def active_log() -> Optional[DegradationLog]:
+def active_log() -> DegradationLog | None:
     """The DegradationLog of the memo run active in this context, or None."""
     return _ACTIVE_LOG.get()
 
@@ -159,7 +160,7 @@ def safe_finding(
     agent: str,
     fn: Callable[..., AgentFinding],
     *args: Any,
-    log_to: Optional[DegradationLog] = None,
+    log_to: DegradationLog | None = None,
     **kwargs: Any,
 ) -> AgentFinding:
     """Call an agent runner and convert any exception into a fallback finding.
@@ -183,7 +184,7 @@ def safe_call(
     *args: Any,
     fallback: T,
     name: str = "",
-    log_to: Optional[DegradationLog] = None,
+    log_to: DegradationLog | None = None,
     **kwargs: Any,
 ) -> T:
     """Generic safe wrapper for non-AgentFinding helpers (DCF, comps, etc.).
@@ -201,11 +202,11 @@ def safe_call(
 
 
 def safe_critic(
-    fn: Callable[..., Optional[CriticReview]],
+    fn: Callable[..., CriticReview | None],
     *args: Any,
-    log_to: Optional[DegradationLog] = None,
+    log_to: DegradationLog | None = None,
     **kwargs: Any,
-) -> Optional[CriticReview]:
+) -> CriticReview | None:
     """Critic-specific safe wrapper.
 
     The critic is allowed to legitimately return None (when disabled by

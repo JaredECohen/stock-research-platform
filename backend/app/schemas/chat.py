@@ -6,7 +6,7 @@ why the referenced classes must be imported here rather than re-exported).
 """
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -26,7 +26,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    history: List[ChatMessage] = Field(default_factory=list)
+    history: list[ChatMessage] = Field(default_factory=list)
 
 
 class AgentTrace(BaseModel):
@@ -38,14 +38,14 @@ class AgentTrace(BaseModel):
 class ChatResponse(BaseModel):
     intent: IntentType
     answer: str
-    agent_trace: List[AgentTrace] = Field(default_factory=list)
-    memo: Optional[StockMemoOut] = None
-    portfolio: Optional[ModelPortfolio] = None
-    macro: Optional[MacroScenarioResult] = None
-    dcf: Optional[DCFResult] = None
-    comps: Optional[CompsResult] = None
-    screener: Optional[ScreenerResult] = None
-    sources: List[str] = Field(default_factory=list)
+    agent_trace: list[AgentTrace] = Field(default_factory=list)
+    memo: StockMemoOut | None = None
+    portfolio: ModelPortfolio | None = None
+    macro: MacroScenarioResult | None = None
+    dcf: DCFResult | None = None
+    comps: CompsResult | None = None
+    screener: ScreenerResult | None = None
+    sources: list[str] = Field(default_factory=list)
     disclaimer: str = (
         "MarketMosaic is for research and education only and does not provide personalized financial advice."
     )

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from ..schemas import NewsAlert, StockMemoOut
@@ -66,7 +66,7 @@ _PROMPT = (
 MAX_CONFIDENCE_DELTA = 15
 
 
-def _clamp_patch(memo: StockMemoOut, patch: Dict[str, Any]) -> Dict[str, Any]:
+def _clamp_patch(memo: StockMemoOut, patch: dict[str, Any]) -> dict[str, Any]:
     """Apply hard rules to the LLM-proposed patch:
     - confidence_score change capped to ±MAX_CONFIDENCE_DELTA.
     - rating_label must be one of the allowed labels.
@@ -79,7 +79,7 @@ def _clamp_patch(memo: StockMemoOut, patch: Dict[str, Any]) -> Dict[str, Any]:
     allowed_ratings = {
         "Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish",
     }
-    cleaned: Dict[str, Any] = {}
+    cleaned: dict[str, Any] = {}
     for k, v in (patch or {}).items():
         if k not in allowed_fields:
             continue
@@ -105,7 +105,7 @@ def _clamp_patch(memo: StockMemoOut, patch: Dict[str, Any]) -> Dict[str, Any]:
 
 def assess(
     memo: StockMemoOut, alert: NewsAlert,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run the news-impact agent. Returns a structured assessment dict
     with `material` (bool), `patch` (dict), `rationales` (dict),
     `delta_summary` (str).
@@ -181,7 +181,7 @@ def assess(
 
 
 def apply_patch(
-    memo: StockMemoOut, patch: Dict[str, Any],
+    memo: StockMemoOut, patch: dict[str, Any],
 ) -> StockMemoOut:
     """Return a new memo with `patch` applied.
 

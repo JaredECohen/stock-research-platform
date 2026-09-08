@@ -12,7 +12,7 @@ service can fall through to the next provider in the chain.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -24,7 +24,7 @@ BASE_URL = "https://financialmodelingprep.com/stable"
 TIMEOUT = 10.0
 
 
-def _to_float(v: Any) -> Optional[float]:
+def _to_float(v: Any) -> float | None:
     if v in (None, "None", "", "-"):
         return None
     try:
@@ -51,7 +51,7 @@ class FMPProvider:
             ],
         )
 
-    def _get(self, path: str, **params: Any) -> Optional[Any]:
+    def _get(self, path: str, **params: Any) -> Any | None:
         if not self.api_key:
             return None
         try:
@@ -71,7 +71,7 @@ class FMPProvider:
     # Profile
     # ------------------------------------------------------------------
 
-    def get_sp500_constituents(self) -> Optional[List[str]]:
+    def get_sp500_constituents(self) -> list[str] | None:
         """`/stable/sp500-constituent` — current S&P 500 ticker list.
 
         Used by the universe seeder + `scripts/refresh_universe_lists.py`
@@ -81,7 +81,7 @@ class FMPProvider:
         data = self._get("/sp500-constituent")
         if not isinstance(data, list):
             return None
-        tickers: List[str] = []
+        tickers: list[str] = []
         for row in data:
             if isinstance(row, dict):
                 sym = row.get("symbol") or row.get("ticker")
@@ -91,7 +91,7 @@ class FMPProvider:
                 tickers.append(sym.upper())
         return tickers or None
 
-    def get_company_profile(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_company_profile(self, ticker: str) -> dict[str, Any] | None:
         """`/stable/profile?symbol=…`. Includes sector / industry / CIK /
         market cap / beta / price / description. Shares outstanding lives
         on a separate endpoint; pulled inline so consumers get one payload."""
@@ -103,7 +103,7 @@ class FMPProvider:
             return None
         # Shares outstanding moved out of /profile in /stable/. Best-effort
         # follow-up call; failure leaves the field None.
-        shares: Optional[float] = None
+        shares: float | None = None
         sf = self._get("/shares-float", symbol=ticker.upper())
         if isinstance(sf, list) and sf:
             shares = _to_float(sf[0].get("outstandingShares"))
@@ -131,7 +131,7 @@ class FMPProvider:
     # Prices
     # ------------------------------------------------------------------
 
-    def get_quote(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_quote(self, ticker: str) -> dict[str, Any] | None:
         """`/stable/quote?symbol=…` — near-real-time intraday price.
 
         FMP returns ~15-min-delayed prices on Starter, real-time on
@@ -155,7 +155,7 @@ class FMPProvider:
             timestamp=item.get("timestamp"),
         )
 
-    def get_price_history(self, ticker: str, days: int = 252) -> Optional[List[Dict[str, Any]]]:
+    def get_price_history(self, ticker: str, days: int = 252) -> list[dict[str, Any]] | None:
         """`/stable/historical-price-eod/full?symbol=…`. Returns OHLCV bars
         most-recent first; reversed to oldest-first to match the demo /
         downstream expectation."""
@@ -184,7 +184,7 @@ class FMPProvider:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _period_label(date_str: str, period: Optional[str]) -> str:
+    def _period_label(date_str: str, period: str | None) -> str:
         """Map (`fiscalDateEnding`, `period`) to a `2024Q4` / `FY2024` label."""
         if not date_str:
             return ""
@@ -202,7 +202,7 @@ class FMPProvider:
             return date_str[:4]
 
     @classmethod
-    def _income_row(cls, r: Dict[str, Any]) -> Dict[str, Any]:
+    def _income_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         date_str = r.get("date") or ""
         return dict(
             period=cls._period_label(date_str, r.get("period")),
@@ -225,7 +225,7 @@ class FMPProvider:
         )
 
     @classmethod
-    def _balance_row(cls, r: Dict[str, Any]) -> Dict[str, Any]:
+    def _balance_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         date_str = r.get("date") or ""
         st_debt = _to_float(r.get("shortTermDebt")) or 0
         lt_debt = _to_float(r.get("longTermDebt")) or 0
@@ -248,7 +248,7 @@ class FMPProvider:
         )
 
     @classmethod
-    def _cash_row(cls, r: Dict[str, Any]) -> Dict[str, Any]:
+    def _cash_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         date_str = r.get("date") or ""
         return dict(
             period=cls._period_label(date_str, r.get("period")),
@@ -263,14 +263,14 @@ class FMPProvider:
             stock_based_compensation=_to_float(r.get("stockBasedCompensation")),
         )
 
-    def get_financial_statements(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_financial_statements(self, ticker: str) -> dict[str, Any] | None:
         """`/stable/income-statement` + `/balance-sheet-statement` +
         `/cash-flow-statement`, all keyed by `?symbol=`. Period defaults
         to `annual` on /stable/; pass `period=quarter` for Q-by-Q."""
         # FMP answers some failures with HTTP 200 and a JSON *object*
         # ({"Error Message": ...}); iterating that as rows raised out of the
         # provider chain. Anything that is not a list of rows is "no data".
-        def _rows(path: str) -> List[Dict[str, Any]]:
+        def _rows(path: str) -> list[dict[str, Any]]:
             payload = self._get(path, symbol=ticker.upper(), limit=8)
             if not isinstance(payload, list):
                 return []
@@ -291,7 +291,7 @@ class FMPProvider:
     # Ratios + key metrics (price-derived; recomputed daily by FMP)
     # ------------------------------------------------------------------
 
-    def get_ratios(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_ratios(self, ticker: str) -> dict[str, Any] | None:
         """`/stable/ratios?symbol=…`. Field names changed in /stable/ —
         `priceEarningsRatio` → `priceToEarningsRatio`, etc. We expose the
         same vocabulary the demo / downstream callers used (`PE`,
@@ -320,7 +320,7 @@ class FMPProvider:
             dividend_yield=_to_float(r.get("dividendYield")),
         )
 
-    def get_key_metrics(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_key_metrics(self, ticker: str) -> dict[str, Any] | None:
         data = self._get("/key-metrics", symbol=ticker.upper(), limit=1)
         if not isinstance(data, list) or not data:
             return None
@@ -330,13 +330,13 @@ class FMPProvider:
     # Earnings + estimates
     # ------------------------------------------------------------------
 
-    def get_earnings(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_earnings(self, ticker: str) -> dict[str, Any] | None:
         """`/stable/earnings?symbol=…` returns past + future quarters in one
         list. Past rows have `epsActual` set; future rows leave it null."""
         data = self._get("/earnings", symbol=ticker.upper(), limit=12)
         if not isinstance(data, list) or not data:
             return None
-        quarters: List[Dict[str, Any]] = []
+        quarters: list[dict[str, Any]] = []
         for q in data:
             actual = _to_float(q.get("epsActual"))
             estimate = _to_float(q.get("epsEstimated"))
@@ -358,7 +358,7 @@ class FMPProvider:
             return None
         return dict(quarters=quarters)
 
-    def get_estimates(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_estimates(self, ticker: str) -> dict[str, Any] | None:
         """`/stable/analyst-estimates?symbol=…&period=annual` — sell-side
         consensus for the next few fiscal years (revenue + EPS Avg/Low/High
         + analyst counts). Plus `/price-target-consensus` for target-price
@@ -378,10 +378,10 @@ class FMPProvider:
         # FMP returns most-recent-first; flip to chronological so YoY
         # deltas land in order downstream.
         ascending = list(reversed(data))
-        years: List[Dict[str, Any]] = []
-        revenue_rows: List[Dict[str, Any]] = []
-        revenue_growth: List[float] = []
-        prev_rev: Optional[float] = None
+        years: list[dict[str, Any]] = []
+        revenue_rows: list[dict[str, Any]] = []
+        revenue_growth: list[float] = []
+        prev_rev: float | None = None
         for r in ascending:
             period = r.get("date") or ""
             rev_avg = _to_float(r.get("revenueAvg"))
@@ -424,7 +424,7 @@ class FMPProvider:
     # News
     # ------------------------------------------------------------------
 
-    def get_news(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
+    def get_news(self, ticker: str) -> list[dict[str, Any]] | None:
         """`/stable/news/stock?symbols=…`."""
         data = self._get("/news/stock", symbols=ticker.upper(), limit=20)
         if not isinstance(data, list) or not data:
@@ -448,14 +448,14 @@ class FMPProvider:
     # BaseProvider stubs we don't implement on FMP
     # ------------------------------------------------------------------
 
-    def get_earnings_transcripts(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
+    def get_earnings_transcripts(self, ticker: str) -> list[dict[str, Any]] | None:
         return None
 
-    def get_filings(self, ticker: str, *, cik: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    def get_filings(self, ticker: str, *, cik: str | None = None) -> list[dict[str, Any]] | None:
         return None
 
-    def get_macro_series(self, series_id: str) -> Optional[Dict[str, Any]]:
+    def get_macro_series(self, series_id: str) -> dict[str, Any] | None:
         return None
 
-    def list_tickers(self) -> List[str]:
+    def list_tickers(self) -> list[str]:
         return []

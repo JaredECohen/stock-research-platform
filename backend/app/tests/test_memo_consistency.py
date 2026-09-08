@@ -24,7 +24,6 @@ from app.agents.valuation_agent import run_valuation_agent
 from app.schemas import AgentFinding, BullBearCase, DCFResult
 from app.services.valuation_service import build_comps, build_dcf
 
-
 # ---------------------------------------------------------------------------
 # B2 — one DCF number everywhere
 # ---------------------------------------------------------------------------

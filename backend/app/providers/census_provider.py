@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -50,7 +50,7 @@ class CensusProvider:
             capabilities=["macro", "retail", "construction"],
         )
 
-    def get_macro_series(self, series_id: str) -> Optional[Dict[str, Any]]:
+    def get_macro_series(self, series_id: str) -> dict[str, Any] | None:
         if not series_id:
             return None
         sid = series_id.upper().strip()
@@ -67,7 +67,7 @@ class CensusProvider:
     # MARTS — Monthly Advance Retail Trade Survey
     # ------------------------------------------------------------------
 
-    def _fetch_marts(self, *, naics: str, series_id: str) -> Optional[Dict[str, Any]]:
+    def _fetch_marts(self, *, naics: str, series_id: str) -> dict[str, Any] | None:
         params = {
             "get": "cell_value,data_type_code,time_slot_id,error_data,category_code",
             "for": "us:*",
@@ -94,7 +94,7 @@ class CensusProvider:
             time_idx = header.index("time")
         except ValueError:
             return None
-        points: List[Dict[str, Any]] = []
+        points: list[dict[str, Any]] = []
         for row in rows[1:]:
             value = _coerce_float(row[cell_idx]) if cell_idx < len(row) else None
             period = row[time_idx] if time_idx < len(row) else None
@@ -116,7 +116,7 @@ class CensusProvider:
 
     def _fetch_construction(
         self, *, category: str, series_id: str, residential: bool,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         params = {
             "get": "cell_value,data_type_code,time_slot_id,error_data,category_code",
             "for": "us:*",
@@ -143,7 +143,7 @@ class CensusProvider:
             time_idx = header.index("time")
         except ValueError:
             return None
-        points: List[Dict[str, Any]] = []
+        points: list[dict[str, Any]] = []
         for row in rows[1:]:
             value = _coerce_float(row[cell_idx]) if cell_idx < len(row) else None
             period = row[time_idx] if time_idx < len(row) else None
@@ -177,8 +177,8 @@ class CensusProvider:
     def get_filings(self, ticker: str): return None
     def get_news(self, ticker: str): return None
     def get_estimates(self, ticker: str): return None
-    def list_tickers(self) -> List[str]: return []
-    def list_macro_series(self) -> List[Dict[str, Any]]:
+    def list_tickers(self) -> list[str]: return []
+    def list_macro_series(self) -> list[dict[str, Any]]:
         from ..data_catalog import SERIES_REGISTRY
         return [
             {"series_id": s.series_id, "name": s.name, "units": s.units, "points": []}
@@ -186,7 +186,7 @@ class CensusProvider:
         ]
 
 
-def _period_to_iso(period: str) -> Optional[str]:
+def _period_to_iso(period: str) -> str | None:
     """Convert Census EITS time labels to ISO dates.
 
     EITS publishes monthly periods as `YYYY-MM`. Returns the last day of
@@ -197,7 +197,8 @@ def _period_to_iso(period: str) -> Optional[str]:
     s = str(period).strip()
     if len(s) == 7 and s[4] == "-":
         try:
-            year = int(s[:4]); month = int(s[5:7])
+            year = int(s[:4])
+            month = int(s[5:7])
             # End-of-month so sort order matches other monthly series.
             if month == 12:
                 eom = date(year, 12, 31)
@@ -213,7 +214,7 @@ def _period_to_iso(period: str) -> Optional[str]:
     return None
 
 
-def _coerce_float(value: Any) -> Optional[float]:
+def _coerce_float(value: Any) -> float | None:
     if value in (None, "", ".", "X"):
         return None
     try:

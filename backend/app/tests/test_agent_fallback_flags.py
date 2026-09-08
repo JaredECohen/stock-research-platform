@@ -14,7 +14,7 @@ constructed and CI (no keys) stays deterministic and zero-cost.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import PropertyMock
 
 import pytest
@@ -62,11 +62,11 @@ def _blank_keys_guard():
 
 
 @pytest.fixture
-def llm_configured_but_empty(monkeypatch) -> List[str]:
+def llm_configured_but_empty(monkeypatch) -> list[str]:
     """`has_llm` on, every chat entry point returns nothing usable, every
     client factory forbidden. Returns the list of factories that were
     (wrongly) constructed so a test can assert it stayed empty."""
-    constructed: List[str] = []
+    constructed: list[str] = []
 
     def _forbid(name: str):
         def _factory(*args: Any, **kwargs: Any) -> None:
@@ -85,7 +85,7 @@ def llm_configured_but_empty(monkeypatch) -> List[str]:
     return constructed
 
 
-def _nvda_inputs() -> Dict[str, Any]:
+def _nvda_inputs() -> dict[str, Any]:
     fin = get_full_financials("NVDA")
     return {"profile": fin["profile"], "ratios": fin["ratios"], "earnings": fin["earnings"]}
 
@@ -290,7 +290,7 @@ def test_earnings_structured_parse_failure_is_flagged(monkeypatch, caplog):
 
 
 def test_earnings_second_pass_crash_is_flagged(llm_configured_but_empty, monkeypatch, caplog):
-    calls: List[int] = []
+    calls: list[int] = []
 
     def _first_call_raises(*args: Any, **kwargs: Any):
         calls.append(1)

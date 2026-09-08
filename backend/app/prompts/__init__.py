@@ -8,15 +8,14 @@ not in escaped triple-quotes.
 """
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
-from typing import Optional
 
 PROMPTS_DIR = Path(__file__).parent
 
 
-@lru_cache(maxsize=None)
-def load_prompt(name: str) -> Optional[str]:
+@cache
+def load_prompt(name: str) -> str | None:
     """Read `<name>.md` from this package.
 
     Returns None when the file is missing — caller falls back to its

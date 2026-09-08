@@ -3,7 +3,6 @@ history, filings, transcripts, vector chunks."""
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Optional
 
 from sqlalchemy import JSON, Date, DateTime, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -23,7 +22,7 @@ class CachedDocument(Base):
     title: Mapped[str] = mapped_column(String(512), default="")
     url: Mapped[str] = mapped_column(String(1024), default="")
     text: Mapped[str] = mapped_column(Text, default="")
-    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     extra: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
@@ -50,7 +49,7 @@ class ProviderCache(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     capability: Mapped[str] = mapped_column(String(32), index=True)
     key: Mapped[str] = mapped_column(String(128), index=True)
-    payload_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -82,12 +81,12 @@ class FinancialPeriod(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticker: Mapped[str] = mapped_column(String(16), index=True)
     period: Mapped[str] = mapped_column(String(16))
-    period_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
-    fiscal_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    fiscal_quarter: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    fiscal_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fiscal_quarter: Mapped[int | None] = mapped_column(Integer, nullable=True)
     statement: Mapped[str] = mapped_column(String(16), index=True)  # income | balance | cash
     line_item: Mapped[str] = mapped_column(String(64))
-    value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)
     currency: Mapped[str] = mapped_column(String(8), default="USD")
     source: Mapped[str] = mapped_column(String(32), default="demo")
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -115,8 +114,8 @@ class FilingDoc(Base):
     ticker: Mapped[str] = mapped_column(String(16), index=True)
     accession_number: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     filing_type: Mapped[str] = mapped_column(String(16), index=True)  # 10-K | 10-Q | 8-K
-    filing_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
-    period_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    filing_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
     raw_text: Mapped[str] = mapped_column(Text, default="")
     sections: Mapped[dict] = mapped_column(JSON, default=dict)
     word_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -136,9 +135,9 @@ class EarningsTranscript(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticker: Mapped[str] = mapped_column(String(16), index=True)
     period: Mapped[str] = mapped_column(String(16), index=True)
-    fiscal_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    fiscal_quarter: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    call_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    fiscal_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fiscal_quarter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    call_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     blocks: Mapped[list] = mapped_column(JSON, default=list)
     full_text: Mapped[str] = mapped_column(Text, default="")
     word_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -172,16 +171,16 @@ class DocChunk(Base):
     __tablename__ = "doc_chunks"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    ticker: Mapped[Optional[str]] = mapped_column(String(16), index=True, nullable=True)
+    ticker: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
     source_type: Mapped[str] = mapped_column(String(16), index=True)
-    source_id: Mapped[Optional[int]] = mapped_column(Integer, index=True, nullable=True)
-    section: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
-    period_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    source_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    section: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
     text: Mapped[str] = mapped_column(Text, default="")
     token_count: Mapped[int] = mapped_column(Integer, default=0)
-    embedding_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    embedding_dim: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    embedding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    embedding_dim: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

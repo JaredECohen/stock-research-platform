@@ -39,7 +39,7 @@ import threading
 import traceback
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select, update
 
@@ -69,7 +69,7 @@ def _ensure_table(db) -> None:
     RegenJob.__table__.create(bind=db.get_bind(), checkfirst=True)
 
 
-def _job_dict(job: RegenJob) -> Dict[str, Any]:
+def _job_dict(job: RegenJob) -> dict[str, Any]:
     """Detached snapshot of a job row, safe to use after the session closes."""
     return {
         "id": job.id,
@@ -95,7 +95,7 @@ def _job_dict(job: RegenJob) -> Dict[str, Any]:
 
 def enqueue(
     ticker: str, scenario: str = "soft_landing", *, source: str = "user",
-) -> tuple[Dict[str, Any], bool]:
+) -> tuple[dict[str, Any], bool]:
     """Queue a regen for `ticker`. Returns `(job, created)`.
 
     Coalesces: when a queued/running job already exists for the ticker,
@@ -136,7 +136,7 @@ def enqueue(
         return _job_dict(job), True
 
 
-def ticker_status(ticker: str) -> Dict[str, Any]:
+def ticker_status(ticker: str) -> dict[str, Any]:
     """Job-queue view of one ticker, shaped for `/analyze/status`.
 
     `last_failure` reproduces the old `_REGEN_FAILURES` payload (same
@@ -159,7 +159,7 @@ def ticker_status(ticker: str) -> Dict[str, Any]:
             .order_by(RegenJob.id.desc())
         ).scalars().first()
 
-        last_failure: Optional[Dict[str, Any]] = None
+        last_failure: dict[str, Any] | None = None
         if last_finished is not None and last_finished.status == "failed":
             duration = None
             if last_finished.started_at and last_finished.finished_at:
@@ -198,7 +198,7 @@ def ticker_status(ticker: str) -> Dict[str, Any]:
         }
 
 
-def _merged_progress(db, job: RegenJob) -> List[Dict[str, str]]:
+def _merged_progress(db, job: RegenJob) -> list[dict[str, str]]:
     """Worker waypoints + per-step checkpoint completions, time-ordered.
 
     The checkpoint rows are the real per-step telemetry (fundamentals,
@@ -207,7 +207,7 @@ def _merged_progress(db, job: RegenJob) -> List[Dict[str, str]]:
     fill in the edges those can't see (claimed, graph entered, persisted,
     exception).
     """
-    entries: List[Dict[str, str]] = [
+    entries: list[dict[str, str]] = [
         {"step": str(p.get("step", "")), "at": str(p.get("at", ""))}
         for p in (job.progress or [])
         if isinstance(p, dict)
@@ -227,7 +227,7 @@ def _merged_progress(db, job: RegenJob) -> List[Dict[str, str]]:
     return entries
 
 
-def recent_jobs(ticker: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+def recent_jobs(ticker: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
     """Newest-first job rows for the admin telemetry endpoint."""
     with SessionLocal() as db:
         _ensure_table(db)
@@ -257,7 +257,7 @@ def _append_progress(job_id: int, step: str) -> None:
         log.debug("progress append failed for job %d", job_id, exc_info=True)
 
 
-def recover_orphans() -> Dict[str, int]:
+def recover_orphans() -> dict[str, int]:
     """Startup pass over jobs the previous process left behind.
 
     - `running` rows mean the process died mid-regen (OOM kill bypasses
@@ -319,7 +319,7 @@ def recover_orphans() -> Dict[str, int]:
     return {"requeued": requeued, "failed": failed, "expired": expired}
 
 
-def claim_next_job() -> Optional[int]:
+def claim_next_job() -> int | None:
     """Atomically move the oldest queued job to `running`. Returns its id."""
     with SessionLocal() as db:
         _ensure_table(db)
@@ -340,7 +340,7 @@ def claim_next_job() -> Optional[int]:
         return job_id if res.rowcount else None
 
 
-def execute_job(job_id: int) -> Dict[str, Any]:
+def execute_job(job_id: int) -> dict[str, Any]:
     """Run one claimed job to completion and record the outcome.
 
     Catches BaseException (not just Exception) so asyncio cancellation
@@ -416,7 +416,7 @@ def execute_job(job_id: int) -> Dict[str, Any]:
         return _job_dict(job) if job is not None else {}
 
 
-def process_next_job() -> Optional[Dict[str, Any]]:
+def process_next_job() -> dict[str, Any] | None:
     """Claim + execute one queued job synchronously. Returns the finished
     job dict, or None when the queue is empty. This is the worker loop's
     body, exposed directly so tests (incl. the nightly smoke test) can
@@ -431,7 +431,7 @@ def process_next_job() -> Optional[Dict[str, Any]]:
 # Worker thread lifecycle
 # ---------------------------------------------------------------------------
 
-_worker_thread: Optional[threading.Thread] = None
+_worker_thread: threading.Thread | None = None
 _stop_event = threading.Event()
 
 

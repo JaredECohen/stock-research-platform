@@ -14,7 +14,6 @@ Covers:
 from __future__ import annotations
 
 from datetime import date, timedelta
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -228,8 +227,8 @@ def test_backtest_returns_fresh_memo_even_when_live_snapshot_exists():
 
 def test_backtest_skips_long_term_memory_write(tmp_path, monkeypatch):
     """A backtest run must not append to the company memory notebook."""
-    from app.config import settings
     from app.agents.graph import run_stock_memo
+    from app.config import settings
     from app.memory import longterm
 
     # Redirect the memory dir to a clean tmp path so we can assert on writes.
@@ -248,6 +247,7 @@ def test_backtest_skips_long_term_memory_write(tmp_path, monkeypatch):
 
 def test_run_stock_memo_rejects_future_as_of_date():
     import pytest
+
     from app.agents.graph import run_stock_memo
     future = date.today() + timedelta(days=30)
     with pytest.raises(ValueError, match="future"):

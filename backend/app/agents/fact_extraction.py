@@ -19,10 +19,9 @@ Two layers, mirroring the rest of the platform:
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from . import llm
@@ -42,7 +41,7 @@ def _filing_text(ticker: str, accession: str) -> str:
     rec = get_filing_text(ticker, accession)
     if not rec:
         return ""
-    parts: List[str] = []
+    parts: list[str] = []
     if rec.get("raw_text"):
         parts.append(str(rec["raw_text"]))
     sections = rec.get("sections") or {}
@@ -98,13 +97,13 @@ _SEGMENT_PATTERNS = (
 
 
 def _find_snippets(text: str, patterns: tuple[str, ...], *, max_hits: int = 5,
-                   max_len: int = 200) -> List[str]:
+                   max_len: int = 200) -> list[str]:
     """Return up to `max_hits` non-overlapping matches from `text`.
 
     Each hit is trimmed to `max_len` chars and includes a small window of
     surrounding context for downstream readability.
     """
-    out: List[str] = []
+    out: list[str] = []
     seen = set()
     for pat in patterns:
         for m in re.finditer(pat, text, flags=re.IGNORECASE):
@@ -122,7 +121,7 @@ def _find_snippets(text: str, patterns: tuple[str, ...], *, max_hits: int = 5,
     return out
 
 
-def deterministic_facts(text: str) -> Dict[str, List[str]]:
+def deterministic_facts(text: str) -> dict[str, list[str]]:
     """Regex-based fact pull. Returns `{kind: [snippet, ...]}`.
 
     Always returns a dict; empty lists when nothing matched. The key set
@@ -165,7 +164,7 @@ _FACT_PROMPT = (
 
 def _llm_enrich(
     text: str, *, ticker: str, kind: str, source_id: str,
-) -> Optional[Dict[str, List[str]]]:
+) -> dict[str, list[str]] | None:
     if not settings.has_llm:
         return None
     prompt = (
@@ -181,7 +180,7 @@ def _llm_enrich(
         return None
     if not isinstance(out, dict):
         return None
-    cleaned: Dict[str, List[str]] = {}
+    cleaned: dict[str, list[str]] = {}
     for k in ("segment_signals", "guidance_changes", "capex_commentary",
               "m_and_a", "leadership_changes"):
         v = out.get(k)
@@ -196,16 +195,16 @@ def _llm_enrich(
 # Public API
 # ---------------------------------------------------------------------------
 
-def _merge(deterministic: Dict[str, List[str]],
-           llm_out: Optional[Dict[str, List[str]]]) -> Dict[str, List[str]]:
+def _merge(deterministic: dict[str, list[str]],
+           llm_out: dict[str, list[str]] | None) -> dict[str, list[str]]:
     """Union deterministic + LLM hits per category, deduping by case-insensitive
     string. Cap each list at 8 entries so the structured block stays readable.
     """
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     keys = set(deterministic) | set(llm_out or {})
     for k in keys:
         seen_norm = set()
-        merged: List[str] = []
+        merged: list[str] = []
         for src in (deterministic.get(k, []), (llm_out or {}).get(k, [])):
             for s in src:
                 norm = re.sub(r"\s+", " ", s.lower()).strip()
@@ -218,7 +217,7 @@ def _merge(deterministic: Dict[str, List[str]],
     return out
 
 
-def extract_filing_facts(ticker: str, accession: str) -> Dict[str, Any]:
+def extract_filing_facts(ticker: str, accession: str) -> dict[str, Any]:
     """Run the deterministic + LLM extraction on a filing identified by accession."""
     text = _filing_text(ticker, accession)
     if not text.strip():
@@ -233,7 +232,7 @@ def extract_filing_facts(ticker: str, accession: str) -> Dict[str, Any]:
     }
 
 
-def extract_transcript_facts(ticker: str, period: str) -> Dict[str, Any]:
+def extract_transcript_facts(ticker: str, period: str) -> dict[str, Any]:
     """Run the deterministic + LLM extraction on a transcript identified by period."""
     text = _transcript_text(ticker, period)
     if not text.strip():
@@ -249,8 +248,8 @@ def extract_transcript_facts(ticker: str, period: str) -> Dict[str, Any]:
 
 
 def collect_structured_facts(
-    ticker: str, triggers: List[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+    ticker: str, triggers: list[dict[str, Any]],
+) -> dict[str, Any] | None:
     """For a memo's triggers, pull structured facts on every filing/transcript
     trigger and combine them into one dict suitable for `MemoryEntry.structured_facts`.
 
@@ -258,7 +257,7 @@ def collect_structured_facts(
     or every source returned empty). Caller should `safe_call` this to keep
     a flaky LLM call from blocking the memory write.
     """
-    pieces: List[Dict[str, Any]] = []
+    pieces: list[dict[str, Any]] = []
     for t in triggers or []:
         kind = t.get("kind")
         detail = t.get("detail") or t.get("label", "")

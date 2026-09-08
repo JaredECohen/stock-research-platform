@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from ..monitoring import KNOWN_LOOPS, _process_role, status_snapshot
@@ -34,7 +34,7 @@ router = APIRouter()
 @limiter.limit(LIMITS["seed_universe"])
 def seed_universe_endpoint(
     request: Request, response: Response, refresh: bool = False,
-) -> Dict:
+) -> dict:
     """Re-seed the curated screener universe (S&P 500 + curated extensions) from FMP.
 
     Upserts a `companies` row per ticker in `data/sp500.json` and tags it
@@ -56,8 +56,8 @@ def seed_universe_endpoint(
 def run_backfill_endpoint(
     request: Request,
     response: Response,
-    ticker: Optional[str] = Query(None, description="Single ticker; omit for full universe"),
-) -> Dict:
+    ticker: str | None = Query(None, description="Single ticker; omit for full universe"),
+) -> dict:
     """Trigger the heavy history backfill on demand.
 
     Synchronous — for the curated universe (S&P 500 + extensions) budget
@@ -75,16 +75,16 @@ def run_backfill_endpoint(
 
 
 @router.get("/api/admin/monitoring/status")
-def monitoring_status() -> Dict:
+def monitoring_status() -> dict:
     """Last-run timestamps + notes per registered monitoring loop."""
     return {"loops": status_snapshot()}
 
 
 @router.get("/api/admin/llm-metrics")
 def llm_metrics_endpoint(
-    run_id: Optional[str] = None,
+    run_id: str | None = None,
     since_days: int = Query(7, ge=1, le=365),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """LLM call audit endpoint (Wave 1A).
 
     With `run_id`: detailed per-call trace for one memo run.
@@ -103,10 +103,10 @@ def llm_metrics_endpoint(
 
 @router.get("/api/admin/sdk-traces")
 def list_sdk_traces(
-    ticker: Optional[str] = None,
-    surface: Optional[str] = Query(None, description="memo|chat"),
+    ticker: str | None = None,
+    surface: str | None = Query(None, description="memo|chat"),
     limit: int = Query(20, ge=1, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — list recent SDK exchange traces.
 
     Use this to spot-check whether the SDK is firing as expected and
@@ -141,7 +141,7 @@ def list_sdk_traces(
 
 
 @router.get("/api/admin/sdk-traces/{run_id}")
-def get_sdk_trace(run_id: str) -> Dict[str, Any]:
+def get_sdk_trace(run_id: str) -> dict[str, Any]:
     """Wave 10 — joined view: SDK exchange trace + the legacy graph's
     LLMCallLog rows for the same `run_id`.
 
@@ -186,9 +186,9 @@ def get_sdk_trace(run_id: str) -> Dict[str, Any]:
 @router.get("/api/admin/track-record")
 def track_record_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
-    ticker: Optional[str] = None,
-    sector: Optional[str] = None,
-) -> Dict[str, Any]:
+    ticker: str | None = None,
+    sector: str | None = None,
+) -> dict[str, Any]:
     """Wave 4A: aggregate realized-outcome stats over evaluated memos.
 
     Filters: `ticker` (single name), `sector`, `horizon_days` (which forward
@@ -200,7 +200,7 @@ def track_record_endpoint(
 
 
 @router.post("/api/admin/evaluate-outcomes")
-def evaluate_outcomes_now() -> Dict[str, Any]:
+def evaluate_outcomes_now() -> dict[str, Any]:
     """Manual trigger for the daily outcome loop. Useful in dev / for
     backfilling the table after deploys; production runs the scheduled
     job via APScheduler."""
@@ -214,7 +214,7 @@ def evaluate_outcomes_now() -> Dict[str, Any]:
 @router.get("/api/admin/calibration")
 def calibration_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — calibration plot data: per-rating realized excess
     return distribution. A well-calibrated PM has Strong-Buy realizations
     clearly higher than Buy realizations. Powers the upcoming
@@ -226,7 +226,7 @@ def calibration_endpoint(
 @router.get("/api/admin/per-agent-attribution")
 def per_agent_attribution_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — per-specialist attribution stats from `memo_postmortems`.
     Surfaces systematic strengths and weaknesses ('our valuation analyst
     consistently picks the right names; our macro is pulling the wrong
@@ -238,7 +238,7 @@ def per_agent_attribution_endpoint(
 @router.get("/api/admin/regime-accuracy")
 def regime_accuracy_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — accuracy bucketed by macro regime at memo creation.
     Catches regime-specific blind spots ('we're great in soft-landing
     regimes, terrible in recessions')."""
@@ -249,7 +249,7 @@ def regime_accuracy_endpoint(
 @router.get("/api/admin/calibration-summary")
 def calibration_summary_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — one-call aggregator returning calibration + per-agent
     + regime stats. Powers the upcoming track-record dashboard with a
     single fetch."""
@@ -261,7 +261,7 @@ def calibration_summary_endpoint(
 def run_postmortems_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
     limit: int = Query(25, ge=1, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — manual trigger for postmortem_loop; equivalent to
     running `python -m scripts.postmortem_backfill`. Useful for
     seeding the system or recovering after a cron outage."""
@@ -270,7 +270,7 @@ def run_postmortems_endpoint(
 
 
 @router.get("/api/admin/cron-health")
-def cron_health_endpoint() -> Dict[str, Any]:
+def cron_health_endpoint() -> dict[str, Any]:
     """Wave 10 — aggregated cron health.
 
     Returns each registered loop's last-run timestamp + freshness flag.
@@ -289,7 +289,7 @@ def cron_health_endpoint() -> Dict[str, Any]:
     # loops it has heard nothing from.
     for name in KNOWN_LOOPS:
         snap.setdefault(name, {"last_run_at": None, "success": None, "note": "never run"})
-    out_loops: List[Dict[str, Any]] = []
+    out_loops: list[dict[str, Any]] = []
     now = datetime.utcnow()
     weekly_loops = {"weekly_digest_loop", "sector_digest_loop"}
     monthly_loops = {"theme_exposure_loop"}
@@ -344,7 +344,7 @@ def universe_review_endpoint(
         description="Also diff data/sp500.json against the live FMP constituent "
                     "list. Read-only; needs FMP_API_KEY and ENABLE_LIVE_DATA.",
     ),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Read-only review of the curated screener universe.
 
     Reports the universe file's review timestamp and staleness, its
@@ -361,10 +361,10 @@ def universe_review_endpoint(
 
 @router.post("/api/admin/run-weekly-digest")
 def run_weekly_digest_endpoint(
-    ticker: Optional[str] = Query(None),
-    sector: Optional[str] = Query(None),
+    ticker: str | None = Query(None),
+    sector: str | None = Query(None),
     days_back: int = Query(7, ge=1, le=30),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — manual trigger for the weekly digest pipeline.
     `ticker` runs the per-name digest; `sector` runs the sector
     cohort digest. Both blank runs the full universe."""
@@ -382,7 +382,7 @@ def run_weekly_digest_endpoint(
 @router.get("/api/admin/specialist-reliability")
 def specialist_reliability_endpoint(
     lookback: int = Query(30, ge=5, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — per-specialist reliability over the last N
     postmortemmed memos. Identifies specialists whose pulls have
     correlated with WRONG calls. Surfaces the same data the PM's
@@ -392,12 +392,13 @@ def specialist_reliability_endpoint(
 
 
 @router.get("/api/admin/postmortems/{ticker}")
-def latest_postmortems_endpoint(ticker: str, limit: int = Query(5, ge=1, le=50)) -> Dict[str, Any]:
+def latest_postmortems_endpoint(ticker: str, limit: int = Query(5, ge=1, le=50)) -> dict[str, Any]:
     """Wave 10 — latest postmortems for a ticker. Powers the memo page's
     "we got this {right/wrong} last time" callout. Returns most recent
     first.
     """
     from sqlalchemy import select
+
     from ..database import SessionLocal
     from ..models import MemoPostmortem
     with SessionLocal() as db:
@@ -427,7 +428,7 @@ def latest_postmortems_endpoint(ticker: str, limit: int = Query(5, ge=1, le=50))
 
 
 @router.post("/api/admin/rerun-memos")
-def rerun_memos_endpoint(tickers: List[str]) -> Dict[str, Any]:
+def rerun_memos_endpoint(tickers: list[str]) -> dict[str, Any]:
     """Wave 10 — admin bulk rerun. Useful when a Wave shipped that
     materially changes memo outputs (new schema field, prompt update,
     DCF default change) and you want to refresh a curated subset
@@ -446,7 +447,7 @@ def rerun_memos_endpoint(tickers: List[str]) -> Dict[str, Any]:
         raise HTTPException(
             status_code=400, detail="cap of 50 tickers per request",
         )
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for raw in tickers:
         ticker = (raw or "").strip().upper()
         if not ticker:
@@ -462,7 +463,7 @@ def rerun_memos_endpoint(tickers: List[str]) -> Dict[str, Any]:
 def mispricing_audit_endpoint(
     limit: int = Query(20, ge=1, le=50),
     persist: bool = Query(True),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — audit the quality of the PM's mispricing theses
     across recent memos. Returns per-memo scores (specificity /
     differentiation / falsifiability) + a corpus-wide failure-
@@ -473,7 +474,9 @@ def mispricing_audit_endpoint(
     `pattern_observation` from its self-improvement context block.
     """
     from ..services.mispricing_audit import (
-        aggregate_scores, persist_audit, run_audit,
+        aggregate_scores,
+        persist_audit,
+        run_audit,
     )
     audit = run_audit(limit=limit)
     audit["aggregate"] = aggregate_scores(audit)
@@ -490,7 +493,7 @@ def mispricing_audit_endpoint(
 @router.get("/api/admin/dcf-versions/{ticker}")
 def dcf_version_history(
     ticker: str, limit: int = Query(25, ge=1, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 5A — DCF assumption drift over time.
 
     Returns the version chain newest-first with `assumption_changes`
@@ -524,8 +527,8 @@ def dcf_version_history(
 
 @router.get("/api/admin/update-queue")
 def update_queue_status(
-    ticker: Optional[str] = None,
-) -> Dict[str, Any]:
+    ticker: str | None = None,
+) -> dict[str, Any]:
     """Wave 5B — in-process FIFO queue for the update orchestrator.
 
     Useful for diagnosing "is the loop wedged?" without shell access.
@@ -542,7 +545,7 @@ def update_queue_status(
 # ---------------------------------------------------------------------------
 
 @router.post("/api/admin/news-domains/reload")
-def reload_news_domains() -> Dict[str, Any]:
+def reload_news_domains() -> dict[str, Any]:
     """Wave 6C — reload `news_domains.json` without bouncing the server.
 
     The agent caches the lists via `lru_cache`; this clears it so a
@@ -574,21 +577,21 @@ class UILogEvent(BaseModel):
     without bumping the schema.
     """
     kind: str
-    path: Optional[str] = None
-    method: Optional[str] = None
-    status_code: Optional[int] = None
-    duration_ms: Optional[int] = None
-    session_id: Optional[str] = None
-    ts: Optional[str] = None  # client wall-clock; not authoritative
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    path: str | None = None
+    method: str | None = None
+    status_code: int | None = None
+    duration_ms: int | None = None
+    session_id: str | None = None
+    ts: str | None = None  # client wall-clock; not authoritative
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class UILogBatch(BaseModel):
-    events: List[UILogEvent]
+    events: list[UILogEvent]
 
 
 @router.post("/api/admin/ui-log")
-def post_ui_log(batch: UILogBatch) -> Dict[str, Any]:
+def post_ui_log(batch: UILogBatch) -> dict[str, Any]:
     """Ingest a batch of UI trace events. Always returns 200 — logging
     must never block the user."""
     from ..database import SessionLocal
@@ -627,16 +630,17 @@ def post_ui_log(batch: UILogBatch) -> Dict[str, Any]:
 def get_ui_log(
     limit: int = Query(200, ge=1, le=2000),
     since_minutes: int = Query(60, ge=1, le=1440),
-    source: Optional[str] = None,
-    kind: Optional[str] = None,
-    path_contains: Optional[str] = None,
-    session_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    source: str | None = None,
+    kind: str | None = None,
+    path_contains: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
     """Read recent UI trace events newest-first. Use this to see what a
     user was doing in the UI."""
+    from sqlalchemy import select
+
     from ..database import SessionLocal
     from ..models import UILog
-    from sqlalchemy import select
     cutoff = datetime.utcnow() - timedelta(minutes=since_minutes)
     with SessionLocal() as db:
         UILog.__table__.create(bind=db.get_bind(), checkfirst=True)
@@ -673,7 +677,7 @@ def get_ui_log(
 
 
 @router.delete("/api/admin/ui-log")
-def clear_ui_log() -> Dict[str, Any]:
+def clear_ui_log() -> dict[str, Any]:
     """Wipe the trace table. Useful before starting a fresh test session."""
     from ..database import SessionLocal
     from ..models import UILog
@@ -687,7 +691,7 @@ def clear_ui_log() -> Dict[str, Any]:
 @router.get("/api/admin/lopsidedness-audit")
 def lopsidedness_audit(
     n: int = Query(10, ge=1, le=100),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 3A risk-register mitigation: telemetry on whether the
     sector-integrated bull/bear is actually balanced.
 
@@ -697,7 +701,7 @@ def lopsidedness_audit(
     to revisit the prompt structure or add a devil's-advocate amplifier
     (deferred per locked decision until lopsidedness shows up in practice).
     """
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     bull_kp_total = 0
     bear_kp_total = 0
     lean_counts = {"bull": 0, "bear": 0, "balanced": 0}
@@ -706,9 +710,10 @@ def lopsidedness_audit(
 
     history_seen: set[str] = set()
     # Pull latest memo per ticker (skip duplicates) up to n unique tickers.
+    from sqlalchemy import select
+
     from ..database import SessionLocal
     from ..models import MemoSnapshot
-    from sqlalchemy import select
     with SessionLocal() as db:
         memo_store._ensure_table(db)
         all_rows = db.execute(
@@ -777,7 +782,7 @@ class AutoUpdateToggle(BaseModel):
 
 
 @router.get("/api/admin/auto-update")
-def list_auto_update_tickers() -> Dict[str, Any]:
+def list_auto_update_tickers() -> dict[str, Any]:
     """List tickers eligible for automatic memo regeneration.
 
     A ticker is eligible when its `Company.auto_update_memo` is True
@@ -805,7 +810,7 @@ def list_auto_update_tickers() -> Dict[str, Any]:
 
 
 @router.put("/api/admin/auto-update/{ticker}")
-def set_auto_update_memo(ticker: str, payload: AutoUpdateToggle) -> Dict[str, Any]:
+def set_auto_update_memo(ticker: str, payload: AutoUpdateToggle) -> dict[str, Any]:
     """Pin or unpin a ticker for automatic memo regeneration.
 
     Returns 404 when the ticker isn't in the companies table. Idempotent.
@@ -825,7 +830,7 @@ def set_auto_update_memo(ticker: str, payload: AutoUpdateToggle) -> Dict[str, An
 
 
 @router.post("/api/admin/auto-update/check/{ticker}")
-def check_auto_regen_decision(ticker: str) -> Dict[str, Any]:
+def check_auto_regen_decision(ticker: str) -> dict[str, Any]:
     """Dry-run the gating logic for a specific ticker — useful for
     debugging when a filing landed but no memo regenerated."""
     return update_orchestrator.should_auto_regen(ticker)
@@ -836,7 +841,7 @@ def check_auto_regen_decision(ticker: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @router.get("/api/admin/llm-breakers")
-def get_llm_breakers() -> Dict[str, Any]:
+def get_llm_breakers() -> dict[str, Any]:
     """Inspect the current circuit-breaker state for each LLM provider.
 
     Three failures in a row open the breaker — subsequent calls return
@@ -872,11 +877,11 @@ def get_llm_breakers() -> Dict[str, Any]:
 
 
 @router.post("/api/admin/llm-breakers/reset")
-def reset_llm_breakers(provider: Optional[str] = Query(None)) -> Dict[str, Any]:
+def reset_llm_breakers(provider: str | None = Query(None)) -> dict[str, Any]:
     """Manually reset LLM circuit breakers. Pass `?provider=openai|anthropic|
     gemini` to reset one; omit for all. Useful after fixing a transient
     issue (auth, model swap, etc.) to skip the auto-reset cooldown."""
-    from ..agents.llm import reset_circuit_breaker, get_breaker_state
+    from ..agents.llm import get_breaker_state, reset_circuit_breaker
     reset_circuit_breaker(provider)
     return {
         "reset": provider or "all",
@@ -897,7 +902,7 @@ def reset_llm_breakers(provider: Optional[str] = Query(None)) -> Dict[str, Any]:
 @router.get("/api/admin/llm-recent-failures")
 def get_recent_llm_failures(
     limit: int = Query(20, ge=1, le=200),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return the most recent LLM call failures from LLMCallLog.
 
     Surfaces the actual provider error message — needed to diagnose
@@ -906,9 +911,10 @@ def get_recent_llm_failures(
     never sees the underlying reason (e.g., bad model name, auth
     rejection, rate limit).
     """
+    from sqlalchemy import desc
+
     from ..database import SessionLocal
     from ..models import LLMCallLog
-    from sqlalchemy import desc
     with SessionLocal() as db:
         LLMCallLog.__table__.create(bind=db.get_bind(), checkfirst=True)
         rows = (
@@ -934,9 +940,9 @@ def get_recent_llm_failures(
 
 @router.get("/api/admin/regen-jobs")
 def list_regen_jobs(
-    ticker: Optional[str] = Query(None),
+    ticker: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Theme 5 — memo-regen queue telemetry.
 
     Newest-first `RegenJob` rows: status, attempt count, timings, the
@@ -950,7 +956,7 @@ def list_regen_jobs(
     """
     from ..services import regen_worker
     jobs = regen_worker.recent_jobs(ticker=ticker, limit=limit)
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for j in jobs:
         counts[j["status"]] = counts.get(j["status"], 0) + 1
     return {"count": len(jobs), "status_counts": counts, "jobs": jobs}
@@ -961,7 +967,7 @@ def list_regen_jobs(
 # ---------------------------------------------------------------------------
 
 @router.post("/api/admin/fix-sequences")
-def fix_postgres_sequences() -> Dict[str, Any]:
+def fix_postgres_sequences() -> dict[str, Any]:
     """Reset Postgres autoincrement sequences to MAX(id)+1 for every
     table that has an `id` primary key.
 
@@ -981,13 +987,14 @@ def fix_postgres_sequences() -> Dict[str, Any]:
     a `_pkey` constraint.
     """
     from sqlalchemy import inspect, text
+
     from ..database import engine
 
     if engine.dialect.name != "postgresql":
         return {"fixed": [], "note": f"no-op on {engine.dialect.name} (sequences are Postgres-only)"}
 
-    fixed: List[Dict[str, Any]] = []
-    skipped: List[Dict[str, Any]] = []
+    fixed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     inspector = inspect(engine)
     with engine.begin() as conn:
         for table_name in inspector.get_table_names():
@@ -1019,7 +1026,7 @@ def fix_postgres_sequences() -> Dict[str, Any]:
                 # value=max_id.
                 new_val = max_id + 1
                 conn.execute(text(
-                    f"SELECT setval(:seq, :val, false)"
+                    "SELECT setval(:seq, :val, false)"
                 ), {"seq": seq_name, "val": new_val})
                 fixed.append({
                     "table": table_name,

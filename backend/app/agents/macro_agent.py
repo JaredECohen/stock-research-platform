@@ -17,15 +17,13 @@ matching the per-agent model wiring that PM/sector/tool agents already use.
 from __future__ import annotations
 
 import json
-from typing import Dict, Optional
 
 from ..config import settings
 from ..schemas import AgentFinding, MacroScenarioResult
 from ..services.macro_service import macro_snapshot
 from . import llm, prompts
 
-
-SCENARIO_TEMPLATES: Dict[str, MacroScenarioResult] = {
+SCENARIO_TEMPLATES: dict[str, MacroScenarioResult] = {
     "soft_landing": MacroScenarioResult(
         scenario="Soft landing",
         narrative=(
@@ -177,7 +175,7 @@ def detect_scenario_key(text: str) -> str:
     return _detect_scenario_key_regex(text)
 
 
-def detect_regime_probabilities(text: str) -> Dict[str, float]:
+def detect_regime_probabilities(text: str) -> dict[str, float]:
     """Wave 10 — continuous regime probabilities across the 5 archetypes.
 
     Real macro states are mixtures. Returns a dict
@@ -204,7 +202,7 @@ def detect_regime_probabilities(text: str) -> Dict[str, float]:
     if not isinstance(raw, dict):
         key = _detect_scenario_key_regex(text)
         return {k: (1.0 if k == key else 0.0) for k in _SCENARIO_KEYS}
-    cleaned: Dict[str, float] = {}
+    cleaned: dict[str, float] = {}
     for k in _SCENARIO_KEYS:
         v = raw.get(k)
         if isinstance(v, (int, float)) and v > 0:
@@ -273,8 +271,8 @@ def run_macro_scenario(scenario: str) -> MacroScenarioResult:
 
 
 def run_macro_agent(
-    profile: Dict, scenario: str = "soft_landing",
-    *, prior_round_critique: Optional[str] = None,
+    profile: dict, scenario: str = "soft_landing",
+    *, prior_round_critique: str | None = None,
 ) -> AgentFinding:
     """Per-company macro `AgentFinding` for the memo.
 
@@ -364,7 +362,7 @@ def run_macro_agent(
         kind="macro", ref=f"regime:{s.scenario}",
         excerpt=(s.narrative or "")[:300],
     )]
-    data: Dict[str, str] = {}
+    data: dict[str, str] = {}
     if settings.has_llm:
         # (b) RP-001: the LLM branch above ran and produced no usable
         # summary, so the regime template stands in for a company-specific

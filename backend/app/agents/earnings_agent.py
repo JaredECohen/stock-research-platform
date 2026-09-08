@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from ..schemas import AgentFinding
@@ -21,7 +21,7 @@ _QA_PASS_FAILED = "qa_pass_failed"
 
 def _multi_pass_qa_addendum(
     *, ticker: str, prepared: str, qa: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — chunked second pass over long transcripts.
 
     The first-pass prompt budgets 10KB prepared + 8KB Q&A. When the
@@ -84,7 +84,7 @@ def _multi_pass_qa_addendum(
         return {_QA_PASS_FAILED: safe_exc(exc)}
 
 
-def _coerce_structured_enums(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _coerce_structured_enums(raw: dict[str, Any]) -> dict[str, Any]:
     """Map LLM-creative enum values onto the schema whitelist.
 
     The EarningsStructured Pydantic model uses `Literal[...]` for
@@ -142,7 +142,7 @@ def _coerce_structured_enums(raw: Dict[str, Any]) -> Dict[str, Any]:
     return raw
 
 
-def _critique_block(question: Optional[str]) -> str:
+def _critique_block(question: str | None) -> str:
     """Wave 9 — prepend this to a specialist's user prompt when the
     deep-research loop is asking a follow-up question."""
     if not question:
@@ -158,8 +158,8 @@ def _critique_block(question: Optional[str]) -> str:
 
 
 def run_earnings_agent(
-    profile: Dict, transcript: Optional[Dict], earnings: Optional[Dict],
-    *, prior_round_critique: Optional[str] = None,
+    profile: dict, transcript: dict | None, earnings: dict | None,
+    *, prior_round_critique: str | None = None,
 ) -> AgentFinding:
     if not transcript:
         return AgentFinding(
@@ -206,7 +206,7 @@ def run_earnings_agent(
     # Flags that ride on `data` whichever path (LLM or deterministic)
     # produces the finding — a failure in an enrichment pass is part of
     # the finding's provenance, not of its prose.
-    finding_flags: Dict[str, Any] = {}
+    finding_flags: dict[str, Any] = {}
     qa_pass_failed = multipass_addendum.pop(_QA_PASS_FAILED, None)
     if qa_pass_failed:
         finding_flags["qa_pass_failed"] = qa_pass_failed
@@ -215,7 +215,7 @@ def run_earnings_agent(
     # blocks float up; otherwise fall back to a general guidance /
     # margin / demand query. Filing analyst already does the same
     # pattern. Cheap (1 embed call); no-op when no chunks indexed yet.
-    retrieved_chunks: List[Dict] = []
+    retrieved_chunks: list[dict] = []
     try:
         from ..services import vector_store
         retrieval_query = (
@@ -299,7 +299,7 @@ def run_earnings_agent(
         # Wave 10 — structured extraction lives on `data.structured`.
         # Validate via the typed schema so a partial / malformed LLM
         # response still serializes (Pydantic drops bad fields).
-        structured_payload: Dict = {}
+        structured_payload: dict = {}
         raw_struct = llm_out.get("structured")
         if isinstance(raw_struct, dict):
             # Coerce LLM-creative enum values into the whitelist before
@@ -335,7 +335,7 @@ def run_earnings_agent(
         # sections + back-half multi-pass when we ran one.
         from ..schemas import Citation
         period = str(transcript.get("period") or "")
-        evidence: List[Citation] = []
+        evidence: list[Citation] = []
         if period and prepared:
             evidence.append(Citation(
                 kind="transcript", ref=period, section="prepared_remarks",

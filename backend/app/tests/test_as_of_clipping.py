@@ -17,8 +17,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from app.services import data_service as ds
-from app.services.data_service import as_of_context, current_as_of_date
-
+from app.services.data_service import as_of_context
 
 # ---------------------------------------------------------------------------
 # _coerce_iso_date

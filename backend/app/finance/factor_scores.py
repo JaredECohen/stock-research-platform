@@ -6,15 +6,14 @@ comparable across sectors.
 from __future__ import annotations
 
 from statistics import mean, pstdev
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any
 
 # Threshold for treating an EPS surprise as a real "beat" (not noise).
 # 2% margin filters out coin-flip rounding-error beats.
 _BEAT_THRESHOLD: float = 0.02
 
 
-def beat_streak(surprise_history: List[Optional[float]]) -> int:
+def beat_streak(surprise_history: list[float | None]) -> int:
     """Count consecutive most-recent beats (surprise > _BEAT_THRESHOLD).
 
     Assumes `surprise_history` is ordered oldest-first (the convention
@@ -36,7 +35,7 @@ def beat_streak(surprise_history: List[Optional[float]]) -> int:
 
 
 def guidance_net_direction(
-    guidance_changes: Optional[List[Dict[str, Any]]],
+    guidance_changes: list[dict[str, Any]] | None,
 ) -> int:
     """Net direction score from the latest call's structured guidance.
 
@@ -66,7 +65,7 @@ def _z_to_100(z: float, *, clip: float = 2.5) -> float:
     return round(50 + (z / clip) * 50, 1)
 
 
-def _zscore(values: List[float], v: float) -> float:
+def _zscore(values: list[float], v: float) -> float:
     clean = [x for x in values if x is not None]
     if len(clean) < 2:
         return 0.0
@@ -76,11 +75,11 @@ def _zscore(values: List[float], v: float) -> float:
     return (v - m) / s
 
 
-def normalize(universe: List[Dict], field: str, *, higher_better: bool = True) -> Dict[str, float]:
+def normalize(universe: list[dict], field: str, *, higher_better: bool = True) -> dict[str, float]:
     # The walrus keeps the None-guard on the same expression that is
     # collected, which is what lets the checker see `vals` as non-optional.
     vals = [v for r in universe if (v := r.get(field)) is not None]
-    out: Dict[str, float] = {}
+    out: dict[str, float] = {}
     for r in universe:
         v = r.get(field)
         if v is None:
@@ -93,8 +92,8 @@ def normalize(universe: List[Dict], field: str, *, higher_better: bool = True) -
     return out
 
 
-def composite_score(scores: Dict[str, Dict[str, float]], weights: Dict[str, float]) -> Dict[str, float]:
-    out: Dict[str, float] = {}
+def composite_score(scores: dict[str, dict[str, float]], weights: dict[str, float]) -> dict[str, float]:
+    out: dict[str, float] = {}
     total_w = sum(weights.values()) or 1.0
     for ticker, sc in scores.items():
         s = 0.0
@@ -104,7 +103,7 @@ def composite_score(scores: Dict[str, Dict[str, float]], weights: Dict[str, floa
     return out
 
 
-def quality_score(roic: Optional[float], op_margin: Optional[float], gross_margin: Optional[float]) -> float:
+def quality_score(roic: float | None, op_margin: float | None, gross_margin: float | None) -> float:
     parts = []
     if roic is not None:
         parts.append(min(100, max(0, (roic - 0.05) / 0.30 * 100)))
@@ -115,7 +114,7 @@ def quality_score(roic: Optional[float], op_margin: Optional[float], gross_margi
     return round(sum(parts) / len(parts), 1) if parts else 50.0
 
 
-def growth_score(revenue_growth: Optional[float], earnings_growth: Optional[float] = None) -> float:
+def growth_score(revenue_growth: float | None, earnings_growth: float | None = None) -> float:
     parts = []
     if revenue_growth is not None:
         parts.append(min(100, max(0, (revenue_growth - 0.0) / 0.30 * 100)))
@@ -124,9 +123,9 @@ def growth_score(revenue_growth: Optional[float], earnings_growth: Optional[floa
     return round(sum(parts) / len(parts), 1) if parts else 50.0
 
 
-def valuation_score(ev_ebitda: Optional[float], p_fcf: Optional[float], fcf_yield: Optional[float]) -> float:
+def valuation_score(ev_ebitda: float | None, p_fcf: float | None, fcf_yield: float | None) -> float:
     """Cheap is good — invert."""
-    parts: List[float] = []
+    parts: list[float] = []
     if ev_ebitda is not None and ev_ebitda > 0:
         parts.append(min(100, max(0, (35 - ev_ebitda) / 30 * 100)))
     if p_fcf is not None and p_fcf > 0:
@@ -137,9 +136,9 @@ def valuation_score(ev_ebitda: Optional[float], p_fcf: Optional[float], fcf_yiel
 
 
 def earnings_momentum_score(
-    surprise_history: List[Optional[float]],
+    surprise_history: list[float | None],
     *,
-    latest_guidance_changes: Optional[List[Dict[str, Any]]] = None,
+    latest_guidance_changes: list[dict[str, Any]] | None = None,
 ) -> float:
     """0-100 earnings momentum score.
 
@@ -188,7 +187,7 @@ def earnings_momentum_score(
     return round(min(100, max(0, total)), 1)
 
 
-def risk_score(beta: Optional[float], debt_to_ebitda: Optional[float], drawdown: Optional[float]) -> float:
+def risk_score(beta: float | None, debt_to_ebitda: float | None, drawdown: float | None) -> float:
     """Higher score = lower perceived risk."""
     parts = []
     if beta is not None:

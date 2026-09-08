@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import statistics
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal
 
 from sqlalchemy import select
 
@@ -43,7 +43,7 @@ def _quarterly_op_margin_series(ticker: str, *, lookback_periods: int = 20) -> l
     and `revenue` per period and divides. Returns oldest → newest.
     Empty list when there's not enough data.
     """
-    rows: Dict[str, Dict[str, Any]] = {}
+    rows: dict[str, dict[str, Any]] = {}
     with SessionLocal() as db:
         stmt = (
             select(FinancialPeriod)
@@ -70,7 +70,7 @@ def _quarterly_op_margin_series(ticker: str, *, lookback_periods: int = 20) -> l
     return margins[-lookback_periods:]
 
 
-def cycle_position(ticker: str) -> Dict[str, Any]:
+def cycle_position(ticker: str) -> dict[str, Any]:
     """Classify current operating margin position vs 5y history.
 
     Returns: {

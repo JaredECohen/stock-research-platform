@@ -121,10 +121,21 @@ def status_snapshot() -> dict:
 
 
 from . import (  # noqa: E402,F401
-    catalyst_loop, checkpoint_gc, edgar_poller, history_backfill, llm_log_gc,
-    macro_loop, mispricing_audit_loop, news_loop, outcome_loop,
-    postmortem_loop, sector_digest_loop, social_loop,
-    theme_exposure_loop, transcripts_poller, weekly_digest_loop,
+    catalyst_loop,
+    checkpoint_gc,
+    edgar_poller,
+    history_backfill,
+    llm_log_gc,
+    macro_loop,
+    mispricing_audit_loop,
+    news_loop,
+    outcome_loop,
+    postmortem_loop,
+    sector_digest_loop,
+    social_loop,
+    theme_exposure_loop,
+    transcripts_poller,
+    weekly_digest_loop,
 )
 
 __all__ = [

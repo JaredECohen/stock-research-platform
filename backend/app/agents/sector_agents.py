@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..cache import cache_get
 from ..config import settings
@@ -33,7 +33,7 @@ from .log_safety import log_safely
 log = logging.getLogger(__name__)
 
 
-def _format_kpi_summary(placements: Dict) -> List[str]:
+def _format_kpi_summary(placements: dict) -> list[str]:
     """Compact bullet list of the most informative KPI placements."""
     if not placements:
         return []
@@ -42,7 +42,7 @@ def _format_kpi_summary(placements: Dict) -> List[str]:
                       "EV_EBITDA", "FCF_yield", "PFCF", "gross_margin",
                       "capex_pct_revenue"]
     seen = set()
-    bullets: List[str] = []
+    bullets: list[str] = []
     for kpi in priority_order:
         if kpi not in placements or kpi in seen:
             continue
@@ -67,8 +67,8 @@ def _format_kpi_summary(placements: Dict) -> List[str]:
     return bullets
 
 
-def _format_trends(trends: Dict) -> List[str]:
-    out: List[str] = []
+def _format_trends(trends: dict) -> list[str]:
+    out: list[str] = []
     g = trends.get("cohort_revenue_growth_recent")
     if g is not None:
         out.append(f"Cohort revenue growth (recent): {g:+.1%}")
@@ -83,20 +83,20 @@ def _format_trends(trends: Dict) -> List[str]:
     return out
 
 
-def _macro_broadcast_payload() -> Dict:
+def _macro_broadcast_payload() -> dict:
     """Subscribe to the latest MacroBroadcast (Phase 6) — empty if none yet."""
     snap = cache_get("macro:global", "macro_broadcast")
     return snap.payload if snap and isinstance(snap.payload, dict) else {}
 
 
-def _pending_news_alerts(ticker: str) -> List[Dict]:
+def _pending_news_alerts(ticker: str) -> list[dict]:
     snap = cache_get(f"news_hot:{ticker}", "news_hot")
     if not snap or not isinstance(snap.payload, dict):
         return []
     return list(snap.payload.get("alerts") or [])[:5]
 
 
-def _cross_sector_relevance_heuristic(ticker: str, sector: str) -> List[str]:
+def _cross_sector_relevance_heuristic(ticker: str, sector: str) -> list[str]:
     """Demo-mode fallback for cross-sector relevance.
 
     A real model would inspect the value chain and pull through, e.g.,
@@ -104,7 +104,7 @@ def _cross_sector_relevance_heuristic(ticker: str, sector: str) -> List[str]:
     sector→adjacent-tickers map seeded from the demo universe.
     """
     ds = get_data_service()
-    adjacency: Dict[str, List[str]] = {
+    adjacency: dict[str, list[str]] = {
         # AI infra → grid: NEE (utility) and CAT (industrials power gen).
         "Technology": ["NEE", "CAT"],
         # Banks → tech (digital exposure).
@@ -126,7 +126,7 @@ def _cross_sector_relevance_heuristic(ticker: str, sector: str) -> List[str]:
     return [c for c in candidates if c in universe and c != ticker]
 
 
-def _coerce_bull_bear_analysis(raw: Any) -> Optional[BullBearAnalysis]:
+def _coerce_bull_bear_analysis(raw: Any) -> BullBearAnalysis | None:
     """Best-effort parse of an LLM-emitted bull_bear_analysis block.
 
     Returns None when the payload is missing required fields or malformed.
@@ -142,7 +142,7 @@ def _coerce_bull_bear_analysis(raw: Any) -> Optional[BullBearAnalysis]:
     if not (bull.get("headline") and bear.get("headline")):
         return None
     tests_raw = raw.get("falsifiable_tests") or []
-    falsifiable: List[FalsifiableTest] = []
+    falsifiable: list[FalsifiableTest] = []
     for t in tests_raw:
         if not isinstance(t, dict):
             continue
@@ -181,7 +181,7 @@ def _coerce_bull_bear_analysis(raw: Any) -> Optional[BullBearAnalysis]:
 
 
 def _deterministic_bull_bear_analysis(
-    profile: Dict, research: Dict,
+    profile: dict, research: dict,
 ) -> BullBearAnalysis:
     """Cohort-grounded fallback when the LLM is offline or output is malformed.
 
@@ -199,7 +199,7 @@ def _deterministic_bull_bear_analysis(
     regime = research.get("regime") or "mixed"
 
     # Bear case — written first.
-    bear_points: List[str] = []
+    bear_points: list[str] = []
     if risks:
         bear_points.extend(f"Headwind: {r}" for r in risks[:3])
     om_d = trends.get("cohort_op_margin_delta")
@@ -222,7 +222,7 @@ def _deterministic_bull_bear_analysis(
     bear = BullBearCase(headline=bear_headline, key_points=bear_points)
 
     # Bull case — written second so any leftover slack lands here.
-    bull_points: List[str] = []
+    bull_points: list[str] = []
     if drivers:
         bull_points.extend(f"Tailwind: {d}" for d in drivers[:3])
     growth = placements.get("revenue_growth")
@@ -248,8 +248,8 @@ def _deterministic_bull_bear_analysis(
     falsifiable = [
         FalsifiableTest(
             statement=(
-                f"Cohort revenue growth turns negative for two consecutive quarters "
-                f"AND target margin compresses with it."
+                "Cohort revenue growth turns negative for two consecutive quarters "
+                "AND target margin compresses with it."
             ),
             invalidates_side="bull",
         ),
@@ -279,8 +279,8 @@ def _deterministic_bull_bear_analysis(
         f"Sector lean is {lean} based on cohort placement; PM should weigh other findings."
     )
     key_disagreement = (
-        f"Bears price in cohort margin compression flowing through to this name; "
-        f"bulls price in this name continuing to outpace cohort on the dominant driver."
+        "Bears price in cohort margin compression flowing through to this name; "
+        "bulls price in this name continuing to outpace cohort on the dominant driver."
     )
 
     return BullBearAnalysis(
@@ -294,8 +294,8 @@ def _deterministic_bull_bear_analysis(
 
 
 def run_sector_agent(
-    profile: Dict, ratios: Dict, *,
-    prior_round_critique: Optional[str] = None,
+    profile: dict, ratios: dict, *,
+    prior_round_critique: str | None = None,
 ) -> AgentFinding:
     """Produce a deeply researched sector view.
 
@@ -474,7 +474,7 @@ def run_sector_agent(
         finding_data["bull_bear_analysis"] = bb.model_dump()
         # Wave 10 — typed citations for cohort peers + sector regime.
         from ..schemas import Citation
-        evidence: List[Citation] = []
+        evidence: list[Citation] = []
         for peer in cohort.get("peers", [])[:6]:
             evidence.append(Citation(
                 kind="peer", ref=str(peer),
@@ -502,12 +502,12 @@ def run_sector_agent(
         return finding
 
     # ---------- Deterministic fallback grounded in research payload ----------
-    headline_bits: List[str] = [f"{sub_industry} cohort, regime: {regime}"]
+    headline_bits: list[str] = [f"{sub_industry} cohort, regime: {regime}"]
     if structure.get("concentration_label"):
         headline_bits.append(f"{structure['concentration_label']} (HHI {structure.get('hhi_revenue', 0):.2f})")
     headline = " · ".join(headline_bits)
 
-    summary_lines: List[str] = []
+    summary_lines: list[str] = []
     summary_lines.append(
         f"{sector} / {sub_industry} regime read: {regime}. "
         f"Cohort of {cohort['size']} peers selected on {cohort['selection_basis']} basis."
@@ -529,7 +529,7 @@ def run_sector_agent(
     if sub_watch:
         summary_lines.append(f"Watch: {sub_watch}.")
 
-    key_points: List[str] = []
+    key_points: list[str] = []
     key_points.extend(_format_kpi_summary(placements))
     key_points.extend(_format_trends(trends))
     if filing_themes:
@@ -571,7 +571,7 @@ def run_sector_agent(
     # the no-LLM path surfaces concrete numbers (footprint-weighted HPI,
     # WTI, retail YoY, etc) rather than only cohort-quartile text.
     overlay_bundles = (sector_context.get("overlays") or {}).get("bundles") or {}
-    overlay_hints: List[str] = []
+    overlay_hints: list[str] = []
     for bundle in overlay_bundles.values():
         if not bundle.get("available"):
             continue

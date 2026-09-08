@@ -1,11 +1,9 @@
 """Tests for the GDELT provider + combined news service."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from app.providers.gdelt_provider import GDELTProvider, _parse_gdelt_ts
 from app.services import news_service
@@ -20,13 +18,13 @@ def _make_response(payload: Any, status: int = 200):
 
 def test_parse_gdelt_timestamp():
     ts = _parse_gdelt_ts("20251201T143055Z")
-    assert ts == datetime(2025, 12, 1, 14, 30, 55, tzinfo=timezone.utc)
+    assert ts == datetime(2025, 12, 1, 14, 30, 55, tzinfo=UTC)
     assert _parse_gdelt_ts(None) is None
     assert _parse_gdelt_ts("garbage") is None
 
 
 def test_gdelt_search_normalizes_articles():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     fixture = {
         "articles": [
             {

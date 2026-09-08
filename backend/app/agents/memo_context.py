@@ -43,7 +43,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from ..schemas import (
     AgentFinding,
@@ -72,30 +72,30 @@ class MemoInputs:
     run_id: str
     scenario: str
     force_refresh: bool
-    as_of_date: Optional[date]
-    fin: Dict[str, Any]
-    profile: Dict[str, Any]
-    ratios: Dict[str, Any]
-    earnings: Dict[str, Any]
-    transcript: Optional[Dict[str, Any]]
-    filings: List[Dict[str, Any]]
-    dcf: Optional[DCFResult]
-    comps: Optional[CompsResult]
+    as_of_date: date | None
+    fin: dict[str, Any]
+    profile: dict[str, Any]
+    ratios: dict[str, Any]
+    earnings: dict[str, Any]
+    transcript: dict[str, Any] | None
+    filings: list[dict[str, Any]]
+    dcf: DCFResult | None
+    comps: CompsResult | None
     degradation: DegradationLog
     # Consensus estimates. Reserved for the expectations-ledger work; the
     # gather stage does NOT fetch it today — the consensus lookup stays
     # lazy inside `graph._market_gap_clause`, which only fires when a DCF
     # with a growth path exists. Lifting it here would add a provider
     # round-trip to every memo, so it stays None until a stage needs it.
-    estimates: Optional[Dict[str, Any]] = None
+    estimates: dict[str, Any] | None = None
 
 
 @dataclass
 class AnalystRound:
     """Output of the fan-out (+ deep-research dialog + long-form pass)."""
-    findings: Dict[str, AgentFinding]        # roster order, keyed by AgentSpec.key
-    intake: "IntakeDecision"
-    round_findings: List[RoundFindings] = field(default_factory=list)
+    findings: dict[str, AgentFinding]        # roster order, keyed by AgentSpec.key
+    intake: IntakeDecision
+    round_findings: list[RoundFindings] = field(default_factory=list)
 
 
 @dataclass
@@ -106,9 +106,9 @@ class DCFStage:
     `dcf` is what every later stage reads. They are the same object when
     no PM adjustment fired.
     """
-    dcf: Optional[DCFResult]
-    initial_dcf: Optional[DCFResult]
-    pm_adjustments: List[Dict[str, Any]] = field(default_factory=list)
+    dcf: DCFResult | None
+    initial_dcf: DCFResult | None
+    pm_adjustments: list[dict[str, Any]] = field(default_factory=list)
     pm_headline: str = ""
 
 
@@ -133,12 +133,12 @@ class VerdictOutcome:
     one_sentence_thesis: str
     mispricing_thesis: MispricingThesis
     final_verdict: str
-    extra_scores: Dict[str, float] = field(default_factory=dict)  # cross_sector_relevance_count
+    extra_scores: dict[str, float] = field(default_factory=dict)  # cross_sector_relevance_count
     thesis_rewrite_fired: bool = False
     # Failures the stage swallowed on the reader's behalf. Returned rather
     # than recorded so the function stays pure; the orchestrator applies
     # them to the run's DegradationLog in this order.
-    degradations: List[DegradationNote] = field(default_factory=list)
+    degradations: list[DegradationNote] = field(default_factory=list)
 
     def apply(self, memo: StockMemoOut, degradation: DegradationLog) -> None:
         """Write the outcome onto `memo` and replay the degradations.

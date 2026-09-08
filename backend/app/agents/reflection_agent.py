@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..cache import cache_get
 from ..config import settings
@@ -37,7 +37,7 @@ def _memory_blob(mem: CompanyMemory) -> str:
     """Concatenate every searchable surface in the file so the seen-detector
     catches accession / period mentions whether they were stored as triggers,
     in entry bodies, or already folded into the historical context."""
-    parts: List[str] = [mem.historical_context or ""]
+    parts: list[str] = [mem.historical_context or ""]
     for e in mem.entries:
         parts.append(e.trigger or "")
         parts.append(e.body or "")
@@ -98,13 +98,13 @@ def _seen_transcript_periods(mem: CompanyMemory) -> set[str]:
     return out
 
 
-def detect_triggers(memo: StockMemoOut, mem: CompanyMemory) -> List[Dict[str, Any]]:
+def detect_triggers(memo: StockMemoOut, mem: CompanyMemory) -> list[dict[str, Any]]:
     """Inspect the memo + cache for delta events worth recording.
 
     Returns a list (possibly empty) of `{kind, label, detail}` dicts. An
     empty list means: no delta this run, do not write to memory.
     """
-    triggers: List[Dict[str, Any]] = []
+    triggers: list[dict[str, Any]] = []
 
     # Filings — sources_used carries `filing:<accession>` pointers.
     seen_filings = _seen_accessions(mem)
@@ -141,7 +141,7 @@ def detect_triggers(memo: StockMemoOut, mem: CompanyMemory) -> List[Dict[str, An
                 })
 
     # De-duplicate by label so a single run never produces twin entries.
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     seen_labels: set[str] = set()
     for t in triggers:
         if t["label"] in seen_labels:
@@ -155,7 +155,7 @@ def detect_triggers(memo: StockMemoOut, mem: CompanyMemory) -> List[Dict[str, An
 # Entry body composition
 # ---------------------------------------------------------------------------
 
-def _compose_company_entry(memo: StockMemoOut, triggers: List[Dict[str, Any]]) -> str:
+def _compose_company_entry(memo: StockMemoOut, triggers: list[dict[str, Any]]) -> str:
     """LLM if available; deterministic fallback otherwise."""
     if settings.has_llm:
         prompt = (
@@ -196,7 +196,7 @@ def _compose_company_entry(memo: StockMemoOut, triggers: List[Dict[str, Any]]) -
     )
 
 
-def _compose_sector_entry(memo: StockMemoOut, triggers: List[Dict[str, Any]]) -> str:
+def _compose_sector_entry(memo: StockMemoOut, triggers: list[dict[str, Any]]) -> str:
     """A sector-level reflection: did the prior heuristics work for THIS name?"""
     if settings.has_llm:
         prompt = (
@@ -235,8 +235,8 @@ def _compose_sector_entry(memo: StockMemoOut, triggers: List[Dict[str, Any]]) ->
 
 
 def _compose_cross_company_pattern(
-    memo: StockMemoOut, triggers: List[Dict[str, Any]]
-) -> Optional[CrossCompanyPattern]:
+    memo: StockMemoOut, triggers: list[dict[str, Any]]
+) -> CrossCompanyPattern | None:
     """Distill a transferable lesson from this run.
 
     The pattern's `applies_to` is built from cohort peers + the
@@ -252,7 +252,7 @@ def _compose_cross_company_pattern(
     if not applies_to:
         return None
 
-    lesson_text: Optional[str] = None
+    lesson_text: str | None = None
     if settings.has_llm:
         prompt = (
             "From this single-name memo, extract ONE generalizable lesson — "
@@ -294,7 +294,7 @@ def _compose_cross_company_pattern(
     )
 
 
-def _compact_memo(memo: StockMemoOut) -> Dict[str, Any]:
+def _compact_memo(memo: StockMemoOut) -> dict[str, Any]:
     """Trim the memo to just the fields useful for reflection prompts."""
     return {
         "ticker": memo.ticker,
@@ -321,7 +321,7 @@ def _compact_memo(memo: StockMemoOut) -> Dict[str, Any]:
 # LLM-backed condenser (used by CompanyMemory.condense_oldest)
 # ---------------------------------------------------------------------------
 
-def _llm_condenser(entries: List[MemoryEntry], existing: str) -> str:
+def _llm_condenser(entries: list[MemoryEntry], existing: str) -> str:
     if not settings.has_llm:
         from ..memory.longterm import _deterministic_summary
         return _deterministic_summary(entries, existing)
@@ -345,7 +345,7 @@ def _llm_condenser(entries: List[MemoryEntry], existing: str) -> str:
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def run(memo: StockMemoOut) -> Tuple[List[Dict[str, Any]], List[str]]:
+def run(memo: StockMemoOut) -> tuple[list[dict[str, Any]], list[str]]:
     """Inspect the memo, append memory entries when a delta fires.
 
     Returns `(triggers, written_files)` so callers can log telemetry.
@@ -354,7 +354,7 @@ def run(memo: StockMemoOut) -> Tuple[List[Dict[str, Any]], List[str]]:
         return [], []
     if not memo or not memo.ticker:
         return [], []
-    written: List[str] = []
+    written: list[str] = []
     company_mem = CompanyMemory.for_ticker(memo.ticker)
     triggers = detect_triggers(memo, company_mem)
     if not triggers:
@@ -368,8 +368,8 @@ def run(memo: StockMemoOut) -> Tuple[List[Dict[str, Any]], List[str]]:
     # so a missing source never blocks the memo from logging the trigger.
     structured_facts = None
     try:
-        from .fact_extraction import collect_structured_facts
         from ..services.history_service import backfill_ticker
+        from .fact_extraction import collect_structured_facts
         # Best-effort backfill — quiet no-op if data_service has nothing.
         try:
             backfill_ticker(memo.ticker)

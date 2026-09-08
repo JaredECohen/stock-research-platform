@@ -7,7 +7,7 @@ PM<->sector<->tool interchange shapes. Depends only on `common`.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -28,7 +28,7 @@ class RiskItem(BaseModel):
 
 class BullBearCase(BaseModel):
     headline: str
-    key_points: List[str] = Field(default_factory=list)
+    key_points: list[str] = Field(default_factory=list)
 
 
 class CritiqueQuestion(BaseModel):
@@ -50,7 +50,7 @@ class CritiqueOutput(BaseModel):
     """PM critique step's structured output. `no_further_questions`
     is the explicit early-exit signal the loop respects so the PM can
     end the dialog before the round budget runs out."""
-    questions: List[CritiqueQuestion] = Field(default_factory=list)
+    questions: list[CritiqueQuestion] = Field(default_factory=list)
     no_further_questions: bool = False
     rationale: str = ""
 
@@ -66,8 +66,8 @@ class RoundFindings(BaseModel):
     consensus or by hitting the round cap.
     """
     round: int
-    pm_questions: List[CritiqueQuestion] = Field(default_factory=list)
-    findings: Dict[str, AgentFinding] = Field(default_factory=dict)
+    pm_questions: list[CritiqueQuestion] = Field(default_factory=list)
+    findings: dict[str, AgentFinding] = Field(default_factory=dict)
     early_exit: bool = False
     pm_rationale: str = ""
 
@@ -119,7 +119,7 @@ class BullBearAnalysis(BaseModel):
     bull_case: BullBearCase
     bear_case: BullBearCase
     key_disagreement: str
-    falsifiable_tests: List[FalsifiableTest] = Field(default_factory=list)
+    falsifiable_tests: list[FalsifiableTest] = Field(default_factory=list)
     sector_synthesis: str
     sector_lean: Literal["bull", "bear", "balanced"] = "balanced"
 
@@ -139,7 +139,7 @@ class Citation(BaseModel):
     ] = "other"
     ref: str = ""
     excerpt: str = ""
-    section: Optional[str] = None
+    section: str | None = None
 
 
 class AgentFinding(BaseModel):
@@ -165,20 +165,20 @@ class AgentFinding(BaseModel):
     agent: str
     headline: str
     summary: str
-    key_points: List[str] = Field(default_factory=list)
+    key_points: list[str] = Field(default_factory=list)
     confidence: float = 0.7
-    sources: List[str] = Field(default_factory=list)
-    evidence: List[Citation] = Field(default_factory=list)
-    data: Dict[str, Any] = Field(default_factory=dict)
-    long_form_report: Optional[str] = None
+    sources: list[str] = Field(default_factory=list)
+    evidence: list[Citation] = Field(default_factory=list)
+    data: dict[str, Any] = Field(default_factory=dict)
+    long_form_report: str | None = None
 
 
 # Wave 10 — earnings structured extraction.
 
 class GuidanceChange(BaseModel):
     metric: str  # e.g. "FY revenue", "Q4 op margin", "FY FCF"
-    prior: Optional[str] = None
-    current: Optional[str] = None
+    prior: str | None = None
+    current: str | None = None
     direction: Literal["raised", "lowered", "reaffirmed", "introduced", "withdrawn", "unclear"] = "unclear"
     rationale: str = ""
 
@@ -206,19 +206,19 @@ class EarningsStructured(BaseModel):
     """
     period: str = ""
     overall_tone: Literal["constructive", "measured", "cautious"] = "measured"
-    guidance_changes: List[GuidanceChange] = Field(default_factory=list)
-    tone_signals: List[ToneSignal] = Field(default_factory=list)
-    qa_themes: List[QAThemeAnalysis] = Field(default_factory=list)
-    most_defended_segment: Dict[str, str] = Field(default_factory=dict)  # {name, why}
-    most_pressed_segment: Dict[str, str] = Field(default_factory=dict)
-    forward_catalysts: List[Dict[str, str]] = Field(default_factory=list)  # [{event, expected_quarter, materiality}]
+    guidance_changes: list[GuidanceChange] = Field(default_factory=list)
+    tone_signals: list[ToneSignal] = Field(default_factory=list)
+    qa_themes: list[QAThemeAnalysis] = Field(default_factory=list)
+    most_defended_segment: dict[str, str] = Field(default_factory=dict)  # {name, why}
+    most_pressed_segment: dict[str, str] = Field(default_factory=dict)
+    forward_catalysts: list[dict[str, str]] = Field(default_factory=list)  # [{event, expected_quarter, materiality}]
 
 
 class CriticReview(BaseModel):
     overall_assessment: str
-    challenges: List[str] = Field(default_factory=list)
-    underweighted_risks: List[str] = Field(default_factory=list)
-    suggested_revisions: List[str] = Field(default_factory=list)
+    challenges: list[str] = Field(default_factory=list)
+    underweighted_risks: list[str] = Field(default_factory=list)
+    suggested_revisions: list[str] = Field(default_factory=list)
     advice_compliance_check: str = "Output framed as research/education only."
 
 
@@ -233,22 +233,22 @@ NewsSeverity = Literal["advisory", "material", "breaking"]
 
 class NewsAlert(BaseModel):
     """Single news/social/macro item pushed into the hot cache."""
-    ticker: Optional[str] = None
-    sector: Optional[str] = None
+    ticker: str | None = None
+    sector: str | None = None
     title: str
     summary: str = ""
     url: str = ""
     severity: NewsSeverity = "advisory"
-    published_at: Optional[str] = None
+    published_at: str | None = None
     source: str = "news_service"
 
 
 class MacroBroadcast(BaseModel):
     """Macro snapshot + regime label broadcast to PM and sector agents."""
-    snapshot: Dict[str, float] = Field(default_factory=dict)
+    snapshot: dict[str, float] = Field(default_factory=dict)
     regime: str = "mixed"
-    favored_sectors: List[str] = Field(default_factory=list)
-    pressured_sectors: List[str] = Field(default_factory=list)
+    favored_sectors: list[str] = Field(default_factory=list)
+    pressured_sectors: list[str] = Field(default_factory=list)
     note: str = ""
     generated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -267,8 +267,8 @@ class SectorReport(BaseModel):
     sector: str
     target_ticker: str
     finding: AgentFinding
-    cross_sector_relevance: List[str] = Field(default_factory=list)
-    macro_alignment: Optional[str] = None
+    cross_sector_relevance: list[str] = Field(default_factory=list)
+    macro_alignment: str | None = None
 
 
 class ToolFinding(BaseModel):
@@ -285,25 +285,25 @@ class TechnicalSignals(BaseModel):
     `trend` and `momentum` are best-effort buckets derived from whichever
     indicators came back populated.
     """
-    last_price: Optional[float] = None
-    last_date: Optional[str] = None
-    sma_50: Optional[float] = None
-    sma_200: Optional[float] = None
-    sma_50_above_200: Optional[bool] = None
-    ema_10: Optional[float] = None
-    ema_20: Optional[float] = None
-    rsi_14: Optional[float] = None
-    macd_line: Optional[float] = None
-    macd_signal: Optional[float] = None
-    macd_histogram: Optional[float] = None
-    bb_upper: Optional[float] = None
-    bb_lower: Optional[float] = None
-    bb_middle: Optional[float] = None
-    bb_position: Optional[float] = None
-    vwma_20: Optional[float] = None
-    high_52w: Optional[float] = None
-    low_52w: Optional[float] = None
-    position_52w: Optional[float] = None
+    last_price: float | None = None
+    last_date: str | None = None
+    sma_50: float | None = None
+    sma_200: float | None = None
+    sma_50_above_200: bool | None = None
+    ema_10: float | None = None
+    ema_20: float | None = None
+    rsi_14: float | None = None
+    macd_line: float | None = None
+    macd_signal: float | None = None
+    macd_histogram: float | None = None
+    bb_upper: float | None = None
+    bb_lower: float | None = None
+    bb_middle: float | None = None
+    bb_position: float | None = None
+    vwma_20: float | None = None
+    high_52w: float | None = None
+    low_52w: float | None = None
+    position_52w: float | None = None
     trend: Literal["up", "down", "sideways"] = "sideways"
     momentum: Literal["positive", "negative", "neutral"] = "neutral"
-    notes: List[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)

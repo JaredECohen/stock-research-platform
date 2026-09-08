@@ -9,7 +9,7 @@ deterministic stub already shipped in `tools.py` so demo mode keeps working.
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ..cache import cache_get, cache_put
 from ..config import settings
@@ -17,11 +17,11 @@ from . import llm
 from . import tools as _tools
 
 
-def _stub(ticker: str) -> Dict[str, Any]:
+def _stub(ticker: str) -> dict[str, Any]:
     return _tools.get_social_sentiment(ticker)
 
 
-def run(ticker: str, *, force_refresh: bool = False) -> Dict[str, Any]:
+def run(ticker: str, *, force_refresh: bool = False) -> dict[str, Any]:
     """Compute a sentiment-extremity scalar for `ticker` and cache as social_hot."""
     today_key = f"social_hot:{ticker}:{date.today().isoformat()}"
     if not force_refresh:

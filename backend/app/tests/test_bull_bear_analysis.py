@@ -217,8 +217,8 @@ def test_graph_falls_back_to_template_when_no_sector_block():
 def _unpriced_dcf():
     """A real DCF whose shares could not be priced — implied price and
     upside are None on every scenario (no share count / no quote)."""
-    from app.services.valuation_service import build_dcf
     from app.schemas import DCFResult
+    from app.services.valuation_service import build_dcf
     data = build_dcf("NVDA").model_dump()
     for k in ("base", "bull", "bear"):
         data[k]["implied_share_price"] = None

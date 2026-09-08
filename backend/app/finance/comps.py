@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 from statistics import median
-from typing import Dict, List, Optional
 
 from ..schemas import CompsResult, CompsRow
 from . import ratios as R
 
 
-def _percentile_rank(values: List[float], target: float) -> float:
+def _percentile_rank(values: list[float], target: float) -> float:
     """Return percentile of `target` within `values` (0-1)."""
     clean = [v for v in values if v is not None]
     if not clean:
@@ -20,11 +19,11 @@ def _percentile_rank(values: List[float], target: float) -> float:
 def build_row(
     ticker: str,
     company_name: str,
-    market_cap: Optional[float],
-    income: Dict,
-    balance: Dict,
-    cash_flow: Dict,
-    prior_income: Optional[Dict] = None,
+    market_cap: float | None,
+    income: dict,
+    balance: dict,
+    cash_flow: dict,
+    prior_income: dict | None = None,
 ) -> CompsRow:
     return CompsRow(
         ticker=ticker,
@@ -43,13 +42,13 @@ def build_row(
     )
 
 
-def compute_comps(target: CompsRow, peers: List[CompsRow]) -> CompsResult:
+def compute_comps(target: CompsRow, peers: list[CompsRow]) -> CompsResult:
     fields = [
         "revenue_growth", "gross_margin", "operating_margin", "ebitda_margin",
         "roic", "pe", "ev_revenue", "ev_ebitda", "p_fcf", "fcf_yield",
     ]
 
-    median_data: Dict[str, Optional[float]] = {}
+    median_data: dict[str, float | None] = {}
     for f in fields:
         vals = [getattr(p, f) for p in peers if getattr(p, f) is not None]
         median_data[f] = median(vals) if vals else None
@@ -61,8 +60,8 @@ def compute_comps(target: CompsRow, peers: List[CompsRow]) -> CompsResult:
         **{f: median_data[f] for f in fields},
     )
 
-    target_percentiles: Dict[str, float] = {}
-    premium_discount: Dict[str, float] = {}
+    target_percentiles: dict[str, float] = {}
+    premium_discount: dict[str, float] = {}
     for f in fields:
         peer_vals = [getattr(p, f) for p in peers if getattr(p, f) is not None]
         target_val = getattr(target, f)
@@ -72,7 +71,7 @@ def compute_comps(target: CompsRow, peers: List[CompsRow]) -> CompsResult:
             if med and med != 0:
                 premium_discount[f] = round((target_val - med) / abs(med), 3)
 
-    interpretation_lines: List[str] = []
+    interpretation_lines: list[str] = []
     if "ev_ebitda" in premium_discount:
         delta = premium_discount["ev_ebitda"]
         if delta > 0.05:

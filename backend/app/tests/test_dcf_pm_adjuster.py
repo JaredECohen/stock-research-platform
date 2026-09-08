@@ -15,7 +15,7 @@ DCF compute layer.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 
@@ -80,7 +80,7 @@ def _stub_dcf() -> DCFResult:
     )
 
 
-def _stub_findings() -> Dict[str, AgentFinding]:
+def _stub_findings() -> dict[str, AgentFinding]:
     return {
         "sector": _stub_finding("Sector Analyst", "cohort growth re-accelerating"),
         "earnings": _stub_finding("Earnings Analyst", "tone constructive"),
@@ -127,7 +127,7 @@ def test_llm_proposal_with_rationale_rebuilds_dcf(monkeypatch):
     rebuilt_dcf = _stub_dcf()
     rebuilt_dcf = rebuilt_dcf.model_copy(update={"summary": "rebuilt DCF"})
 
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     def fake_build_dcf(ticker, *, assumptions=None, force_refresh=False):
         captured["ticker"] = ticker

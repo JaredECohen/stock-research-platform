@@ -26,8 +26,9 @@ Why both:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from ..cache import cache_get
 from ..config import settings
@@ -70,7 +71,7 @@ class _Tool:
     description: str = ""
 
 
-def function_tool(fn: Optional[Callable] = None, *, name: Optional[str] = None, description: str = ""):
+def function_tool(fn: Callable | None = None, *, name: str | None = None, description: str = ""):
     """Decorator that wraps a Python function as a `_Tool` instance.
 
     Mirrors the `@function_tool` decorator from `openai-agents`. Used so we
@@ -89,9 +90,9 @@ class Agent:
     name: str
     instructions: str
     model: str
-    tools: List[_Tool] = field(default_factory=list)
-    handoffs: List["Agent"] = field(default_factory=list)
-    handler: Optional[Callable[..., Any]] = None  # demo-mode deterministic implementation
+    tools: list[_Tool] = field(default_factory=list)
+    handoffs: list[Agent] = field(default_factory=list)
+    handler: Callable[..., Any] | None = None  # demo-mode deterministic implementation
 
 
 @dataclass
@@ -99,7 +100,7 @@ class RunResult:
     """Return shape of `Runner.run()` — kept simple for our internal callers."""
     final_output: Any
     iterations: int
-    trace: List[str] = field(default_factory=list)
+    trace: list[str] = field(default_factory=list)
 
 
 class Runner:
@@ -108,7 +109,7 @@ class Runner:
     DEFAULT_MAX_ITERATIONS = 6
 
     @classmethod
-    def run(cls, agent: Agent, inputs: Dict[str, Any], *, max_iterations: int = DEFAULT_MAX_ITERATIONS) -> RunResult:
+    def run(cls, agent: Agent, inputs: dict[str, Any], *, max_iterations: int = DEFAULT_MAX_ITERATIONS) -> RunResult:
         trace = [f"start agent={agent.name}"]
         if agent.handler is None:
             return RunResult(final_output=None, iterations=0, trace=trace + ["no-handler"])
@@ -128,51 +129,51 @@ class Runner:
 # ---------------------------------------------------------------------------
 
 @function_tool(description="Read the latest cached company_cold snapshot for a ticker.")
-def get_cached_company_cold(ticker: str) -> Optional[Dict[str, Any]]:
+def get_cached_company_cold(ticker: str) -> dict[str, Any] | None:
     snap = cache_get(ticker, "company_cold")
     return snap.payload if snap else None
 
 
 @function_tool(description="Read the latest cached sector_warm snapshot for sector:sub_industry:ticker.")
-def get_cached_sector_warm(sector: str, sub_industry: str, ticker: str) -> Optional[Dict[str, Any]]:
+def get_cached_sector_warm(sector: str, sub_industry: str, ticker: str) -> dict[str, Any] | None:
     snap = cache_get(f"{sector}:{sub_industry}:{ticker}", "sector_warm")
     return snap.payload if snap else None
 
 
 @function_tool(description="Read the latest cached news_hot buffer for a ticker.")
-def get_cached_news_hot(ticker: str) -> Optional[Dict[str, Any]]:
+def get_cached_news_hot(ticker: str) -> dict[str, Any] | None:
     snap = cache_get(f"news_hot:{ticker}", "news_hot")
     return snap.payload if snap else None
 
 
 @function_tool(description="Read the latest cached MacroBroadcast snapshot.")
-def get_cached_macro_broadcast() -> Optional[Dict[str, Any]]:
+def get_cached_macro_broadcast() -> dict[str, Any] | None:
     snap = cache_get("macro:global", "macro_broadcast")
     return snap.payload if snap else None
 
 
 @function_tool(description="Run the news agent for a ticker and return its NewsAlert list.")
-def run_news_agent(ticker: str) -> List[Dict[str, Any]]:
+def run_news_agent(ticker: str) -> list[dict[str, Any]]:
     from . import news_agent
     alerts = news_agent.run(ticker)
     return [a.model_dump() for a in alerts]
 
 
 @function_tool(description="Run the social-media agent for a ticker; returns a sentiment scalar.")
-def run_social_agent(ticker: str) -> Dict[str, Any]:
+def run_social_agent(ticker: str) -> dict[str, Any]:
     from . import social_agent
     return social_agent.run(ticker)
 
 
 @function_tool(description="Run the critic agent against a draft memo dict; returns a CriticReview.")
-def run_critic_agent(memo_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def run_critic_agent(memo_dict: dict[str, Any]) -> dict[str, Any] | None:
     from .critic_agent import run_critic
     review = run_critic(memo_dict)
     return review.model_dump() if review else None
 
 
 @function_tool(description="Hand off a question to a peer sector agent, capped to depth 2.")
-def query_peer_sector(sector: str, question: str, *, _depth: int = 0) -> Dict[str, Any]:
+def query_peer_sector(sector: str, question: str, *, _depth: int = 0) -> dict[str, Any]:
     """Real peer-sector query (Phase 6).
 
     1. Read the peer sector's most recent warm snapshot from cache (cheap path).
@@ -185,9 +186,10 @@ def query_peer_sector(sector: str, question: str, *, _depth: int = 0) -> Dict[st
 
     # 1. Latest warm snapshot for the sector
     from sqlalchemy import select
+
     from ..cache.snapshots import ResearchSnapshot
     from ..database import SessionLocal
-    snapshot_payload: Optional[Dict[str, Any]] = None
+    snapshot_payload: dict[str, Any] | None = None
     with SessionLocal() as db:
         rows = db.execute(
             select(ResearchSnapshot)
@@ -205,7 +207,7 @@ def query_peer_sector(sector: str, question: str, *, _depth: int = 0) -> Dict[st
                 break
 
     # 2. Pending news alerts for the sector
-    pending_alerts: List[Dict[str, Any]] = []
+    pending_alerts: list[dict[str, Any]] = []
     with SessionLocal() as db:
         rows = db.execute(
             select(ResearchSnapshot)
@@ -224,7 +226,7 @@ def query_peer_sector(sector: str, question: str, *, _depth: int = 0) -> Dict[st
 
     # 3. Optionally invoke the peer sector agent for a fresh take. Demo mode's
     # handler delegates to `run_sector_agent`, which is cheap.
-    fresh_view: Optional[Dict[str, Any]] = None
+    fresh_view: dict[str, Any] | None = None
     agents_map = get_agents()
     peer_key = f"sector:{sector}"
     peer = agents_map.get(peer_key)
@@ -259,7 +261,7 @@ def query_peer_sector(sector: str, question: str, *, _depth: int = 0) -> Dict[st
 # whole pipeline runs in demo mode without an LLM.
 # ---------------------------------------------------------------------------
 
-def _pm_handler(inputs: Dict[str, Any], *, runner: Any, max_iterations: int) -> StockMemoOut:
+def _pm_handler(inputs: dict[str, Any], *, runner: Any, max_iterations: int) -> StockMemoOut:
     """PM agent handler: orchestrates a single-stock memo via legacy graph.
 
     With an LLM, this would compose handoffs to the sector / tool agents.
@@ -271,7 +273,7 @@ def _pm_handler(inputs: Dict[str, Any], *, runner: Any, max_iterations: int) -> 
     return run_stock_memo(ticker)
 
 
-def _sector_handler(inputs: Dict[str, Any], *, runner: Any, max_iterations: int) -> AgentFinding:
+def _sector_handler(inputs: dict[str, Any], *, runner: Any, max_iterations: int) -> AgentFinding:
     from .sector_agents import run_sector_agent
     profile = inputs.get("profile") or {}
     ratios = inputs.get("ratios") or {}
@@ -279,7 +281,7 @@ def _sector_handler(inputs: Dict[str, Any], *, runner: Any, max_iterations: int)
 
 
 def _tool_handler_factory(name: str) -> Callable:
-    def _handler(inputs: Dict[str, Any], *, runner: Any, max_iterations: int) -> Any:
+    def _handler(inputs: dict[str, Any], *, runner: Any, max_iterations: int) -> Any:
         # Each tool agent calls the cached service; demo mode delegates to the
         # underlying legacy agent runners.
         if name == "filing":
@@ -314,7 +316,7 @@ def _tool_handler_factory(name: str) -> Callable:
 
 
 # Build agents lazily so importing the module is cheap and side-effect-free.
-_AGENT_CACHE: Dict[str, Agent] = {}
+_AGENT_CACHE: dict[str, Agent] = {}
 
 
 # The Agents SDK (real or shim) only speaks OpenAI, so roles resolve
@@ -371,7 +373,7 @@ SECTOR_NAMES = [
 TOOL_NAMES = ["filing", "earnings", "valuation", "comps", "risk"]
 
 
-def get_agents() -> Dict[str, Agent]:
+def get_agents() -> dict[str, Agent]:
     """Build (or fetch from process cache) the full agent topology."""
     if _AGENT_CACHE:
         return _AGENT_CACHE
@@ -400,7 +402,7 @@ def get_agents() -> Dict[str, Agent]:
 
 
 def _persist_sdk_trace(
-    *, run_id: str, ticker: Optional[str], surface: str,
+    *, run_id: str, ticker: str | None, surface: str,
     final_output: str, new_items: Any, error: str = "",
     duration_ms: int = 0,
 ) -> None:
@@ -448,8 +450,8 @@ def _persist_sdk_trace(
 
 
 def _run_via_real_sdk(
-    ticker: str, *, run_id: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+    ticker: str, *, run_id: str | None = None,
+) -> dict[str, Any] | None:
     """Real OpenAI Agents SDK exchange.
 
     Builds a real `agents.Agent` for the PM with sector-handoff agents and
@@ -467,10 +469,12 @@ def _run_via_real_sdk(
     import time as _time
     started = _time.perf_counter()
     try:
-        from agents import Agent as RealAgent, Runner as RealRunner, function_tool as real_function_tool
+        from agents import Agent as RealAgent
+        from agents import Runner as RealRunner
+        from agents import function_tool as real_function_tool
 
         @real_function_tool
-        def produce_legacy_memo(ticker: str) -> Dict[str, Any]:
+        def produce_legacy_memo(ticker: str) -> dict[str, Any]:
             """Generate a structured StockMemoOut for the requested ticker
             using the firm's specialist-agent graph (sector / earnings /
             filing / valuation / comps / macro / risk + critic). Always

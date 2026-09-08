@@ -215,6 +215,7 @@ def test_sdk_shim_runner_masks_the_handler_exception(caplog):
 def test_real_sdk_exchange_masks_the_exception_in_log_and_trace_row(monkeypatch, caplog):
     """Nothing is run: the SDK's Agent/Runner are replaced, Runner raises."""
     import agents as real_sdk
+
     from app.agents import sdk_runtime
 
     class _FakeAgent:

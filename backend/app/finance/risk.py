@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import math
 from statistics import mean, pstdev
-from typing import Dict, List, Optional
 
 
-def daily_returns(closes: List[float]) -> List[float]:
+def daily_returns(closes: list[float]) -> list[float]:
     if not closes or len(closes) < 2:
         return []
     return [
@@ -16,20 +15,20 @@ def daily_returns(closes: List[float]) -> List[float]:
     ]
 
 
-def annualized_volatility(returns: List[float]) -> float:
+def annualized_volatility(returns: list[float]) -> float:
     if len(returns) < 2:
         return 0.0
     return pstdev(returns) * math.sqrt(252)
 
 
-def annualized_return(returns: List[float]) -> float:
+def annualized_return(returns: list[float]) -> float:
     if not returns:
         return 0.0
     avg = mean(returns)
     return ((1 + avg) ** 252) - 1
 
 
-def sharpe_ratio(returns: List[float], rf_annual: float = 0.04) -> float:
+def sharpe_ratio(returns: list[float], rf_annual: float = 0.04) -> float:
     if not returns:
         return 0.0
     vol = annualized_volatility(returns)
@@ -38,7 +37,7 @@ def sharpe_ratio(returns: List[float], rf_annual: float = 0.04) -> float:
     return (annualized_return(returns) - rf_annual) / vol
 
 
-def max_drawdown(closes: List[float]) -> float:
+def max_drawdown(closes: list[float]) -> float:
     if not closes:
         return 0.0
     peak = closes[0]
@@ -52,7 +51,7 @@ def max_drawdown(closes: List[float]) -> float:
     return max_dd
 
 
-def correlation(a: List[float], b: List[float]) -> Optional[float]:
+def correlation(a: list[float], b: list[float]) -> float | None:
     n = min(len(a), len(b))
     if n < 2:
         return None
@@ -65,7 +64,7 @@ def correlation(a: List[float], b: List[float]) -> Optional[float]:
     return num / den
 
 
-def beta(stock_returns: List[float], market_returns: List[float]) -> Optional[float]:
+def beta(stock_returns: list[float], market_returns: list[float]) -> float | None:
     n = min(len(stock_returns), len(market_returns))
     if n < 2:
         return None
@@ -78,7 +77,7 @@ def beta(stock_returns: List[float], market_returns: List[float]) -> Optional[fl
     return cov / var
 
 
-def portfolio_volatility(weights: Dict[str, float], vols: Dict[str, float], corr: Dict[str, Dict[str, float]]) -> float:
+def portfolio_volatility(weights: dict[str, float], vols: dict[str, float], corr: dict[str, dict[str, float]]) -> float:
     """sigma_p^2 = sum_i sum_j w_i w_j sigma_i sigma_j rho_ij"""
     tickers = list(weights.keys())
     var = 0.0
@@ -91,7 +90,7 @@ def portfolio_volatility(weights: Dict[str, float], vols: Dict[str, float], corr
     return math.sqrt(max(0.0, var))
 
 
-def concentration_metrics(weights: Dict[str, float]) -> Dict[str, float]:
+def concentration_metrics(weights: dict[str, float]) -> dict[str, float]:
     if not weights:
         return {"top_3": 0.0, "top_5": 0.0, "hhi": 0.0, "n_effective": 0.0}
     sorted_w = sorted(weights.values(), reverse=True)

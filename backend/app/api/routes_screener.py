@@ -1,8 +1,6 @@
 """Screener endpoints — AI-first, factor-rank, and rule-based custom screen."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -30,7 +28,7 @@ _AI_SORT_COLUMNS = {
 }
 
 
-def _apply_sort(rows, sort_by: Optional[str], order: str = "desc"):
+def _apply_sort(rows, sort_by: str | None, order: str = "desc"):
     if not sort_by or sort_by not in _AI_SORT_COLUMNS:
         sort_by = "pm_score"
     rev = order != "asc"
@@ -41,9 +39,9 @@ def _apply_sort(rows, sort_by: Optional[str], order: str = "desc"):
 
 @router.get("/api/screener", response_model=ScreenerResult)
 def get_screener(
-    theme: Optional[str] = None,
-    sector: Optional[str] = None,
-    sort_by: Optional[str] = "pm_score",
+    theme: str | None = None,
+    sector: str | None = None,
+    sort_by: str | None = "pm_score",
     order: str = "desc",
     limit: int = 50,
 ) -> ScreenerResult:
@@ -92,7 +90,7 @@ def _execute_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
     """Pure business logic for the custom screen — used by both the
     HTTP route (which adds rate limiting) and the chat-SDK tool (which
     invokes it directly without a Request object)."""
-    metric_names: List[str] = list({r.metric for r in req.rules})
+    metric_names: list[str] = list({r.metric for r in req.rules})
     metric_names.append(req.sort_by)
 
     with SessionLocal() as db:
@@ -145,7 +143,7 @@ def _execute_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
         # Pull AI scores in one query so we can render PM conviction
         # alongside the raw metrics.
         tickers = [m.ticker for m, _, _ in results]
-        score_lookup: Dict[str, ScreenerScore] = {}
+        score_lookup: dict[str, ScreenerScore] = {}
         if tickers:
             score_rows = db.execute(
                 select(ScreenerScore).where(
@@ -155,12 +153,12 @@ def _execute_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
             ).scalars().all()
             score_lookup = {s.ticker: s for s in score_rows}
 
-    rows: List[CustomScreenRow] = []
+    rows: list[CustomScreenRow] = []
     for m, company_name, sector in results:
         score = score_lookup.get(m.ticker)
         # Surface every metric the user filtered on plus the sort column;
         # frontend renders these as columns in the result grid.
-        metrics: Dict[str, Optional[float]] = {}
+        metrics: dict[str, float | None] = {}
         for name in metric_names:
             metrics[name] = getattr(m, name, None)
         rows.append(CustomScreenRow(
@@ -206,8 +204,8 @@ class NLScreenerRequest(BaseModel):
 @router.post("/api/screener/nl")
 @limiter.limit(LIMITS["custom_screen"])
 def run_nl_screener(
-    request: Request, response: Response, req: "NLScreenerRequest",
-) -> Dict:
+    request: Request, response: Response, req: NLScreenerRequest,
+) -> dict:
     """Wave 10 — natural-language screener.
 
     User types free-form prose ("show me profitable AI-exposed semis

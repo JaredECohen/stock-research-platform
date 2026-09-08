@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter
 
 from ..agents import llm
 from ..config import settings
-from ..services.data_service import get_data_service
 from ..services import provider_cache
+from ..services.data_service import get_data_service
 
 router = APIRouter()
 
@@ -19,7 +19,7 @@ router = APIRouter()
 def _iso(epoch: float | None) -> str | None:
     if epoch is None:
         return None
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(epoch, tz=UTC).isoformat()
 
 
 def _ago(seconds: float) -> str:
@@ -32,8 +32,8 @@ def _ago(seconds: float) -> str:
 
 
 def _llm_degradation(
-    mode: str, active: str, breakers: Dict[str, Dict[str, Any]], failover: Dict[str, Any],
-) -> Tuple[bool, List[str]]:
+    mode: str, active: str, breakers: dict[str, dict[str, Any]], failover: dict[str, Any],
+) -> tuple[bool, list[str]]:
     """Why the LLM layer is not running as configured, in plain sentences.
 
     Three conditions count: nothing configured while data is live (memos
@@ -43,7 +43,7 @@ def _llm_degradation(
     backup vendor). Anything the ops page can act on has to be readable
     without the breaker internals, hence sentences rather than codes.
     """
-    reasons: List[str] = []
+    reasons: list[str] = []
     if not settings.has_llm and mode == "live":
         reasons.append("No LLM provider configured")
     if active in breakers and breakers[active]["is_open"]:
@@ -62,7 +62,7 @@ def _llm_degradation(
     return bool(reasons), reasons
 
 
-def _llm_status(mode: str) -> Dict[str, Any]:
+def _llm_status(mode: str) -> dict[str, Any]:
     """The `llm` block of `/api/providers/status`.
 
     Shape is a contract with the frontend status page — keep every key,
@@ -106,7 +106,7 @@ def _llm_status(mode: str) -> Dict[str, Any]:
 
 
 @router.get("/health")
-def health() -> Dict:
+def health() -> dict:
     return {
         "status": "ok",
         "app_env": settings.app_env,
@@ -117,7 +117,7 @@ def health() -> Dict:
 
 
 @router.get("/api/providers/status")
-def providers_status() -> Dict:
+def providers_status() -> dict:
     ds = get_data_service()
     statuses = {name: asdict(s) for name, s in ds.status().items()}
     missing_keys = [

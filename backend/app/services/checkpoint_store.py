@@ -29,8 +29,9 @@ from __future__ import annotations
 import functools
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, Optional, Type, TypeVar
+from typing import Any, TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -61,9 +62,9 @@ def _now() -> datetime:
 
 def save_step(
     run_id: str, step_name: str, *,
-    payload: Any, ticker: Optional[str] = None,
+    payload: Any, ticker: str | None = None,
     ttl_hours: int = DEFAULT_TTL_HOURS,
-    db: Optional[Session] = None,
+    db: Session | None = None,
 ) -> bool:
     """Persist `payload` for `(run_id, step_name)`. Returns True on success.
 
@@ -109,8 +110,8 @@ def save_step(
 
 
 def load_step(
-    run_id: str, step_name: str, *, db: Optional[Session] = None,
-) -> Optional[Dict[str, Any]]:
+    run_id: str, step_name: str, *, db: Session | None = None,
+) -> dict[str, Any] | None:
     own = db is None
     if own:
         db = SessionLocal()
@@ -132,7 +133,7 @@ def load_step(
             db.close()
 
 
-def gc_expired(*, db: Optional[Session] = None) -> int:
+def gc_expired(*, db: Session | None = None) -> int:
     """Delete checkpoint rows past their TTL. Returns count removed."""
     own = db is None
     if own:
@@ -172,7 +173,7 @@ def _to_json_safe(value: Any) -> Any:
     return value
 
 
-def _from_json_safe(value: Any, return_type: Optional[Type] = None) -> Any:
+def _from_json_safe(value: Any, return_type: type | None = None) -> Any:
     """Re-hydrate a stored payload into the caller's expected type when
     a Pydantic class is provided. Otherwise returns the raw dict / scalar."""
     if value is None:
@@ -186,7 +187,7 @@ def _from_json_safe(value: Any, return_type: Optional[Type] = None) -> Any:
 
 
 def checkpointed(
-    step_name: str, *, return_type: Optional[Type] = None,
+    step_name: str, *, return_type: type | None = None,
     ttl_hours: int = DEFAULT_TTL_HOURS,
 ):
     """Decorator: cache the function's return value under `(run_id, step_name)`.
@@ -218,7 +219,7 @@ def checkpointed(
     return decorator
 
 
-def _current_run_id() -> Optional[str]:
+def _current_run_id() -> str | None:
     """Pull `run_id` out of the active llm_call_context (Wave 1A)."""
     try:
         from ..agents.llm import current_call_context

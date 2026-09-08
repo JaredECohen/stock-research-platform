@@ -8,12 +8,10 @@ solver needed for a self-contained demo.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, Iterable, List, Optional
 
 from ..schemas import ModelPortfolio, PortfolioHolding, PortfolioRequest
 
-
-SCENARIO_KEYWORDS: Dict[str, Dict[str, float]] = {
+SCENARIO_KEYWORDS: dict[str, dict[str, float]] = {
     "soft_landing": {
         "tech": 1.15, "consumer": 1.10, "financials": 1.05,
         "healthcare": 1.0, "energy": 0.95, "industrials": 1.05,
@@ -77,7 +75,7 @@ def detect_scenario(market_view: str) -> str:
     return "soft_landing"
 
 
-def blended_sector_weights(market_view: str) -> Dict[str, float]:
+def blended_sector_weights(market_view: str) -> dict[str, float]:
     """Wave 10 — sector multipliers blended across the regime mixture.
 
     Real macro states are mixtures (e.g. 0.55 soft / 0.30 sticky /
@@ -99,9 +97,9 @@ def blended_sector_weights(market_view: str) -> Dict[str, float]:
         key = detect_scenario(market_view)
         return dict(SCENARIO_KEYWORDS.get(key, {}))
     # Weighted average across regimes for each sector bucket.
-    blended: Dict[str, float] = {}
+    blended: dict[str, float] = {}
     seen_buckets: set[str] = set()
-    for regime, weight in probs.items():
+    for regime, _weight in probs.items():
         for bucket in SCENARIO_KEYWORDS.get(regime, {}):
             seen_buckets.add(bucket)
     for bucket in seen_buckets:
@@ -115,7 +113,7 @@ def blended_sector_weights(market_view: str) -> Dict[str, float]:
 
 def build_portfolio(
     request: PortfolioRequest,
-    candidates: List[dict],
+    candidates: list[dict],
     *,
     name: str = "Scenario Portfolio",
 ) -> ModelPortfolio:
@@ -180,9 +178,9 @@ def build_portfolio(
     # Sector cap: at most 35% in a single sector for balanced; tighter for conservative
     sector_cap = {"conservative": 0.30, "balanced": 0.40, "aggressive": 0.55}[request.risk_level]
 
-    selected: List[dict] = []
-    sector_used: Dict[str, float] = defaultdict(float)
-    raw_weights: Dict[str, float] = {}
+    selected: list[dict] = []
+    sector_used: dict[str, float] = defaultdict(float)
+    raw_weights: dict[str, float] = {}
     for c in eligible:
         if len(selected) >= n:
             break
@@ -223,8 +221,8 @@ def build_portfolio(
     total = sum(weights.values()) or 1.0
     weights = {t: round(w / total, 4) for t, w in weights.items()}
 
-    holdings: List[PortfolioHolding] = []
-    sector_allocation: Dict[str, float] = defaultdict(float)
+    holdings: list[PortfolioHolding] = []
+    sector_allocation: dict[str, float] = defaultdict(float)
     for c in selected:
         w = weights.get(c["ticker"], 0.0)
         if w <= 0:
@@ -248,7 +246,7 @@ def build_portfolio(
     weight_map = {h.ticker: h.weight for h in holdings}
     concentration = {k: round(v, 4) for k, v in concentration_metrics(weight_map).items()}
 
-    risk_notes: List[str] = []
+    risk_notes: list[str] = []
     if concentration.get("hhi", 0) > 0.18:
         risk_notes.append("Portfolio is concentrated; HHI above 0.18.")
     if concentration.get("top_3", 0) > 0.40:
@@ -264,16 +262,16 @@ def build_portfolio(
     if not risk_notes:
         risk_notes.append("Diversification looks reasonable; revisit positions on material thesis change.")
 
-    top_drivers: List[str] = []
+    top_drivers: list[str] = []
     for h in holdings[:3]:
         top_drivers.append(f"{h.ticker}: {h.rationale}")
 
-    invalidators: List[str] = [
+    invalidators: list[str] = [
         f"A reversal of the '{request.market_view}' thesis would unwind the sector tilt.",
         "Significant rerating in one of the top three positions would dominate portfolio P&L.",
         "Sustained credit-spread widening could compress the multiples this construction assumes.",
     ]
-    watch_items: List[str] = [
+    watch_items: list[str] = [
         "Update the screener weekly — refresh PM scores after major macro prints or earnings.",
         "Re-run the risk committee if sector allocation drifts >5% from target.",
         "Add a defensive sleeve if drawdown tolerance is tighter than risk_level suggests.",

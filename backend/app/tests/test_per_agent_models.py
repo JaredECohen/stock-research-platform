@@ -14,9 +14,11 @@ from app.agents import (
     critic_agent,
     earnings_agent,
     filing_agent,
-    llm as llm_mod,
     sector_agents,
     valuation_agent,
+)
+from app.agents import (
+    llm as llm_mod,
 )
 from app.config import settings
 
@@ -225,6 +227,7 @@ def test_chat_sdk_agent_never_carries_a_blank_pm_model(monkeypatch):
     OPENAI_PM_MODEL used to reach it as "" and silently drop chat to the
     non-SDK path. The SDK module is patched so nothing is ever run."""
     import agents as real_sdk
+
     from app.agents import chat_sdk
 
     captured: dict = {}

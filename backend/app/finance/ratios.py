@@ -1,28 +1,26 @@
 """Ratio computations used across the comps and screener engines."""
 from __future__ import annotations
 
-from typing import Optional, Tuple
 
-
-def safe_div(n: Optional[float], d: Optional[float]) -> Optional[float]:
+def safe_div(n: float | None, d: float | None) -> float | None:
     if n is None or d is None or d == 0:
         return None
     return n / d
 
 
-def gross_margin(income: dict) -> Optional[float]:
+def gross_margin(income: dict) -> float | None:
     return safe_div(income.get("gross_profit"), income.get("revenue"))
 
 
-def operating_margin(income: dict) -> Optional[float]:
+def operating_margin(income: dict) -> float | None:
     return safe_div(income.get("operating_income"), income.get("revenue"))
 
 
-def net_margin(income: dict) -> Optional[float]:
+def net_margin(income: dict) -> float | None:
     return safe_div(income.get("net_income"), income.get("revenue"))
 
 
-def ebitda(income: dict, cash_flow: dict) -> Optional[float]:
+def ebitda(income: dict, cash_flow: dict) -> float | None:
     op = income.get("operating_income")
     da = cash_flow.get("depreciation_and_amortization") if cash_flow else None
     if op is None:
@@ -30,27 +28,27 @@ def ebitda(income: dict, cash_flow: dict) -> Optional[float]:
     return op + (da or 0.0)
 
 
-def ebitda_margin(income: dict, cash_flow: dict) -> Optional[float]:
+def ebitda_margin(income: dict, cash_flow: dict) -> float | None:
     val = ebitda(income, cash_flow)
     return safe_div(val, income.get("revenue"))
 
 
-def fcf_margin(cash_flow: dict, income: dict) -> Optional[float]:
+def fcf_margin(cash_flow: dict, income: dict) -> float | None:
     return safe_div(cash_flow.get("free_cash_flow"), income.get("revenue"))
 
 
-def revenue_growth(prior: dict, current: dict) -> Optional[float]:
+def revenue_growth(prior: dict, current: dict) -> float | None:
     p, c = prior.get("revenue"), current.get("revenue")
     if not p or p == 0:
         return None
     return (c - p) / abs(p)
 
 
-def roe(income: dict, balance: dict) -> Optional[float]:
+def roe(income: dict, balance: dict) -> float | None:
     return safe_div(income.get("net_income"), balance.get("shareholders_equity"))
 
 
-def roa(income: dict, balance: dict) -> Optional[float]:
+def roa(income: dict, balance: dict) -> float | None:
     return safe_div(income.get("net_income"), balance.get("total_assets"))
 
 
@@ -78,7 +76,7 @@ ROIC_NO_OPERATING_INCOME = "no_operating_income"
 ROIC_NO_INVESTED_CAPITAL = "no_invested_capital"
 
 
-def effective_tax_rate(income: dict) -> Optional[float]:
+def effective_tax_rate(income: dict) -> float | None:
     """`tax_expense / pretax_income`, or None when the ratio isn't credible.
 
     Credible means: both lines present, positive pretax income (a loss
@@ -108,8 +106,8 @@ def invested_capital(balance: dict) -> float:
 
 
 def roic_with_provenance(
-    income: dict, balance: dict, tax_rate: Optional[float] = None,
-) -> Tuple[Optional[float], str]:
+    income: dict, balance: dict, tax_rate: float | None = None,
+) -> tuple[float | None, str]:
     """ROIC = operating_income * (1 - tax_rate) / (debt + equity), plus a
     label saying how the tax rate was resolved (or why ROIC is None).
 
@@ -147,7 +145,7 @@ def roic_with_provenance(
     return op * (1 - rate) / invested, source
 
 
-def roic(income: dict, balance: dict, tax_rate: Optional[float] = None) -> Optional[float]:
+def roic(income: dict, balance: dict, tax_rate: float | None = None) -> float | None:
     """Value-only view of `roic_with_provenance`; same resolution rules."""
     return roic_with_provenance(income, balance, tax_rate)[0]
 
@@ -160,30 +158,30 @@ def net_debt(balance: dict) -> float:
     return debt - cash
 
 
-def enterprise_value(market_cap: float, balance: dict) -> Optional[float]:
+def enterprise_value(market_cap: float, balance: dict) -> float | None:
     if market_cap is None:
         return None
     return market_cap + net_debt(balance)
 
 
-def ev_revenue(market_cap: float, balance: dict, income: dict) -> Optional[float]:
+def ev_revenue(market_cap: float, balance: dict, income: dict) -> float | None:
     ev = enterprise_value(market_cap, balance)
     return safe_div(ev, income.get("revenue"))
 
 
-def ev_ebitda(market_cap: float, balance: dict, income: dict, cash_flow: dict) -> Optional[float]:
+def ev_ebitda(market_cap: float, balance: dict, income: dict, cash_flow: dict) -> float | None:
     ev = enterprise_value(market_cap, balance)
     return safe_div(ev, ebitda(income, cash_flow))
 
 
-def pe_ratio(market_cap: float, income: dict) -> Optional[float]:
+def pe_ratio(market_cap: float, income: dict) -> float | None:
     return safe_div(market_cap, income.get("net_income"))
 
 
-def p_fcf(market_cap: float, cash_flow: dict) -> Optional[float]:
+def p_fcf(market_cap: float, cash_flow: dict) -> float | None:
     return safe_div(market_cap, cash_flow.get("free_cash_flow"))
 
 
-def fcf_yield(market_cap: float, cash_flow: dict) -> Optional[float]:
+def fcf_yield(market_cap: float, cash_flow: dict) -> float | None:
     val = safe_div(cash_flow.get("free_cash_flow"), market_cap)
     return val

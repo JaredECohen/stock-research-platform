@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from ..seed_universe import UniverseFile, load_universe_file
@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 FEED_SOURCE = "fmp"
 
 
-def _parse_date(value: Optional[str]) -> Optional[date]:
+def _parse_date(value: str | None) -> date | None:
     if not value:
         return None
     try:
@@ -48,7 +48,7 @@ def _parse_date(value: Optional[str]) -> Optional[date]:
         return None
 
 
-def file_status(uf: Optional[UniverseFile] = None, today: Optional[date] = None) -> Dict[str, Any]:
+def file_status(uf: UniverseFile | None = None, today: date | None = None) -> dict[str, Any]:
     """Staleness of the universe file alone — no DB, no network.
 
     Cheap enough to embed in `/api/admin/cron-health`. A missing or
@@ -74,7 +74,7 @@ def file_status(uf: Optional[UniverseFile] = None, today: Optional[date] = None)
     }
 
 
-def _db_view(file_tickers: List[str]) -> Dict[str, Any]:
+def _db_view(file_tickers: list[str]) -> dict[str, Any]:
     from ..database import SessionLocal
     from ..models import Company
 
@@ -96,7 +96,7 @@ def _db_view(file_tickers: List[str]) -> Dict[str, Any]:
     }
 
 
-def _feed_view(file_tickers: List[str]) -> Dict[str, Any]:
+def _feed_view(file_tickers: list[str]) -> dict[str, Any]:
     """Diff the file against the live FMP constituent list, read-only.
 
     `removed` will always include the curated extensions (ADRs, semis)
@@ -105,7 +105,7 @@ def _feed_view(file_tickers: List[str]) -> Dict[str, Any]:
     blindly. Failures are reported in `error` rather than raised: this
     is a report, and a half-report with a reason beats a 500.
     """
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "source": FEED_SOURCE, "fetched_at": None,
         "added": [], "removed": [], "error": None,
     }
@@ -140,10 +140,10 @@ def _feed_view(file_tickers: List[str]) -> Dict[str, Any]:
     return out
 
 
-def review_universe(compare_feed: bool = False, today: Optional[date] = None) -> Dict[str, Any]:
+def review_universe(compare_feed: bool = False, today: date | None = None) -> dict[str, Any]:
     """Full review report. Read-only; see the module docstring for shape."""
     uf = load_universe_file()
-    report: Dict[str, Any] = file_status(uf, today=today)
+    report: dict[str, Any] = file_status(uf, today=today)
     report.update({
         "ticker_count": len(uf.tickers),
         "auto_update_count": len(uf.auto_update),

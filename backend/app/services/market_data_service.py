@@ -1,22 +1,20 @@
 """Market data convenience layer (prices + lightweight stats)."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
-from .data_service import get_data_service
 from ..finance import risk as risk_lib
+from .data_service import get_data_service
 
 
-def get_price_series(ticker: str, days: int = 252) -> List[Dict]:
+def get_price_series(ticker: str, days: int = 252) -> list[dict]:
     return get_data_service().get_price_history(ticker, days) or []
 
 
-def get_close_series(ticker: str, days: int = 252) -> List[float]:
+def get_close_series(ticker: str, days: int = 252) -> list[float]:
     rows = get_price_series(ticker, days)
     return [r.get("close") or r.get("adjusted_close") for r in rows if r.get("close") is not None]
 
 
-def get_current_price(ticker: str) -> Optional[float]:
+def get_current_price(ticker: str) -> float | None:
     """Live intraday price with EOD-close fallback.
 
     Returns the freshest price available: a 60s-cached quote during
@@ -31,7 +29,7 @@ def get_current_price(ticker: str) -> Optional[float]:
     return closes[-1] if closes else None
 
 
-def get_basic_stats(ticker: str) -> Dict:
+def get_basic_stats(ticker: str) -> dict:
     closes = get_close_series(ticker)
     if not closes:
         return {}

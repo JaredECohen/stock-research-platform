@@ -14,7 +14,6 @@ about.
 from __future__ import annotations
 
 import logging
-from typing import Dict
 
 from ..services.theme_exposure_service import refresh_universe
 from . import record_run
@@ -22,7 +21,7 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def run_once(*, limit: int | None = None) -> Dict[str, int]:
+def run_once(*, limit: int | None = None) -> dict[str, int]:
     res = refresh_universe(limit=limit)
     note = f"tickers={res['tickers']} rows_written={res['rows_written']}"
     record_run("theme_exposure_loop", note=note)

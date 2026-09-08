@@ -19,7 +19,6 @@ Scheduled at 03:00 UTC, after `outcome_loop` (02:30) but before
 from __future__ import annotations
 
 import logging
-from typing import Dict
 
 from ..services.postmortem_service import run_postmortems
 from . import record_run
@@ -27,7 +26,7 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def run_once(*, limit_per_horizon: int = 25) -> Dict[str, int]:
+def run_once(*, limit_per_horizon: int = 25) -> dict[str, int]:
     try:
         early = run_postmortems(horizon_days=30, limit=limit_per_horizon)
         full = run_postmortems(horizon_days=90, limit=limit_per_horizon)

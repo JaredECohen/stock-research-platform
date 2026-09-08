@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select
 
@@ -30,8 +30,8 @@ log = logging.getLogger(__name__)
 
 
 def _latest_period_value(
-    rows: List[FinancialPeriod], line_item: str,
-) -> Optional[float]:
+    rows: list[FinancialPeriod], line_item: str,
+) -> float | None:
     """Most-recent non-null value for `line_item` from a sorted (desc) list."""
     for r in rows:
         if r.line_item == line_item and r.value is not None:
@@ -40,20 +40,20 @@ def _latest_period_value(
 
 
 def _yoy_growth(
-    rows: List[FinancialPeriod], line_item: str,
-) -> Optional[float]:
+    rows: list[FinancialPeriod], line_item: str,
+) -> float | None:
     values = [float(r.value) for r in rows if r.line_item == line_item and r.value is not None]
     if len(values) < 2 or values[1] == 0:
         return None
     return (values[0] - values[1]) / abs(values[1])
 
 
-def compute_metrics(ticker: str) -> Optional[Dict[str, Any]]:
+def compute_metrics(ticker: str) -> dict[str, Any] | None:
     """Compute the 15-metric snapshot for one ticker. Returns None when
     insufficient data — caller skips the upsert."""
     ticker = ticker.upper()
     with session_scope() as db:
-        company: Optional[Company] = db.get(Company, ticker)
+        company: Company | None = db.get(Company, ticker)
         if company is None:
             return None
         company_kwargs = dict(
@@ -110,7 +110,7 @@ def compute_metrics(ticker: str) -> Optional[Dict[str, Any]]:
     if market_cap is not None:
         enterprise_value = market_cap + (total_debt or 0) - (cash_balance + short_inv)
 
-    def _safe_div(a: Optional[float], b: Optional[float]) -> Optional[float]:
+    def _safe_div(a: float | None, b: float | None) -> float | None:
         if a is None or b is None or b == 0:
             return None
         return a / b
@@ -155,7 +155,7 @@ def compute_metrics(ticker: str) -> Optional[Dict[str, Any]]:
     return metrics
 
 
-def snapshot_universe() -> Dict[str, int]:
+def snapshot_universe() -> dict[str, int]:
     """Recompute + upsert metrics for every `auto_analysis` ticker.
 
     Returns counts: `{written, skipped, missing_data}`.

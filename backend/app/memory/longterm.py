@@ -30,15 +30,15 @@ leaves a half-written state.
 """
 from __future__ import annotations
 
+import json as _json
 import logging
 import os
 import re
 import tempfile
-import json as _json
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 
@@ -112,7 +112,7 @@ class MemoryEntry:
     date: str  # ISO date (YYYY-MM-DD)
     trigger: str  # e.g. "earnings", "filing:10-K", "material_news"
     body: str  # Markdown — multiple paragraphs allowed
-    structured_facts: Optional[Dict[str, Any]] = None
+    structured_facts: dict[str, Any] | None = None
 
     def render(self) -> str:
         out = f"### {self.date} — {self.trigger}\n\n{self.body.strip()}\n"
@@ -144,7 +144,7 @@ class CrossCompanyPattern:
     """
     date: str
     source_company: str
-    applies_to: List[str]
+    applies_to: list[str]
     lesson: str  # plain markdown, multi-paragraph allowed
 
     def render(self) -> str:
@@ -176,16 +176,16 @@ class _MemoryFile:
     entry_count: int = 0
     static_section: str = ""  # rarely-changing seed content
     historical_context: str = ""  # condensed summary block
-    entries: List[MemoryEntry] = field(default_factory=list)
+    entries: list[MemoryEntry] = field(default_factory=list)
     # Cross-company patterns are populated only on sector memory files. The
     # field lives on the base class so parsing/rendering stays uniform; for
     # company files it just stays empty.
-    cross_company_patterns: List[CrossCompanyPattern] = field(default_factory=list)
+    cross_company_patterns: list[CrossCompanyPattern] = field(default_factory=list)
 
     # ----- I/O -----
 
     @classmethod
-    def load(cls, path: Path, subject: str, kind: str) -> "_MemoryFile":
+    def load(cls, path: Path, subject: str, kind: str) -> _MemoryFile:
         if not path.exists():
             return cls(path=path, subject=subject, kind=kind)
         text = path.read_text(encoding="utf-8")
@@ -257,7 +257,7 @@ class _MemoryFile:
                 and not self.historical_context
                 and not self.cross_company_patterns):
             return ""
-        parts: List[str] = [f"### Long-term memory: {self.subject} ({self.kind})\n"]
+        parts: list[str] = [f"### Long-term memory: {self.subject} ({self.kind})\n"]
         if self.static_section.strip():
             parts.append(self.static_section.strip() + "\n")
         if self.historical_context.strip():
@@ -280,7 +280,7 @@ class _MemoryFile:
     # ----- Internal: parse / render -----
 
     @classmethod
-    def _parse(cls, path: Path, subject: str, kind: str, text: str) -> "_MemoryFile":
+    def _parse(cls, path: Path, subject: str, kind: str, text: str) -> _MemoryFile:
         front = {}
         body = text
         if text.startswith("---"):
@@ -296,7 +296,7 @@ class _MemoryFile:
         # Split body into sections by H2 headings
         sections: dict[str, str] = {}
         current = "_intro"
-        buf: List[str] = []
+        buf: list[str] = []
         for line in body.splitlines():
             if line.startswith("## "):
                 sections[current] = "\n".join(buf).strip()
@@ -326,7 +326,7 @@ class _MemoryFile:
         )
 
     def _render(self) -> str:
-        lines: List[str] = []
+        lines: list[str] = []
         lines.append("---")
         lines.append(f"subject: {self.subject}")
         lines.append(f"kind: {self.kind}")
@@ -368,7 +368,7 @@ _STRUCTURED_FACTS_RE = re.compile(
 )
 
 
-def _split_structured_facts(body: str) -> "tuple[str, Optional[Dict[str, Any]]]":
+def _split_structured_facts(body: str) -> tuple[str, dict[str, Any] | None]:
     """Pull a trailing ```structured-facts``` JSON block out of an entry body.
 
     Wave 3D round-trips structured-fact dicts by appending them as a
@@ -388,7 +388,7 @@ def _split_structured_facts(body: str) -> "tuple[str, Optional[Dict[str, Any]]]"
     return cleaned, facts
 
 
-def _parse_entries(block: str) -> List[MemoryEntry]:
+def _parse_entries(block: str) -> list[MemoryEntry]:
     if not block.strip():
         return []
     # Skip pattern-shaped headers — they go through `_parse_patterns`.
@@ -396,7 +396,7 @@ def _parse_entries(block: str) -> List[MemoryEntry]:
         m for m in _ENTRY_HEADER_RE.finditer(block)
         if " → applies to:" not in m.group(2)
     ]
-    out: List[MemoryEntry] = []
+    out: list[MemoryEntry] = []
     for i, m in enumerate(matches):
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(block)
@@ -409,11 +409,11 @@ def _parse_entries(block: str) -> List[MemoryEntry]:
     return out
 
 
-def _parse_patterns(block: str) -> List[CrossCompanyPattern]:
+def _parse_patterns(block: str) -> list[CrossCompanyPattern]:
     if not block.strip():
         return []
     matches = list(_PATTERN_HEADER_RE.finditer(block))
-    out: List[CrossCompanyPattern] = []
+    out: list[CrossCompanyPattern] = []
     for i, m in enumerate(matches):
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(block)
@@ -429,7 +429,7 @@ def _parse_patterns(block: str) -> List[CrossCompanyPattern]:
 
 
 def _deterministic_summary(
-    entries: List[MemoryEntry], prior: str
+    entries: list[MemoryEntry], prior: str
 ) -> str:
     """Demo-mode condenser. Preserves a one-line takeaway per entry plus the
     date range and trigger histogram so future-you can still see what shaped
@@ -440,7 +440,7 @@ def _deterministic_summary(
     triggers: dict[str, int] = {}
     for e in entries:
         triggers[e.trigger] = triggers.get(e.trigger, 0) + 1
-    lines: List[str] = []
+    lines: list[str] = []
     if prior.strip() and not prior.strip().startswith("_"):
         lines.append(prior.strip())
         lines.append("")
@@ -469,7 +469,7 @@ class CompanyMemory(_MemoryFile):
     """Per-company memory file (`memory/companies/<TICKER>.md`)."""
 
     @classmethod
-    def for_ticker(cls, ticker: str) -> "CompanyMemory":
+    def for_ticker(cls, ticker: str) -> CompanyMemory:
         path = company_memory_path(ticker)
         loaded = cls.load(path, ticker.upper(), "company")
         # mypy/pylance: cast to CompanyMemory since load returns _MemoryFile
@@ -489,7 +489,7 @@ class PMMemory(_MemoryFile):
     """
 
     @classmethod
-    def load_pm(cls) -> "PMMemory":
+    def load_pm(cls) -> PMMemory:
         path = pm_memory_path()
         loaded = cls.load(path, "PM", "pm")
         return loaded  # type: ignore[return-value]
@@ -499,7 +499,7 @@ class MacroMemory(_MemoryFile):
     """The macro analyst's running notes (`memory/macro/notes.md`)."""
 
     @classmethod
-    def load_macro(cls) -> "MacroMemory":
+    def load_macro(cls) -> MacroMemory:
         path = macro_memory_path()
         loaded = cls.load(path, "Macro", "macro")
         return loaded  # type: ignore[return-value]
@@ -516,7 +516,7 @@ class SectorMemory(_MemoryFile):
     reflection step after a run."""
 
     @classmethod
-    def for_sector(cls, sector: str) -> "SectorMemory":
+    def for_sector(cls, sector: str) -> SectorMemory:
         path = sector_memory_path(sector)
         loaded = cls.load(path, sector, "sector")
         return loaded  # type: ignore[return-value]
@@ -532,7 +532,7 @@ class SectorMemory(_MemoryFile):
         self.cross_company_patterns.append(p)
         self.last_updated = date.today().isoformat()
 
-    def patterns_for(self, ticker: str) -> List[CrossCompanyPattern]:
+    def patterns_for(self, ticker: str) -> list[CrossCompanyPattern]:
         """Return patterns applicable to `ticker`. Source = the company we
         learned the lesson on; we exclude self-patterns (a pattern with
         source==ticker is the agent's own past entry, already covered by the

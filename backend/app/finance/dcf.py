@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import Dict, Iterable, List, Optional
+from collections.abc import Iterable
 
 from ..schemas import (
     DCFAssumptions,
@@ -51,7 +51,7 @@ TV_CLAMP_FLOOR = 0.005
 NA = "n/a"
 
 
-def _implied_share_price(equity_value: float, diluted_shares: Optional[float]) -> Optional[float]:
+def _implied_share_price(equity_value: float, diluted_shares: float | None) -> float | None:
     """Equity value per share, or None when there is no share count.
 
     A missing / zero share count used to yield `0.0`, which downstream read
@@ -63,7 +63,7 @@ def _implied_share_price(equity_value: float, diluted_shares: Optional[float]) -
     return equity_value / diluted_shares
 
 
-def _upside_pct(implied: Optional[float], current_price: Optional[float]) -> Optional[float]:
+def _upside_pct(implied: float | None, current_price: float | None) -> float | None:
     """Upside of `implied` over `current_price`, or None when either side
     is missing. `current_price` 0.0 is "no quote" (that's what the
     assumption builders emit when the quote chain is down), not a free
@@ -73,17 +73,17 @@ def _upside_pct(implied: Optional[float], current_price: Optional[float]) -> Opt
     return (implied - current_price) / current_price
 
 
-def fmt_price(x: Optional[float]) -> str:
+def fmt_price(x: float | None) -> str:
     """"$1,234.56", or "n/a" when the implied price could not be computed."""
     return NA if x is None else f"${x:,.2f}"
 
 
-def fmt_upside(x: Optional[float], *, decimals: int = 1) -> str:
+def fmt_upside(x: float | None, *, decimals: int = 1) -> str:
     """"+12.3%" (signed), or "n/a" when the upside could not be computed."""
     return NA if x is None else f"{x:+.{decimals}%}"
 
 
-def _trend(values: List[float]) -> float:
+def _trend(values: list[float]) -> float:
     """Naive trend = average year-over-year growth, last 3 periods."""
     if not values or len(values) < 2:
         return 0.0
@@ -98,7 +98,7 @@ def _trend(values: List[float]) -> float:
     return sum(last) / len(last)
 
 
-def _consensus_growth_path(estimates: Optional[Dict]) -> Optional[List[float]]:
+def _consensus_growth_path(estimates: dict | None) -> list[float] | None:
     """Wave 8I — derive a 5-year revenue-growth path from analyst
     consensus estimates when present. Returns None when the estimates
     payload doesn't carry usable revenue rows.
@@ -115,7 +115,7 @@ def _consensus_growth_path(estimates: Optional[Dict]) -> Optional[List[float]]:
     # Direct growth list — easiest case.
     rg = estimates.get("revenue_growth")
     if isinstance(rg, list) and rg:
-        out: List[float] = []
+        out: list[float] = []
         for v in rg[:5]:
             try:
                 out.append(round(max(-0.20, min(0.50, float(v))), 4))
@@ -134,7 +134,7 @@ def _consensus_growth_path(estimates: Optional[Dict]) -> Optional[List[float]]:
     # Revenue-level estimates → derive YoY deltas.
     rev_rows = estimates.get("revenue")
     if isinstance(rev_rows, list) and len(rev_rows) >= 2:
-        vals: List[float] = []
+        vals: list[float] = []
         for r in rev_rows:
             if isinstance(r, dict):
                 v = r.get("value") or r.get("revenue")
@@ -159,9 +159,9 @@ def _consensus_growth_path(estimates: Optional[Dict]) -> Optional[List[float]]:
 
 
 def derive_default_assumptions(
-    income_statements: List[dict],
-    cash_flows: List[dict],
-    balance_sheets: List[dict],
+    income_statements: list[dict],
+    cash_flows: list[dict],
+    balance_sheets: list[dict],
     *,
     current_price: float,
     diluted_shares: float,
@@ -170,9 +170,9 @@ def derive_default_assumptions(
     beta: float = 1.0,
     pretax_cost_of_debt: float = 0.055,
     target_debt_weight: float = 0.15,
-    analyst_estimates: Optional[Dict] = None,
+    analyst_estimates: dict | None = None,
     margin_mean_reversion: bool = False,
-    cohort_op_margin: Optional[float] = None,
+    cohort_op_margin: float | None = None,
 ) -> DCFAssumptions:
     """Build sane base-case assumptions from a few years of statements.
 
@@ -197,7 +197,6 @@ def derive_default_assumptions(
 
     revenues = [r.get("revenue", 0.0) or 0.0 for r in income_statements]
     op_incomes = [r.get("operating_income", 0.0) or 0.0 for r in income_statements]
-    net_incomes = [r.get("net_income", 0.0) or 0.0 for r in income_statements]
     pretax = [r.get("pretax_income", 0.0) or 0.0 for r in income_statements]
     tax_exp = [r.get("tax_expense", 0.0) or 0.0 for r in income_statements]
     capex_vals = [abs(r.get("capex", 0.0) or 0.0) for r in cash_flows]
@@ -316,7 +315,7 @@ def run_dcf(assumptions: DCFAssumptions, *, scenario_name: str = "base", label: 
     years = max(len(assumptions.revenue_growth), len(assumptions.operating_margin))
     if years == 0:
         years = 5
-    projections: List[DCFYearProjection] = []
+    projections: list[DCFYearProjection] = []
     prev_revenue = assumptions.base_revenue or 1.0
     for year in range(1, years + 1):
         proj = _project_year(prev_revenue, year, assumptions)
@@ -404,11 +403,11 @@ def _build_sensitivity(
     name: str,
     row_axis: str,
     col_axis: str,
-    rows: List[float],
-    cols: List[float],
+    rows: list[float],
+    cols: list[float],
     setter,
 ) -> DCFSensitivity:
-    cells: List[SensitivityCell] = []
+    cells: list[SensitivityCell] = []
     for r in rows:
         for c in cols:
             assumptions = copy.deepcopy(base)
@@ -431,7 +430,7 @@ def _build_sensitivity(
 
 def _scenario_with_exit_terminal(
     assumptions: DCFAssumptions, exit_multiple: float,
-) -> Optional[float]:
+) -> float | None:
     """Run a single DCF scenario but use the *exit-multiple terminal*
     instead of Gordon Growth. Returns the implied share price, or None
     when there is no share count to divide by.
@@ -444,7 +443,7 @@ def _scenario_with_exit_terminal(
     a = copy.deepcopy(assumptions)
     a.exit_ebitda_multiple = exit_multiple
     years = max(len(a.revenue_growth), len(a.operating_margin)) or 5
-    projections: List[DCFYearProjection] = []
+    projections: list[DCFYearProjection] = []
     prev_revenue = a.base_revenue or 1.0
     for year in range(1, years + 1):
         proj = _project_year(prev_revenue, year, a)
@@ -463,8 +462,8 @@ def _scenario_with_exit_terminal(
 def build_exit_multiple_sensitivity(
     base: DCFAssumptions,
     *,
-    bull: Optional[DCFAssumptions] = None,
-    bear: Optional[DCFAssumptions] = None,
+    bull: DCFAssumptions | None = None,
+    bear: DCFAssumptions | None = None,
 ) -> DCFSensitivity:
     """Wave 10j — what would the implied price be under exit-multiple
     terminal across a range of multiples × bear/base/bull?
@@ -491,12 +490,12 @@ def build_exit_multiple_sensitivity(
     # Five multiples centered on user input, bracketed.
     base_m = max(5.0, float(base.exit_ebitda_multiple))
     half_span = max(2.5, base_m * 0.4)
-    multiples: List[float] = [
+    multiples: list[float] = [
         round(max(3.0, base_m + (i - 2) * (half_span / 2)), 1)
         for i in range(5)
     ]
 
-    cells: List[SensitivityCell] = []
+    cells: list[SensitivityCell] = []
     scenarios = [
         ("bear", bear),
         ("base", base),
@@ -523,14 +522,14 @@ def build_exit_multiple_sensitivity(
 def build_default_sensitivities(
     base: DCFAssumptions,
     *,
-    bull: Optional[DCFAssumptions] = None,
-    bear: Optional[DCFAssumptions] = None,
-) -> List[DCFSensitivity]:
+    bull: DCFAssumptions | None = None,
+    bear: DCFAssumptions | None = None,
+) -> list[DCFSensitivity]:
     """Wave 10k — bull / bear assumptions thread through to the
     exit-multiple sensitivity so the cross-check uses the SAME
     scenario assumption sets as the headline DCF (LLM-driven or
     sector-aware fallback)."""
-    sens: List[DCFSensitivity] = []
+    sens: list[DCFSensitivity] = []
 
     def set_wacc_terminal(a: DCFAssumptions, w: float, g: float) -> None:
         a.wacc = w
@@ -593,8 +592,8 @@ def check_dcf_realism(
     base: DCFScenario,
     *,
     ticker: str = "",
-    scenarios: Optional[Iterable[DCFScenario]] = None,
-) -> List[DCFGuardrail]:
+    scenarios: Iterable[DCFScenario] | None = None,
+) -> list[DCFGuardrail]:
     """Wave 10 — sanity-check the DCF against cohort distribution.
 
     The user's frustration: "valuations seem off." This guardrail
@@ -628,7 +627,7 @@ def check_dcf_realism(
        `scenarios`; checks 1-4 stay base-only since the sensitivity
        grids already cover the assumption range.
     """
-    guardrails: List[DCFGuardrail] = []
+    guardrails: list[DCFGuardrail] = []
 
     # 0) Degenerate Gordon denominator — surfaced first because every
     #    other number in the scenario is downstream of the capped TV.
@@ -759,7 +758,7 @@ def check_dcf_realism(
     return guardrails
 
 
-def _cohort_p90_ev_ebitda(ticker: str) -> Optional[float]:
+def _cohort_p90_ev_ebitda(ticker: str) -> float | None:
     """Pull the cohort 90th-percentile EV/EBITDA from comps.
 
     Returns None when comps are unavailable (bare ticker, sparse
@@ -788,7 +787,7 @@ def build_full_dcf(
     ticker: str,
     base_assumptions: DCFAssumptions,
     *,
-    profile: Optional[Dict] = None,
+    profile: dict | None = None,
 ) -> DCFResult:
     """Run base/bull/bear scenarios + sensitivities and synthesize a summary.
 
@@ -816,7 +815,7 @@ def build_full_dcf(
     )
     guardrails = check_dcf_realism(base, ticker=ticker, scenarios=(bull, bear))
 
-    summary_parts: List[str] = []
+    summary_parts: list[str] = []
     # `current_price` 0.0 means "no quote" — the summary then reads
     # "vs current n/a" rather than hiding the comparison, so a reader can
     # see WHY the upside is n/a instead of wondering where it went.

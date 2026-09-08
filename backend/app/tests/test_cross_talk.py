@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from app.agents.graph import run_stock_memo
-from app.agents.sector_agents import run_sector_agent
 from app.agents.sdk_runtime import query_peer_sector
+from app.agents.sector_agents import run_sector_agent
 from app.cache import cache_put
 from app.monitoring import macro_loop
 from app.services.fundamentals_service import get_full_financials

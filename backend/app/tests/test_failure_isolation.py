@@ -9,10 +9,6 @@ fail the whole memo. The memo is returned with:
 """
 from __future__ import annotations
 
-from unittest.mock import patch
-
-import pytest
-
 from app.agents import graph, roster
 from app.agents.safe_runner import (
     DegradationLog,

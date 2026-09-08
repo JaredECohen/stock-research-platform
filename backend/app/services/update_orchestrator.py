@@ -33,8 +33,8 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict, deque
-from datetime import date as _date, datetime
-from typing import Any, Deque, Dict, List, Optional
+from datetime import datetime
+from typing import Any
 
 from ..schemas import NewsAlert, StockMemoOut
 
@@ -55,7 +55,7 @@ AUTO_REGEN_RECENCY_DAYS = 30
 # full_reanalysis by the durable `regen_jobs` queue — kept because the
 # /api/admin/update-queue inspector reads it and future in-process
 # event types may still want it.
-_QUEUES: Dict[str, Deque[Dict[str, Any]]] = defaultdict(deque)
+_QUEUES: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
 
 
 def _patch_count_today(ticker: str) -> int:
@@ -86,7 +86,7 @@ def _patch_count_today(ticker: str) -> int:
 
 def should_auto_regen(
     ticker: str, *, window_days: int = AUTO_REGEN_RECENCY_DAYS,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Decide whether a polling event should trigger memo regeneration.
 
     Two conditions, OR'd together:
@@ -102,9 +102,9 @@ def should_auto_regen(
     """
     ticker = ticker.upper()
     try:
-        from . import memo_store
         from ..database import SessionLocal
         from ..models import Company
+        from . import memo_store
         with SessionLocal() as db:
             company = db.get(Company, ticker)
             if company is not None and company.auto_update_memo:
@@ -139,11 +139,11 @@ def should_auto_regen(
 GATE_ERROR_REASONS = frozenset({"db_error"})
 
 
-def _skip_kind(decision: Dict[str, Any]) -> str:
+def _skip_kind(decision: dict[str, Any]) -> str:
     return "gate_error" if decision.get("reason") in GATE_ERROR_REASONS else "skipped"
 
 
-def _persist_raw_data_only(ticker: str) -> Dict[str, int]:
+def _persist_raw_data_only(ticker: str) -> dict[str, int]:
     """Ingest fresh filings + transcripts into FilingDoc / EarningsTranscript
     + the vector store, WITHOUT running the LLM memo synthesis.
 
@@ -156,8 +156,8 @@ def _persist_raw_data_only(ticker: str) -> Dict[str, int]:
     counts = {"filings": 0, "transcripts": 0}
     try:
         from ..database import SessionLocal
-        from .data_service import get_data_service
         from . import history_service
+        from .data_service import get_data_service
         ds = get_data_service()
         filings = ds.get_filings(ticker) or []
         transcripts = ds.get_earnings_transcripts(ticker) or []
@@ -173,7 +173,7 @@ def _persist_raw_data_only(ticker: str) -> Dict[str, int]:
     return counts
 
 
-def on_transcript_event(ticker: str, *, period: str = "") -> Dict[str, Any]:
+def on_transcript_event(ticker: str, *, period: str = "") -> dict[str, Any]:
     """A new earnings transcript landed → maybe regenerate the memo.
 
     Two-phase:
@@ -209,7 +209,7 @@ def on_transcript_event(ticker: str, *, period: str = "") -> Dict[str, Any]:
     }
 
 
-def on_filing_event(ticker: str, *, source: str = "filing_event") -> Dict[str, Any]:
+def on_filing_event(ticker: str, *, source: str = "filing_event") -> dict[str, Any]:
     """A new filing was observed → persist + index, then maybe memo regen.
 
     Two-phase:
@@ -250,7 +250,7 @@ def on_filing_event(ticker: str, *, source: str = "filing_event") -> Dict[str, A
     }
 
 
-def on_news_alert(ticker: str, alert: NewsAlert) -> Dict[str, Any]:
+def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
     """A material/breaking news alert came in → run news_impact_agent
     against the latest memo, persist a patch if material.
 
@@ -317,7 +317,7 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> Dict[str, Any]:
     }
 
 
-def queue_depth(ticker: Optional[str] = None) -> Dict[str, int]:
+def queue_depth(ticker: str | None = None) -> dict[str, int]:
     """Inspect the in-process FIFO queue (for /api/admin).
 
     Note: `full_reanalysis` no longer flows through this queue — it
@@ -341,7 +341,7 @@ MAX_TICKERS_PER_REGIME_SHIFT = 10
 
 def _affected_tickers_for_regime_shift(
     prior_regime: str, new_regime: str,
-) -> List[str]:
+) -> list[str]:
     """Pick tickers most likely to need a memo refresh after the
     regime flipped from `prior_regime` → `new_regime`.
 
@@ -365,7 +365,7 @@ def _affected_tickers_for_regime_shift(
     new_set = set(_REGIME_FAVORED.get(new_regime, []) + _REGIME_PRESSURED.get(new_regime, []))
     affected_sectors = (prior_set - new_set) | (new_set - prior_set)
 
-    candidates: List[str] = []
+    candidates: list[str] = []
 
     # 1) Long-rates-sensitive names — the first to feel a regime change.
     try:
@@ -381,6 +381,7 @@ def _affected_tickers_for_regime_shift(
     if affected_sectors:
         try:
             from sqlalchemy import select
+
             from ..database import SessionLocal
             from ..models import Company
             with SessionLocal() as db:
@@ -399,7 +400,7 @@ def _affected_tickers_for_regime_shift(
     return candidates[:MAX_TICKERS_PER_REGIME_SHIFT]
 
 
-def on_regime_shift(prior_regime: str, new_regime: str) -> Dict[str, Any]:
+def on_regime_shift(prior_regime: str, new_regime: str) -> dict[str, Any]:
     """Wave 10 — fire when macro_loop detects the regime classification
     changed. Re-runs memos for the most affected names.
 
@@ -419,8 +420,8 @@ def on_regime_shift(prior_regime: str, new_regime: str) -> Dict[str, Any]:
     if prior_regime == new_regime:
         return {"prior": prior_regime, "new": new_regime, "refreshed": [], "gate_errors": []}
     affected = _affected_tickers_for_regime_shift(prior_regime, new_regime)
-    refreshed: List[str] = []
-    gate_errors: List[str] = []
+    refreshed: list[str] = []
+    gate_errors: list[str] = []
     for ticker in affected:
         try:
             # Reuses the full_reanalysis path (gating + enqueue).

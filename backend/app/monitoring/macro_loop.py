@@ -7,7 +7,6 @@ context is always macro-aware.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
 
 from ..cache import cache_get, cache_put
 from ..schemas import MacroBroadcast
@@ -17,7 +16,7 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def _detect_regime(snapshot: Dict[str, float]) -> str:
+def _detect_regime(snapshot: dict[str, float]) -> str:
     """Heuristic regime detection — purposely simple; tune via prompts later."""
     cpi = snapshot.get("CORESTICKM159SFRBATL") or snapshot.get("CPIAUCSL") or 0.0
     fed = snapshot.get("FEDFUNDS") or 0.0
@@ -50,7 +49,7 @@ _REGIME_PRESSURED = {
 }
 
 
-def run_once() -> Dict:
+def run_once() -> dict:
     snapshot = macro_service.macro_snapshot()
     regime = _detect_regime(snapshot)
     broadcast = MacroBroadcast(
@@ -76,8 +75,8 @@ def run_once() -> Dict:
     # so a flip can't run away on cost. Skipped on cold start
     # (prior_regime is None) so first-boot doesn't refresh the
     # universe.
-    refreshed: List[str] = []
-    gate_errors: List[str] = []
+    refreshed: list[str] = []
+    gate_errors: list[str] = []
     if prior_regime and prior_regime != regime:
         try:
             from ..services.update_orchestrator import on_regime_shift

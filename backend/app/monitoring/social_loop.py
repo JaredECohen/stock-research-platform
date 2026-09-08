@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, List, Optional
+from collections.abc import Iterable
 
 from ..agents import social_agent
 from ..services.data_service import get_data_service
@@ -11,11 +11,11 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
+def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     if tickers is None:
         ds = get_data_service()
         tickers = list(ds.list_tickers())[:10]
-    out: List[dict] = []
+    out: list[dict] = []
     for t in tickers:
         try:
             payload = social_agent.run(t, force_refresh=True)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -29,10 +29,10 @@ class TiingoProvider:
             capabilities=["prices", "quote", "news"],
         )
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self) -> dict[str, str]:
         return {"Content-Type": "application/json", "Authorization": f"Token {self.api_key}"}
 
-    def get_quote(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_quote(self, ticker: str) -> dict[str, Any] | None:
         """`/iex/{ticker}` — IEX real-time last trade during market hours."""
         if not self.api_key:
             return None
@@ -62,7 +62,7 @@ class TiingoProvider:
             timestamp=item.get("timestamp"),
         )
 
-    def get_price_history(self, ticker: str, days: int = 252) -> Optional[List[Dict[str, Any]]]:
+    def get_price_history(self, ticker: str, days: int = 252) -> list[dict[str, Any]] | None:
         if not self.api_key:
             return None
         try:
@@ -87,7 +87,7 @@ class TiingoProvider:
             log_safely(log, f"Tiingo fetch failed for {ticker}", exc)
             return None
 
-    def get_news(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
+    def get_news(self, ticker: str) -> list[dict[str, Any]] | None:
         return None
 
     # Stubs
@@ -100,4 +100,4 @@ class TiingoProvider:
     def get_filings(self, ticker: str): return None
     def get_estimates(self, ticker: str): return None
     def get_macro_series(self, series_id: str): return None
-    def list_tickers(self) -> List[str]: return []
+    def list_tickers(self) -> list[str]: return []

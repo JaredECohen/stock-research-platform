@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..config import settings
 from ..schemas import AgentFinding, DCFAssumptions, DCFResult
@@ -97,8 +97,8 @@ def _format_finding_for_pm(name: str, f: AgentFinding) -> str:
 
 def _propose_adjustments(
     *, ticker: str, prior: DCFAssumptions,
-    findings: Dict[str, AgentFinding], run_id: str,
-) -> Optional[Dict[str, Any]]:
+    findings: dict[str, AgentFinding], run_id: str,
+) -> dict[str, Any] | None:
     """Single LLM call that returns proposed updates + rationales + headline.
 
     Returns None on LLM failure — caller leaves the DCF untouched.
@@ -146,8 +146,8 @@ def _propose_adjustments(
 
 def adjust_dcf_for_pm_view(
     *, ticker: str, initial_dcf: DCFResult,
-    findings: Dict[str, AgentFinding], run_id: str,
-) -> Tuple[Optional[DCFResult], List[Dict[str, Any]], str]:
+    findings: dict[str, AgentFinding], run_id: str,
+) -> tuple[DCFResult | None, list[dict[str, Any]], str]:
     """Re-build the DCF using PM-adjusted assumptions.
 
     Returns `(adjusted_dcf_or_None, adjustments_audit, headline)`.
@@ -207,7 +207,7 @@ def adjust_dcf_for_pm_view(
     # Audit trail: one row per changed field, with PM's rationale + the
     # before/after values. The frontend uses this to show "Why did the
     # PM change this assumption?" in the DCF Lab.
-    audit: List[Dict[str, Any]] = []
+    audit: list[dict[str, Any]] = []
     prior_d = prior.model_dump()
     new_d = new_assumptions.model_dump()
     for field, rationale in accepted.items():

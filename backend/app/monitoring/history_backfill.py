@@ -17,7 +17,6 @@ universe is being driven against live providers.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
 
 from sqlalchemy import select
 
@@ -29,7 +28,7 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def _tier1_tickers() -> List[str]:
+def _tier1_tickers() -> list[str]:
     with SessionLocal() as db:
         rows = db.execute(
             select(Company.ticker).where(Company.universe_tier == "auto_analysis")
@@ -37,7 +36,7 @@ def _tier1_tickers() -> List[str]:
     return [r[0] for r in rows]
 
 
-def run_once(ticker: Optional[str] = None) -> Dict[str, int]:
+def run_once(ticker: str | None = None) -> dict[str, int]:
     """Backfill `ticker` (one) or every tier-1 name. Returns aggregate counts.
 
     Wave 8E: classify per-ticker failures so a wedged provider (rate-

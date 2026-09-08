@@ -23,17 +23,18 @@ Design points:
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 log = logging.getLogger(__name__)
 
 
-Upgrader = Callable[[Dict[str, Any]], Dict[str, Any]]
+Upgrader = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 # Registry: `(kind, from_version) -> upgrader_fn`.
 # Each entry upgrades a payload from `from_version` to `from_version + 1`.
-_REGISTRY: Dict[Tuple[str, int], Upgrader] = {}
+_REGISTRY: dict[tuple[str, int], Upgrader] = {}
 
 
 def register(kind: str, from_version: int, upgrader: Upgrader) -> None:
@@ -51,7 +52,7 @@ def unregister(kind: str, from_version: int) -> None:
     _REGISTRY.pop((kind, from_version), None)
 
 
-def registered() -> List[Tuple[str, int]]:
+def registered() -> list[tuple[str, int]]:
     """Return all registered (kind, from_version) keys — for testing/audit."""
     return sorted(_REGISTRY.keys())
 
@@ -67,8 +68,8 @@ def latest_version(kind: str) -> int:
 
 
 def upgrade_payload(
-    kind: str, payload: Dict[str, Any], target_version: Optional[int] = None,
-) -> Dict[str, Any]:
+    kind: str, payload: dict[str, Any], target_version: int | None = None,
+) -> dict[str, Any]:
     """Walk `payload` from its embedded `schema_version` up to `target_version`.
 
     `target_version` defaults to the registry's latest known target for
@@ -112,7 +113,7 @@ def upgrade_payload(
 # Cache-read integration
 # ---------------------------------------------------------------------------
 
-def upgrade_snapshot_payload(snap: Any) -> Dict[str, Any]:
+def upgrade_snapshot_payload(snap: Any) -> dict[str, Any]:
     """Apply migrations to a `ResearchSnapshot` row's payload, returning the
     upgraded dict. Convenience wrapper for read-side callers.
 

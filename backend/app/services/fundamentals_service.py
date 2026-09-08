@@ -9,12 +9,12 @@ warm snapshots that depend on it (sector_warm, company_warm:dcf, …) auto-stale
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 log = logging.getLogger(__name__)
 
 
-def _gather_sources(ticker: str) -> List[str]:
+def _gather_sources(ticker: str) -> list[str]:
     """Identifiers a 'cold' snapshot is keyed against — used for cache fingerprint.
 
     Filing accession numbers and transcript period IDs are the primary tripwires
@@ -26,7 +26,7 @@ def _gather_sources(ticker: str) -> List[str]:
     from .filings_service import get_filings
     from .transcripts_service import latest_transcript
 
-    sources: List[str] = []
+    sources: list[str] = []
     try:
         for f in get_filings(ticker) or []:
             acc = f.get("accession_number") or f.get("type") or ""
@@ -49,7 +49,7 @@ def _gather_sources(ticker: str) -> List[str]:
 _PARTIAL_KEY = "_partial"
 
 
-def _build_full_financials(ticker: str) -> Dict[str, Any]:
+def _build_full_financials(ticker: str) -> dict[str, Any]:
     """Raw provider call — kept private so the public `get_full_financials`
     can decide whether to consult the cache.
 
@@ -61,7 +61,7 @@ def _build_full_financials(ticker: str) -> Dict[str, Any]:
     statements = ds.get_financial_statements(ticker) or {}
     ratios = ds.get_ratios(ticker) or {}
     profile = ds.get_company_profile(ticker) or {}
-    partial: Dict[str, str] = {}
+    partial: dict[str, str] = {}
     try:
         earnings = ds.get_earnings(ticker) or {}
     except Exception as exc:
@@ -81,7 +81,7 @@ def _build_full_financials(ticker: str) -> Dict[str, Any]:
         )
         earnings = {}
         partial["earnings"] = f"{type(exc).__name__}: {redact(exc)}"
-    full: Dict[str, Any] = dict(
+    full: dict[str, Any] = dict(
         ticker=ticker,
         profile=profile,
         income=statements.get("income", []),
@@ -95,7 +95,7 @@ def _build_full_financials(ticker: str) -> Dict[str, Any]:
     return full
 
 
-def get_full_financials(ticker: str, *, force_refresh: bool = False) -> Dict:
+def get_full_financials(ticker: str, *, force_refresh: bool = False) -> dict:
     """Cache-aware fundamentals fetcher.
 
     Returns the same dict shape as before. Quarterly TTL (90d) bounds the worst
@@ -140,7 +140,7 @@ def get_full_financials(ticker: str, *, force_refresh: bool = False) -> Dict:
     return full
 
 
-def get_latest_year(records: List[Dict]) -> Optional[Dict]:
+def get_latest_year(records: list[dict]) -> dict | None:
     if not records:
         return None
     return sorted(records, key=lambda r: r.get("period", ""))[-1]

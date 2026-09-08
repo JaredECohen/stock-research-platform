@@ -9,7 +9,7 @@ their `parent_snapshot_ids` chain.
 from __future__ import annotations
 
 import logging
-from typing import Iterable, List, Optional, Set
+from collections.abc import Iterable
 
 from ..cache import cache_get, cache_put, invalidate
 from ..services.data_service import get_data_service
@@ -21,14 +21,14 @@ log = logging.getLogger(__name__)
 _FILING_TYPES = {"10-K", "10-Q", "8-K"}
 
 
-def _seen_accessions(ticker: str) -> Set[str]:
+def _seen_accessions(ticker: str) -> set[str]:
     snap = cache_get(ticker, "edgar_seen_accessions")
     if not snap or not isinstance(snap.payload, dict):
         return set()
     return set(snap.payload.get("accessions") or [])
 
 
-def _save_seen_accessions(ticker: str, accessions: Set[str]) -> None:
+def _save_seen_accessions(ticker: str, accessions: set[str]) -> None:
     cache_put(
         ticker, "edgar_seen_accessions",
         payload={"accessions": sorted(accessions)},
@@ -39,7 +39,7 @@ def _save_seen_accessions(ticker: str, accessions: Set[str]) -> None:
     )
 
 
-def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
+def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     """Poll EDGAR once. Returns a list of `{ticker, new_accessions}` events.
 
     No-op for tickers without filings. The EDGAR provider returns an empty
@@ -49,8 +49,8 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
         ds = get_data_service()
         tickers = ds.list_tickers()
 
-    events: List[dict] = []
-    gate_errors: List[str] = []
+    events: list[dict] = []
+    gate_errors: list[str] = []
     for t in tickers:
         try:
             filings = get_filings(t) or []
@@ -58,7 +58,7 @@ def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
             log.warning("EDGAR poll failed for %s: %s", t, exc)
             continue
 
-        accessions: Set[str] = set()
+        accessions: set[str] = set()
         for f in filings:
             if f.get("type") not in _FILING_TYPES:
                 continue

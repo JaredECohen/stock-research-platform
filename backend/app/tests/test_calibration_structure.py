@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import socket
 from datetime import datetime, timedelta
-from typing import Optional
 
 import pytest
 
@@ -46,9 +45,9 @@ def _clean():
 
 
 def _seed(
-    ticker: str, rating: str, *, alpha: Optional[float],
-    verdict: Optional[str] = None, attribution=None, regime: Optional[str] = None,
-    realized: Optional[float] = None, bench: Optional[float] = None,
+    ticker: str, rating: str, *, alpha: float | None,
+    verdict: str | None = None, attribution=None, regime: str | None = None,
+    realized: float | None = None, bench: float | None = None,
 ) -> None:
     with SessionLocal() as db:
         snap = MemoSnapshot(

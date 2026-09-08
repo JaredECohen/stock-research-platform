@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from ..finance.technicals import compute_technical_signals
@@ -29,23 +29,23 @@ from .safe_runner import note_soft
 log = logging.getLogger(__name__)
 
 
-def _format_value(v: Optional[float], fmt: str = "{:,.2f}") -> str:
+def _format_value(v: float | None, fmt: str = "{:,.2f}") -> str:
     return "n/a" if v is None else fmt.format(v)
 
 
-def _deterministic_summary(profile: Dict[str, Any], sig: TechnicalSignals) -> Dict[str, Any]:
+def _deterministic_summary(profile: dict[str, Any], sig: TechnicalSignals) -> dict[str, Any]:
     """LLM-free fallback. Reads the structured signals into a sober narrative
     that explicitly frames technicals as positioning context, not a
     rating-driver."""
     ticker = profile.get("ticker") or ""
-    headline_bits: List[str] = []
+    headline_bits: list[str] = []
     headline_bits.append(f"{sig.trend} trend")
     headline_bits.append(f"{sig.momentum} momentum")
     if sig.position_52w is not None:
         headline_bits.append(f"{sig.position_52w * 100:.0f}% of 52w range")
     headline = f"{ticker}: " + " · ".join(headline_bits)
 
-    summary_lines: List[str] = []
+    summary_lines: list[str] = []
     if sig.sma_50 is not None and sig.sma_200 is not None:
         rel = "above" if sig.sma_50_above_200 else "below"
         summary_lines.append(
@@ -68,7 +68,7 @@ def _deterministic_summary(profile: Dict[str, Any], sig: TechnicalSignals) -> Di
         "not a standalone trade signal."
     )
 
-    key_points: List[str] = list(sig.notes)
+    key_points: list[str] = list(sig.notes)
     if not key_points:
         key_points.append(
             f"No actionable technical setup; {sig.trend}/{sig.momentum} is the regime."
@@ -83,8 +83,8 @@ def _deterministic_summary(profile: Dict[str, Any], sig: TechnicalSignals) -> Di
 
 
 def run_technical_agent(
-    profile: Dict[str, Any], days: int = 300,
-    *, prior_round_critique: Optional[str] = None,
+    profile: dict[str, Any], days: int = 300,
+    *, prior_round_critique: str | None = None,
 ) -> AgentFinding:
     """Produce the Technical Analyst finding for `profile`.
 
@@ -109,7 +109,7 @@ def run_technical_agent(
     # `note_soft` (a no-op outside a memo run). A short-but-present series
     # is an honest data limit, not a failure, and keeps the plain
     # "insufficient history" stub below.
-    degraded_reason: Optional[str] = None
+    degraded_reason: str | None = None
     try:
         rows = get_price_series(ticker, days)
     except Exception as exc:  # pragma: no cover — defensive
@@ -170,7 +170,7 @@ def run_technical_agent(
         model=settings.openai_tool_model,
     )
 
-    data: Dict[str, Any] = {"signals": signals.model_dump()}
+    data: dict[str, Any] = {"signals": signals.model_dump()}
     if llm_out:
         narrative = llm_out
     else:

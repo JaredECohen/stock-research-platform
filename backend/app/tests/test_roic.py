@@ -21,7 +21,6 @@ import pytest
 
 from app.finance import ratios as R
 
-
 BALANCE = {"total_debt": 400.0, "shareholders_equity": 600.0}  # invested = 1000
 
 

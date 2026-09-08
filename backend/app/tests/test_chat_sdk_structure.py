@@ -24,7 +24,7 @@ import socket
 import sys
 import types
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
@@ -60,7 +60,7 @@ def _offline(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_llm(monkeypatch) -> List[Dict[str, Any]]:
+def no_llm(monkeypatch) -> list[dict[str, Any]]:
     """What a blank key yields from `llm.chat_json` / `chat_text` is None;
     pin that so every tool takes its deterministic branch even under a
     developer `.env` with a live key. The key itself is blanked too:
@@ -68,7 +68,7 @@ def no_llm(monkeypatch) -> List[Dict[str, Any]]:
     no seam through `llm` and calls OpenAI directly whenever a key is
     set. Returns the recorded calls so a test can prove the seam was
     reached."""
-    calls: List[Dict[str, Any]] = []
+    calls: list[dict[str, Any]] = []
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(llm, "chat_json", lambda *a, **k: calls.append(k) or None)
     monkeypatch.setattr(llm, "chat_text", lambda *a, **k: calls.append(k) or None)
@@ -101,7 +101,7 @@ class _FakeAgent:
 
 
 @pytest.fixture
-def tools(monkeypatch) -> Dict[str, Any]:
+def tools(monkeypatch) -> dict[str, Any]:
     fake = types.ModuleType("agents")
     fake.Agent = _FakeAgent
     fake.function_tool = lambda fn: fn
@@ -291,7 +291,7 @@ def provider_miss(monkeypatch):
 def _capture(monkeypatch, module_path: str, fn_name: str, profile_kw: str = "profile"):
     import importlib
     module = importlib.import_module(module_path)
-    seen: Dict[str, Any] = {}
+    seen: dict[str, Any] = {}
 
     def fake(*args: Any, **kwargs: Any):
         seen["profile"] = kwargs.get(profile_kw, args[0] if args else None)

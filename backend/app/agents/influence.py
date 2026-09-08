@@ -23,8 +23,6 @@ Method (deterministic, transparent):
 from __future__ import annotations
 
 import logging
-import re
-from typing import Dict
 
 from ..schemas import AgentFinding
 
@@ -74,13 +72,13 @@ def _agent_pull(finding: AgentFinding) -> float:
     return tone * (finding.confidence or 0.0)
 
 
-def compute_influence(findings: Dict[str, AgentFinding]) -> Dict[str, float]:
+def compute_influence(findings: dict[str, AgentFinding]) -> dict[str, float]:
     """For each agent in `findings`, compute its signed pull on the
     rating. Results are normalized so the biggest |pull| has
     magnitude 1.0; downstream consumers can present them as a
     bar chart with the strongest mover at full extension.
     """
-    raw: Dict[str, float] = {}
+    raw: dict[str, float] = {}
     for name, finding in (findings or {}).items():
         raw[name] = _agent_pull(finding)
     max_abs = max((abs(v) for v in raw.values()), default=0.0)

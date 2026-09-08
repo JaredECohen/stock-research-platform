@@ -9,12 +9,12 @@ the fresh news context.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
-from typing import Iterable, List, Optional
+from collections.abc import Iterable
+from datetime import datetime
 
+from ..agents import news_agent
 from ..cache import cache_get, cache_put, invalidate
 from ..services.data_service import get_data_service
-from ..agents import news_agent
 from . import record_run
 
 log = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 _THROTTLE_SECONDS = 60 * 60  # 1 hour per ticker
 
 
-def _last_run_for(ticker: str) -> Optional[datetime]:
+def _last_run_for(ticker: str) -> datetime | None:
     snap = cache_get(f"news_loop_throttle:{ticker}", "loop_throttle")
     if not snap or not isinstance(snap.payload, dict):
         return None
@@ -45,13 +45,13 @@ def _record_run_for(ticker: str) -> None:
     )
 
 
-def run_once(tickers: Optional[Iterable[str]] = None) -> List[dict]:
+def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     """Run the news agent for each (un-throttled) ticker. Returns triggered events."""
     if tickers is None:
         ds = get_data_service()
         tickers = list(ds.list_tickers())[:10]  # demo universe sample
 
-    events: List[dict] = []
+    events: list[dict] = []
     assessment_failures = 0
     for t in tickers:
         last = _last_run_for(t)

@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 class DCFAssumptions(BaseModel):
-    revenue_growth: List[float] = Field(default_factory=lambda: [0.10, 0.09, 0.08, 0.07, 0.06])
-    operating_margin: List[float] = Field(default_factory=lambda: [0.25, 0.26, 0.27, 0.27, 0.27])
+    revenue_growth: list[float] = Field(default_factory=lambda: [0.10, 0.09, 0.08, 0.07, 0.06])
+    operating_margin: list[float] = Field(default_factory=lambda: [0.25, 0.26, 0.27, 0.27, 0.27])
     tax_rate: float = 0.21
     da_pct_revenue: float = 0.04
     capex_pct_revenue: float = 0.05
@@ -48,14 +48,14 @@ class ScenarioDriver(BaseModel):
     """
     name: str = ""
     rationale: str = ""
-    assumption_changes: List[str] = Field(default_factory=list)
+    assumption_changes: list[str] = Field(default_factory=list)
 
 
 class DCFScenario(BaseModel):
     name: Literal["base", "bull", "bear"]
     label: str
     assumptions: DCFAssumptions
-    projections: List[DCFYearProjection]
+    projections: list[DCFYearProjection]
     pv_explicit: float
     terminal_value_gordon: float
     terminal_value_exit_multiple: float
@@ -70,8 +70,8 @@ class DCFScenario(BaseModel):
     # upside. A 0.0 here used to flow into memos as "+0.0%" and into the
     # valuation verdict as a neutral signal, which is a lie, not a value.
     # Renderers print "n/a"; verdict logic treats None as "DCF unavailable".
-    implied_share_price: Optional[float] = None
-    upside_pct: Optional[float] = None
+    implied_share_price: float | None = None
+    upside_pct: float | None = None
     # True when WACC − terminal growth was ≤ 0.5% and the Gordon denominator
     # was floored. The terminal value is then a cap, not a valuation, so the
     # flag rides on the scenario for the UI badge + a `check_dcf_realism`
@@ -82,7 +82,7 @@ class DCFScenario(BaseModel):
     # scenarios populated via `services/scenario_assumptions.py` so
     # the prose drivers and the assumption changes are tied — no more
     # symmetric ±400bps bumps with no narrative connection.
-    drivers: List[ScenarioDriver] = Field(default_factory=list)
+    drivers: list[ScenarioDriver] = Field(default_factory=list)
 
 
 class SensitivityCell(BaseModel):
@@ -90,16 +90,16 @@ class SensitivityCell(BaseModel):
     col_label: str
     # None mirrors `DCFScenario.implied_share_price` — a grid cell has no
     # implied price when the share count is missing.
-    value: Optional[float] = None
+    value: float | None = None
 
 
 class DCFSensitivity(BaseModel):
     name: str
     row_axis: str
     col_axis: str
-    rows: List[float]
-    cols: List[float]
-    cells: List[SensitivityCell]
+    rows: list[float]
+    cols: list[float]
+    cells: list[SensitivityCell]
 
 
 class DCFGuardrail(BaseModel):
@@ -111,8 +111,8 @@ class DCFGuardrail(BaseModel):
     severity: Literal["warn", "error"] = "warn"
     message: str = ""
     metric: str = ""  # e.g. "implied_y5_ev_ebitda", "terminal_disagreement"
-    value: Optional[float] = None
-    cohort_p90: Optional[float] = None
+    value: float | None = None
+    cohort_p90: float | None = None
 
 
 class DCFResult(BaseModel):
@@ -120,14 +120,14 @@ class DCFResult(BaseModel):
     # None when no quote reached the model (off-universe name, quote chain
     # down). Historical payloads carry 0.0 here; `run_dcf` treats both as
     # "no price" so the upside comes back None rather than -100%.
-    current_price: Optional[float] = None
+    current_price: float | None = None
     base: DCFScenario
     bull: DCFScenario
     bear: DCFScenario
-    sensitivities: List[DCFSensitivity] = Field(default_factory=list)
+    sensitivities: list[DCFSensitivity] = Field(default_factory=list)
     summary: str = ""
     # Wave 10 — reality-check flags. Empty list when nothing tripped.
     # The PM sees these and decides whether to defend or revise the
     # model; the UI surfaces them as a "model warnings" block.
-    guardrails: List[DCFGuardrail] = Field(default_factory=list)
+    guardrails: list[DCFGuardrail] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=datetime.utcnow)

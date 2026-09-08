@@ -15,8 +15,8 @@ Covers:
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, List
+from datetime import datetime, timedelta
+from typing import Any
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -59,7 +59,7 @@ def _seed_snapshot(
         return snap
 
 
-def _stub_prices(rows_by_ticker: Dict[str, List[Dict[str, Any]]]):
+def _stub_prices(rows_by_ticker: dict[str, list[dict[str, Any]]]):
     """Patch market_data_service.get_price_series to return stub data."""
     from app.services import market_data_service
     def fake(ticker: str, days: int = 252):
@@ -267,7 +267,7 @@ def test_backtest_snapshots_are_skipped():
         "SPY": [{"date": "2099-01-01", "close": 500.0}],
     }
     with _stub_prices(prices):
-        res = outcome_service.evaluate_all_due(today=today)
+        outcome_service.evaluate_all_due(today=today)
     rows = outcome_service.get_outcomes_for_snapshot(snap.id)
     assert rows == []  # backtest → no outcomes
 
