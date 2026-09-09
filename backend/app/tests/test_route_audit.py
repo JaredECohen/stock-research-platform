@@ -136,6 +136,65 @@ def test_admin_routes_are_documented_as_admin_unless_browser_exempt():
     assert not disagreements, "\n  ".join(["audit vs admin_auth:"] + disagreements)
 
 
+def _policy_cell(cells: list[str]) -> str:
+    """The policy cell of a row from either table in the doc: the backend
+    inventory (Method | Path | Called by | External | Auth today | Policy |
+    Rate | Notes) or the shorter FEAT-002 additions table (Method | Path |
+    External | Policy | Rate)."""
+    return cells[5] if len(cells) >= 7 else cells[3]
+
+
+def _expected_from_doc(policy: str) -> tuple[str, str | None]:
+    """Doc vocabulary → (policy level, feature-or-None) as `auth/policy.py`
+    would state it. Feature is None where the doc names none."""
+    from app.auth import policy as pol
+
+    text = policy.strip()
+    head = re.split(r"[\s(,]", text, maxsplit=1)[0].lower()
+    m = re.search(r"metered:(\w+)", text)
+    if text.startswith("pro + metered:"):
+        return pol.PRO, m.group(1)
+    if head == "metered:" or text.startswith("metered:"):
+        return pol.AUTHENTICATED, m.group(1) if m else None
+    if head in ("dcf", "comps"):
+        return pol.AUTHENTICATED, head
+    if head == "public" or head == "stripe":
+        return pol.PUBLIC, None
+    if head == "free":
+        return pol.AUTHENTICATED, None
+    if head == "pro":
+        return pol.PRO, None
+    if head == "admin":
+        return pol.ADMIN, None
+    raise AssertionError(f"unrecognised policy cell {policy!r}")
+
+
+def test_audit_doc_policy_column_agrees_with_auth_policy():
+    """The doc is the human-readable mirror of `auth/policy.py`; the
+    middleware enforces the table, not the doc. A row that says `free`
+    for a route the table calls `pro` (or names a different meter) would
+    have the pricing page promise something the backend refuses. Checked
+    for every route that exists today, so the two cannot drift apart."""
+    from app.auth import policy as pol
+
+    docs = _documented_routes()
+    live = _openapi_routes()
+    disagreements = []
+    for (method, path), cells in sorted(docs.items()):
+        if (method, path) not in live:
+            continue
+        level, feature = _expected_from_doc(_policy_cell(cells))
+        actual, explicit = pol.lookup(method, pol.templated_to_concrete(path))
+        if not explicit:
+            disagreements.append(f"{method} {path}: not named in auth/policy.py")
+            continue
+        if actual.level != level:
+            disagreements.append(f"{method} {path}: doc {level!r} vs policy {actual.level!r}")
+        if feature is not None and actual.feature != feature:
+            disagreements.append(f"{method} {path}: doc meters {feature!r} vs policy {actual.feature!r}")
+    assert not disagreements, "\n  ".join(["route-audit doc vs auth/policy.py:"] + disagreements)
+
+
 def test_unit_cost_doc_has_no_invented_numbers():
     """§5 must stay 'NOT YET MEASURED' until the script's JSON exists.
 

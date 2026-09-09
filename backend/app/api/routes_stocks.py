@@ -5,11 +5,15 @@ import logging
 from datetime import date as _date
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from ..agents.graph import run_stock_memo
-from ..database import SessionLocal
+from ..auth.entitlements import EntitlementError, Grant, authorize, require_feature
+from ..config import settings
+from ..database import SessionLocal, get_db
 from ..models import Company
 from ..rate_limit import LIMITS, limiter
 from ..schemas import CompanyOut, StockMemoOut
@@ -19,6 +23,7 @@ from ..services.data_service import get_data_service
 from ..services.fundamentals_service import get_full_financials
 from ..services.history_service import backfill_ticker
 from ..services.market_data_service import get_basic_stats, get_price_series
+from .gating import customer_wall_on, enforce_scope, feature_disabled, rate_scope
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +86,7 @@ def _company_tier(ticker: str) -> str:
 
 
 @router.get("/api/stocks", response_model=list[CompanyOut])
-def list_stocks() -> list[CompanyOut]:
+def list_stocks(_rate: None = Depends(rate_scope("data"))) -> list[CompanyOut]:
     """Return every ticker the platform knows about.
 
     Wave 9b — reads the `companies` table directly so the dropdown gets
@@ -111,7 +116,7 @@ def list_stocks() -> list[CompanyOut]:
 
 
 @router.get("/api/stocks/{ticker}")
-def get_stock(ticker: str) -> dict[str, Any]:
+def get_stock(ticker: str, _rate: None = Depends(rate_scope("data"))) -> dict[str, Any]:
     fin = get_full_financials(ticker.upper())
     if not fin.get("profile"):
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -135,7 +140,9 @@ def get_stock(ticker: str) -> dict[str, Any]:
 
 
 @router.get("/api/stocks/{ticker}/prices")
-def get_stock_prices(ticker: str, days: int = 252) -> list[dict[str, Any]]:
+def get_stock_prices(
+    ticker: str, days: int = 252, _rate: None = Depends(rate_scope("series")),
+) -> list[dict[str, Any]]:
     rows = get_price_series(ticker.upper(), days)
     if not rows:
         raise HTTPException(status_code=404, detail=f"No prices for {ticker}")
@@ -157,6 +164,85 @@ def _parse_as_of(as_of: str | None) -> _date | None:
     return d
 
 
+def _stamp_snapshot_headers(response: Response, snap: Any) -> None:
+    response.headers["X-Memo-Version"] = str(snap.version)
+    response.headers["X-Memo-Trigger"] = snap.trigger
+    response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
+
+
+def _memo_from_store_only(
+    request: Request,
+    response: Response,
+    db: Session,
+    t: str,
+    *,
+    scenario: str,
+    ondemand: bool,
+    as_of: str | None,
+) -> Any:
+    """`GET /memo` when the web process may not generate (login wall on).
+
+    The agent graph and the provider backfill only ever run in the worker
+    here; this function reads `memo_snapshots` and nothing else. The
+    branches, in order:
+
+    - `as_of` → 404 `feature_disabled`. Backtests re-run the graph for a
+      historical date; there is no stored artefact to serve and no worker
+      path for them this phase.
+    - no snapshot, `ondemand=false` → 409 `no_memo` with `analyze_path`, so
+      the UI can offer a (charged) research run. Nothing is metered: the
+      customer saw no memo.
+    - no snapshot, `ondemand=true` → the analyze path (a `research_run`
+      reservation + a queued job) and 202 with the analyze payload. It
+      draws on the `research` rate window (3/hour/user) exactly as
+      `POST /analyze` does — the route's own `data` scope is 120/minute,
+      which would otherwise be the only ceiling on charged runs started
+      through a GET.
+    - snapshot → `memo_view` is authorized (Free: 3 distinct tickers a
+      month) and the snapshot is served. A stale snapshot is still served,
+      flagged with `X-Memo-Stale: true` and the reason, rather than
+      regenerated in the request as the wall-off path does.
+
+    `memo_view` is authorized only once a snapshot is known to exist,
+    rather than as a route dependency, so the 409 branch never charges:
+    the customer saw no memo, and `/api/me/usage` must not list a
+    reserve-then-release for it.
+    """
+    if as_of:
+        _parse_as_of(as_of)  # keep today's 422 for a malformed date
+        raise feature_disabled(
+            f"Backtest memos (as_of) are not available to customer accounts for {t}.",
+            feature="memo_view", ticker=t,
+        )
+    snap = memo_store.latest_memo(t)
+    if snap is None:
+        if ondemand:
+            enforce_scope(request, db, "research")
+            return _enqueue_research_run(request, db, t, scenario)
+        raise EntitlementError(
+            409, "no_memo",
+            f"No stored memo for {t} yet. Run research to generate one.",
+            feature="memo_view",
+            extra={"ticker": t, "analyze_path": f"/api/stocks/{t}/analyze"},
+        )
+
+    grant = authorize(request, "memo_view", resource=t, db=db)
+    try:
+        freshness = memo_store.memo_freshness(snap)
+        if freshness["stale"]:
+            response.headers["X-Memo-Stale"] = "true"
+            response.headers["X-Memo-Stale-Reason"] = freshness["reason"]
+            response.headers["X-Memo-Stale-Trigger"] = freshness["trigger"] or ""
+        _stamp_snapshot_headers(response, snap)
+        response.headers["X-Memo-Source"] = "cache"
+        memo = memo_store.memo_to_pydantic(snap)
+    except Exception:
+        grant.release(db)
+        raise
+    grant.commit(db)
+    return memo
+
+
 @router.get("/api/stocks/{ticker}/memo", response_model=StockMemoOut)
 @limiter.limit(LIMITS["memo_read"])
 def get_stock_memo(
@@ -166,6 +252,8 @@ def get_stock_memo(
     scenario: str = "soft_landing",
     ondemand: bool = False,
     as_of: str | None = Query(None, description="YYYY-MM-DD; backtest mode"),
+    db: Session = Depends(get_db),
+    _rate: None = Depends(rate_scope("data")),
 ) -> StockMemoOut:
     """Return the latest memo for `ticker`.
 
@@ -180,8 +268,25 @@ def get_stock_memo(
     - When `as_of=YYYY-MM-DD` is passed (Wave 1C), the memo is reproduced
       as of that historical date. Backtest results are stored separately
       (won't shadow live memos) and skip long-term memory writes.
+
+    FEAT-002: everything after the cheap path above assumes the web
+    process may run the agent graph. With the login wall on it never
+    does — `memo_view` is metered and generation belongs to the worker —
+    and the request is answered from the store alone; see
+    `_memo_from_store_only` for the 409 / 202 / stale contract the
+    frontend handles. `MEMO_INLINE_GENERATION=false` forces that
+    store-only path with the wall off too (worker-only serving with no
+    accounts, uncharged since `authorize` is a no-op there). The reverse
+    override is deliberately not honoured: `MEMO_INLINE_GENERATION=true`
+    under the wall would route customers down the legacy branch, which
+    meters nothing and runs the graph plus the provider backfill
+    in-request for free.
     """
     t = ticker.upper()
+    if customer_wall_on() or not settings.memo_inline_generation_effective:
+        return _memo_from_store_only(
+            request, response, db, t, scenario=scenario, ondemand=ondemand, as_of=as_of,
+        )
     as_of_date = _parse_as_of(as_of)
 
     # Backtest path: skip the cached-snapshot shortcut so we always
@@ -244,7 +349,12 @@ def get_stock_memo(
 
 
 @router.get("/api/stocks/{ticker}/memory")
-def get_stock_memory(ticker: str, limit: int = 10) -> dict[str, Any]:
+def get_stock_memory(
+    ticker: str,
+    limit: int = 10,
+    _rate: None = Depends(rate_scope("data")),
+    _grant: Grant = Depends(require_feature("memo_history")),
+) -> dict[str, Any]:
     """Wave 8D — surface long-term memory entries for the UI.
 
     Returns the most recent `limit` entries from `memory/companies/<T>.md`
@@ -273,7 +383,12 @@ def get_stock_memory(ticker: str, limit: int = 10) -> dict[str, Any]:
 
 
 @router.get("/api/stocks/{ticker}/memos")
-def get_stock_memo_history(ticker: str, limit: int = 25) -> list[dict[str, Any]]:
+def get_stock_memo_history(
+    ticker: str,
+    limit: int = 25,
+    _rate: None = Depends(rate_scope("data")),
+    _grant: Grant = Depends(require_feature("memo_history")),
+) -> list[dict[str, Any]]:
     """Memo timeline for `ticker`, newest-first.
 
     Returns the metadata only (version / trigger / parent_version /
@@ -295,6 +410,68 @@ def get_stock_memo_history(ticker: str, limit: int = 25) -> list[dict[str, Any]]
     ]
 
 
+def _analyze_payload(t: str, job: dict[str, Any], created: bool, *, charged: bool) -> dict[str, Any]:
+    snap = memo_store.latest_memo(t)
+    return {
+        "ticker": t,
+        "status": "started" if created else "in_progress",
+        # The polling contract compares `latest_memo_at` against this
+        # value, so it must predate the memo the job will persist —
+        # enqueue time qualifies even while the job is still queued.
+        "started_at": job["started_at"] or job["enqueued_at"],
+        "job_id": job["id"],
+        "current_version": snap.version if snap else None,
+        "current_generated_at": snap.generated_at.isoformat() if snap and snap.generated_at else None,
+        # FEAT-002: True only when THIS request reserved a research run.
+        # A coalesced request rides on someone else's job for free.
+        "charged": charged,
+        "note": (
+            "Memo regeneration runs in the background (5-9 min typical). "
+            "Poll GET /api/stocks/{ticker}/analyze/status for completion."
+        ),
+    }
+
+
+def _enqueue_research_run(request: Request, db: Session, t: str, scenario: str) -> JSONResponse:
+    """The charged analyze path (login wall on).
+
+    Reserve a `research_run`, then enqueue. The reservation is handed to
+    the job when the job was actually created — the worker commits it
+    when the memo persists and releases it when the run fails or is
+    orphaned — and released right here when the request coalesced onto a
+    job that already existed, so the customer pays for their own run and
+    never for someone else's.
+
+    The meter key is per call (see `authorize`: a random key means "charge
+    each call"). Retry safety comes from the job queue, not from the key:
+    a retried POST lands on the still-active job as `created=False` and
+    its own reservation is released. A client-supplied key would be
+    worse, not better — a replayed key on a job that has already finished
+    replays the committed event as "allowed" and starts a second,
+    uncharged run.
+
+    Lazy universe resolution (profile lookup + the 5-year backfill for a
+    ticker the database has never seen) does not happen here: it is
+    provider spend, so it runs in the worker inside the job that was
+    charged for it.
+    """
+    grant = authorize(request, "research_run", resource=t, db=db)
+    try:
+        job, created = regen_worker.enqueue(
+            t, scenario, source="user",
+            requested_by_user_id=grant.user_id, usage_event_id=grant.usage_event_id,
+        )
+    except Exception:
+        grant.release(db)
+        raise
+    if not created:
+        grant.release(db)
+    return JSONResponse(
+        status_code=202,
+        content=_analyze_payload(t, job, created, charged=created and grant.charged),
+    )
+
+
 @router.post("/api/stocks/{ticker}/analyze", status_code=202)
 @limiter.limit(LIMITS["memo_analyze"])
 def analyze_stock(
@@ -303,6 +480,8 @@ def analyze_stock(
     ticker: str,
     scenario: str | None = None,
     sync: bool = Query(False, description="If True, run synchronously and return the memo (will 504 on prod for full memos > 100s)."),
+    db: Session = Depends(get_db),
+    _rate: None = Depends(rate_scope("research")),
 ) -> dict[str, Any]:
     """Trigger a fresh full memo regeneration.
 
@@ -317,10 +496,26 @@ def analyze_stock(
     Only useful in dev or behind a long-timeout proxy; on Render this
     will 504 after ~100s and the frontend will lose the response (the
     backend may still complete the work; check the status endpoint).
+
+    FEAT-002, login wall on: `sync=true` is refused (403 — the web process
+    never generates for a customer), the run is metered as a
+    `research_run` (Free 1 / Pro 20 a month; 402 when spent, with no job
+    row), and lazy universe resolution moves into the worker. See
+    `_enqueue_research_run`.
     """
     t = ticker.upper()
-    _ensure_lazy_universe(t)
     sc = scenario or "soft_landing"
+
+    if customer_wall_on():
+        if sync:
+            raise feature_disabled(
+                "Synchronous generation is not available to customer accounts; "
+                "POST without sync=true and poll /analyze/status.",
+                feature="research_run", status_code=403, ticker=t,
+            )
+        return _enqueue_research_run(request, db, t, sc)
+
+    _ensure_lazy_universe(t)
 
     if sync:
         try:
@@ -329,9 +524,7 @@ def analyze_stock(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         snap = memo_store.latest_memo(t)
         if snap is not None:
-            response.headers["X-Memo-Version"] = str(snap.version)
-            response.headers["X-Memo-Trigger"] = snap.trigger
-            response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
+            _stamp_snapshot_headers(response, snap)
         # The route default is 202 (async enqueue). The sync path runs
         # inline and returns the memo, so override back to 200 — otherwise
         # `?sync=true` returns a body with a misleading 202 status.
@@ -345,27 +538,11 @@ def analyze_stock(
     # regens — and, unlike the old in-memory registry, the coalescing
     # holds across process restarts.
     job, created = regen_worker.enqueue(t, sc)
-
-    snap = memo_store.latest_memo(t)
-    return {
-        "ticker": t,
-        "status": "started" if created else "in_progress",
-        # The polling contract compares `latest_memo_at` against this
-        # value, so it must predate the memo the job will persist —
-        # enqueue time qualifies even while the job is still queued.
-        "started_at": job["started_at"] or job["enqueued_at"],
-        "job_id": job["id"],
-        "current_version": snap.version if snap else None,
-        "current_generated_at": snap.generated_at.isoformat() if snap and snap.generated_at else None,
-        "note": (
-            "Memo regeneration runs in the background (5-9 min typical). "
-            "Poll GET /api/stocks/{ticker}/analyze/status for completion."
-        ),
-    }
+    return _analyze_payload(t, job, created, charged=False)
 
 
 @router.get("/api/stocks/{ticker}/analyze/status")
-def analyze_status(ticker: str) -> dict[str, Any]:
+def analyze_status(ticker: str, _rate: None = Depends(rate_scope("data"))) -> dict[str, Any]:
     """Poll target for the async analyze flow.
 
     Returns:

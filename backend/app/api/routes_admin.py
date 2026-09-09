@@ -17,13 +17,16 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from ..database import get_db
 from ..monitoring import KNOWN_LOOPS, _process_role, status_snapshot
 from ..rate_limit import LIMITS, limiter
 from ..seed_universe import run_full_seed
 from ..services import dcf_store, llm_metrics, memo_store, outcome_service, update_orchestrator
+from .gating import enforce_global
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +81,23 @@ def run_backfill_endpoint(
 def monitoring_status() -> dict:
     """Last-run timestamps + notes per registered monitoring loop."""
     return {"loops": status_snapshot()}
+
+
+@router.get("/api/admin/abuse-telemetry")
+def abuse_telemetry_endpoint() -> dict[str, Any]:
+    """FEAT-002 phase 6 — the numbers behind "is the login wall being
+    abused, and is it refusing real customers": 429s by scope / plan /
+    route, trial creations per bootstrap IP hash, and the share of
+    non-public API requests that were refused with 429, over the trailing
+    24h. Admin-token protected by prefix (`admin_auth`); the customer
+    middleware never consults a JWT for this path. Cross-process by
+    construction — every input is a database row, so it reads the same
+    from the web and the worker.
+    """
+    from ..auth.analytics import abuse_report
+    from ..database import SessionLocal
+    with SessionLocal() as db:
+        return abuse_report(db, hours=24)
 
 
 @router.get("/api/admin/llm-metrics")
@@ -200,10 +220,20 @@ def track_record_endpoint(
 
 
 @router.post("/api/admin/evaluate-outcomes")
-def evaluate_outcomes_now() -> dict[str, Any]:
+def evaluate_outcomes_now(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     """Manual trigger for the daily outcome loop. Useful in dev / for
     backfilling the table after deploys; production runs the scheduled
-    job via APScheduler."""
+    job via APScheduler.
+
+    Browser-called (`TrackRecord.tsx`), so it is exempt from the admin
+    token and Pro under the customer policy. The work is platform-wide
+    and identical whoever asks, so behind the login wall it also sits in
+    one GLOBAL window (`evaluate_outcomes`, 1 per 10 minutes, shared by
+    every caller) rather than a per-user one — a per-user limit would let
+    N accounts run the loop N times. With the wall off the route is
+    unchanged.
+    """
+    enforce_global(request, db, "evaluate_outcomes")
     return outcome_service.evaluate_all_due()
 
 

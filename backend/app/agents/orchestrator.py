@@ -312,8 +312,54 @@ def _try_sdk_chat(message: str, history: list[ChatMessage] | None) -> str | None
         return None
 
 
+def _stored_memo(ticker: str) -> StockMemoOut | None:
+    """The latest persisted memo for `ticker`, or None. Reads only; the
+    lazy import mirrors `_answer_with_memo_context` (memo_store imports
+    the graph's schemas, and this module is imported early)."""
+    from ..services import memo_store
+    snap = memo_store.latest_memo(ticker)
+    if snap is None:
+        return None
+    try:
+        return memo_store.memo_to_pydantic(snap)
+    except Exception as exc:
+        log_safely(log, f"stored memo for {ticker} could not be hydrated for chat", exc)
+        return None
+
+
+def _render_needs_analysis(tickers: list[str]) -> str:
+    names = ", ".join(tickers)
+    plural = "s" if len(tickers) != 1 else ""
+    return (
+        f"There is no stored research memo for {names} yet, and the committee does not run "
+        f"inside a chat turn. Run research on the ticker{plural} from the Research page "
+        "(a research run is charged against your plan's allowance) and ask again once the "
+        "memo is ready."
+    )
+
+
 class Orchestrator:
-    def chat(self, message: str, history: list[ChatMessage] | None = None) -> ChatResponse:
+    def chat(
+        self,
+        message: str,
+        history: list[ChatMessage] | None = None,
+        *,
+        allow_inline_memo: bool = True,
+    ) -> ChatResponse:
+        """One chat turn.
+
+        `allow_inline_memo` (FEAT-002) says whether this turn may start a
+        full memo run in-process for `single_stock_analysis` /
+        `stock_comparison`. True is the historical behaviour and the
+        default, so nothing changes for a caller that never heard of the
+        flag. False — what `routes_chat` passes while the login wall is on
+        — answers from `memo_store.latest_memo` and names the tickers
+        without a memo in `ChatResponse.needs_analysis` so the UI can offer
+        a (charged, worker-side) research run instead. Both inline entry
+        points are behind the flag: the legacy `run_stock_memo` and the
+        SDK runtime's `run_stock_memo_via_sdk`, which is resolved at call
+        time and would otherwise run a full memo under its own run_id.
+        """
         intent, tickers, theme = classify_intent(message)
         trace = default_agent_trace(intent)
 
@@ -337,10 +383,17 @@ class Orchestrator:
 
         if intent == "single_stock_analysis" and tickers:
             ticker = tickers[0]
+            if not allow_inline_memo:
+                memo = _stored_memo(ticker)
+                if memo is None:
+                    return ChatResponse(
+                        intent=intent, answer=_render_needs_analysis([ticker]),
+                        agent_trace=trace, needs_analysis=[ticker],
+                    )
             # Phase 3: route through the Agents SDK runtime when enabled. The
             # runtime ultimately returns the same StockMemoOut shape, so the
             # downstream rendering / tracing is identical.
-            if settings.use_agents_sdk:
+            elif settings.use_agents_sdk:
                 from .sdk_runtime import run_stock_memo_via_sdk
                 memo = run_stock_memo_via_sdk(ticker)
             else:
@@ -361,23 +414,42 @@ class Orchestrator:
             # and silently read about three. The note rides on `sources`
             # (appended after the cap so it is never truncated away).
             unavailable: list[str] = []
+            # FEAT-002: tickers with no stored memo when generation is not
+            # allowed in-request; reported separately so the UI can offer
+            # a research run rather than an error.
+            missing: list[str] = []
             for t in tickers[:4]:
+                if not allow_inline_memo:
+                    stored = _stored_memo(t)
+                    if stored is None:
+                        missing.append(t)
+                    else:
+                        memos.append(stored)
+                    continue
                 try:
                     memos.append(run_stock_memo(t))
                 except Exception as exc:
                     log_safely(log, f"comparison memo unavailable for {t}", exc)
                     unavailable.append(t)
             unavailable_notes = [f"memo unavailable: {t}" for t in unavailable]
+            unavailable_notes += [f"memo not yet generated: {t}" for t in missing]
             if not memos:
-                return ChatResponse(
-                    intent=intent,
-                    answer="Could not generate any memos for the requested tickers.",
-                    agent_trace=trace, sources=unavailable_notes,
+                answer = (
+                    _render_needs_analysis(missing) if missing
+                    else "Could not generate any memos for the requested tickers."
                 )
+                return ChatResponse(
+                    intent=intent, answer=answer,
+                    agent_trace=trace, sources=unavailable_notes, needs_analysis=missing,
+                )
+            answer = _render_comparison_answer(memos)
+            if missing:
+                answer += "\n\n_" + _render_needs_analysis(missing) + "_"
             return ChatResponse(
-                intent=intent, answer=_render_comparison_answer(memos),
+                intent=intent, answer=answer,
                 agent_trace=trace, memo=memos[0],
                 sources=[s for m in memos for s in m.sources_used][:20] + unavailable_notes,
+                needs_analysis=missing,
             )
 
         if intent == "dcf_analysis" and tickers:

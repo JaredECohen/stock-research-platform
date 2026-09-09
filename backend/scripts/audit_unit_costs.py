@@ -212,17 +212,14 @@ def _research_run(ticker: str):
     `RegenJob` row, the same field the ops endpoints report.
     """
     def go(_run_id: str) -> dict[str, Any]:
-        from app.api.routes_stocks import _ensure_lazy_universe
         from app.database import SessionLocal
         from app.models import RegenJob
         from app.services import regen_worker
 
-        # Same step `POST /analyze` performs before enqueueing today (profile
-        # lookup + 5-year backfill for a ticker the DB has never seen). It
-        # runs inside the measurement window on purpose: a cold ticker's
-        # provider calls are part of what a research run costs. When S2
-        # moves this into the worker's `execute_job`, drop this line.
-        _ensure_lazy_universe(ticker)
+        # Lazy universe resolution (profile lookup + 5-year backfill for a
+        # ticker the DB has never seen) runs inside `execute_job` now, so a
+        # cold ticker's provider calls land inside the measurement window
+        # exactly as they do for a customer's run.
         job, created = regen_worker.enqueue(ticker, "soft_landing", source="unit_cost_audit")
         if not created:
             return {"status": "skipped", "note": f"coalesced onto existing job {job['id']}"}

@@ -143,6 +143,7 @@ flag is on.
 | GET | `/api/admin/llm-recent-failures` | none | DB-only (`llm_call_logs`) | admin | admin | admin | |
 | GET | `/api/admin/regen-jobs` | none | DB-only (`regen_jobs`) | admin | admin | admin | |
 | POST | `/api/admin/fix-sequences` | none | DB-only (Postgres sequences) | admin | admin | admin | |
+| GET | `/api/admin/abuse-telemetry` | none | DB-only (`analytics_events`, `users.bootstrap_ip_hash`, `ui_logs`) | admin | admin | admin | FEAT-002 phase 6: 429s by scope/plan/route, trial creations per IP hash, share of authenticated requests refused with 429, trailing 24h |
 
 ### Routes FEAT-002 still adds (not in `app.openapi()` yet)
 
@@ -160,7 +161,6 @@ with the full columns (the drift test parses every live route there).
 | POST | `/api/billing/portal` | Stripe (httpx) | free with `stripe_customer_id` | 10/hour/user |
 | POST | `/api/billing/reconcile` | Stripe (httpx) | free | 5/hour/user |
 | POST | `/api/billing/webhook` | none (signature verified locally) | Stripe signature only — `@limiter.exempt`, exempt from the customer policy | none |
-| GET | `/api/admin/abuse-telemetry` | DB-only | admin | admin |
 | GET | `/api/admin/billing/users/{external_id}` | DB-only | admin | admin |
 | POST | `/api/admin/billing/overrides` | DB-only | admin | admin |
 | POST | `/api/admin/samples/rebuild` | DB-only (enqueues; the worker builds) | admin | admin |
