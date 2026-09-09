@@ -346,6 +346,34 @@ def test_public_copy_of_a_stored_memo_round_trips_through_the_schema(monkeypatch
 # ETag / 304
 # ---------------------------------------------------------------------------
 
+def test_prices_are_served_as_the_contract_list_not_the_stored_row(wall, client, monkeypatch):
+    """Plan §3.1: `prices: [{date, close}]`. The row is stored as
+    `{points: [...]}` (the size-cap stripper and the JSON column want an
+    object) but the frontend maps over the list directly, so serving the
+    stored shape would be a TypeError on the sample page."""
+    memo_store.save_memo(_memo(LISTED[0]))
+    _build(LISTED[0], monkeypatch)
+    with SessionLocal() as db:
+        stored = public_samples.rows_for(db, LISTED[0])["prices"].payload
+    assert stored == {"points": [{"date": "2026-09-05", "close": 100.0}]}
+
+    body = client.get(f"/api/public/samples/{LISTED[0]}").json()
+    assert body["prices"] == [{"date": "2026-09-05", "close": 100.0}]
+    assert all(set(p) == {"date", "close"} for p in body["prices"])
+    # The other plan shapes are unchanged by the flattening.
+    assert body["commentary"] is None and "commentary: not built" in body["degraded"]
+    assert "prices: empty" not in body["degraded"]
+
+    # An empty stored series is null + degraded, never `[]` masquerading
+    # as "no price moves".
+    with SessionLocal() as db:
+        row = public_samples.rows_for(db, LISTED[0])["prices"]
+        row.payload = {"points": []}
+        db.commit()
+    body = client.get(f"/api/public/samples/{LISTED[0]}").json()
+    assert body["prices"] is None and "prices: empty" in body["degraded"]
+
+
 def test_etag_304_round_trip_and_rollover(wall, client, monkeypatch):
     memo_store.save_memo(_memo(LISTED[0]))
     _build(LISTED[0], monkeypatch)

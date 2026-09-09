@@ -51,7 +51,9 @@ PAYLOAD_CAP_BYTES = 1_500_000
 
 # Bump when `assemble()` changes shape so cached ETags roll over even
 # though the underlying rows did not change.
-_ASSEMBLY_VERSION = "v1"
+#   v2: `prices` served as the plan's `[{date, close}]` list, not the
+#       stored `{points: [...]}` row shape.
+_ASSEMBLY_VERSION = "v2"
 
 # The admin "rebuild" trigger crosses the web→worker boundary through the
 # same table the samples live in: one control row keyed by a ticker no
@@ -59,6 +61,12 @@ _ASSEMBLY_VERSION = "v1"
 # request-side readers filter by the allowlist, so it never leaks.
 CONTROL_TICKER = "_control"
 REBUILD_KIND = "rebuild_request"
+# Second control row: when the loop last built the WHOLE allowlist, and
+# whether that build succeeded. The weekly cadence is anchored here rather
+# than on `cron_loop_runs` because every `record_run` — an operator's
+# one-ticker rebuild, a run that failed outright — would otherwise push
+# the next full build out by a week.
+FULL_BUILD_KIND = "last_full_build"
 
 # A row whose `built_at` trails the newest row for the same ticker by more
 # than this was kept from an earlier build because its kind failed this
@@ -205,8 +213,8 @@ def assemble(db: Session, ticker: str) -> tuple[dict[str, Any], str]:
             payload[kind] = None
             degraded.append(f"{kind}: not built")
             continue
-        payload[kind] = row.payload if row.payload else None
-        if not row.payload:
+        payload[kind] = _public_shape(kind, row.payload)
+        if payload[kind] is None:
             degraded.append(f"{kind}: empty")
         for note in (row.degraded or []):
             if isinstance(note, str) and note not in degraded:
@@ -220,6 +228,22 @@ def assemble(db: Session, ticker: str) -> tuple[dict[str, Any], str]:
     payload["degraded"] = degraded
     payload["disclosures"] = disclosures_for(newest)
     return payload, compute_etag(rows)
+
+
+def _public_shape(kind: str, stored: Any) -> Any:
+    """The page-facing shape of one stored row, or None when it is empty.
+
+    Rows are stored as dicts (the size-cap stripper and the JSON column
+    both want an object), but the API contract (plan §3.1) serves
+    `prices` as a bare `[{date, close}]` list — the frontend maps over
+    it directly. Every other kind is served as stored.
+    """
+    if not stored:
+        return None
+    if kind == "prices":
+        points = stored.get("points") if isinstance(stored, dict) else stored
+        return list(points) if isinstance(points, list) and points else None
+    return stored
 
 
 # --- expectations ledger ------------------------------------------------------
@@ -450,6 +474,42 @@ def clear_request(db: Session, *, requested_at: str | None = None) -> bool:
     db.delete(row)
     db.commit()
     return True
+
+
+# --- weekly anchor -------------------------------------------------------------
+
+def record_full_build(
+    db: Session, *, now: datetime, success: bool, ok: list[str], failed: list[str],
+) -> dict[str, Any]:
+    """Note that a build covering the whole allowlist just finished.
+
+    Only the loop calls this, and only for full runs: a subset rebuild
+    (an operator refreshing one ticker) must not count as this week's
+    build for the others, and `weekly_due` reads nothing else.
+    """
+    payload = {
+        "completed_at": now.isoformat(), "success": bool(success),
+        "tickers_ok": list(ok), "tickers_failed": list(failed),
+    }
+    row = db.get(PublicSample, (CONTROL_TICKER, FULL_BUILD_KIND))
+    if row is None:
+        row = PublicSample(ticker=CONTROL_TICKER, kind=FULL_BUILD_KIND, degraded=[])
+        db.add(row)
+    row.payload = payload
+    row.etag = payload_etag(payload)
+    row.built_at = now
+    row.built_by = "worker"
+    db.commit()
+    return payload
+
+
+def last_full_build(db: Session) -> dict[str, Any] | None:
+    """`{completed_at, success, tickers_ok, tickers_failed}` for the most
+    recent full build, or None when the allowlist has never been built."""
+    row = db.get(PublicSample, (CONTROL_TICKER, FULL_BUILD_KIND))
+    if row is None or not row.payload:
+        return None
+    return dict(row.payload)
 
 
 # ---------------------------------------------------------------------------

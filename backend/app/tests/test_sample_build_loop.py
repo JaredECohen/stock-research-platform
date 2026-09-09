@@ -302,37 +302,167 @@ def test_tick_keeps_a_request_that_arrived_mid_build(monkeypatch):
     assert pending is not None and pending["tickers"] == [LISTED[0], LISTED[1]]
 
 
+def _anchor(*, completed_at: datetime, success: bool = True) -> None:
+    with SessionLocal() as db:
+        public_samples.record_full_build(db, now=completed_at, success=success, ok=LISTED if success else [], failed=[] if success else LISTED)
+
+
 def test_tick_builds_when_the_weekly_run_is_due_and_idles_otherwise(monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", True)
     calls: list[str] = []
     monkeypatch.setattr(sample_build_loop, "run_once", lambda tickers=None, now=None: calls.append("ran") or {})
 
-    # Never recorded → due.
+    # Never built → due.
     assert sample_build_loop.weekly_due()
     sample_build_loop.tick()
     assert calls == ["ran"]
 
-    import app.monitoring as monitoring
-    monitoring.record_run(sample_build_loop.LOOP_NAME, note="built=3 degraded=0")
+    # A full build just completed → not due (the anchor is a DB row, so
+    # the worker and a fresh process agree; nothing in-memory to drop).
+    _anchor(completed_at=datetime.utcnow())
     assert not sample_build_loop.weekly_due()
     assert sample_build_loop.tick() is None and calls == ["ran"]
 
-    # Six days later: still not due; eight days later: due (cross-process:
-    # the anchor is the DB row, so drop the in-memory copy first).
-    monitoring._LAST_RUNS.pop(sample_build_loop.LOOP_NAME, None)
-    with SessionLocal() as db:
-        row = db.query(CronLoopRun).filter(CronLoopRun.loop_name == sample_build_loop.LOOP_NAME).one()
-        row.last_run_at = datetime.utcnow() - timedelta(days=6)
-        db.commit()
+    # Six days later: still not due; eight days later: due.
+    _anchor(completed_at=datetime.utcnow() - timedelta(days=6))
     assert sample_build_loop.tick() is None
-    with SessionLocal() as db:
-        row = db.query(CronLoopRun).filter(CronLoopRun.loop_name == sample_build_loop.LOOP_NAME).one()
-        row.last_run_at = datetime.utcnow() - timedelta(days=8)
-        db.commit()
+    _anchor(completed_at=datetime.utcnow() - timedelta(days=8))
     sample_build_loop.tick()
     assert calls == ["ran", "ran"]
 
+    # `record_run` alone (what cron-health reads) never satisfies the
+    # weekly cadence: the anchor is the full build, not any bookkeeping.
+    _purge()
+    import app.monitoring as monitoring
+    monitoring.record_run(sample_build_loop.LOOP_NAME, note="built=3 degraded=0 scope=partial")
+    assert sample_build_loop.weekly_due()
+
+
+def test_tick_never_builds_automatically_while_the_feature_is_dark(monkeypatch, recorded):
+    """render.yaml ships AUTH_ENABLED=false. With the feature dark the
+    loop must spend nothing: no provider fan-out, no LLM commentary,
+    even on the first tick after deploy when nothing has ever been built
+    (which is exactly when the weekly cadence says "due")."""
+    monkeypatch.setattr(settings, "auth_enabled", False)
+    ran: list[str] = []
+    monkeypatch.setattr(sample_build_loop, "run_once", lambda tickers=None, now=None: ran.append("ran") or {})
+
+    assert sample_build_loop.weekly_due(), "precondition: never built → due"
+    assert sample_build_loop.tick() is None
+    assert ran == []
+    # cron-health sees a healthy idle loop, not one that never reported.
+    (args, kwargs), = recorded
+    assert args == (sample_build_loop.LOOP_NAME,) and kwargs["success"] is True
+    assert kwargs["note"] == sample_build_loop.IDLE_NOTE
+
+    # Flipping the flag on is all it takes: the next tick builds.
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    sample_build_loop.tick()
+    assert ran == ["ran"]
+
+
+def test_admin_request_is_served_even_while_the_feature_is_dark(monkeypatch):
+    """An operator asking for a build is not the feature spending on its
+    own — and the plan's go-live order runs a rebuild before the flags
+    that would gate it are all on."""
+    monkeypatch.setattr(settings, "auth_enabled", False)
+    with SessionLocal() as db:
+        public_samples.request_rebuild(db, [LISTED[1]])
+    seen: list[list[str]] = []
+    monkeypatch.setattr(sample_build_loop, "run_once", lambda tickers=None, now=None: seen.append(tickers) or {"ok": True})
+
+    assert sample_build_loop.tick() == {"ok": True}
+    assert seen == [[LISTED[1]]]
+    with SessionLocal() as db:
+        assert public_samples.pending_request(db) is None
+
+
+def test_partial_rebuild_does_not_move_the_weekly_anchor(monkeypatch, recorded):
+    """Day 6: an operator rebuilds one ticker. Day 7: the others are still
+    refreshed on schedule — the one-ticker run must not count as this
+    week's build for the tickers it did not touch."""
+    monkeypatch.setattr(public_samples, "build_for_ticker", lambda t, **kw: {"ticker": t, "built": ["memo"], "degraded": []})
+    day0 = datetime(2026, 9, 1, 7, 0, 0)
+
+    full = sample_build_loop.run_once(now=day0)
+    assert full["full"] is True
+    with SessionLocal() as db:
+        anchor = public_samples.last_full_build(db)
+    assert anchor == {"completed_at": day0.isoformat(), "success": True, "tickers_ok": LISTED, "tickers_failed": []}
+
+    partial = sample_build_loop.run_once([LISTED[0]], now=day0 + timedelta(days=6))
+    assert partial["full"] is False and partial["success"] is True
+    with SessionLocal() as db:
+        assert public_samples.last_full_build(db) == anchor, "a subset rebuild moved the weekly anchor"
+    # cron-health still saw both runs (freshness of the loop itself)...
+    assert [kw["note"].split("scope=")[1].split()[0] for _a, kw in recorded] == ["full", "partial"]
+    # ...but the weekly cadence is unmoved.
+    assert not sample_build_loop.weekly_due(now=day0 + timedelta(days=6, hours=1))
+    assert sample_build_loop.weekly_due(now=day0 + timedelta(days=7))
+
+    # The control rows never reach the public listing or a sample page.
+    with SessionLocal() as db:
+        assert public_samples.rows_for(db, public_samples.CONTROL_TICKER) == {}
+        assert all(e["ticker"] in LISTED for e in public_samples.list_samples(db))
+
+
+def test_admin_rebuild_of_the_whole_allowlist_anchors_the_week(monkeypatch):
+    """The go-live order is: flip the flag, POST /api/admin/samples/rebuild.
+    That request builds every listed ticker, so it IS the week's build;
+    the loop must not immediately build everything a second time."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(public_samples, "build_for_ticker", lambda t, **kw: {"ticker": t, "built": ["memo"], "degraded": []})
+    with SessionLocal() as db:
+        public_samples.request_rebuild(db, None)  # every listed ticker
+    out = sample_build_loop.tick(now=datetime(2026, 9, 1))
+    assert out is not None and out["full"] is True and out["tickers"] == LISTED
+    assert not sample_build_loop.weekly_due(now=datetime(2026, 9, 1, 0, 10))
+    assert sample_build_loop.tick(now=datetime(2026, 9, 1, 0, 10)) is None
+
+
+def test_failed_full_build_is_retried_after_the_backoff_not_a_week(monkeypatch):
+    """A weekly build that built nothing (provider chain down) must not
+    silently leave the samples stale for seven days — nor hammer the
+    providers every poll."""
+    monkeypatch.setattr(settings, "auth_enabled", True)
+
+    def explode(ticker, **kw):
+        raise RuntimeError("everything is down")
+
+    monkeypatch.setattr(public_samples, "build_for_ticker", explode)
+    t0 = datetime(2026, 9, 1, 7, 0, 0)
+    out = sample_build_loop.run_once(now=t0)
+    assert out["success"] is False and out["full"] is True
+    with SessionLocal() as db:
+        anchor = public_samples.last_full_build(db)
+    assert anchor["success"] is False and anchor["tickers_failed"] == LISTED
+
+    poll = timedelta(minutes=sample_build_loop.POLL_MINUTES)
+    assert not sample_build_loop.weekly_due(now=t0 + poll), "a failed build must not retry on the next poll"
+    assert not sample_build_loop.weekly_due(now=t0 + timedelta(hours=sample_build_loop.RETRY_HOURS) - poll)
+    assert sample_build_loop.weekly_due(now=t0 + timedelta(hours=sample_build_loop.RETRY_HOURS))
+    assert sample_build_loop.RETRY_HOURS * 3600 < sample_build_loop.WEEKLY_DAYS * 86400
+
+    # Once a retry succeeds the weekly cadence resumes from that build.
+    monkeypatch.setattr(public_samples, "build_for_ticker", lambda t, **kw: {"ticker": t, "built": ["memo"], "degraded": []})
+    t1 = t0 + timedelta(hours=sample_build_loop.RETRY_HOURS)
+    assert sample_build_loop.tick(now=t1)["success"] is True
+    assert not sample_build_loop.weekly_due(now=t1 + timedelta(days=6))
+    assert sample_build_loop.weekly_due(now=t1 + timedelta(days=7))
+
+
+def test_a_garbled_anchor_means_rebuild_not_never(monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    with SessionLocal() as db:
+        db.add(PublicSample(ticker=public_samples.CONTROL_TICKER, kind=public_samples.FULL_BUILD_KIND,
+                            payload={"completed_at": "not a timestamp", "success": True}, degraded=[]))
+        db.commit()
+    assert sample_build_loop.weekly_due()
+
 
 def test_tick_records_a_crash_before_reraising(monkeypatch, recorded):
+    monkeypatch.setattr(settings, "auth_enabled", True)
+
     def crash(tickers=None, now=None):
         raise RuntimeError("synthetic sample build failure")
 
