@@ -35,22 +35,22 @@ export default function Dashboard() {
       </header>
 
       <section className="grid md:grid-cols-2 lg:grid-cols-4 gap-3">
-        <Link to="/chat" className="card hover:border-accent-600 transition-colors">
+        <Link to="/app/chat" className="card hover:border-accent-600 transition-colors">
           <MessageCircle className="text-accent-500 mb-2" size={18} />
           <div className="font-medium">Ask the PM</div>
           <div className="text-xs text-slate-400 mt-1">Chat with the orchestrator and watch the agent trace.</div>
         </Link>
-        <Link to="/research" className="card hover:border-accent-600 transition-colors">
+        <Link to="/app/research" className="card hover:border-accent-600 transition-colors">
           <Newspaper className="text-accent-500 mb-2" size={18} />
           <div className="font-medium">Stock Research</div>
           <div className="text-xs text-slate-400 mt-1">Generate a full investment memo for any supported ticker.</div>
         </Link>
-        <Link to="/screener" className="card hover:border-accent-600 transition-colors">
+        <Link to="/app/screener" className="card hover:border-accent-600 transition-colors">
           <Search className="text-accent-500 mb-2" size={18} />
           <div className="font-medium">Screener</div>
           <div className="text-xs text-slate-400 mt-1">Agent-ranked ideas across themes — falling rates, AI infra, defense.</div>
         </Link>
-        <Link to="/portfolio" className="card hover:border-accent-600 transition-colors">
+        <Link to="/app/portfolio" className="card hover:border-accent-600 transition-colors">
           <Briefcase className="text-accent-500 mb-2" size={18} />
           <div className="font-medium">Portfolio Builder</div>
           <div className="text-xs text-slate-400 mt-1">Translate a market view into a diversified scenario portfolio.</div>
@@ -60,7 +60,7 @@ export default function Dashboard() {
       <section className="card">
         <div className="flex items-center justify-between">
           <div className="section-title">Demo prompts</div>
-          <Link to="/chat" className="text-xs text-accent-500 inline-flex items-center gap-1">
+          <Link to="/app/chat" className="text-xs text-accent-500 inline-flex items-center gap-1">
             Open chat <ArrowRight size={12} />
           </Link>
         </div>
@@ -68,7 +68,7 @@ export default function Dashboard() {
           {QUICK_PROMPTS.map((p) => (
             <Link
               key={p}
-              to={`/chat?q=${encodeURIComponent(p)}`}
+              to={`/app/chat?q=${encodeURIComponent(p)}`}
               className="card-tight hover:border-accent-600 transition-colors"
             >
               <div className="text-sm">{p}</div>
@@ -81,7 +81,7 @@ export default function Dashboard() {
         <div className="card md:col-span-2">
           <div className="section-title mb-2 flex items-center justify-between">
             <span>Top-ranked ideas</span>
-            <Link to="/screener" className="text-xs text-accent-500 inline-flex items-center gap-1">
+            <Link to="/app/screener" className="text-xs text-accent-500 inline-flex items-center gap-1">
               Full screener <ArrowRight size={12} />
             </Link>
           </div>
@@ -101,7 +101,7 @@ export default function Dashboard() {
                   <tr key={r.ticker} className="border-b border-ink-800 table-row-hover">
                     <td className="py-2 text-slate-500">{r.rank}</td>
                     <td className="font-mono">
-                      <Link to={`/research?ticker=${r.ticker}`} className="text-accent-500 hover:underline">
+                      <Link to={`/app/research?ticker=${r.ticker}`} className="text-accent-500 hover:underline">
                         {r.ticker}
                       </Link>
                     </td>

@@ -1,0 +1,43 @@
+// Where to send someone after they sign in.
+//
+// `returnTo` rides in the query string of /sign-in, so it is attacker
+// controlled (a phishing link can set it). We only ever honour a
+// same-origin relative path INSIDE the app shell: no protocol-relative
+// `//evil`, no `scheme:`, nothing under /api (which would hand a bearer-less
+// browser navigation to a JSON endpoint), no backslashes (browsers treat
+// `/\evil` as `//evil`). Anything else falls back to /app.
+
+export const APP_HOME = "/app";
+
+// Written with escapes on purpose: a literal NUL or DEL byte in this file
+// makes git treat it as binary, which hides every future change to this
+// allowlist from code review. Covers C0 controls, space and DEL.
+const CONTROL_OR_SPACE = /[\x00-\x20\x7f]/;
+
+export function safeReturnTo(raw: string | null | undefined): string {
+  if (!raw) return APP_HOME;
+  let value = raw.trim();
+  try {
+    // A double-encoded value from a mangled link decodes once here; a
+    // plain value is unchanged.
+    if (/%[0-9a-f]{2}/i.test(value)) value = decodeURIComponent(value);
+  } catch {
+    return APP_HOME;
+  }
+  if (value.includes("\\")) return APP_HOME;
+  if (value.startsWith("//")) return APP_HOME;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return APP_HOME;
+  if (!value.startsWith("/")) return APP_HOME;
+  // Only the shell: "/app", "/app/...", never "/apple" or "/api/...".
+  if (value !== APP_HOME && !value.startsWith(`${APP_HOME}/`) && !value.startsWith(`${APP_HOME}?`)) {
+    return APP_HOME;
+  }
+  // Whitespace or control characters never belong in a path we redirect to.
+  if (CONTROL_OR_SPACE.test(value)) return APP_HOME;
+  return value;
+}
+
+/** Build the sign-in URL that comes back to `returnTo` afterwards. */
+export function signInPath(returnTo: string, mode: "sign-in" | "sign-up" = "sign-in"): string {
+  return `/${mode}?returnTo=${encodeURIComponent(returnTo)}`;
+}

@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api } from "@/api/client";
+import { api, isApiError } from "@/api/client";
 import MemoCard from "@/components/MemoCard";
+import RateLimitNotice from "@/components/RateLimitNotice";
+import UpgradePrompt from "@/components/UpgradePrompt";
 import { AgentTrace } from "@/components/AgentTrace";
 import FullInvestmentMemo from "@/components/FullInvestmentMemo";
 import NewsAlertPanel from "@/components/NewsAlertPanel";
@@ -10,7 +12,13 @@ import MemoVersionTimeline from "@/components/MemoVersionTimeline";
 import DCFVersionHistory from "@/components/DCFVersionHistory";
 import MemoryTrail from "@/components/MemoryTrail";
 import TickerPicker from "@/components/TickerPicker";
-import type { CompanyOut, StockMemoOut, AgentTrace as AgentTraceT } from "@/types";
+import type {
+  CompanyOut,
+  EntitlementRefusal,
+  RateLimitRefusal,
+  StockMemoOut,
+  AgentTrace as AgentTraceT,
+} from "@/types";
 
 type FetchError = Error & { status?: number; detail?: string };
 
@@ -23,7 +31,16 @@ export default function Research() {
   const [memo, setMemo] = useState<StockMemoOut | null>(null);
   const [loading, setLoading] = useState(false);
   const [needsGate, setNeedsGate] = useState(false);   // 409 from backend
+  // Which 409 we got: the legacy data-only tier (retry with ondemand=true,
+  // generation runs inline) or `no_memo` under the login wall (nothing is
+  // generated in-request; POST /analyze queues a charged research run).
+  const [gateMode, setGateMode] = useState<"legacy" | "no_memo">("legacy");
   const [error, setError] = useState<string | null>(null);
+  // Structured refusals render a specific prompt; the ticker in the URL and
+  // the user's place on the page are untouched so a retry is one click.
+  const [refusal, setRefusal] = useState<EntitlementRefusal | null>(null);
+  const [rateLimit, setRateLimit] = useState<{ refusal: RateLimitRefusal; retry: () => void } | null>(null);
+  const [staleReason, setStaleReason] = useState<string | null>(null);
   const [trace, setTrace] = useState<AgentTraceT[]>([]);
   const [fullMemoOpen, setFullMemoOpen] = useState(false);
   // Async memo regen state. `regenStartedAt` is the server-side
@@ -62,6 +79,9 @@ export default function Research() {
     if (!ticker) return;
     setLoading(true);
     setError(null);
+    setRefusal(null);
+    setRateLimit(null);
+    setStaleReason(null);
     setMemo(null);
     setNeedsGate(false);
     setTrace([
@@ -76,12 +96,24 @@ export default function Research() {
     ]);
     api
       .getStockMemo(ticker, opts)
-      .then((m) => {
-        setMemo(m);
+      .then((r) => {
+        if (r.kind === "queued") {
+          // Login wall + ondemand: the worker is generating; poll like a regen.
+          setRegenStartedAt(r.job.started_at);
+          setRegenElapsedSec(0);
+          return;
+        }
+        setMemo(r.memo);
+        if (r.stale) setStaleReason(r.staleReason || "a newer memo is being prepared");
         setTrace((cur) => cur.map((t) => ({ ...t, status: "done" as const, detail: t.detail || "complete" })));
       })
       .catch((e: FetchError) => {
-        if (e.status === 409) {
+        if (isApiError(e) && e.entitlement) {
+          setRefusal(e.entitlement);
+        } else if (isApiError(e) && e.rateLimit) {
+          setRateLimit({ refusal: e.rateLimit, retry: () => loadMemo(opts) });
+        } else if (e.status === 409) {
+          setGateMode(isApiError(e) && e.code === "no_memo" ? "no_memo" : "legacy");
           setNeedsGate(true);
         } else {
           setError(e.detail || String(e));
@@ -115,13 +147,23 @@ export default function Research() {
   function startRegen() {
     if (!ticker) return;
     setError(null);
+    setRefusal(null);
+    setRateLimit(null);
     api
       .analyzeStock(ticker)
       .then((res) => {
         setRegenStartedAt(res.started_at);
         setRegenElapsedSec(0);
       })
-      .catch((e: FetchError) => setError(e.detail || String(e)));
+      .catch((e: FetchError) => {
+        if (isApiError(e) && e.entitlement) {
+          setRefusal(e.entitlement);
+        } else if (isApiError(e) && e.rateLimit) {
+          setRateLimit({ refusal: e.rateLimit, retry: startRegen });
+        } else {
+          setError(e.detail || String(e));
+        }
+      });
   }
 
   // Poll `/analyze/status` while a regen is in flight. Stop when the
@@ -146,7 +188,12 @@ export default function Research() {
             // Refetch the fresh memo from the server.
             api
               .getStockMemo(ticker)
-              .then(onAnalyzed)
+              .then((r) => {
+                if (r.kind === "memo") {
+                  setNeedsGate(false);
+                  onAnalyzed(r.memo);
+                }
+              })
               .catch((e: FetchError) =>
                 setError(e.detail || String(e)),
               );
@@ -212,6 +259,22 @@ export default function Research() {
 
       {error && <div className="card-tight border-danger-500/40 text-danger-500 text-sm">{error}</div>}
 
+      {refusal && <UpgradePrompt refusal={refusal} onDismiss={() => setRefusal(null)} />}
+      {rateLimit && (
+        <RateLimitNotice
+          refusal={rateLimit.refusal}
+          onRetry={rateLimit.retry}
+          onDismiss={() => setRateLimit(null)}
+          preservedNote={`${ticker} stays selected — retry when the timer ends.`}
+        />
+      )}
+
+      {staleReason && memo && (
+        <div className="card-tight border-warn-500/40 bg-warn-500/5 text-xs text-slate-300" role="status">
+          Showing the last stored memo; it may be out of date ({staleReason}). Use <strong>Refresh memo</strong> for a new run.
+        </div>
+      )}
+
       {universeError && !universeLoading && (
         <div className="card-tight border-warn-500/40 bg-warn-500/5 text-sm">
           <div className="text-warn-500 font-medium">Ticker universe failed to load</div>
@@ -246,9 +309,23 @@ export default function Research() {
       {needsGate && company && (
         <AnalyzeStockGate
           company={company}
-          loading={loading}
-          onAnalyze={() => loadMemo({ ondemand: true })}
+          loading={loading || !!regenStartedAt}
+          onAnalyze={() => (gateMode === "no_memo" ? startRegen() : loadMemo({ ondemand: true }))}
         />
+      )}
+      {needsGate && !company && !regenStartedAt && (
+        // Under the login wall an unknown ticker is only added to the
+        // universe by the worker, so there is no company row to describe yet.
+        <div className="card max-w-2xl">
+          <h2 className="text-xl font-semibold mb-1">{ticker}</h2>
+          <p className="text-sm text-slate-300 mt-2 leading-relaxed">
+            No memo is stored for this ticker yet. A research run puts the full agent committee on it and writes one
+            in the background (typically 5-9 minutes). It counts as one research run.
+          </p>
+          <button type="button" className="btn-primary mt-4" onClick={startRegen}>
+            Run research on {ticker}
+          </button>
+        </div>
       )}
 
       {ticker && !memo && !error && !needsGate && loading && (
