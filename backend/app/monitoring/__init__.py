@@ -36,6 +36,7 @@ KNOWN_LOOPS: tuple[str, ...] = (
     "news_loop",
     "outcome_loop",
     "postmortem_loop",
+    "sample_build_loop",
     "sector_digest_loop",
     "social_loop",
     "theme_exposure_loop",
@@ -131,6 +132,7 @@ from . import (  # noqa: E402,F401
     news_loop,
     outcome_loop,
     postmortem_loop,
+    sample_build_loop,
     sector_digest_loop,
     social_loop,
     theme_exposure_loop,
@@ -141,7 +143,7 @@ from . import (  # noqa: E402,F401
 __all__ = [
     "catalyst_loop", "checkpoint_gc", "edgar_poller", "history_backfill",
     "llm_log_gc", "macro_loop", "mispricing_audit_loop", "news_loop",
-    "outcome_loop", "postmortem_loop", "sector_digest_loop", "social_loop",
+    "outcome_loop", "postmortem_loop", "sample_build_loop", "sector_digest_loop", "social_loop",
     "theme_exposure_loop", "transcripts_poller", "weekly_digest_loop",
     "register_all", "record_run", "status_snapshot", "KNOWN_LOOPS",
 ]
@@ -166,3 +168,6 @@ def register_all(scheduler) -> None:
     weekly_digest_loop.register(scheduler)
     sector_digest_loop.register(scheduler)
     mispricing_audit_loop.register(scheduler)
+    # FEAT-002 — curated public samples for the logged-out site. Polls for
+    # admin rebuild requests and builds weekly; see the module docstring.
+    sample_build_loop.register(scheduler)
