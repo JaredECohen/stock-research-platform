@@ -273,7 +273,7 @@ function AIScreenerView({ themed = false }: { themed?: boolean }) {
               <tr key={r.ticker} className="border-b border-ink-800 table-row-hover">
                 <td className="py-2 text-slate-500">{r.rank}</td>
                 <td className="font-mono">
-                  <Link to={`/research?ticker=${r.ticker}`} className="text-accent-500 hover:underline">
+                  <Link to={`/app/research?ticker=${r.ticker}`} className="text-accent-500 hover:underline">
                     {r.ticker}
                   </Link>
                 </td>
@@ -502,7 +502,7 @@ function CustomScreenView() {
                 <tr key={r.ticker} className="border-b border-ink-800 table-row-hover">
                   <td className="py-2 font-mono">
                     <Link
-                      to={`/research?ticker=${r.ticker}`}
+                      to={`/app/research?ticker=${r.ticker}`}
                       className="text-accent-500 hover:underline"
                     >
                       {r.ticker}

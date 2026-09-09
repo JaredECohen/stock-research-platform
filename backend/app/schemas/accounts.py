@@ -24,7 +24,7 @@ ErrorCode = Literal[
     "quota_exceeded",       # 402
     "rate_limited",         # 429
     "concurrency_limited",  # 429
-    "feature_disabled",     # 404
+    "feature_disabled",     # 404 (403 when refusing sync=true on POST /analyze)
     "no_memo",              # 409 — GET /memo under auth with nothing stored
     "already_subscribed",   # 409
     "billing_unavailable",  # 503

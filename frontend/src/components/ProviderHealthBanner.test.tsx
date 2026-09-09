@@ -142,7 +142,7 @@ describe("ProviderHealthBanner", () => {
     expect(
       screen.getByText("Memos and chat may fall back to deterministic sections until the provider recovers."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /provider health details/i })).toHaveAttribute("href", "/settings");
+    expect(screen.getByRole("link", { name: /provider health details/i })).toHaveAttribute("href", "/app/settings");
   });
 
   it("derives a breaker sentence when a breaker is open without the degraded flag", async () => {

@@ -214,7 +214,7 @@ export default function ProviderHealthBanner() {
             Memos and chat may fall back to deterministic sections until the provider recovers.
           </div>
         )}
-        <Link to="/settings" className="inline-block mt-1.5 underline underline-offset-2 hover:opacity-80">
+        <Link to="/app/settings" className="inline-block mt-1.5 underline underline-offset-2 hover:opacity-80">
           Provider health details
         </Link>
       </div>

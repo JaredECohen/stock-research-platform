@@ -269,7 +269,11 @@ class Settings(BaseSettings):
     # Whether GET /api/stocks/{t}/memo may run the agent graph inside the
     # request. None (the default) resolves to `not auth_enabled`: today's
     # behaviour with the login wall off, worker-only generation with it
-    # on. Set explicitly only to force one mode for an experiment.
+    # on. Not symmetric: `false` forces worker-only generation even with
+    # the wall off, but `true` under the wall is deliberately ignored by
+    # GET /memo and POST /chat (it would skip memo_view metering and run
+    # LLM work inside a customer request). Set explicitly only to force
+    # worker-only mode for an experiment.
     memo_inline_generation: bool | None = None
     # Legal pages ship as clearly labelled drafts until the owner records
     # the review date here (any non-empty value flips the banner off).
