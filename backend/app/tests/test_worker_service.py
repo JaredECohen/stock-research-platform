@@ -17,7 +17,7 @@ def test_worker_module_imports_without_starting_anything():
 def test_monitoring_registers_every_loop():
     """The worker's whole job is running these. `register_all` must not
     need apscheduler at import time, or the worker can't even wire them."""
-    from app.monitoring import register_all
+    from app.monitoring import KNOWN_LOOPS, register_all
 
     class FakeScheduler:
         def __init__(self):
@@ -28,8 +28,13 @@ def test_monitoring_registers_every_loop():
 
     sched = FakeScheduler()
     register_all(sched)
-    assert len(sched.jobs) == 15
+    # `KNOWN_LOOPS` is what cron-health expects to see reporting, so the
+    # two lists must be the same length — a literal count here went stale
+    # the first time a loop was added (sample_build_loop, FEAT-002).
+    assert len(sched.jobs) == len(KNOWN_LOOPS)
+    assert sorted(sched.jobs) == sorted(KNOWN_LOOPS)
     assert "edgar_poller" in sched.jobs
+    assert "sample_build_loop" in sched.jobs
     assert "history_backfill" in sched.jobs
 
 

@@ -96,6 +96,9 @@ def test_public_allowlist_is_exactly_what_the_plan_says():
         ("GET", "/health"),
         ("GET", "/api/providers/status"),
         ("GET", "/api/public/config"),
+        ("GET", "/api/public/samples"),
+        ("GET", "/api/public/samples/{ticker}"),
+        ("POST", "/api/public/events"),
         ("POST", "/api/admin/ui-log"),
     }, sorted(public)
 

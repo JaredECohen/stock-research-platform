@@ -81,6 +81,9 @@ flag is on.
 | GET | `/api/me` | none yet (S5 `useAccount`) | DB-only (`users`, `subscriptions`, `usage_counters`, `admin_overrides`) | public (auth off → anonymous principal) | free | data | requires a valid JWT once `AUTH_ENABLED` |
 | POST | `/api/me/bootstrap` | none yet (S5 `RequireAuth`, once per session) | DB-only (`users` upsert; one trial per verified `email_hash`) | public (auth off → no-op) | free | data (slowapi 3/hour/IP keyed by `rate_limit.client_ip`) | idempotent; never resets a started trial |
 | GET | `/api/me/usage` | none yet (S5 `Account.tsx`) | DB-only (`usage_counters`, `usage_events`) | public (auth off → anonymous) | free | data | |
+| GET | `/api/public/samples` | none yet (S6 landing page) | DB-only (`public_samples`; allowlisted tickers only) | public | public | public_get | `Cache-Control: public, max-age=300`; build state per listed ticker, built or not |
+| GET | `/api/public/samples/{ticker}` | none yet (S6 sample components) | DB-only (`public_samples`; allowlisted tickers only; never generates or backfills) | public | public | public_get | strong `ETag`, `If-None-Match` → 304; `Cache-Control: public, max-age=3600`; unlisted → 404 even with a memo; listed-but-unbuilt → 200 with nulls + `degraded`; `prices` is `[{date, close}]` |
+| POST | `/api/public/events` | none yet (S6 analytics helper) | DB-only (`analytics_events`; allowlisted names/props, ≤50 events, 200-char strings, 64 KB body) | public | public | public_get | always 200 `{accepted, rejected}`; `user_id`/`plan` only from a verified bearer |
 | GET | `/api/stocks` | `pages/Research.tsx`, `pages/Comps.tsx`, `pages/DCFLab.tsx` (`listStocks`) | DB-only (`companies` table) | public | free | data | |
 | GET | `/api/stocks/{ticker}` | none (client helper `getStock` has no page caller) | providers (`get_full_financials` → `company_cold` snapshot, cold ticker pays provider calls; `get_quote` live; `get_basic_stats`) | public | free | data | unknown ticker → 404 as today; no lazy-universe insert on this path |
 | GET | `/api/stocks/{ticker}/prices` | none (client helper `getStockPrices` has no page caller) | providers (`get_price_history`, provider-cached) | public | free | data | |
@@ -143,27 +146,24 @@ flag is on.
 | GET | `/api/admin/llm-recent-failures` | none | DB-only (`llm_call_logs`) | admin | admin | admin | |
 | GET | `/api/admin/regen-jobs` | none | DB-only (`regen_jobs`) | admin | admin | admin | |
 | POST | `/api/admin/fix-sequences` | none | DB-only (Postgres sequences) | admin | admin | admin | |
+| POST | `/api/admin/samples/rebuild` | none | DB-only (control row in `public_samples`; the worker builds on its next poll, ≤10 min) | admin | admin | admin | tickers ⊆ `SAMPLE_TICKERS` else 422; merges repeated requests |
 | GET | `/api/admin/abuse-telemetry` | none | DB-only (`analytics_events`, `users.bootstrap_ip_hash`, `ui_logs`) | admin | admin | admin | FEAT-002 phase 6: 429s by scope/plan/route, trial creations per IP hash, share of authenticated requests refused with 429, trailing 24h |
 
 ### Routes FEAT-002 still adds (not in `app.openapi()` yet)
 
 Listed so the allowlist is complete when the policy layer is written; they
-are owned by slices S3/S4 and are not pinned by `test_route_audit.py` until
-they exist; when a slice lands one, move its row into the main table above
+are owned by slice S4 and are not pinned by `test_route_audit.py` until they
+exist; when a slice lands one, move its row into the main table above
 with the full columns (the drift test parses every live route there).
 
 | Method | Path | External calls | Proposed policy | Rate scope |
 |---|---|---|---|---|
-| GET | `/api/public/samples` | DB-only (`public_samples`) | public | public_get |
-| GET | `/api/public/samples/{ticker}` | DB-only (`public_samples`; allowlisted tickers only; ETag/304) | public | public_get |
-| POST | `/api/public/events` | DB-only (`analytics_events`, allowlisted names/props) | public | public_get |
 | POST | `/api/billing/checkout` | Stripe (httpx) | free, verified email, `BILLING_ENABLED` | 10/hour/user |
 | POST | `/api/billing/portal` | Stripe (httpx) | free with `stripe_customer_id` | 10/hour/user |
 | POST | `/api/billing/reconcile` | Stripe (httpx) | free | 5/hour/user |
 | POST | `/api/billing/webhook` | none (signature verified locally) | Stripe signature only — `@limiter.exempt`, exempt from the customer policy | none |
 | GET | `/api/admin/billing/users/{external_id}` | DB-only | admin | admin |
 | POST | `/api/admin/billing/overrides` | DB-only | admin | admin |
-| POST | `/api/admin/samples/rebuild` | DB-only (enqueues; the worker builds) | admin | admin |
 
 ### Non-API paths
 
