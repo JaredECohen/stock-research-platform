@@ -4,7 +4,9 @@ A charge is two rows in one transaction:
 
   1. a `usage_events` row keyed by the caller's `idempotency_key` — the
      unique constraint means a retried request finds the existing event
-     and is NOT charged again;
+     and is NOT charged again (a *released* event under the key is the
+     exception: the units were given back, so the key is reserved afresh
+     by flipping that row, see `_re_reserve`);
   2. `UPDATE usage_counters SET used = used + q WHERE … AND used + q <= limit`
      — the row lock makes the check-and-increment atomic, so two requests
      racing for the last unit cannot both win, on either database and
@@ -136,9 +138,20 @@ def reserve(
 
     existing = find_event(db, idempotency_key)
     if existing is not None:
-        return Reservation(
-            allowed=existing.status != RELEASED, event=existing,
-            used=used(db, user_id, feature, key), limit=limit, replayed=True,
+        if existing.status != RELEASED:
+            return Reservation(
+                allowed=True, event=existing,
+                used=used(db, user_id, feature, key), limit=limit, replayed=True,
+            )
+        # A released event is a charge that was given back, not a charge
+        # that stands: the same key may be reserved again. This matters
+        # for distinct-resource features, whose key is (user, feature,
+        # month, ticker) by design — a memo open that failed after
+        # reserving (and released) must not lock that ticker out for the
+        # rest of the month with a "quota exceeded" the counter contradicts.
+        return _re_reserve(
+            db, existing, user_id=user_id, feature=feature, limit=limit, key=key,
+            plan_at_charge=plan_at_charge, quantity=quantity, run_id=run_id, now=now,
         )
 
     _insert_counter_if_missing(db, user_id, feature, key, now)
@@ -173,6 +186,62 @@ def reserve(
         )
     db.refresh(event)
     return Reservation(allowed=True, event=event, used=used(db, user_id, feature, key), limit=limit)
+
+
+def _re_reserve(
+    db: Session,
+    existing: UsageEvent,
+    *,
+    user_id: int,
+    feature: str,
+    limit: int | None,
+    key: str,
+    plan_at_charge: str,
+    quantity: int,
+    run_id: str | None,
+    now: datetime,
+) -> Reservation:
+    """Reserve again under a key whose earlier event was released.
+
+    The same two-step transaction as a fresh reservation, except that the
+    event row is flipped back to `reserved` (guarded on `status =
+    'released'`) instead of inserted. The guard is what makes two retries
+    racing for the same released key safe: only one flips the row, the
+    other's counter increment rolls back and it replays the winner. The
+    caller gets `replayed=False` — this request made the reservation and
+    owns the right to release it.
+    """
+    _insert_counter_if_missing(db, user_id, feature, key, now)
+    stmt = update(UsageCounter).where(
+        UsageCounter.user_id == user_id,
+        UsageCounter.feature == feature,
+        UsageCounter.period_key == key,
+    )
+    if limit is not None:
+        stmt = stmt.where(UsageCounter.used + quantity <= int(limit))
+    result = db.execute(stmt.values(used=UsageCounter.used + quantity, updated_at=now))
+    if result.rowcount != 1:
+        db.rollback()
+        return Reservation(allowed=False, event=None, used=used(db, user_id, feature, key), limit=limit)
+
+    flipped = db.execute(update(UsageEvent).where(
+        UsageEvent.id == existing.id, UsageEvent.status == RELEASED,
+    ).values(
+        status=RESERVED, finalized_at=None, created_at=now, period_key=key,
+        quantity=quantity, plan_at_charge=plan_at_charge, run_id=run_id,
+    ))
+    if flipped.rowcount != 1:
+        # Lost a race to another re-reservation of the same key. The
+        # rollback undoes our counter increment; the winner's stands.
+        db.rollback()
+        winner = find_event(db, existing.idempotency_key)
+        return Reservation(
+            allowed=winner is not None and winner.status != RELEASED, event=winner,
+            used=used(db, user_id, feature, key), limit=limit, replayed=True,
+        )
+    db.commit()
+    db.refresh(existing)
+    return Reservation(allowed=True, event=existing, used=used(db, user_id, feature, key), limit=limit)
 
 
 def commit(db: Session, event_id: int | None, *, now: datetime | None = None) -> bool:
