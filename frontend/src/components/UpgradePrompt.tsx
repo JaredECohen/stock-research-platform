@@ -2,13 +2,15 @@ import React from "react";
 import { Link } from "react-router-dom";
 import { Lock } from "lucide-react";
 import type { EntitlementRefusal } from "@/types";
+import { useConfig } from "@/auth/ConfigProvider";
 import { featureCopy, formatShortUtc } from "@/lib/entitlements";
 
 /**
  * What the user sees instead of a generic error when the backend answers
  * 402. It says which allowance ran out (or which feature is Pro-only),
  * what the Pro plan changes about that, and when a quota resets — copy
- * built from the refusal body, so it cannot disagree with the backend.
+ * built from the refusal body and the `features` matrix the backend
+ * publishes, so it cannot disagree with what is enforced.
  */
 interface Props {
   refusal: EntitlementRefusal;
@@ -31,7 +33,8 @@ export function refusalForFeature(feature: string, plan: string | null = null): 
 }
 
 export default function UpgradePrompt({ refusal, onDismiss, compact }: Props) {
-  const copy = featureCopy(refusal.feature);
+  const { config } = useConfig();
+  const copy = featureCopy(refusal.feature, config.features);
   const isQuota = refusal.code === "quota_exceeded";
   const resets = formatShortUtc(refusal.resets_at);
   const onPro = refusal.plan === "pro";

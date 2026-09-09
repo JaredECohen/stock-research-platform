@@ -709,9 +709,30 @@ export interface PublicConfig {
   prices: { monthly_cents: number; annual_cents: number; currency: string };
   legal_reviewed: boolean;
   app_env: string;
-  trial_days?: number;
-  features?: Record<string, { description: string; free: unknown; pro: unknown; metered: boolean; period: string }>;
+  /** Trial length the backend grants; null when the config fetch fell back
+   *  to defaults (the UI then says "your Pro trial" without a number). */
+  trial_days: number | null;
+  /** The entitlement matrix the backend enforces (`features.registry_for_config`),
+   *  including ENTITLEMENT_OVERRIDES_JSON. Every allowance number in UI copy
+   *  comes from here or from `/api/me` — never from a literal. */
+  features: FeatureMatrix;
 }
+
+/** Mirrors backend `auth/features.py` allowances: an int is metered per
+ *  UTC month, null is unlimited, booleans are allowed / not allowed, and
+ *  "follows_memo" means usable for a ticker whose memo was opened this month. */
+export type FeatureAllowance = number | boolean | null | "follows_memo";
+
+export interface FeatureMatrixEntry {
+  description: string;
+  free: FeatureAllowance;
+  pro: FeatureAllowance;
+  metered: boolean;
+  period: string;
+  distinct_resources: boolean;
+}
+
+export type FeatureMatrix = Record<string, FeatureMatrixEntry>;
 
 export type BillingInterval = "month" | "year";
 

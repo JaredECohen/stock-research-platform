@@ -7,8 +7,8 @@ import { invalidateAccount, useAccount } from "@/auth/useAccount";
 import UpgradePrompt, { refusalForFeature } from "@/components/UpgradePrompt";
 import UsageMeter from "@/components/UsageMeter";
 import { track } from "@/lib/analytics";
-import { featureCopy, formatExactUtc, formatShortUtc, planLabel } from "@/lib/entitlements";
-import type { BillingInterval, UsageResponse } from "@/types";
+import { featureCopy, formatExactUtc, formatShortUtc, freeHeadlineAllowances, planLabel } from "@/lib/entitlements";
+import type { Account as AccountShape, BillingInterval, UsageResponse } from "@/types";
 
 /**
  * /app/account — plan, exact trial end, usage meters, upgrade / manage
@@ -130,7 +130,7 @@ export default function Account() {
                 <span className="text-xs text-slate-500">Stripe status: {billing.stripe_status}</span>
               )}
             </div>
-            <PlanDetail plan={plan} />
+            <PlanDetail plan={plan} entitlements={account.entitlements} trialDays={config.trial_days} />
             {plan.warning && <div className="text-sm text-warn-500">{plan.warning}</div>}
 
             {actionError && <div className="text-sm text-danger-500">{actionError}</div>}
@@ -221,11 +221,19 @@ export default function Account() {
   );
 }
 
-function PlanDetail({ plan }: { plan: NonNullable<ReturnType<typeof useAccount>["account"]>["plan"] }) {
+interface PlanDetailProps {
+  plan: AccountShape["plan"];
+  entitlements: AccountShape["entitlements"];
+  /** From `/api/public/config`; null when unknown, in which case the trial
+   *  is described without a length (the end date is exact either way). */
+  trialDays: number | null;
+}
+
+function PlanDetail({ plan, entitlements, trialDays }: PlanDetailProps) {
   if (plan.source === "trial" && plan.trial_ends_at) {
     return (
       <div className="text-sm text-slate-300">
-        Your 7-day Pro trial ends on <span className="font-medium" data-testid="trial-ends">{formatExactUtc(plan.trial_ends_at)}</span>. No card is on file; afterwards the account drops to Free and nothing is deleted.
+        Your {trialDays ? `${trialDays}-day ` : ""}Pro trial ends on <span className="font-medium" data-testid="trial-ends">{formatExactUtc(plan.trial_ends_at)}</span>. No card is on file; afterwards the account drops to Free and nothing is deleted.
       </div>
     );
   }
@@ -248,9 +256,12 @@ function PlanDetail({ plan }: { plan: NonNullable<ReturnType<typeof useAccount>[
   if (plan.plan === "none") {
     return <div className="text-sm text-danger-500">This account is suspended. Contact support.</div>;
   }
+  // The headline numbers are this user's own /api/me limits (overrides
+  // included); when none is numeric the clause is dropped, never guessed.
+  const headline = freeHeadlineAllowances(entitlements);
   return (
-    <div className="text-sm text-slate-300">
-      Free Explorer: browse the committee&apos;s stored work — up to 3 stored-memo views, 1 research run and 10 Ask-the-PM turns a month.
+    <div className="text-sm text-slate-300" data-testid="free-summary">
+      Free Explorer: browse the committee&apos;s stored work{headline ? ` — ${headline}` : ""}.
     </div>
   );
 }

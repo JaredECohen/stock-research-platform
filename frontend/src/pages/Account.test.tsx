@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, within } from "@testing-library/react";
 import Account from "@/pages/Account";
 import { resetAccountCache } from "@/auth/useAccount";
-import { SIGNED_IN, calls, freeAccount, makeAccount, okJson, renderWithProviders, stubFetch } from "@/test/providers";
+import { SIGNED_IN, calls, ent, freeAccount, makeAccount, okJson, renderWithProviders, stubFetch } from "@/test/providers";
 
 const USAGE = {
   period_key: "2026-09",
@@ -101,5 +101,53 @@ describe("Account page", () => {
     stubFetch();
     renderWithProviders(<Account />, { config: { auth_enabled: false } });
     expect(screen.getByText(/Accounts are not enabled on this deployment/)).toBeInTheDocument();
+  });
+
+  // The trial length and the Free headline numbers are never literals:
+  // TRIAL_DAYS and ENTITLEMENT_OVERRIDES_JSON can change them without a
+  // deploy, and the page must say what the backend actually grants.
+  describe("plan copy follows the backend, not hardcoded numbers", () => {
+    it("takes the trial length from /api/public/config trial_days", async () => {
+      stubFetch([["/api/me", () => okJson(makeAccount())]]);
+      renderWithProviders(<Account />, { config: { auth_enabled: true, trial_days: 14 }, auth: SIGNED_IN });
+      await screen.findByTestId("plan-badge");
+      expect(screen.getByText(/Your 14-day Pro trial ends on/)).toBeInTheDocument();
+      expect(screen.queryByText(/7-day/)).not.toBeInTheDocument();
+    });
+
+    it("describes the trial without a length when trial_days is unknown", async () => {
+      stubFetch([["/api/me", () => okJson(makeAccount())]]);
+      renderWithProviders(<Account />, { config: { auth_enabled: true, trial_days: null }, auth: SIGNED_IN });
+      await screen.findByTestId("plan-badge");
+      expect(screen.getByText(/Your Pro trial ends on/)).toBeInTheDocument();
+      expect(screen.queryByText(/\d+-day/)).not.toBeInTheDocument();
+      // The exact end still comes from /api/me.
+      expect(screen.getByTestId("trial-ends")).toHaveTextContent("September 15, 2026 at 14:03 UTC");
+    });
+
+    it("builds the Free summary from the user's own /api/me limits (override-aware)", async () => {
+      const acct = freeAccount();
+      acct.entitlements.pm_chat = ent("pm_chat", { limit: 5, used: 0, remaining: 5, metered: true });
+      stubFetch([["/api/me", () => okJson(acct)]]);
+      renderWithProviders(<Account />, { config: { auth_enabled: true }, auth: SIGNED_IN });
+      await screen.findByTestId("plan-badge");
+      expect(screen.getByTestId("free-summary")).toHaveTextContent(
+        "up to 3 stored memo views, 1 research run and 5 Ask-the-PM turns a month",
+      );
+      expect(screen.getByTestId("free-summary")).not.toHaveTextContent("10 Ask-the-PM");
+    });
+
+    it("drops the numeric clause rather than guessing when no headline meter carries a limit", async () => {
+      const acct = freeAccount();
+      acct.entitlements.memo_view = ent("memo_view", { metered: true });
+      acct.entitlements.research_run = ent("research_run", { metered: true });
+      acct.entitlements.pm_chat = ent("pm_chat", { metered: true });
+      stubFetch([["/api/me", () => okJson(acct)]]);
+      renderWithProviders(<Account />, { config: { auth_enabled: true }, auth: SIGNED_IN });
+      await screen.findByTestId("plan-badge");
+      const summary = screen.getByTestId("free-summary");
+      expect(summary).toHaveTextContent("Free Explorer: browse the committee's stored work.");
+      expect(summary.textContent).not.toMatch(/\d/);
+    });
   });
 });

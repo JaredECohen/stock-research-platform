@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import type { PublicConfig } from "@/types";
+import type { FeatureAllowance, FeatureMatrix, FeatureMatrixEntry, PublicConfig } from "@/types";
 
 /**
  * Loads `GET /api/public/config` once at boot. The flags here drive UX
@@ -7,6 +7,14 @@ import type { PublicConfig } from "@/types";
  * authorises every request regardless, so an unreachable config endpoint
  * falls back to "auth off" defaults rather than blocking the page. A 2s
  * timeout keeps a slow backend from turning into a blank screen.
+ *
+ * This fetch deliberately bypasses `api/client.ts`: the endpoint is public
+ * and `Cache-Control: public`, so it must never carry a bearer, the anon id
+ * or the session id (plan §6.3 — public endpoints are token-free).
+ *
+ * `trial_days` and `features` have NO fallback numbers on purpose: copy
+ * that mentions an allowance renders without the number rather than
+ * promising something the backend may not enforce.
  */
 export const DEFAULT_CONFIG: PublicConfig = {
   auth_enabled: false,
@@ -18,9 +26,39 @@ export const DEFAULT_CONFIG: PublicConfig = {
   prices: { monthly_cents: 2999, annual_cents: 29900, currency: "usd" },
   legal_reviewed: false,
   app_env: "development",
-  trial_days: 7,
+  trial_days: null,
   features: {},
 };
+
+function coerceAllowance(v: unknown): FeatureAllowance | undefined {
+  if (v === null || typeof v === "boolean") return v;
+  if (typeof v === "number" && Number.isFinite(v)) return Math.trunc(v);
+  if (v === "follows_memo") return v;
+  return undefined;
+}
+
+/** Keep only well-formed entries; a malformed row is dropped rather than
+ *  rendered as a nonsense allowance. */
+export function coerceFeatures(raw: unknown): FeatureMatrix {
+  if (!raw || typeof raw !== "object") return {};
+  const out: FeatureMatrix = {};
+  for (const [name, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Partial<Record<keyof FeatureMatrixEntry, unknown>>;
+    const free = coerceAllowance(e.free);
+    const pro = coerceAllowance(e.pro);
+    if (free === undefined || pro === undefined) continue;
+    out[name] = {
+      description: typeof e.description === "string" ? e.description : "",
+      free,
+      pro,
+      metered: e.metered === true,
+      period: typeof e.period === "string" ? e.period : "month",
+      distinct_resources: e.distinct_resources === true,
+    };
+  }
+  return out;
+}
 
 export interface ConfigContextValue {
   config: PublicConfig;
@@ -51,6 +89,8 @@ function coerce(raw: unknown): PublicConfig {
     clerk_frontend_api: typeof r.clerk_frontend_api === "string" && r.clerk_frontend_api ? r.clerk_frontend_api : null,
     sample_tickers: Array.isArray(r.sample_tickers) ? r.sample_tickers.filter((t) => typeof t === "string") : [],
     prices: { ...DEFAULT_CONFIG.prices, ...(r.prices || {}) },
+    trial_days: typeof r.trial_days === "number" && Number.isInteger(r.trial_days) && r.trial_days > 0 ? r.trial_days : null,
+    features: coerceFeatures(r.features),
   };
 }
 

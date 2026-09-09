@@ -24,7 +24,6 @@ import type {
   ModelPortfolio,
   PortfolioRequest,
   ProvidersStatusResponse,
-  PublicConfig,
   RateLimitRefusal,
   ScreenerResult,
   StockMemoOut,
@@ -202,8 +201,10 @@ export const api = {
   providersStatus: () => request<ProvidersStatusResponse>("/api/providers/status"),
 
   // --- FEAT-002 account / billing -------------------------------------
-  /** Runtime flags + Clerk publishable key; no token needed. */
-  publicConfig: (init?: RequestInit) => request<PublicConfig>("/api/public/config", init),
+  // `/api/public/config` is deliberately NOT here: everything on this
+  // object carries the bearer, X-Anon-Id and X-Session-Id, and the public
+  // config is a `Cache-Control: public` endpoint that must never see them.
+  // Use `fetchPublicConfig` in auth/ConfigProvider (plan §6.3).
   me: () => request<Account>("/api/me"),
   /** Idempotent; starts the trial once server-side. */
   bootstrap: () => request<BootstrapResponse>("/api/me/bootstrap", { method: "POST", body: "{}" }),

@@ -8,7 +8,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { vi } from "vitest";
 import { AuthContext, DISABLED_AUTH, type AuthContextValue } from "@/auth/AuthContext";
 import { ConfigContext, DEFAULT_CONFIG } from "@/auth/ConfigProvider";
-import type { Account, Entitlement, PublicConfig } from "@/types";
+import type { Account, Entitlement, FeatureAllowance, FeatureMatrix, FeatureMatrixEntry, PublicConfig } from "@/types";
 
 // Node ≥22 ships an experimental `localStorage` global that is `undefined`
 // unless `--localstorage-file` is passed, and it shadows jsdom's. Install an
@@ -112,6 +112,33 @@ export function requestHeaders(init?: RequestInit): Headers {
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+/** The default matrix from backend `auth/features.py` as
+ *  `/api/public/config.features` serialises it. Tests that assert copy
+ *  numbers pass this (or an override of it) in `config.features`. */
+export function featureMatrix(over: Partial<Record<string, Partial<FeatureMatrixEntry>>> = {}): FeatureMatrix {
+  const row = (description: string, free: FeatureAllowance, pro: FeatureAllowance, extra: Partial<FeatureMatrixEntry> = {}): FeatureMatrixEntry => ({
+    description, free, pro, metered: false, period: "month", distinct_resources: false, ...extra,
+  });
+  const base: FeatureMatrix = {
+    memo_view: row("Open a stored investment memo", 3, null, { metered: true, distinct_resources: true }),
+    research_run: row("Run the full agent committee on a ticker", 1, 20, { metered: true }),
+    pm_chat: row("Ask-the-PM chat turn (also macro analysis and the NL screener)", 10, 300, { metered: true }),
+    chart_commentary: row("AI commentary on a chart (reserved for FEAT-001)", 5, 100, { metered: true }),
+    fundamentals_explorer: row("Fundamentals explorer (reserved for FEAT-001)", true, true),
+    dcf: row("DCF model on a ticker", "follows_memo", true),
+    comps: row("Comparable-company table", "follows_memo", true),
+    portfolio: row("Model portfolio builder", false, true),
+    macro: row("Macro series and scenario analysis", false, true),
+    track_record: row("Track record and outcome evaluation", false, true),
+    memo_history: row("Memo version history, agent memory and DCF versions", false, true),
+    data_catalog: row("Data catalog and sector overlays", false, true),
+  };
+  for (const [name, patch] of Object.entries(over)) {
+    base[name] = { ...base[name], ...(patch || {}) };
+  }
+  return base;
+}
 
 export function ent(feature: string, over: Partial<Entitlement> = {}): Entitlement {
   return { feature, allowed: true, limit: null, used: 0, remaining: null, resets_at: "2026-10-01T00:00:00", ...over };
