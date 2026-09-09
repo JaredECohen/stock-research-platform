@@ -23,7 +23,7 @@ from ..services.data_service import get_data_service
 from ..services.fundamentals_service import get_full_financials
 from ..services.history_service import backfill_ticker
 from ..services.market_data_service import get_basic_stats, get_price_series
-from .gating import customer_wall_on, feature_disabled, rate_scope
+from .gating import customer_wall_on, enforce_scope, feature_disabled, rate_scope
 
 log = logging.getLogger(__name__)
 
@@ -193,17 +193,20 @@ def _memo_from_store_only(
       the UI can offer a (charged) research run. Nothing is metered: the
       customer saw no memo.
     - no snapshot, `ondemand=true` → the analyze path (a `research_run`
-      reservation + a queued job) and 202 with the analyze payload.
+      reservation + a queued job) and 202 with the analyze payload. It
+      draws on the `research` rate window (3/hour/user) exactly as
+      `POST /analyze` does — the route's own `data` scope is 120/minute,
+      which would otherwise be the only ceiling on charged runs started
+      through a GET.
     - snapshot → `memo_view` is authorized (Free: 3 distinct tickers a
       month) and the snapshot is served. A stale snapshot is still served,
       flagged with `X-Memo-Stale: true` and the reason, rather than
       regenerated in the request as the wall-off path does.
 
     `memo_view` is authorized only once a snapshot is known to exist,
-    rather than as a route dependency, so that the 409 branch never
-    reserves-then-releases a charge: the meter key for a distinct-ticker
-    feature is `(user, feature, month, ticker)`, and a released row under
-    that key would refuse the next open of the same memo as a replay.
+    rather than as a route dependency, so the 409 branch never charges:
+    the customer saw no memo, and `/api/me/usage` must not list a
+    reserve-then-release for it.
     """
     if as_of:
         _parse_as_of(as_of)  # keep today's 422 for a malformed date
@@ -214,6 +217,7 @@ def _memo_from_store_only(
     snap = memo_store.latest_memo(t)
     if snap is None:
         if ondemand:
+            enforce_scope(request, db, "research")
             return _enqueue_research_run(request, db, t, scenario)
         raise EntitlementError(
             409, "no_memo",
@@ -266,13 +270,20 @@ def get_stock_memo(
       (won't shadow live memos) and skip long-term memory writes.
 
     FEAT-002: everything after the cheap path above assumes the web
-    process may run the agent graph. With the login wall on it may not
-    (`settings.memo_inline_generation_effective`), and the request is
-    answered from the store alone — see `_memo_from_store_only` for the
-    409 / 202 / stale contract the frontend handles.
+    process may run the agent graph. With the login wall on it never
+    does — `memo_view` is metered and generation belongs to the worker —
+    and the request is answered from the store alone; see
+    `_memo_from_store_only` for the 409 / 202 / stale contract the
+    frontend handles. `MEMO_INLINE_GENERATION=false` forces that
+    store-only path with the wall off too (worker-only serving with no
+    accounts, uncharged since `authorize` is a no-op there). The reverse
+    override is deliberately not honoured: `MEMO_INLINE_GENERATION=true`
+    under the wall would route customers down the legacy branch, which
+    meters nothing and runs the graph plus the provider backfill
+    in-request for free.
     """
     t = ticker.upper()
-    if not settings.memo_inline_generation_effective:
+    if customer_wall_on() or not settings.memo_inline_generation_effective:
         return _memo_from_store_only(
             request, response, db, t, scenario=scenario, ondemand=ondemand, as_of=as_of,
         )

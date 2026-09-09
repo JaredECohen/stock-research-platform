@@ -30,25 +30,58 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from ..auth import ratelimit
+from ..auth import analytics, ratelimit
 from ..auth.entitlements import EntitlementError
 from ..auth.principal import current_principal
 from ..config import settings
 from ..database import get_db
 
 
+def limiter_on() -> bool:
+    """The per-user limiter runs only behind the login wall, and honours
+    the same `RATE_LIMIT_ENABLED` switch as slowapi."""
+    return settings.auth_enabled and settings.rate_limit_enabled
+
+
+def enforce_scope(request: Request, db: Session, scope: str) -> None:
+    """Count this request in `scope` for the signed-in user (and, at
+    `IP_MULTIPLIER` × the limit, for the caller's address); raise the
+    structured 429 when the window is full. No-op when the limiter is
+    off. The function form exists for a handler that reaches a costlier
+    scope than its own route declares — `GET /memo?ondemand=true` is the
+    analyze path in a GET, so it must draw on `research`, not `data`."""
+    if not limiter_on():
+        return
+    principal = current_principal(request)
+    ratelimit.enforce(db, request, scope, user_id=principal.user_id)
+
+
+def enforce_global(request: Request, db: Session, scope: str, identity: str = "global") -> None:
+    """One window shared by every caller — for a route that does the same
+    platform-wide work whoever asks (`POST /api/admin/evaluate-outcomes`
+    walks every due memo). Refusals are recorded like any other 429 so
+    the abuse report sees them."""
+    if not limiter_on():
+        return
+    res = ratelimit.check(db, scope, identity)
+    if res.allowed:
+        return
+    try:
+        analytics.track(
+            "rate_limit_hit", db=db, principal=current_principal(request),
+            props={"scope": scope, "kind": identity, "route": request.url.path, "method": request.method},
+        )
+    except Exception:  # pragma: no cover — telemetry must never break a 429
+        pass
+    raise ratelimit.RateLimited(res)
+
+
 def rate_scope(scope: str) -> Callable[..., None]:
-    """FastAPI dependency: count this request in `scope` for the signed-in
-    user (and, at `IP_MULTIPLIER` × the limit, for the caller's address)
-    and refuse with a structured 429 when the window is full. No-op with
-    the login wall or the limiter switched off."""
+    """FastAPI dependency form of `enforce_scope`."""
     ratelimit.scope_limit(scope)  # a typo fails at import, not at first request
 
     def dependency(request: Request, db: Session = Depends(get_db)) -> None:
-        if not settings.auth_enabled or not settings.rate_limit_enabled:
-            return
-        principal = current_principal(request)
-        ratelimit.enforce(db, request, scope, user_id=principal.user_id)
+        enforce_scope(request, db, scope)
 
     dependency.__name__ = f"rate_{scope}"
     return dependency

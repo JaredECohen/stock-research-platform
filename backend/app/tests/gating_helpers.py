@@ -87,6 +87,18 @@ def purge_jobs() -> None:
         db.commit()
 
 
+def purge_rate_windows() -> None:
+    """Empty `rate_limit_windows`. Every test that turns the per-user
+    limiter on must start here: the `ip:` buckets are keyed by the shared
+    TestClient address and the `global` ones by nothing at all, so on a
+    reused database file a second run inside the same window inherits the
+    first run's counts and refuses requests the test expects to pass."""
+    from app.models.accounts import RateLimitWindow
+    with SessionLocal() as db:
+        db.query(RateLimitWindow).delete()
+        db.commit()
+
+
 def usage_events(user_id: int, feature: str) -> list[UsageEvent]:
     with SessionLocal() as db:
         rows = db.query(UsageEvent).filter(

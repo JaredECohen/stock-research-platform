@@ -10,7 +10,7 @@ from ..auth.principal import current_principal
 from ..config import settings
 from ..rate_limit import LIMITS, limiter
 from ..schemas import ChatRequest, ChatResponse
-from .gating import rate_scope
+from .gating import customer_wall_on, rate_scope
 
 router = APIRouter()
 _orch = Orchestrator()
@@ -28,18 +28,18 @@ def chat(
     """One Ask-the-PM turn.
 
     FEAT-002: metered as `pm_chat` (Free 10 / Pro 300 a month, two in
-    flight per user, 10/min). With the login wall on the orchestrator may
-    not start a memo run inside the request — `allow_inline_memo` follows
-    `settings.memo_inline_generation_effective`, which is `not
-    AUTH_ENABLED` unless forced — and answers from stored memos instead,
-    naming the tickers that still need a research run in
-    `needs_analysis`. The LLM calls the turn makes are attributed to the
-    customer and the feature so per-plan margin can be read from
-    `llm_call_logs` without any prompt text.
+    flight per user, 10/min). With the login wall on the orchestrator
+    never starts a memo run inside the request — a memo is a
+    `research_run` charge that only the analyze path reserves, so an
+    inline run here would be an uncharged one — and answers from stored
+    memos instead, naming the tickers that still need a research run in
+    `needs_analysis`. `MEMO_INLINE_GENERATION=false` disables inline
+    runs with the wall off as well; `=true` cannot re-enable them under
+    it. The LLM calls the turn makes are attributed to the customer and
+    the feature so per-plan margin can be read from `llm_call_logs`
+    without any prompt text.
     """
     principal = current_principal(request)
+    allow_inline = not customer_wall_on() and settings.memo_inline_generation_effective
     with llm_call_context(user_id=principal.user_id, feature="pm_chat"):
-        return _orch.chat(
-            req.message, req.history,
-            allow_inline_memo=settings.memo_inline_generation_effective,
-        )
+        return _orch.chat(req.message, req.history, allow_inline_memo=allow_inline)

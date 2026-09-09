@@ -176,6 +176,35 @@ def test_route_passes_the_flag_and_the_call_context(auth_on, client, monkeypatch
     assert seen["ctx"]["user_id"] == uid and seen["ctx"]["feature"] == "pm_chat"
 
 
+def test_inline_override_cannot_reenable_memo_runs_under_the_wall(auth_on, client, sentinels, monkeypatch):
+    """Regression: the flag followed `memo_inline_generation_effective`
+    alone, so `MEMO_INLINE_GENERATION=true` with the wall on had chat
+    generate memos in-request with no `research_run` charge. The wall
+    always wins; the override only matters with the wall off."""
+    monkeypatch.setattr(settings, "memo_inline_generation", True)
+    monkeypatch.setattr(memo_store, "latest_memo", _stored())
+    _sub, tok = free_user(auth_on)
+    resp = client.post("/api/chat", json={"message": "Analyze NVDA as a long-term investment.", "history": []},
+                       headers=bearer(tok))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["needs_analysis"] == ["NVDA"]
+    assert sentinels == []
+
+
+def test_inline_off_with_the_wall_off_disables_memo_runs(client, monkeypatch):
+    seen: dict = {}
+
+    def fake_chat(message, history, *, allow_inline_memo=True):
+        seen["flag"] = allow_inline_memo
+        return ChatResponse(intent="general_research_chat", answer="ok")
+
+    monkeypatch.setattr(settings, "auth_enabled", False)
+    monkeypatch.setattr(settings, "memo_inline_generation", False)
+    monkeypatch.setattr(routes_chat._orch, "chat", fake_chat)
+    assert client.post("/api/chat", json={"message": "hello", "history": []}).status_code == 200
+    assert seen["flag"] is False
+
+
 def test_route_with_the_wall_off_allows_inline_memo(client, monkeypatch):
     seen: dict = {}
 
