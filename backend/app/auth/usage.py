@@ -135,9 +135,9 @@ def reserve(
     quantity = max(1, int(quantity))
 
     existing = find_event(db, idempotency_key)
-    if existing is not None:
+    if existing is not None and existing.status != RELEASED:
         return Reservation(
-            allowed=existing.status != RELEASED, event=existing,
+            allowed=True, event=existing,
             used=used(db, user_id, feature, key), limit=limit, replayed=True,
         )
 
@@ -152,7 +152,31 @@ def reserve(
     result = db.execute(stmt.values(used=UsageCounter.used + quantity, updated_at=now))
     if result.rowcount != 1:
         db.rollback()
-        return Reservation(allowed=False, event=None, used=used(db, user_id, feature, key), limit=limit)
+        return Reservation(
+            allowed=False, event=existing, used=used(db, user_id, feature, key), limit=limit,
+        )
+
+    if existing is not None:
+        # A released event under this key is a charge that was given back
+        # (the handler failed after reserving). Distinct-resource features
+        # key on user:feature:month:resource, so refusing here would lock
+        # that resource out for the whole month; re-arm the same row as a
+        # fresh reservation instead. It is this call's reservation, not a
+        # replay, so the caller may release it.
+        result = db.execute(update(UsageEvent).where(
+            UsageEvent.id == existing.id, UsageEvent.status == RELEASED,
+        ).values(status=RESERVED, finalized_at=None, created_at=now,
+                 quantity=quantity, run_id=run_id, plan_at_charge=plan_at_charge))
+        if result.rowcount != 1:
+            db.rollback()
+            winner = find_event(db, idempotency_key)
+            return Reservation(
+                allowed=winner is not None and winner.status != RELEASED, event=winner,
+                used=used(db, user_id, feature, key), limit=limit, replayed=True,
+            )
+        db.commit()
+        db.refresh(existing)
+        return Reservation(allowed=True, event=existing, used=used(db, user_id, feature, key), limit=limit)
 
     event = UsageEvent(
         user_id=user_id, feature=feature, period_key=key, quantity=quantity,

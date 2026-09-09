@@ -76,11 +76,18 @@ def test_retry_with_the_same_idempotency_key_never_double_charges():
         retry = usage.reserve(db, user_id=uid, feature="pm_chat", limit=10, idempotency_key=key, now=NOW)
         assert retry.replayed and retry.event.id == first.event.id
         assert usage.used(db, uid, "pm_chat", "2026-09") == 1
-        # a released event replays as not-allowed rather than re-charging
+        # A released event is a refunded charge, not a live one: the same key
+        # re-arms as a fresh reservation (charged once more, never twice for
+        # the same live reservation) instead of refusing for the month.
         usage.release(db, first.event.id)
-        replay = usage.reserve(db, user_id=uid, feature="pm_chat", limit=10, idempotency_key=key, now=NOW)
-        assert replay.replayed and not replay.allowed
         assert usage.used(db, uid, "pm_chat", "2026-09") == 0
+        rearmed = usage.reserve(db, user_id=uid, feature="pm_chat", limit=10, idempotency_key=key, now=NOW)
+        assert rearmed.allowed and not rearmed.replayed and rearmed.event.id == first.event.id
+        assert usage.used(db, uid, "pm_chat", "2026-09") == 1
+        # Retrying the re-armed reservation is a replay again: no second charge.
+        retry2 = usage.reserve(db, user_id=uid, feature="pm_chat", limit=10, idempotency_key=key, now=NOW)
+        assert retry2.replayed and retry2.allowed
+        assert usage.used(db, uid, "pm_chat", "2026-09") == 1
 
 
 def test_unlimited_still_counts():
@@ -173,3 +180,53 @@ def test_history_is_newest_first_and_bounded():
                           resource_ref=f"T{i}", now=datetime(2026, 9, 1, i))
         rows = usage.history(db, uid, "2026-09", limit=3)
         assert [r.resource_ref for r in rows] == ["T4", "T3", "T2"]
+
+
+def test_released_key_can_be_reserved_again():
+    """A reserve-then-release must not poison the key for the month.
+
+    Distinct-resource features key on user:feature:month:resource, so a
+    handler that failed after reserving (charge released) would otherwise
+    have locked that resource out with a 402 until the period rolled over.
+    """
+    U = usage
+    uid = _uid()
+    key = f"u{uid}:memo_view:2026-09:NVDA"
+    with SessionLocal() as db:
+        first = U.reserve(db, user_id=uid, feature="memo_view", limit=3,
+                          idempotency_key=key,
+                          resource_ref="NVDA", now=NOW)
+        assert first.allowed and first.event is not None
+        assert U.release(db, first.event.id, now=NOW)
+        assert U.used(db, uid, "memo_view", U.period_key(NOW)) == 0
+
+        again = U.reserve(db, user_id=uid, feature="memo_view", limit=3,
+                          idempotency_key=key,
+                          resource_ref="NVDA", now=NOW)
+        assert again.allowed, "a released key must be re-reservable"
+        assert again.replayed is False, "it is a fresh reservation, not a replay"
+        assert again.event is not None and again.event.id == first.event.id
+        assert again.event.status == U.RESERVED
+        assert U.used(db, uid, "memo_view", U.period_key(NOW)) == 1
+        # And it is releasable again, like any live reservation.
+        assert U.release(db, again.event.id, now=NOW)
+        assert U.used(db, uid, "memo_view", U.period_key(NOW)) == 0
+
+
+def test_released_key_still_respects_the_limit():
+    U = usage
+    uid = _uid()
+    with SessionLocal() as db:
+        first = U.reserve(db, user_id=uid, feature="memo_view", limit=1,
+                          idempotency_key=f"u{uid}:memo_view:2026-09:NVDA", now=NOW)
+        assert first.allowed
+        assert U.release(db, first.event.id, now=NOW)
+        # Another resource consumes the single unit.
+        other = U.reserve(db, user_id=uid, feature="memo_view", limit=1,
+                          idempotency_key=f"u{uid}:memo_view:2026-09:MSFT", now=NOW)
+        assert other.allowed
+        back = U.reserve(db, user_id=uid, feature="memo_view", limit=1,
+                         idempotency_key=f"u{uid}:memo_view:2026-09:NVDA", now=NOW)
+        assert not back.allowed
+        assert back.event is not None and back.event.status == U.RELEASED
+        assert U.used(db, uid, "memo_view", U.period_key(NOW)) == 1
