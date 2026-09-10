@@ -14,7 +14,7 @@ import ViewModeControl from "@/components/fundamentals/ViewModeControl";
 import { FundamentalsChart } from "@/components/fundamentals/chart";
 import { MAX_METRICS, MAX_TICKERS, useFundamentalsState } from "@/hooks/useFundamentalsState";
 import type { LayoutResult } from "@/lib/fundamentals/layout";
-import type { CatalogResponse, CompanyOut, RateLimitRefusal, SeriesResponseWire, StructuredErrorDetail } from "@/types";
+import type { CatalogResponse, CompanyOut, RateLimitRefusal, SeriesResponseWire, StructuredErrorDetail, UnavailableTickerWire } from "@/types";
 
 /**
  * FEAT-001 Fundamentals Explorer. The URL is the state (`useFundamentalsState`);
@@ -29,6 +29,25 @@ import type { CatalogResponse, CompanyOut, RateLimitRefusal, SeriesResponseWire,
 
 /** Tailwind `md` is 768px; dual axis is unreadable below it. */
 const NARROW_QUERY = "(max-width: 767px)";
+
+/**
+ * A ticker the platform has never seen (the series route's 404
+ * `unknown_tickers`) has the same remedy as one it knows but has not
+ * backfilled: a research run is the only path that loads history. So the
+ * page renders it through the same `not_backfilled` row and CTA rather
+ * than a generic error with a Retry that would 404 again.
+ */
+const UNKNOWN_TICKER_REMEDY = "This company is not on the platform yet. Run research on it — the memo job adds the company and backfills its statement history.";
+
+function unknownTickersFrom(structured: StructuredErrorDetail | undefined, requested: string[]): UnavailableTickerWire[] {
+  const echoed = structured?.extra?.tickers;
+  const list = Array.isArray(echoed) && echoed.every((t) => typeof t === "string") ? (echoed as string[]) : requested;
+  // Only tickers the reader actually asked for: the echo is server-supplied
+  // and the notice links each one to a research run.
+  const asked = new Set(requested);
+  const shown = list.filter((t) => asked.has(t));
+  return (shown.length > 0 ? shown : requested).map((ticker) => ({ ticker, reason: "not_backfilled", remedy: UNKNOWN_TICKER_REMEDY }));
+}
 
 function useNarrowViewport(): boolean {
   const [narrow, setNarrow] = useState<boolean>(() => {
@@ -72,6 +91,8 @@ export default function Fundamentals() {
   const [error, setError] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<StructuredErrorDetail | null>(null);
   const [rateLimit, setRateLimit] = useState<RateLimitRefusal | null>(null);
+  /** 404 `unknown_tickers`: nothing to draw, but each ticker gets the research CTA. */
+  const [unknown, setUnknown] = useState<UnavailableTickerWire[] | null>(null);
   const [layout, setLayout] = useState<LayoutResult | null>(null);
   const requestSeq = useRef(0);
 
@@ -104,6 +125,7 @@ export default function Fundamentals() {
     setError(null);
     setRefusal(null);
     setRateLimit(null);
+    setUnknown(null);
     api
       .fundamentalsSeries({ tickers, metrics, years: years ?? undefined })
       .then((r) => {
@@ -120,6 +142,11 @@ export default function Fundamentals() {
         } else if (isApiError(e) && e.rateLimit) {
           // Inputs and the last chart stay; the notice offers the retry.
           setRateLimit(e.rateLimit);
+        } else if (isApiError(e) && e.code === "unknown_tickers") {
+          // Same state as a known-but-unbackfilled company: the remedy is a
+          // research run, never a retry of this request.
+          setData(null);
+          setUnknown(unknownTickersFrom(e.structured, tickers));
         } else {
           setData(null);
           setError(isApiError(e) ? e.detail || e.message : String(e));
@@ -138,6 +165,7 @@ export default function Fundamentals() {
       setError(null);
       setRefusal(null);
       setRateLimit(null);
+      setUnknown(null);
       return;
     }
     loadSeries();
@@ -250,6 +278,7 @@ export default function Fundamentals() {
           {data && (
             <SeriesStateNotice unavailable={data.unavailable} series={data.series} warnings={data.warnings} metricLabels={metricLabels} />
           )}
+          {!data && unknown && <SeriesStateNotice unavailable={unknown} series={[]} />}
 
           {data && showChart && (
             <div className="card" aria-busy={loading || undefined}>

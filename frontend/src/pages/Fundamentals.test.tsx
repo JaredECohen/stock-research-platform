@@ -287,6 +287,71 @@ describe("Fundamentals page", () => {
     expect(screen.getByRole("button", { name: "Explain this chart" })).toBeDisabled();
   });
 
+  it("shows the research CTA, not a Retry, when every ticker is unknown to the platform (404 unknown_tickers)", async () => {
+    stubFetch([
+      catalogRoute,
+      [
+        "/api/fundamentals/series",
+        () =>
+          errJson(404, {
+            code: "unknown_tickers",
+            message: "None of the requested tickers is known to the platform: NEWCO. No financial history is stored for this company yet. Run research on it — the memo job backfills its statement history.",
+            feature: "fundamentals_explorer",
+            extra: { tickers: ["NEWCO"] },
+          }),
+      ],
+    ]);
+    mount("/app/fundamentals?t=NEWCO&m=revenue");
+    const row = await screen.findByTestId("unavailable-NEWCO");
+    expect(row).toHaveTextContent("NEWCO — history not loaded.");
+    expect(row).toHaveTextContent("Run research on it — the memo job adds the company and backfills its statement history.");
+    expect(within(row).getByRole("link", { name: "Run research on NEWCO" })).toHaveAttribute("href", "/app/research?ticker=NEWCO");
+    // The remedy is a research run: retrying this request would 404 again.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByTestId("fundamentals-chart")).toBeNull();
+    // Inputs stay so the reader can change the selection instead.
+    expect(screen.getByTestId("chip-NEWCO")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /^Revenue/ })).toBeChecked();
+  });
+
+  it("falls back to the requested tickers when the 404 echoes none, and clears the CTA once a known company is added", async () => {
+    const mock = stubFetch([
+      catalogRoute,
+      [/\/api\/stocks$/, () => okJson([{ ticker: "AAPL", company_name: "Apple", sector: "Tech", industry: null, universe_tier: "auto_analysis" }])],
+      [
+        "/api/fundamentals/series",
+        (url, init) => {
+          const body = JSON.parse(String(init?.body)) as { tickers: string[] };
+          if (body.tickers.every((t) => t === "NEWCO" || t === "ZZZZ")) {
+            return errJson(404, { code: "unknown_tickers", message: "None of the requested tickers is known to the platform: NEWCO, ZZZZ.", feature: "fundamentals_explorer" });
+          }
+          return seriesResponder(() => ({
+            series: seriesFor(["AAPL"], body.tickers.length ? ["revenue"] : []),
+            unavailable: [{ ticker: "NEWCO", reason: "not_backfilled" }, { ticker: "ZZZZ", reason: "not_backfilled" }],
+          }))(url, init);
+        },
+      ],
+    ]);
+    mount("/app/fundamentals?t=NEWCO,ZZZZ&m=revenue");
+    // No `extra.tickers` on the wire: every requested ticker gets its own CTA.
+    const first = await screen.findByTestId("unavailable-NEWCO");
+    expect(within(first).getByRole("link", { name: "Run research on NEWCO" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("unavailable-ZZZZ")).getByRole("link", { name: "Run research on ZZZZ" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    const input = await screen.findByPlaceholderText("Add a company…");
+    fireEvent.change(input, { target: { value: "AAPL" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(location()).toBe("/app/fundamentals?t=NEWCO,ZZZZ,AAPL&m=revenue"));
+    await screen.findByTestId("fundamentals-chart");
+    expect(calls(mock, "/api/fundamentals/series")).toHaveLength(2);
+    // The server now reports the two unknowns itself; the 404-derived rows are gone, not doubled.
+    expect(screen.getAllByTestId("unavailable-NEWCO")).toHaveLength(1);
+    expect(screen.getAllByTestId("unavailable-ZZZZ")).toHaveLength(1);
+    expect(screen.queryByText(/not on the platform yet/)).toBeNull();
+  });
+
   it("labels stale and estimated series in the notice and the legend", async () => {
     stubFetch([catalogRoute, ["/api/fundamentals/series", seriesResponder()]]);
     mount("/app/fundamentals?t=AAPL,MSFT&m=revenue,gross_margin");
