@@ -29,7 +29,11 @@ Pipeline per as-of run (``normalize_universe``):
    say "the score is where it is because of X, Y and Z" honestly.
 6. **Percentiles**: rank-based across rows with a non-null overall z
    (universe) and within the canonical sector; ties share the average
-   rank so the result does not depend on input order.
+   rank so the result does not depend on input order. Each family gets
+   the same treatment over the rows with a non-null z for *that* family
+   (``category_percentile`` / ``category_percentile_sector``) — the
+   cross-section needed to rank a family only exists here, and the
+   memo's valuation disagreement rule reads the valuation one.
 
 Nothing here invents a value: a feature with no raw value has no z, a
 family with too few features has no z, and a row with too few families
@@ -358,6 +362,11 @@ class TickerNormalization:
     contributions: dict[str, float]
     percentile_universe: float | None = None
     percentile_sector: float | None = None
+    # Per-family rank percentiles over the rows that have that family's z
+    # (None where this row has no z for the family, or — for the sector
+    # variant — the sector is unmatched or has fewer than 2 such rows).
+    category_percentile: dict[str, float | None] = field(default_factory=dict)
+    category_percentile_sector: dict[str, float | None] = field(default_factory=dict)
     profiles: dict[str, float | None] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
@@ -467,20 +476,17 @@ def normalize_universe(
             notes=notes,
         )
 
-    # Percentiles among rows that actually have an overall z.
-    pct_u = rank_percentiles({t: rows[t].overall_z for t in tickers})
-    by_sector: dict[str, dict[str, float | None]] = {}
-    for t in tickers:
-        s = sector_canon[t]
-        if s is not None and rows[t].overall_z is not None:
-            by_sector.setdefault(s, {})[t] = rows[t].overall_z
-    pct_s: dict[str, float | None] = {}
-    for group in by_sector.values():
-        if len(group) >= 2:
-            pct_s.update(rank_percentiles(group))
+    # Percentiles among rows that actually have an overall z, then the same
+    # for each family among rows that have that family's z.
+    pct_u, pct_s = _universe_and_sector_percentiles({t: rows[t].overall_z for t in tickers}, sector_canon)
     for t in tickers:
         rows[t].percentile_universe = pct_u.get(t)
         rows[t].percentile_sector = pct_s.get(t)
+    for fam in family_weights:
+        fam_u, fam_s = _universe_and_sector_percentiles({t: rows[t].category_z.get(fam) for t in tickers}, sector_canon)
+        for t in tickers:
+            rows[t].category_percentile[fam] = fam_u.get(t)
+            rows[t].category_percentile_sector[fam] = fam_s.get(t)
 
     universe_notes: dict[str, Any] = {
         "n_tickers": len(tickers),
@@ -494,6 +500,26 @@ def normalize_universe(
         "sector_counts": _counts(sector_canon.values()),
     }
     return UniverseNormalization(rows=rows, notes=universe_notes, params=params)
+
+
+def _universe_and_sector_percentiles(
+    value_by_ticker: Mapping[str, float | None],
+    sector_canon: Mapping[str, str | None],
+) -> tuple[dict[str, float | None], dict[str, float | None]]:
+    """Rank percentiles of one score across the universe and within each
+    canonical sector (a sector needs at least 2 non-null values to rank;
+    unmatched names get no sector percentile). Nulls stay null."""
+    pct_u = rank_percentiles(value_by_ticker)
+    by_sector: dict[str, dict[str, float | None]] = {}
+    for t, v in value_by_ticker.items():
+        s = sector_canon.get(t)
+        if s is not None and v is not None and math.isfinite(v):
+            by_sector.setdefault(s, {})[t] = v
+    pct_s: dict[str, float | None] = {t: None for t in value_by_ticker}
+    for group in by_sector.values():
+        if len(group) >= 2:
+            pct_s.update(rank_percentiles(group))
+    return pct_u, pct_s
 
 
 def _counts(values: Iterable[str | None]) -> dict[str, int]:

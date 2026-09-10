@@ -339,6 +339,10 @@ def test_normalize_universe_sector_fallback_and_unmatched_notes():
     assert u.rows[bogus].feature_basis["roic"] == N.BASIS_UNIVERSE_UNMATCHED
     assert u.rows[bogus].notes == ["sector_unmatched:Bogus"]
     assert u.rows[bogus].percentile_sector is None
+    # an unmatched name still ranks in the universe per family, never in a sector
+    assert u.rows[bogus].category_percentile[S.FAMILY_VALUATION] is not None
+    assert set(u.rows[bogus].category_percentile_sector) == set(S.FAMILY_NAMES)
+    assert all(v is None for v in u.rows[bogus].category_percentile_sector.values())
     assert u.notes["sectors_unmatched"] == {"Bogus": 6}
     assert u.notes["sector_fallback_feature_rows"] == {}
     # … and a higher min_n pushes them to the universe with a note
@@ -379,6 +383,23 @@ def test_normalize_universe_property_over_random_universes():
                 assert 0.0 < r.percentile_sector <= 100.0
         if scored:
             assert max(r.percentile_universe for r in scored) == 100.0, trial
+        # Family percentiles exist exactly where the family z exists (whether
+        # or not the overall does), and the best name in each family is 100.
+        for r in u.rows.values():
+            assert set(r.category_percentile) == set(S.FAMILY_NAMES)
+            for fam in S.FAMILY_NAMES:
+                cp = r.category_percentile[fam]
+                assert (cp is None) == (r.category_z[fam] is None), (trial, r.ticker, fam)
+                if cp is not None:
+                    assert 0.0 < cp <= 100.0
+                cps = r.category_percentile_sector[fam]
+                if cps is not None:
+                    assert r.sector is not None and r.category_z[fam] is not None
+                    assert 0.0 < cps <= 100.0
+        for fam in S.FAMILY_NAMES:
+            have = [r.category_percentile[fam] for r in u.rows.values() if r.category_percentile[fam] is not None]
+            if have:
+                assert max(have) == 100.0, (trial, fam)
 
 
 def test_normalize_universe_returns_insufficient_rows_instead_of_dropping_them():
@@ -412,6 +433,58 @@ def test_normalize_universe_percentiles_and_score_scale():
     assert top.category_z_universe == pytest.approx(top.category_z)
     assert top.profiles["compounder"] is not None and top.profiles["inflection"] is not None
     assert u.notes["sector_counts"] == {S.SECTOR_HEALTH_CARE: 10}
+
+
+def test_normalize_universe_category_percentiles_ladder_and_ties():
+    raw = {f"T{i}": {name: float(i) for name in S.FEATURE_NAMES} for i in range(10)}
+    sector = {t: "Healthcare" for t in raw}
+    u = N.normalize_universe(raw, sector)
+    order = sorted(raw, key=lambda t: u.rows[t].overall_z)
+    ladder = [pytest.approx(10.0 * k) for k in range(1, 11)]
+    # Valuation is all sign +1: same ladder as the overall (universe == sector here)
+    assert [u.rows[t].category_percentile[S.FAMILY_VALUATION] for t in order] == ladder
+    assert [u.rows[t].category_percentile_sector[S.FAMILY_VALUATION] for t in order] == ladder
+    # Efficiency is (+, −, −) on identical inputs: the family z runs the other way
+    assert [u.rows[t].category_percentile[S.FAMILY_EFFICIENCY] for t in order] == ladder[::-1]
+    # Leverage is (−, −, +, +) on identical inputs: every family z is exactly 0,
+    # a ten-way tie, and every name shares the average rank (5.5 / 10)
+    assert all(u.rows[t].category_z[S.FAMILY_LEVERAGE] == 0.0 for t in raw)
+    assert all(u.rows[t].category_percentile[S.FAMILY_LEVERAGE] == pytest.approx(55.0) for t in raw)
+    assert all(u.rows[t].category_percentile_sector[S.FAMILY_LEVERAGE] == pytest.approx(55.0) for t in raw)
+
+
+def test_family_percentile_exists_even_when_overall_is_insufficient():
+    # The memo's valuation-disagreement rule reads the valuation percentile;
+    # a name with only valuation data must still carry one.
+    rng = random.Random(0)
+    raw, sector = _random_universe(rng, 20, ["Technology"], null_rate=0.0)
+    thin = {name: None for name in S.FEATURE_NAMES}
+    for f in S.FEATURE_SPEC:
+        if f.family == S.FAMILY_VALUATION:
+            thin[f.name] = 10.0                   # best valuation in the universe, nothing else
+    raw["T000"] = thin
+    u = N.normalize_universe(raw, sector)
+    row = u.rows["T000"]
+    assert row.overall_z is None and row.percentile_universe is None and row.percentile_sector is None
+    assert row.category_percentile[S.FAMILY_VALUATION] == 100.0
+    assert row.category_percentile_sector[S.FAMILY_VALUATION] == 100.0
+    assert all(row.category_percentile[fam] is None for fam in S.FAMILY_NAMES if fam != S.FAMILY_VALUATION)
+    # everyone else ranks below it in valuation, on the (0, 100] ladder over all 20 names
+    others = sorted(r.category_percentile[S.FAMILY_VALUATION] for t, r in u.rows.items() if t != "T000")
+    assert others == [pytest.approx(100.0 * k / 20) for k in range(1, 20)]
+
+
+def test_category_percentiles_do_not_depend_on_ticker_order():
+    rng = random.Random(0)
+    raw, sector = _random_universe(rng, 30, ["Technology", "Healthcare", "Energy"], null_rate=0.2)
+    u1 = N.normalize_universe(raw, sector)
+    keys = list(raw)
+    rng.shuffle(keys)
+    u2 = N.normalize_universe({k: raw[k] for k in keys}, sector)
+    for t in raw:
+        assert u1.rows[t].category_percentile == u2.rows[t].category_percentile
+        assert u1.rows[t].category_percentile_sector == u2.rows[t].category_percentile_sector
+        assert u1.rows[t].percentile_universe == u2.rows[t].percentile_universe
 
 
 def test_normalize_universe_accepts_precomputed_applicable_sets():
