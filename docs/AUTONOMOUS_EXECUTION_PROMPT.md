@@ -14,7 +14,7 @@ order.
 
 You are an expert full-stack engineer working on **MarketMosaic**, a
 multi-agent equity research platform. Repo path:
-`/Users/jaredcohen/code/AgenticAI/stock-research-platform/`
+`/Users/jaredcohen/code/stock-research-platform/`
 
 ### Mission
 
@@ -354,7 +354,7 @@ criterion.
 
 ```
 You are an expert full-stack engineer working on MarketMosaic.
-Repo path: /Users/jaredcohen/code/AgenticAI/stock-research-platform/
+Repo path: /Users/jaredcohen/code/stock-research-platform/
 
 Read `docs/AUTONOMOUS_EXECUTION_PROMPT.md` and execute the PROMPT
 section verbatim. Begin with Wave 1A and proceed through Wave 7C in
