@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { MetricSeries, ViewMode } from "@/types/fundamentals";
 import { computeLayout, type LayoutResult } from "@/lib/fundamentals/layout";
+import { seriesId } from "@/lib/fundamentals/transform";
 import { useReducedMotion } from "@/components/public/hooks";
 import SeriesLegend from "../SeriesLegend";
 import SeriesTable from "../SeriesTable";
@@ -75,8 +76,21 @@ export default function FundamentalsChart({
     return ordered;
   }, [series, metricOrder]);
 
+  // The table is the accessible equivalent of the chart, so it must carry
+  // every series the reader selected — including one with no observed
+  // points, whose per-period reasons ("n/a (history not loaded)") appear
+  // nowhere else. The layout drops such series from `drawn`; in indexed mode
+  // the drawn (rebased) copy is used where one exists and the original
+  // otherwise, preserving selection order.
+  const tableSeries = useMemo(() => {
+    if (!layout.indexBasePeriod) return series;
+    const drawnById = new Map(layout.drawn.map((s) => [seriesId(s), s]));
+    return series.map((s) => drawnById.get(seriesId(s)) ?? s);
+  }, [series, layout]);
+
   const multi = layout.panels.length > 1;
   const nothing = layout.panels.length === 0;
+  const hasSeries = series.length > 0;
 
   return (
     <div className={`space-y-3 ${className}`} data-resolved-mode={layout.resolved} data-testid="fundamentals-chart">
@@ -109,7 +123,7 @@ export default function FundamentalsChart({
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SeriesLegend series={series} metricLabels={metricLabels} excluded={layout.excluded} />
-        {!nothing && (
+        {hasSeries && (
           <button
             type="button"
             aria-pressed={tableShown}
@@ -122,12 +136,12 @@ export default function FundamentalsChart({
         )}
       </div>
 
-      {nothing ? (
+      {tableShown && hasSeries ? (
+        <SeriesTable series={tableSeries} metricLabels={metricLabels} indexBasePeriod={layout.indexBasePeriod} />
+      ) : nothing ? (
         <p className="text-sm text-slate-400" data-testid="chart-empty">
-          No observed points to draw. Each series above says why.
+          {hasSeries ? "No observed points to draw. View as table to see the reason for each period." : "No series selected."}
         </p>
-      ) : tableShown ? (
-        <SeriesTable series={layout.drawn} metricLabels={metricLabels} indexBasePeriod={layout.indexBasePeriod} />
       ) : (
         <div className={multi ? "grid gap-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : ""}>
           {layout.panels.map((panel) => (

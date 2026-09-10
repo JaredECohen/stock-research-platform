@@ -10,9 +10,12 @@ import { AXIS_STROKE, CHART_SURFACE, GRID_STROKE, STALE_OPACITY, colorForTicker,
 /**
  * One recharts panel for a `PanelSpec` from the layout engine: a shared or
  * dual axis, one line per series, gaps where a point is null
- * (`connectNulls={false}`), hollow markers on estimated points, reduced
- * opacity on stale series. The container is `role="img"` with a generated
- * sentence as its label; pressing T on it switches to the data table.
+ * (`connectNulls={false}`), hollow markers on estimated points, filled
+ * markers on observed points that have no observed neighbour (a gap on both
+ * sides leaves no segment to draw, so without a marker the value would
+ * vanish), reduced opacity on stale series. The container is `role="img"`
+ * with a generated sentence as its label; pressing T on it switches to the
+ * data table.
  */
 export interface ChartPanelProps {
   panel: PanelSpec;
@@ -35,8 +38,18 @@ interface DotProps {
   key?: React.Key;
   cx?: number;
   cy?: number;
+  /** Position of this point in the panel's row array (recharts supplies it). */
+  index?: number;
   value?: number | null;
   payload?: ChartRow;
+}
+
+/** True when neither adjacent row has an observed value for `id`: the point
+ *  is the only member of its sub-path, so the line contributes zero length. */
+export function isIsolatedPoint(rows: ChartRow[], index: number, id: string): boolean {
+  const prev = rows[index - 1]?.values[id];
+  const next = rows[index + 1]?.values[id];
+  return typeof prev !== "number" && typeof next !== "number";
 }
 
 function axisUnitOf(axes: AxisSpec[], id: string): AxisSpec {
@@ -79,6 +92,9 @@ export default function ChartPanel({ panel, series, tickers, metrics, metricLabe
         />
       )}
       <Tooltip
+        // Recharts drops null entries from the tooltip by default, which would
+        // hide the "n/a (reason)" the formatter builds for a missing point.
+        filterNull={false}
         contentStyle={{ background: "#0E1525", border: `1px solid ${GRID_STROKE}`, borderRadius: 8, fontSize: 12 }}
         labelStyle={{ color: "#e2e8f0" }}
         itemStyle={{ color: "#cbd5e1" }}
@@ -116,20 +132,29 @@ export default function ChartPanel({ panel, series, tickers, metrics, metricLabe
             isAnimationActive={animate}
             activeDot={{ r: 5, strokeWidth: 0 }}
             dot={(p: DotProps) => {
-              // Only estimated points get a marker: hollow, so the eye reads
-              // "computed with a fallback" without a second colour.
-              if (!p.payload?.estimated[id] || typeof p.cx !== "number" || typeof p.cy !== "number") return null as unknown as React.ReactElement;
+              // Markers are drawn in two cases only, so a plain observed
+              // run stays a clean line: an estimated point gets a hollow
+              // marker (the eye reads "computed with a fallback" without a
+              // second colour), and an observed point with a gap on both
+              // sides gets a filled one, because `connectNulls={false}`
+              // gives it a zero-length sub-path that paints nothing.
+              if (typeof p.cx !== "number" || typeof p.cy !== "number" || typeof p.value !== "number") return null as unknown as React.ReactElement;
+              const estimated = !!p.payload?.estimated[id];
+              const isolated = typeof p.index === "number" && isIsolatedPoint(rows, p.index, id);
+              if (!estimated && !isolated) return null as unknown as React.ReactElement;
               return (
                 <circle
-                  key={`${id}-${p.payload.period}`}
+                  key={`${id}-${p.payload?.period ?? p.index}`}
                   cx={p.cx}
                   cy={p.cy}
-                  r={4}
-                  fill={CHART_SURFACE}
+                  r={estimated ? 4 : 3.5}
+                  fill={estimated ? CHART_SURFACE : color}
                   stroke={color}
                   strokeWidth={2}
                   strokeOpacity={stale ? STALE_OPACITY : 1}
-                  data-estimated="true"
+                  fillOpacity={stale && !estimated ? STALE_OPACITY : 1}
+                  data-estimated={estimated ? "true" : undefined}
+                  data-isolated={isolated ? "true" : undefined}
                 />
               );
             }}

@@ -60,6 +60,45 @@ describe("FundamentalsChart", () => {
     const markers = document.querySelectorAll('circle[data-estimated="true"]');
     expect(markers).toHaveLength(1);
     expect(markers[0]).toHaveAttribute("fill", "#131B30");
+    // Every observed point in the fixture set has an observed neighbour, so
+    // no isolated-point markers appear and the lines stay clean.
+    expect(document.querySelectorAll('circle[data-isolated="true"]')).toHaveLength(0);
+  });
+
+  it("draws a filled marker for an observed point with a gap on both sides so it cannot vanish", () => {
+    stubReducedMotion(true);
+    // Three observed values, each with no observed neighbour: the line path
+    // is three zero-length sub-paths, so the markers are the only pixels.
+    const alternating = makeSeries("AAPL", "revenue", [100e9, null, 120e9, null, 140e9]);
+    render(<FundamentalsChart series={[alternating]} view="auto" metricLabels={METRIC_LABELS} {...SIZE} />);
+    const path = document.querySelector("path.recharts-line-curve");
+    expect((path?.getAttribute("d")?.match(/M/g) ?? []).length).toBe(3);
+    const markers = document.querySelectorAll('circle[data-isolated="true"]');
+    expect(markers).toHaveLength(3);
+    for (const m of Array.from(markers)) {
+      expect(m).toHaveAttribute("fill", path?.getAttribute("stroke") ?? "");
+      expect(m).not.toHaveAttribute("data-estimated");
+    }
+    // The label still reports every observed point.
+    expect(screen.getByRole("img").getAttribute("aria-label")).toContain("2 missing points");
+  });
+
+  it("draws a single observed point in an otherwise empty series", () => {
+    stubReducedMotion(true);
+    const lone = makeSeries("NEW", "revenue", [null, null, 5e9, null, null]);
+    render(<FundamentalsChart series={[lone]} view="auto" metricLabels={METRIC_LABELS} {...SIZE} />);
+    expect(document.querySelectorAll('circle[data-isolated="true"]')).toHaveLength(1);
+    expect(screen.getByRole("img").getAttribute("aria-label")).toContain("has one observed point ($5.0B in FY2022)");
+  });
+
+  it("marks an isolated estimated point as both estimated (hollow) and isolated", () => {
+    stubReducedMotion(true);
+    const s = makeSeries("AAPL", "revenue", [100e9, 110e9, null, { v: 130e9, estimated: true }, null]);
+    render(<FundamentalsChart series={[s]} view="auto" metricLabels={METRIC_LABELS} {...SIZE} />);
+    const markers = document.querySelectorAll("circle[data-isolated]");
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toHaveAttribute("data-estimated", "true");
+    expect(markers[0]).toHaveAttribute("fill", "#131B30");
   });
 
   it("renders stale series at reduced opacity and dashes the second metric", () => {
@@ -148,11 +187,49 @@ describe("FundamentalsChart", () => {
     expect(onSuggestion).toHaveBeenCalledWith("indexed");
   });
 
-  it("lists a series with no observed points as not drawn and shows the empty state", () => {
+  it("lists a series with no observed points as not drawn, shows the empty state, and still offers the table with the reasons", () => {
     const empty = makeSeries("NEW", "revenue", [null, null, null, null, null], { currency: "USD" });
+    empty.points = empty.points.map((p) => ({ ...p, reason: "not_backfilled" }));
     render(<FundamentalsChart series={[empty]} view="auto" metricLabels={METRIC_LABELS} {...SIZE} />);
     expect(screen.getByTestId("chart-empty")).toHaveTextContent("No observed points to draw");
     expect(screen.getByRole("listitem")).toHaveTextContent("not drawn: no observed points");
+    // The per-period reason code lives only in the table, so it must be reachable.
+    fireEvent.click(screen.getByRole("button", { name: "View as table" }));
+    const table = screen.getByRole("table");
+    expect(within(table).getAllByText("n/a (history not loaded)")).toHaveLength(5);
+    expect(screen.queryByTestId("chart-empty")).not.toBeInTheDocument();
+  });
+
+  it("keeps an all-missing series in the data table with its per-period reasons", () => {
+    const missing = makeSeries("NEW", "revenue", Array(5).fill({ v: null, reason: "not_backfilled" }));
+    render(<FundamentalsChart series={[makeSeriesSet()[0], missing]} view="auto" metricLabels={METRIC_LABELS} {...SIZE} />);
+    // The chart draws only AAPL; the legend says NEW is not drawn.
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    expect(screen.getByRole("list", { name: "Series" })).toHaveTextContent("not drawn: no observed points");
+    fireEvent.click(screen.getByRole("button", { name: "View as table" }));
+    const table = screen.getByRole("table");
+    const headers = within(table).getAllByRole("columnheader").map((h) => h.textContent ?? "");
+    expect(headers).toEqual([expect.stringContaining("Period"), expect.stringContaining("AAPL Revenue"), expect.stringContaining("NEW Revenue")]);
+    expect(within(table).getAllByText("n/a (history not loaded)")).toHaveLength(5);
+    expect(within(table).getByText(/AAPL Revenue/).closest("th")).not.toBeNull();
+  });
+
+  it("uses the rebased series in the indexed table but keeps an all-missing series' reasons", () => {
+    const missing = makeSeries("NEW", "revenue", Array(5).fill({ v: null, reason: "not_backfilled" }));
+    render(<FundamentalsChart series={[makeSeriesSet()[0], makeSeriesSet()[1], missing]} view="indexed" metricLabels={METRIC_LABELS} {...SIZE} />);
+    fireEvent.click(screen.getByRole("button", { name: "View as table" }));
+    const table = screen.getByRole("table");
+    expect(table.querySelector("caption")).toHaveTextContent("indexed to 100 at FY2020");
+    const headers = within(table).getAllByRole("columnheader");
+    expect(headers).toHaveLength(4);
+    expect(headers[3]).toHaveTextContent("NEW Revenue");
+    expect(within(table).getAllByText("n/a (history not loaded)")).toHaveLength(5);
+    expect(within(table).getAllByText("100.0").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("says so when no series are selected", () => {
+    render(<FundamentalsChart series={[]} view="auto" metricLabels={METRIC_LABELS} {...SIZE} />);
+    expect(screen.getByTestId("chart-empty")).toHaveTextContent("No series selected.");
     expect(screen.queryByRole("button", { name: /View as/ })).not.toBeInTheDocument();
   });
 });
