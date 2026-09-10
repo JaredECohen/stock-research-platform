@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import ScorecardEvaluation from "@/components/scorecard/ScorecardEvaluation";
+import { SCORECARD_CLIENT_RULES, evalParam, type ScorecardEvaluation as EvaluationRow } from "@/types/scorecard";
 import { ALL_CAVEATS, CAVEATS, makeEvaluation, makeInsufficientEvaluation, makeLassoResult } from "@/test/fixtures/scorecard";
 
 const SIZE = { width: 640, height: 220 };
@@ -111,8 +112,56 @@ describe("ScorecardEvaluation", () => {
     expect(screen.getByRole("status")).toHaveTextContent("n/a (no evaluation yet)");
   });
 
+  it("takes the minimum leg, months and observations from the row's params when the worker recorded them", () => {
+    const ev = makeInsufficientEvaluation();
+    const params = { min_leg: 20, min_months: 36, min_obs: 3000 };
+    ev.evaluations = ev.evaluations.map((e) => ({ ...e, params }) as EvaluationRow);
+    render(<ScorecardEvaluation evaluation={ev} {...SIZE} />);
+    const q = screen.getByTestId("eval-quintile_ls");
+    expect(q).toHaveTextContent("legs need at least 20 names");
+    expect(within(q).getByTestId("quintile-insufficient")).toHaveTextContent("insufficient: 8 of 36 months");
+    expect(q.textContent).not.toMatch(/at least 15 names/);
+    const ff = screen.getByTestId("eval-ff6_regression");
+    expect(within(ff).getByTestId("ff6-insufficient")).toHaveTextContent("insufficient: 8 of 36 months");
+    expect(ff).toHaveTextContent("n/a (insufficient: 8 of 36 months)");
+    expect(within(screen.getByTestId("eval-double_lasso")).getByTestId("lasso-gloss")).toHaveTextContent("Fewer than 36 month-ends or 3,000 observations: no verdict is drawn.");
+  });
+
+  it("falls back to the documented fs-v1 client rules when params omit or malform the minimums", () => {
+    const ev = makeInsufficientEvaluation();
+    ev.evaluations = ev.evaluations.map((e) => ({ ...e, params: { min_leg: "fifteen", min_months: NaN } }) as EvaluationRow);
+    render(<ScorecardEvaluation evaluation={ev} {...SIZE} />);
+    const q = screen.getByTestId("eval-quintile_ls");
+    expect(q).toHaveTextContent(`legs need at least ${SCORECARD_CLIENT_RULES.evalMinLeg} names`);
+    expect(within(q).getByTestId("quintile-insufficient")).toHaveTextContent(`insufficient: 8 of ${SCORECARD_CLIENT_RULES.evalMinMonths} months`);
+    expect(q.textContent).not.toMatch(/NaN/);
+    expect(within(screen.getByTestId("eval-double_lasso")).getByTestId("lasso-gloss")).toHaveTextContent(
+      `Fewer than ${SCORECARD_CLIENT_RULES.evalMinMonths} month-ends or ${SCORECARD_CLIENT_RULES.lassoMinObs.toLocaleString("en-US")} observations`,
+    );
+  });
+
+  it("gives a reason when a sample bound was not recorded", () => {
+    const ev = makeEvaluation();
+    ev.evaluations = ev.evaluations.map((e) => ({ ...e, sample_start: null, sample_end: null }) as EvaluationRow);
+    render(<ScorecardEvaluation evaluation={ev} {...SIZE} />);
+    const q = screen.getByTestId("eval-quintile_ls");
+    expect(q).toHaveTextContent("Sample n/a (no start recorded) to n/a (no end recorded)");
+    expect(q.textContent?.replace(/n\/a \([^)]+\)/g, "")).not.toMatch(/n\/a/);
+  });
+
   it("labels the results as model outputs, not recommendations", () => {
     render(<ScorecardEvaluation evaluation={makeEvaluation()} {...SIZE} />);
     expect(screen.getByTestId("scorecard-evaluation")).toHaveTextContent("model outputs for research and education, not a forecast or a recommendation");
+  });
+});
+
+describe("evalParam", () => {
+  it("prefers a finite numeric param and otherwise returns the fallback", () => {
+    expect(evalParam({ min_leg: 20 }, "min_leg", 15)).toBe(20);
+    expect(evalParam({ min_leg: "20" }, "min_leg", 15)).toBe(15);
+    expect(evalParam({ min_leg: Number.POSITIVE_INFINITY }, "min_leg", 15)).toBe(15);
+    expect(evalParam({}, "min_months", 24)).toBe(24);
+    expect(evalParam(null, "min_obs", 2000)).toBe(2000);
+    expect(evalParam(undefined, "min_obs", 2000)).toBe(2000);
   });
 });

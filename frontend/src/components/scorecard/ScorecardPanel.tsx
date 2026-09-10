@@ -1,6 +1,9 @@
 import React, { useMemo } from "react";
 import {
+  SCORECARD_CLIENT_RULES,
   SCORECARD_FAMILIES,
+  SCORECARD_SCORE_SCALE,
+  SCORECARD_SCORE_SCALE_LONG,
   type ScorecardCategory,
   type ScorecardDetail,
   type ScorecardDisagreement,
@@ -34,7 +37,10 @@ export interface ScorecardPanelProps {
 }
 
 const OVERALL_REASON = "insufficient coverage: fewer than 5 families scored";
-const PROFILE_THRESHOLD = 0.5;
+// fs-v1 client rule (documented in types/scorecard.ts, shared with the memo
+// section): a sub-composite z at or above this reads as that profile.
+const PROFILE_THRESHOLD = SCORECARD_CLIENT_RULES.profileThresholdZ;
+const PROFILE_THRESHOLD_TEXT = `+${PROFILE_THRESHOLD.toFixed(2)}`;
 
 function hasFeatures(s: ScorecardSummary | ScorecardDetail): s is ScorecardDetail {
   return Array.isArray((s as ScorecardDetail).features);
@@ -192,7 +198,9 @@ export default function ScorecardPanel({ scorecard, title = "Fundamental Factor 
           <dd className={`text-lg font-semibold font-mono ${scoreTone(scorecard.overall_score)}`} data-testid="overall-score">
             {fmtScore(scorecard.overall_score, OVERALL_REASON)}
           </dd>
-          <dd className="text-[10px] text-slate-500">0–100 · 50 = universe median · z {fmtZ(scorecard.overall_z, OVERALL_REASON)}</dd>
+          <dd className="text-[10px] text-slate-500" title={SCORECARD_SCORE_SCALE_LONG} data-testid="score-scale">
+            {SCORECARD_SCORE_SCALE} · z {fmtZ(scorecard.overall_z, OVERALL_REASON)}
+          </dd>
         </div>
         <div className="card-tight !p-2">
           <dt className="text-[10px] uppercase tracking-widest text-slate-500">Universe percentile</dt>
@@ -218,7 +226,11 @@ export default function ScorecardPanel({ scorecard, title = "Fundamental Factor 
       <p className="text-xs text-slate-300" data-testid="profile-line">
         <span className="text-accent-500 uppercase tracking-widest text-[10px] mr-2">Model read</span>
         {profileText(scorecard.profiles)}
-        <span className="text-slate-500"> — from the quality/profitability/capital-allocation/earnings-quality and growth sub-composites; a scenario label, not a recommendation.</span>
+        <span className="text-slate-500">
+          {" "}
+          — from the quality/profitability/capital-allocation/earnings-quality and growth sub-composites (a profile reads when its sub-composite z is at least {PROFILE_THRESHOLD_TEXT}, an fs-v1 client rule); a scenario label, not a
+          recommendation.
+        </span>
       </p>
 
       <div className="grid md:grid-cols-2 gap-4">

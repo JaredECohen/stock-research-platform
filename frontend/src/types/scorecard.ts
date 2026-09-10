@@ -43,6 +43,42 @@ export const SCORECARD_FAMILY_LABELS: Record<ScorecardFamily, string> = {
  *  column order is a new contract, never a change to this one. */
 export const SCORECARD_EXPORT_CONTRACT = "v1";
 
+/** How the 0–100 score maps from z. `factor_scores._z_to_100` is linear:
+ *  `50 + z / 2.5 * 50`, clipped, so 50 sits at z = 0 — the *mean* of the
+ *  winsorized composite within the sector (or the universe when the sector
+ *  is too small) — not at the universe median. Only the rank-based
+ *  percentiles are median-anchored. One string, shared by the panel
+ *  headline and the universe Score header so the two cannot disagree. */
+export const SCORECARD_SCORE_SCALE = "0–100 · 50 = z of 0 (sector mean)";
+export const SCORECARD_SCORE_SCALE_LONG = "0–100, linear in z: 50 = z of 0 (the sector mean, or the universe mean when the sector is too small); the percentile columns, not the score, are median-anchored.";
+
+/** fs-v1 client-side interpretation rules. These are not part of the wire
+ *  contract: the spec (`/api/scorecard/spec`) carries the normalisation
+ *  parameters but not these thresholds, and an evaluation row's `params`
+ *  may or may not name its minimums. They are collected here — one place,
+ *  documented — so the memo section and the /app/scorecard page read the
+ *  same numbers, and each component prefers the API's `params` value when
+ *  it is present (see `evalParam`). Changing one is a client-rule change
+ *  and must be reflected in the backend's pm_context block. */
+export const SCORECARD_CLIENT_RULES = {
+  /** A sub-composite z at or above this reads as that profile. */
+  profileThresholdZ: 0.5,
+  /** Months of month-end history below which an evaluation is "insufficient". */
+  evalMinMonths: 24,
+  /** Names a quintile leg needs or the month is skipped (orchestrator rule). */
+  evalMinLeg: 15,
+  /** Panel observations below which the LASSO draws no verdict. */
+  lassoMinObs: 2000,
+} as const;
+
+/** Read a numeric minimum from an evaluation row's `params`, falling back
+ *  to the documented fs-v1 client rule. Non-numeric or non-finite values
+ *  fall back too, so a malformed row cannot print "NaN of NaN months". */
+export function evalParam(params: Record<string, unknown> | null | undefined, key: "min_leg" | "min_months" | "min_obs", fallback: number): number {
+  const v = params?.[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
 export type ScorecardFeatureUnit = "ratio" | "percent" | "multiple" | "currency" | "count";
 
 /** One family composite for one ticker. `z`/`score`/`percentile` are null

@@ -1,16 +1,32 @@
 import React, { useMemo } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useReducedMotion } from "@/components/public/hooks";
-import type { DoubleLassoResult, FF6Factor, FF6RegressionResult, LassoVerdict, QuintileLSResult, ScorecardEvaluation as EvaluationRow, ScorecardEvaluationResponse } from "@/types/scorecard";
+import {
+  SCORECARD_CLIENT_RULES,
+  evalParam,
+  type DoubleLassoResult,
+  type FF6Factor,
+  type FF6RegressionResult,
+  type LassoVerdict,
+  type QuintileLSResult,
+  type ScorecardEvaluation as EvaluationRow,
+  type ScorecardEvaluationResponse,
+} from "@/types/scorecard";
 import { fmtReturn, fmtStat, humanize, isNum, na } from "./format";
 
 /**
  * Does the scorecard predict anything? Three worker-computed evaluations,
  * each with its own card: the top-vs-bottom quintile long/short monthly
  * spread (stats, quintile table, skipped months), the FF5 + momentum
- * regression (alpha with t-stat, betas, "insufficient" when n < 24), and
- * the double-selection LASSO verdict (independent | subsumed |
- * insufficient_data). Every card renders the backend's `caveats` verbatim
+ * regression (alpha with t-stat, betas, "insufficient" below the minimum
+ * months), and the double-selection LASSO verdict (independent | subsumed
+ * | insufficient_data). The minimums a card prints (`min_leg`,
+ * `min_months`, `min_obs`) come from the row's `params` when the worker
+ * recorded them and otherwise from the documented fs-v1 client rules in
+ * types/scorecard.ts — never from a literal in this file, so the page and
+ * the memo block cannot drift apart. The FF6 `insufficient` flag itself is
+ * the backend's; the client only names the threshold beside it.
+ * Every card renders the backend's `caveats` verbatim
  * — the unadjusted-price, current-constituent, current-sector and
  * restatement residues are part of the result, not a footnote the client
  * paraphrases. A kind the worker has not run yet says so rather than
@@ -30,14 +46,24 @@ const GRID = "#243056";
 const AXIS = "#94a3b8";
 const FACTORS: FF6Factor[] = ["MKT_RF", "SMB", "HML", "RMW", "CMA", "MOM"];
 
-export const VERDICT_TEXT: Record<LassoVerdict, { label: string; tone: string; gloss: string }> = {
-  independent: { label: "Independent information", tone: "badge-bull", gloss: "The overall z predicts next-month excess return after the standard characteristics are controlled for (cluster t ≥ 2)." },
-  subsumed: { label: "Subsumed by known characteristics", tone: "badge-mixed", gloss: "After controls the coefficient on the overall z is not distinguishable from zero (|t| < 2)." },
-  insufficient_data: { label: "Insufficient data", tone: "badge-neutral", gloss: "Fewer than 24 month-ends or 2,000 observations: no verdict is drawn." },
+interface VerdictInfo {
+  label: string;
+  tone: string;
+  gloss: (minMonths: number, minObs: number) => string;
+}
+
+export const VERDICT_TEXT: Record<LassoVerdict, VerdictInfo> = {
+  independent: { label: "Independent information", tone: "badge-bull", gloss: () => "The overall z predicts next-month excess return after the standard characteristics are controlled for (cluster t ≥ 2)." },
+  subsumed: { label: "Subsumed by known characteristics", tone: "badge-mixed", gloss: () => "After controls the coefficient on the overall z is not distinguishable from zero (|t| < 2)." },
+  insufficient_data: {
+    label: "Insufficient data",
+    tone: "badge-neutral",
+    gloss: (minMonths, minObs) => `Fewer than ${minMonths} month-ends or ${minObs.toLocaleString("en-US")} observations: no verdict is drawn.`,
+  },
 };
 
-function verdictInfo(v: string): { label: string; tone: string; gloss: string } {
-  return VERDICT_TEXT[v as LassoVerdict] ?? { label: humanize(v), tone: "badge-neutral", gloss: "Verdict not recognised by this client version." };
+function verdictInfo(v: string): VerdictInfo {
+  return VERDICT_TEXT[v as LassoVerdict] ?? { label: humanize(v), tone: "badge-neutral", gloss: () => "Verdict not recognised by this client version." };
 }
 
 function Caveats({ caveats, kind }: { caveats: string[] | undefined; kind: string }) {
@@ -70,7 +96,7 @@ function Stat({ label, value, title }: { label: string; value: string; title?: s
 function Sample({ row }: { row: EvaluationRow }) {
   return (
     <p className="text-[11px] text-slate-500">
-      Sample {row.sample_start ?? "n/a"} to {row.sample_end ?? "n/a"} · n = {row.n_obs.toLocaleString("en-US")} · computed {row.created_at}
+      Sample {row.sample_start ?? na("no start recorded")} to {row.sample_end ?? na("no end recorded")} · n = {row.n_obs.toLocaleString("en-US")} · computed {row.created_at}
     </p>
   );
 }
@@ -94,7 +120,9 @@ function QuintileCard({ row, result, width, height, animate }: { row: Evaluation
       return { as_of: m.as_of, cumulative: acc, spread: m.spread };
     });
   }, [result.months]);
-  const insufficient = result.n_months < 24;
+  const minMonths = evalParam(row.params, "min_months", SCORECARD_CLIENT_RULES.evalMinMonths);
+  const minLeg = evalParam(row.params, "min_leg", SCORECARD_CLIENT_RULES.evalMinLeg);
+  const insufficient = result.n_months < minMonths;
   const label = useMemo(() => {
     if (result.months.length === 0) return "Quintile long/short spread: no scored months.";
     const first = result.months[0].as_of;
@@ -124,12 +152,14 @@ function QuintileCard({ row, result, width, height, animate }: { row: Evaluation
         <h3 className="section-title">Quintile long/short spread</h3>
         {insufficient && (
           <span className="badge-neutral" data-testid="quintile-insufficient">
-            insufficient: {result.n_months} of 24 months
+            insufficient: {result.n_months} of {minMonths} months
           </span>
         )}
       </div>
       <Sample row={row} />
-      <p className="text-xs text-slate-400">Top 20% minus bottom 20% by overall z, equal weight, monthly rebalance; legs need at least 15 names or the month is skipped and listed below.</p>
+      <p className="text-xs text-slate-400">
+        Top 20% minus bottom 20% by overall z, equal weight, monthly rebalance; legs need at least {minLeg} names or the month is skipped and listed below.
+      </p>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <Stat label="Mean monthly spread" value={fmtReturn(result.mean_spread, "no months")} />
         <Stat label="Stdev" value={fmtReturn(result.stdev, "no months")} />
@@ -206,14 +236,15 @@ function QuintileCard({ row, result, width, height, animate }: { row: Evaluation
 }
 
 function FF6Card({ row, result }: { row: EvaluationRow; result: FF6RegressionResult }) {
-  const reason = result.insufficient ? `insufficient: ${result.n_months} of 24 months` : "not computed";
+  const minMonths = evalParam(row.params, "min_months", SCORECARD_CLIENT_RULES.evalMinMonths);
+  const reason = result.insufficient ? `insufficient: ${result.n_months} of ${minMonths} months` : "not computed";
   return (
     <section className="card space-y-3" data-testid="eval-ff6_regression" data-state={result.insufficient ? "insufficient" : "ok"}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="section-title">Fama-French 5 + momentum regression</h3>
         {result.insufficient && (
           <span className="badge-neutral" data-testid="ff6-insufficient">
-            insufficient: {result.n_months} of 24 months
+            insufficient: {result.n_months} of {minMonths} months
           </span>
         )}
       </div>
@@ -263,6 +294,8 @@ function FF6Card({ row, result }: { row: EvaluationRow; result: FF6RegressionRes
 
 function LassoCard({ row, result }: { row: EvaluationRow; result: DoubleLassoResult }) {
   const info = verdictInfo(result.verdict);
+  const minMonths = evalParam(row.params, "min_months", SCORECARD_CLIENT_RULES.evalMinMonths);
+  const minObs = evalParam(row.params, "min_obs", SCORECARD_CLIENT_RULES.lassoMinObs);
   const insufficient = result.verdict === "insufficient_data";
   const reason = insufficient ? "insufficient data" : "not computed";
   return (
@@ -275,7 +308,9 @@ function LassoCard({ row, result }: { row: EvaluationRow; result: DoubleLassoRes
       </div>
       <Sample row={row} />
       <p className="text-xs text-slate-300">{result.interpretation || na("no interpretation recorded")}</p>
-      <p className="text-[11px] text-slate-500">{info.gloss}</p>
+      <p className="text-[11px] text-slate-500" data-testid="lasso-gloss">
+        {info.gloss(minMonths, minObs)}
+      </p>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <Stat label="Coef on overall z" value={isNum(result.coef_d) ? result.coef_d.toFixed(4) : na(reason)} title="Post-selection OLS coefficient on the overall z (monthly excess return per 1 z)" />
         <Stat label="SE (month-clustered)" value={isNum(result.se_cluster_month) ? result.se_cluster_month.toFixed(4) : na(reason)} />

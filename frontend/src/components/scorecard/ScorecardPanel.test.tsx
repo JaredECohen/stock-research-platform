@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import ScorecardPanel, { profileText } from "@/components/scorecard/ScorecardPanel";
+import { SCORECARD_CLIENT_RULES } from "@/types/scorecard";
 import { makeDetail, makeDisagreementSummary, makeInsufficientSummary, makeSummary, partialCategories } from "@/test/fixtures/scorecard";
 
 describe("ScorecardPanel", () => {
@@ -141,6 +142,22 @@ describe("ScorecardPanel", () => {
     expect(screen.queryByTestId("disagreement")).not.toBeInTheDocument();
   });
 
+  it("describes the score scale as 50 = z of 0 (sector mean), never as the universe median", () => {
+    // _z_to_100 is linear in z (50 + z/2.5*50): 50 is the sector-mean anchor.
+    // A right-skewed universe puts the median name below 50, so calling 50
+    // the median would tell a reader the median name is below-median.
+    render(<ScorecardPanel scorecard={makeSummary()} />);
+    const scale = screen.getByTestId("score-scale");
+    expect(scale).toHaveTextContent("0–100 · 50 = z of 0 (sector mean)");
+    expect(scale.textContent).not.toMatch(/median/i);
+    expect(scale.getAttribute("title")).toMatch(/percentile columns, not the score, are median-anchored/);
+  });
+
+  it("names the fs-v1 profile threshold beside the model read so the rule is visible", () => {
+    render(<ScorecardPanel scorecard={makeSummary()} />);
+    expect(screen.getByTestId("profile-line")).toHaveTextContent("sub-composite z is at least +0.50, an fs-v1 client rule");
+  });
+
   it("keeps an unknown family from the backend rather than dropping it", () => {
     const s = makeSummary();
     s.categories = { ...s.categories, resilience: { z: 0.2, score: 54, percentile: 55, weight: 0.1, n_features: 2, n_available: 2 } };
@@ -150,6 +167,12 @@ describe("ScorecardPanel", () => {
 });
 
 describe("profileText", () => {
+  it("uses the documented client threshold, not a literal", () => {
+    const t = SCORECARD_CLIENT_RULES.profileThresholdZ;
+    expect(profileText({ compounder: t, inflection: null })).toBe("reads as a compounder");
+    expect(profileText({ compounder: t - 0.01, inflection: null })).toBe("reads as neither a compounder nor an inflection");
+  });
+
   it("maps the sub-composites to a model-read label", () => {
     expect(profileText({ compounder: 1.0, inflection: 0.1 })).toBe("reads as a compounder");
     expect(profileText({ compounder: 0.1, inflection: 0.9 })).toBe("reads as an early inflection");
