@@ -27,6 +27,7 @@ from .api import (
     routes_macro,
     routes_portfolio,
     routes_public,
+    routes_scorecard,
     routes_screener,
     routes_stocks,
 )
@@ -174,6 +175,10 @@ def create_app() -> FastAPI:
     if settings.enable_fundamentals_explorer:
         app.include_router(routes_fundamentals.router, tags=["fundamentals"])
         app.include_router(routes_fundamentals_commentary.router, tags=["fundamentals"])
+    # Phase 6: scorecard reads + the v1 export. Always mounted so the route
+    # set (and the auth policy coverage test) is static; ENABLE_SCORECARD
+    # is checked per request and turns the whole surface into 404s.
+    app.include_router(routes_scorecard.router, tags=["scorecard"])
 
     @app.on_event("startup")
     def _startup() -> None:

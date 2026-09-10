@@ -14,16 +14,26 @@ its own rows; one timeline I can query.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from calendar import monthrange
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..database import get_db
 from ..monitoring import KNOWN_LOOPS, _process_role, status_snapshot
 from ..rate_limit import LIMITS, limiter
+from ..schemas.scorecard import (
+    ScorecardBackfillOut,
+    ScorecardBackfillRequest,
+    ScorecardEnqueueOut,
+    ScorecardEvaluateRequest,
+    ScorecardRefreshRequest,
+    ScorecardRunOut,
+)
 from ..seed_universe import run_full_seed
 from ..services import dcf_store, llm_metrics, memo_store, outcome_service, update_orchestrator
 from .gating import enforce_global
@@ -1068,4 +1078,116 @@ def fix_postgres_sequences() -> dict[str, Any]:
             except Exception as exc:
                 skipped.append({"table": table_name, "reason": str(exc)[:200]})
     return {"fixed": fixed, "skipped": skipped}
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — Fundamental Factor Scorecard: enqueue-only ops surface
+# ---------------------------------------------------------------------------
+#
+# Every endpoint here inserts a `scorecard_runs` row and returns 202. The
+# web process never scores: the worker's `scorecard_loop` claims the row
+# at its next tick (daily, 03:45 UTC). Protected by the admin token through
+# the `/api/admin` prefix; none of these is browser-called.
+
+def _scorecard_version_for(version_key: str | None) -> str:
+    from ..services import scorecard_service
+    try:
+        return scorecard_service.resolve_version(version_key)["version_key"]
+    except scorecard_service.UnknownVersion as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+@router.post("/api/admin/scorecard/refresh", status_code=202)
+def scorecard_refresh_endpoint(payload: ScorecardRefreshRequest | None = None) -> ScorecardEnqueueOut:
+    """Queue one scoring run.
+
+    `as_of` defaults to yesterday UTC (the last complete close);
+    `tickers` restricts the run to a subset (still normalised only
+    against that subset — use it for diagnostics, not for the product
+    cross-section). Coalesces on `(version_key, as_of, kind)`, so a repeat
+    request returns the pending row with `created=false`.
+    """
+    from ..monitoring.scorecard_loop import scheduled_as_of
+    from ..services import scorecard_queue
+    payload = payload or ScorecardRefreshRequest()
+    vk = _scorecard_version_for(payload.version_key)
+    as_of = payload.as_of or scheduled_as_of(datetime.utcnow())
+    params: dict[str, Any] = {}
+    if payload.tickers is not None:
+        params["tickers"] = sorted({t.strip().upper() for t in payload.tickers if t.strip()})
+    run, created = scorecard_queue.enqueue_run(
+        version_key=vk, as_of=as_of, kind=payload.kind, params=params, requested_by="admin",
+    )
+    return ScorecardEnqueueOut(
+        run=ScorecardRunOut(**run), created=created,
+        note="queued; the worker's scorecard_loop drains the queue at its next 03:45 UTC tick",
+    )
+
+
+@router.post("/api/admin/scorecard/evaluate", status_code=202)
+def scorecard_evaluate_endpoint(payload: ScorecardEvaluateRequest | None = None) -> ScorecardEnqueueOut:
+    """Queue the evaluation job (quintile long/short, FF5+MOM regression,
+    double-selection LASSO) over every month-end row on file. `as_of` is
+    only the run's label (default: the last completed month end)."""
+    from ..monitoring.scorecard_loop import last_completed_month_end
+    from ..services import scorecard_queue
+    payload = payload or ScorecardEvaluateRequest()
+    vk = _scorecard_version_for(payload.version_key)
+    as_of = payload.as_of or last_completed_month_end(datetime.utcnow().date())
+    run, created = scorecard_queue.enqueue_run(
+        version_key=vk, as_of=as_of, kind=scorecard_queue.KIND_EVALUATE, requested_by="admin",
+    )
+    return ScorecardEnqueueOut(
+        run=ScorecardRunOut(**run), created=created,
+        note="queued; results land in scorecard_evaluations and GET /api/scorecard/evaluation",
+    )
+
+
+@router.post("/api/admin/scorecard/backfill", status_code=202)
+def scorecard_backfill_endpoint(payload: ScorecardBackfillRequest | None = None) -> ScorecardBackfillOut:
+    """Queue the month-end history: one `pit_prepare` run (availability
+    backfill + month-end price sync for the universe) followed by one
+    `backfill` run per month end, oldest first, for `months` months ending
+    at `end` (default: the last completed month end, `SCORECARD_BACKFILL_MONTHS`
+    months). Month ends that already have a succeeded run are skipped.
+
+    Honest limit: the price store is fed from the app's 252-day cached
+    series, so month ends older than ~12 months score without a price —
+    every valuation feature there is n/a (`missing:price`) and coverage is
+    lower. The rows are still written so the fundamentals-only families
+    have history; the run note reports `no_price=`.
+    """
+    from ..monitoring.scorecard_loop import last_completed_month_end
+    from ..services import scorecard_queue
+    payload = payload or ScorecardBackfillRequest()
+    vk = _scorecard_version_for(payload.version_key)
+    months = int(payload.months or settings.scorecard_backfill_months)
+    end = payload.end or last_completed_month_end(datetime.utcnow().date())
+    end = date(end.year, end.month, monthrange(end.year, end.month)[1])
+    month_ends: list[date] = []
+    y, m = end.year, end.month
+    for _ in range(months):
+        month_ends.append(date(y, m, monthrange(y, m)[1]))
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    month_ends.reverse()
+
+    prep, _prep_created = scorecard_queue.enqueue_run(
+        version_key=vk, as_of=end, kind=scorecard_queue.KIND_PIT_PREPARE, requested_by="admin",
+    )
+    enqueued: list[ScorecardRunOut] = []
+    skipped: list[date] = []
+    for me in month_ends:
+        if scorecard_queue.succeeded_run_exists(vk, me):
+            skipped.append(me)
+            continue
+        run, created = scorecard_queue.enqueue_run(
+            version_key=vk, as_of=me, kind=scorecard_queue.KIND_BACKFILL, requested_by="admin",
+        )
+        if created:
+            enqueued.append(ScorecardRunOut(**run))
+    return ScorecardBackfillOut(
+        pit_prepare=ScorecardRunOut(**prep), enqueued=enqueued, skipped_existing=skipped,
+        note=(f"{len(enqueued)} month-end runs queued behind pit_prepare; {len(skipped)} already scored. "
+              "Month ends older than the cached 252-day price window score without a price (valuation n/a)."),
+    )
 

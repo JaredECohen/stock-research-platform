@@ -132,6 +132,12 @@ FEATURES: dict[str, Feature] = {
             "data_catalog", "Data catalog and sector overlays",
             free=False, pro=True,
         ),
+        # Phase 6. DB reads only (the worker computes); Pro because the
+        # universe table and the export are the product's quant surface.
+        Feature(
+            "scorecard", "Fundamental factor scorecard (universe, ticker detail, evaluation, export)",
+            free=False, pro=True,
+        ),
     )
 }
 

@@ -105,6 +105,9 @@ LIMITS = {
     # call per request and gets DEVPLAN's lightweight-LLM ceiling.
     "fundamentals_series":     "60/minute",
     "fundamentals_commentary": "10/minute",
+    # Phase 6. The export streams a whole run (a few hundred rows) per
+    # call; a downstream system polls it, a person does not.
+    "scorecard_export":        "30/minute",
 }
 
 
