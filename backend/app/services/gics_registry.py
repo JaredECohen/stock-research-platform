@@ -243,6 +243,20 @@ def checksum_for(nodes: list[dict[str, Any]]) -> str:
     return hashlib.sha256(json.dumps(canonical, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
+def node_counts_for(nodes: list[dict[str, Any]]) -> dict[str, int]:
+    """Active nodes per level plus ``inactive`` — the shape stored on the
+    version row and reported by the drift check."""
+    counts: dict[str, int] = {level: 0 for level in NODE_LEVELS}
+    inactive = 0
+    for n in nodes:
+        if n["is_active"]:
+            counts[n["level"]] += 1
+        else:
+            inactive += 1
+    counts["inactive"] = inactive
+    return counts
+
+
 def _load_payload(path: Path | None) -> dict[str, Any]:
     if path is None:
         from .industry_knowledge import load_industry_knowledge
@@ -293,14 +307,7 @@ def import_from_knowledge_json(
     if not nodes:
         raise ValueError("knowledge payload holds no taxonomy nodes")
     checksum = checksum_for(nodes)
-    counts: dict[str, int] = {level: 0 for level in NODE_LEVELS}
-    inactive = 0
-    for n in nodes:
-        if n["is_active"]:
-            counts[n["level"]] += 1
-        else:
-            inactive += 1
-    counts["inactive"] = inactive
+    counts = node_counts_for(nodes)
     meta = doc.get("map_metadata") or {}
     provenance = {
         "generated_from": doc.get("generated_from"),
@@ -392,6 +399,56 @@ def activate_version(version_key: str) -> VersionInfo:
         return _version_info(row)
 
 
+def bundled_drift(
+    active: VersionInfo | None = None, *, payload: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Does the bundled knowledge JSON describe the structure the registry
+    is serving? ``None`` when the active version's checksum equals the
+    bundled payload's; otherwise a dict naming both sides and the remedy.
+
+    This is the "ONE taxonomy source" invariant made observable. The
+    knowledge JSON is regenerated whenever the user-authored map evolves,
+    so a deploy can ship a changed structure under the SAME version key —
+    ``import_from_knowledge_json`` refuses to rewrite it, which is right,
+    but refusing silently leaves the worker classifying against the old
+    node set. The loop reads this every day and reports it. Two kinds:
+
+    * ``same_key_changed_structure`` — the bundled file hashes differently
+      under the active key; the operator re-imports under a new key
+      (``--version-key``) and activates it.
+    * ``bundled_version_not_active`` — the bundled file carries another
+      version key; import/activate it, or keep the pin deliberately.
+    """
+    if active is None:
+        active = active_version()
+    if active is None:
+        return None
+    if payload is None:
+        payload = _load_payload(None)
+    bundled_key = str(payload.get("taxonomy_version") or settings.gics_taxonomy_version)
+    bundled_nodes = nodes_from_payload(payload)
+    bundled_checksum = checksum_for(bundled_nodes)
+    if bundled_checksum == active.checksum:
+        return None
+    same_key = bundled_key == active.version_key
+    return {
+        "kind": "same_key_changed_structure" if same_key else "bundled_version_not_active",
+        "active_version_key": active.version_key,
+        "active_checksum": active.checksum,
+        "bundled_version_key": bundled_key,
+        "bundled_checksum": bundled_checksum,
+        "active_node_counts": dict(active.node_counts),
+        "bundled_node_counts": node_counts_for(bundled_nodes),
+        "remedy": (
+            "re-import the bundled JSON under a new key "
+            "(python -m app.scripts.import_gics_taxonomy --version-key <key> --activate)"
+            if same_key else
+            f"import and activate {bundled_key!r} "
+            "(python -m app.scripts.import_gics_taxonomy --activate), or keep the pin deliberately"
+        ),
+    }
+
+
 def ensure_taxonomy(*, activate: bool = True) -> VersionInfo | None:
     """Bootstrap: import the bundled knowledge JSON when its version is not
     yet in the database, and activate it when nothing is active.
@@ -400,9 +457,23 @@ def ensure_taxonomy(*, activate: bool = True) -> VersionInfo | None:
     existing active version — activation of a NEW structure is a
     deliberate operator action (``activate_version``). Returns the active
     version, or ``None`` when ``activate`` is False and nothing is active.
+
+    When a version IS active its checksum is compared with the bundled
+    JSON's and a mismatch is logged as a warning — the registry must never
+    diverge from the one taxonomy source without saying so. The loop turns
+    the same comparison (``bundled_drift``) into a red health row.
     """
     active = active_version()
     if active is not None:
+        drift = bundled_drift(active)
+        if drift is not None:
+            log.warning(
+                "gics taxonomy drift: active %s (checksum %s…) differs from the bundled "
+                "knowledge JSON %s (checksum %s…) [%s]; %s",
+                drift["active_version_key"], drift["active_checksum"][:12],
+                drift["bundled_version_key"], drift["bundled_checksum"][:12],
+                drift["kind"], drift["remedy"],
+            )
         return active
     payload = _load_payload(None)
     key = payload.get("taxonomy_version") or settings.gics_taxonomy_version

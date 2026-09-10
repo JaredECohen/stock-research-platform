@@ -12,6 +12,12 @@ company to the wrong (or no) Industry Group Analyst without anyone
 noticing. The note carries every count and the top unmapped labels so
 the operator reading ``/api/admin/cron-health`` can extend the alias map
 without opening a database.
+
+Also ``success=False`` when the bundled knowledge JSON no longer hashes
+to the active taxonomy (``taxonomy_drift=1``): a deploy that ships a
+regenerated structure under the same version key is refused by the
+importer, and without this row nothing would say that the worker is
+still classifying against the old node set.
 """
 from __future__ import annotations
 
@@ -31,8 +37,10 @@ _NOTE_LABEL_CAP = 5
 
 def _note(summary: dict) -> str:
     counts = summary.get("counts") or {}
+    drift = summary.get("taxonomy_drift")
     parts = [
         f"taxonomy={summary.get('taxonomy_version', '?')}",
+        f"taxonomy_drift={1 if drift else 0}",
         f"classified={summary.get('classified', 0)}",
         f"mapped={counts.get('mapped', 0)}",
         f"fallback={counts.get('fallback', 0)}",
@@ -51,6 +59,13 @@ def _note(summary: dict) -> str:
         )
         more = f" (+{len(labels) - _NOTE_LABEL_CAP} more)" if len(labels) > _NOTE_LABEL_CAP else ""
         parts.append(f"unmapped_labels={shown}{more}")
+    if drift:
+        parts.append(
+            f"bundled={drift.get('bundled_version_key', '?')}@"
+            f"{str(drift.get('bundled_checksum', ''))[:12]} "
+            f"active_checksum={str(drift.get('active_checksum', ''))[:12]} "
+            f"drift_kind={drift.get('kind', '?')}"
+        )
     return " ".join(parts)
 
 
@@ -66,11 +81,15 @@ def run_once() -> dict:
         if active is None:
             raise gics_registry.TaxonomyNotImported("no taxonomy could be activated")
         summary = industry_classification.classify_all(version=active)
+        # Read AFTER classify_all so the note describes the structure the
+        # rows were just written against; ensure_taxonomy already logged it.
+        summary["taxonomy_drift"] = gics_registry.bundled_drift(active)
     except Exception as exc:
         record_run(LOOP_NAME, success=False, note=f"error={type(exc).__name__}: {safe_exc(exc)}")
         raise
     missing = int((summary.get("counts") or {}).get("missing", 0))
-    record_run(LOOP_NAME, success=missing == 0, note=_note(summary))
+    healthy = missing == 0 and summary["taxonomy_drift"] is None
+    record_run(LOOP_NAME, success=healthy, note=_note(summary))
     log.info("industry classification: %s", _note(summary))
     return summary
 

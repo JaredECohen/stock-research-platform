@@ -13,6 +13,8 @@ companies other suites insert never leak into the "zero missing" claim.
 """
 from __future__ import annotations
 
+import copy
+
 import pytest
 from sqlalchemy import delete, event, update
 
@@ -144,6 +146,43 @@ def test_research_map_wins_and_records_its_provenance():
     assert row["evidence"]["research_map_source_id"] == ref["source_id"]
     assert row["evidence"]["provider_alias_agrees"] is True
     assert row["confidence"] == ic.CONFIDENCE[("research_map", "mapped")]
+
+
+def test_security_reference_normalises_share_class_separators():
+    """The map spells share classes with a hyphen; providers do not agree.
+    Exact spelling first, then the separator swapped — never anything
+    fuzzier (a separator-free symbol is a different ticker)."""
+    hyphenated = next(
+        (s for s in ik.load_industry_knowledge()["security_reference"] if "-" in s), None,
+    )
+    assert hyphenated is not None, "the map carries at least one share-class symbol"
+    base, cls = hyphenated.split("-", 1)
+    exact = ik.security_reference(hyphenated)
+    assert exact is not None and exact["symbol"] == exact["matched_symbol"] == hyphenated
+    for spelling in (f"{base}.{cls}", f"{base}/{cls}", f"{base} {cls}", f" {base.lower()}.{cls.lower()} "):
+        ref = ik.security_reference(spelling)
+        assert ref is not None, spelling
+        assert ref["matched_symbol"] == hyphenated and ref["codes"] == exact["codes"]
+        assert ref["symbol"] == spelling.strip().upper()
+    assert ik.security_reference(f"{base}{cls}") is None  # BRKB is not BRK-B
+    assert ik.security_reference("") is None
+    plain = next(s for s in ik.load_industry_knowledge()["security_reference"] if "-" not in s)
+    assert ik.security_reference(plain)["matched_symbol"] == plain
+
+
+def test_research_map_matches_a_provider_spelled_share_class(company):
+    hyphenated = next(s for s in ik.load_industry_knowledge()["security_reference"] if "-" in s)
+    ref = ik.security_reference(hyphenated)
+    provider_symbol = hyphenated.replace("-", ".")
+    company(provider_symbol, sector="Zzz Sector", industry="No Such Industry")
+    ic.classify_ticker(provider_symbol, force=True)
+    row = ic.current_for([provider_symbol])[provider_symbol]
+    assert row["state"] == "mapped" and row["source"] == "research_map"
+    assert row["sub_industry_code"] == ref["codes"][0]
+    assert row["evidence"]["research_map_symbol"] == hyphenated
+    # An exact match carries no normalisation note.
+    ic.classify_ticker("NVDA", force=True)
+    assert "research_map_symbol" not in ic.current_for(["NVDA"])["NVDA"]["evidence"]
 
 
 def test_provider_alias_is_the_fallback_when_the_map_has_no_entry():
@@ -403,6 +442,44 @@ def test_loop_reports_success_only_when_nothing_is_missing(recorded, monkeypatch
     assert "missing=2" in kwargs["note"]
     assert "unmapped_labels=Zzz/Label 0×1" in kwargs["note"]
     assert "(+2 more)" in kwargs["note"]  # capped at 5 labels in the note
+
+
+def test_loop_goes_red_on_taxonomy_drift(recorded, monkeypatch):
+    """Regression: a regenerated knowledge JSON under the active key left
+    the loop reporting success while the registry served the old nodes."""
+    monkeypatch.setattr(loop.industry_classification, "classify_all",
+                        lambda **kw: _summary(mapped=30))
+    drift = {
+        "kind": "same_key_changed_structure", "active_version_key": "gics-test",
+        "bundled_version_key": "gics-test", "active_checksum": "a" * 64,
+        "bundled_checksum": "b" * 64, "remedy": "re-import",
+    }
+    monkeypatch.setattr(loop.gics_registry, "bundled_drift", lambda active: drift)
+    summary = loop.run_once()
+    assert summary["taxonomy_drift"] is drift
+    (args, kwargs), = recorded
+    assert kwargs["success"] is False
+    note = kwargs["note"]
+    assert "missing=0" in note and "taxonomy_drift=1" in note
+    assert f"bundled=gics-test@{'b' * 12}" in note
+    assert f"active_checksum={'a' * 12}" in note and "drift_kind=same_key_changed_structure" in note
+
+    recorded.clear()
+    monkeypatch.setattr(loop.gics_registry, "bundled_drift", lambda active: None)
+    assert loop.run_once()["taxonomy_drift"] is None
+    (args, kwargs), = recorded
+    assert kwargs["success"] is True and "taxonomy_drift=0" in kwargs["note"]
+
+
+def test_loop_reads_drift_from_the_real_registry(recorded, monkeypatch):
+    payload = copy.deepcopy(ik.load_industry_knowledge())
+    payload["sectors"][0]["industry_groups"][0]["name"] += " (renamed)"
+    monkeypatch.setattr(reg, "_load_payload", lambda path: payload)
+    summary = loop.run_once()
+    assert summary["taxonomy_drift"]["kind"] == "same_key_changed_structure"
+    assert summary["taxonomy_drift"]["active_checksum"] == reg.active_version().checksum
+    (args, kwargs), = recorded
+    assert kwargs["success"] is False and "taxonomy_drift=1" in kwargs["note"]
 
 
 def test_loop_records_failure_before_propagating(recorded, monkeypatch):

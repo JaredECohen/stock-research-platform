@@ -52,6 +52,9 @@ def main(argv: list[str] | None = None) -> int:
         if active is not None:
             out["active"] = {**active.as_dict(), "counts": gics_registry.counts(active)}
             out["classification"] = industry_classification.audit(version=active)
+            # The registry vs the bundled JSON — a mismatch is what the
+            # daily loop reports as taxonomy_drift=1.
+            out["bundled_drift"] = gics_registry.bundled_drift(active)
         print(json.dumps(out, indent=2, default=str))
         return 0
 

@@ -246,6 +246,66 @@ def test_ensure_taxonomy_activates_the_bundled_version_when_nothing_is_active(bu
     assert reg.ensure_taxonomy(activate=True).id == bundled.id
 
 
+def _renamed_payload() -> dict:
+    """The bundled payload with one industry group renamed — the same
+    version key, a different structure; what a regenerated map ships."""
+    payload = copy.deepcopy(ik.load_industry_knowledge())
+    payload["sectors"][0]["industry_groups"][0]["name"] += " (renamed)"
+    return payload
+
+
+def test_bundled_drift_is_none_while_the_registry_matches_the_json(bundled):
+    assert reg.bundled_drift(bundled) is None
+    assert reg.bundled_drift() is None  # resolves the active version itself
+
+
+def test_bundled_drift_names_a_changed_structure_under_the_same_key(bundled):
+    payload = _renamed_payload()
+    drift = reg.bundled_drift(bundled, payload=payload)
+    assert drift is not None
+    assert drift["kind"] == "same_key_changed_structure"
+    assert drift["active_version_key"] == drift["bundled_version_key"] == bundled.version_key
+    assert drift["active_checksum"] == bundled.checksum
+    assert drift["bundled_checksum"] == reg.checksum_for(reg.nodes_from_payload(payload))
+    assert drift["bundled_checksum"] != drift["active_checksum"]
+    assert drift["active_node_counts"] == bundled.node_counts
+    assert drift["bundled_node_counts"] == bundled.node_counts  # a rename changes no count
+    assert "--version-key" in drift["remedy"]
+
+    payload["taxonomy_version"] = bundled.version_key + "-next"
+    other = reg.bundled_drift(bundled, payload=payload)
+    assert other is not None and other["kind"] == "bundled_version_not_active"
+    assert other["bundled_version_key"] == bundled.version_key + "-next"
+    assert "--activate" in other["remedy"]
+
+
+def test_bundled_drift_needs_an_active_version(bundled, restore_active):
+    with SessionLocal() as db:
+        db.execute(update(TaxonomyVersion).values(is_active=False))
+        db.commit()
+    assert reg.bundled_drift() is None
+
+
+def test_ensure_taxonomy_warns_when_the_bundled_json_drifted(bundled, monkeypatch, caplog):
+    """Regression: a regenerated JSON under the active key used to be
+    returned as the active version with no signal at all."""
+    monkeypatch.setattr(reg, "_load_payload", lambda path: _renamed_payload())
+    with caplog.at_level("WARNING", logger=reg.__name__):
+        info = reg.ensure_taxonomy(activate=True)
+    assert info is not None and info.id == bundled.id  # never re-imports or flips
+    assert reg.active_version().checksum == bundled.checksum
+    messages = [r.getMessage() for r in caplog.records if "taxonomy drift" in r.getMessage()]
+    assert len(messages) == 1
+    assert bundled.version_key in messages[0] and "same_key_changed_structure" in messages[0]
+    assert "--version-key" in messages[0]
+
+    caplog.clear()
+    monkeypatch.setattr(reg, "_load_payload", lambda path: copy.deepcopy(ik.load_industry_knowledge()))
+    with caplog.at_level("WARNING", logger=reg.__name__):
+        reg.ensure_taxonomy(activate=True)
+    assert not [r for r in caplog.records if "taxonomy drift" in r.getMessage()]
+
+
 def test_unknown_version_raises():
     with pytest.raises(reg.UnknownTaxonomyVersion):
         reg.resolve_version("no-such-version")

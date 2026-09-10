@@ -213,20 +213,47 @@ def retired_sub_industries() -> list[dict[str, Any]]:
     return copy.deepcopy(load_industry_knowledge().get("retired_sub_industries", []))
 
 
-def security_reference(symbol: str) -> dict[str, Any] | None:
-    """``{symbol, codes, as_of, source_id, caveat}`` for a symbol in the map's
-    economic security reference, or ``None``. ``codes`` are active 8-digit
-    sub-industry codes (several when the author recorded more than one
-    exposure); ``caveat`` restates that these are research examples, not a
-    licensed issuer assignment."""
+def _symbol_variants(symbol: str) -> list[str]:
+    """The map spells share classes ``BRK-B`` / ``BF-B``; providers vary
+    (``BRK.B``, ``BRK/B``, ``BRK B``). Exact spelling first, then the same
+    symbol with its separator swapped (``.``/``/``/space → ``-``, and ``-``
+    → ``.`` should the map ever change spelling). Never separator-free:
+    ``BRKB`` is a different ticker, not ``BRK-B``."""
     sym = _normalize(symbol).upper()
     if not sym:
+        return []
+    variants = [sym]
+    for sep in (".", "/", " "):
+        if sep in sym:
+            variants.append(sym.replace(sep, "-"))
+    if "-" in sym:
+        variants.append(sym.replace("-", "."))
+    out: list[str] = []
+    for v in variants:
+        if v not in out:
+            out.append(v)
+    return out
+
+
+def security_reference(symbol: str) -> dict[str, Any] | None:
+    """``{symbol, matched_symbol, codes, as_of, source_id, caveat}`` for a
+    symbol in the map's economic security reference, or ``None``. ``codes``
+    are active 8-digit sub-industry codes (several when the author recorded
+    more than one exposure); ``caveat`` restates that these are research
+    examples, not a licensed issuer assignment. ``matched_symbol`` is the
+    map's spelling — it differs from ``symbol`` only when a share-class
+    separator was normalised (``BRK.B`` → ``BRK-B``)."""
+    variants = _symbol_variants(symbol)
+    if not variants:
         return None
-    entry = load_industry_knowledge().get("security_reference", {}).get(sym)
-    if entry is None:
+    reference = load_industry_knowledge().get("security_reference", {})
+    matched = next((v for v in variants if v in reference), None)
+    if matched is None:
         return None
+    entry = reference[matched]
     return {
-        "symbol": sym,
+        "symbol": variants[0],
+        "matched_symbol": matched,
         "codes": list(entry.get("codes", [])),
         "as_of": entry.get("as_of", ""),
         "source_id": entry.get("source_id", ""),

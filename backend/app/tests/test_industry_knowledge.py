@@ -404,7 +404,7 @@ def test_security_reference_lookup_is_symbol_exact_and_caveated(payload):
     symbol, raw = next(iter(payload["security_reference"].items()))
     entry = ik.security_reference(symbol.lower())
     assert entry == {
-        "symbol": symbol, "codes": raw["codes"], "as_of": raw["as_of"],
+        "symbol": symbol, "matched_symbol": symbol, "codes": raw["codes"], "as_of": raw["as_of"],
         "source_id": raw["source_id"], "caveat": ik.SECURITY_REFERENCE_CAVEAT,
     }
     assert "not official licensed issuer GICS mapping" in entry["caveat"]

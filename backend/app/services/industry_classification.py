@@ -194,7 +194,14 @@ def _research_map_candidate(ticker: str, version: VersionInfo) -> tuple[dict[str
             "codes": list(usable),
             **_codes_from(primary),
         },
-        {"research_map_source_id": ref["source_id"], "research_map_caveat": ref["caveat"]},
+        {
+            "research_map_source_id": ref["source_id"],
+            "research_map_caveat": ref["caveat"],
+            # Present only when the provider spells a share class differently
+            # from the map (BRK.B vs BRK-B) — the row still says which entry.
+            **({"research_map_symbol": ref["matched_symbol"]}
+               if ref.get("matched_symbol", ref["symbol"]) != ref["symbol"] else {}),
+        },
     )
 
 
