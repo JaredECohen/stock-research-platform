@@ -50,6 +50,14 @@ from .memo import (
 )
 from .portfolio import PortfolioRun
 from .public import AnalyticsEvent, PublicSample
+from .scorecard import (
+    PriceMonthEnd,
+    ScorecardDisagreement,
+    ScorecardEvaluation,
+    ScorecardRun,
+    ScorecardScore,
+    ScorecardVersion,
+)
 from .telemetry import LLMCallLog, SDKTrace, UILog
 from .universe import Company, ScreenerMetric, ScreenerScore, StockMemo
 
@@ -99,4 +107,11 @@ __all__ = [
     "CronLoopRun",
     # fundamentals (FEAT-001)
     "ChartCommentary",
+    # scorecard (Phase 6)
+    "ScorecardVersion",
+    "ScorecardRun",
+    "ScorecardScore",
+    "PriceMonthEnd",
+    "ScorecardEvaluation",
+    "ScorecardDisagreement",
 ]

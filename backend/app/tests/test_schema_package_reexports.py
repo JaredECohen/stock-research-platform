@@ -82,6 +82,9 @@ MODEL_NAMES = [
     "PublicSample", "AnalyticsEvent",
     # FEAT-001 (`models/fundamentals.py`).
     "ChartCommentary",
+    # Phase 6 (`models/scorecard.py`).
+    "ScorecardVersion", "ScorecardRun", "ScorecardScore", "PriceMonthEnd",
+    "ScorecardEvaluation", "ScorecardDisagreement",
 ]
 
 # Frozen at the split. `research_snapshots` / `cache_cost_logs` live in
@@ -101,6 +104,9 @@ TABLE_NAMES = sorted([
     "public_samples", "analytics_events",
     # FEAT-001 (`models/fundamentals.py`).
     "chart_commentaries",
+    # Phase 6 (`models/scorecard.py`).
+    "scorecard_versions", "scorecard_runs", "scorecard_scores", "price_month_ends",
+    "scorecard_evaluations", "scorecard_disagreements",
 ])
 
 SCHEMA_SUBMODULES = [
@@ -109,7 +115,7 @@ SCHEMA_SUBMODULES = [
 ]
 MODEL_SUBMODULES = [
     "universe", "documents", "memo", "dcf", "portfolio", "telemetry", "jobs",
-    "accounts", "public", "fundamentals",
+    "accounts", "public", "fundamentals", "scorecard",
 ]
 
 # sha256 of `StockMemoOut.model_json_schema()` (sorted keys, compact

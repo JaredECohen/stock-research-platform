@@ -201,6 +201,24 @@ class FMPProvider:
         except (ValueError, IndexError):
             return date_str[:4]
 
+    @staticmethod
+    def _filing_dates(r: dict[str, Any]) -> dict[str, Any]:
+        """Phase 6 (scorecard): pass the statement's own filing dates through
+        when FMP supplies them (`fillingDate` — FMP's spelling — and
+        `acceptedDate`). Additive keys only, and only when present, so
+        the normalised row contract is unchanged for rows without them.
+        `history_service` records `filing_date` (else `accepted_date`) as
+        the row's point-in-time `available_at`; without either the lag
+        rule applies."""
+        out: dict[str, Any] = {}
+        filing = r.get("fillingDate") or r.get("filingDate")
+        if filing:
+            out["filing_date"] = str(filing)
+        accepted = r.get("acceptedDate")
+        if accepted:
+            out["accepted_date"] = str(accepted)
+        return out
+
     @classmethod
     def _income_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         date_str = r.get("date") or ""
@@ -222,6 +240,7 @@ class FMPProvider:
             interest_expense=_to_float(r.get("interestExpense")),
             pretax_income=_to_float(r.get("incomeBeforeTax")),
             tax_expense=_to_float(r.get("incomeTaxExpense")),
+            **cls._filing_dates(r),
         )
 
     @classmethod
@@ -245,6 +264,7 @@ class FMPProvider:
             goodwill=_to_float(r.get("goodwill")),
             current_assets=_to_float(r.get("totalCurrentAssets")),
             current_liabilities=_to_float(r.get("totalCurrentLiabilities")),
+            **cls._filing_dates(r),
         )
 
     @classmethod
@@ -261,6 +281,7 @@ class FMPProvider:
             dividends_paid=_to_float(r.get("commonDividendsPaid")) or _to_float(r.get("netDividendsPaid")),
             share_repurchases=_to_float(r.get("commonStockRepurchased")),
             stock_based_compensation=_to_float(r.get("stockBasedCompensation")),
+            **cls._filing_dates(r),
         )
 
     def get_financial_statements(self, ticker: str) -> dict[str, Any] | None:

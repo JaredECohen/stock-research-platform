@@ -11,6 +11,9 @@ Covers:
 - Read APIs scope by ticker (no cross-talk).
 - Backfill loop wires up — `monitoring.history_backfill.run_once(ticker)`
   populates rows when called directly.
+- Phase 6: inserted rows carry a point-in-time `available_at` (the demo
+  dataset has no period_end, so the `assumed_fye` rule applies), and a
+  restatement never moves it.
 """
 from __future__ import annotations
 
@@ -226,3 +229,57 @@ def test_monitoring_history_backfill_run_once_processes_one_ticker():
             FinancialPeriod.ticker == "MSFT",
         ).count()
     assert msft_count > 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — point-in-time availability on ingest
+# ---------------------------------------------------------------------------
+
+def test_backfill_sets_available_at_on_every_inserted_row():
+    """Demo statement rows carry `period="2024"` and no period_end, so the
+    only derivable date is the assumed fiscal-year end plus the annual
+    lag — and it must be there on every row, never NULL."""
+    from datetime import date, timedelta
+
+    from app.config import settings
+
+    _reset_tables()
+    history_service.backfill_ticker("NVDA")
+    with SessionLocal() as db:
+        rows = db.query(FinancialPeriod).filter(FinancialPeriod.ticker == "NVDA").all()
+    assert rows
+    assert all(r.available_at is not None for r in rows)
+    assert {r.available_at_source for r in rows} == {"assumed_fye"}
+    lag = timedelta(days=settings.scorecard_pit_lag_annual_days)
+    for r in rows:
+        assert r.fiscal_year is not None
+        assert r.available_at == date(r.fiscal_year, 12, 31) + lag
+        # never later than when we fetched it
+        assert r.available_at <= r.fetched_at.date()
+
+
+def test_restatement_on_reupsert_keeps_the_original_available_at():
+    from datetime import date
+
+    _reset_tables()
+    history_service.backfill_ticker("NVDA")
+    with SessionLocal() as db:
+        row = db.query(FinancialPeriod).filter(
+            FinancialPeriod.ticker == "NVDA", FinancialPeriod.line_item == "revenue",
+        ).order_by(FinancialPeriod.period.desc()).first()
+        assert row is not None
+        key = dict(ticker=row.ticker, period=row.period, statement=row.statement, line_item="revenue")
+        original_available, original_value = row.available_at, row.value
+        assert original_available is not None
+        # A restated figure arrives with a different (later) availability date.
+        changed = history_service._upsert_financial_period(
+            db, **key, value=(original_value or 0.0) + 1.0, period_end=row.period_end,
+            fiscal_year=row.fiscal_year, fiscal_quarter=row.fiscal_quarter, source="test",
+            available_at=date(2030, 1, 1), available_at_source="provider",
+        )
+        db.commit()
+        assert changed is True
+        after = db.query(FinancialPeriod).filter_by(**key).one()
+    assert after.value == (original_value or 0.0) + 1.0
+    assert after.available_at == original_available
+    assert after.available_at_source == "assumed_fye"
