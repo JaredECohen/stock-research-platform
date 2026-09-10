@@ -90,6 +90,19 @@ class FinancialPeriod(Base):
     currency: Mapped[str] = mapped_column(String(8), default="USD")
     source: Mapped[str] = mapped_column(String(32), default="demo")
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Phase 6 (scorecard) — point-in-time availability. `available_at` is
+    # the first date this figure could have been known: the provider's
+    # filing date when FMP supplies one, else a matching `filing_docs`
+    # row, else a documented lag after `period_end` (see
+    # `services/scorecard_pit.derive_available_at`, which also names the
+    # rule used in `available_at_source`: provider | filing_doc | lag_rule
+    # | assumed_fye). Set on INSERT only — a restatement overwrites
+    # `value` but never moves `available_at`, so history reads as
+    # "restated values at original availability". Both nullable so
+    # `reconcile_missing_columns` can add them to a live table; NULL means
+    # "not yet derived" and the PIT snapshot excludes (and counts) the row.
+    available_at: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    available_at_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 Index(

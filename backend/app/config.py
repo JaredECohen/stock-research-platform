@@ -311,6 +311,53 @@ class Settings(BaseSettings):
     fundamentals_anon_commentary: bool = False
     fundamentals_commentary_model: str = ""
 
+    # ------------------------------------------------------------------
+    # Phase 6 — Fundamental Factor Scorecard (versioned, point-in-time).
+    # ------------------------------------------------------------------
+    # Three independent kill switches. `enable_scorecard` governs reads and
+    # the memo/PM integration; `enable_scorecard_loop` governs the worker's
+    # daily scoring loop (rows stay readable when it is off);
+    # `enable_scorecard_disagreement_regen` is the ONLY path by which the
+    # feature can spend LLM money, so it defaults off and is capped per day.
+    enable_scorecard: bool = True
+    enable_scorecard_loop: bool = True
+    enable_scorecard_disagreement_regen: bool = False
+    scorecard_disagreement_regen_daily_cap: int = 3
+    # Point-in-time lag rule, used when neither the provider nor a stored
+    # filing supplies the filing date: a figure for a period ending on D is
+    # treated as knowable on D + lag. 75 days for annual rows is
+    # deliberately conservative — large accelerated filers have 60 days for
+    # a 10-K, everyone else 75/90 — so the scorecard errs toward "not yet
+    # known" rather than toward lookahead. 45 days for quarterly rows is
+    # the widest 10-Q deadline (no quarterly ingestion in fs-v1, kept so
+    # the rule is complete for rows that carry `fiscal_quarter`).
+    scorecard_pit_lag_annual_days: int = 75
+    scorecard_pit_lag_quarter_days: int = 45
+    # Cross-sectional normalisation. The curated universe is ~170 names
+    # (sp500.json starter list), so thresholds are sized for 100–600 names
+    # and nothing below hardcodes the count: sector-neutral z needs at
+    # least `scorecard_min_sector_n` names in a sector (else universe z
+    # with a note); evaluation legs are quintiles with at least
+    # `scorecard_min_leg_n` names each (else the month is skipped and
+    # reported).
+    scorecard_min_sector_n: int = 5
+    scorecard_min_leg_n: int = 15
+    scorecard_winsor_pct: float = 0.025
+    scorecard_min_coverage: float = 0.6
+    # Retention: daily rows are a convenience and age out; month-end rows
+    # are the evaluation's sample and are kept forever.
+    scorecard_daily_retention_days: int = 45
+    scorecard_backfill_months: int = 60
+    # Disagreement thresholds, in percentile points between the memo's
+    # rating bucket centre and the scorecard percentile.
+    scorecard_disagreement_material: float = 40.0
+    scorecard_disagreement_watch: float = 25.0
+    # Bearer token for `GET /api/scorecard/export`. Separate from
+    # `admin_api_token` so the export can be handed to a downstream system
+    # without granting the ops surface. Empty (default) means the export
+    # follows the same policy as the other scorecard reads.
+    scorecard_export_token: str = ""
+
     @property
     def auth_configured(self) -> bool:
         """Enough Clerk config to verify a token at all."""
