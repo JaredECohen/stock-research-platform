@@ -44,12 +44,13 @@ describe("App routing", () => {
   });
 
   describe("with the login wall off", () => {
-    it("renders the placeholder landing at / and the dashboard at /app", async () => {
+    it("renders the marketing landing at / and the dashboard at /app", async () => {
       stubFetch();
       const view = mountApp("/", { auth_enabled: false });
       await settle();
-      expect(screen.getByText("The marketing site is coming")).toBeInTheDocument();
-      expect(screen.getByRole("link", { name: "Continue to app" })).toHaveAttribute("href", "/app");
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Research that shows its work.");
+      // The CTA appears in both the header and the hero.
+      expect(screen.getAllByRole("link", { name: "Continue to app" })[0]).toHaveAttribute("href", "/app");
       view.unmount();
 
       stubFetch();
@@ -183,8 +184,9 @@ describe("App routing", () => {
       stubFetch();
       mountApp("/", { auth_enabled: true });
       await settle();
-      expect(screen.getByText("The marketing site is coming")).toBeInTheDocument();
-      expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/sign-in?returnTo=%2Fapp");
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Research that shows its work.");
+      // Header and hero both link to sign-in.
+      expect(screen.getAllByRole("link", { name: "Sign in" })[0]).toHaveAttribute("href", "/sign-in?returnTo=%2Fapp");
     });
   });
 });

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { FeatureAllowance, FeatureMatrix, FeatureMatrixEntry, PublicConfig } from "@/types";
+import { CONFIG_TIMEOUT_MS, fetchPublicConfigJson } from "@/api/publicClient";
 
 /**
  * Loads `GET /api/public/config` once at boot. The flags here drive UX
@@ -8,9 +9,10 @@ import type { FeatureAllowance, FeatureMatrix, FeatureMatrixEntry, PublicConfig 
  * falls back to "auth off" defaults rather than blocking the page. A 2s
  * timeout keeps a slow backend from turning into a blank screen.
  *
- * This fetch deliberately bypasses `api/client.ts`: the endpoint is public
- * and `Cache-Control: public`, so it must never carry a bearer, the anon id
- * or the session id (plan §6.3 — public endpoints are token-free).
+ * The fetch itself lives in `api/publicClient.ts` with the other token-free
+ * calls: the endpoint is public and `Cache-Control: public`, so it must
+ * never carry a bearer, the anon id or the session id (plan §6.3). This
+ * module only coerces the body into `PublicConfig`.
  *
  * `trial_days` and `features` have NO fallback numbers on purpose: copy
  * that mentions an allowance renders without the number rather than
@@ -74,8 +76,7 @@ export const ConfigContext = createContext<ConfigContextValue>({
   fallback: false,
 });
 
-export const CONFIG_TIMEOUT_MS = 2000;
-const BASE = (import.meta.env.VITE_BACKEND_URL as string | undefined) || "";
+export { CONFIG_TIMEOUT_MS };
 
 function coerce(raw: unknown): PublicConfig {
   const r = (raw && typeof raw === "object" ? raw : {}) as Partial<PublicConfig>;
@@ -95,17 +96,8 @@ function coerce(raw: unknown): PublicConfig {
 }
 
 export async function fetchPublicConfig(timeoutMs = CONFIG_TIMEOUT_MS): Promise<PublicConfig | null> {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${BASE}/api/public/config`, { signal: controller.signal });
-    if (!res.ok) return null;
-    return coerce(await res.json());
-  } catch {
-    return null;
-  } finally {
-    window.clearTimeout(timer);
-  }
+  const raw = await fetchPublicConfigJson(timeoutMs);
+  return raw === null ? null : coerce(raw);
 }
 
 interface Props {

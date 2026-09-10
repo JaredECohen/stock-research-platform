@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Public marketing pages only. Sample URLs follow SAMPLE_TICKERS
+     (default NVDA,COST,JPM); update this list if the allowlist changes. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://marketmosaic.ai/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>https://marketmosaic.ai/pricing</loc><changefreq>monthly</changefreq><priority>0.9</priority></url>
+  <url><loc>https://marketmosaic.ai/methodology</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://marketmosaic.ai/samples</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://marketmosaic.ai/samples/NVDA</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://marketmosaic.ai/samples/COST</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://marketmosaic.ai/samples/JPM</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://marketmosaic.ai/faq</loc><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://marketmosaic.ai/terms</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://marketmosaic.ai/billing-terms</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://marketmosaic.ai/privacy</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://marketmosaic.ai/cookies</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+</urlset>
