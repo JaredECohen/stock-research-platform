@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import FullInvestmentMemo from "@/components/FullInvestmentMemo";
 import {
   BLANK_MISPRICING,
@@ -8,6 +8,7 @@ import {
   UNPRICED_DCF_SUMMARY,
   makeMemo,
 } from "@/test/fixtures/memo";
+import { makeDisagreementSummary, makeInsufficientSummary, makeSummary } from "@/test/fixtures/scorecard";
 import type { StockMemoOut } from "@/types";
 
 function renderMemo(memo: StockMemoOut) {
@@ -145,6 +146,75 @@ describe("FullInvestmentMemo", () => {
       const badge = screen.getByText("Terminal value clamped").closest("[title]");
       expect(badge).not.toBeNull();
       expect(badge?.getAttribute("title")).toMatch(/0\.5% floor/);
+    });
+  });
+
+  describe("Fundamental Factor Scorecard section (Phase 6)", () => {
+    it("renders the observed inputs and the model read in separate blocks", () => {
+      renderMemo(makeMemo({ scorecard: makeSummary() }));
+      expect(screen.getByText("Fundamental Factor Scorecard")).toBeInTheDocument();
+      const observed = screen.getByTestId("memo-scorecard-observed");
+      expect(observed).toHaveTextContent("Observed — reported inputs");
+      expect(observed).toHaveTextContent("FY2025");
+      expect(observed).toHaveTextContent("2026-02-12");
+      expect(observed).toHaveTextContent("93%");
+      // Nothing from the model read leaks into the observed block.
+      expect(observed).not.toHaveTextContent("62.4");
+      expect(observed).not.toHaveTextContent("71st");
+      const model = screen.getByTestId("memo-scorecard-model");
+      expect(model).toHaveTextContent("Model read — fs-v1");
+      expect(model).toHaveTextContent("62.4");
+      expect(model).toHaveTextContent("+0.62");
+      expect(model).toHaveTextContent("71st");
+      expect(model).toHaveTextContent("58th");
+      expect(model).toHaveTextContent("50 = z of 0");
+      expect(screen.getByTestId("memo-scorecard-profile")).toHaveTextContent("reads as a compounder");
+      expect(screen.getByTestId("memo-scorecard-profile")).toHaveTextContent("not a recommendation");
+      expect(screen.getByTestId("memo-scorecard")).toHaveTextContent("did not move the rating");
+      const quality = screen.getByTestId("memo-category-quality");
+      expect(quality).toHaveTextContent("78.5");
+      expect(quality).toHaveTextContent("4/4");
+      expect(screen.getByTestId("memo-scorecard-top-positive")).toHaveTextContent("Accruals ratio");
+      expect(screen.getByTestId("memo-scorecard-top-negative")).toHaveTextContent("Fcf yield");
+      expect(screen.queryByTestId("memo-scorecard-disagreement")).toBeNull();
+    });
+
+    it("renders the disagreement callout with the PM reconciliation when the memo contradicts the quant read", () => {
+      renderMemo(makeMemo({ scorecard: makeDisagreementSummary() }));
+      const note = screen.getByTestId("memo-scorecard-disagreement");
+      expect(note).toHaveAttribute("role", "note");
+      expect(note).toHaveTextContent("Memo / scorecard disagreement · material · overall");
+      expect(note).toHaveTextContent("Memo rating Bullish (70) vs universe percentile 18: gap 52 points.");
+      expect(note).toHaveTextContent("the memo is more positive than the quant read; gap +52 points.");
+      expect(note).toHaveTextContent("PM reconciliation: The PM attributes the gap to a one-off restructuring charge");
+    });
+
+    it("says the reconciliation is not yet written rather than hiding the disagreement", () => {
+      renderMemo(makeMemo({ scorecard: makeDisagreementSummary({ reconciliation: null }) }));
+      expect(screen.getByTestId("memo-scorecard-disagreement")).toHaveTextContent("PM reconciliation: n/a (not yet written)");
+    });
+
+    it("renders n/a with a reason — never 0 — when the run could not score the name", () => {
+      renderMemo(makeMemo({ scorecard: makeInsufficientSummary() }));
+      const model = screen.getByTestId("memo-scorecard-model");
+      expect(model).toHaveTextContent("n/a (insufficient coverage: fewer than 5 families scored)");
+      expect(model).toHaveTextContent("n/a (unranked)");
+      expect(model).not.toHaveTextContent(/\b0\.0\b/);
+      expect(screen.getByTestId("memo-scorecard")).toHaveTextContent("stale (the latest run is older than 45 days)");
+      const growth = screen.getByTestId("memo-category-growth");
+      expect(growth).toHaveAttribute("data-missing", "true");
+      expect(growth).toHaveTextContent("n/a (not scored)");
+      const quality = screen.getByTestId("memo-category-quality");
+      expect(quality).toHaveTextContent("n/a (1 of 4 inputs)");
+      expect(within(screen.getByTestId("memo-scorecard-top-positive")).getByText("n/a (overall not scored)")).toBeInTheDocument();
+    });
+
+    it("hides the section on memos that pre-date the field or carry null", () => {
+      renderMemo(makeMemo({ scorecard: undefined }));
+      expect(screen.queryByText("Fundamental Factor Scorecard")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("memo-scorecard")).toBeNull();
+      renderMemo(makeMemo({ scorecard: null }));
+      expect(screen.queryByTestId("memo-scorecard")).toBeNull();
     });
   });
 });

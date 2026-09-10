@@ -28,6 +28,11 @@ import type {
   PortfolioRequest,
   ProvidersStatusResponse,
   RateLimitRefusal,
+  ScorecardDetailWire,
+  ScorecardEvaluationWire,
+  ScorecardHistory,
+  ScorecardSpecWire,
+  ScorecardUniverseWire,
   ScreenerResult,
   SeriesRequest,
   SeriesResponseWire,
@@ -35,6 +40,7 @@ import type {
   StructuredErrorDetail,
   UsageResponse,
 } from "@/types";
+import { SCORECARD_EXPORT_CONTRACT, SCORECARD_FAMILIES } from "@/types/scorecard";
 import { getSessionId, logEvent } from "@/lib/logger";
 import { getAnonId } from "@/lib/analytics";
 
@@ -237,6 +243,139 @@ export function normaliseSeriesResponse(raw: unknown): SeriesResponseWire {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Phase 6 — Fundamental Factor Scorecard (browser-called reads under
+// /api/scorecard; the admin refresh/evaluate/backfill endpoints are
+// deliberately not here). The page never computes a score: every call is
+// a read of what the worker persisted.
+// ---------------------------------------------------------------------------
+
+/** `sort_by` values `GET /api/scorecard` accepts (`scorecard_service.
+ *  UNIVERSE_SORT_COLUMNS`). Anything else is a 422 there, so the client
+ *  never sends a key outside this list — an unknown key is dropped and
+ *  the backend's default (`overall_score`) applies. */
+export const SCORECARD_UNIVERSE_SORT_KEYS = [
+  "overall_score",
+  "overall_z",
+  "universe_percentile",
+  "sector_percentile",
+  "coverage",
+  "ticker",
+  ...SCORECARD_FAMILIES,
+] as const;
+export type ScorecardUniverseSortKey = (typeof SCORECARD_UNIVERSE_SORT_KEYS)[number];
+
+export function isScorecardSortKey(key: string | null | undefined): key is ScorecardUniverseSortKey {
+  return !!key && (SCORECARD_UNIVERSE_SORT_KEYS as readonly string[]).includes(key);
+}
+
+export interface ScorecardUniverseParams {
+  as_of?: string;
+  version?: string;
+  sector?: string;
+  sort_by?: string;
+  order?: "asc" | "desc";
+  /** 1–600 (the route's ceiling; the curated universe is 100–600 names). */
+  limit?: number;
+  min_coverage?: number;
+}
+
+export interface ScorecardExportParams {
+  format?: "csv" | "json";
+  version?: string;
+  as_of?: string;
+  /** JSON only: append feature_raw / feature_z objects. */
+  include_features?: boolean;
+}
+
+/**
+ * The export is a plain `<a href>` download under the FROZEN v1 column
+ * contract. The URL carries no credential of any kind: the bearer (when
+ * the wall is on) rides in a header the client attaches, and the
+ * optional `SCORECARD_EXPORT_TOKEN` is for downstream systems to present
+ * themselves — a token in a query string would land in ui_logs.
+ */
+export function scorecardExportUrl(params: ScorecardExportParams = {}): string {
+  const q = new URLSearchParams();
+  q.set("format", params.format ?? "csv");
+  q.set("contract", SCORECARD_EXPORT_CONTRACT);
+  if (params.version) q.set("version", params.version);
+  if (params.as_of) q.set("as_of", params.as_of);
+  if (params.include_features) q.set("include_features", "true");
+  return `${BASE}/api/scorecard/export?${q.toString()}`;
+}
+
+/** The detail row embeds its month-end history (`ScorecardDetailOut.
+ *  history`); there is no separate history route. Lift it into the shape
+ *  the history chart draws, oldest first as the backend orders it. */
+export function historyFromDetail(detail: ScorecardDetailWire): ScorecardHistory {
+  return {
+    ticker: detail.ticker,
+    version_key: detail.version_key,
+    points: Array.isArray(detail.history) ? detail.history : [],
+  };
+}
+
+function stringList(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
+}
+
+/**
+ * `ScorecardEvaluationOut` keys `evaluations` by kind and carries the
+ * caveats once, at the top level; the evaluation component renders an
+ * array with the caveats on each result. Fold the wire shape into that
+ * without inventing anything: a result that carries its own `caveats`
+ * keeps them, one that does not gets the response's list verbatim, and
+ * the quintile bucket table is renamed from the backend's
+ * `quantile_table` / `n_months` to the mirror's `quintile_table` / `n`.
+ * Every other key (`reasons`, `interpretation`, `stats_note`, …) passes
+ * through untouched so nothing the worker said is lost.
+ */
+export function normaliseEvaluationResponse(raw: unknown): ScorecardEvaluationWire {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const caveats = stringList(r.caveats);
+  const wire = r.evaluations;
+  const items: Array<Record<string, unknown>> = Array.isArray(wire)
+    ? (wire as Array<Record<string, unknown>>)
+    : wire && typeof wire === "object"
+      ? Object.values(wire as Record<string, Record<string, unknown>>)
+      : [];
+  const evaluations = items
+    .filter((item) => item && typeof item.kind === "string")
+    .map((item) => {
+      const result: Record<string, unknown> = { ...((item.result as Record<string, unknown> | undefined) ?? {}) };
+      if (!Array.isArray(result.caveats)) result.caveats = caveats;
+      if (item.kind === "quintile_ls") {
+        if (!Array.isArray(result.months)) result.months = [];
+        if (!Array.isArray(result.skipped_months)) result.skipped_months = [];
+        if (!Array.isArray(result.quintile_table)) {
+          const buckets = Array.isArray(result.quantile_table) ? (result.quantile_table as Array<Record<string, unknown>>) : [];
+          result.quintile_table = buckets.map((b) => ({
+            q: b.q,
+            mean_ret: typeof b.mean_ret === "number" ? b.mean_ret : null,
+            n: typeof b.n === "number" ? b.n : typeof b.n_months === "number" ? b.n_months : 0,
+          }));
+        }
+        if (typeof result.n_months !== "number") result.n_months = (result.months as unknown[]).length;
+      }
+      return {
+        kind: item.kind,
+        created_at: typeof item.created_at === "string" ? item.created_at : "",
+        sample_start: typeof item.sample_start === "string" ? item.sample_start : null,
+        sample_end: typeof item.sample_end === "string" ? item.sample_end : null,
+        n_obs: typeof item.n_obs === "number" ? item.n_obs : 0,
+        params: (item.params && typeof item.params === "object" ? item.params : {}) as Record<string, unknown>,
+        result,
+      } as unknown as ScorecardEvaluationWire["evaluations"][number];
+    });
+  return {
+    version_key: typeof r.version_key === "string" ? r.version_key : "",
+    evaluations,
+    caveats,
+    note: typeof r.note === "string" ? r.note : "",
+  };
+}
+
 export const api = {
   health: () => request<{ status: string; mode: string; llm_configured: boolean }>("/health"),
 
@@ -377,6 +516,50 @@ export const api = {
       method: "POST",
       body: JSON.stringify(req),
     }),
+
+  // --- Phase 6 scorecard reads ----------------------------------------
+  /** The cross-section from the latest succeeded run. `sort_by` outside
+   *  `SCORECARD_UNIVERSE_SORT_KEYS` is dropped rather than sent (422). */
+  scorecardUniverse: (params: ScorecardUniverseParams = {}) => {
+    const q = new URLSearchParams();
+    if (params.as_of) q.set("as_of", params.as_of);
+    if (params.version) q.set("version", params.version);
+    if (params.sector) q.set("sector", params.sector);
+    if (isScorecardSortKey(params.sort_by)) q.set("sort_by", params.sort_by);
+    if (params.order) q.set("order", params.order);
+    if (typeof params.limit === "number") q.set("limit", String(Math.max(1, Math.min(600, Math.round(params.limit)))));
+    if (typeof params.min_coverage === "number") q.set("min_coverage", String(params.min_coverage));
+    const qs = q.toString();
+    return request<ScorecardUniverseWire>(`/api/scorecard${qs ? `?${qs}` : ""}`);
+  },
+  /** Latest score for one name with every feature's observed value and
+   *  model read, plus `months` of month-end history. 404 when no
+   *  succeeded run scored the ticker. */
+  scorecard: (ticker: string, opts: { as_of?: string; version?: string; months?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.as_of) q.set("as_of", opts.as_of);
+    if (opts.version) q.set("version", opts.version);
+    if (typeof opts.months === "number") q.set("months", String(opts.months));
+    const qs = q.toString();
+    return request<ScorecardDetailWire>(`/api/scorecard/${encodeURIComponent(ticker.toUpperCase())}${qs ? `?${qs}` : ""}`);
+  },
+  /** Month-end history for the chart, lifted from the detail row. */
+  scorecardHistory: async (ticker: string, months = 36): Promise<ScorecardHistory> =>
+    historyFromDetail(await request<ScorecardDetailWire>(`/api/scorecard/${encodeURIComponent(ticker.toUpperCase())}?months=${months}`)),
+  /** The methodology: families, features, normalisation, the score-scale
+   *  caption and the version label the page shows. */
+  scorecardSpec: (version?: string) =>
+    request<ScorecardSpecWire>(`/api/scorecard/spec${version ? `?version=${encodeURIComponent(version)}` : ""}`),
+  /** Latest evaluation per kind with the caveats folded onto each result. */
+  scorecardEvaluation: async (opts: { version?: string; kind?: string } = {}): Promise<ScorecardEvaluationWire> => {
+    const q = new URLSearchParams();
+    if (opts.version) q.set("version", opts.version);
+    if (opts.kind) q.set("kind", opts.kind);
+    const qs = q.toString();
+    return normaliseEvaluationResponse(await request<unknown>(`/api/scorecard/evaluation${qs ? `?${qs}` : ""}`));
+  },
+  /** Plain href for the frozen v1 export (see `scorecardExportUrl`). */
+  scorecardExportUrl,
 
   chat: (message: string) =>
     request<ChatResponse>("/api/chat", {
