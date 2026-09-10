@@ -393,6 +393,61 @@ def test_memo_stale_when_a_newer_filing_exists(client, seeded, memos, anon_ok, l
     assert "predates" not in (item.memo_stale_reason or "")
 
 
+def test_cache_hit_reflects_memo_staleness_now_not_at_generation(client, seeded, memos, anon_ok, llm_available):
+    """A filing that lands after the row was written leaves the memo
+    version — and so the cache key — unchanged. The hit must still carry
+    today's verdict: `memo_store.memo_freshness` says stale, so does the
+    served row, without an LLM call and without a charge."""
+    before = _event_count()
+    with patch.object(llm, "chat_json", return_value=CANNED) as call:
+        first = CommentaryOut.model_validate(_post(client, **_body()).json())
+        assert first.cache_hit is False
+        assert all(m.memo_stale is False and m.memo_stale_reason is None for m in first.memo_view)
+        assert not any("is stale" in c for c in first.caveats)
+        with SessionLocal() as db:
+            db.add(FilingDoc(ticker="FCMA", accession_number="0000000000-25-000003", filing_type="10-K",
+                             filing_date=date(2025, 4, 15)))
+            db.commit()
+        second = CommentaryOut.model_validate(_post(client, **_body()).json())
+    assert call.call_count == 1 and second.cache_hit is True
+    assert second.commentary_id == first.commentary_id and len(_rows()) == 1
+    assert _event_count() == before
+    fcma = [m for m in second.memo_view if m.ticker == "FCMA"]
+    assert fcma and all(m.memo_stale is True for m in fcma)
+    assert all("new 10-K on 2025-04-15" in (m.memo_stale_reason or "") for m in fcma)
+    stale = [c for c in second.caveats if c.startswith(f"FCMA memo v{memos['FCMA'].version} is stale: ")]
+    assert len(stale) == 1 and "new 10-K on 2025-04-15" in stale[0]
+    assert not any(c.startswith("FCMB memo v") for c in second.caveats)
+    # The stored row itself is untouched: the overlay is per request.
+    stored = CommentaryOut.model_validate(_rows()[0].output)
+    assert all(m.memo_stale is False for m in stored.memo_view)
+    # The sentences, versions and generation time are what was generated.
+    assert [m.text for m in second.memo_view] == [m.text for m in first.memo_view]
+    assert [m.memo_version for m in second.memo_view] == [m.memo_version for m in first.memo_view]
+    assert second.generated_at == first.generated_at
+
+
+def test_cache_hit_keeps_generation_caveats_without_duplicating_stale_ones(
+    client, seeded, memos, anon_ok, llm_available,
+):
+    """The memo is already stale when the row is written (predates rule),
+    so the stored caveats carry a stale caveat. The hit rebuilds the list
+    from today's verdict: one stale caveat, not two, and the
+    generation-time caveats (drops, model notes) survive after it."""
+    _set_generated_at(memos["FCMA"], datetime(2024, 6, 1))
+    with patch.object(llm, "chat_json", return_value=CANNED) as call:
+        first = CommentaryOut.model_validate(_post(client, **_body()).json())
+        second = CommentaryOut.model_validate(_post(client, **_body()).json())
+    assert call.call_count == 1 and second.cache_hit is True
+    stale = [c for c in second.caveats if "FCMA memo v" in c and "is stale" in c]
+    assert len(stale) == 1 and "predates the last displayed period FY2024" in stale[0]
+    assert second.caveats == first.caveats
+    assert any(c.startswith("Model note:") for c in second.caveats)
+    assert any("were dropped" in c for c in second.caveats)
+    assert second.caveats.index(stale[0]) < second.caveats.index(next(c for c in second.caveats if "were dropped" in c))
+    assert second.memo_view[0].memo_stale is True
+
+
 def test_memo_staleness_combines_both_rules(seeded, memos):
     _set_generated_at(memos["FCMA"], datetime(2024, 6, 1))
     with SessionLocal() as db:
@@ -656,6 +711,34 @@ def test_route_is_mounted_with_the_ip_limit():
     assert "/api/fundamentals/commentary" in app.openapi()["paths"]
     limits = limiter._route_limits["app.api.routes_fundamentals_commentary.post_commentary"]
     assert [str(lim.limit) for lim in limits] == ["10 per 1 minute"]
+
+
+def test_unknown_metric_is_a_structured_422_not_a_500(seeded, memos, anon_ok, llm_available):
+    """The catalog check runs before anything is recomputed, in the same
+    envelope the series route uses; `raise_server_exceptions=False` so a
+    regression shows up as the 500 a client would see, not a traceback."""
+    quiet = TestClient(app, raise_server_exceptions=False)
+    fp = "f" * 64
+    with patch.object(llm, "chat_json", return_value=CANNED) as call:
+        resp = _post(quiet, tickers=["FCMA"], metrics=["bogus_metric", "revenue"], fingerprint=fp)
+    detail = assert_structured(resp, code="invalid_request", status=422)
+    assert detail["message"] == "unknown metric id(s): bogus_metric"
+    assert detail["extra"]["unknown_metrics"] == ["bogus_metric"]
+    assert "revenue" in detail["extra"]["known_metrics"]
+    assert call.call_count == 0 and _rows() == []
+    # Same body, same answer on the series route: one error shape to switch on.
+    series = quiet.post("/api/fundamentals/series", json={"tickers": ["FCMA"], "metrics": ["bogus_metric", "revenue"]})
+    assert series.status_code == 422 and series.json()["detail"]["message"] == detail["message"]
+
+
+def test_service_value_error_is_a_structured_422(client, seeded, monkeypatch):
+    """The honest fallback: a `ValueError` out of the service (a future
+    rule the schema does not mirror) is the caller's mistake, never a 500."""
+    quiet = TestClient(app, raise_server_exceptions=False)
+    monkeypatch.setattr(cc, "generate", lambda *a, **k: (_ for _ in ()).throw(ValueError("years must be >= 1")))
+    resp = _post(quiet, tickers=["FCMA"], metrics=["revenue"], fingerprint="f" * 64)
+    detail = assert_structured(resp, code="invalid_request", status=422)
+    assert detail["message"] == "years must be >= 1"
 
 
 def test_request_validation_422s(client, seeded):

@@ -26,7 +26,12 @@ The order of operations is the cost control, so it is spelled out:
      `PROMPT_VERSION` and the memo versions quoted. A hit is served from
      the `chart_commentaries` row without an LLM call and without a
      charge (the table is shared by every web replica, so a hit here is
-     a hit everywhere). A stored *degraded* row is never a hit.
+     a hit everywhere). A stored *degraded* row is never a hit. Memo
+     staleness is deliberately *not* in the key — a filing that lands
+     after the row was written does not change the memo version, so it
+     would not move the key anyway — and is therefore overlaid live on
+     every hit: `memo_stale` / `memo_stale_reason` on each memo_view item
+     and the "memo … is stale" caveats reflect now, not generation time.
   5. Nothing to interpret (no series has a value, or no selected ticker
      has a stored memo) or no LLM (provider unconfigured, breaker open)
      → the degraded shape, free.
@@ -56,6 +61,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -613,6 +619,47 @@ def _from_row(row: ChartCommentary) -> CommentaryOut:
     return out.model_copy(update={"commentary_id": int(row.id), "cache_hit": True})
 
 
+def _stale_caveat(ticker: str, excerpt: MemoExcerpt) -> str:
+    """The one caveat whose truth moves without the cache key moving; kept
+    in one place so `_with_live_staleness` can recognise the stored copy."""
+    return f"{ticker} memo v{excerpt.version} is stale: {excerpt.stale_reason}."
+
+
+_STALE_CAVEAT_RE = re.compile(r"^\S+ memo v\d+ is stale: ")
+
+
+def _with_live_staleness(
+    cached: CommentaryOut, excerpts: dict[str, MemoExcerpt | None], request_caveats: list[str],
+) -> CommentaryOut:
+    """A cache hit with today's staleness verdict instead of the one
+    frozen when the row was written.
+
+    The row is keyed on the memo *versions*, and a newer 10-K or
+    transcript arriving after generation leaves the version unchanged —
+    so the stored `memo_stale=false` would otherwise be served for up to
+    90 days while `memo_store.memo_freshness` already says otherwise. The
+    excerpts were just recomputed for the key anyway, so overlay their
+    verdict per ticker, and rebuild the caveat list as: the caveats this
+    request computed (unavailable tickers, missing memos, *current*
+    staleness) followed by whatever the generation itself added (drops,
+    truncation, model notes), minus the stale caveats of that time. The
+    text sentences, versions and `generated_at` are untouched: they are
+    what was generated, and the badge says whether to still trust them."""
+    memo_view = []
+    for item in cached.memo_view:
+        e = excerpts.get(item.ticker)
+        if e is None or e.version != item.memo_version:
+            # Cannot happen while versions are in the key; if it ever
+            # does, the stored verdict is the honest one to keep.
+            memo_view.append(item)
+            continue
+        memo_view.append(item.model_copy(update={"memo_stale": e.stale, "memo_stale_reason": e.stale_reason}))
+    generation_caveats = [
+        c for c in cached.caveats if c not in request_caveats and not _STALE_CAVEAT_RE.match(c)
+    ]
+    return cached.model_copy(update={"memo_view": memo_view, "caveats": [*request_caveats, *generation_caveats]})
+
+
 def generate(
     req: CommentaryRequest, principal: Principal, *, request: Request, db: Session, years: int | None,
 ) -> CommentaryOut:
@@ -638,15 +685,17 @@ def generate(
         if e is None:
             caveats.append(f"No stored memo for {t}; the memo section cannot cover it. Run research on it to add one.")
         elif e.stale:
-            caveats.append(f"{t} memo v{e.version} is stale: {e.stale_reason}.")
+            caveats.append(_stale_caveat(t, e))
 
     key = cache_key(req.tickers, req.metrics, years, out.normalize, out.fingerprint, versions)
     existing = _lookup(db, key)
     if existing is not None and not existing.degraded:
         try:
-            return _from_row(existing)
+            cached = _from_row(existing)
         except Exception as exc:  # a row written by an older contract
             log_safely(log, "chart commentary: cached row does not validate; regenerating", exc)
+        else:
+            return _with_live_staleness(cached, excerpts, caveats)
 
     # 5. Nothing to interpret, or no way to interpret it.
     if not any(p.value is not None for s in out.series for p in s.points):

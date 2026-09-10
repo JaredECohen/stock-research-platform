@@ -35,6 +35,10 @@ Errors (all `{"detail": StructuredError}`):
   409 `series_changed`     the recomputed fingerprint differs from the
                            one sent; `extra.fingerprint` is the current
                            one, so the client refetches and retries
+  422 `invalid_request`   unknown metric id (checked against the catalog
+                           before anything is recomputed, exactly as the
+                           series route does, so a typo is a 422 and never
+                           a 500) or the service's own `ValueError`
   422                      pydantic (empty lists, >5 tickers, >4 metrics,
                            a fingerprint of the wrong length)
   429 `concurrency_limited` two commentaries already in flight
@@ -56,9 +60,10 @@ from ..database import get_db
 from ..rate_limit import LIMITS, limiter
 from ..schemas.fundamentals import CommentaryOut, CommentaryRequest
 from ..services import chart_commentary
+from ..services import fundamentals_catalog as catalog
 from .gating import rate_scope
 from .routes_fundamentals import FEATURE as EXPLORER_FEATURE
-from .routes_fundamentals import _cap_years, _shape_exceeded
+from .routes_fundamentals import _cap_years, _shape_exceeded, _structured
 
 router = APIRouter()
 
@@ -85,10 +90,28 @@ def post_commentary(
         )
     years, _capped = _cap_years(req.years, shape.max_years)
 
+    # Same guard, same envelope as the series route: a metric id the
+    # catalog does not know is the client's mistake, so it must be a 422
+    # naming the ids, not the `ValueError` `build_series` would raise
+    # deep inside `generate()` (which nothing catches → 500). Bounded
+    # echo of user input, as there.
+    unknown = [m[:64] for m in req.metrics if m not in catalog.CATALOG][:10]
+    if unknown:
+        raise _structured(
+            422, "invalid_request", "unknown metric id(s): " + ", ".join(unknown),
+            feature=EXPLORER_FEATURE,
+            extra={"unknown_metrics": unknown, "known_metrics": list(catalog.metric_ids())},
+        )
+
     try:
         return chart_commentary.generate(
             req, current_principal(request), request=request, db=db, years=years,
         )
+    except ValueError as exc:
+        # The service's own validation (a future series rule the schema
+        # does not yet mirror). Honest fallback: the caller's input is
+        # named, nothing else, and it is never a 500.
+        raise _structured(422, "invalid_request", str(exc)[:200], feature=EXPLORER_FEATURE) from None
     except chart_commentary.SeriesChanged as exc:
         raise EntitlementError(
             409, "series_changed",
