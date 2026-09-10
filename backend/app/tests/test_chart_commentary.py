@@ -107,6 +107,12 @@ def _clean_rows():
         with SessionLocal() as db:
             db.query(ChartCommentary).delete(synchronize_session=False)
             db.query(FilingDoc).filter(FilingDoc.ticker.in_(TICKERS)).delete(synchronize_session=False)
+            # The two-in-flight test seeds leases it never releases; they
+            # would otherwise sit in `active_actions` for their TTL and
+            # leak into any later test that counts leases or runs the GC.
+            db.query(ratelimit.ActiveAction).filter(ratelimit.ActiveAction.feature == "chart_commentary").delete(
+                synchronize_session=False,
+            )
             db.commit()
         purge_memos(*TICKERS)
     wipe()

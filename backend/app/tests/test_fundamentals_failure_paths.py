@@ -29,7 +29,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError
 
 from app.agents import llm
-from app.auth import usage
+from app.auth import ratelimit, usage
 from app.config import settings
 from app.database import SessionLocal
 from app.main import app
@@ -89,6 +89,15 @@ def _clean():
             db.query(ChartCommentary).delete(synchronize_session=False)
             db.query(FinancialPeriod).filter(FinancialPeriod.ticker.in_((SEEDED, EMPTY))).delete(synchronize_session=False)
             db.query(Company).filter(Company.ticker == EMPTY).delete(synchronize_session=False)
+            # `authorize()` takes the two-in-flight lease before it reserves
+            # the meter and does not give it back when `usage.reserve`
+            # raises (the 503 test below), so the lease outlives the test
+            # with the service's pinned 2025 clock on it. Left in place it
+            # counts as an already-expired row for `test_ratelimit_db`'s
+            # GC test; drop every chart_commentary lease on the way out.
+            db.query(ratelimit.ActiveAction).filter(ratelimit.ActiveAction.feature == "chart_commentary").delete(
+                synchronize_session=False,
+            )
             db.commit()
         purge_memos(SEEDED, EMPTY)
     wipe()
@@ -221,6 +230,15 @@ def test_meter_db_error_is_503_for_commentary_while_series_still_works(auth_on, 
     with SessionLocal() as db:
         assert usage.counters_for(db, uid, usage.period_key(NOW)) == {}
         assert db.query(ChartCommentary).count() == 0
+        # Known limitation of `authorize()` (auth/entitlements.py, outside
+        # this slice): the lease taken before the failed reserve is not
+        # released and heals by its 120 s TTL. Pinned deliberately — when
+        # that is fixed this count becomes 0 and the assertion (and the
+        # `_clean` cleanup above) should be updated, not the fix reverted.
+        leaked = db.query(ratelimit.ActiveAction).filter(
+            ratelimit.ActiveAction.user_id == uid, ratelimit.ActiveAction.feature == "chart_commentary",
+        ).count()
+        assert leaked == 1
     # The series read never touches the meter.
     resp = _series(client, tok, tickers=[SEEDED], metrics=["revenue"])
     assert resp.status_code == 200, resp.text
