@@ -30,14 +30,42 @@ def _sector_config() -> dict[str, dict]:
     return _SECTOR_CONFIG_CACHE
 
 
+def _neutral_sector_block(sector: str) -> dict:
+    """The block for a sector label no config matches.
+
+    The old fallback was `next(iter(cfg.values()))` — the FIRST config,
+    which is Technology — so every `Financial Services` company (FMP's
+    label for banks, insurers and payments) was researched against
+    Technology's drivers, KPIs and valuation lens and nothing said so.
+    A neutral block keeps the generic KPI groups (so placements still
+    compute), carries no sector-specific drivers or lens, and names the
+    label it failed to match so the gap is visible instead of silent.
+    """
+    cfg = _sector_config()
+    first = next(iter(cfg.values()))
+    return {
+        "key_drivers": [],
+        "kpi_groups": {k: list(v) for k, v in (first.get("kpi_groups") or {}).items()},
+        "valuation_lens": "n/a: no sector config matched; generic multiples only.",
+        "macro_sensitivities": [],
+        "common_risks": [],
+        "secular_trends": [],
+        "subindustry_overrides": {},
+        "neutral_default": True,
+        "reason": f"no sector config matches {sector!r}",
+    }
+
+
 def _resolve_sector_block(sector: str) -> dict:
     cfg = _sector_config()
+    sector = sector or ""
     if sector in cfg:
         return cfg[sector]
-    for k, v in cfg.items():
-        if k.lower() in sector.lower() or sector.lower() in k.lower():
-            return v
-    return next(iter(cfg.values()))
+    if sector.strip():
+        for k, v in cfg.items():
+            if k.lower() in sector.lower() or sector.lower() in k.lower():
+                return v
+    return _neutral_sector_block(sector)
 
 
 def _resolve_subindustry_overrides(sector_block: dict, industry: str) -> dict:
