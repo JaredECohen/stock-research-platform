@@ -113,6 +113,12 @@ ROUTES: tuple[tuple[str, str, Policy], ...] = (
     ("GET", "/api/data-catalog/ticker/{ticker}/context", _pro("data_catalog")),
     ("GET", "/api/data-catalog/ticker/{ticker}/geography", _pro("data_catalog", "allow_llm forced off for customers")),
     ("GET", "/api/data-catalog/ticker/{ticker}/overlay/{name}", _pro("data_catalog")),
+    # --- fundamentals explorer (FEAT-001) ------------------------------------
+    # Catalog and series are DB reads shaped by the plan inside the route
+    # (`features.shape`); commentary is the one LLM call and is metered.
+    ("GET", "/api/fundamentals/catalog", _FREE),
+    ("POST", "/api/fundamentals/series", _FREE),
+    ("POST", "/api/fundamentals/commentary", _metered("chart_commentary", "Free 5 / Pro 100 a month; 2 in flight")),
     # --- product features that live under the admin prefix ------------------
     # These are the `admin_auth.EXEMPT_PREFIXES` (browser-called, no admin
     # token). They are customer routes in everything but path.

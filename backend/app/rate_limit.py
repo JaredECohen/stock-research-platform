@@ -100,6 +100,11 @@ LIMITS = {
     # many trials one address can start per hour, so keep it small.
     "public_get":      "60/minute",
     "bootstrap":        "3/hour",
+    # FEAT-001. Series/catalog reads are DB-only plus a cached price
+    # read, so the default ceiling; commentary is one cheap-route LLM
+    # call per request and gets DEVPLAN's lightweight-LLM ceiling.
+    "fundamentals_series":     "60/minute",
+    "fundamentals_commentary": "10/minute",
 }
 
 
