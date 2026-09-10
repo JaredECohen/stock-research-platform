@@ -67,13 +67,14 @@ ERROR_WORKER_RESTART = "WorkerRestart"
 ERROR_QUEUE_EXPIRED = "QueueExpired"
 ERROR_UNKNOWN_KIND = "UnknownRunKind"
 
-# The loop drains once a day (03:45 UTC), so a queued row can legitimately
-# wait ~24h; a week without a claim means the worker is down and the
-# request is stale enough that silently running it later would surprise
-# whoever asked. A running row older than the grace period was left by a
-# process that no longer exists — the loop is serial (APScheduler
-# `max_instances=1`), so nothing of this process can be mid-run at tick
-# start; the grace guards a second replica that must never exist.
+# The loop ticks every few minutes, so a queued row normally waits
+# minutes, not hours; a week without a claim means the worker is down and
+# the request is stale enough that silently running it later would
+# surprise whoever asked. A running row older than the grace period was
+# left by a process that no longer exists — the loop is serial
+# (APScheduler `max_instances=1`), so nothing of this process can be
+# mid-run at tick start; the grace guards a second replica that must
+# never exist.
 QUEUE_MAX_AGE = timedelta(days=7)
 RUNNING_GRACE = timedelta(minutes=30)
 
@@ -267,22 +268,32 @@ def succeeded_run_exists(version_key: str, as_of: date, *, kinds: tuple[str, ...
         return row is not None
 
 
+def run_exists(
+    version_key: str, as_of: date, *, kinds: tuple[str, ...], exclude_statuses: tuple[str, ...] = (),
+) -> bool:
+    """Any row for `(version_key, as_of)` whose kind is in `kinds` and
+    whose status is not excluded. The loop's gates are all questions of
+    this shape: "was the daily run for yesterday attempted at all?"
+    (`exclude_statuses=()`), "is a non-failed scoring run for that month
+    end on file?" (`kinds=SCORING_KINDS`, failed excluded)."""
+    with SessionLocal() as db:
+        _ensure_table(db)
+        stmt = select(ScorecardRun.id).where(
+            ScorecardRun.version_key == version_key,
+            ScorecardRun.as_of == as_of,
+            ScorecardRun.run_kind.in_(kinds),
+        )
+        if exclude_statuses:
+            stmt = stmt.where(ScorecardRun.status.not_in(exclude_statuses))
+        return db.execute(stmt.limit(1)).first() is not None
+
+
 def unfailed_run_exists(version_key: str, as_of: date, kind: str) -> bool:
     """Any row for the identity that is not `failed` — queued, running,
     succeeded or skipped. The loop's "enqueue once per month" rule reads
-    this so a failed evaluation is retried on the next tick while a
+    this so a failed evaluation is retried on the next daily tick while a
     finished or pending one is left alone."""
-    with SessionLocal() as db:
-        _ensure_table(db)
-        row = db.execute(
-            select(ScorecardRun.id).where(
-                ScorecardRun.version_key == version_key,
-                ScorecardRun.as_of == as_of,
-                ScorecardRun.run_kind == kind,
-                ScorecardRun.status != STATUS_FAILED,
-            ).limit(1)
-        ).first()
-        return row is not None
+    return run_exists(version_key, as_of, kinds=(kind,), exclude_statuses=(STATUS_FAILED,))
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +538,7 @@ __all__ = [
     "recent_runs",
     "recover_orphans",
     "run_dict",
+    "run_exists",
     "succeeded_run_exists",
     "unfailed_run_exists",
 ]

@@ -227,3 +227,16 @@ def test_latest_succeeded_run_and_existence_helpers():
     assert q.latest_succeeded_run(VK, as_of=date(1991, 1, 31))["id"] == c["id"]
     recent = q.recent_runs(version_key=VK, limit=5)
     assert recent and recent[0]["id"] == c["id"]
+
+
+def test_run_exists_filters_by_kind_and_excluded_status():
+    row, _ = _enqueue(kind=q.KIND_SCHEDULED)
+    assert q.run_exists(VK, AS_OF, kinds=(q.KIND_SCHEDULED,))
+    assert q.run_exists(VK, AS_OF, kinds=q.SCORING_KINDS, exclude_statuses=(q.STATUS_FAILED,))
+    assert not q.run_exists(VK, AS_OF, kinds=(q.KIND_EVALUATE,))
+    assert not q.run_exists(VK, AS_OF - timedelta(days=1), kinds=q.SCORING_KINDS)
+    q.claim_next_run()
+    q.finish_run(row["id"], status=q.STATUS_FAILED, error_type="RuntimeError")
+    assert q.run_exists(VK, AS_OF, kinds=(q.KIND_SCHEDULED,)), "the daily gate counts a failed attempt"
+    assert not q.run_exists(VK, AS_OF, kinds=q.SCORING_KINDS, exclude_statuses=(q.STATUS_FAILED,))
+    assert not q.unfailed_run_exists(VK, AS_OF, q.KIND_SCHEDULED)

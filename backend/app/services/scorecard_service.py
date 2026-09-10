@@ -15,11 +15,13 @@ failed run leaves no rows and a succeeded run is never missing any.
 Point-in-time rules honoured here, not re-derived: only rows with
 `available_at <= as_of` reach the feature engine (NULL availability is
 excluded and counted, never guessed); the price on the as-of date comes
-from the month-end store for month-end runs and from the SAME 252-day
-cached series the rest of the app uses for daily runs — no new provider
-key, no new provider calls. Sector labels and the constituent list are
-today's (documented residue). Restated values keep their original
-availability date.
+from the month-end store when the store already holds the AS-OF MONTH
+(the exact close the evaluation later joins against) and otherwise from
+the SAME 252-day cached series the rest of the app uses — no new provider
+key, no new provider calls. A store row from an earlier month is only ever
+a last resort, and the row then says so (`price_date`, `price_stale`).
+Sector labels and the constituent list are today's (documented residue).
+Restated values keep their original availability date.
 
 Two layers in every stored row: `feature_raw` is what was observed (null
 with a reason when an input is missing — never zero, never "neutral");
@@ -46,7 +48,7 @@ from calendar import monthrange
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -335,10 +337,22 @@ def _price_series(ticker: str) -> list[dict[str, Any]] | None:
         return None
 
 
-def store_prices(db: Session, tickers: list[str], as_of: date) -> dict[str, tuple[float, date]]:
+class StorePrice(NamedTuple):
+    """One `price_month_ends` row as the scorer needs it. `month_end` is
+    the calendar month the close belongs to — `price_context` compares it
+    against the as-of month to decide whether the store is current."""
+    close: float
+    price_date: date
+    month_end: date
+
+
+def store_prices(db: Session, tickers: list[str], as_of: date) -> dict[str, StorePrice]:
     """Latest stored month-end close on or before `as_of` per ticker, in
     ONE query — loaded before the statement stream opens so no query runs
-    against a connection holding a server-side cursor (Postgres)."""
+    against a connection holding a server-side cursor (Postgres). The row
+    may belong to an EARLIER month than `as_of` (the store fills a month
+    in only after it closes and `pit_prepare` has synced it); the
+    `month_end` on each entry lets the caller tell current from stale."""
     if not tickers:
         return {}
     rows = db.execute(
@@ -346,37 +360,61 @@ def store_prices(db: Session, tickers: list[str], as_of: date) -> dict[str, tupl
         .where(PriceMonthEnd.ticker.in_(tickers), PriceMonthEnd.month_end <= as_of)
         .order_by(PriceMonthEnd.ticker, PriceMonthEnd.month_end.desc())
     ).all()
-    out: dict[str, tuple[float, date]] = {}
+    out: dict[str, StorePrice] = {}
     for t, month_end, price_date, close in rows:
         if t in out:
             continue
         c = _finite(close)
         if c is not None:
-            out[t] = (c, price_date or month_end)
+            out[t] = StorePrice(c, price_date or month_end, month_end)
     return out
 
 
+def _as_store_price(value: Any) -> StorePrice | None:
+    """Accept a `StorePrice` or a bare `(close, price_date)` pair (the
+    month is then the price date's own month, which is what the store
+    guarantees anyway)."""
+    if value is None:
+        return None
+    if isinstance(value, StorePrice):
+        return value
+    close, price_date = value[0], value[1]
+    month_end = value[2] if len(value) > 2 and value[2] is not None else _month_end(price_date)
+    return StorePrice(float(close), price_date, month_end)
+
+
 def price_context(
-    ticker: str, as_of: date, *, store_price: tuple[float, date] | None, prefer_store: bool,
+    ticker: str, as_of: date, *, store_price: Any, prefer_store: bool,
     shares_fallback: float | None, today: date | None = None,
 ) -> tuple[dict[str, Any], str]:
     """`(price_ctx, basis)` for the feature engine.
 
-    `basis` says where the price came from: `month_end_store` (the last
-    stored month-end close on or before `as_of`, preloaded by
-    `store_prices`), `daily_series` (the last cached daily close on or
-    before `as_of`) or `none`. Month-end runs prefer the store (the exact
-    close the evaluation will later join against); daily runs prefer the
-    series and fall back to the store, which can be up to a month stale —
-    `price_date` says so honestly.
+    `basis` says where the price came from: `month_end_store` (a stored
+    month-end close on or before `as_of`, preloaded by `store_prices`),
+    `daily_series` (the last cached daily close on or before `as_of`) or
+    `none`.
+
+    The store is preferred ONLY when `prefer_store` is set AND the stored
+    row belongs to the as-of month — that is the exact close the
+    evaluation joins forward returns against, so a month-end run must
+    reuse it. A store row from an earlier month is never preferred: on the
+    first tick after a month turns (and permanently for months whose last
+    trading day is not the calendar month end) the store lags a month
+    while the cached series already carries the as-of close, and scoring
+    every valuation feature with last month's price would silently poison
+    rows that are kept forever. So a lagging store falls behind the series
+    and is used only when the series has nothing, with `price_date` and
+    `price_stale` saying so.
     """
     ctx: dict[str, Any] = {"price": None, "price_date": None, "shares_fallback": shares_fallback}
     today = today or _today()
+    store = _as_store_price(store_price)
+    store_is_current = store is not None and store.month_end == _month_end(as_of)
 
     def from_store() -> tuple[float, date, str] | None:
-        if store_price is None:
+        if store is None:
             return None
-        return store_price[0], store_price[1], "month_end_store"
+        return store.close, store.price_date, "month_end_store"
 
     def from_series() -> tuple[float, date, str] | None:
         if (today - as_of).days > _SERIES_WINDOW_DAYS:
@@ -394,12 +432,14 @@ def price_context(
                 best = (d, c)
         return (best[1], best[0], "daily_series") if best else None
 
-    order = (from_store, from_series) if prefer_store else (from_series, from_store)
+    order = (from_store, from_series) if (prefer_store and store_is_current) else (from_series, from_store)
     for source in order:
         got = source()
         if got is not None:
             ctx["price"], ctx["price_date"] = got[0], got[1]
+            ctx["price_stale"] = _month_end(got[1]) < _month_end(as_of)
             return ctx, got[2]
+    ctx["price_stale"] = False
     return ctx, "none"
 
 
@@ -515,7 +555,7 @@ def _run_scorecard_inner(
         per_ticker_hash: dict[str, str] = {}
         seen: set[str] = set()
         counts = {"pit_excluded": 0, "null_available_at": 0, "no_price": 0, "no_snapshot": 0,
-                  "price_from_store": 0, "price_from_series": 0}
+                  "price_from_store": 0, "price_from_series": 0, "price_stale": 0}
 
         def _score_one(t: str, rows: list[tuple[Any, ...]]) -> None:
             m = by_ticker[t]
@@ -536,10 +576,15 @@ def _run_scorecard_inner(
                 counts["price_from_store"] += 1
             elif basis == "daily_series":
                 counts["price_from_series"] += 1
+            # A price from an earlier month than `as_of` is a fallback the
+            # row must own up to: counted here so cron-health can see a
+            # month-end cross-section that was priced late.
+            if ctx.get("price_stale"):
+                counts["price_stale"] += 1
             latest = snapshot.latest
             details[t] = {
                 "reasons": res.reasons,
-                "context": {**res.context, "price_basis": basis},
+                "context": {**res.context, "price_basis": basis, "price_stale": bool(ctx.get("price_stale"))},
                 "latest_period": f"FY{latest.fiscal_year}" if latest is not None else "",
                 "data_available_at": max((p.available_at for p in snapshot.points if p.available_at), default=None),
                 "price_date": ctx["price_date"],
@@ -602,6 +647,7 @@ def _run_scorecard_inner(
             f"mean_coverage={(coverage_sum / written):.3f}" if written else "mean_coverage=n/a",
             f"no_price={counts['no_price']}", f"no_snapshot={counts['no_snapshot']}",
             f"price_store={counts['price_from_store']}", f"price_series={counts['price_from_series']}",
+            f"price_stale={counts['price_stale']}",
             f"pit_excluded={counts['pit_excluded']}", f"null_available_at={counts['null_available_at']}",
             f"available_at_filled={filled.get('filled', 0)}",
             f"sector_unmatched={sum(n['sectors_unmatched'].values())}",
@@ -1000,6 +1046,21 @@ def evaluation_view(version_key: str | None = None, *, kind: str | None = None) 
                 sample_end=r.sample_end, n_obs=r.n_obs or 0, params=dict(r.params or {}), result=dict(r.result or {}),
             )
     note = "" if items else "no evaluation has run for this version yet; nothing here is a result"
+    if items:
+        # An `insufficient` marker on its own reads as "broken"; the row
+        # carries the reasons (a thin price store, a short sample), so the
+        # view repeats them where the verdict is read.
+        shortfalls = []
+        for kind_name, item in items.items():
+            res = item.result or {}
+            insufficient = res.get("insufficient") is True or res.get("verdict") == "insufficient_data"
+            if not insufficient:
+                continue
+            reasons = [str(r) for r in (res.get("reasons") or []) if r]
+            if not reasons and res.get("stats_note"):
+                reasons = [str(res["stats_note"])]
+            shortfalls.append(f"{kind_name}: insufficient — " + ("; ".join(reasons) or "no reason recorded"))
+        note = " | ".join(shortfalls)
     return ScorecardEvaluationOut(version_key=version["version_key"], evaluations=items,
                                   caveats=list(EVALUATION_CAVEATS), note=note)
 

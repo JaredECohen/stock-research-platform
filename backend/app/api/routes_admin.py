@@ -1086,8 +1086,9 @@ def fix_postgres_sequences() -> dict[str, Any]:
 #
 # Every endpoint here inserts a `scorecard_runs` row and returns 202. The
 # web process never scores: the worker's `scorecard_loop` claims the row
-# at its next tick (daily, 03:45 UTC). Protected by the admin token through
-# the `/api/admin` prefix; none of these is browser-called.
+# at its next interval tick (every few minutes; the daily scoring itself
+# is gated to 03:45 UTC inside the loop). Protected by the admin token
+# through the `/api/admin` prefix; none of these is browser-called.
 
 def _scorecard_version_for(version_key: str | None) -> str:
     from ..services import scorecard_service
@@ -1120,7 +1121,7 @@ def scorecard_refresh_endpoint(payload: ScorecardRefreshRequest | None = None) -
     )
     return ScorecardEnqueueOut(
         run=ScorecardRunOut(**run), created=created,
-        note="queued; the worker's scorecard_loop drains the queue at its next 03:45 UTC tick",
+        note="queued; the worker's scorecard_loop drains the queue at its next interval tick (minutes)",
     )
 
 

@@ -1,8 +1,9 @@
 """Phase 6 (slice C) — `monitoring/scorecard_loop`.
 
-One loop, registered once, recorded every tick. The queue drain is stubbed
-(the job bodies have their own suites), the clock is injected, and the
-rows the loop enqueues are purged afterwards.
+One loop, registered once (interval trigger, daily step gated to 03:45
+UTC inside the tick), recorded on every tick that does something. The
+queue drain is stubbed (the job bodies have their own suites), the clock
+is injected, and the rows the loop enqueues are purged afterwards.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from app.tests.scorecard_helpers import insert_run, purge
 
 LOOP_BY = ("scorecard_loop",)
 VK_GC = "fs-looptest"
+JULY_1 = datetime(2026, 7, 1, 3, 45, 0)     # first daily tick after June ended
 JULY_2 = datetime(2026, 7, 2, 3, 45, 0)
 
 
@@ -49,6 +51,16 @@ def _runs(kind: str | None = None, as_of: date | None = None) -> list[ScorecardR
         return rows
 
 
+def _finish_everything(status: str = q.STATUS_SUCCEEDED, *, fail_ids: tuple[int, ...] = ()) -> None:
+    """Claim every queued row (FIFO) and finish it, so a later tick sees a
+    settled queue the way it would in production."""
+    while (row_id := q.claim_next_run()) is not None:
+        if row_id in fail_ids:
+            q.finish_run(row_id, status=q.STATUS_FAILED, error_type="RuntimeError")
+        else:
+            q.finish_run(row_id, status=status)
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -68,9 +80,12 @@ def test_loop_is_registered_once_under_known_loops():
     mine = [j for j in sched.jobs if j[0] == loop.LOOP_NAME]
     assert len(mine) == 1 and loop.LOOP_NAME in KNOWN_LOOPS
     _id, trigger, kw = mine[0]
-    assert trigger == "cron" and (kw["hour"], kw["minute"]) == (3, 45)
+    # Interval so admin-enqueued runs drain within minutes; the daily
+    # scoring is gated inside the tick, not by the trigger.
+    assert trigger == "interval" and kw["minutes"] == loop.INTERVAL_MINUTES == 5
     assert kw["max_instances"] == 1 and kw["coalesce"] is True
-    assert (kw["hour"], kw["minute"]) != (4, 30), "must not share mispricing_audit_loop's slot"
+    assert (loop.DAILY_HOUR, loop.DAILY_MINUTE) == (3, 45)
+    assert (loop.DAILY_HOUR, loop.DAILY_MINUTE) != (4, 30), "must not share mispricing_audit_loop's slot"
 
 
 # ---------------------------------------------------------------------------
@@ -89,9 +104,9 @@ def test_tick_with_nothing_queued_still_records_written_counts(_isolate):
     out = loop.run_once()
     args, kwargs = _isolate[0]
     assert args == (loop.LOOP_NAME,) and kwargs["success"] is True
-    for key in ("written=0", "skipped=0", "failed=0", "as_of=2026-07-01", "gc="):
+    for key in ("daily=1", "written=0", "skipped=0", "failed=0", "as_of=2026-07-01", "gc="):
         assert key in kwargs["note"], kwargs["note"]
-    assert out["problems"] == []
+    assert out["problems"] == [] and out["daily"] is True and out["recorded"] is True
 
 
 def test_tick_enqueues_yesterday_and_the_monthly_pair_exactly_once():
@@ -109,34 +124,133 @@ def test_tick_enqueues_yesterday_and_the_monthly_pair_exactly_once():
     assert len(_runs(q.KIND_SCHEDULED)) == 1
 
 
+def test_first_tick_after_the_month_turns_orders_pit_prepare_before_the_month_end_run(monkeypatch):
+    """The reviewer's ordering finding: on Jul 1 the scheduled run IS the
+    June month-end cross-section, so the June close must be synced into
+    the store before it is scored, and the evaluation must come last."""
+    monkeypatch.setattr(loop, "_utcnow", lambda: JULY_1)
+    loop.run_once()
+    rows = _runs()
+    assert [(r.run_kind, r.as_of) for r in rows] == [
+        (q.KIND_PIT_PREPARE, date(2026, 6, 30)),
+        (q.KIND_SCHEDULED, date(2026, 6, 30)),
+        (q.KIND_EVALUATE, date(2026, 6, 30)),
+    ], "FIFO by id: pit_prepare < month-end scoring < evaluate"
+    assert _runs(q.KIND_MONTH_END) == [], "no catch-up when the scheduled run already covers the month end"
+    # FIFO claim order is exactly the id order.
+    claimed = [q.claim_next_run() for _ in range(3)]
+    assert claimed == [r.id for r in rows]
+
+
+def test_a_missed_month_end_is_caught_up_with_a_month_end_run_behind_pit_prepare(monkeypatch):
+    """The worker was down on Jul 1: the Jul 2 daily tick must still score
+    June 30 (month-end rows are the evaluation's sample, kept forever),
+    after pit_prepare and before the evaluation."""
+    loop.run_once()   # JULY_2, nothing on file for June 30
+    rows = _runs()
+    assert [(r.run_kind, r.as_of) for r in rows] == [
+        (q.KIND_PIT_PREPARE, date(2026, 6, 30)),
+        (q.KIND_MONTH_END, date(2026, 6, 30)),
+        (q.KIND_SCHEDULED, date(2026, 7, 1)),
+        (q.KIND_EVALUATE, date(2026, 6, 30)),
+    ]
+    # Once a non-failed scoring run for the month end exists, no second catch-up.
+    _finish_everything()
+    with SessionLocal() as db:
+        for r in db.query(ScorecardRun).filter(ScorecardRun.requested_by == loop.LOOP_NAME,
+                                               ScorecardRun.run_kind == q.KIND_EVALUATE):
+            r.status = q.STATUS_FAILED   # force the monthly block to re-run on the next daily tick
+        db.commit()
+    # Next daily tick (Jul 3): evaluate is retried, the month end is NOT rescored.
+    monkeypatch.setattr(loop, "_utcnow", lambda: datetime(2026, 7, 3, 3, 45, 0))
+    loop.run_once()
+    assert len(_runs(q.KIND_MONTH_END)) == 1
+    assert [r.status for r in _runs(q.KIND_EVALUATE)] == [q.STATUS_FAILED, q.STATUS_QUEUED]
+
+
+def test_daily_step_fires_once_per_day_and_the_interval_ticks_only_drain(_isolate, monkeypatch):
+    loop.run_once()                                   # 03:45 — the daily tick
+    assert len(_runs(q.KIND_SCHEDULED)) == 1 and _isolate[-1][1]["note"].startswith("as_of=2026-07-01 daily=1")
+    n_recorded = len(_isolate)
+
+    drains: list[int] = []
+    monkeypatch.setattr(q, "drain", lambda max_runs=200: drains.append(max_runs) or [])
+    for hhmm in ((3, 50), (12, 0), (23, 55)):
+        monkeypatch.setattr(loop, "_utcnow", lambda h=hhmm: datetime(2026, 7, 2, *h, 0))
+        out = loop.run_once()
+        assert out["daily"] is False and out["recorded"] is False
+    assert len(_runs(q.KIND_SCHEDULED)) == 1, "the daily run is enqueued once per day, not once per interval"
+    assert drains == [loop.MAX_RUNS_PER_TICK] * 3, "every interval tick drains the queue"
+    assert len(_isolate) == n_recorded, "a quiet interval tick does not overwrite the last informative record"
+
+    # A tick before 03:45 the next day is not the daily tick either.
+    monkeypatch.setattr(loop, "_utcnow", lambda: datetime(2026, 7, 3, 1, 0, 0))
+    assert loop.run_once()["daily"] is False
+    # 03:45 the next day is.
+    monkeypatch.setattr(loop, "_utcnow", lambda: datetime(2026, 7, 3, 3, 45, 0))
+    assert loop.run_once()["daily"] is True
+    assert [r.as_of for r in _runs(q.KIND_SCHEDULED)] == [date(2026, 7, 1), date(2026, 7, 2)]
+
+
+def test_a_worker_that_was_down_at_0345_runs_the_daily_step_on_its_first_tick_back(monkeypatch):
+    monkeypatch.setattr(loop, "_utcnow", lambda: datetime(2026, 7, 2, 15, 10, 0))
+    out = loop.run_once()
+    assert out["daily"] is True and [r.as_of for r in _runs(q.KIND_SCHEDULED)] == [date(2026, 7, 1)]
+
+
+def test_a_failed_daily_run_is_one_attempt_per_day(monkeypatch):
+    loop.run_once()
+    _finish_everything(fail_ids=tuple(r.id for r in _runs(q.KIND_SCHEDULED)))
+    monkeypatch.setattr(loop, "_utcnow", lambda: datetime(2026, 7, 2, 4, 0, 0))
+    out = loop.run_once()
+    assert out["daily"] is False
+    assert [r.status for r in _runs(q.KIND_SCHEDULED)] == [q.STATUS_FAILED], "not retried every interval"
+
+
+def test_interval_tick_records_when_it_drained_something(_isolate, monkeypatch):
+    loop.run_once()
+    n_recorded = len(_isolate)
+    monkeypatch.setattr(loop, "_utcnow", lambda: datetime(2026, 7, 2, 9, 0, 0))
+    monkeypatch.setattr(q, "drain", lambda max_runs=200: [
+        {"status": q.STATUS_SUCCEEDED, "params": {"written": 170}, "scored_count": 170},
+    ])
+    out = loop.run_once()
+    assert out["daily"] is False and out["recorded"] is True and out["written"] == 170
+    assert len(_isolate) == n_recorded + 1 and "daily=0" in _isolate[-1][1]["note"]
+    assert "written=170" in _isolate[-1][1]["note"]
+
+
 def test_evaluation_is_enqueued_once_per_month_even_after_it_finished(monkeypatch):
     loop.run_once()
-    ev = _runs(q.KIND_EVALUATE)[0]
-    q.claim_next_run()   # scheduled
-    q.claim_next_run()   # pit_prepare
-    q.claim_next_run()   # evaluate
-    q.finish_run(ev.id, status=q.STATUS_SUCCEEDED, note="written=3")
-    for r in _runs():
-        if r.status == q.STATUS_RUNNING:
-            q.finish_run(r.id, status=q.STATUS_SUCCEEDED)
+    _finish_everything()
     monkeypatch.setattr(loop, "_utcnow", lambda: datetime(2026, 7, 20, 3, 45, 0))
     loop.run_once()
     assert len(_runs(q.KIND_EVALUATE, date(2026, 6, 30))) == 1, "a finished evaluation must not be re-enqueued"
-    # The month turns: the next month end gets its own pair.
+    assert len(_runs(q.KIND_PIT_PREPARE)) == 1 and len(_runs(q.KIND_MONTH_END)) == 1
+    # The month turns: the next month end gets its own pair; Jul 31 was
+    # not scored on Aug 1 (this tick is Aug 3) so it is caught up too.
     monkeypatch.setattr(loop, "_utcnow", lambda: datetime(2026, 8, 3, 3, 45, 0))
     loop.run_once()
     assert [r.as_of for r in _runs(q.KIND_EVALUATE)] == [date(2026, 6, 30), date(2026, 7, 31)]
+    assert [r.as_of for r in _runs(q.KIND_MONTH_END)] == [date(2026, 6, 30), date(2026, 7, 31)]
 
 
-def test_failed_evaluation_is_retried_on_the_next_tick():
+def test_failed_evaluation_is_retried_on_the_next_daily_tick(monkeypatch):
     loop.run_once()
     ev = _runs(q.KIND_EVALUATE)[0]
-    for _ in range(3):
-        q.claim_next_run()
-    q.finish_run(ev.id, status=q.STATUS_FAILED, error_type="RuntimeError")
+    _finish_everything(fail_ids=(ev.id,))
+    monkeypatch.setattr(loop, "_utcnow", lambda: datetime(2026, 7, 2, 10, 0, 0))
+    loop.run_once()
+    assert [r.status for r in _runs(q.KIND_EVALUATE, date(2026, 6, 30))] == [q.STATUS_FAILED], (
+        "an interval tick never retries the evaluation — that is the daily step's job"
+    )
+    monkeypatch.setattr(loop, "_utcnow", lambda: datetime(2026, 7, 3, 3, 45, 0))
     loop.run_once()
     rows = _runs(q.KIND_EVALUATE, date(2026, 6, 30))
     assert [r.status for r in rows] == [q.STATUS_FAILED, q.STATUS_QUEUED]
+    # The retry is again behind a pit_prepare for the month end.
+    prep = _runs(q.KIND_PIT_PREPARE, date(2026, 6, 30))
+    assert prep[-1].id < rows[-1].id
 
 
 def test_tick_counts_drained_outcomes_and_flags_failures(_isolate, monkeypatch):
@@ -170,6 +284,19 @@ def test_recovery_runs_first_and_a_broken_step_never_hides_the_tick(_isolate, mo
     assert kwargs["success"] is False and "errors=gc:RuntimeError" in kwargs["note"]
     assert "recovered=2" in kwargs["note"] and "expired=1" in kwargs["note"]
     assert out["problems"] == ["gc:RuntimeError"]
+
+
+def test_a_broken_gate_records_the_error_and_still_drains(_isolate, monkeypatch):
+    drains: list[int] = []
+    monkeypatch.setattr(q, "drain", lambda max_runs=200: drains.append(max_runs) or [])
+
+    def broken(*a, **k):
+        raise RuntimeError("db away")
+
+    monkeypatch.setattr(q, "run_exists", broken)
+    out = loop.run_once()
+    assert out["daily"] is False and out["problems"] == ["gate:RuntimeError"] and drains == [loop.MAX_RUNS_PER_TICK]
+    assert _isolate[-1][1]["success"] is False and "errors=gate:RuntimeError" in _isolate[-1][1]["note"]
 
 
 def test_gc_step_drops_old_dailies_and_keeps_month_ends():

@@ -18,7 +18,7 @@ import pytest
 
 from app.database import SessionLocal
 from app.finance import scorecard_spec
-from app.models import ScorecardScore, ScorecardVersion
+from app.models import PriceMonthEnd, ScorecardScore, ScorecardVersion
 from app.services import scorecard_pit, scorecard_queue
 from app.services import scorecard_service as svc
 from app.tests.scorecard_helpers import REQUESTED_BY, insert_run, purge, score_rows_for_run, seed_universe
@@ -226,10 +226,99 @@ def test_daily_as_of_prefers_the_cached_series_and_records_the_basis(monkeypatch
 
 def test_price_context_reports_none_honestly():
     ctx, basis = svc.price_context("ZSC0", AS_OF, store_price=None, prefer_store=True, shares_fallback=None, today=NOW.date())
-    assert ctx["price"] is None and basis == "none"
+    assert ctx["price"] is None and basis == "none" and ctx["price_stale"] is False
     ctx, basis = svc.price_context("ZSC0", AS_OF, store_price=(10.0, AS_OF), prefer_store=False, shares_fallback=1.0,
                                    today=NOW.date())
     assert (ctx["price"], ctx["price_date"], basis) == (10.0, AS_OF, "month_end_store")
+    assert ctx["price_stale"] is False
+    ctx, basis = svc.price_context("ZSC0", AS_OF, store_price=svc.StorePrice(9.0, date(2026, 5, 29), date(2026, 5, 31)),
+                                   prefer_store=True, shares_fallback=None, today=NOW.date())
+    assert (ctx["price"], ctx["price_date"], basis, ctx["price_stale"]) == (9.0, date(2026, 5, 29), "month_end_store", True)
+
+
+# ---------------------------------------------------------------------------
+# Month-end runs and a lagging price store (reviewer's high finding)
+# ---------------------------------------------------------------------------
+
+JULY_END = date(2026, 7, 31)       # a month end the fixture's store (through AS_OF) does NOT hold
+JULY_SERIES = [{"date": "2026-06-30", "close": 100.0}, {"date": "2026-07-15", "close": 110.0},
+               {"date": "2026-07-31", "close": 123.0}]
+
+
+def test_price_context_prefers_the_store_only_when_it_holds_the_as_of_month(monkeypatch):
+    monkeypatch.setattr(svc, "_price_series", lambda ticker: JULY_SERIES)
+    lagging = svc.StorePrice(77.0, date(2026, 6, 30), date(2026, 6, 30))
+    current = svc.StorePrice(122.5, date(2026, 7, 31), date(2026, 7, 31))
+    ctx, basis = svc.price_context("ZSC0", JULY_END, store_price=lagging, prefer_store=True, shares_fallback=None,
+                                   today=date(2026, 8, 1))
+    assert (ctx["price"], ctx["price_date"], basis, ctx["price_stale"]) == (123.0, JULY_END, "daily_series", False)
+    ctx, basis = svc.price_context("ZSC0", JULY_END, store_price=current, prefer_store=True, shares_fallback=None,
+                                   today=date(2026, 8, 1))
+    assert (ctx["price"], ctx["price_date"], basis) == (122.5, JULY_END, "month_end_store"), (
+        "the stored as-of month close is the one the evaluation joins against"
+    )
+    # A bare (close, price_date) pair still works and is judged by its own month.
+    ctx, basis = svc.price_context("ZSC0", JULY_END, store_price=(77.0, date(2026, 6, 30)), prefer_store=True,
+                                   shares_fallback=None, today=date(2026, 8, 1))
+    assert basis == "daily_series" and ctx["price"] == 123.0
+
+
+def test_month_end_run_with_a_lagging_store_scores_the_as_of_close_from_the_series(monkeypatch):
+    """Repro of the finding: the store holds month ends through June, the
+    cached series carries the July 31 close, and the run is the July
+    month-end cross-section. Every row must be priced at July 31."""
+    monkeypatch.setattr(svc, "_utcnow", lambda: datetime(2026, 8, 1, 3, 45, 0))
+    monkeypatch.setattr(scorecard_queue, "_utcnow", lambda: datetime(2026, 8, 1, 3, 45, 0))
+    monkeypatch.setattr(svc, "_price_series", lambda ticker: JULY_SERIES)
+    with SessionLocal() as db:
+        latest_stored = db.query(PriceMonthEnd.month_end).filter(PriceMonthEnd.ticker == "ZSC0").order_by(
+            PriceMonthEnd.month_end.desc()).first()[0]
+    assert latest_stored == AS_OF, "precondition: the store lags the as-of month"
+    out = _run(JULY_END, run_kind=scorecard_queue.KIND_SCHEDULED)
+    assert out["status"] == scorecard_queue.STATUS_SUCCEEDED and "month_end=1" in out["note"]
+    assert "price_series=10" in out["note"] and "price_store=0" in out["note"] and "price_stale=0" in out["note"]
+    rows = score_rows_for_run(out["id"])
+    assert len(rows) == 10
+    assert all(r.is_month_end is True and r.price_date == JULY_END for r in rows)
+    assert all(r.feature_raw["_context"]["price"] == 123.0 for r in rows)
+    assert all(r.feature_raw["_context"]["price_basis"] == "daily_series" for r in rows)
+    assert all(r.feature_raw["_context"]["price_stale"] is False for r in rows)
+
+
+def test_month_end_run_uses_the_store_once_the_as_of_month_is_synced(monkeypatch):
+    monkeypatch.setattr(svc, "_utcnow", lambda: datetime(2026, 8, 2, 3, 45, 0))
+    monkeypatch.setattr(scorecard_queue, "_utcnow", lambda: datetime(2026, 8, 2, 3, 45, 0))
+    monkeypatch.setattr(svc, "_price_series", lambda ticker: JULY_SERIES)
+    with SessionLocal() as db:
+        for t in TICKERS:
+            db.add(PriceMonthEnd(ticker=t, month_end=JULY_END, price_date=JULY_END, close=122.5,
+                                 adjusted_close=122.5, source="test", fetched_at=NOW))
+        db.commit()
+    try:
+        out = _run(JULY_END, run_kind=scorecard_queue.KIND_MONTH_END)
+        assert out["status"] == scorecard_queue.STATUS_SUCCEEDED
+        assert "price_store=10" in out["note"] and "price_series=0" in out["note"] and "price_stale=0" in out["note"]
+        rows = score_rows_for_run(out["id"])
+        assert all(r.price_date == JULY_END and r.feature_raw["_context"]["price"] == 122.5 for r in rows)
+        assert all(r.feature_raw["_context"]["price_basis"] == "month_end_store" for r in rows)
+    finally:
+        with SessionLocal() as db:
+            db.query(PriceMonthEnd).filter(PriceMonthEnd.ticker.in_(TICKERS), PriceMonthEnd.month_end == JULY_END).delete(
+                synchronize_session=False)
+            db.commit()
+
+
+def test_month_end_run_falls_back_to_the_stale_store_and_says_so(monkeypatch):
+    """No series at all and no July row in the store: the June close is the
+    last resort, and the row must own up to it rather than pretend."""
+    monkeypatch.setattr(svc, "_utcnow", lambda: datetime(2026, 8, 1, 3, 45, 0))
+    monkeypatch.setattr(scorecard_queue, "_utcnow", lambda: datetime(2026, 8, 1, 3, 45, 0))
+    out = _run(JULY_END, run_kind=scorecard_queue.KIND_SCHEDULED)      # fixture: _price_series -> None
+    assert out["status"] == scorecard_queue.STATUS_SUCCEEDED
+    assert "price_store=10" in out["note"] and "price_stale=10" in out["note"]
+    rows = score_rows_for_run(out["id"])
+    assert all(r.price_date == AS_OF and r.feature_raw["_context"]["price_stale"] is True for r in rows)
+    assert all(r.feature_raw["_context"]["price_basis"] == "month_end_store" for r in rows)
 
 
 # ---------------------------------------------------------------------------
