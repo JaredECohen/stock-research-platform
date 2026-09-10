@@ -1,0 +1,1218 @@
+{
+  "_doc": "Provenance: generated from docs/research/Investment_Research_Atlas.xlsx (sheet 'Dependencies') and backend/app/data/industry_knowledge/gics_industries_2026.json by app/scripts/build_atlas_dependencies.py; do not edit by hand — rerun `python -m app.scripts.build_atlas_dependencies` from backend/ (needs openpyxl in the dev interpreter). `edges` are the Atlas's analyst causal hypotheses (economic exposure graph, not estimated correlations); `relationships` are the universe map's themed cross-industry links. Codes are the public GICS numeric hierarchy; exposures resolve through the map's economic security reference, which is research examples, not licensed issuer GICS assignments.",
+  "generated_from": {
+    "atlas": "docs/research/Investment_Research_Atlas.xlsx",
+    "knowledge": "backend/app/data/industry_knowledge/gics_industries_2026.json"
+  },
+  "atlas_sha256": "6796ba10d7de0ca4c9c3734dfd574b75e229339786a43aa2377d0007dfd3b665",
+  "atlas_snapshot_date": "2026-09-07",
+  "knowledge_taxonomy_version": "gics-2026-04",
+  "knowledge_source_sha256": "f6d578e89b2d450042c73703c67432672050c2b7f84d3d9c1992fcbb2e1339ef",
+  "knowledge_map_source_sha256": "65e1cc496f2dcd6aa62405e19a9e8a89d86ae0a85903e17260e506ceb6c587a0",
+  "knowledge_map_as_of": "2026-09-10",
+  "edge_source": "atlas_dependencies_sheet",
+  "relationship_source": "universe_map_cross_industry_relationships",
+  "edge_count": 27,
+  "relationship_count": 12,
+  "edges": [
+    {
+      "edge_id": "D01",
+      "origin": "Hyperscaler funded demand",
+      "destination": "Accelerators / HBM",
+      "transmission": "Workload demand must become funded systems and qualified memory orders",
+      "example_exposures": [
+        "NVDA",
+        "AMD",
+        "MU"
+      ],
+      "invalidation": "Budget reallocations or efficiency reduce hardware content",
+      "next_evidence": "Orders, customer cash commitments, shipment schedules",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "NVDA": [
+          "45301020"
+        ],
+        "MU": [
+          "45301020"
+        ]
+      },
+      "unresolved_exposures": [
+        "AMD"
+      ],
+      "sub_industry_codes": [
+        "45301020"
+      ],
+      "industry_group_codes": [
+        "4530"
+      ]
+    },
+    {
+      "edge_id": "D02",
+      "origin": "Accelerator density",
+      "destination": "Advanced packaging",
+      "transmission": "More expensive and complex packages may require more process steps",
+      "example_exposures": [
+        "TSM",
+        "AMAT",
+        "CAMT"
+      ],
+      "invalidation": "Architecture changes reduce outsourced content",
+      "next_evidence": "Customer process flows and qualified capex",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "TSM": [
+          "45301020"
+        ],
+        "AMAT": [
+          "45301010"
+        ]
+      },
+      "unresolved_exposures": [
+        "CAMT"
+      ],
+      "sub_industry_codes": [
+        "45301010",
+        "45301020"
+      ],
+      "industry_group_codes": [
+        "4530"
+      ]
+    },
+    {
+      "edge_id": "D03",
+      "origin": "Advanced packaging",
+      "destination": "Test and inspection",
+      "transmission": "Yield losses become more costly, potentially increasing test intensity",
+      "example_exposures": [
+        "COHU",
+        "CAMT",
+        "ONTO",
+        "KLAC"
+      ],
+      "invalidation": "Inspection technology or customer insourcing changes the winner",
+      "next_evidence": "Paid tool adoption and steps per package",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "ONTO": [
+          "45301010"
+        ],
+        "KLAC": [
+          "45301010"
+        ]
+      },
+      "unresolved_exposures": [
+        "COHU",
+        "CAMT"
+      ],
+      "sub_industry_codes": [
+        "45301010"
+      ],
+      "industry_group_codes": [
+        "4530"
+      ]
+    },
+    {
+      "edge_id": "D04",
+      "origin": "Accelerator clusters",
+      "destination": "Networking / optics",
+      "transmission": "Scale-out and scale-up connections increase bandwidth needs",
+      "example_exposures": [
+        "ANET",
+        "AAOI",
+        "COHR",
+        "CRDO"
+      ],
+      "invalidation": "ASP erosion or architecture reduces gross profit per system",
+      "next_evidence": "Port mix, speed, unit contribution and optical adoption",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "ANET": [
+          "45201020"
+        ],
+        "COHR": [
+          "45203010"
+        ]
+      },
+      "unresolved_exposures": [
+        "AAOI",
+        "CRDO"
+      ],
+      "sub_industry_codes": [
+        "45201020",
+        "45203010"
+      ],
+      "industry_group_codes": [
+        "4520"
+      ]
+    },
+    {
+      "edge_id": "D05",
+      "origin": "Data-center projects",
+      "destination": "Grid and power distribution",
+      "transmission": "Energized sites need transformers, switchgear and electrical systems",
+      "example_exposures": [
+        "HPS.A@CA",
+        "POWL",
+        "ETN",
+        "HUBB"
+      ],
+      "invalidation": "Speculative projects never receive power or financing",
+      "next_evidence": "Permits, power contracts, deposits and start notices",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "POWL": [
+          "20104010"
+        ],
+        "ETN": [
+          "20104010"
+        ]
+      },
+      "unresolved_exposures": [
+        "HPS.A@CA",
+        "HUBB"
+      ],
+      "sub_industry_codes": [
+        "20104010"
+      ],
+      "industry_group_codes": [
+        "2010"
+      ]
+    },
+    {
+      "edge_id": "D06",
+      "origin": "Power availability",
+      "destination": "Cooling commissioning",
+      "transmission": "Delivered compute cannot run without electrical and heat-rejection infrastructure",
+      "example_exposures": [
+        "MOD",
+        "AAON",
+        "IESC"
+      ],
+      "invalidation": "Bottleneck elsewhere delays otherwise valid orders",
+      "next_evidence": "Commissioning dates and project-level dependencies",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "MOD": [
+          "20106020"
+        ],
+        "AAON": [
+          "20102010"
+        ]
+      },
+      "unresolved_exposures": [
+        "IESC"
+      ],
+      "sub_industry_codes": [
+        "20102010",
+        "20106020"
+      ],
+      "industry_group_codes": [
+        "2010"
+      ]
+    },
+    {
+      "edge_id": "D07",
+      "origin": "Equipment backlog",
+      "destination": "Supplier working capital",
+      "transmission": "Ramps require inventory, labor and receivables before collections",
+      "example_exposures": [
+        "MOD",
+        "AAOI",
+        "POWL",
+        "IESC"
+      ],
+      "invalidation": "Revenue growth becomes cash consumption",
+      "next_evidence": "Milestone receipts, inventory turns, capex and financing",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "MOD": [
+          "20106020"
+        ],
+        "POWL": [
+          "20104010"
+        ]
+      },
+      "unresolved_exposures": [
+        "AAOI",
+        "IESC"
+      ],
+      "sub_industry_codes": [
+        "20104010",
+        "20106020"
+      ],
+      "industry_group_codes": [
+        "2010"
+      ]
+    },
+    {
+      "edge_id": "D08",
+      "origin": "Supplier capacity additions",
+      "destination": "Scarcity pricing",
+      "transmission": "New saleable capacity can erode the temporary price premium",
+      "example_exposures": [
+        "HPS.A@CA",
+        "MOD",
+        "AAOI"
+      ],
+      "invalidation": "Qualification delays postpone effective supply",
+      "next_evidence": "Commissioned and qualified capacity, not announcements",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "MOD": [
+          "20106020"
+        ]
+      },
+      "unresolved_exposures": [
+        "HPS.A@CA",
+        "AAOI"
+      ],
+      "sub_industry_codes": [
+        "20106020"
+      ],
+      "industry_group_codes": [
+        "2010"
+      ]
+    },
+    {
+      "edge_id": "D09",
+      "origin": "Higher power prices",
+      "destination": "Generator versus retail economics",
+      "transmission": "Generation exposure may benefit while retail commitments become costly",
+      "example_exposures": [
+        "NRG",
+        "VST",
+        "regulated utilities"
+      ],
+      "invalidation": "Hedges and retail obligations offset gross generation gains",
+      "next_evidence": "Net exposure by price, volume and hedge tenor",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "VST": [
+          "55105010"
+        ]
+      },
+      "unresolved_exposures": [
+        "NRG",
+        "regulated utilities"
+      ],
+      "sub_industry_codes": [
+        "55105010"
+      ],
+      "industry_group_codes": [
+        "5510"
+      ]
+    },
+    {
+      "edge_id": "D10",
+      "origin": "Housing credit",
+      "destination": "Home construction",
+      "transmission": "Affordability affects orders, cancellations and land demand",
+      "example_exposures": [
+        "DHI",
+        "NVR",
+        "builders"
+      ],
+      "invalidation": "Incentives support volume but destroy margin",
+      "next_evidence": "Effective mortgage cost and cancellation cohorts",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "DHI": [
+          "25201030"
+        ],
+        "NVR": [
+          "25201030"
+        ]
+      },
+      "unresolved_exposures": [
+        "builders"
+      ],
+      "sub_industry_codes": [
+        "25201030"
+      ],
+      "industry_group_codes": [
+        "2520"
+      ]
+    },
+    {
+      "edge_id": "D11",
+      "origin": "Housing / remodeling",
+      "destination": "Specialty retail and HVAC",
+      "transmission": "Projects create demand for flooring, tools and installed building systems",
+      "example_exposures": [
+        "FND",
+        "CSW",
+        "AOS",
+        "SITE"
+      ],
+      "invalidation": "Channel stocking rather than end demand drives shipments",
+      "next_evidence": "Retail traffic, contractor activity and channel inventory",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {},
+      "unresolved_exposures": [
+        "FND",
+        "CSW",
+        "AOS",
+        "SITE"
+      ],
+      "sub_industry_codes": [],
+      "industry_group_codes": []
+    },
+    {
+      "edge_id": "D12",
+      "origin": "Apartment supply",
+      "destination": "Property-manager software",
+      "transmission": "Supply and occupancy affect managed units and payment activity",
+      "example_exposures": [
+        "APPF",
+        "IRT",
+        "MAA"
+      ],
+      "invalidation": "Transaction mix changes without durable customer growth",
+      "next_evidence": "Units, occupancy, retention and gross profit",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "MAA": [
+          "60106010"
+        ]
+      },
+      "unresolved_exposures": [
+        "APPF",
+        "IRT"
+      ],
+      "sub_industry_codes": [
+        "60106010"
+      ],
+      "industry_group_codes": [
+        "6010"
+      ]
+    },
+    {
+      "edge_id": "D13",
+      "origin": "Apartment deliveries",
+      "destination": "Landlord rent and concessions",
+      "transmission": "New local supply affects effective rent and lease-up cost",
+      "example_exposures": [
+        "IRT",
+        "MAA",
+        "INVH"
+      ],
+      "invalidation": "Demand growth offsets supply or differs by submarket",
+      "next_evidence": "City-level supply, absorption and concessions",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "MAA": [
+          "60106010"
+        ],
+        "INVH": [
+          "60106020"
+        ]
+      },
+      "unresolved_exposures": [
+        "IRT"
+      ],
+      "sub_industry_codes": [
+        "60106010",
+        "60106020"
+      ],
+      "industry_group_codes": [
+        "6010"
+      ]
+    },
+    {
+      "edge_id": "D14",
+      "origin": "Interest rates",
+      "destination": "REIT common-share cash",
+      "transmission": "Refinancing and cap rates can offset operating rent growth",
+      "example_exposures": [
+        "IRT",
+        "BXP",
+        "PLD"
+      ],
+      "invalidation": "Debt hedge/maturity structure differs from headline rate exposure",
+      "next_evidence": "Debt ladder and recurring capex-adjusted AFFO",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "BXP": [
+          "60104010"
+        ],
+        "PLD": [
+          "60102510"
+        ]
+      },
+      "unresolved_exposures": [
+        "IRT"
+      ],
+      "sub_industry_codes": [
+        "60102510",
+        "60104010"
+      ],
+      "industry_group_codes": [
+        "6010"
+      ]
+    },
+    {
+      "edge_id": "D15",
+      "origin": "Interest rates",
+      "destination": "Bank spread and liquidity",
+      "transmission": "Deposit repricing, asset yields and securities marks interact",
+      "example_exposures": [
+        "PEBO",
+        "CFR",
+        "regional banks"
+      ],
+      "invalidation": "Deposit outflows or credit losses dominate NIM",
+      "next_evidence": "Funding cost, liquidity, duration and credit vintages",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "CFR": [
+          "40101015"
+        ]
+      },
+      "unresolved_exposures": [
+        "PEBO",
+        "regional banks"
+      ],
+      "sub_industry_codes": [
+        "40101015"
+      ],
+      "industry_group_codes": [
+        "4010"
+      ]
+    },
+    {
+      "edge_id": "D16",
+      "origin": "Loss-cost inflation",
+      "destination": "Insurance underwriting",
+      "transmission": "Pricing must cover claims frequency/severity as cohorts earn",
+      "example_exposures": [
+        "KNSL",
+        "RLI",
+        "PGR"
+      ],
+      "invalidation": "Reserve releases mask inadequate current-year price",
+      "next_evidence": "Accident-year ratio, written premiums and renewal rates",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "RLI": [
+          "40301040"
+        ],
+        "PGR": [
+          "40301040"
+        ]
+      },
+      "unresolved_exposures": [
+        "KNSL"
+      ],
+      "sub_industry_codes": [
+        "40301040"
+      ],
+      "industry_group_codes": [
+        "4030"
+      ]
+    },
+    {
+      "edge_id": "D17",
+      "origin": "Biotech funding",
+      "destination": "Research tools and services",
+      "transmission": "Funded programs drive instruments, CRO work and consumables",
+      "example_exposures": [
+        "RGEN",
+        "TMO",
+        "IQV",
+        "MEDP"
+      ],
+      "invalidation": "Orders reflect stockpiling rather than research execution",
+      "next_evidence": "Cash runway, customer trial activity and utilization",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "TMO": [
+          "35203010"
+        ],
+        "IQV": [
+          "35203010"
+        ],
+        "MEDP": [
+          "35203010"
+        ]
+      },
+      "unresolved_exposures": [
+        "RGEN"
+      ],
+      "sub_industry_codes": [
+        "35203010"
+      ],
+      "industry_group_codes": [
+        "3520"
+      ]
+    },
+    {
+      "edge_id": "D18",
+      "origin": "Biologics production",
+      "destination": "Bioprocess consumables",
+      "transmission": "Validated manufacturing workflows create repeat consumable demand",
+      "example_exposures": [
+        "RGEN",
+        "DHR"
+      ],
+      "invalidation": "Inventory unwinds suppress purchases despite end-use growth",
+      "next_evidence": "Production runs and distributor inventory",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "DHR": [
+          "35203010"
+        ]
+      },
+      "unresolved_exposures": [
+        "RGEN"
+      ],
+      "sub_industry_codes": [
+        "35203010"
+      ],
+      "industry_group_codes": [
+        "3520"
+      ]
+    },
+    {
+      "edge_id": "D19",
+      "origin": "Clinical evidence",
+      "destination": "Commercial health-care adoption",
+      "transmission": "Approval must translate into reimbursement and usable workflows",
+      "example_exposures": [
+        "Biotechnology",
+        "pharma",
+        "providers"
+      ],
+      "invalidation": "Commercial coverage or workflow burden limits uptake",
+      "next_evidence": "FDA decision plus payer and treatment-center evidence",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {},
+      "unresolved_exposures": [
+        "Biotechnology",
+        "pharma",
+        "providers"
+      ],
+      "sub_industry_codes": [],
+      "industry_group_codes": []
+    },
+    {
+      "edge_id": "D20",
+      "origin": "Procedure activity",
+      "destination": "Medical consumables",
+      "transmission": "Clinical use drives repeat replacement and disposable products",
+      "example_exposures": [
+        "LMAT",
+        "SYK",
+        "ABT"
+      ],
+      "invalidation": "Product substitution or reimbursement harms economics",
+      "next_evidence": "Procedure volumes, unit sales and gross contribution",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "SYK": [
+          "35101010"
+        ]
+      },
+      "unresolved_exposures": [
+        "LMAT",
+        "ABT"
+      ],
+      "sub_industry_codes": [
+        "35101010"
+      ],
+      "industry_group_codes": [
+        "3510"
+      ]
+    },
+    {
+      "edge_id": "D21",
+      "origin": "Aircraft utilization",
+      "destination": "Aerospace aftermarket",
+      "transmission": "Flight hours and cycles create replacement and repair demand",
+      "example_exposures": [
+        "VSEC",
+        "HEI",
+        "HWM"
+      ],
+      "invalidation": "OEM terms or inventory funding absorb the profit",
+      "next_evidence": "Organic sales, repair turns and working capital",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "HEI": [
+          "20101010"
+        ],
+        "HWM": [
+          "20101010"
+        ]
+      },
+      "unresolved_exposures": [
+        "VSEC"
+      ],
+      "sub_industry_codes": [
+        "20101010"
+      ],
+      "industry_group_codes": [
+        "2010"
+      ]
+    },
+    {
+      "edge_id": "D22",
+      "origin": "Natural-gas throughput",
+      "destination": "Compression fleet",
+      "transmission": "Gas production and transport requirements drive equipment use",
+      "example_exposures": [
+        "AROC",
+        "USAC"
+      ],
+      "invalidation": "High utilization without rate uplift offers limited upside",
+      "next_evidence": "Renewal rates and maintenance-adjusted cash",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "AROC": [
+          "10101020"
+        ]
+      },
+      "unresolved_exposures": [
+        "USAC"
+      ],
+      "sub_industry_codes": [
+        "10101020"
+      ],
+      "industry_group_codes": [
+        "1010"
+      ]
+    },
+    {
+      "edge_id": "D23",
+      "origin": "Mineral price incentives",
+      "destination": "Equipment and future supply",
+      "transmission": "Producer cash funds mines and machines that later add commodity supply",
+      "example_exposures": [
+        "FCX",
+        "CAT",
+        "EPIROC comparators"
+      ],
+      "invalidation": "Demand weakens before projects come online",
+      "next_evidence": "Project finance, construction and qualified output",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "FCX": [
+          "15104025"
+        ],
+        "CAT": [
+          "20106010"
+        ]
+      },
+      "unresolved_exposures": [
+        "EPIROC comparators"
+      ],
+      "sub_industry_codes": [
+        "15104025",
+        "20106010"
+      ],
+      "industry_group_codes": [
+        "1510",
+        "2010"
+      ]
+    },
+    {
+      "edge_id": "D24",
+      "origin": "Commodity supply shock",
+      "destination": "Food brand economics",
+      "transmission": "Wholesale prices, farm commitments and retail positioning interact",
+      "example_exposures": [
+        "VITL",
+        "TSN",
+        "food producers"
+      ],
+      "invalidation": "Demand normalizes before contracted production can adjust",
+      "next_evidence": "Retail sell-through versus committed supply",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "VITL": [
+          "30202030"
+        ]
+      },
+      "unresolved_exposures": [
+        "TSN",
+        "food producers"
+      ],
+      "sub_industry_codes": [
+        "30202030"
+      ],
+      "industry_group_codes": [
+        "3020"
+      ]
+    },
+    {
+      "edge_id": "D25",
+      "origin": "Search / AI discovery",
+      "destination": "Digital publisher monetization",
+      "transmission": "Referral changes affect audience, ads and affiliate transactions",
+      "example_exposures": [
+        "ZD",
+        "NYT",
+        "digital media"
+      ],
+      "invalidation": "Owned channels do not replace lost referral economics",
+      "next_evidence": "Direct traffic, subscriptions and cash gross profit",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "NYT": [
+          "50201040"
+        ]
+      },
+      "unresolved_exposures": [
+        "ZD",
+        "digital media"
+      ],
+      "sub_industry_codes": [
+        "50201040"
+      ],
+      "industry_group_codes": [
+        "5020"
+      ]
+    },
+    {
+      "edge_id": "D26",
+      "origin": "AI automation",
+      "destination": "Software and professional services",
+      "transmission": "Automation can raise productivity or commoditize billable work",
+      "example_exposures": [
+        "APPF",
+        "ACN",
+        "EPAM",
+        "software peers"
+      ],
+      "invalidation": "Customer willingness to pay falls faster than delivery cost",
+      "next_evidence": "Retention, price, task-level savings and renewal evidence",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "ACN": [
+          "45102010"
+        ],
+        "EPAM": [
+          "45102010"
+        ]
+      },
+      "unresolved_exposures": [
+        "APPF",
+        "software peers"
+      ],
+      "sub_industry_codes": [
+        "45102010"
+      ],
+      "industry_group_codes": [
+        "4510"
+      ]
+    },
+    {
+      "edge_id": "D27",
+      "origin": "Municipal finance",
+      "destination": "Water measurement deployments",
+      "transmission": "Procurement and funding determine when awarded projects install",
+      "example_exposures": [
+        "BMI",
+        "XYL",
+        "AWK"
+      ],
+      "invalidation": "Awards slip or costs exceed approved budgets",
+      "next_evidence": "Funded milestones, installation schedules and collected cash",
+      "status": "Analyst causal hypothesis; magnitude and lag require company-specific testing",
+      "source": "atlas_dependencies_sheet",
+      "resolved_exposures": {
+        "AWK": [
+          "55104010"
+        ]
+      },
+      "unresolved_exposures": [
+        "BMI",
+        "XYL"
+      ],
+      "sub_industry_codes": [
+        "55104010"
+      ],
+      "industry_group_codes": [
+        "5510"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "theme": "Housing and household mobility",
+      "mechanism": "Mortgage rates and credit → transactions/starts → building products, appliances, furniture, moving/storage and brokerage",
+      "codes": [
+        "25201030",
+        "25201020",
+        "25201040",
+        "25504030",
+        "40201050",
+        "60106010",
+        "60106020",
+        "60108020",
+        "60201040"
+      ],
+      "industry_group_codes": [
+        "2520",
+        "2550",
+        "4020",
+        "6010",
+        "6020"
+      ],
+      "monitor": "Track permits, starts, completions and financing separately; completions create apartment supply while transactions stimulate repair and moving demand.",
+      "failure_of_inference": "Builder incentives can support new-home sales while existing-home turnover remains weak. Do not infer one broad housing recovery from a single series.",
+      "source_ids": [
+        "S08",
+        "S15",
+        "S31"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    },
+    {
+      "theme": "Power delivery and computing",
+      "mechanism": "Funded compute demand → energized data centers → networks/chips/equipment → generation and grid investment",
+      "codes": [
+        "20103010",
+        "20104010",
+        "20104020",
+        "45201020",
+        "45202030",
+        "45301010",
+        "45301020",
+        "55101010",
+        "55105010",
+        "55105020",
+        "60108050"
+      ],
+      "industry_group_codes": [
+        "2010",
+        "4520",
+        "4530",
+        "5510",
+        "6010"
+      ],
+      "monitor": "Match signed customer commitments, grid rights, construction, equipment delivery and in-service dates. Track gross profit and funded returns at each supplier.",
+      "failure_of_inference": "A megawatt may appear in several announcements. Avoid counting the same project as independent demand and capitalizing everyone at scarcity margins.",
+      "source_ids": [
+        "S03",
+        "S22",
+        "S23",
+        "S32"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    },
+    {
+      "theme": "Oil and gas value chain",
+      "mechanism": "Commodity balances → producer budgets → drilling/services → transport/storage → refining and petrochemical spreads",
+      "codes": [
+        "10101010",
+        "10101020",
+        "10102010",
+        "10102020",
+        "10102030",
+        "10102040",
+        "15101010"
+      ],
+      "industry_group_codes": [
+        "1010",
+        "1510"
+      ],
+      "monitor": "Watch actual producer cash budgets and decline replacement, not only spot prices; compare regional basis, refinery utilization and chemical feedstock spreads.",
+      "failure_of_inference": "Higher oil can help producers while hurting consumer demand or chemical margins. Contracted transport revenue may lag and retain counterparty risk.",
+      "source_ids": [
+        "S03",
+        "S04"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    },
+    {
+      "theme": "Agriculture and the grocery shelf",
+      "mechanism": "Weather/crop balances → fertilizer and farm equipment → processing/ingredients → packaged food → distributors/retailers",
+      "codes": [
+        "15101030",
+        "20106015",
+        "30101020",
+        "30101030",
+        "30101040",
+        "30202010",
+        "30202030"
+      ],
+      "industry_group_codes": [
+        "1510",
+        "2010",
+        "3010",
+        "3020"
+      ],
+      "monitor": "Track crop economics, local basis, inventory, realized pricing and consumer volume; identify contract reset lags and where branded value is retained.",
+      "failure_of_inference": "Falling inputs can first reduce processors' revenue or inventory value before helping branded margins. Consumer trade-down can benefit one channel and hurt another.",
+      "source_ids": [
+        "S09",
+        "S11",
+        "S12"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    },
+    {
+      "theme": "Industrial inventory cycle",
+      "mechanism": "End-user orders → distributor inventory → component/plant production → freight and warehousing",
+      "codes": [
+        "15103020",
+        "20107010",
+        "20301010",
+        "20303010",
+        "20304010",
+        "20304030",
+        "45203015",
+        "45203020",
+        "45203030",
+        "45301020",
+        "60102510"
+      ],
+      "industry_group_codes": [
+        "1510",
+        "2010",
+        "2030",
+        "4520",
+        "4530",
+        "6010"
+      ],
+      "monitor": "Align sell-in, sell-through, shipments and inventories by calendar. Require orders plus actual use plus cash conversion before calling a broad recovery.",
+      "failure_of_inference": "Restocking can lift manufacturers ahead of final demand; heavier freight mix or fuel surcharge revenue can mimic unit growth.",
+      "source_ids": [
+        "S06",
+        "S07",
+        "S14",
+        "S22"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    },
+    {
+      "theme": "Medical spending and reimbursement",
+      "mechanism": "Payer pricing/utilization → provider staffing and collections → equipment/supplies/drugs → property operator coverage",
+      "codes": [
+        "35101010",
+        "35101020",
+        "35102010",
+        "35102015",
+        "35102020",
+        "35102030",
+        "35202010",
+        "60105010"
+      ],
+      "industry_group_codes": [
+        "3510",
+        "3520",
+        "6010"
+      ],
+      "monitor": "Map who bears claims risk, who bills, who gets paid and on what lag; compare reimbursement growth with labor, acuity and denial costs.",
+      "failure_of_inference": "Higher utilization may help suppliers/providers but hurt insurers. More covered lives need not create equivalent recognized revenue or landlord rent coverage.",
+      "source_ids": [
+        "S18",
+        "S21",
+        "S34"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    },
+    {
+      "theme": "Credit, refinancing and collateral",
+      "mechanism": "Lending standards/rates → borrower liquidity → defaults and collateral values → bank/insurer/REIT capital",
+      "codes": [
+        "40101010",
+        "40101015",
+        "40201040",
+        "40201050",
+        "40202010",
+        "40204010",
+        "40301020",
+        "60104010",
+        "60201030"
+      ],
+      "industry_group_codes": [
+        "4010",
+        "4020",
+        "4030",
+        "6010",
+        "6020"
+      ],
+      "monitor": "Build maturity and funding ladders, then test operating cash and collateral values together. Watch covenant headroom and required capital, not just interest coverage.",
+      "failure_of_inference": "Lower rates can relieve borrowers while compressing investment spreads or accelerating mortgage prepayments. Asset and liability duration must be matched.",
+      "source_ids": [
+        "S15",
+        "S16",
+        "S17"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    },
+    {
+      "theme": "Consumer attention and distribution",
+      "mechanism": "Engagement/intent → advertising budgets → platforms/agencies/publishers → commerce conversion",
+      "codes": [
+        "25503030",
+        "50201010",
+        "50201020",
+        "50201030",
+        "50201040",
+        "50202010",
+        "50202020",
+        "50203010"
+      ],
+      "industry_group_codes": [
+        "2550",
+        "5020"
+      ],
+      "monitor": "Track advertiser outcomes, retained take rates, user retention and content costs. Distinguish distribution access from owning the customer relationship.",
+      "failure_of_inference": "Audience growth may not monetize; automated content can lower production cost while reducing scarcity and pricing for creators and intermediaries.",
+      "source_ids": [
+        "S09",
+        "S10",
+        "S24"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    },
+    {
+      "theme": "Labor intensity and automation",
+      "mechanism": "Hiring/wage pressure → staffing and outsourced services → software/equipment substitution → customer productivity",
+      "codes": [
+        "20201050",
+        "20201070",
+        "20202010",
+        "20202020",
+        "20202030",
+        "25301040",
+        "35102020",
+        "45102010",
+        "45103010",
+        "45203010"
+      ],
+      "industry_group_codes": [
+        "2020",
+        "2530",
+        "3510",
+        "4510",
+        "4520"
+      ],
+      "monitor": "Compare worker output, service quality and customer savings. Test whether suppliers retain productivity gains or pass them through in lower prices.",
+      "failure_of_inference": "A falling wage bill can signal lost volume or poor staffing rather than durable efficiency. AI spending alone does not prove customer returns.",
+      "source_ids": [
+        "S06",
+        "S30"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    },
+    {
+      "theme": "Insurance pricing and asset economics",
+      "mechanism": "Claims inflation/catastrophes → insurance pricing → broker commissions → customer expenses/property cash",
+      "codes": [
+        "40301010",
+        "40301020",
+        "40301030",
+        "40301040",
+        "40301050",
+        "60103010",
+        "60106010",
+        "60106020"
+      ],
+      "industry_group_codes": [
+        "4030",
+        "6010"
+      ],
+      "monitor": "Compare rate with exposure and loss trend; trace premium increases into broker revenue and insured-property expense. Check reinsurance terms and retained catastrophe risk.",
+      "failure_of_inference": "An insurer's favorable investment income does not fix inadequate reserves; rising premiums can raise broker revenue while weakening customers' occupancy or operating margins.",
+      "source_ids": [
+        "S17",
+        "S27"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    },
+    {
+      "theme": "Commodity substitution and resource intensity",
+      "mechanism": "End-use technology → metal/mineral mix → extraction/processing → equipment and infrastructure",
+      "codes": [
+        "15101040",
+        "15104010",
+        "15104020",
+        "15104025",
+        "15104030",
+        "15104040",
+        "15104045",
+        "15104050",
+        "20104010",
+        "25102010",
+        "45301020"
+      ],
+      "industry_group_codes": [
+        "1510",
+        "2010",
+        "2510",
+        "4530"
+      ],
+      "monitor": "Map physical content, recovery/recycling, qualification and supply additions. Compare substitution economics at several prices rather than extrapolating current scarcity.",
+      "failure_of_inference": "A long-run demand narrative can coexist with near-term oversupply, higher extraction costs and shareholder dilution.",
+      "source_ids": [
+        "S05",
+        "S06",
+        "S22"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    },
+    {
+      "theme": "Contracted growth and hidden financing",
+      "mechanism": "Customer contracts → working capital/construction → revenue recognition → cash collection → shareholder cash",
+      "codes": [
+        "10102040",
+        "20101010",
+        "20103010",
+        "35103010",
+        "45103010",
+        "50101010",
+        "55101010",
+        "55104010",
+        "60108050"
+      ],
+      "industry_group_codes": [
+        "1010",
+        "2010",
+        "3510",
+        "4510",
+        "5010",
+        "5510",
+        "6010"
+      ],
+      "monitor": "Record contract enforceability, termination terms, milestone timing, funding source and diluted shares. Match business perimeter across statements.",
+      "failure_of_inference": "Backlog, rate authorization, eligible lives, leased megawatts and acquisition accretion all precede cash. None independently proves funded per-share value creation.",
+      "source_ids": [
+        "S07",
+        "S18",
+        "S25",
+        "S28",
+        "S32"
+      ],
+      "source": "universe_map_cross_industry_relationships"
+    }
+  ]
+}
