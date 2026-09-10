@@ -135,6 +135,18 @@ def main() -> int:
         except Exception as exc:
             log.warning("worker pgvector backfill failed (continuing): %s", exc)
 
+        # Phase 6: register the in-code scorecard methodology so the web
+        # process can serve `/api/scorecard/spec` from the registry (it
+        # falls back to the in-code spec until then). Queue recovery is
+        # deliberately NOT here — `scorecard_loop.run_once` recovers at
+        # the start of every tick, so a stale `running` row can never be
+        # observed before recovery has had its turn.
+        try:
+            from .services import scorecard_service
+            log.info("worker scorecard registry: %s", scorecard_service.ensure_version_registered())
+        except Exception as exc:
+            log.warning("worker scorecard registry failed (continuing): %s", type(exc).__name__)
+
     threading.Thread(target=_seed, name="worker-seed", daemon=True).start()
 
     scheduler = None

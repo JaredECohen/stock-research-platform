@@ -92,6 +92,29 @@ from .fundamentals import (
 from .macro import MacroScenarioRequest, MacroScenarioResult, MacroSeries, MacroSeriesPoint
 from .memo import MispricingThesis, StockMemoOut, ValuationVerdict
 from .portfolio import ModelPortfolio, PortfolioBrief, PortfolioHolding, PortfolioRequest
+
+# Phase 6 (`schemas/scorecard.py`). Reachable as `app.schemas.ScorecardSummary`
+# etc.; deliberately NOT added to `__all__` below, which
+# `test_schema_package_reexports.SCHEMA_NAMES` freezes — extend both together.
+from .scorecard import (
+    ScorecardBackfillOut,
+    ScorecardBackfillRequest,
+    ScorecardCategory,
+    ScorecardContribution,
+    ScorecardDetailOut,
+    ScorecardDisagreementFlag,
+    ScorecardEnqueueOut,
+    ScorecardEvaluateRequest,
+    ScorecardEvaluationItem,
+    ScorecardEvaluationOut,
+    ScorecardFeatureOut,
+    ScorecardHistoryPoint,
+    ScorecardRefreshRequest,
+    ScorecardRunOut,
+    ScorecardSummary,
+    ScorecardUniverseOut,
+    ScorecardUniverseRow,
+)
 from .screener import (
     CustomScreenRequest,
     CustomScreenResult,

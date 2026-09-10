@@ -38,6 +38,7 @@ KNOWN_LOOPS: tuple[str, ...] = (
     "outcome_loop",
     "postmortem_loop",
     "sample_build_loop",
+    "scorecard_loop",
     "sector_digest_loop",
     "social_loop",
     "theme_exposure_loop",
@@ -135,6 +136,7 @@ from . import (  # noqa: E402,F401
     outcome_loop,
     postmortem_loop,
     sample_build_loop,
+    scorecard_loop,
     sector_digest_loop,
     social_loop,
     theme_exposure_loop,
@@ -145,7 +147,7 @@ from . import (  # noqa: E402,F401
 __all__ = [
     "billing_loop", "catalyst_loop", "checkpoint_gc", "edgar_poller", "history_backfill",
     "llm_log_gc", "macro_loop", "mispricing_audit_loop", "news_loop",
-    "outcome_loop", "postmortem_loop", "sample_build_loop", "sector_digest_loop", "social_loop",
+    "outcome_loop", "postmortem_loop", "sample_build_loop", "scorecard_loop", "sector_digest_loop", "social_loop",
     "theme_exposure_loop", "transcripts_poller", "weekly_digest_loop",
     "register_all", "record_run", "status_snapshot", "KNOWN_LOOPS",
 ]
@@ -177,3 +179,7 @@ def register_all(scheduler) -> None:
     # funnel events, limiter + analytics GC, stale-reservation settlement.
     # Plan changes never happen here (`plans.resolve_plan` is read-time).
     billing_loop.register(scheduler)
+    # Phase 6 — the fundamental scorecard's single daily loop (03:45 UTC):
+    # queue recovery, the scheduled scoring run, the monthly evaluation
+    # enqueue, the drain and retention GC all happen inside one tick.
+    scorecard_loop.register(scheduler)

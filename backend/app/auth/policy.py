@@ -126,7 +126,33 @@ ROUTES: tuple[tuple[str, str, Policy], ...] = (
     ("POST", "/api/admin/evaluate-outcomes", _pro("track_record", "global 1/10min limit")),
     ("GET", "/api/admin/dcf-versions/{ticker}", _pro("memo_history")),
     ("GET", "/api/admin/lopsidedness-audit", _pro("track_record", "no UI caller today")),
+    # --- fundamental scorecard (Phase 6) ------------------------------------
+    # DB reads only; the worker computes. Listed BEFORE the `{ticker}`
+    # template so `spec` / `evaluation` / `export` are not read as tickers
+    # (the first matching row wins). The export row is documentation: with
+    # `SCORECARD_EXPORT_TOKEN` set `lookup` classifies it public and the
+    # route enforces that token itself (see `_scorecard_export_policy`).
+    ("GET", "/api/scorecard", _pro("scorecard")),
+    ("GET", "/api/scorecard/spec", _pro("scorecard")),
+    ("GET", "/api/scorecard/evaluation", _pro("scorecard")),
+    ("GET", "/api/scorecard/export", _pro("scorecard", "public when SCORECARD_EXPORT_TOKEN is set; the route checks it")),
+    ("GET", "/api/scorecard/{ticker}", _pro("scorecard")),
 )
+
+SCORECARD_EXPORT_PATH = "/api/scorecard/export"
+
+
+def _scorecard_export_policy() -> Policy:
+    """The export has two audiences. With `SCORECARD_EXPORT_TOKEN` unset it
+    is a Pro read like its siblings. With the token set it is handed to a
+    downstream system that has neither a customer login nor the admin
+    token, so the customer wall must let it through and the route enforces
+    the bearer itself (`routes_scorecard._check_export_token`). Resolved
+    per call because tests flip the setting."""
+    from ..config import settings
+    if settings.scorecard_export_token:
+        return Policy(PUBLIC, note="SCORECARD_EXPORT_TOKEN set — the route enforces its own bearer")
+    return _pro("scorecard", "Pro read; set SCORECARD_EXPORT_TOKEN for a token-gated export")
 
 
 def _compile(template: str) -> re.Pattern[str]:
@@ -151,6 +177,8 @@ def lookup(method: str, path: str) -> tuple[Policy, bool]:
         # CORS preflights carry no credentials by design and never reach a
         # handler; challenging them just breaks the browser.
         return _PUBLIC, True
+    if m == "GET" and path == SCORECARD_EXPORT_PATH:
+        return _scorecard_export_policy(), True
     for rm, rx, policy in _COMPILED:
         if rm == m and rx.match(path):
             return policy, True
