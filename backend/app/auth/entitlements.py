@@ -91,6 +91,28 @@ def resolve_for_user(db: Session, user: User, now: datetime | None = None) -> Pl
     return resolve_plan(user, current_subscription(db, user.id), active_overrides(db, user.id, now), now)
 
 
+QUOTA_UNLIMITED = "unlimited"
+
+
+def quota_override_limit(db: Session, user_id: int, feature: str, now: datetime) -> tuple[bool, int | None]:
+    """`(found, limit)` from the newest active `admin_overrides` row of
+    kind `quota` for this feature — the operator's "lift the meter for a
+    support ticket" lever (`POST /api/admin/billing/overrides`). `limit`
+    is None for `unlimited`. A quota override changes only the meter of
+    a feature the plan already allows: granting a Pro-only feature is
+    what a `plan` override is for, and the two are kept separate so an
+    override cannot widen access by accident."""
+    rows = [o for o in active_overrides(db, user_id, now) if o.kind == "quota" and o.feature == feature]
+    for o in sorted(rows, key=lambda o: o.id, reverse=True):
+        value = (o.value or "").strip().lower()
+        if value == QUOTA_UNLIMITED:
+            return True, None
+        if value.isdigit():
+            return True, int(value)
+        log.warning("quota override %s for user %s has an unusable value; ignored", o.id, user_id)
+    return False, None
+
+
 def _plan_state(db: Session, principal: Principal, now: datetime) -> PlanState:
     if principal.plan_state is not None:
         return principal.plan_state
@@ -258,6 +280,9 @@ def authorize(
             return grant
 
         limit = allowance.limit
+        overridden, override_limit = quota_override_limit(session, user_id, feature, now)
+        if overridden:
+            limit = override_limit
         if feat.distinct_resources and resource:
             seen = usage.distinct_resources(session, user_id, feature, pk)
             if resource in seen:
@@ -339,6 +364,10 @@ def entitlement_snapshot(db: Session, user: User, state: PlanState, *, now: date
         a = features.allowance(name, state.plan)
         used_n = counters.get(name, 0)
         limit = a.limit if (a.metered and settings.usage_limits_enabled) else None
+        if limit is not None and a.allowed:
+            overridden, override_limit = quota_override_limit(db, user.id, name, now)
+            if overridden:
+                limit = override_limit
         allowed = a.allowed and not state.suspended
         remaining = None if limit is None else max(0, limit - used_n)
         out[name] = EntitlementOut(
