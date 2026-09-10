@@ -1,0 +1,15 @@
+{
+  "id": "evt_TEST",
+  "object": "event",
+  "api_version": "2024-06-20",
+  "created": 1763000000,
+  "livemode": false,
+  "type": "customer.deleted",
+  "data": {
+    "object": {
+      "id": "cus_TEST",
+      "object": "customer",
+      "deleted": true
+    }
+  }
+}

@@ -148,22 +148,17 @@ flag is on.
 | POST | `/api/admin/fix-sequences` | none | DB-only (Postgres sequences) | admin | admin | admin | |
 | POST | `/api/admin/samples/rebuild` | none | DB-only (control row in `public_samples`; the worker builds on its next poll, ≤10 min) | admin | admin | admin | tickers ⊆ `SAMPLE_TICKERS` else 422; merges repeated requests |
 | GET | `/api/admin/abuse-telemetry` | none | DB-only (`analytics_events`, `users.bootstrap_ip_hash`, `ui_logs`) | admin | admin | admin | FEAT-002 phase 6: 429s by scope/plan/route, trial creations per IP hash, share of authenticated requests refused with 429, trailing 24h |
+| POST | `/api/billing/checkout` | none yet (S5 `Account.tsx` / pricing CTA → `api.checkout`) | Stripe (httpx: `POST /customers` once per user, `POST /checkout/sessions`; idempotency keys on both) | public (auth off → 404 `feature_disabled`) | free | checkout (10/hour/user) | 404 `feature_disabled` while `BILLING_ENABLED=false`; 403 `email_unverified`; 409 `already_subscribed` when an active/trialing/past_due row exists; 503 `billing_unavailable` when Stripe is unconfigured/unreachable. Mid-trial (≥48h left) passes `subscription_data[trial_end]=users.trial_ends_at` so Stripe starts `trialing` and the first charge lands when the local trial ends; otherwise `billing_starts:"now"`. The redirect is never proof of payment. |
+| POST | `/api/billing/portal` | none yet (S5 `Account.tsx` "Manage billing") | Stripe (httpx: `POST /billing_portal/sessions`) | public (auth off → 404) | free | checkout (10/hour/user) | 409 `no_billing_account` before any checkout created a customer; return URL `/app/account` |
+| POST | `/api/billing/reconcile` | none yet (S5 `BillingSuccess.tsx` after polling `/api/me`) | Stripe (httpx: `GET /subscriptions?customer=…&status=all`) | public (auth off → 404) | free | reconcile (5/hour/user) | applies fetched objects through the same state machine as webhooks, as of *now*; a fetch error returns `reconcile.ok=false` and changes nothing (never downgrades); returns the `/api/me` payload |
+| POST | `/api/billing/webhook` | Stripe only | none (`Stripe-Signature` verified locally: HMAC-SHA256 over `t.body`, 300s tolerance, constant-time) | public | public | none (`@limiter.exempt`; exempt from the customer policy — the signature is the auth) | raw body ≤256 KB (413); 400 bad signature / non-event; 503 when `STRIPE_WEBHOOK_SECRET` unset (Stripe retries); 500 only on a DB write failure (retry is idempotent via `billing_webhook_events.stripe_event_id`); 200 `{received, outcome}` for `applied` / `duplicate` / `ignored_stale` / `ignored_unhandled` / `error` (ownership mismatch → no grant). Never writes `users.trial_*`. |
+| GET | `/api/admin/billing/users/{external_id}` | none | DB-only (`users`, `subscriptions`, `admin_overrides`, last 20 `usage_events`) | admin | admin | admin | support view; no email (none is stored) |
+| POST | `/api/admin/billing/overrides` | none | DB-only (`admin_overrides`; `trial_reset` also rewrites `users.trial_*` — an operator action, the one writer besides bootstrap) | admin | admin | admin | kinds `plan` (value `pro`), `quota` (a metered feature + `unlimited`/integer; replaces that feature's monthly limit in `entitlements.authorize` and on `/api/me` while active), `trial_reset`, `suspend`; `reason` mandatory |
 
 ### Routes FEAT-002 still adds (not in `app.openapi()` yet)
 
-Listed so the allowlist is complete when the policy layer is written; they
-are owned by slice S4 and are not pinned by `test_route_audit.py` until they
-exist; when a slice lands one, move its row into the main table above
-with the full columns (the drift test parses every live route there).
-
-| Method | Path | External calls | Proposed policy | Rate scope |
-|---|---|---|---|---|
-| POST | `/api/billing/checkout` | Stripe (httpx) | free, verified email, `BILLING_ENABLED` | 10/hour/user |
-| POST | `/api/billing/portal` | Stripe (httpx) | free with `stripe_customer_id` | 10/hour/user |
-| POST | `/api/billing/reconcile` | Stripe (httpx) | free | 5/hour/user |
-| POST | `/api/billing/webhook` | none (signature verified locally) | Stripe signature only — `@limiter.exempt`, exempt from the customer policy | none |
-| GET | `/api/admin/billing/users/{external_id}` | DB-only | admin | admin |
-| POST | `/api/admin/billing/overrides` | DB-only | admin | admin |
+None — every FEAT-002 route is live and in the table above. (S4 landed the
+billing routes; keep this heading so a future addition has a home.)
 
 ### Non-API paths
 

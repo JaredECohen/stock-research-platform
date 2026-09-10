@@ -1,0 +1,22 @@
+{
+  "id": "evt_TEST",
+  "object": "event",
+  "api_version": "2024-06-20",
+  "created": 1759992050,
+  "livemode": false,
+  "type": "invoice.paid",
+  "data": {
+    "object": {
+      "id": "in_TEST",
+      "object": "invoice",
+      "customer": "cus_TEST",
+      "subscription": "sub_TEST",
+      "billing_reason": "subscription_cycle",
+      "status": "paid",
+      "paid": true,
+      "amount_paid": 2999,
+      "currency": "usd",
+      "customer_email": "should-never-be-stored@example.com"
+    }
+  }
+}

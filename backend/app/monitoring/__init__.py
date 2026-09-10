@@ -26,6 +26,7 @@ _LAST_RUNS: dict = {}
 # endpoint showed nothing wrong. `test_cron_health_cross_process`
 # asserts this list matches what `register_all` actually registers.
 KNOWN_LOOPS: tuple[str, ...] = (
+    "billing_loop",
     "catalyst_loop",
     "checkpoint_gc",
     "edgar_poller",
@@ -122,6 +123,7 @@ def status_snapshot() -> dict:
 
 
 from . import (  # noqa: E402,F401
+    billing_loop,
     catalyst_loop,
     checkpoint_gc,
     edgar_poller,
@@ -141,7 +143,7 @@ from . import (  # noqa: E402,F401
 )
 
 __all__ = [
-    "catalyst_loop", "checkpoint_gc", "edgar_poller", "history_backfill",
+    "billing_loop", "catalyst_loop", "checkpoint_gc", "edgar_poller", "history_backfill",
     "llm_log_gc", "macro_loop", "mispricing_audit_loop", "news_loop",
     "outcome_loop", "postmortem_loop", "sample_build_loop", "sector_digest_loop", "social_loop",
     "theme_exposure_loop", "transcripts_poller", "weekly_digest_loop",
@@ -171,3 +173,7 @@ def register_all(scheduler) -> None:
     # FEAT-002 — curated public samples for the logged-out site. Polls for
     # admin rebuild requests and builds weekly; see the module docstring.
     sample_build_loop.register(scheduler)
+    # FEAT-002 — hourly billing housekeeping: trial-expiry / downgrade
+    # funnel events, limiter + analytics GC, stale-reservation settlement.
+    # Plan changes never happen here (`plans.resolve_plan` is read-time).
+    billing_loop.register(scheduler)
