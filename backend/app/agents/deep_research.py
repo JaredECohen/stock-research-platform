@@ -173,6 +173,7 @@ def run_dialog_loop(
     initial_findings: dict[str, AgentFinding],
     re_fire: dict[str, AgentDispatcher],
     max_rounds: int | None = None,
+    seed_questions: list[CritiqueQuestion] | None = None,
 ) -> tuple[dict[str, AgentFinding], list[RoundFindings]]:
     """Run the PM↔specialist dialog. Returns the final-round findings
     + the full round_findings list for persistence.
@@ -183,14 +184,25 @@ def run_dialog_loop(
     specialist gets the right inputs (profile / ratios / dcf / etc.)
     without leaking through the loop's signature.
 
+    `seed_questions` (Phase 6) are questions a caller wants asked on
+    ROUND 1 regardless of the PM critique — today the scorecard
+    disagreement review seeds. Contract: when non-empty, round 1 always
+    re-fires (the seeds are prepended to whatever the critique adds, and
+    the "no further questions" early exit is bypassed for that round
+    only), so a review regen asks its question even where the critique's
+    LLM call is unavailable and would otherwise end the dialog before any
+    re-fire. Rounds 2+ are unchanged. None / empty is the pre-Phase-6
+    behavior exactly.
+
     Loop exits when ANY of:
-    - PM returns `no_further_questions=True`.
-    - PM returns 0 questions (functionally the same).
+    - PM returns `no_further_questions=True` (round 1: only without seeds).
+    - PM returns 0 questions (functionally the same; same round-1 caveat).
     - Round count hits `max_rounds`.
     - A round's re-fires all fail (we don't burn budget on a stuck loop).
     """
     if max_rounds is None:
         max_rounds = settings.deep_research_max_rounds
+    seeds: list[CritiqueQuestion] = list(seed_questions or [])
 
     # Round 0 — the existing parallel fan-out. Persist it as round 0 with
     # no PM questions so the audit log is complete.
@@ -204,7 +216,17 @@ def run_dialog_loop(
             round_num=r - 1, current_findings=current,
             rounds_so_far=rounds, run_id=run_id,
         )
-        if critique.no_further_questions or not critique.questions:
+        # Round 1 carries the seeds first (a seeded question must be asked
+        # before the PM's own follow-ups, and must be asked at all).
+        questions: list[CritiqueQuestion] = list(critique.questions)
+        rationale = critique.rationale
+        if r == 1 and seeds:
+            questions = seeds + questions
+            rationale = (
+                f"seeded {len(seeds)} review question(s) from the scorecard "
+                f"disagreement queue; PM critique: {critique.rationale or 'n/a'}"
+            )[:240]
+        elif critique.no_further_questions or not critique.questions:
             # Persist the no-questions exit so reviewers see why the loop
             # ended. early_exit=True signals "PM was satisfied", not "we
             # ran out of budget".
@@ -219,7 +241,7 @@ def run_dialog_loop(
         # don't have a re-fire dispatcher for (defensive).
         new_findings: dict[str, AgentFinding] = {}
         any_success = False
-        for q in critique.questions:
+        for q in questions:
             disp = re_fire.get(q.target_agent)
             if disp is None:
                 continue
@@ -237,9 +259,9 @@ def run_dialog_loop(
                 )
 
         rounds.append(RoundFindings(
-            round=r, pm_questions=critique.questions,
+            round=r, pm_questions=questions,
             findings=new_findings, early_exit=False,
-            pm_rationale=critique.rationale,
+            pm_rationale=rationale,
         ))
 
         # Update `current` with the latest findings — the next round's

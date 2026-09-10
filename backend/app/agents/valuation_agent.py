@@ -13,13 +13,23 @@ from . import llm, prompts
 def run_valuation_agent(
     profile: dict, ratios: dict, dcf: DCFResult | None,
     *, prior_round_critique: str | None = None,
+    scorecard_block: str | None = None,
 ) -> AgentFinding:
+    """Valuation analyst: DCF + multiples, optionally against the scorecard.
+
+    `scorecard_block` is the <= 600-char Fundamental Factor Scorecard read
+    from `scorecard_context.prompt_block` (the valuation family is the
+    "what is already priced in" leg). It is an EXPLICIT kwarg because this
+    agent builds its own payload from named ratio keys — a value stuffed
+    into `ratios` would be silently dropped. None / empty leaves the
+    payload and the prompt exactly as they were before Phase 6.
+    """
     # Pull a fresh intraday quote rather than the 7-day-cached
     # `profile.last_price`. Falls back to last close if the quote
     # chain is unavailable (e.g., backtest as-of context).
     ticker = profile.get("ticker")
     live_price = get_current_price(ticker) if ticker else None
-    payload = {
+    payload: dict = {
         "ticker": ticker,
         "current_price": live_price if live_price is not None else profile.get("last_price"),
         "PE": ratios.get("PE"),
@@ -34,6 +44,10 @@ def run_valuation_agent(
         "dcf_bear_implied": dcf.bear.implied_share_price if dcf else None,
         "dcf_base_upside": dcf.base.upside_pct if dcf else None,
     }
+    if scorecard_block:
+        # Observed rank + model read under a named version; the prompt
+        # tells the analyst to reconcile, not defer, to it.
+        payload["fundamental_scorecard"] = scorecard_block
     # Wave 7C: discretionary notes tagged for the valuation agent.
     from ..services.research_notes import build_notes_block_for_agent
     notes_block = build_notes_block_for_agent(
