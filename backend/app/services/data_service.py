@@ -26,6 +26,7 @@ from datetime import date as _date
 from functools import lru_cache
 from typing import Any
 
+from ..config import settings
 from ..providers.alpha_vantage_provider import AlphaVantageProvider
 from ..providers.base import ProviderStatus
 from ..providers.bls_provider import BLSProvider
@@ -271,6 +272,12 @@ class DataService:
             "factor_returns": [self.ken_french],
         }
         chain = chains.get(capability, [])
+        if settings.use_demo_data_only:
+            # USE_DEMO_DATA=true with ENABLE_LIVE_DATA=false (every test run)
+            # means "no provider calls": a developer .env carrying provider
+            # keys must not turn the suite into paid traffic. The injected
+            # test provider is the whole chain then.
+            return [self._test_provider] if self._test_provider is not None else []
         if self._test_provider is not None:
             return [self._test_provider, *chain]
         return chain
