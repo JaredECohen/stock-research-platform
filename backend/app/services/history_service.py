@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
 from ..models import EarningsTranscript, FilingDoc, FinancialPeriod
+from . import scorecard_pit
 
 log = logging.getLogger(__name__)
 
@@ -115,8 +116,20 @@ def _upsert_financial_period(
     line_item: str, value: float | None, period_end: _date | None,
     fiscal_year: int | None, fiscal_quarter: int | None,
     source: str,
+    available_at: _date | None = None,
+    available_at_source: str | None = None,
+    fetched_at: datetime | None = None,
 ) -> bool:
-    """Insert-or-update one row. Returns True if an actual write happened."""
+    """Insert-or-update one row. Returns True if an actual write happened.
+
+    `available_at` / `available_at_source` (Phase 6, point-in-time) are
+    written on INSERT only. A restatement overwrites `value` and
+    `period_end` but never moves `available_at`: the figure was first
+    knowable when it was first published, and re-dating it to the
+    restatement would let a historical scorecard "know" a number before
+    anyone did. Rows that predate the column keep NULL here and are filled
+    by `scorecard_pit.backfill_available_at`.
+    """
     existing = db.execute(
         select(FinancialPeriod).where(
             FinancialPeriod.ticker == ticker,
@@ -125,6 +138,7 @@ def _upsert_financial_period(
             FinancialPeriod.line_item == line_item,
         )
     ).scalar_one_or_none()
+    now = fetched_at or datetime.utcnow()
     if existing is not None:
         # Cheap value compare with float tolerance to avoid spurious rewrites.
         if existing.value == value and existing.period_end == period_end:
@@ -134,13 +148,14 @@ def _upsert_financial_period(
         existing.fiscal_year = fiscal_year
         existing.fiscal_quarter = fiscal_quarter
         existing.source = source
-        existing.fetched_at = datetime.utcnow()
+        existing.fetched_at = now
         return True
     db.add(FinancialPeriod(
         ticker=ticker, period=period, statement=statement,
         line_item=line_item, value=value, period_end=period_end,
         fiscal_year=fiscal_year, fiscal_quarter=fiscal_quarter,
-        source=source, fetched_at=datetime.utcnow(),
+        source=source, fetched_at=now,
+        available_at=available_at, available_at_source=available_at_source,
     ))
     return True
 
@@ -161,9 +176,20 @@ def _ingest_statement_rows(
             continue
         by_period[period] = row
     written = 0
+    # Point-in-time availability is derived once per period row (every
+    # line of a statement was published together). The ticker's periodic
+    # filings are loaded once here rather than per line; `backfill_ticker`
+    # ingests filings BEFORE statements so a first pass can match them.
+    filings = scorecard_pit.load_filing_dates(db, ticker) if by_period else []
+    fetched_at = datetime.utcnow()
     for period, row in by_period.items():
         period_end = _coerce_date(row.get("period_end") or row.get("date") or row.get("period"))
         fy, fq = _parse_period(period)
+        available_at, available_at_source = scorecard_pit.derive_available_at(
+            ticker=ticker, period_end=period_end, fiscal_year=fy, fiscal_quarter=fq,
+            provider_date=row.get("filing_date") or row.get("accepted_date"),
+            fetched_at=fetched_at, filings=filings,
+        )
         for line in line_whitelist:
             if line not in row:
                 continue
@@ -176,6 +202,8 @@ def _ingest_statement_rows(
                 db, ticker=ticker, period=period, statement=statement,
                 line_item=line, value=value, period_end=period_end,
                 fiscal_year=fy, fiscal_quarter=fq, source=source,
+                available_at=available_at, available_at_source=available_at_source,
+                fetched_at=fetched_at,
             ):
                 written += 1
     return written
@@ -399,6 +427,12 @@ def backfill_ticker(ticker: str, *, db: Session | None = None) -> dict[str, int]
     try:
         _ensure_tables(db)
         source = ds.mode()
+        # Filings first: a statement row's point-in-time `available_at`
+        # falls back to the matching 10-K / 10-Q filing date when the
+        # provider did not supply one, and `_ingest_filings` flushes new
+        # rows, so the same pass can see them. Order is otherwise
+        # irrelevant — the three ingests share nothing else.
+        n_filings = _ingest_filings(db, ticker, filings)
         n_fp = 0
         n_fp += _ingest_statement_rows(
             db, ticker, "income", statements.get("income", []),
@@ -412,7 +446,6 @@ def backfill_ticker(ticker: str, *, db: Session | None = None) -> dict[str, int]
             db, ticker, "cash", statements.get("cash", []),
             _CASH_LINES, source,
         )
-        n_filings = _ingest_filings(db, ticker, filings)
         n_tx = _ingest_transcripts(db, ticker, transcripts)
         db.commit()
         return {

@@ -232,3 +232,52 @@ def test_feat_001_chart_commentaries_columns_are_repaired_on_a_live_table():
         for col in (idx.get("column_names") or [])
     }
     assert {"user_id", "fingerprint", "cache_key"} <= indexed
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — the scorecard tables and the two point-in-time columns
+# ---------------------------------------------------------------------------
+
+PHASE_6_TABLES = (
+    "scorecard_versions", "scorecard_runs", "scorecard_scores",
+    "price_month_ends", "scorecard_evaluations", "scorecard_disagreements",
+)
+
+# `financial_periods` exists in every long-lived database (Wave 2), so its
+# two new nullable columns must arrive via the boot-time reconcile.
+PHASE_6_ADDED_COLUMNS = (
+    ("financial_periods", "available_at", "ix_financial_periods_available_at"),
+    ("financial_periods", "available_at_source", None),
+)
+
+
+def test_phase_6_tables_are_created():
+    init_db()
+    existing = set(sa_inspect(engine).get_table_names())
+    missing = [t for t in PHASE_6_TABLES if t not in existing]
+    assert not missing, missing
+
+
+@pytest.mark.parametrize("table,column,index", PHASE_6_ADDED_COLUMNS)
+def test_phase_6_added_columns_are_repaired_on_a_live_table(table, column, index):
+    init_db()
+    assert column in _columns(table)
+    _drop_column(table, column, index)
+    assert column not in _columns(table), "setup failed"
+
+    added = reconcile_missing_columns()
+    assert f"{table}.{column}" in added
+    assert column in _columns(table)
+    if index:
+        indexed = {
+            col for idx in sa_inspect(engine).get_indexes(table)
+            for col in (idx.get("column_names") or [])
+        }
+        assert column in indexed
+
+
+def test_phase_6_added_columns_are_nullable():
+    from app.models import FinancialPeriod
+    for name in ("available_at", "available_at_source"):
+        col = FinancialPeriod.__table__.columns[name]
+        assert col.nullable, name
