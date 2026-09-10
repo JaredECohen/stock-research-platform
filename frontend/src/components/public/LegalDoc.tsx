@@ -13,7 +13,7 @@ export const LEGAL_DOCS: Record<LegalDocId, { title: string; description: string
   privacy: { title: "Privacy policy", description: "What MarketMosaic stores about you, why, and for how long.", body: privacy },
   terms: { title: "Terms of service", description: "The terms under which MarketMosaic's research software is provided.", body: terms },
   "billing-terms": { title: "Billing terms", description: "How the Pro trial, subscription, renewal and cancellation work.", body: billingTerms },
-  cookies: { title: "Cookies and storage", description: "Exactly what this site stores in your browser: an anonymous id and a session id, no third-party scripts.", body: cookies },
+  cookies: { title: "Cookies and storage", description: "Exactly what this site stores in your browser: an anonymous id, a session id, and the sign-in provider's cookies when accounts are enabled.", body: cookies },
 };
 
 /**
@@ -55,6 +55,48 @@ export const STORAGE_INVENTORY: Array<{ key: string; where: "localStorage" | "se
   { key: "screener:tab:v1, screener:factor:v1, screener:custom:v1", where: "localStorage", scope: "app", purpose: "Screener tab and saved rule set", source: "src/pages/Screener.tsx" },
 ];
 
+/**
+ * Cookies the sign-in provider sets on this domain. main.tsx mounts
+ * AuthProvider around the whole App, so with accounts enabled clerk-js
+ * runs on the marketing pages too and `__client_uat` exists for every
+ * visitor. Kept out of STORAGE_INVENTORY because our code never writes
+ * them (clerk-js does), so the source check in `content/copy.test.ts`
+ * does not apply; and named here rather than in cookies.md because the
+ * Markdown renderer's italics rule would mangle the leading underscores.
+ */
+export const PROVIDER_COOKIES: Array<{ name: string; when: string; purpose: string }> = [
+  { name: "__client_uat", when: "Every visitor, signed in or not", purpose: "Records whether a Clerk session exists so the page can check without a network round-trip" },
+  { name: "__session", when: "Once you sign in", purpose: "Carries your session token so the app can call the API as you" },
+];
+
+export function ProviderCookies() {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-ink-700 mt-6">
+      <table className="min-w-full text-sm">
+        <caption className="text-left px-3 py-2 text-xs uppercase tracking-wider text-slate-400 bg-ink-900/60">
+          Cookies set by the sign-in provider
+        </caption>
+        <thead className="text-xs uppercase tracking-wider text-slate-400">
+          <tr>
+            <th scope="col" className="text-left px-3 py-2">Cookie</th>
+            <th scope="col" className="text-left px-3 py-2">Set for</th>
+            <th scope="col" className="text-left px-3 py-2">Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          {PROVIDER_COOKIES.map((c) => (
+            <tr key={c.name} className="border-t border-ink-700 text-slate-300 align-top">
+              <td className="px-3 py-2 font-mono text-xs text-slate-100">{c.name}</td>
+              <td className="px-3 py-2 whitespace-nowrap">{c.when}</td>
+              <td className="px-3 py-2">{c.purpose}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function StorageInventory() {
   return (
     <div className="overflow-x-auto rounded-xl border border-ink-700 mt-6">
@@ -93,7 +135,12 @@ export default function LegalDoc({ doc }: { doc: LegalDocId }) {
         <DraftBanner />
       </div>
       <Markdown text={d.body} />
-      {doc === "cookies" ? <StorageInventory /> : null}
+      {doc === "cookies" ? (
+        <>
+          <StorageInventory />
+          <ProviderCookies />
+        </>
+      ) : null}
     </article>
   );
 }

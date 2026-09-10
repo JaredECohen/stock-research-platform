@@ -109,7 +109,7 @@ export default function PricingTable({ headingLevel = 2 }: { headingLevel?: 2 | 
         <li>All allowances are per UTC calendar month and reset on the first of the month at 00:00 UTC.</li>
         <li>
           Subscribe during the trial and the remaining trial days are kept when at least 48 hours remain (billing starts when the trial
-          would have ended); with less than 48 hours left, billing starts at checkout — the checkout page says which applies.
+          would have ended); with less than 48 hours left, billing starts at checkout. Stripe's checkout page shows the first charge date before you confirm.
         </li>
         <li>Cancel any time from the billing portal; Pro stays active until the end of the paid period.</li>
         {authEnabled && !config.billing_enabled ? (

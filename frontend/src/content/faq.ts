@@ -34,7 +34,7 @@ export const FAQ: FAQEntry[] = [
     id: "trial",
     question: "How does the Pro trial work?",
     answer:
-      "Every new account starts a Pro trial on sign-up — no card is asked for. When it ends you drop to Free Explorer automatically; nothing is charged unless you subscribe. If you subscribe while the trial is still running, the remaining trial days are kept when at least 48 hours remain (billing starts when the trial would have ended); with less than that left, billing starts at checkout and the checkout page says so. The trial length shown on the pricing page is the one the backend grants.",
+      "Every new account starts a Pro trial on sign-up — no card is asked for. When it ends you drop to Free Explorer automatically; nothing is charged unless you subscribe. If you subscribe while the trial is still running, the remaining trial days are kept when at least 48 hours remain (billing starts when the trial would have ended); with less than that left, billing starts at checkout. Stripe's checkout page shows the first charge date before you confirm. The trial length shown on the pricing page is the one the backend grants.",
     featured: true,
   },
   {

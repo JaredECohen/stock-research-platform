@@ -31,7 +31,7 @@ MarketMosaic is operated by its owner (the "operator"). Contact details for priv
 
 ## Third parties
 
-- **Clerk** — authentication. Runs only on the sign-in pages and inside the app, not on the marketing pages.
+- **Clerk** — authentication. When accounts are enabled, Clerk's script loads on every page of this site, including the marketing pages, and sets its own first-party cookies on this domain (one for every visitor, one more once you sign in); the cookie page names them. Clerk processes your sign-in details under its own privacy policy.
 - **Stripe** — payments and the billing portal.
 - **AI model providers** — process the prompts the app sends on your behalf to generate research.
 - **Market-data providers and SEC EDGAR** — the sources of filings, fundamentals and prices.

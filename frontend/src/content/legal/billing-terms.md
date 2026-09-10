@@ -10,7 +10,7 @@ The current prices are shown on the pricing page in US dollars. Taxes may be add
 
 - Every new verified account starts a Pro trial automatically. No payment method is requested.
 - When the trial ends, the account becomes Free Explorer. Nothing is charged.
-- Subscribing during the trial: if at least 48 hours of trial remain, the remaining trial time is kept and the first charge happens when the trial would have ended. If less than 48 hours remain, billing starts at checkout. The checkout page states which applies before you confirm.
+- Subscribing during the trial: if at least 48 hours of trial remain, the remaining trial time is kept and the first charge happens when the trial would have ended. If less than 48 hours remain, billing starts at checkout. Stripe's checkout page shows the amount due today and the first charge date before you confirm.
 
 ## Subscription
 
@@ -32,4 +32,4 @@ The refund policy will be stated here once the operator's legal review is comple
 
 ## Allowance changes
 
-Allowances shown on the pricing page may change with notice. A change never reduces what a paid period already started with.
+Allowances shown on the pricing page may change. A change applies to every account, including a paid period already in progress, from the moment it takes effect; the pricing page and your account page always show the allowances currently in force.

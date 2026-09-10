@@ -19,7 +19,7 @@ Nothing in the service is personalised financial, investment, legal, tax or acco
 
 ## 4. Plans and allowances
 
-Free Explorer and Pro include monthly allowances that are shown on the pricing page and on your account page. Allowances are measured per UTC calendar month. The operator may change allowances with notice on the pricing page; paid subscribers keep the allowances in force when their current period started until it ends.
+Free Explorer and Pro include monthly allowances that are shown on the pricing page and on your account page. Allowances are measured per UTC calendar month. The operator may change allowances. A change applies to every account, including paid subscriptions already in progress, from the moment it takes effect; the pricing page and your account page always show the allowances currently in force.
 
 ## 5. Acceptable use
 
