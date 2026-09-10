@@ -1,0 +1,39 @@
+{
+  "id": "evt_TEST",
+  "object": "event",
+  "api_version": "2024-06-20",
+  "created": 1762670400,
+  "livemode": false,
+  "type": "customer.subscription.deleted",
+  "data": {
+    "object": {
+      "id": "sub_TEST",
+      "object": "subscription",
+      "customer": "cus_TEST",
+      "status": "canceled",
+      "cancel_at_period_end": false,
+      "canceled_at": 1760100000,
+      "ended_at": 1762670400,
+      "trial_end": null,
+      "current_period_start": 1759992000,
+      "current_period_end": 1762670400,
+      "created": 1757400000,
+      "metadata": {"user_id": "USER_TEST", "external_id": "user_TEST"},
+      "items": {
+        "object": "list",
+        "data": [
+          {
+            "id": "si_TEST",
+            "object": "subscription_item",
+            "price": {
+              "id": "price_TEST_monthly",
+              "object": "price",
+              "recurring": {"interval": "month", "interval_count": 1}
+            },
+            "quantity": 1
+          }
+        ]
+      }
+    }
+  }
+}
