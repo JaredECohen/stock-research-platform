@@ -77,7 +77,10 @@ def _build_recommendations(
             ))
 
     # DCF bear well below current → rating-level signal.
-    if dcf_summary and isinstance(dcf_summary, dict):
+    # `dcf_summary` is the DCF agent's prose summary (str), so the former
+    # `isinstance(dcf_summary, dict)` guard never held and this signal
+    # never fired.
+    if dcf_summary:
         bear_text = str(dcf_summary).lower()
         if "downside" in bear_text or "bear" in bear_text:
             recs.append(RiskRecommendation(

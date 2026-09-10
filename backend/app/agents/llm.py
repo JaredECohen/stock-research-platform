@@ -555,6 +555,7 @@ def gemini_chat_text(
                 config["tools"] = [types.Tool(google_search=types.GoogleSearch())]
             except Exception:
                 # Older versions: tools accept a dict
+                log.debug("google-genai types.Tool unavailable; using the dict tool config")
                 config["tools"] = [{"google_search": {}}]
         resp = client.models.generate_content(
             model=chosen_model,
@@ -669,7 +670,10 @@ def _extract_json(text: str) -> dict[str, Any] | None:
         try:
             return json.loads(text[start : end + 1])
         except Exception:
+            # Length only — the body may carry prompt or provider text.
+            log.debug("LLM output was not parseable JSON after every recovery (len=%d)", len(text))
             return None
+    log.debug("LLM output held no JSON object to recover (len=%d)", len(text))
     return None
 
 
