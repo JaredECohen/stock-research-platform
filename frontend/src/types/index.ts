@@ -1,6 +1,10 @@
 // Shared types mirrored from the FastAPI Pydantic schemas.
 // Keep these in sync with backend/app/schemas.py.
 
+// Phase 6 — the memo's scorecard summary lives with the rest of the
+// scorecard contracts in ./scorecard; only the memo field is declared here.
+import type { ScorecardSummary } from "./scorecard";
+
 export type RatingLabel =
   | "Very Bullish"
   | "Bullish"
@@ -491,6 +495,13 @@ export interface StockMemoOut {
   // Wave 9 — PM↔specialist deep-research dialog. Empty when the loop is
   // disabled (default) or the memo is from a backtest run.
   round_findings?: RoundFindings[];
+  // Phase 6 — the Fundamental Factor Scorecard read the memo was written
+  // against (observed rank beside the model read, plus the disagreement
+  // flag). Null when no succeeded run had scored the ticker (the memo's
+  // `degraded_agents` then carries "Fundamental Scorecard" and the section
+  // renders n/a); absent on memos that pre-date the field. It informs the
+  // memo and never enters the rating blend.
+  scorecard?: ScorecardSummary | null;
   disclaimer: string;
 }
 

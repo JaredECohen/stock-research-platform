@@ -21,6 +21,7 @@ from .agents import (
     RoundFindings,
 )
 from .common import RatingLabel
+from .scorecard import ScorecardSummary
 
 
 class MispricingThesis(BaseModel):
@@ -148,6 +149,15 @@ class StockMemoOut(BaseModel):
     # so adding an analyst does not require a schema edit. Empty for the
     # current eight-agent roster.
     extra_agent_views: dict[str, AgentFinding] = Field(default_factory=dict)
+    # Phase 6 — the Fundamental Factor Scorecard read the memo was written
+    # against: observed rank (percentiles, coverage, fiscal period) beside
+    # the model read (z, contributions) under a named version, plus the
+    # disagreement flag when the narrative contradicts it. None when no
+    # succeeded run has scored the ticker (the section renders n/a and
+    # `degraded_agents` carries a soft "Fundamental Scorecard" entry), on
+    # memos that pre-date the field, and when `ENABLE_SCORECARD=false`.
+    # It informs the memo; it does not enter the rating blend.
+    scorecard: ScorecardSummary | None = None
     disclaimer: str = (
         "MarketMosaic is for investment research and education only. "
         "It does not provide personalized financial, investment, legal, or tax advice."
