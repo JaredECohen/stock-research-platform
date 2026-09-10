@@ -219,10 +219,21 @@ def test_healthy_run_carries_no_degradation_events(nvda_memo):
     """RP-001: with no keys every deterministic path is the design, so a
     healthy demo run must not report PM Synthesis / PM DCF Adjuster /
     Thesis Builder as degraded — `note_soft` is gated on `has_llm` where
-    the deterministic path is expected."""
-    assert nvda_memo.degradation_events == []
-    assert nvda_memo.degraded_agents == []
+    the deterministic path is expected.
+
+    Phase 6: the one entry a healthy run MAY carry is the scorecard's soft
+    "no row on file" note — CI has no worker and therefore no score rows,
+    and by design that absence is reported (the section says n/a), not
+    hidden. Everything else must still be empty.
+    """
+    from app.agents.scorecard_context import AGENT_NAME
+    events = [e for e in nvda_memo.degradation_events if e["agent"] != AGENT_NAME]
+    agents = [a for a in nvda_memo.degraded_agents if a != AGENT_NAME]
+    assert events == []
+    assert agents == []
     assert nvda_memo.extra_agent_views == {}
+    for e in nvda_memo.degradation_events:
+        assert e["error_type"] == "DataUnavailable", e
 
 
 def test_degradation_events_agree_with_degraded_agents(nvda_memo_unpriced):
@@ -534,3 +545,66 @@ def test_build_verdict_soft_notes_dedupe_on_apply(monkeypatch):
     log.record_soft("Thesis Builder", "earlier note from PM synthesis")
     out.apply(memo, log)
     assert log.degraded_agents() == ["Thesis Builder"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — the scorecard informs the memo; it does not move the rating
+# ---------------------------------------------------------------------------
+
+from app.schemas import StockMemoOut  # noqa: E402
+
+
+def _scorecard_fixture(pct: float = 8.0):
+    from datetime import date
+
+    from app.schemas import ScorecardCategory, ScorecardContribution, ScorecardSummary
+    return ScorecardSummary(
+        version_key="fs-v1", as_of=date(2026, 6, 30), overall_z=-1.2, overall_score=26.0,
+        universe_percentile=pct, sector_percentile=12.0, coverage=0.9,
+        categories={"valuation": ScorecardCategory(z=-1.4, score=22.0, percentile=6.0, weight=0.125)},
+        top_negative=[ScorecardContribution(feature="accruals_ratio", family="earnings_quality", z=-1.8, contribution=-0.05)],
+        profiles={"compounder": -0.4, "inflection": None},
+    )
+
+
+def test_memo_validates_with_scorecard_none_and_with_a_summary():
+    memo = make_memo()
+    assert memo.scorecard is None
+    payload = memo.model_dump(mode="json")
+    assert payload["scorecard"] is None
+    assert StockMemoOut.model_validate(payload).scorecard is None
+    # An older snapshot without the key at all.
+    payload.pop("scorecard")
+    assert StockMemoOut.model_validate(payload).scorecard is None
+    with_row = make_memo(scorecard=_scorecard_fixture())
+    round_trip = StockMemoOut.model_validate(with_row.model_dump(mode="json"))
+    assert round_trip.scorecard is not None
+    assert round_trip.scorecard.universe_percentile == 8.0
+
+
+@pytest.mark.parametrize("rating", ["Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish"])
+@pytest.mark.parametrize("factor_pm", [15.0, 40.0, 62.0, 88.0])
+def test_rating_blend_ignores_the_scorecard(rating, factor_pm):
+    """Behavior preservation: `_blend_rating` reads only `rating_label` and
+    `scores["factor_pm_score"]`. A bottom-decile scorecard on a Very Bullish
+    memo changes nothing about the blended rating or its audit fields."""
+    without = make_memo(rating_label=rating, scores={"factor_pm_score": factor_pm})
+    with_row = make_memo(rating_label=rating, scores={"factor_pm_score": factor_pm}, scorecard=_scorecard_fixture())
+    graph._blend_rating(without)
+    graph._blend_rating(with_row)
+    assert with_row.rating_label == without.rating_label
+    assert with_row.scores == without.scores
+    assert {"llm_rating_score", "llm_rating_weight", "blended_pm_score"} <= set(with_row.scores)
+
+
+def test_attach_scorecard_disagreement_does_not_touch_the_rating():
+    memo = make_memo(rating_label="Very Bullish", scores={"factor_pm_score": 88.0}, scorecard=_scorecard_fixture())
+    graph._blend_rating(memo)
+    rating_after_blend, scores_after_blend = memo.rating_label, dict(memo.scores)
+    graph._attach_scorecard_disagreement(memo)
+    assert memo.scorecard is not None and memo.scorecard.disagreement is not None
+    assert memo.scorecard.disagreement.severity == "material"
+    assert memo.rating_label == rating_after_blend
+    assert memo.scores == scores_after_blend
+    # A finding, not an outage: nothing lands on the banner.
+    assert memo.degraded_agents == []

@@ -195,6 +195,10 @@ VALUATION_ANALYST_PROMPT = """You are a valuation analyst.
 You have a DCF result, current valuation multiples, and peer median.
 Interpret valuation: history vs current, peers vs current, what is priced in, what is not.
 Cover: bull/base/bear price interpretation, valuation risk, terminal-growth fragility.
+If the context carries a `fundamental_scorecard` block, state its valuation-family
+percentile (an observed cross-sectional rank — the "what is already priced in"
+leg) and say whether your multiples read agrees with it; a model read is a
+scenario input to reconcile, not a recommendation to defer to.
 
 Return JSON with keys: headline, summary, key_points (list), confidence (0-1)."""
 
@@ -341,6 +345,17 @@ our work, no actionable edge" — that is a valid PM call. But do not
 hedge by writing a vague claim. Pick one of the three structures and
 commit.
 
+FUNDAMENTAL SCORECARD RECONCILIATION. If the PM context carries a
+"Fundamental scorecard" block, it is an observed cross-sectional rank
+plus a model read under a named version — a scenario input, not a
+recommendation. When its overall or valuation-family percentile
+contradicts your rating by a wide margin (a Bullish call on a name the
+scorecard ranks in the bottom fifth, or the mirror), add
+`scorecard_reconciliation`: 1-2 sentences naming the observed figures
+that justify the narrative overriding the quant read — or lower your
+confidence and say so. Omit the key when the two agree or no block is
+present. Never adjust the rating to match the scorecard mechanically.
+
 Return JSON with keys: final_pm_view, one_sentence_thesis, rating_label,
 confidence_score, mispricing_thesis (object: consensus_view, our_view,
-gap, falsifiers list)."""
+gap, falsifiers list), and optionally scorecard_reconciliation (string)."""

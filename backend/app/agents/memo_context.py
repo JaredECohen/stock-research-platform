@@ -48,9 +48,11 @@ from typing import TYPE_CHECKING, Any
 from ..schemas import (
     AgentFinding,
     CompsResult,
+    CritiqueQuestion,
     DCFResult,
     MispricingThesis,
     RoundFindings,
+    ScorecardSummary,
     StockMemoOut,
     ValuationVerdict,
 )
@@ -88,6 +90,21 @@ class MemoInputs:
     # with a growth path exists. Lifting it here would add a provider
     # round-trip to every memo, so it stays None until a stage needs it.
     estimates: dict[str, Any] | None = None
+    # Phase 6 — the latest Fundamental Factor Scorecard row for the ticker
+    # (point-in-time at `as_of_date`), or None when no succeeded run has
+    # scored it / `ENABLE_SCORECARD=false`. Read once in the gather stage;
+    # the valuation analyst and PM synthesis receive it as a <= 600-char
+    # block (`scorecard_context.prompt_block`), and the compose stage
+    # attaches it to `StockMemoOut.scorecard`. Never feeds the rating blend.
+    scorecard: ScorecardSummary | None = None
+    # Seed questions from `scorecard_disagreements` rows queued for review.
+    # Non-empty only when a flag-gated review regen asked for this memo;
+    # the deep-research loop re-fires them on round 1 regardless of the PM
+    # critique. `scorecard_seeds_consumed` is the one stage flag written
+    # after the gather stage (by `_run_analyst_round`, once the loop ran
+    # with them) so the persist stage knows to mark the rows reviewed.
+    scorecard_seeds: list[CritiqueQuestion] = field(default_factory=list)
+    scorecard_seeds_consumed: bool = False
 
 
 @dataclass

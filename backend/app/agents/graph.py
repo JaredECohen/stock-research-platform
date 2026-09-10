@@ -34,7 +34,7 @@ import logging
 import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from ..config import settings
 from ..finance.dcf import fmt_price, fmt_upside
@@ -45,10 +45,12 @@ from ..schemas import (
     CatalystItem,
     CompsResult,
     CriticReview,
+    CritiqueQuestion,
     DCFResult,
     MispricingThesis,
     RiskItem,
     RoundFindings,
+    ScorecardSummary,
     StockMemoOut,
     ValuationVerdict,
 )  # CriticReview imported for the safe-runner fallback path  # noqa: F401
@@ -57,7 +59,7 @@ from ..services.filings_service import get_filings
 from ..services.fundamentals_service import get_full_financials
 from ..services.transcripts_service import latest_transcript
 from ..services.valuation_service import build_comps, build_dcf
-from . import llm, prompts, roster
+from . import llm, prompts, roster, scorecard_context
 from .critic_agent import run_critic
 from .log_safety import redact
 from .memo_context import AnalystRound, DCFStage, DegradationNote, MemoInputs, VerdictOutcome
@@ -70,6 +72,9 @@ from .safe_runner import (
     safe_finding,
 )
 from .tools import evidence_quality
+
+if TYPE_CHECKING:  # the ORM stays a lazy import at runtime (see _persist_memo_snapshot)
+    from ..models import MemoSnapshot
 
 log = logging.getLogger(__name__)
 
@@ -1037,14 +1042,20 @@ def _catalysts(
     return items[:6]
 
 
-def _pm_synthesis(profile: dict, findings: dict[str, AgentFinding], dcf: DCFResult | None) -> dict:
+def _pm_synthesis(
+    profile: dict, findings: dict[str, AgentFinding], dcf: DCFResult | None,
+    *, scorecard: Any | None = None,
+) -> dict:
     # PM uses its dedicated model (OPENAI_PM_MODEL — gpt-5.5-pro by default).
     # Wave 10 — read PM brain + company / sector memory + research_notes.
+    # Phase 6 — plus the scorecard block (<= 600 chars; "" when no row), so
+    # the synthesis prompt can ask for `scorecard_reconciliation`.
     from .pm_context import build_pm_context
     pm_ctx = build_pm_context(
         ticker=profile.get("ticker"),
         sector=profile.get("sector"),
         profile=profile,
+        scorecard_block=scorecard_context.prompt_block(scorecard),
     )
     llm_out = llm.chat_json(
         prompts.PM_SYNTHESIS_PROMPT
@@ -1282,7 +1293,27 @@ def _run_stock_memo_inner(
         findings=analysts.findings, ticker=ticker,
     )
     verdict.apply(memo, degradation)
+    _attach_scorecard_disagreement(memo)
     return _persist(memo, inputs)
+
+
+def _attach_scorecard_disagreement(memo: StockMemoOut) -> None:
+    """Phase 6 — fill `memo.scorecard.disagreement` from the FINAL memo.
+
+    Runs after the verdict is applied because the detector reads the
+    post-blend rating and the reconciled valuation verdict; a flag computed
+    off the compose-stage draft could name a rating the reader never sees.
+    A finding, not an outage: no degradation entry, and on a detector crash
+    the summary is kept without a flag (the memo is still whole).
+    """
+    summary = memo.scorecard
+    if summary is None:
+        return
+
+    def _with_flag() -> ScorecardSummary:
+        return scorecard_context.summarize(summary, memo) or summary
+
+    memo.scorecard = safe_call(_with_flag, fallback=summary, name="Scorecard Summary", log_to=None)
 
 
 # ---------------------------------------------------------------------------
@@ -1323,6 +1354,27 @@ def _gather_inputs(
     comps = safe_call(_checkpointed_comps, ticker, force_refresh=force_refresh, fallback=None,
                       name="Comps Engine", log_to=degradation)
 
+    # Phase 6 — the scorecard read, point-in-time at `as_of_date`. A crash
+    # here is a hard "Fundamental Scorecard" degradation (the read failed);
+    # a clean None is the soft one, recorded in the compose stage where the
+    # memo's degradation fields are assembled. With the kill switch off
+    # `load_for_memo` returns None without touching the DB and nothing
+    # downstream records anything — the memo is what it was before.
+    scorecard = None
+    seeds: list[CritiqueQuestion] = []
+    if settings.enable_scorecard:
+        scorecard = safe_call(
+            scorecard_context.load_for_memo, ticker, as_of_date, fallback=None,
+            name=scorecard_context.AGENT_NAME, log_to=degradation,
+        )
+        # Review seeds are only meaningful where the dialog will run (live
+        # memo, deep research on) — the same gate `_run_analyst_round` uses.
+        if settings.enable_deep_research and as_of_date is None:
+            seeds = safe_call(
+                scorecard_context.pending_seed_questions, ticker, fallback=[],
+                name="Scorecard Review Seeds", log_to=None,
+            )
+
     # `profile` is shared with every later stage and mutated in place — see
     # the mutation contract in `memo_context`.
     return MemoInputs(
@@ -1330,6 +1382,7 @@ def _gather_inputs(
         as_of_date=as_of_date, fin=fin, profile=profile, ratios=ratios,
         earnings=earnings, transcript=transcript, filings=filings,
         dcf=dcf, comps=comps, degradation=degradation,
+        scorecard=scorecard, scorecard_seeds=seeds,
     )
 
 
@@ -1388,11 +1441,16 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
         # Loop reads `findings` keyed by short agent name — same as the
         # `re_fire` map. Returns the latest-per-agent findings dict + the
         # full round-by-round audit trail for persistence.
+        # Phase 6 — scorecard review seeds force a round-1 re-fire (see
+        # `run_dialog_loop`); None keeps the loop's original behavior.
+        seeds = list(inputs.scorecard_seeds) or None
+
         def _run_loop() -> tuple[dict[str, AgentFinding], list[RoundFindings]]:
             return run_dialog_loop(
                 run_id=run_id,
                 initial_findings=findings,
                 re_fire=re_fire,
+                seed_questions=seeds,
             )
 
         no_rounds: list[RoundFindings] = []
@@ -1408,6 +1466,11 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
             # downstream synthesis (PM, critic) sees the freshest read.
             for name, finding in current.items():
                 findings[name] = finding
+            # The seeds were asked only if round 1 actually re-fired (the
+            # loop's fallback above returns no rounds); the persist stage
+            # closes the queued review rows on that flag.
+            if seeds and any(r.round == 1 and not r.early_exit for r in rounds):
+                inputs.scorecard_seeds_consumed = True
 
     # B3 / Theme 2 — promote silent deterministic fallbacks into the
     # degradation log. An agent whose LLM call returned nothing usable
@@ -1571,11 +1634,28 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     }
     with llm_call_context(agent_name="PM Synthesis", run_id=inputs.run_id, route="strong"):
         synth: dict[str, Any] = safe_call(
-            _pm_synthesis, profile, findings, dcf,
+            _pm_synthesis, profile, findings, dcf, scorecard=inputs.scorecard,
             fallback=synth_fallback, name="PM Synthesis", log_to=degradation,
         )
     rating = synth.get("rating_label", "Neutral")
     raw_confidence = float(synth.get("confidence_score", 60))
+
+    # Phase 6 — the scorecard summary the memo carries. No row on file is a
+    # SOFT degradation the reader must see (the section says n/a and why),
+    # recorded before the memo's degradation fields are assembled below;
+    # with the kill switch off nothing is recorded and the field stays
+    # None. `record_soft` dedupes against a hard entry from a failed read.
+    memo_scorecard = safe_call(
+        scorecard_context.for_memo, inputs.scorecard,
+        reconciliation=synth.get("scorecard_reconciliation"),
+        fallback=None, name="Scorecard Summary", log_to=None,
+    )
+    if memo_scorecard is None and settings.enable_scorecard:
+        degradation.record_soft(
+            scorecard_context.AGENT_NAME,
+            f"no scorecard row on file for {profile.get('ticker', ticker)}; section renders n/a",
+            kind="DataUnavailable",
+        )
 
     dcf_summary = _summarize_dcf(dcf)
     # Wave 10 — keep the consensus-anchored ("initial") DCF on the memo
@@ -1759,6 +1839,7 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
         agent_influence=agent_influence,
         macro_snapshot_at_memo=macro_snapshot_at_memo,
         macro_regime_at_memo=macro_regime_at_memo,
+        scorecard=memo_scorecard,
     )
 
     # Wave 9 — surface deep-research counters on `memo.scores` so the
@@ -1840,12 +1921,23 @@ def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound)
     if isinstance(risk_finding.data, dict):
         risk_finding.data["applied_recommendations"] = applied_risk_recs
 
-    # Rating blend (Option A) — mix the PM LLM's directional call with
-    # the quant factor_pm_score. Weight is `LLM_RATING_WEIGHT` in
-    # config.env (default 0.4). At weight=0 this collapses to the
-    # prior Wave 8P behavior (factor score is dispositive); at
-    # weight=1 the LLM call wins outright. The LLM rating read here
-    # is post-risk-rec, so risk_agent downgrades flow into the blend.
+    _blend_rating(memo)
+    return memo
+
+
+def _blend_rating(memo: StockMemoOut) -> None:
+    """Rating blend (Option A) — mix the PM LLM's directional call with
+    the quant factor_pm_score. Weight is `LLM_RATING_WEIGHT` in
+    config.env (default 0.4). At weight=0 this collapses to the
+    prior Wave 8P behavior (factor score is dispositive); at
+    weight=1 the LLM call wins outright. The LLM rating read here
+    is post-risk-rec, so risk_agent downgrades flow into the blend.
+
+    Reads `rating_label` and `scores["factor_pm_score"]` and nothing else
+    — in particular not `memo.scorecard`. The Phase 6 scorecard informs
+    the memo (context, section, disagreement flag) but does not move the
+    rating in this phase; `test_memo_consistency` pins that.
+    """
     from ..schemas import rating_from_stock_score, score_from_rating_label
     factor_pm = (memo.scores or {}).get("factor_pm_score")
     if factor_pm is not None:
@@ -1860,7 +1952,6 @@ def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound)
                 "llm_rating_weight": float(w),
                 "blended_pm_score": round(float(blended), 1),
             }
-    return memo
 
 
 # ---------------------------------------------------------------------------
@@ -2073,7 +2164,7 @@ def _persist(memo: StockMemoOut, inputs: MemoInputs) -> StockMemoOut:
     _absorb_failover_events(degradation)
     _sync_degradation(memo, degradation)
     try:
-        _persist_memo_snapshot(memo, inputs.as_of_date)
+        snapshot = _persist_memo_snapshot(memo, inputs.as_of_date)
     except Exception as exc:
         log.error(
             "memo persistence FAILED for %s: %s: %s",
@@ -2085,6 +2176,22 @@ def _persist(memo: StockMemoOut, inputs: MemoInputs) -> StockMemoOut:
         _sync_degradation(memo, degradation)
         raise
     _sync_degradation(memo, degradation)
+
+    # Phase 6 — the disagreement row keyed on the snapshot just written,
+    # and the review rows this run answered. Finding records, not memo
+    # content: a failure is logged, never raised and never a degradation
+    # (the memo is already saved and whole).
+    if memo.scorecard is not None:
+        snapshot_id = getattr(snapshot, "id", None)
+        safe_call(
+            scorecard_context.persist_disagreement, memo, snapshot_id,
+            fallback=None, name="Scorecard Disagreement", log_to=None,
+        )
+        if inputs.scorecard_seeds_consumed:
+            safe_call(
+                scorecard_context.mark_reviewed, inputs.ticker, snapshot_id,
+                fallback=0, name="Scorecard Review", log_to=None,
+            )
     return memo
 
 
@@ -2109,12 +2216,16 @@ def _absorb_failover_events(degradation: DegradationLog) -> None:
         )
 
 
-def _persist_memo_snapshot(memo: StockMemoOut, as_of_date: Any | None = None) -> None:
+def _persist_memo_snapshot(memo: StockMemoOut, as_of_date: Any | None = None) -> MemoSnapshot:
     """Indirection so safe_call wraps DB I/O. Lazy-import keeps graph.py from
     pulling the ORM at module import time (it's already loaded via models).
 
     Wave 1C: backtest snapshots are persisted with `as_of_date` set so the
     default `latest_memo` lookup excludes them.
+
+    Returns the saved `MemoSnapshot` (Phase 6) so the persist stage can key
+    the `scorecard_disagreements` row on its id instead of re-querying
+    `latest_memo` and hoping nothing landed in between.
     """
     from ..services import memo_store
     # latest_memo defaults to live snapshots only. For backtests we ask
@@ -2123,8 +2234,8 @@ def _persist_memo_snapshot(memo: StockMemoOut, as_of_date: Any | None = None) ->
     prior = memo_store.latest_memo(memo.ticker, include_backtests=as_of_date is not None)
     trigger = "first_run" if prior is None else "full_reanalysis"
     parent_version = prior.version if prior is not None else None
-    memo_store.save_memo(memo, trigger=trigger, parent_version=parent_version,
-                         as_of_date=as_of_date)
+    return memo_store.save_memo(memo, trigger=trigger, parent_version=parent_version,
+                                as_of_date=as_of_date)
 
 
 # ---------------------------------------------------------------------------

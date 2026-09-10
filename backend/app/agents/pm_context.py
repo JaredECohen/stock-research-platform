@@ -11,6 +11,10 @@ Assembles the markdown context block the PM reads on every synthesis
   sector is in scope.
 - Discretionary research notes routed to the PM agent
   (`research_notes/...` with `applies_to_agents: [pm]`).
+- Phase 6: the Fundamental Factor Scorecard block when the caller hands
+  one in (`scorecard_block`, built by `scorecard_context.prompt_block`).
+  Explicit rather than loaded here so the chat and orchestrator callers,
+  which have no memo run in scope, add no DB read per turn.
 
 Returns a single markdown string ready to splice into the PM system
 prompt or user message. Empty string when nothing is loaded — callers
@@ -29,11 +33,17 @@ def build_pm_context(
     sector: str | None = None,
     profile: dict | None = None,
     max_chars_each: int = 3000,
+    scorecard_block: str | None = None,
 ) -> str:
     """Render the markdown context the PM should read.
 
     Defensive: every component caught individually so a missing file
     or malformed memory entry can't block a memo.
+
+    `scorecard_block` (Phase 6) is already capped at
+    `scorecard_context.PROMPT_BLOCK_MAX_CHARS` (600), well inside
+    `max_chars_each`; it is clipped here again so a caller cannot widen
+    the budget by handing in a longer string.
     """
     blocks: list[str] = []
 
@@ -153,6 +163,23 @@ def build_pm_context(
                 )
     except Exception as exc:  # pragma: no cover
         log.debug("regime accuracy read failed: %s", exc)
+
+    # 6) Phase 6 — the Fundamental Factor Scorecard read for the ticker in
+    # scope. Observed rank and model read side by side; the synthesis
+    # prompt asks for `scorecard_reconciliation` when they disagree.
+    if scorecard_block and scorecard_block.strip():
+        try:
+            from .scorecard_context import PROMPT_BLOCK_MAX_CHARS
+            budget = min(int(max_chars_each), PROMPT_BLOCK_MAX_CHARS)
+            blocks.append(
+                "## Fundamental scorecard (observed rank + model read)\n\n"
+                + scorecard_block.strip()[:budget]
+                + "\n\n_A cross-sectional model read is a scenario input. Reconcile "
+                "a wide gap with observed figures or lower conviction; do not "
+                "move the rating to match it._"
+            )
+        except Exception as exc:  # pragma: no cover
+            log.debug("scorecard block render failed: %s", exc)
 
     if not blocks:
         return ""

@@ -38,6 +38,7 @@ from .earnings_agent import run_earnings_agent
 from .filing_agent import run_filing_agent
 from .macro_agent import run_macro_agent
 from .risk_agent import run_risk_agent
+from .scorecard_context import prompt_block
 from .sector_agents import run_sector_agent
 from .technical_agent import run_technical_agent
 from .valuation_agent import run_valuation_agent
@@ -94,8 +95,15 @@ AGENTS: tuple[AgentSpec, ...] = (
     AgentSpec(
         key="valuation", display_name="Valuation Analyst",
         checkpoint="graph.valuation_finding",
-        run=lambda i, q: run_valuation_agent(i.profile, i.ratios, i.dcf, prior_round_critique=q),
-        needs=("profile", "ratios", "dcf"), memo_field="valuation_agent_view",
+        # Phase 6: the scorecard read rides as an explicit kwarg (the agent
+        # builds its own payload from named ratio keys, so it cannot be
+        # smuggled through `ratios`). `prompt_block(None)` is "" and the
+        # agent then leaves its payload untouched.
+        run=lambda i, q: run_valuation_agent(
+            i.profile, i.ratios, i.dcf, prior_round_critique=q,
+            scorecard_block=prompt_block(i.scorecard),
+        ),
+        needs=("profile", "ratios", "dcf", "scorecard"), memo_field="valuation_agent_view",
     ),
     AgentSpec(
         key="comps", display_name="Comps Analyst",
