@@ -9,7 +9,7 @@ it, and that must hold in both modes.
 from __future__ import annotations
 
 import logging
-import time
+import types
 from datetime import datetime, timedelta
 
 import pytest
@@ -89,11 +89,15 @@ def test_missing_header_is_400(client, billing, customer):
     assert resp.status_code == 400
 
 
-def test_stale_timestamp_is_400(client, billing):
+def test_stale_timestamp_is_400(client, billing, monkeypatch):
+    # Pin the verifier's clock: signing at "now - 299" and verifying a
+    # moment later races the 300s edge under a loaded full-suite run.
+    fixed = 1_800_000_000
+    monkeypatch.setattr(stripe_client, "time", types.SimpleNamespace(time=lambda: float(fixed)))
     ev = load_event("unhandled_charge_succeeded")
-    resp = post_event(client, ev, timestamp=int(time.time()) - 301)
+    resp = post_event(client, ev, timestamp=fixed - 301)
     assert resp.status_code == 400
-    resp = post_event(client, ev, timestamp=int(time.time()) - 299)
+    resp = post_event(client, ev, timestamp=fixed - 299)
     assert resp.status_code == 200, "inside the 300s tolerance"
 
 
