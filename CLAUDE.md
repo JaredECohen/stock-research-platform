@@ -36,6 +36,12 @@ Two things to know before you trust a local run:
   CI has no keys, so pass `OPENAI_API_KEY="" ANTHROPIC_API_KEY="" GEMINI_API_KEY=""`
   to match it. Doing so makes `test_config_load_order` fail — that failure is an
   artifact of the blanking, not a regression.
+- **The harness blocks outbound sockets.** `app/tests/netguard.py` (installed by
+  `conftest.py`) refuses every non-loopback connect and DNS lookup and lists the
+  tests that reached for the network in the terminal summary. Providers are
+  already silent under the `USE_DEMO_DATA=true` / `ENABLE_LIVE_DATA=false` pair;
+  the guard makes that a property. `RUN_LIVE_TESTS=1` (the `live` marker's
+  opt-in) or `MM_ALLOW_NETWORK=1` lifts it.
 - **Use an isolated database.** The default sqlite file is shared, so two
   concurrent runs produce flaky memo-version failures. Pass
   `DATABASE_URL="sqlite:////tmp/<something-unique>.db"`.

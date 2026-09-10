@@ -18,7 +18,29 @@ from __future__ import annotations
 import pytest
 
 from app.services.data_service import get_data_service
+from app.tests import netguard
 from app.tests.fixtures.demo_provider import DemoProvider
+
+# Installed at import so background threads started under a TestClient
+# lifespan are covered too; a no-op under RUN_LIVE_TESTS=1 / MM_ALLOW_NETWORK=1.
+netguard.install()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    netguard.set_current(item.nodeid)
+    yield
+    netguard.set_current(f"<after {item.nodeid}>")
+
+
+def pytest_terminal_summary(terminalreporter):
+    offenders = netguard.hits()
+    if not offenders:
+        return
+    terminalreporter.section("netguard: outbound network attempts (blocked)")
+    for test_id, targets in sorted(offenders.items()):
+        terminalreporter.line(f"{test_id}: {', '.join(targets)}")
+    terminalreporter.line(f"{len(offenders)} test(s) reached for the network; each attempt was refused.")
 
 
 @pytest.fixture(autouse=True, scope="session")
