@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import ScorecardUniverseTable from "@/components/scorecard/ScorecardUniverseTable";
 import { exportHref, makeUniverse } from "@/test/fixtures/scorecard";
+import { SCORECARD_SCORE_SCALE_LONG } from "@/types/scorecard";
 
 function bodyRows() {
   const table = screen.getByTestId("universe-table");
@@ -15,6 +16,10 @@ function tickers() {
 function header(name: RegExp) {
   return screen.getByRole("columnheader", { name });
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("ScorecardUniverseTable", () => {
   it("renders a caption, sortable headers with aria-sort, and one row per ticker ranked first", () => {
@@ -35,7 +40,8 @@ describe("ScorecardUniverseTable", () => {
     const newco = screen.getByTestId("row-NEWCO");
     expect(newco).toHaveAttribute("data-unscored", "true");
     const cells = within(newco).getAllByRole("cell");
-    expect(cells[0]).toHaveTextContent("n/a"); // rank
+    expect(cells[0]).toHaveTextContent("n/a (unscored)"); // rank
+    expect(cells[0]).toHaveAttribute("data-missing", "true");
     expect(cells[2]).toHaveTextContent("n/a (insufficient coverage)");
     expect(cells[2]).toHaveAttribute("data-missing", "true");
     expect(cells[3]).toHaveTextContent("n/a (unranked)");
@@ -43,7 +49,7 @@ describe("ScorecardUniverseTable", () => {
     // Masked family for a Financials name.
     const jpm = screen.getByTestId("row-JPM");
     const leverage = jpm.querySelector('[data-family="leverage"]') as HTMLElement;
-    expect(leverage).toHaveTextContent("n/a");
+    expect(leverage).toHaveTextContent("n/a (not scored)");
     expect(leverage.querySelector("[data-missing]")).not.toBeNull();
     expect(newco.textContent).not.toMatch(/\b0\.0\b/);
   });
@@ -81,10 +87,10 @@ describe("ScorecardUniverseTable", () => {
     fireEvent.click(within(growth).getByRole("button"));
     expect(growth).toHaveAttribute("aria-sort", "descending");
     const growthValues = bodyRows().map((r) => (r.querySelector('[data-family="growth"]') as HTMLElement).textContent?.trim() ?? "");
-    const nums = growthValues.filter((v) => v !== "n/a").map(Number);
+    const nums = growthValues.filter((v) => !v.startsWith("n/a")).map(Number);
     expect([...nums].sort((a, b) => b - a)).toEqual(nums);
     // n/a family scores sit at the bottom (JPM has growth, NEWCO's growth is 61 so it sorts by it).
-    expect(growthValues.indexOf("n/a")).toBe(-1);
+    expect(growthValues.some((v) => v.startsWith("n/a"))).toBe(false);
   });
 
   it("filters by sector and by minimum coverage", () => {
@@ -137,6 +143,38 @@ describe("ScorecardUniverseTable", () => {
     expect(cost[cost.length - 2]).toHaveTextContent("Accruals ratio +1.40");
     expect(cost[cost.length - 1]).toHaveTextContent("Ebitda ev yield -1.30");
     const newco = within(screen.getByTestId("row-NEWCO")).getAllByRole("cell");
-    expect(newco[newco.length - 2]).toHaveTextContent("n/a");
+    expect(newco[newco.length - 2]).toHaveTextContent("n/a (overall not scored)");
+    expect(newco[newco.length - 1]).toHaveTextContent("n/a (overall not scored)");
+  });
+
+  it("gives a reason for a scored name with no contributor on one side", () => {
+    const u = makeUniverse(0);
+    u.rows = u.rows.map((r) => (r.ticker === "COST" ? { ...r, top_negative: [] } : r));
+    render(<ScorecardUniverseTable universe={u} />);
+    const cost = within(screen.getByTestId("row-COST")).getAllByRole("cell");
+    expect(cost[cost.length - 1]).toHaveTextContent("n/a (none listed)");
+  });
+
+  it("never prints a bare n/a: every missing value in the table carries a reason in its cell text", () => {
+    render(<ScorecardUniverseTable universe={makeUniverse(8)} />);
+    const table = screen.getByTestId("universe-table");
+    const cells = within(table.querySelector("tbody") as HTMLElement).getAllByRole("cell");
+    const missing = cells.map((c) => c.textContent ?? "").filter((t) => t.includes("n/a"));
+    expect(missing.length).toBeGreaterThan(0);
+    for (const text of missing) {
+      // "n/a" must always be followed by "(reason)".
+      expect(text.replace(/n\/a \([^)]+\)/g, "")).not.toMatch(/n\/a/);
+    }
+    // The score header explains the scale in the same words as the panel.
+    expect(header(/^Score/).getAttribute("title")).toBe(SCORECARD_SCORE_SCALE_LONG);
+    expect(header(/^Score/).getAttribute("title")).not.toMatch(/median$/);
+    expect(header(/^Score/).getAttribute("title")).toContain("50 = z of 0 (the sector mean");
+  });
+
+  it("renders the header row without a React key warning", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<ScorecardUniverseTable universe={makeUniverse(3)} />);
+    const keyWarnings = err.mock.calls.filter((c) => String(c[0]).includes("unique \"key\" prop"));
+    expect(keyWarnings).toHaveLength(0);
   });
 });

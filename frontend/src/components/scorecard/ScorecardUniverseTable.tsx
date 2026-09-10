@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { SCORECARD_EXPORT_CONTRACT, SCORECARD_FAMILIES, type ScorecardUniverse, type ScorecardUniverseRow } from "@/types/scorecard";
+import { SCORECARD_EXPORT_CONTRACT, SCORECARD_FAMILIES, SCORECARD_SCORE_SCALE_LONG, type ScorecardUniverse, type ScorecardUniverseRow } from "@/types/scorecard";
 import { familyLabel, fmtCoverage, fmtPercentile, fmtScore, fmtZ, humanize, isNum, na, scoreTone } from "./format";
 
 /**
@@ -7,8 +7,10 @@ import { familyLabel, fmtCoverage, fmtPercentile, fmtScore, fmtZ, humanize, isNu
  * universe and sector percentile, coverage and the eight family scores as
  * mini-bars. Headers sort (click or Enter/Space) and announce it through
  * `aria-sort`; an unscored value sorts last in either direction because a
- * gap is not a small number. Filters: sector and minimum coverage. The
- * export link, when the page supplies one, must carry `contract=v1`.
+ * gap is not a small number, and every gap prints as "n/a (reason)" in the
+ * cell itself — a tooltip is not a reason a screen reader or a copy-paste
+ * can see. Filters: sector and minimum coverage. The export link, when the
+ * page supplies one, must carry `contract=v1`.
  */
 export interface ScorecardUniverseTableProps {
   universe: ScorecardUniverse | null | undefined;
@@ -66,15 +68,22 @@ export function compareRows(a: ScorecardUniverseRow, b: ScorecardUniverseRow, ke
   return (va - vb) * sign;
 }
 
+// The universe row does not say *why* a family is unscored (the sector mask
+// and the coverage floor both yield null), so the cell names the two
+// possibilities rather than pretending to know; the detail view has the
+// per-feature reason.
+const FAMILY_MISSING = "not scored";
+const FAMILY_MISSING_TITLE = "Family not scored for this name: masked for its sector, or fewer than half of its inputs were available. Open the ticker for the per-feature reason.";
+
 function MiniBar({ value }: { value: number | null | undefined }) {
   const has = isNum(value);
   return (
-    <span className="inline-flex items-center gap-1" title={has ? `${value.toFixed(0)} / 100` : na("not scored")}>
+    <span className="inline-flex items-center gap-1" title={has ? `${value.toFixed(0)} / 100` : FAMILY_MISSING_TITLE}>
       <span aria-hidden="true" className="inline-block w-10 h-1.5 rounded bg-ink-700 overflow-hidden align-middle">
         {has && <span className="block h-full bg-accent-600" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />}
       </span>
       <span className={`font-mono text-[11px] ${has ? "text-slate-300" : "text-slate-500"}`} data-missing={has ? undefined : "true"}>
-        {has ? value.toFixed(0) : "n/a"}
+        {has ? value.toFixed(0) : na(FAMILY_MISSING)}
       </span>
     </span>
   );
@@ -100,8 +109,9 @@ export default function ScorecardUniverseTable({ universe, onSelect, exportHref,
     }
   }
 
+  // `key` is set here because the family headers are rendered from a map.
   const header = (key: SortKey, label: React.ReactNode, align: "left" | "right" = "right", title?: string) => (
-    <th scope="col" aria-sort={sortKey === key ? sortDir : "none"} className={`${align === "left" ? "text-left" : "text-right"} px-2 py-1 whitespace-nowrap`} title={title}>
+    <th key={key} scope="col" aria-sort={sortKey === key ? sortDir : "none"} className={`${align === "left" ? "text-left" : "text-right"} px-2 py-1 whitespace-nowrap`} title={title}>
       <button type="button" onClick={() => toggle(key)} className={`inline-flex items-center gap-1 ${align === "right" ? "justify-end w-full" : ""} ${FOCUS}`}>
         <span>{label}</span>
         <span aria-hidden="true" className="text-slate-500">
@@ -167,7 +177,7 @@ export default function ScorecardUniverseTable({ universe, onSelect, exportHref,
               {header("rank", "Rank", "right")}
               {header("ticker", "Ticker", "left")}
               {header("sector", "Sector", "left")}
-              {header("overall_score", "Score", "right", "0–100, 50 = universe median")}
+              {header("overall_score", "Score", "right", SCORECARD_SCORE_SCALE_LONG)}
               {header("universe_percentile", "Univ pct", "right", "Percentile rank across the universe")}
               {header("sector_percentile", "Sector pct", "right", "Percentile rank within sector")}
               {header("coverage", "Coverage", "right", "Share of applicable inputs available")}
@@ -192,9 +202,14 @@ export default function ScorecardUniverseTable({ universe, onSelect, exportHref,
               const unscored = !isNum(r.overall_score);
               const pos = r.top_positive?.[0];
               const neg = r.top_negative?.[0];
+              // No overall means no rank and no contributor list; a scored
+              // name with an empty list simply had none on that side.
+              const noContributor = unscored ? "overall not scored" : "none listed";
               return (
                 <tr key={r.ticker} className="border-t border-ink-700/60 table-row-hover" data-testid={`row-${r.ticker}`} data-ticker={r.ticker} data-unscored={unscored ? "true" : undefined}>
-                  <td className="px-2 py-1 text-right font-mono text-slate-400">{isNum(r.rank) ? r.rank : "n/a"}</td>
+                  <td className="px-2 py-1 text-right font-mono text-slate-400 whitespace-nowrap" data-missing={isNum(r.rank) ? undefined : "true"}>
+                    {isNum(r.rank) ? r.rank : na(unscored ? "unscored" : "not ranked")}
+                  </td>
                   <th scope="row" className="px-2 py-1 text-left font-normal whitespace-nowrap">
                     {onSelect ? (
                       <button type="button" onClick={() => onSelect(r.ticker)} className={`font-mono text-accent-500 underline underline-offset-2 ${FOCUS}`}>
@@ -223,7 +238,7 @@ export default function ScorecardUniverseTable({ universe, onSelect, exportHref,
                         {humanize(pos.feature)} <span className="text-accent-500 font-mono">{fmtZ(pos.z)}</span>
                       </span>
                     ) : (
-                      "n/a"
+                      <span data-missing="true">{na(noContributor)}</span>
                     )}
                   </td>
                   <td className="px-2 py-1 text-xs whitespace-nowrap text-slate-400">
@@ -232,7 +247,7 @@ export default function ScorecardUniverseTable({ universe, onSelect, exportHref,
                         {humanize(neg.feature)} <span className="text-danger-500 font-mono">{fmtZ(neg.z)}</span>
                       </span>
                     ) : (
-                      "n/a"
+                      <span data-missing="true">{na(noContributor)}</span>
                     )}
                   </td>
                 </tr>
