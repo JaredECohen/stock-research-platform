@@ -233,9 +233,9 @@ def create_checkout_session(
 
 def create_portal_session(*, customer_id: str, return_url: str, configuration_id: str | None = None,
                           idempotency_key: str | None = None) -> dict[str, Any]:
-    """`POST /billing_portal/sessions`. Portal sessions are short-lived,
-    so the idempotency key is optional (a double click makes two links to
-    the same portal — harmless)."""
+    """`POST /billing_portal/sessions`. `billing_service.create_portal`
+    always passes a key (every Stripe write carries one); it is optional
+    here only so the transport stays a plain function of its inputs."""
     data: dict[str, Any] = {"customer": customer_id, "return_url": return_url}
     if configuration_id:
         data["configuration"] = configuration_id

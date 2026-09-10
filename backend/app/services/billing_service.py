@@ -25,6 +25,15 @@ What `apply_subscription_object` guarantees:
   - **Trial columns are never written.** A Stripe event must not be able
     to extend or reset `users.trial_started_at` / `trial_ends_at`; the
     only writers are `/api/me/bootstrap` and an operator override.
+  - **Analytics never touch the caller's transaction.** Funnel events
+    derived from a transition (`trial_converted`, `subscription_canceled`,
+    …) are queued on the session and written in their own session only
+    after the caller's commit succeeds; a rollback drops them. The
+    alternative — `analytics.track(db=db)` mid-apply — commits (and on a
+    failure rolls back) the caller's session, which once discarded a
+    flushed subscription row while the event was still recorded as
+    `applied`, so the redelivery was answered `duplicate` and the
+    customer never became Pro.
   - **Ownership.** A subscription is applied to the user whose
     `stripe_customer_id` matches the object's customer; a
     `checkout.session.completed` must also carry that user's id in
@@ -44,6 +53,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy import event as sa_event
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -116,6 +126,44 @@ class WebhookStorageError(Exception):
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
+
+_PENDING_ANALYTICS = "billing_pending_analytics"
+
+
+def _queue_analytics(db: Session, event_name: str, **kwargs: Any) -> None:
+    """Record a funnel event to be written AFTER the caller's commit.
+
+    The queue lives in `Session.info`; the first call on a session
+    attaches `after_commit` (write the queue, each event in its own
+    session — `analytics.track` never raises) and `after_rollback`
+    (drop it: the transition it describes did not happen). Nothing here
+    commits, flushes or rolls back the caller's session.
+    """
+    info = db.info
+    if _PENDING_ANALYTICS not in info:
+        info[_PENDING_ANALYTICS] = []
+        sa_event.listen(db, "after_commit", _flush_pending_analytics)
+        sa_event.listen(db, "after_rollback", _discard_pending_analytics)
+    info[_PENDING_ANALYTICS].append((event_name, kwargs))
+
+
+def _flush_pending_analytics(db: Session) -> None:
+    pending = db.info.get(_PENDING_ANALYTICS) or []
+    db.info[_PENDING_ANALYTICS] = []
+    for name, kwargs in pending:
+        analytics.track(name, **kwargs)  # own session; False on failure, never raises
+
+
+def _discard_pending_analytics(db: Session) -> None:
+    if _PENDING_ANALYTICS in db.info:
+        db.info[_PENDING_ANALYTICS] = []
+
+
+def _take_pending_analytics(db: Session) -> list[tuple[str, dict[str, Any]]]:
+    pending = list(db.info.get(_PENDING_ANALYTICS) or [])
+    _discard_pending_analytics(db)
+    return pending
+
 
 def _ts(value: Any) -> datetime | None:
     """Stripe unix seconds → naive UTC datetime (the codebase convention)."""
@@ -234,6 +282,8 @@ def apply_subscription_object(
     belonging to `user`. Returns `(row, outcome)` where outcome is
     `applied` or `ignored_stale`. Flushes; the caller commits, so an
     event's state and its `billing_webhook_events` outcome land together.
+    Never commits or rolls back — the funnel events it derives are queued
+    (`_queue_analytics`) and written only once the caller's commit lands.
 
     Never touches `users.trial_*`. The only `users` write is filling an
     empty `stripe_customer_id` from the object — recovery for a Checkout
@@ -307,19 +357,21 @@ def apply_subscription_object(
 
 def _track_transitions(db: Session, user: User, row: Subscription, *, created_now: bool,
                        prev_status: str, prev_cancel: bool, now: datetime, source: str) -> None:
-    """Funnel events derived from the transition just applied. Analytics
-    never raise; a lost event is not a lost subscription."""
+    """Funnel events derived from the transition just applied. Queued,
+    not written: they go out after the caller commits and are dropped on
+    rollback, so a lost event is never a lost subscription and a lost
+    subscription never has an event claiming otherwise."""
     status = row.stripe_status or ""
     props = {"interval": row.billing_interval, "source": source, "status": status}
     if created_now and status in ("active", "trialing"):
         if user.trial_ends_at is not None and user.trial_ends_at > now:
-            analytics.track("trial_converted", db=db, user_id=user.id, plan="pro", props=props, now=now)
+            _queue_analytics(db, "trial_converted", user_id=user.id, plan="pro", props=props, now=now)
     if status == "canceled" and prev_status != "canceled":
-        analytics.track("subscription_canceled", db=db, user_id=user.id, plan="pro",
-                        props={**props, "reason": "canceled"}, now=now)
+        _queue_analytics(db, "subscription_canceled", user_id=user.id, plan="pro",
+                         props={**props, "reason": "canceled"}, now=now)
     elif row.cancel_at_period_end and not prev_cancel and status != "canceled":
-        analytics.track("subscription_canceled", db=db, user_id=user.id, plan="pro",
-                        props={**props, "reason": "cancel_at_period_end"}, now=now)
+        _queue_analytics(db, "subscription_canceled", user_id=user.id, plan="pro",
+                         props={**props, "reason": "cancel_at_period_end"}, now=now)
 
 
 # ---------------------------------------------------------------------------
@@ -393,8 +445,13 @@ def apply_event(db: Session, event: dict[str, Any], *, now: datetime | None = No
     except (BillingUnavailable, StripeError) as exc:
         # A follow-up fetch failed; the event itself was fine. Recorded
         # so an operator can see it; not retried (the subscription
-        # events carry the same state).
+        # events carry the same state). The funnel events queued before
+        # the fetch (`checkout_completed`, `subscription_renewed`)
+        # describe the event, not the fetch, so they survive the rollback.
+        pending = _take_pending_analytics(db)
         db.rollback()
+        for name, kwargs in pending:
+            _queue_analytics(db, name, **kwargs)
         outcome, error = OUTCOME_APPLIED, f"fetch skipped: {type(exc).__name__}"
         log.warning("webhook %s (%s): follow-up Stripe fetch failed: %s", event_id, event_type, type(exc).__name__)
     except Exception as exc:
@@ -402,6 +459,10 @@ def apply_event(db: Session, event: dict[str, Any], *, now: datetime | None = No
         outcome, error = OUTCOME_ERROR, safe_exc(exc)
         log.warning("webhook %s (%s) failed: %s", event_id, event_type, type(exc).__name__)
 
+    # One commit carries the state change (flushed, uncommitted) and the
+    # outcome row; the queued analytics are written by `after_commit`.
+    # If it fails nothing is `applied`, the row keeps `processed_at`
+    # NULL, and the retry Stripe sends re-processes the event.
     try:
         stored = db.get(BillingWebhookEvent, row_id)
         if stored is not None:
@@ -437,8 +498,7 @@ def _on_checkout_completed(db: Session, session: dict[str, Any], *, created: int
     customer_id = _id(session.get("customer"))
     if not customer_id or user.stripe_customer_id != customer_id:
         raise OwnershipMismatch("session customer does not match the user's customer")
-    analytics.track("checkout_completed", db=db, user_id=user.id, plan="pro",
-                    props={"source": "webhook"}, now=now)
+    _queue_analytics(db, "checkout_completed", user_id=user.id, plan="pro", props={"source": "webhook"}, now=now)
 
     sub_id = _id(session.get("subscription"))
     if not sub_id:
@@ -510,8 +570,8 @@ def _on_invoice_event(db: Session, event_type: str, invoice: dict[str, Any], *, 
     if user is None:
         raise OwnershipMismatch("subscription row has no user")
     if event_type == "invoice.paid" and invoice.get("billing_reason") == "subscription_cycle":
-        analytics.track("subscription_renewed", db=db, user_id=user.id, plan="pro",
-                        props={"interval": row.billing_interval}, now=now)
+        _queue_analytics(db, "subscription_renewed", user_id=user.id, plan="pro",
+                         props={"interval": row.billing_interval}, now=now)
     if stripe_client.configured():
         obj = stripe_client.retrieve_subscription(sub_id)
         _, outcome = apply_subscription_object(db, user, obj, event_created=unix(now), now=now, source="fetch")
@@ -641,7 +701,15 @@ def create_checkout(
                           session_id=_id(session.get("id")))
 
 
-def create_portal(db: Session, user: User) -> str:
+def create_portal(db: Session, user: User, *, now: datetime | None = None) -> str:
+    """A Stripe-hosted billing-portal URL for the user's customer.
+
+    Every Stripe write carries an idempotency key; a portal session's is
+    `portal:<user>:<second>`, so a double click (or an httpx retry
+    after a timeout) within the same second gets the one link back
+    instead of minting another, while a later click gets a fresh
+    session — portal URLs are short-lived and single-use."""
+    now = now or datetime.utcnow()
     if not (settings.billing_configured and settings.public_base_url):
         raise BillingUnavailable("billing is not fully configured")
     if not user.stripe_customer_id:
@@ -650,6 +718,7 @@ def create_portal(db: Session, user: User) -> str:
         customer_id=user.stripe_customer_id,
         return_url=f"{settings.public_base_url.rstrip('/')}/app/account",
         configuration_id=settings.stripe_portal_configuration_id or None,
+        idempotency_key=f"portal:{user.id}:{unix(now)}",
     )
     url = session.get("url")
     if not isinstance(url, str) or not url:
@@ -667,7 +736,10 @@ def reconcile_user(db: Session, user: User, *, now: datetime | None = None) -> d
     Additive by construction: a fetch failure returns `ok=False` and
     changes nothing, so a Stripe outage can never revoke Pro; only a
     successfully fetched object goes through the state machine, as of
-    `now` (newer than any webhook already delivered).
+    `now` (newer than any webhook already delivered). The fetched objects
+    are applied as one transaction: an ownership refusal on any of them
+    rolls back all of them (and drops their queued analytics), so
+    "nothing changed" is literally true.
     """
     now = now or datetime.utcnow()
     if not stripe_client.configured():

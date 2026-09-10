@@ -35,8 +35,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import usage
-from ..auth.entitlements import EntitlementError, current_subscription, resolve_for_user
+from ..auth import features, usage
+from ..auth.entitlements import QUOTA_UNLIMITED, EntitlementError, current_subscription, resolve_for_user
 from ..auth.sanitize import safe_logger
 from ..config import settings
 from ..database import get_db
@@ -370,7 +370,10 @@ def admin_billing_user(external_id: str, db: Session = Depends(get_db)) -> Admin
 @router.post("/api/admin/billing/overrides", response_model=OverrideOut, status_code=201)
 def admin_create_override(body: OverrideIn, db: Session = Depends(get_db)) -> OverrideOut:
     """Operator escape hatch. `plan` (value `pro`) and `suspend` are read
-    by `resolve_plan` at request time; `trial_reset` also rewrites the
+    by `resolve_plan` at request time; `quota` (a registered feature +
+    `unlimited` or an integer) replaces that feature's monthly limit in
+    `entitlements.authorize` for as long as the row is active, for a
+    feature the plan already allows; `trial_reset` also rewrites the
     user's trial columns — the one writer of those besides bootstrap,
     and an operator decision rather than a Stripe event — so it takes
     effect immediately and is auditable through the override row."""
@@ -386,7 +389,13 @@ def admin_create_override(body: OverrideIn, db: Session = Depends(get_db)) -> Ov
     elif body.kind == "quota":
         if not body.feature:
             raise EntitlementError(422, "invalid_override", "a quota override names a feature")
-        if value != "unlimited" and not (value or "").isdigit():
+        if body.feature not in features.FEATURES or not features.get(body.feature).metered:
+            # An override nothing reads would be a 201 that changes nothing.
+            raise EntitlementError(422, "invalid_override",
+                                   f"quota overrides apply to a metered feature: "
+                                   f"{', '.join(n for n, f in features.FEATURES.items() if f.metered)}")
+        value = (value or "").lower()
+        if value != QUOTA_UNLIMITED and not value.isdigit():
             raise EntitlementError(422, "invalid_override", "a quota override's value is 'unlimited' or an integer")
     elif body.kind == "trial_reset":
         days = max(0, int(settings.trial_days))

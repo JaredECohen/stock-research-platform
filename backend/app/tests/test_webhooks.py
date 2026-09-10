@@ -260,6 +260,7 @@ def test_checkout_completed_when_stripe_is_down_still_records_and_waits_for_the_
     assert resp.status_code == 200 and resp.json()["outcome"] == "applied"
     assert "fetch skipped" in webhook_row(ev["id"]).error
     assert plan_for(customer.id) == "free", "no grant without a subscription object"
+    assert len(events_for(customer.id, "checkout_completed")) == 1, "the event itself was fine and is counted"
     billing.fail = None
     post_event(client, load_event("customer_subscription_created", customer=customer.stripe_customer_id, sub=sub,
                                   user_id=customer.id))
@@ -396,6 +397,58 @@ def test_db_failure_is_500_and_the_retry_processes(client, billing, customer, mo
     resp = post_event(client, ev)
     assert resp.status_code == 200 and resp.json()["outcome"] == "applied"
     assert plan_for(customer.id) == "pro"
+
+
+def test_analytics_failure_does_not_lose_the_grant(client, billing):
+    """Adversarial-review repro: with the analytics write failing, the
+    event used to be recorded `applied` while the flushed subscription
+    row was rolled back — and the redelivery was then a `duplicate`, so
+    the customer never became Pro."""
+    from sqlalchemy.orm import Session
+
+    from app.models import AnalyticsEvent
+    mid_trial = make_user(customer=f"cus_{uid()}", trial_ends_in=timedelta(days=4))
+    real_add = Session.add
+
+    def bad_add(self, obj, *a, **k):
+        if isinstance(obj, AnalyticsEvent):
+            raise RuntimeError("analytics down")
+        return real_add(self, obj, *a, **k)
+
+    ev = load_event("customer_subscription_created", customer=mid_trial.stripe_customer_id, sub=f"sub_{uid()}",
+                    user_id=mid_trial.id)
+    with pytest.MonkeyPatch.context() as mp:  # scoped: the billing settings must outlive it
+        mp.setattr(Session, "add", bad_add)
+        resp = post_event(client, ev)
+    assert resp.status_code == 200 and resp.json()["outcome"] == "applied"
+    assert webhook_row(ev["id"]).outcome == "applied"
+    assert len(subscription_rows(mid_trial.id)) == 1, "the grant landed even though the funnel write failed"
+    assert plan_for(mid_trial.id) == "pro"
+    assert events_for(mid_trial.id, "trial_converted") == [], "no event claims a write that failed"
+    assert post_event(client, ev).json()["outcome"] == "duplicate", "already applied — the redelivery has nothing to do"
+
+
+def test_transition_analytics_are_written_only_after_the_outcome_commit(client, billing, customer, monkeypatch):
+    """A crash between the state flush and the outcome commit leaves no
+    funnel event behind: the redelivery writes the state AND the event."""
+    mid_trial = make_user(customer=f"cus_{uid()}", trial_ends_in=timedelta(days=4))
+    ev = load_event("customer_subscription_created", customer=mid_trial.stripe_customer_id, sub=f"sub_{uid()}",
+                    user_id=mid_trial.id)
+    real_get = SessionLocal.class_.get
+    calls = {"n": 0}
+
+    def flaky_get(self, entity, *a, **k):
+        if entity is BillingWebhookEvent:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OperationalError("SELECT billing_webhook_events", {}, Exception("database is locked"))
+        return real_get(self, entity, *a, **k)
+
+    monkeypatch.setattr(SessionLocal.class_, "get", flaky_get)
+    assert post_event(client, ev).status_code == 500
+    assert events_for(mid_trial.id, "trial_converted") == [] and subscription_rows(mid_trial.id) == []
+    assert post_event(client, ev).json()["outcome"] == "applied"
+    assert len(events_for(mid_trial.id, "trial_converted")) == 1 and plan_for(mid_trial.id) == "pro"
 
 
 def test_claim_failure_is_500(client, billing, monkeypatch):

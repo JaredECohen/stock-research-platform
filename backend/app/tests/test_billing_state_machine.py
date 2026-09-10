@@ -283,6 +283,69 @@ def test_transition_analytics(user):
     assert reasons == ["cancel_at_period_end", "canceled"], "once per transition, not per delivery"
 
 
+# ---------------------------------------------------------------------------
+# Analytics never touch the caller's transaction (adversarial-review fix)
+# ---------------------------------------------------------------------------
+
+def test_apply_never_commits_or_rolls_back_the_caller(user):
+    """`apply_subscription_object` flushes and queues its funnel events;
+    the caller decides when they land. A commit or rollback from inside
+    it would let a failed analytics write discard the flushed row."""
+    from sqlalchemy.orm import Session
+    mid = make_user(customer=f"cus_{uid()}", trial_ends_in=timedelta(days=4), now=NOW)
+    sub = f"sub_{uid()}"
+    with SessionLocal() as db:
+        u = db.get(User, mid.id)
+        db.commit = lambda: (_ for _ in ()).throw(AssertionError("apply committed the caller's session"))
+        db.rollback = lambda: (_ for _ in ()).throw(AssertionError("apply rolled back the caller's session"))
+        row, outcome = bs.apply_subscription_object(db, u, _obj(mid.stripe_customer_id, sub, status="trialing"),
+                                                    event_created=CREATED, now=NOW)
+        assert outcome == "applied" and row.id is not None, "flushed, not committed"
+        assert [n for n, _ in db.info[bs._PENDING_ANALYTICS]] == ["trial_converted"], "queued, not written"
+        del db.commit, db.rollback
+        from app.tests.billing_helpers import events_for
+        assert events_for(mid.id, "trial_converted") == [], "nothing written before the caller commits"
+        Session.commit(db)
+    assert len(events_for(mid.id, "trial_converted")) == 1, "written by after_commit"
+    assert len(current_subscription(SessionLocal(), mid.id).stripe_subscription_id) > 0
+
+
+def test_rollback_drops_the_queued_analytics():
+    from app.tests.billing_helpers import events_for
+    mid = make_user(customer=f"cus_{uid()}", trial_ends_in=timedelta(days=4), now=NOW)
+    with SessionLocal() as db:
+        u = db.get(User, mid.id)
+        bs.apply_subscription_object(db, u, _obj(mid.stripe_customer_id, f"sub_{uid()}", status="active"),
+                                     event_created=CREATED, now=NOW)
+        db.rollback()
+        assert db.info[bs._PENDING_ANALYTICS] == []
+        db.commit()
+    assert events_for(mid.id, "trial_converted") == [], "no event for a transition that did not happen"
+    assert current_subscription(SessionLocal(), mid.id) is None
+
+
+def test_analytics_failure_never_loses_the_subscription(monkeypatch):
+    """Reviewer's repro: the analytics insert blows up — the subscription
+    row must land anyway, and no event may claim the transition."""
+    from sqlalchemy.orm import Session
+
+    from app.models import AnalyticsEvent
+    from app.tests.billing_helpers import events_for
+    mid = make_user(customer=f"cus_{uid()}", trial_ends_in=timedelta(days=4), now=NOW)
+    real_add = Session.add
+
+    def bad_add(self, obj, *a, **k):
+        if isinstance(obj, AnalyticsEvent):
+            raise RuntimeError("analytics down")
+        return real_add(self, obj, *a, **k)
+
+    monkeypatch.setattr(Session, "add", bad_add)
+    row, outcome, state = _apply(mid.id, _obj(mid.stripe_customer_id, f"sub_{uid()}", status="trialing"))
+    assert outcome == "applied" and state.plan == "pro"
+    assert current_subscription(SessionLocal(), mid.id).stripe_subscription_id == row.stripe_subscription_id
+    assert events_for(mid.id, "trial_converted") == []
+
+
 def test_trial_converted_is_emitted_only_while_the_trial_is_ahead():
     from app.tests.billing_helpers import events_for
     ahead = make_user(customer=f"cus_{uid()}", trial_ends_in=timedelta(days=4), now=NOW)

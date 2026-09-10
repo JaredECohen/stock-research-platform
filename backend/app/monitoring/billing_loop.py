@@ -10,9 +10,14 @@ two processes cannot disagree. What does need a periodic pass:
      source) and `downgraded` (a subscription ended, was canceled at
      period end, or its grace ran out, and the user is now Free). Once
      per user: a candidate is skipped when an event of that name already
-     exists for them since the boundary. Candidates are drawn from a
-     `LOOKBACK_DAYS` window that is shorter than the analytics retention
-     (90d), so GC can never re-open a boundary the loop already noted.
+     exists for them since the boundary. That check is a query against
+     `analytics_events` rather than a marker column on `users` — it is
+     still database state, so it holds across processes and restarts
+     (the requirement a marker was meant to meet), and it needs no
+     schema change to a table that may already exist. Candidates are
+     drawn from a `LOOKBACK_DAYS` window that is shorter than the
+     analytics retention (90d), so GC can never re-open a boundary the
+     loop already noted (`test_lookback_is_shorter_than_analytics_retention`).
   2. **GC** of expired `rate_limit_windows` / `active_actions` and of
      `analytics_events` past retention (`auth/analytics.RETENTION_DAYS`).
      `usage_events` and `billing_webhook_events` are audit and are never

@@ -274,8 +274,10 @@ def test_portal_returns_a_url(client, stripe, auth_on, monkeypatch):
     assert _checkout(client, tok).status_code == 200
     resp = client.post("/api/billing/portal", headers=bearer(tok))
     assert resp.status_code == 200 and resp.json()["url"].startswith("https://billing.stripe.com/")
-    data = stripe.calls_to("POST", "/billing_portal/sessions")[0][2]
+    _, _, data, key, _ = stripe.calls_to("POST", "/billing_portal/sessions")[0]
     assert data == {"customer": stripe.customer_id, "return_url": f"{BASE_URL}/app/account", "configuration": "bpc_test"}
+    assert key is not None and key.startswith(f"portal:{user_id_for(client, tok)}:") and key.rsplit(":", 1)[1].isdigit(), \
+        "every Stripe write carries an idempotency key"
     me = client.get("/api/me", headers=bearer(tok)).json()
     assert me["billing"]["portal_available"] is True
 
@@ -319,6 +321,28 @@ def test_reconcile_never_downgrades_on_a_fetch_error(client, stripe, auth_on):
         assert resp.status_code == 200, resp.text
         assert resp.json()["reconcile"]["ok"] is False and resp.json()["plan"]["plan"] == "pro"
     assert plan_for(uid_) == "pro"
+
+
+def test_reconcile_refusal_changes_nothing_including_earlier_objects(client, stripe, auth_on):
+    """Two fetched objects, the second belonging to someone else: the
+    first must not be left applied — 'nothing changed' is one transaction,
+    and the funnel event the first one queued goes with it."""
+    _, tok = free_user(auth_on)
+    uid_ = user_id_for(client, tok)
+    cust = f"cus_{uid()}"
+    with SessionLocal() as db:
+        user = db.get(User, uid_)
+        user.stripe_customer_id = cust
+        user.trial_ends_at = datetime.utcnow() + timedelta(days=4)  # so `trial_converted` is queued
+        db.commit()
+    good = load_event("customer_subscription_created", customer=cust, sub=f"sub_{uid()}", user_id=uid_)["data"]["object"]
+    foreign = load_event("customer_subscription_created", customer=f"cus_{uid()}", sub=f"sub_{uid()}",
+                         user_id=uid_)["data"]["object"]
+    stripe.subscriptions = [good, foreign]
+    resp = client.post("/api/billing/reconcile", headers=bearer(tok))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["reconcile"] == {"ok": False, "fetched": 2, "applied": 0, "error": "ownership"}
+    assert subscription_rows(uid_) == [] and events_for(uid_, "trial_converted") == []
 
 
 def test_reconcile_with_no_customer_is_a_noop(client, stripe, auth_on):
@@ -455,6 +479,49 @@ def test_admin_trial_reset_rewrites_the_trial_and_is_audited(client, auth_on, ad
     assert me["plan"]["plan"] == "pro" and me["plan"]["source"] == "trial"
     view = client.get(f"/api/admin/billing/users/{sub_ext}", headers=admin).json()
     assert view["overrides"][0]["created_by"] == "jared" and view["user"]["trial_source"] == "admin"
+
+
+def test_admin_quota_override_is_enforced(client, auth_on, admin):
+    """A `quota` override is read by `entitlements.authorize`, not just
+    stored: the 4th distinct memo on Free is 402 until the operator lifts
+    the meter, then it opens, and `/api/me` shows the lifted limit."""
+    from app.tests.gating_helpers import store_memo
+    tickers = ("QOVA", "QOVB", "QOVC", "QOVD", "QOVE")
+    for t in tickers:
+        store_memo(t)
+    _, tok = free_user(auth_on)
+    sub_ext = client.get("/api/me", headers=bearer(tok)).json()["user"]["external_id"]
+    for t in tickers[:3]:
+        assert client.get(f"/api/stocks/{t}/memo", headers=bearer(tok)).status_code == 200
+    assert_structured(client.get(f"/api/stocks/{tickers[3]}/memo", headers=bearer(tok)), code="quota_exceeded", status=402)
+    me = client.get("/api/me", headers=bearer(tok)).json()
+    assert me["entitlements"]["memo_view"]["limit"] == 3 and me["entitlements"]["memo_view"]["remaining"] == 0
+
+    resp = client.post("/api/admin/billing/overrides", headers=admin, json={
+        "external_id": sub_ext, "kind": "quota", "feature": "memo_view", "value": "4", "reason": "support ticket 7",
+    })
+    assert resp.status_code == 201 and resp.json()["value"] == "4"
+    me = client.get("/api/me", headers=bearer(tok)).json()
+    assert me["entitlements"]["memo_view"]["limit"] == 4 and me["entitlements"]["memo_view"]["remaining"] == 1
+    assert client.get(f"/api/stocks/{tickers[3]}/memo", headers=bearer(tok)).status_code == 200
+    detail = assert_structured(client.get(f"/api/stocks/{tickers[4]}/memo", headers=bearer(tok)),
+                               code="quota_exceeded", status=402)
+    assert detail["used"] == 4 and detail["limit"] == 4
+
+    resp = client.post("/api/admin/billing/overrides", headers=admin, json={
+        "external_id": sub_ext, "kind": "quota", "feature": "memo_view", "value": "UNLIMITED", "reason": "ticket 7 again",
+    })
+    assert resp.status_code == 201 and resp.json()["value"] == "unlimited", "newest override wins; value normalised"
+    me = client.get("/api/me", headers=bearer(tok)).json()
+    assert me["entitlements"]["memo_view"]["limit"] is None and me["entitlements"]["memo_view"]["used"] == 4
+    assert client.get(f"/api/stocks/{tickers[4]}/memo", headers=bearer(tok)).status_code == 200
+    # Only a metered, registered feature can carry a quota override.
+    assert_structured(client.post("/api/admin/billing/overrides", headers=admin, json={
+        "external_id": sub_ext, "kind": "quota", "feature": "portfolio", "value": "5", "reason": "not metered",
+    }), code="invalid_override", status=422)
+    assert_structured(client.post("/api/admin/billing/overrides", headers=admin, json={
+        "external_id": sub_ext, "kind": "quota", "feature": "no_such_feature", "value": "5", "reason": "typo",
+    }), code="invalid_override", status=422)
 
 
 def test_ensure_customer_is_used_by_checkout_not_by_a_plain_get():
