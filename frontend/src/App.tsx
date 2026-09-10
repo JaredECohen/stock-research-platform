@@ -62,8 +62,6 @@ export default function App() {
       <RouteTracker />
       <Routes>
         {renderRouteObjects(publicRoutes)}
-        <Route path="/sign-in/*" element={<SignInPage mode="sign-in" />} />
-        <Route path="/sign-up/*" element={<SignInPage mode="sign-up" />} />
 
         <Route path="/app" element={<RequireAuth />}>
           <Route element={<Layout />}>
