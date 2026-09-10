@@ -13,6 +13,17 @@ No DB, no I/O, no numpy. Two steps:
    a reason — never a zero, never a neutral placeholder. The reasons are
    the product's "n/a because …" text, so they are stable strings.
 
+Missing inputs are never zero-filled. A line that is absent from the
+snapshot is *unknown*: the persistence slice stores a provider null as a
+null row and ``pit_snapshot`` drops it, so by the time a formula runs
+"absent" and "unknown" are indistinguishable. A 0 invented for a missing
+partner line (R&D next to SG&A, buybacks next to dividends, short-term
+investments next to cash, one half of the debt split) would be
+standardised and ranked as if it had been observed, so the feature is
+null with ``missing:<line>`` instead. A provider that reports 0 stores 0
+and scores as 0. The rule is frozen in ``scorecard_spec.RULES`` and
+therefore in the spec hash.
+
 Row contract (owned by the persistence slice, mirrored here so this
 module can be tested without a database)::
 
@@ -156,8 +167,19 @@ def pit_snapshot(rows: Iterable[Sequence[Any]], as_of: date) -> PitSnapshot:
     * ``value`` None / non-finite → ``null_values_dropped``;
     * no fiscal year and no period_end to derive one from → ``rows_unusable``;
     * unknown statement name → ``rows_unusable``;
-    * a second row for the same (year, statement, line) → last one wins,
-      counted in ``duplicate_rows``.
+    * a second row for the same (year, statement, line) → counted in
+      ``duplicate_rows``; the winner is chosen by the data, not by input
+      order (see below).
+
+    Duplicates are real: two period labels for one fiscal year (``FY2024``
+    from FMP, ``2024`` from Alpha Vantage) both land in ``financial_periods``
+    across provider fallbacks. The winner is the row with the latest
+    ``available_at`` (a later fill or restatement supersedes an earlier
+    one), then the greater period label, then the greater value. Because
+    the choice depends only on the rows, the snapshot — and therefore
+    ``inputs_hash`` — is identical for any ordering of the same rows,
+    which the persistence slice's ``(version_key, as_of, inputs_hash)``
+    skip rule depends on; an unordered SELECT must not change the score.
     """
     notes: dict[str, int] = {
         "rows_seen": 0,
@@ -168,9 +190,9 @@ def pit_snapshot(rows: Iterable[Sequence[Any]], as_of: date) -> PitSnapshot:
         "rows_unusable": 0,
         "duplicate_rows": 0,
     }
-    by_year: dict[int, dict[str, dict[str, float]]] = {}
+    # (fiscal_year, statement, line_item) -> (available_at, period label, value)
+    chosen: dict[tuple[int, str, str], tuple[date, str, float]] = {}
     period_end_by_year: dict[int, date | None] = {}
-    available_by_year: dict[int, date | None] = {}
 
     for row in rows:
         notes["rows_seen"] += 1
@@ -197,17 +219,31 @@ def pit_snapshot(rows: Iterable[Sequence[Any]], as_of: date) -> PitSnapshot:
             notes["rows_unusable"] += 1
             continue
         fy = int(fy)
-        stmts = by_year.setdefault(fy, {s: {} for s in _STATEMENTS})
-        if line_item in stmts[statement]:
+        key = (fy, statement, line_item)
+        candidate = (avail, "" if _period is None else str(_period), float(value))
+        incumbent = chosen.get(key)
+        if incumbent is not None:
             notes["duplicate_rows"] += 1
-        stmts[statement][line_item] = float(value)
+        if incumbent is None or candidate > incumbent:
+            chosen[key] = candidate
         prev_pe = period_end_by_year.get(fy)
         if pe is not None and (prev_pe is None or pe > prev_pe):
             period_end_by_year[fy] = pe
         elif fy not in period_end_by_year:
             period_end_by_year[fy] = pe
-        prev = available_by_year.get(fy)
-        available_by_year[fy] = avail if prev is None or avail > prev else prev
+
+    # Sorted so the statement dicts (and everything hashed from them) have
+    # an order that does not depend on how the rows arrived.
+    by_year: dict[int, dict[str, dict[str, float]]] = {}
+    available_by_year: dict[int, date] = {}
+    for key in sorted(chosen):
+        fy, statement, line_item = key
+        avail, _label, val = chosen[key]
+        stmts = by_year.setdefault(fy, {s: {} for s in _STATEMENTS})
+        stmts[statement][line_item] = val
+        prev_avail = available_by_year.get(fy)
+        if prev_avail is None or avail > prev_avail:
+            available_by_year[fy] = avail
 
     points = tuple(
         AnnualPoint(
@@ -298,7 +334,9 @@ class _Calc:
         self.shares_source: str = "none"
         self.mktcap: float | None = None
         self.total_debt: float | None = None
+        self.total_debt_reason: str | None = None   # why total_debt is None
         self.net_debt: float | None = None
+        self.net_debt_reason: str | None = None     # why net_debt is None
         self.ev: float | None = None
         self.ebitda: float | None = None
         self.avg_assets: float | None = None
@@ -322,15 +360,24 @@ class _Calc:
 
         self.mktcap = self.price * shares if (self.price is not None and self.price > 0 and shares) else None
 
-        debt, debt_flag = _total_debt(balance)
+        debt, debt_reason, debt_flag = _total_debt(balance)
         if debt_flag:
             self.flags.append(debt_flag)
-        self.total_debt = debt
+        self.total_debt, self.total_debt_reason = debt, debt_reason
         cash = _get(balance, "cash_and_equivalents")
         sti = _get(balance, "short_term_investments")
-        if cash is not None and sti is None:
-            self.flags.append("short_term_investments_not_reported")
-        self.net_debt = (debt - cash - (sti or 0.0)) if (debt is not None and cash is not None) else None
+        # Every term of net debt must be reported. An absent short-term
+        # investments line is unknown, not zero — `ratios.net_debt` and the
+        # screener fill it with 0, but here that 0 would be standardised and
+        # ranked as if observed (fs-v1 missing-input rule).
+        if debt is None:
+            self.net_debt, self.net_debt_reason = None, debt_reason
+        elif cash is None:
+            self.net_debt, self.net_debt_reason = None, f"{REASON_MISSING}:cash_and_equivalents"
+        elif sti is None:
+            self.net_debt, self.net_debt_reason = None, f"{REASON_MISSING}:short_term_investments"
+        else:
+            self.net_debt, self.net_debt_reason = debt - cash - sti, None
         self.ev = (self.mktcap + self.net_debt) if (self.mktcap is not None and self.net_debt is not None) else None
 
         self.ebitda, ebitda_flag = _ebitda(income, latest.cash if latest else {})
@@ -540,17 +587,14 @@ class _Calc:
         return _over_avg_assets(self, rev)
 
     def opex_ratio(self) -> _Value:
-        sga = self.inc("sga")
-        rd = self.inc("r_and_d")
+        sga, rd = self.inc("sga"), self.inc("r_and_d")
         if sga is None:
             return None, f"{REASON_MISSING}:sga"
         if rd is None:
-            # Many companies (retailers, utilities) have no R&D line at all;
-            # FMP reports 0 for them, and a missing line next to a present
-            # SG&A is far more likely "not reported" than "unknown". Flagged
-            # so the row says so.
-            self.flags.append("r_and_d_not_reported")
-            rd = 0.0
+            # Not zero-filled. FMP reports 0 for names with no R&D line and
+            # that 0 arrives as a real value; only a genuinely absent (or
+            # provider-null) line reaches here, and that is unknown.
+            return None, f"{REASON_MISSING}:r_and_d"
         return _over_revenue(self, sga + rd, "opex")
 
     def capex_intensity(self) -> _Value:
@@ -563,8 +607,7 @@ class _Calc:
 
     def net_debt_to_ebitda(self) -> _Value:
         if self.net_debt is None:
-            missing = "total_debt" if self.total_debt is None else "cash_and_equivalents"
-            return None, f"{REASON_MISSING}:{missing}"
+            return None, self.net_debt_reason or f"{REASON_MISSING}:total_debt"
         if self.ebitda is None:
             return None, f"{REASON_MISSING}:ebitda"
         if self.ebitda <= 0:
@@ -574,7 +617,7 @@ class _Calc:
     def debt_to_equity(self) -> _Value:
         eq = self.bal("shareholders_equity")
         if self.total_debt is None:
-            return None, f"{REASON_MISSING}:total_debt"
+            return None, self.total_debt_reason or f"{REASON_MISSING}:total_debt"
         if eq is None:
             return None, f"{REASON_MISSING}:shareholders_equity"
         if eq <= 0:
@@ -612,12 +655,14 @@ class _Calc:
         div, buyback = self.cf("dividends_paid"), self.cf("share_repurchases")
         if div is None and buyback is None:
             return None, f"{REASON_MISSING}:dividends_paid,share_repurchases"
-        if div is None or buyback is None:
-            # Same reasoning as R&D: a present partner line makes the
-            # missing one "not reported" rather than unknown. Flagged.
-            self.flags.append("dividends_paid_not_reported" if div is None else "share_repurchases_not_reported")
-        total = abs(div or 0.0) + abs(buyback or 0.0)
-        return _over_mktcap(self, total, "shareholder_returns")
+        # Both legs are required: a present partner line does not make the
+        # absent one zero, and a yield built on one leg would be ranked
+        # against names whose yield has both.
+        if div is None:
+            return None, f"{REASON_MISSING}:dividends_paid"
+        if buyback is None:
+            return None, f"{REASON_MISSING}:share_repurchases"
+        return _over_mktcap(self, abs(div) + abs(buyback), "shareholder_returns")
 
     def net_share_change_1y(self) -> _Value:
         cur = self.inc("weighted_avg_shares_diluted")
@@ -687,22 +732,24 @@ def _finite_or_reason(value: float, name: str) -> _Value:
     return value, None
 
 
-def _total_debt(balance: Mapping[str, Any]) -> tuple[float | None, str | None]:
-    """`total_debt` when reported, else short + long. A missing partner in
-    the split is treated as not reported (0) and flagged — the same rule
-    `finance.ratios.invested_capital` and the screener use."""
+def _total_debt(balance: Mapping[str, Any]) -> tuple[float | None, str | None, str | None]:
+    """``(total_debt, reason, flag)``: the reported ``total_debt`` line, else
+    ``short_term_debt + long_term_debt`` — but only when both halves are
+    reported (flagged ``total_debt_from_short_plus_long``). ``ratios.net_debt``
+    and the screener treat a missing half as 0; the scorecard does not,
+    because an invented 0 would be standardised and ranked as if observed
+    (fs-v1 missing-input rule). ``reason`` names the absent line."""
     total = _get(balance, "total_debt")
     if total is not None:
-        return total, None
+        return total, None, None
     st, lt = _get(balance, "short_term_debt"), _get(balance, "long_term_debt")
     if st is None and lt is None:
-        return None, None
-    flag = None
+        return None, f"{REASON_MISSING}:total_debt", None
     if st is None:
-        flag = "short_term_debt_not_reported"
-    elif lt is None:
-        flag = "long_term_debt_not_reported"
-    return (st or 0.0) + (lt or 0.0), flag
+        return None, f"{REASON_MISSING}:short_term_debt", None
+    if lt is None:
+        return None, f"{REASON_MISSING}:long_term_debt", None
+    return st + lt, None, "total_debt_from_short_plus_long"
 
 
 def _ebitda(income: Mapping[str, Any], cash: Mapping[str, Any]) -> tuple[float | None, str | None]:
@@ -734,8 +781,7 @@ def _over_ev(c: _Calc, numerator: float) -> _Value:
     if c.mktcap is None:
         return _over_mktcap(c, numerator, "numerator")  # surfaces the price/shares reason
     if c.net_debt is None:
-        missing = "total_debt" if c.total_debt is None else "cash_and_equivalents"
-        return None, f"{REASON_MISSING}:{missing}"
+        return None, c.net_debt_reason or f"{REASON_MISSING}:total_debt"
     if c.ev is None or c.ev <= 0:
         return None, f"{REASON_DENOMINATOR}:enterprise_value<=0"
     return numerator / c.ev, None

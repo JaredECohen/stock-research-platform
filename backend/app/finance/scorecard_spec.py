@@ -55,6 +55,30 @@ Sign convention
 ``sign = -1`` means a higher raw value is *worse*. The feature engine
 always emits the raw ratio; the normaliser multiplies the z-score by
 ``sign`` so every stored z reads "higher = better".
+
+Missing inputs and percentiles (``RULES``)
+------------------------------------------
+Two methodology rules that are not visible in a formula string are
+frozen in ``RULES`` and hashed with the rest of the spec:
+
+* **Missing inputs are null, never zero.** Every line a formula names
+  must be present in the point-in-time snapshot; an absent one makes the
+  feature null with a ``missing:<line>`` reason. No partner-line
+  zero-fill: ``r_and_d`` is not 0 because ``sga`` is present,
+  ``share_repurchases`` is not 0 because ``dividends_paid`` is present,
+  ``short_term_investments`` is not 0 because ``cash_and_equivalents`` is
+  present, and one half of the debt split is not 0 because the other is.
+  The persistence slice stores a provider null as a null row, so by the
+  time a formula runs "absent" and "unknown" are the same thing, and a 0
+  invented here would be standardised and ranked as if it had been
+  observed. (``ratios.net_debt`` and the screener do zero-fill; the
+  scorecard deliberately does not.)
+* **Percentiles are rank-based** (average rank for ties, ``(0, 100]``,
+  100 = best). The overall percentile ranks rows with a non-null overall
+  z; each family percentile ranks rows with a non-null z for *that*
+  family, so a name whose overall is "insufficient data" can still carry
+  a valuation percentile — which is what the memo's valuation
+  disagreement rule reads.
 """
 from __future__ import annotations
 
@@ -542,6 +566,40 @@ NORMALIZATION = NormalizationParams()
 
 
 # ---------------------------------------------------------------------------
+# Methodology rules that no formula string shows (part of the hash)
+# ---------------------------------------------------------------------------
+
+# Plain data so it serialises as-is into ``spec_as_dict`` and reaches the
+# ``/api/scorecard/spec`` reader verbatim. Changing a rule here changes the
+# hash, which is the point: a row scored under a different null policy or
+# ranking population is not comparable to one scored under this one.
+RULES: dict[str, Any] = {
+    "missing_inputs": {
+        "policy": "null_with_reason",
+        "partner_line_zero_fill": False,
+        "detail": (
+            "Every line a formula names must be present in the point-in-time "
+            "snapshot; an absent line makes the feature null with a "
+            "missing:<line> reason. No line is assumed to be zero because a "
+            "sibling line is present (r_and_d/sga, share_repurchases/"
+            "dividends_paid, short_term_investments/cash_and_equivalents, "
+            "short_term_debt/long_term_debt). A provider that reports 0 "
+            "stores 0 and scores as 0; a provider that omits the line scores "
+            "as n/a."
+        ),
+        "total_debt_fallback": "short_term_debt + long_term_debt only when both are reported",
+    },
+    "percentiles": {
+        "method": "average_rank",
+        "scale": "(0, 100], 100 = best",
+        "overall_population": "rows with a non-null overall z",
+        "category_population": "rows with a non-null z for that family",
+        "sector_population": "same rule within the canonical sector, at least 2 names",
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # Serialisation and fingerprint
 # ---------------------------------------------------------------------------
 
@@ -579,6 +637,7 @@ def spec_as_dict(
             for fam in families
         ],
         "normalization": asdict(normalization),
+        "rules": json.loads(json.dumps(RULES)),   # a copy; callers may mutate the dict
         "sectors": {
             "canonical": list(CANONICAL_SECTORS),
             "aliases": dict(SECTOR_ALIASES),

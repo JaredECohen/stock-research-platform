@@ -8,7 +8,9 @@ value, available_at)``.
 from __future__ import annotations
 
 import math
+import random
 from datetime import date, datetime
+from pathlib import Path
 from statistics import stdev
 
 import pytest
@@ -151,15 +153,54 @@ def test_snapshot_derives_fiscal_year_from_period_end_and_counts_unusable():
     assert snap.notes["rows_unusable"] == 2
 
 
-def test_snapshot_duplicate_rows_last_wins_and_are_counted():
-    rows = [
-        ("income", "revenue", "FY2024", date(2024, 12, 31), 2024, None, 1.0, date(2025, 2, 15)),
-        ("income", "revenue", "2024", date(2024, 12, 31), 2024, None, 2.0, date(2025, 2, 20)),
-    ]
-    snap = F.pit_snapshot(rows, AS_OF)
-    assert snap.latest.income["revenue"] == 2.0
-    assert snap.latest.available_at == date(2025, 2, 20)
-    assert snap.notes["duplicate_rows"] == 1
+def test_snapshot_duplicate_rows_resolve_by_latest_availability_not_input_order():
+    # Two period labels for one fiscal year ("FY2024" from FMP, "2024" from
+    # Alpha Vantage) is what provider fallbacks produce. The row that became
+    # available later wins whatever order the SELECT returned them in, so an
+    # unordered query cannot change the score or the inputs_hash.
+    a = ("income", "revenue", "FY2024", date(2024, 12, 31), 2024, None, 1.0, date(2025, 2, 20))
+    b = ("income", "revenue", "2024", date(2024, 12, 31), 2024, None, 2.0, date(2025, 2, 15))
+    for rows in ([a, b], [b, a]):
+        snap = F.pit_snapshot(rows, AS_OF)
+        assert snap.latest.income == {"revenue": 1.0}
+        assert snap.latest.available_at == date(2025, 2, 20)
+        assert snap.notes["duplicate_rows"] == 1
+    assert F.inputs_hash(F.pit_snapshot([a, b], AS_OF), PRICE_CTX) == F.inputs_hash(F.pit_snapshot([b, a], AS_OF), PRICE_CTX)
+
+
+def test_snapshot_duplicate_tie_breaks_on_period_label_then_value():
+    same_day = date(2025, 2, 15)
+    fy_label = ("income", "revenue", "FY2024", date(2024, 12, 31), 2024, None, 1.0, same_day)
+    bare_label = ("income", "revenue", "2024", date(2024, 12, 31), 2024, None, 2.0, same_day)
+    for rows in ([fy_label, bare_label], [bare_label, fy_label]):
+        assert F.pit_snapshot(rows, AS_OF).latest.income == {"revenue": 1.0}     # "FY2024" > "2024"
+    lo = ("income", "revenue", "FY2024", date(2024, 12, 31), 2024, None, 1.0, same_day)
+    hi = ("income", "revenue", "FY2024", date(2024, 12, 31), 2024, None, 3.0, same_day)
+    for rows in ([lo, hi], [hi, lo]):
+        assert F.pit_snapshot(rows, AS_OF).latest.income == {"revenue": 3.0}
+
+
+def test_snapshot_duplicate_not_yet_available_does_not_supersede_the_visible_row():
+    # A restatement filed after as_of is invisible: the original row scores.
+    early = ("income", "revenue", "FY2024", date(2024, 12, 31), 2024, None, 1.0, date(2025, 2, 15))
+    late = ("income", "revenue", "FY2024", date(2024, 12, 31), 2024, None, 2.0, date(2025, 3, 15))
+    for rows in ([early, late], [late, early]):
+        snap = F.pit_snapshot(rows, AS_OF)
+        assert snap.latest.income == {"revenue": 1.0}
+        assert snap.latest.available_at == date(2025, 2, 15)
+        assert snap.notes["pit_excluded"] == 1 and snap.notes["duplicate_rows"] == 0
+
+
+def test_snapshot_and_inputs_hash_are_independent_of_row_order():
+    rows = _rows()
+    base = F.pit_snapshot(rows, AS_OF)
+    rng = random.Random(0)
+    for _ in range(5):
+        shuffled = list(rows)
+        rng.shuffle(shuffled)
+        snap = F.pit_snapshot(shuffled, AS_OF)
+        assert snap == base
+        assert F.inputs_hash(snap, PRICE_CTX) == F.inputs_hash(base, PRICE_CTX)
 
 
 def test_years_back_requires_the_adjacent_fiscal_year():
@@ -372,15 +413,23 @@ def test_negative_ebitda_nulls_net_debt_to_ebitda_only():
     assert _close(res.values["ebitda_ev_yield"], -5 / 1250)
 
 
-def test_total_debt_falls_back_to_short_plus_long_and_flags_missing_partner():
+def test_total_debt_split_needs_both_halves_and_is_flagged():
     data = _without(2024, "balance", "total_debt")
-    data[2024]["balance"]["long_term_debt"] = 400.0
+    data[2024]["balance"]["long_term_debt"] = 300.0
+    data[2024]["balance"]["short_term_debt"] = 100.0
     res = _features(snapshot=F.pit_snapshot(_rows(data), AS_OF))
     assert _close(res.values["debt_to_equity"], 0.5)
-    assert "short_term_debt_not_reported" in res.context["flags"]
+    assert _close(res.values["net_debt_to_ebitda"], 250 / 350)
+    assert "total_debt_from_short_plus_long" in res.context["flags"]
+    # One half absent is unknown, not zero (ratios.net_debt zero-fills; the scorecard must not).
+    data[2024]["balance"].pop("short_term_debt")
+    res = _features(snapshot=F.pit_snapshot(_rows(data), AS_OF))
+    for name in ("debt_to_equity", "net_debt_to_ebitda", "ebitda_ev_yield", "sales_ev_yield"):
+        assert res.values[name] is None, name
+        assert res.reasons[name] == "missing:short_term_debt", name
+    assert res.context["total_debt"] is None and res.context["net_debt"] is None
     data[2024]["balance"].pop("long_term_debt")
     res = _features(snapshot=F.pit_snapshot(_rows(data), AS_OF))
-    assert res.values["debt_to_equity"] is None
     assert res.reasons["debt_to_equity"] == "missing:total_debt"
     assert res.reasons["ebitda_ev_yield"] == "missing:total_debt"
 
@@ -438,16 +487,54 @@ def test_gross_margin_stability_uses_at_most_five_points():
     assert _close(res.values["gross_margin_stability"], -stdev([0.6, 0.55, 0.5, 0.5, 0.1]))
 
 
-def test_optional_partner_lines_are_treated_as_not_reported_and_flagged():
+def test_missing_partner_lines_are_null_with_reason_never_zero_filled():
+    # history_service stores a provider null as a null row and pit_snapshot
+    # drops it, so "absent" and "unknown" are the same thing here: a 0
+    # invented next to a present sibling would be ranked as if observed.
     res = _features(snapshot=F.pit_snapshot(_rows(_without(2024, "income", "r_and_d")), AS_OF))
-    assert _close(res.values["opex_ratio"], 200 / 1000)
-    assert "r_and_d_not_reported" in res.context["flags"]
+    assert res.values["opex_ratio"] is None
+    assert res.reasons["opex_ratio"] == "missing:r_and_d"
     res = _features(snapshot=F.pit_snapshot(_rows(_without(2024, "cash", "share_repurchases")), AS_OF))
-    assert _close(res.values["shareholder_yield"], 40 / 1000)
-    assert "share_repurchases_not_reported" in res.context["flags"]
+    assert res.values["shareholder_yield"] is None
+    assert res.reasons["shareholder_yield"] == "missing:share_repurchases"
+    res = _features(snapshot=F.pit_snapshot(_rows(_without(2024, "cash", "dividends_paid")), AS_OF))
+    assert res.values["shareholder_yield"] is None
+    assert res.reasons["shareholder_yield"] == "missing:dividends_paid"
     res = _features(snapshot=F.pit_snapshot(_rows(_without(2024, "cash", "share_repurchases", "dividends_paid")), AS_OF))
     assert res.values["shareholder_yield"] is None
     assert res.reasons["shareholder_yield"] == "missing:dividends_paid,share_repurchases"
+
+
+def test_missing_short_term_investments_nulls_every_net_debt_feature():
+    res = _features(snapshot=F.pit_snapshot(_rows(_without(2024, "balance", "short_term_investments")), AS_OF))
+    for name in ("ebitda_ev_yield", "sales_ev_yield", "net_debt_to_ebitda"):
+        assert res.values[name] is None, name
+        assert res.reasons[name] == "missing:short_term_investments", name
+    assert res.context["net_debt"] is None and res.context["enterprise_value"] is None
+    assert _close(res.values["debt_to_equity"], 0.5)          # gross debt does not need it
+    assert res.context["total_debt"] == 400.0
+
+
+def test_reported_zero_partner_line_is_observed_data_and_scores_as_zero():
+    # FMP reports 0 for a name with no R&D line / no buybacks / no
+    # short-term investments; that 0 is a value, not a gap.
+    data = _without(2024, "income")
+    data[2024]["income"]["r_and_d"] = 0.0
+    data[2024]["cash"]["share_repurchases"] = 0.0
+    data[2024]["balance"]["short_term_investments"] = 0.0
+    res = _features(snapshot=F.pit_snapshot(_rows(data), AS_OF))
+    assert _close(res.values["opex_ratio"], 200 / 1000)
+    assert _close(res.values["shareholder_yield"], 40 / 1000)
+    assert _close(res.values["net_debt_to_ebitda"], 300 / 350)
+    assert res.reasons == {}
+
+
+def test_engine_has_no_not_reported_zero_fill_anywhere():
+    # Sweep, not a spot check: the "_not_reported" flag was the marker of a
+    # partner-line zero fill. None may come back under any feature.
+    src = Path(F.__file__).read_text()
+    assert "_not_reported" not in src
+    assert "or 0.0)" not in src
 
 
 def test_single_line_features_null_when_their_line_is_missing():

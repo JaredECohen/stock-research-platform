@@ -158,6 +158,20 @@ def test_spec_as_dict_is_json_serialisable_and_ordered():
     feat = d["families"][0]["features"][2]
     assert feat["name"] == "ebitda_ev_yield"
     assert feat["applicability"] == {"exclude_sectors": ["Financials", "Real Estate"]}
+    # The rules no formula string shows are frozen (and hashed) too.
+    assert d["rules"]["missing_inputs"]["policy"] == "null_with_reason"
+    assert d["rules"]["missing_inputs"]["partner_line_zero_fill"] is False
+    assert d["rules"]["percentiles"]["method"] == "average_rank"
+    assert d["rules"]["percentiles"]["category_population"] == "rows with a non-null z for that family"
+
+
+def test_spec_hash_changes_when_a_rule_changes_and_rules_are_copied():
+    d = S.spec_as_dict()
+    d["rules"]["missing_inputs"]["partner_line_zero_fill"] = True
+    assert S.hash_spec_dict(d) != S.spec_hash()
+    # spec_as_dict hands out a copy: mutating it must not edit the methodology
+    assert S.RULES["missing_inputs"]["partner_line_zero_fill"] is False
+    assert S.spec_as_dict()["rules"] == S.RULES
 
 
 def _shuffle_keys(obj, rng: random.Random):
@@ -201,8 +215,9 @@ def test_spec_hash_is_sha256_of_canonical_json():
 
 def test_fs_v1_hash_is_pinned():
     # Changing fs-v1 in place invalidates every persisted fs-v1 row. Bump
-    # VERSION_KEY instead and re-pin here.
-    assert S.spec_hash() == "f88cd6d0d5a12b8c413e8855a063d1f55e3e59c3679795daa79e8d6482dc6056"
+    # VERSION_KEY instead and re-pin here. (Re-pinned once, 2026-09-10, when
+    # the `rules` block was added — before any fs-v1 row had been persisted.)
+    assert S.spec_hash() == "950aed4ffc3846e45898387bae913c5cdd80120a357987c3cd567f686b0466ec"
 
 
 def test_no_numpy_at_import():
