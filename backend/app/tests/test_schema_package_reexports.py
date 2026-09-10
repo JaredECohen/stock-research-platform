@@ -102,6 +102,11 @@ MODEL_NAMES = [
     # Phase 6 (`models/scorecard.py`).
     "ScorecardVersion", "ScorecardRun", "ScorecardScore", "PriceMonthEnd",
     "ScorecardEvaluation", "ScorecardDisagreement",
+    # FEAT-003 (`models/industry.py`). `CompanyClassification` is the
+    # plan's frozen-contract alias of `CompanyIndustryClassification`.
+    "TaxonomyVersion", "GicsNode", "CompanyIndustryClassification",
+    "CompanyClassification", "IndustryStatSnapshot", "CrossIndustrySnapshot",
+    "IndustryReport", "IndustryReportJob",
 ]
 
 # Frozen at the split. `research_snapshots` / `cache_cost_logs` live in
@@ -124,6 +129,9 @@ TABLE_NAMES = sorted([
     # Phase 6 (`models/scorecard.py`).
     "scorecard_versions", "scorecard_runs", "scorecard_scores", "price_month_ends",
     "scorecard_evaluations", "scorecard_disagreements",
+    # FEAT-003 (`models/industry.py`).
+    "gics_taxonomy_versions", "gics_nodes", "company_industry_classifications",
+    "industry_stats", "industry_snapshots", "industry_reports", "industry_report_jobs",
 ])
 
 SCHEMA_SUBMODULES = [
@@ -132,7 +140,7 @@ SCHEMA_SUBMODULES = [
 ]
 MODEL_SUBMODULES = [
     "universe", "documents", "memo", "dcf", "portfolio", "telemetry", "jobs",
-    "accounts", "public", "fundamentals", "scorecard",
+    "accounts", "public", "fundamentals", "scorecard", "industry",
 ]
 
 # sha256 of `StockMemoOut.model_json_schema()` (sorted keys, compact

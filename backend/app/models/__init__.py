@@ -40,6 +40,16 @@ from .documents import (
     ProviderCache,
 )
 from .fundamentals import ChartCommentary
+from .industry import (
+    CompanyClassification,
+    CompanyIndustryClassification,
+    CrossIndustrySnapshot,
+    GicsNode,
+    IndustryReport,
+    IndustryReportJob,
+    IndustryStatSnapshot,
+    TaxonomyVersion,
+)
 from .jobs import CatalystEvent, CronLoopRun, RegenJob, ThemeExposure
 from .memo import (
     MemoOutcome,
@@ -114,4 +124,13 @@ __all__ = [
     "PriceMonthEnd",
     "ScorecardEvaluation",
     "ScorecardDisagreement",
+    # industry (FEAT-003)
+    "TaxonomyVersion",
+    "GicsNode",
+    "CompanyIndustryClassification",
+    "CompanyClassification",
+    "IndustryStatSnapshot",
+    "CrossIndustrySnapshot",
+    "IndustryReport",
+    "IndustryReportJob",
 ]

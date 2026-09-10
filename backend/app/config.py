@@ -358,6 +358,74 @@ class Settings(BaseSettings):
     # follows the same policy as the other scorecard reads.
     scorecard_export_token: str = ""
 
+    # ------------------------------------------------------------------
+    # FEAT-003 — GICS Industry Group analysts and weekly Industry Analysis.
+    # ------------------------------------------------------------------
+    # Every setting for the feature lives here (slice 1 owns the file) so the
+    # parallel slices — knowledge/analysts, analytics, jobs, API, frontend —
+    # read one block instead of each adding its own. Defaults keep the
+    # feature dark: no memo routing change, no worker loops enqueueing
+    # reports. `enable_industry_reports` follows the web/worker split in
+    # render.yaml (false on web, true on the worker); the taxonomy registry
+    # and the daily classification audit are DB-only and always available.
+    #
+    # `gics_taxonomy_version` names the taxonomy the deployment expects. It
+    # is the key the importer uses for the bundled knowledge JSON and what
+    # `gics_registry.ensure_taxonomy` activates on a fresh database; the
+    # ACTIVE version is always read from the database (two processes share
+    # nothing else), never from this value.
+    gics_taxonomy_version: str = "gics-2026-04"
+    # Display policy. Only `codes_and_names` is built; `internal_labels` is
+    # reserved for the licensing decision (owner decision 5) and is not
+    # implemented — the value is validated by the registry, not acted on.
+    gics_display_mode: str = "codes_and_names"
+    # Memo pipeline: when on, a mapped company's memo runs the Industry
+    # Group Analyst (one per memo) alongside the sector analyst. Off until a
+    # production A/B is read; the sector analyst stays primary either way.
+    enable_industry_analyst_routing: bool = False
+    # Worker: the weekly report loop + the report-job drainer. Web keeps it
+    # off (reads only); page views never generate.
+    enable_industry_reports: bool = False
+    # Report generation caps. Two bounded LLM calls per report; the third
+    # job attempt runs deterministic so a week never ends blank.
+    industry_report_max_llm_calls: int = 2
+    industry_report_max_attempts: int = 3
+    industry_reports_max_jobs_per_run: int = 40
+    # Publication: Sunday 06:30 UTC (after sector_digest_loop 05:30) with the
+    # as-of set to the prior Friday's close; period_key is that Friday's
+    # ISO week. Owner decision 3 — defaults recorded in the setup doc.
+    industry_reports_cron_dow: str = "sun"
+    industry_reports_cron_hour: int = 6
+    industry_reports_cron_minute: int = 30
+    industry_reports_as_of_weekday: int = 4  # Monday=0 … Friday=4
+    # Analytics: sample floor below which a group reports
+    # `insufficient_sample` (a labelled state, not an error); the weekly
+    # price warm-up budget (provider fetches per run, lowest-coverage groups
+    # first) so first-run coverage is honest rather than mostly `no_prices`;
+    # the benchmark set (owner decision 2 — no ETF/index-vendor series).
+    industry_stats_min_sample: int = 3
+    industry_price_warmup_budget: int = 150
+    industry_benchmarks: str = "universe_ew,sector_ew,KFR.MKT_RF.D"
+    # PM context: the company's own group plus at most this many groups
+    # linked by dependency edges; the cross-industry block is capped at
+    # 2,000 characters by the renderer.
+    industry_pm_max_linked_groups: int = 2
+    # Access (owner decision 1): `public` for the latest report; history,
+    # changes-since-prior and PM chat integration are `pro` when
+    # AUTH_ENABLED. The taxonomy endpoint always answers with the policy.
+    industry_analysis_access: str = "public"
+    # A report older than this (by as-of) is flagged stale on the read API,
+    # as is one whose latest refresh attempt failed.
+    industry_report_stale_after_days: int = 10
+    # Owner decision 4: auto-publish after validation. The review-queue
+    # status (`pending_review`) exists; no publish endpoint is built while
+    # this stays False.
+    industry_reports_require_review: bool = False
+
+    @property
+    def industry_benchmarks_list(self) -> list[str]:
+        return [b.strip() for b in self.industry_benchmarks.split(",") if b.strip()]
+
     @property
     def auth_configured(self) -> bool:
         """Enough Clerk config to verify a token at all."""

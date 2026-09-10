@@ -66,6 +66,18 @@ def _ensure_lazy_universe(ticker: str) -> str:
             status_code=404,
             detail=f"{t}: provider chain rejected this symbol.",
         )
+    # FEAT-003: place the new company in the GICS registry at introduction
+    # so its first memo can find its Industry Group Analyst instead of
+    # waiting for the 03:40 UTC classification loop. DB-only (one company
+    # read, one current-row read, one insert); a no-op when no taxonomy is
+    # active. Best-effort — a classification failure must not turn a
+    # successful symbol introduction into a 500.
+    try:
+        from ..services import industry_classification
+        industry_classification.classify_ticker(t)
+    except Exception as exc:  # pragma: no cover — diagnostic only
+        from ..agents.log_safety import safe_exc
+        log.warning("industry classification skipped for %s: %s", t, safe_exc(exc))
     # Heavy load (5yr financials + filings + transcripts) so the agent
     # graph has data to work with. Best-effort — if a single capability
     # 403s, we still return the memo using whatever did land.
