@@ -68,6 +68,7 @@ describe("App routing", () => {
       ["/dcf", "/app/dcf"],
       ["/comps", "/app/comps"],
       ["/screener", "/app/screener"],
+      ["/scorecard?tab=ticker&ticker=NVDA", "/app/scorecard?tab=ticker&ticker=NVDA"],
       ["/portfolio", "/app/portfolio"],
       ["/macro", "/app/macro"],
       ["/track-record?horizon=90", "/app/track-record?horizon=90"],

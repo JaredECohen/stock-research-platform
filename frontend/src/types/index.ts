@@ -491,6 +491,12 @@ export interface StockMemoOut {
   // Wave 9 — PM↔specialist deep-research dialog. Empty when the loop is
   // disabled (default) or the memo is from a backtest run.
   round_findings?: RoundFindings[];
+  // Phase 6 — the Fundamental Factor Scorecard summary the memo carries
+  // (`StockMemoOut.scorecard`, additive). Absent on memos that pre-date
+  // the field and null when the run had no row for the ticker; the memo
+  // view hides its Scorecard section in both cases. Informs the memo
+  // only — it does not move the rating.
+  scorecard?: ScorecardSummary | null;
   disclaimer: string;
 }
 
@@ -623,7 +629,8 @@ export type FeatureName =
   | "macro"
   | "track_record"
   | "memo_history"
-  | "data_catalog";
+  | "data_catalog"
+  | "scorecard";
 
 export interface Entitlement {
   feature: string;
@@ -837,3 +844,13 @@ export interface CommentaryRequestWire {
   years: number | null;
   fingerprint: string;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 6 — Fundamental Factor Scorecard. The client-side mirror of
+// `schemas/scorecard.py` lives in ./scorecard (types, the fs-v1 client
+// rules and the score-scale captions) and is re-exported so pages import
+// one module.
+// ---------------------------------------------------------------------------
+
+export * from "./scorecard";
+import type { ScorecardSummary } from "./scorecard";

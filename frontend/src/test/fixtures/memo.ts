@@ -2,6 +2,7 @@
 // fully populated (every optional section present) so tests subtract via
 // overrides to exercise the hidden/empty paths.
 import type { AgentFinding, MispricingThesis, StockMemoOut } from "@/types";
+import { makeSummary } from "./scorecard";
 
 export function makeFinding(
   agent: string,
@@ -130,6 +131,10 @@ export function makeMemo(overrides: Partial<StockMemoOut> = {}): StockMemoOut {
     generated_at: "2026-06-01T12:00:00Z",
     generation_mode: "demo",
     degraded_agents: [],
+    // Phase 6: the scorecard summary the memo carries. Override with
+    // `undefined` for a memo that pre-dates the field, `null` for a run
+    // with no row for the ticker — the section hides in both cases.
+    scorecard: makeSummary(),
     disclaimer: "Research and education only. Not investment advice.",
     ...overrides,
   };

@@ -1,7 +1,12 @@
-// Phase 6 Fundamental Factor Scorecard — TypeScript mirror of the backend
-// contracts served by /api/scorecard/* (plan §3 as amended by the
-// orchestrator decisions: quintile evaluation legs, export contract v1).
-// Mirrored by hand; keep the two in sync when either side changes.
+// Phase 6 Fundamental Factor Scorecard — TypeScript mirror of
+// `backend/app/schemas/scorecard.py` as served by /api/scorecard/* (plan §3
+// as amended by the orchestrator decisions: quintile evaluation legs,
+// export contract v1). Mirrored by hand, field names exactly as pydantic
+// serialises them; keep the two in sync when either side changes. Fields
+// the backend always emits but that pre-date the merged service (run
+// bookkeeping, the embedded history, the registry `source`) are optional
+// here only so the hand-written fixtures stay valid — the page treats an
+// absent value as "not on this response", never as zero.
 //
 // Research-process rules these shapes carry:
 //   * a number the model could not compute is `null` — never 0, never
@@ -87,7 +92,11 @@ export interface ScorecardCategory {
   z: number | null;
   score: number | null;
   percentile: number | null;
+  /** Rank-based within the sector; absent/null when the sector was too small. */
+  sector_percentile?: number | null;
   weight: number;
+  /** available / applicable features in the family, 0–1. */
+  coverage?: number | null;
   n_features: number;
   n_available: number;
 }
@@ -150,6 +159,8 @@ export interface ScorecardProfiles {
 export interface ScorecardSummary {
   version_key: string;
   as_of: string;
+  /** The succeeded run the row came from (`scorecard_runs.run_id`). */
+  run_id?: string;
   overall_z: number | null;
   overall_score: number | null;
   universe_percentile: number | null;
@@ -169,22 +180,40 @@ export interface ScorecardSummary {
   latest_period: string | null;
   /** Point-in-time date the fundamentals became available. */
   data_available_at: string | null;
+  /** Date of the close the price context used (observed; may lag `as_of`). */
+  price_date?: string | null;
   /** True when `as_of` is older than 45 days. */
   stale: boolean;
   is_month_end?: boolean;
+  /** Worker notes for this row (fallbacks taken, a stale price store) — rendered verbatim, never interpreted. */
+  notes?: string[];
 }
 
-/** `GET /api/scorecard/{ticker}` */
+/** `GET /api/scorecard/{ticker}` (`ScorecardDetailOut`). The month-end
+ *  history rides on this row — there is no separate history route. */
 export interface ScorecardDetail extends ScorecardSummary {
   ticker: string;
+  company_name?: string;
+  /** Canonical sector after the alias table; null/"" when unknown. */
   sector: string | null;
+  /** The `Company.sector` string before normalisation. */
+  sector_raw?: string | null;
   run_id: string;
   price_date: string | null;
+  spec_hash?: string;
+  inputs_hash?: string;
   features: ScorecardFeature[];
+  /** Price-context bookkeeping (e.g. `price_stale`); shown, never interpreted. */
+  context?: Record<string, unknown>;
+  /** Month-end rows from succeeded runs, oldest first (`months` query; default 36). */
+  history?: ScorecardHistoryPoint[];
 }
 
+/** One month-end row of a ticker's history (`ScorecardHistoryPoint`). */
 export interface ScorecardHistoryPoint {
   as_of: string;
+  is_month_end?: boolean;
+  overall_z?: number | null;
   overall_score: number | null;
   universe_percentile: number | null;
   sector_percentile: number | null;
@@ -192,7 +221,9 @@ export interface ScorecardHistoryPoint {
   category_z: Partial<Record<ScorecardFamily, number | null>> & Record<string, number | null>;
 }
 
-/** `GET /api/scorecard/{ticker}/history` — month-end rows only, oldest first. */
+/** Client-side view the history chart draws: the detail row's `history`
+ *  lifted beside the ticker and version it belongs to (see
+ *  `historyFromDetail` in api/client.ts). Not a wire shape. */
 export interface ScorecardHistory {
   ticker: string;
   version_key: string;
@@ -200,25 +231,48 @@ export interface ScorecardHistory {
 }
 
 export interface ScorecardUniverseRow {
+  /** `int` on the wire for EVERY row — `universe_table` numbers the served
+   *  order with `enumerate(start=1)`, unscored names included, after the
+   *  scored ones. The client blanks it for a row whose overall is null
+   *  (`normaliseUniverseResponse` in api/client.ts) because a position
+   *  beside nothing to rank is not a rank; the table then prints n/a and
+   *  sorts the row last. So: number for a scored name, null for an
+   *  unscored one, by the time a page sees it. */
   rank: number | null;
   ticker: string;
   company_name: string | null;
   sector: string | null;
+  overall_z?: number | null;
   overall_score: number | null;
   universe_percentile: number | null;
   sector_percentile: number | null;
   coverage: number;
   category_score: Partial<Record<ScorecardFamily, number | null>> & Record<string, number | null>;
+  category_z?: Partial<Record<ScorecardFamily, number | null>> & Record<string, number | null>;
   top_positive: ScorecardContribution[];
   top_negative: ScorecardContribution[];
+  latest_period?: string;
+  notes?: string[];
 }
 
-/** `GET /api/scorecard` */
+/** `GET /api/scorecard` (`ScorecardUniverseOut`). */
 export interface ScorecardUniverse {
   version_key: string;
+  spec_hash?: string;
   as_of: string;
   run_id: string;
+  is_month_end?: boolean;
   universe_size: number;
+  /** Names with an overall score on this run. */
+  scored?: number;
+  /** Names the run could not score (overall null; they sort last). */
+  insufficient?: number;
+  /** The sort the server applied (echoed; the page re-sorts client-side). */
+  sort_by?: string;
+  order?: string;
+  /** True when the latest run is older than the retention window. */
+  stale?: boolean;
+  generated_at?: string;
   rows: ScorecardUniverseRow[];
 }
 
@@ -238,17 +292,29 @@ export interface ScorecardSpecFamily {
   features: ScorecardSpecFeature[];
 }
 
-/** `GET /api/scorecard/spec` */
+/** `GET /api/scorecard/spec` (`scorecard_service.spec_view`): the in-code
+ *  spec plus where it was served from and the backend's own one-line
+ *  description of the score scale. */
 export interface ScorecardSpec {
   version_key: string;
   spec_hash: string;
+  /** "registry" once the worker (or a lazy route hit) registered the version, else "code". */
+  source?: "registry" | "code" | string;
+  /** The backend's own sentence for the 0–100 scale; shown over the client caption when present. */
+  score_scale?: string;
   families: ScorecardSpecFamily[];
   normalization: {
+    /** A FRACTION of the distribution, not a percent: fs-v1 serialises
+     *  `NormalizationParams.winsor_pct = 0.025` verbatim (each feature is
+     *  clamped to [pct, 1 − pct]). Scale it once, where it is printed. */
     winsor_pct: number;
     sector_neutral: boolean;
     min_sector_n: number;
     clip_z: number;
   };
+  rules?: Record<string, unknown>;
+  sectors?: { canonical: string[]; aliases: Record<string, string> };
+  profiles?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,8 +419,43 @@ export type ScorecardEvaluation =
   | (EvaluationBase & { kind: "ff6_regression"; result: FF6RegressionResult })
   | (EvaluationBase & { kind: "double_lasso"; result: DoubleLassoResult });
 
-/** `GET /api/scorecard/evaluation` — latest row per kind. */
+/** One persisted evaluation row exactly as `ScorecardEvaluationItem`
+ *  serialises it: `result` is the worker's dict under the backend's own
+ *  key names (`quantile_table` with `n_months` per bucket, `reasons`,
+ *  `stats_note`, …) and always carries its `caveats`. */
+export interface ScorecardEvaluationItem {
+  kind: ScorecardEvaluationKind | string;
+  run_id: string;
+  created_at: string | null;
+  sample_start: string | null;
+  sample_end: string | null;
+  n_obs: number;
+  params: Record<string, unknown>;
+  result: Record<string, unknown>;
+}
+
+/** `GET /api/scorecard/evaluation` on the wire (`ScorecardEvaluationOut`):
+ *  the latest row per kind, keyed by kind, with the caveats repeated once
+ *  at the top level so a UI cannot render a bare number, and a `note`
+ *  that is either "" or the verbatim shortfall text ("kind: insufficient
+ *  — reasons"). `normaliseEvaluationResponse` folds it into
+ *  `ScorecardEvaluationResponse` for the evaluation component. */
+export interface ScorecardEvaluationOut {
+  version_key: string;
+  evaluations: Record<string, ScorecardEvaluationItem>;
+  caveats: string[];
+  note: string;
+}
+
+/** What the evaluation component renders: the rows as an array with the
+ *  bucket table under the mirror's names (`quintile_table`, `n`). The
+ *  response-level `caveats` / `note` ride along verbatim; they are
+ *  optional only because the hand-written fixtures pre-date them. */
 export interface ScorecardEvaluationResponse {
   version_key: string;
   evaluations: ScorecardEvaluation[];
+  /** Rendered verbatim: the evaluation is only honest with these. */
+  caveats?: string[];
+  /** Verbatim shortfall text ("kind: insufficient — reasons") or "". */
+  note?: string;
 }
