@@ -263,6 +263,34 @@ def test_export_token_rule(client, monkeypatch):
     assert client.get("/api/scorecard/spec", headers={"Authorization": "Bearer export-token-123"}).status_code == 200
 
 
+@pytest.fixture()
+def auth_on(monkeypatch):
+    from app.tests.auth_helpers import ClerkStub, enable_auth
+    from app.tests.gating_helpers import purge_rate_windows
+    purge_rate_windows()
+    yield from enable_auth(monkeypatch, ClerkStub())
+
+
+def test_export_token_deployment_still_admits_a_signed_in_pro_user(auth_on, client, monkeypatch):
+    """A token-gated export has two doors under the customer wall: the
+    machine token, or a signed-in customer the `scorecard` feature admits.
+    Anonymous stays 401; a Free account gets the feature's own refusal."""
+    from app.tests.auth_helpers import bearer
+    from app.tests.gating_helpers import assert_structured, free_user, pro_user
+    monkeypatch.setattr(settings, "scorecard_export_token", "export-token-123")
+    params = {"as_of": AS_OF.isoformat()}
+    assert client.get("/api/scorecard/export", params=params).status_code == 401
+    assert client.get("/api/scorecard/export", params=params, headers=bearer("export-token-124")).status_code == 401
+    _sub, pro_tok = pro_user(client, auth_on)
+    good = client.get("/api/scorecard/export", params=params, headers=bearer(pro_tok))
+    assert good.status_code == 200 and good.text.startswith(FROZEN_HEADER), good.text[:200]
+    _sub, free_tok = free_user(auth_on)
+    refused = client.get("/api/scorecard/export", params=params, headers=bearer(free_tok))
+    assert_structured(refused, code="plan_required", status=402)
+    machine = client.get("/api/scorecard/export", params=params, headers=bearer("export-token-123"))
+    assert machine.status_code == 200 and machine.text.startswith(FROZEN_HEADER)
+
+
 # ---------------------------------------------------------------------------
 # Auth classification
 # ---------------------------------------------------------------------------

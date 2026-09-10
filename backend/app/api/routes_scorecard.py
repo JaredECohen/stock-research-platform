@@ -21,6 +21,8 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
+from ..auth.entitlements import authorize
+from ..auth.principal import current_principal
 from ..config import settings
 from ..rate_limit import LIMITS, limiter
 from ..schemas.scorecard import ScorecardDetailOut, ScorecardEvaluationOut, ScorecardUniverseOut
@@ -135,17 +137,27 @@ def get_scorecard_evaluation(
 
 
 def _check_export_token(request: Request) -> None:
-    """When `SCORECARD_EXPORT_TOKEN` is configured the export requires it
-    as a bearer (and nothing else — the customer wall treats the route as
-    public then, see `auth/policy.py`). Constant-time compare, no
-    WWW-Authenticate challenge (machine-to-machine), token never logged."""
+    """When `SCORECARD_EXPORT_TOKEN` is configured the export has two
+    doors: the machine token as a bearer (constant-time compare, no
+    WWW-Authenticate challenge, token never logged), or — with the customer
+    wall on — a signed-in customer the `scorecard` feature admits, so a Pro
+    user's browser export keeps working on a token-gated deployment. The
+    wall treats the route as public then (see `auth/policy.py`), which is
+    why the customer check is made here rather than by the middleware."""
     token = settings.scorecard_export_token
     if not token:
         return
     supplied = request.headers.get("authorization") or ""
     expected = f"Bearer {token}"
-    if len(supplied) != len(expected) or not secrets.compare_digest(supplied, expected):
-        raise HTTPException(status_code=401, detail="scorecard export token required")
+    if len(supplied) == len(expected) and secrets.compare_digest(supplied, expected):
+        return
+    # Second door: a signed-in customer the feature admits. Only with the
+    # wall on — off, `authorize` answers "unrestricted" for everyone and an
+    # anonymous visitor would walk through the token gate.
+    if settings.auth_enabled and not current_principal(request).is_anon:
+        authorize(request, "scorecard")   # 402/403 EntitlementError when refused; the feature has no meter
+        return
+    raise HTTPException(status_code=401, detail="scorecard export token required")
 
 
 @router.get("/api/scorecard/export")
