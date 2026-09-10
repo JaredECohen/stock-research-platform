@@ -230,15 +230,14 @@ def test_meter_db_error_is_503_for_commentary_while_series_still_works(auth_on, 
     with SessionLocal() as db:
         assert usage.counters_for(db, uid, usage.period_key(NOW)) == {}
         assert db.query(ChartCommentary).count() == 0
-        # Known limitation of `authorize()` (auth/entitlements.py, outside
-        # this slice): the lease taken before the failed reserve is not
-        # released and heals by its 120 s TTL. Pinned deliberately — when
-        # that is fixed this count becomes 0 and the assertion (and the
-        # `_clean` cleanup above) should be updated, not the fix reverted.
+        # authorize() takes the concurrency lease before it reserves the
+        # meter; a meter outage must give that slot back, or every retry
+        # during the outage would leave a 120 s lease behind and surface as
+        # a spurious 429 concurrency_limited.
         leaked = db.query(ratelimit.ActiveAction).filter(
             ratelimit.ActiveAction.user_id == uid, ratelimit.ActiveAction.feature == "chart_commentary",
         ).count()
-        assert leaked == 1
+        assert leaked == 0
     # The series read never touches the meter.
     resp = _series(client, tok, tickers=[SEEDED], metrics=["revenue"])
     assert resp.status_code == 200, resp.text

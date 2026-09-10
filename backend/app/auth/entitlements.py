@@ -33,6 +33,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -292,10 +293,20 @@ def authorize(
             idempotency_key = idempotency_key or f"{user_id}:{feature}:{pk}:{resource}"
         key = idempotency_key or f"{user_id}:{feature}:{pk}:{uuid.uuid4().hex}"
 
-        res = usage.reserve(
-            session, user_id=user_id, feature=feature, limit=limit, idempotency_key=key,
-            resource_ref=resource, plan_at_charge=plan, quantity=quantity, now=now,
-        )
+        try:
+            res = usage.reserve(
+                session, user_id=user_id, feature=feature, limit=limit, idempotency_key=key,
+                resource_ref=resource, plan_at_charge=plan, quantity=quantity, now=now,
+            )
+        except SQLAlchemyError:
+            # The meter is down (503 upstream). Give the concurrency slot
+            # back rather than leaving a 120 s lease behind on every retry,
+            # which would turn a meter outage into spurious 429s.
+            try:
+                ratelimit.release_lease(session, lease_token)
+            except SQLAlchemyError:
+                pass
+            raise
         if not res.allowed:
             ratelimit.release_lease(session, lease_token)
             analytics.track("quota_hit", db=session, principal=principal,
