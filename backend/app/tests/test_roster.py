@@ -27,6 +27,7 @@ from app.tests.factories import make_finding, make_inputs
 
 _EXPECTED_ORDER = (
     "sector", "earnings", "filing", "valuation", "comps", "macro", "risk", "technical",
+    "industry_group",  # FEAT-003: appended, gated by `applies_to`
 )
 
 
@@ -62,12 +63,12 @@ def test_every_memo_field_exists_on_stock_memo_out():
 def test_only_risk_is_unsurfaced():
     """Risk has no memo view by design; nothing else may hide behind
     `NO_MEMO_VIEW` (a new analyst either names a field or rides in
-    `extra_agent_views`)."""
+    `extra_agent_views` — the Industry Group Analyst is the first to)."""
     assert roster.NO_MEMO_VIEW == frozenset({"risk"})
     assert roster.AGENTS_BY_KEY["risk"].memo_field is None
-    for spec in AGENTS:
-        if spec.memo_field is None:
-            assert spec.key in roster.NO_MEMO_VIEW
+    unsurfaced = {spec.key for spec in AGENTS if spec.memo_field is None}
+    assert unsurfaced == {"risk", "industry_group"}
+    assert roster.AGENTS_BY_KEY["industry_group"].key not in roster.NO_MEMO_VIEW
 
 
 def test_deterministic_round0_analysts_are_comps_and_risk():
@@ -78,7 +79,7 @@ def test_long_form_names_match_the_historical_strings():
     assert [s.long_form_name for s in AGENTS] == [
         "Long-form (Sector)", "Long-form (Earnings)", "Long-form (Filing)",
         "Long-form (Valuation)", "Long-form (Comps)", "Long-form (Macro)",
-        "Long-form (Risk)", "Long-form (Technical)",
+        "Long-form (Risk)", "Long-form (Technical)", "Long-form (Industry Group)",
     ]
 
 
@@ -124,9 +125,59 @@ def test_known_steps_is_the_frozen_contract():
         "graph.fundamentals", "graph.dcf", "graph.comps",
         "graph.sector_finding", "graph.earnings_finding", "graph.filing_finding",
         "graph.valuation_finding", "graph.comps_finding", "graph.macro_finding",
-        "graph.risk_finding", "graph.technical_finding",
+        "graph.risk_finding", "graph.technical_finding", "graph.industry_group_finding",
         "graph.critic",
     )
+
+
+# ---------------------------------------------------------------------------
+# applies_to — the per-run gate (FEAT-003)
+# ---------------------------------------------------------------------------
+
+def test_every_pre_existing_spec_always_applies():
+    for spec in AGENTS:
+        if spec.key != "industry_group":
+            assert spec.applies_to is roster.always_applies, spec.key
+    assert roster.AGENTS_BY_KEY["industry_group"].applies_to is not roster.always_applies
+
+
+def test_applicable_drops_the_industry_analyst_with_routing_off(monkeypatch):
+    inputs = make_inputs("MSFT", industry_group={"state": "mapped", "industry_group_code": "4510"})
+    monkeypatch.setattr(roster.settings, "enable_industry_analyst_routing", False)
+    keys = [s.key for s in roster.applicable(inputs)]
+    assert keys == [k for k in _EXPECTED_ORDER if k != "industry_group"]
+    assert roster._industry_kwargs(inputs) == {}
+
+
+def test_applicable_keeps_the_industry_analyst_with_routing_on_and_a_mapping(monkeypatch):
+    monkeypatch.setattr(roster.settings, "enable_industry_analyst_routing", True)
+    row = {"state": "mapped", "industry_group_code": "4510"}
+    inputs = make_inputs("MSFT", industry_group=row)
+    assert [s.key for s in roster.applicable(inputs)] == list(_EXPECTED_ORDER)
+    assert roster._industry_kwargs(inputs) == {"industry_group": row}
+    # Routing on, no row: the analyst is out and the sector kwarg is absent.
+    bare = make_inputs("MSFT")
+    assert "industry_group" not in [s.key for s in roster.applicable(bare)]
+    assert roster._industry_kwargs(bare) == {}
+
+
+def test_spec_that_does_not_apply_leaves_no_trace_on_the_memo(monkeypatch):
+    ran: list[str] = []
+
+    def run(i, q):
+        ran.append(i.ticker)
+        return make_finding("Fake Analyst")
+
+    spec = AgentSpec(
+        key="fake", display_name="Fake Analyst", checkpoint="graph.fake_finding",
+        run=run, needs=("profile",), memo_field=None, applies_to=lambda i: False,
+    )
+    monkeypatch.setattr(roster, "AGENTS", AGENTS + (spec,))
+    memo = graph.run_stock_memo("MSFT")
+    assert ran == []
+    assert "fake" not in memo.extra_agent_views
+    assert "Fake Analyst" not in memo.degraded_agents
+    assert memo.sector_agent_view.confidence > 0.0
 
 
 # ---------------------------------------------------------------------------

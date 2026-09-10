@@ -24,6 +24,12 @@ Contract notes
   sees the patch. `graph.py` no longer imports the runners at all.
 * Round 0 calls `spec.run(inputs, None)`; the deep-research loop calls
   `spec.run(inputs, question)`. Same function, so the two can't drift.
+* `applies_to` (FEAT-003) decides per run whether a spec runs at all.
+  `graph.py` iterates `applicable(inputs)` rather than `AGENTS`, so a spec
+  whose predicate says no has no finding, no checkpoint, no memo view and
+  no long-form pass. The default predicate is always-true; the Industry
+  Group Analyst is its first real use (routing flag on AND the company has
+  a routable classification).
 """
 from __future__ import annotations
 
@@ -31,11 +37,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..config import settings
 from ..schemas import AgentFinding
 from ..services.checkpoint_store import checkpointed
 from .comps_agent import run_comps_agent
 from .earnings_agent import run_earnings_agent
 from .filing_agent import run_filing_agent
+from .industry_analysts import applies_to as industry_analyst_applies
+from .industry_analysts import run_industry_group_agent
 from .macro_agent import run_macro_agent
 from .risk_agent import run_risk_agent
 from .scorecard_context import prompt_block
@@ -49,6 +58,12 @@ if TYPE_CHECKING:
 # (inputs, prior_round_critique) -> finding. `prior_round_critique` is None
 # on round 0 and the PM's question on deep-research re-fires.
 AgentRunner = Callable[["MemoInputs", str | None], AgentFinding]
+# (inputs) -> whether the spec runs for this memo. Evaluated once per run.
+AppliesTo = Callable[["MemoInputs"], bool]
+
+
+def always_applies(inputs: MemoInputs) -> bool:
+    return True
 
 
 @dataclass(frozen=True)
@@ -60,6 +75,7 @@ class AgentSpec:
     needs: tuple[str, ...] = ()       # MemoInputs attribute names the runner reads
     memo_field: str | None = None  # StockMemoOut attribute, or None -> extra_agent_views[key]
     uses_llm_round0: bool = True      # False when round 0 is deterministic by design
+    applies_to: AppliesTo = always_applies  # per-run gate; see the contract note
 
     @property
     def long_form_name(self) -> str:
@@ -71,12 +87,24 @@ class AgentSpec:
         return f"Long-form ({self.display_name.replace(' Analyst', '')})"
 
 
+def _industry_kwargs(inputs: MemoInputs) -> dict[str, dict | None]:
+    """The sector analyst's `industry_group=` kwarg, present only when
+    routing is on and the gather stage read a row — so with the flag off the
+    call is byte-for-byte what it was, and a test's three-argument fake
+    runner keeps working."""
+    if settings.enable_industry_analyst_routing and inputs.industry_group is not None:
+        return {"industry_group": inputs.industry_group}
+    return {}
+
+
 AGENTS: tuple[AgentSpec, ...] = (
     AgentSpec(
         key="sector", display_name="Sector Analyst",
         checkpoint="graph.sector_finding",
-        run=lambda i, q: run_sector_agent(i.profile, i.ratios, prior_round_critique=q),
-        needs=("profile", "ratios"), memo_field="sector_agent_view",
+        run=lambda i, q: run_sector_agent(
+            i.profile, i.ratios, prior_round_critique=q, **_industry_kwargs(i),
+        ),
+        needs=("profile", "ratios", "industry_group"), memo_field="sector_agent_view",
     ),
     AgentSpec(
         key="earnings", display_name="Earnings Analyst",
@@ -141,7 +169,26 @@ AGENTS: tuple[AgentSpec, ...] = (
         run=lambda i, q: run_technical_agent(i.profile, prior_round_critique=q),
         needs=("profile",), memo_field="technical_agent_view",
     ),
+    AgentSpec(
+        key="industry_group", display_name="Industry Group Analyst",
+        checkpoint="graph.industry_group_finding",
+        # FEAT-003: the company's ONE industry-group analyst, built lazily by
+        # code + taxonomy version. Rides in `extra_agent_views` (no dedicated
+        # memo field) and runs only when `applies_to` says the company has a
+        # routable mapping and ENABLE_INDUSTRY_ANALYST_ROUTING is on.
+        run=lambda i, q: run_industry_group_agent(
+            i.profile, i.ratios, prior_round_critique=q, classification=i.industry_group,
+        ),
+        needs=("profile", "ratios", "industry_group"), memo_field=None,
+        applies_to=industry_analyst_applies,
+    ),
 )
+
+
+def applicable(inputs: MemoInputs) -> tuple[AgentSpec, ...]:
+    """The roster for THIS run: every spec whose `applies_to` says yes, in
+    roster order. Each predicate is called exactly once per run."""
+    return tuple(spec for spec in AGENTS if spec.applies_to(inputs))
 
 AGENTS_BY_KEY: dict[str, AgentSpec] = {spec.key: spec for spec in AGENTS}
 
