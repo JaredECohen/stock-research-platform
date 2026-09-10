@@ -72,6 +72,10 @@ class EIAProvider:
         `{series_id, name, units, points}` shape used by all providers."""
         if not series_id:
             return None
+        # The overlays call this provider directly, past data_service's
+        # gated chain: honour the demo-only pair here too (no network).
+        if settings.use_demo_data_only:
+            return None
         # Try the keyed v2 API when configured.
         if self.api_key:
             v2 = self._fetch_v2(series_id)

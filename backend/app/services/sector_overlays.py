@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..config import settings
 from . import company_geography, data_catalog_service, factor_analytics
 
 log = logging.getLogger(__name__)
@@ -139,9 +138,7 @@ def compute_energy_overlay(
     try:
         from .data_service import get_data_service
         ds = get_data_service()
-        # Direct provider access bypasses the gated chain: stay silent under
-        # demo-only mode like every other provider read.
-        eia = None if settings.use_demo_data_only else getattr(ds, "eia", None)
+        eia = getattr(ds, "eia", None)   # the provider itself is silent under demo-only mode
     except Exception:
         eia = None
 
