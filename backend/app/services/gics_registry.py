@@ -184,10 +184,11 @@ def _parse_date(value: Any) -> date | None:
 def nodes_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """The canonical node list for a knowledge payload, in document order.
 
-    Every level's ``effective_from`` is the structure's official effective
-    date from the map metadata; retired sub-industries are inactive with
-    that date as ``effective_to`` (the structure that retired them is the
-    one that took effect then). Nothing here counts anything.
+    Every active level's ``effective_from`` is the structure's official
+    effective date from the map metadata; retired sub-industries are
+    inactive with that date as ``effective_to`` (the structure that retired
+    them is the one that took effect then) and no ``effective_from`` (the
+    map does not say when they began). Nothing here counts anything.
     """
     meta = payload.get("map_metadata") or {}
     effective = _parse_date(meta.get("taxonomy_structure_effective"))
@@ -203,7 +204,9 @@ def nodes_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
             "code": str(code),
             "name": str(name),
             "parent_code": parent,
-            "effective_from": effective,
+            # A retired row's own start date is unknown to the map; only the
+            # structure that discontinued it is dated.
+            "effective_from": effective if active else None,
             "effective_to": None if active else effective,
             "is_active": active,
             "sort_order": order,

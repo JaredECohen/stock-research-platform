@@ -428,9 +428,17 @@ def _new_row(
     )
 
 
+def _effective_state(row: CompanyIndustryClassification) -> str:
+    """The state a row had while it was current: a row flipped to ``stale``
+    in place keeps its original state under ``evidence.previous_state``."""
+    if row.state == STATE_STALE:
+        return str((row.evidence or {}).get("previous_state") or row.state)
+    return str(row.state)
+
+
 def _same_outcome(row: CompanyIndustryClassification, res: Resolution) -> bool:
     return (
-        row.state == res.state
+        _effective_state(row) == res.state
         and row.source == res.source
         and (row.sector_code, row.industry_group_code, row.industry_code, row.sub_industry_code) == res.codes
         and tuple(row.sub_industry_codes or []) == tuple(res.sub_industry_codes)
@@ -530,6 +538,7 @@ def classify_all(
         "reclassified": 0,
         "stale_detected": 0,
         "stale_fixed": 0,
+        "restamped": 0,
         "unchanged": 0,
         "counts": {state: 0 for state in CLASSIFICATION_STATES},
         "sources": {},
@@ -585,6 +594,25 @@ def classify_all(
             res = resolve(symbol, sector, industry, sub_industry, version=info)
             if current is not None and not drifted and not force and _same_outcome(current, res):
                 summary["unchanged"] += 1
+                continue
+            if current is not None and drifted and not force and _same_outcome(current, res):
+                # Changed inputs, identical outcome (a relabel, an alias-map
+                # or map edition bump): re-stamp the row in place instead of
+                # superseding it, so the history records real changes only.
+                evidence = dict(current.evidence or {})
+                previous_state = evidence.pop("previous_state", None)
+                evidence.pop("stale_reason", None)
+                evidence.pop("stale_detected_at", None)
+                evidence["restamped_at"] = now.isoformat()
+                evidence["restamp_reason"] = "inputs_changed_same_outcome"
+                current.evidence = evidence
+                current.state = previous_state or res.state
+                current.inputs_fingerprint = fingerprint
+                current.source_sector = sector
+                current.source_industry = industry
+                current.source_sub_industry = sub_industry
+                summary["restamped"] += 1
+                summary["stale_fixed"] += 1
                 continue
             if current is not None:
                 reason = "forced" if force else ("inputs_changed" if drifted else "outcome_changed")

@@ -259,6 +259,45 @@ def test_conflict_when_map_and_alias_disagree_on_the_group(company, monkeypatch)
 # --- staleness and history -------------------------------------------------------
 
 
+def test_drift_with_the_same_outcome_restamps_the_row_instead_of_superseding():
+    """A relabel that resolves to the same codes (here a case change the
+    alias map ignores) changes the fingerprint but not the outcome: the
+    current row is re-stamped in place and the history gains nothing."""
+    ticker = next(t for t in DEMO_TICKERS if ik.security_reference(t) is None)
+    original = COMPANY_PROFILES[ticker]["industry"]
+    ic.classify_all(tickers=[ticker])
+    before = ic.current_for([ticker])[ticker]
+    assert before["state"] == "mapped"
+    history_before = [r["id"] for r in ic.history(ticker)]
+    relabel = str(original).upper()
+    profile = COMPANY_PROFILES[ticker]
+    assert relabel != original
+    assert ic.inputs_fingerprint(profile.get("sector"), relabel, profile.get("sub_industry")) != ic.inputs_fingerprint(
+        profile.get("sector"), original, profile.get("sub_industry"),
+    )
+    try:
+        _set_labels(ticker, industry=relabel)
+        detect = ic.classify_all(tickers=[ticker], reclassify=False)
+        assert detect["stale_detected"] == 1 and ic.current_for([ticker])[ticker]["state"] == "stale"
+
+        fixed = ic.classify_all(tickers=[ticker])
+        assert fixed["restamped"] == 1 and fixed["reclassified"] == 0 and fixed["stale_fixed"] == 1
+        assert fixed["changed"] == []
+        after = ic.current_for([ticker])[ticker]
+        assert after["id"] == before["id"] and after["state"] == "mapped"
+        assert after["industry_group_code"] == before["industry_group_code"]
+        assert after["source_industry"] == relabel
+        assert after["evidence"]["restamp_reason"] == "inputs_changed_same_outcome"
+        assert "previous_state" not in after["evidence"] and "stale_reason" not in after["evidence"]
+        assert [r["id"] for r in ic.history(ticker)] == history_before, "no new history row"
+        # The fingerprint was re-stamped: the next pass sees no drift at all.
+        again = ic.classify_all(tickers=[ticker])
+        assert again["stale_detected"] == 0 and again["restamped"] == 0 and again["unchanged"] == 1
+    finally:
+        _set_labels(ticker, industry=original)
+        ic.classify_all(tickers=[ticker])
+
+
 def test_stale_rows_are_reclassified_by_superseding_and_history_survives():
     ticker = next(t for t in DEMO_TICKERS if ik.security_reference(t) is None)
     original = COMPANY_PROFILES[ticker]["industry"]

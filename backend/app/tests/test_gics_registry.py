@@ -105,7 +105,7 @@ def test_nodes_from_payload_holds_four_levels_with_consistent_prefixes():
     for n in nodes:
         if not n["is_active"]:
             assert n["level"] == "sub_industry"
-            assert n["effective_to"] is not None and n["effective_to"] == n["effective_from"]
+            assert n["effective_to"] is not None and n["effective_from"] is None
             assert n["attributes"]["status"] == "discontinued"
     # Sort order is document order, so the tree renders without a sort key.
     assert [n["sort_order"] for n in nodes] == list(range(1, len(nodes) + 1))
