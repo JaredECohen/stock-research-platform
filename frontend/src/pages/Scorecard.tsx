@@ -85,7 +85,7 @@ type Failure =
   | { state: "disabled"; detail: string }
   | { state: "plan"; refusal: EntitlementRefusal }
   | { state: "rate"; refusal: RateLimitRefusal }
-  | { state: "error"; detail: string };
+  | { state: "error"; detail: string; status?: number };
 
 type Loaded<T> = { key: string } & ({ state: "loading" } | { state: "ok"; data: T } | Failure);
 
@@ -95,7 +95,7 @@ function classify(e: unknown): Failure {
     if (e.entitlement) return { state: "plan", refusal: e.entitlement };
     if (e.rateLimit) return { state: "rate", refusal: e.rateLimit };
     if (e.status === 404) return { state: "missing", detail: e.detail || e.message };
-    return { state: "error", detail: e.detail || e.message };
+    return { state: "error", detail: e.detail || e.message, status: e.status };
   }
   return { state: "error", detail: e instanceof Error ? e.message : String(e) };
 }
@@ -305,7 +305,11 @@ type ExportFormat = "csv" | "json";
 
 /** Under the wall: fetch the export with the bearer, then download it.
  *  A refusal renders exactly as it would for any other read (402 → the
- *  upgrade prompt, 401 from an export-token deployment → its message). */
+ *  upgrade prompt). A 401 is the one exception: on a deployment that sets
+ *  `SCORECARD_EXPORT_TOKEN` the route wants that token and ignores the
+ *  bearer, so the client fetches with `unauthorized: "throw"` — the
+ *  refusal prints verbatim with a retry and the session is left alone
+ *  (the shared 401 path would sign the viewer out through RequireAuth). */
 function ExportButtons({ run }: { run: ScorecardUniverse }) {
   const [busy, setBusy] = useState<ExportFormat | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -350,8 +354,14 @@ function ExportButtons({ run }: { run: ScorecardUniverse }) {
         </span>
       )}
       {failed && (
-        <div className="basis-full">
+        <div className="basis-full space-y-1">
           <ResourceState res={failed} onRetry={() => void download(failed.format)} missing={<span className="text-slate-400">{na(failed.state === "missing" ? failed.detail : "export unavailable")}</span>} />
+          {failed.state === "error" && failed.status === 401 && (
+            <p className="text-[11px] text-slate-500" data-testid="export-token-gated">
+              The export route refused this request; no file was saved and your session is unchanged. A deployment that sets SCORECARD_EXPORT_TOKEN answers
+              every browser export this way — that token is for downstream systems to present as a bearer header, never for this page.
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -360,8 +370,23 @@ function ExportButtons({ run }: { run: ScorecardUniverse }) {
 
 // ---------------------------------------------------------------------------
 
+/** `normalization.winsor_pct` is served as a FRACTION of the distribution
+ *  (fs-v1: 0.025 — `scorecard_spec.NormalizationParams`, emitted verbatim
+ *  by `spec_view`), while the sentence prints the two percentile bounds.
+ *  This is the only place the number is scaled; the rounding trims float
+ *  noise (0.025 × 100 must read 2.5, not 2.5000000000000004). null when
+ *  the spec carried no finite value, so the page says n/a instead of
+ *  printing NaN%. */
+export function winsorBoundsPct(fraction: unknown): [lower: string, upper: string] | null {
+  if (typeof fraction !== "number" || !Number.isFinite(fraction)) return null;
+  const lo = Number((fraction * 100).toFixed(4));
+  const hi = Number((100 - fraction * 100).toFixed(4));
+  return [`${lo}%`, `${hi}%`];
+}
+
 function SpecBlock({ spec }: { spec: ScorecardSpec }) {
   const norm = spec.normalization;
+  const winsor = norm ? winsorBoundsPct(norm.winsor_pct) : null;
   return (
     <details className="card-tight text-xs" data-testid="spec">
       <summary className="cursor-pointer text-slate-300">
@@ -374,9 +399,9 @@ function SpecBlock({ spec }: { spec: ScorecardSpec }) {
       <div className="mt-2 space-y-2 text-slate-300">
         <p data-testid="spec-score-scale">{spec.score_scale || SCORECARD_SCORE_SCALE_LONG}</p>
         {norm && (
-          <p className="text-slate-400">
-            Winsorised at {norm.winsor_pct}% / {100 - norm.winsor_pct}%, {norm.sector_neutral ? "sector-neutral" : "universe"} z (minimum sector n {norm.min_sector_n}, else
-            universe z), clipped at ±{norm.clip_z}; percentiles are rank-based.
+          <p className="text-slate-400" data-testid="spec-normalization">
+            Winsorised at {winsor ? `${winsor[0]} / ${winsor[1]}` : na("winsor bound not in the served spec")}, {norm.sector_neutral ? "sector-neutral" : "universe"} z
+            (minimum sector n {norm.min_sector_n}, else universe z), clipped at ±{norm.clip_z}; percentiles are rank-based.
           </p>
         )}
         <div className="overflow-x-auto">

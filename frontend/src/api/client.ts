@@ -34,6 +34,7 @@ import type {
   ScorecardHistory,
   ScorecardSpec,
   ScorecardUniverse,
+  ScorecardUniverseRow,
   ScreenerResult,
   SeriesRequest,
   SeriesResponseWire,
@@ -155,19 +156,33 @@ function baseHeaders(init?: RequestInit): Headers {
   return headers;
 }
 
+/** `RequestInit` plus the one behaviour a caller may opt out of. By
+ *  default a 401 raises `AUTH_REQUIRED_EVENT`, which `RequireAuth` answers
+ *  by signing the session out and routing to sign-in — right for a token
+ *  the backend rejected, wrong for a route whose 401 is not a verdict on
+ *  the session at all. The scorecard export on a deployment that sets
+ *  `SCORECARD_EXPORT_TOKEN` is that route: it demands its own token and
+ *  ignores the customer bearer (`routes_scorecard._check_export_token`),
+ *  so its 401 must reach the page as an `ApiError` and nothing more. */
+export interface FetchApiInit extends RequestInit {
+  unauthorized?: "event" | "throw";
+}
+
 /** `fetch` with the shared headers, the bearer (header only, never a
  *  query param), the `api_call` trace and the refusal mapping (non-2xx →
- *  `ApiError`; 401 raises the auth-required event, 402 the account
- *  refresh). Returns the raw `Response` so a caller can read a body that
- *  is not JSON — the scorecard export streams CSV. */
-async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
-  const method = (init?.method || "GET").toUpperCase();
+ *  `ApiError`; 401 raises the auth-required event unless the caller
+ *  opted out, 402 the account refresh). Returns the raw `Response` so a
+ *  caller can read a body that is not JSON — the scorecard export streams
+ *  CSV. */
+async function fetchApi(path: string, init?: FetchApiInit): Promise<Response> {
+  const { unauthorized = "event", ...requestInit } = init ?? {};
+  const method = (requestInit.method || "GET").toUpperCase();
   // Don't trace the trace endpoint — would self-recurse on every flush.
   const trace = !path.startsWith("/api/admin/ui-log");
   const started = performance.now();
   let res: Response | null = null;
   let errorMsg: string | undefined;
-  const headers = baseHeaders(init);
+  const headers = baseHeaders(requestInit);
   if (tokenProvider) {
     let token: string | null = null;
     try {
@@ -179,7 +194,7 @@ async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
   }
 
   try {
-    res = await fetch(`${BASE}${path}`, { ...init, headers });
+    res = await fetch(`${BASE}${path}`, { ...requestInit, headers });
   } catch (e) {
     errorMsg = (e as Error).message;
     throw e;
@@ -201,7 +216,7 @@ async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
     const err = new ApiError(res.status, text, res.statusText);
     if (typeof window !== "undefined") {
       if (res.status === 401) {
-        window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT, { detail: { path } }));
+        if (unauthorized === "event") window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT, { detail: { path } }));
       } else if (res.status === 402) {
         window.dispatchEvent(new CustomEvent(ACCOUNT_REFRESH_EVENT));
       }
@@ -363,15 +378,23 @@ export function filenameFromDisposition(header: string | null | undefined, fallb
 /**
  * Fetch the export with the client's headers — the bearer under the wall,
  * the same structured refusals as every other read (402 `plan_required`
- * renders the upgrade prompt, 401 from a deployment that requires
- * `SCORECARD_EXPORT_TOKEN` surfaces verbatim) — so the page can hand the
- * viewer the bytes as an object-URL download. The URL is the same
- * credential-free one `scorecardExportUrl` builds.
+ * renders the upgrade prompt) — so the page can hand the viewer the bytes
+ * as an object-URL download. The URL is the same credential-free one
+ * `scorecardExportUrl` builds.
+ *
+ * A 401 here is NOT a session verdict: a deployment that sets
+ * `SCORECARD_EXPORT_TOKEN` refuses every browser export with one, bearer
+ * or not, because the route then wants that token alone. Raising the
+ * auth-required event on it would have `RequireAuth` sign a valid session
+ * out and bounce the viewer to sign-in, so the refusal is thrown to the
+ * page instead, which renders it verbatim. A bearer that really has
+ * expired is caught by the next ordinary read.
  */
 export async function scorecardExportDownload(params: ScorecardExportParams = {}): Promise<ScorecardExportFile> {
   const format = params.format ?? "csv";
   const res = await fetchApi(scorecardExportPath(params), {
     headers: { Accept: format === "json" ? "application/json" : "text/csv" },
+    unauthorized: "throw",
   });
   const blob = await res.blob();
   const version = res.headers.get("X-Scorecard-Version") || params.version || "";
@@ -385,6 +408,25 @@ export async function scorecardExportDownload(params: ScorecardExportParams = {}
     as_of: asOf,
     run_id: res.headers.get("X-Scorecard-Run-Id") || "",
   };
+}
+
+/**
+ * `scorecard_service.universe_table` numbers every row it returns with
+ * `enumerate(ordered, start=1)` — the names it could not score are
+ * appended after the scored ones and numbered with them, so a name with
+ * no overall arrives with a positional integer (166 of 170) where the
+ * table wants "nothing to rank". A position beside an unscored overall
+ * is not evidence of standing, and missing evidence renders as n/a, so
+ * the client blanks it here: the table's null path prints
+ * `n/a (unscored)` and sorts the row last in either direction. Scored
+ * rows keep the wire value — the page requests the route's default
+ * `sort_by=overall_score` descending, under which the position is the
+ * rank. Nothing else in the row is touched.
+ */
+export function normaliseUniverseResponse(raw: ScorecardUniverse): ScorecardUniverse {
+  const rows = Array.isArray(raw?.rows) ? raw.rows : [];
+  const scored = (r: ScorecardUniverseRow): boolean => typeof r.overall_score === "number" && Number.isFinite(r.overall_score);
+  return { ...raw, rows: rows.map((r) => (scored(r) ? r : { ...r, rank: null })) };
 }
 
 /** The detail row embeds its month-end history (`ScorecardDetailOut.
@@ -603,8 +645,9 @@ export const api = {
 
   // --- Phase 6 scorecard reads ----------------------------------------
   /** The cross-section from the latest succeeded run. `sort_by` outside
-   *  `SCORECARD_UNIVERSE_SORT_KEYS` is dropped rather than sent (422). */
-  scorecardUniverse: (params: ScorecardUniverseParams = {}) => {
+   *  `SCORECARD_UNIVERSE_SORT_KEYS` is dropped rather than sent (422); an
+   *  unscored name's positional `rank` is blanked (`normaliseUniverseResponse`). */
+  scorecardUniverse: async (params: ScorecardUniverseParams = {}): Promise<ScorecardUniverse> => {
     const q = new URLSearchParams();
     if (params.as_of) q.set("as_of", params.as_of);
     if (params.version) q.set("version", params.version);
@@ -614,7 +657,7 @@ export const api = {
     if (typeof params.limit === "number") q.set("limit", String(Math.max(1, Math.min(600, Math.round(params.limit)))));
     if (typeof params.min_coverage === "number") q.set("min_coverage", String(params.min_coverage));
     const qs = q.toString();
-    return request<ScorecardUniverse>(`/api/scorecard${qs ? `?${qs}` : ""}`);
+    return normaliseUniverseResponse(await request<ScorecardUniverse>(`/api/scorecard${qs ? `?${qs}` : ""}`));
   },
   /** Latest score for one name with every feature's observed value and
    *  model read, plus `months` of month-end history. 404 when no

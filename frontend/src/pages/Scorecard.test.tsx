@@ -1,7 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import Scorecard from "@/pages/Scorecard";
-import { filenameFromDisposition, normaliseEvaluationResponse, scorecardExportUrl, setTokenProvider } from "@/api/client";
+import Scorecard, { winsorBoundsPct } from "@/pages/Scorecard";
+import RequireAuth from "@/components/RequireAuth";
+import {
+  AUTH_REQUIRED_EVENT,
+  api,
+  filenameFromDisposition,
+  normaliseEvaluationResponse,
+  normaliseUniverseResponse,
+  scorecardExportDownload,
+  scorecardExportUrl,
+  setTokenProvider,
+} from "@/api/client";
 import { resetAccountCache } from "@/auth/useAccount";
 import {
   ALL_CAVEATS,
@@ -49,9 +59,28 @@ function stubMatchMedia() {
 // i.e. with the bookkeeping the client mirror does not carry.
 // ---------------------------------------------------------------------------
 
-const UNIVERSE_WIRE = { ...makeUniverse(5), spec_hash: "9f1c2e7a", is_month_end: true, scored: 7, insufficient: 1, sort_by: "overall_score", order: "desc", stale: false };
+// `universe_table` numbers every row positionally — the unscored NEWCO
+// arrives as rank 8 of 8, after the scored names, not as null.
+const UNIVERSE_WIRE = {
+  ...makeUniverse(5),
+  rows: makeUniverse(5).rows.map((r) => (r.ticker === "NEWCO" ? { ...r, rank: 8 } : r)),
+  spec_hash: "9f1c2e7a",
+  is_month_end: true,
+  scored: 7,
+  insufficient: 1,
+  sort_by: "overall_score",
+  order: "desc",
+  stale: false,
+};
 
-const SPEC_WIRE = { ...makeSpec(), source: "registry", score_scale: "0-100, 50 = z of 0 (the sector or universe-fallback mean); percentiles are rank-based" };
+// `winsor_pct` is the fraction `scorecard_spec.NormalizationParams` holds
+// (0.025), emitted verbatim; the fixture's 2.5 is not the wire value.
+const SPEC_WIRE = {
+  ...makeSpec(),
+  normalization: { ...makeSpec().normalization, winsor_pct: 0.025 },
+  source: "registry",
+  score_scale: "0-100, 50 = z of 0 (the sector or universe-fallback mean); percentiles are rank-based",
+};
 
 const DETAIL_WIRE = {
   ...makeDetail(),
@@ -103,6 +132,24 @@ function mount(route = "/app/scorecard") {
 function mountWalled(route = "/app/scorecard") {
   setTokenProvider(async () => "stub-token");
   return renderWithProviders(<Scorecard />, { route, path: "/app/scorecard", config: { auth_enabled: true }, auth: SIGNED_IN });
+}
+
+/** The page as App.tsx mounts it: inside the real `RequireAuth`, which
+ *  answers the client's auth-required event with a sign-out. Bootstrap is
+ *  marked done so the gate renders the page at once. */
+function mountBehindGate(route = "/app/scorecard") {
+  setTokenProvider(async () => "stub-token");
+  try {
+    sessionStorage.setItem("mm_bootstrapped:user_stub", "1");
+  } catch {}
+  const signOut = vi.fn(async () => {});
+  renderWithProviders(
+    <RequireAuth>
+      <Scorecard />
+    </RequireAuth>,
+    { route, path: "/app/scorecard", config: { auth_enabled: true }, auth: { ...SIGNED_IN, signOut } },
+  );
+  return { signOut };
 }
 
 const CSV_BODY = "ticker,as_of,overall_score\nCOST,2026-08-31,62.400000\n";
@@ -228,6 +275,29 @@ describe("Scorecard page", () => {
       expect(screen.getByTestId("universe-count")).toHaveTextContent(`${financials} of 8 names · fs-v1 · as of 2026-08-31`);
     });
 
+    it("blanks the positional rank the service assigns an unscored name and sorts it last in both directions", async () => {
+      stubFetch([specRoute, universeRoute]);
+      mount();
+      await screen.findByTestId("universe-table");
+      const newco = screen.getByTestId("row-NEWCO");
+      expect(newco).toHaveAttribute("data-unscored", "true");
+      const rankCell = newco.querySelector("td") as HTMLElement;
+      // The wire said 8; a position beside no overall is not a rank.
+      expect(rankCell).toHaveTextContent("n/a (unscored)");
+      expect(rankCell).not.toHaveTextContent("8");
+      expect(rankCell).toHaveAttribute("data-missing", "true");
+      // Scored names keep their wire rank.
+      expect(screen.getByTestId("row-COST").querySelector("td")).toHaveTextContent("1");
+
+      const rankHeader = screen.getByRole("columnheader", { name: /^Rank/ });
+      expect(rankHeader).toHaveAttribute("aria-sort", "ascending");
+      expect(tickers()[7]).toBe("NEWCO");
+      fireEvent.click(within(rankHeader).getByRole("button"));
+      expect(rankHeader).toHaveAttribute("aria-sort", "descending");
+      expect(tickers()[0]).toBe("T05");
+      expect(tickers()[7]).toBe("NEWCO");
+    });
+
     it("says n/a (not scored) for a masked family and names both causes in the tooltip", async () => {
       stubFetch([specRoute, universeRoute]);
       mount();
@@ -329,14 +399,49 @@ describe("Scorecard page", () => {
         expect(createObjectURL).not.toHaveBeenCalled();
       });
 
-      it("shows an export-token refusal verbatim with a retry", async () => {
+      it("shows an export-token refusal verbatim with a retry, without raising the auth-required event", async () => {
         stubFetch([specRoute, ["/api/scorecard/export", () => errJson(401, "scorecard export token required")], universeRoute]);
-        mountWalled();
+        const authRequired = vi.fn();
+        window.addEventListener(AUTH_REQUIRED_EVENT, authRequired);
+        try {
+          mountWalled();
+          await screen.findByTestId("universe-table");
+          fireEvent.click(screen.getByTestId("export-csv-button"));
+          const alert = await screen.findByRole("alert");
+          expect(alert).toHaveTextContent("scorecard export token required");
+          expect(within(alert).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+          expect(screen.getByTestId("export-token-gated")).toHaveTextContent("SCORECARD_EXPORT_TOKEN");
+          expect(authRequired).not.toHaveBeenCalled();
+          expect(createObjectURL).not.toHaveBeenCalled();
+        } finally {
+          window.removeEventListener(AUTH_REQUIRED_EVENT, authRequired);
+        }
+      });
+
+      it("leaves the session signed in behind the real RequireAuth when a token-gated deployment refuses the export", async () => {
+        stubFetch([specRoute, ["/api/scorecard/export", () => errJson(401, "scorecard export token required")], universeRoute, ["/api/me/bootstrap", () => okJson({})]]);
+        const { signOut } = mountBehindGate();
         await screen.findByTestId("universe-table");
-        fireEvent.click(screen.getByTestId("export-csv-button"));
+        fireEvent.click(screen.getByTestId("export-json-button"));
         const alert = await screen.findByRole("alert");
         expect(alert).toHaveTextContent("scorecard export token required");
-        expect(within(alert).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+        // No sign-out, no bounce to /sign-in, the page is still mounted.
+        expect(signOut).not.toHaveBeenCalled();
+        expect(location()).toBe("/app/scorecard");
+        expect(screen.getByTestId("universe-table")).toBeInTheDocument();
+        // Retry goes back to the route rather than anywhere else.
+        fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+        await screen.findByRole("alert");
+        expect(signOut).not.toHaveBeenCalled();
+        expect(location()).toBe("/app/scorecard");
+      });
+
+      it("still signs out behind RequireAuth when an ordinary read answers 401 (the gate is live in this harness)", async () => {
+        stubFetch([specRoute, [/\/api\/scorecard(\?|$)/, () => errJson(401, "token expired")], ["/api/me/bootstrap", () => okJson({})]]);
+        const { signOut } = mountBehindGate();
+        await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(location()).toMatch(/^\/sign-in/));
+        expect(screen.queryByTestId("universe-table")).toBeNull();
       });
     });
 
@@ -349,6 +454,20 @@ describe("Scorecard page", () => {
       expect(within(spec).getByTestId("spec-score-scale")).toHaveTextContent(SPEC_WIRE.score_scale);
       expect(spec).toHaveTextContent("fcf_yield");
       expect(spec).toHaveTextContent("Financial Services, Real Estate");
+      // The served 0.025 is a fraction: 2.5% / 97.5%, not 0.025% / 99.975%.
+      const norm = within(spec).getByTestId("spec-normalization");
+      expect(norm).toHaveTextContent("Winsorised at 2.5% / 97.5%, sector-neutral z (minimum sector n 5, else universe z), clipped at ±3");
+      expect(norm).not.toHaveTextContent("0.025%");
+    });
+
+    it("says n/a when the served spec carries no winsor bound rather than printing NaN", async () => {
+      const { winsor_pct: _w, ...rest } = SPEC_WIRE.normalization;
+      stubFetch([["/api/scorecard/spec", () => okJson({ ...SPEC_WIRE, normalization: rest })], universeRoute]);
+      mount();
+      await screen.findByTestId("universe-table");
+      const norm = within(await screen.findByTestId("spec")).getByTestId("spec-normalization");
+      expect(norm).toHaveTextContent("n/a (winsor bound not in the served spec)");
+      expect(norm).not.toHaveTextContent("NaN");
     });
   });
 
@@ -501,6 +620,73 @@ describe("Scorecard page", () => {
       await screen.findByTestId("universe-table");
       expect(screen.getByTestId("tab-universe")).toHaveAttribute("aria-selected", "true");
     });
+  });
+});
+
+describe("winsorBoundsPct", () => {
+  it("scales the served fraction to the two percentile bounds without float noise", () => {
+    expect(winsorBoundsPct(0.025)).toEqual(["2.5%", "97.5%"]);
+    expect(winsorBoundsPct(0.01)).toEqual(["1%", "99%"]);
+    expect(winsorBoundsPct(0.05)).toEqual(["5%", "95%"]);
+  });
+  it("returns null for a missing or non-finite value", () => {
+    expect(winsorBoundsPct(undefined)).toBeNull();
+    expect(winsorBoundsPct(Number.NaN)).toBeNull();
+    expect(winsorBoundsPct("2.5")).toBeNull();
+  });
+});
+
+describe("normaliseUniverseResponse", () => {
+  it("blanks the rank of a row with no overall and leaves scored rows untouched", () => {
+    const wire = makeUniverse(2);
+    const idx = wire.rows.findIndex((r) => r.ticker === "NEWCO");
+    wire.rows[idx] = { ...wire.rows[idx], rank: 5 };
+    const out = normaliseUniverseResponse(wire);
+    expect(out.rows.find((r) => r.ticker === "NEWCO")?.rank).toBeNull();
+    expect(out.rows.find((r) => r.ticker === "COST")?.rank).toBe(1);
+    expect(out.rows.find((r) => r.ticker === "JPM")?.rank).toBe(2);
+    expect(out.rows).toHaveLength(wire.rows.length);
+    expect(out.version_key).toBe(wire.version_key);
+    // The wire object is not mutated.
+    expect(wire.rows[idx].rank).toBe(5);
+  });
+  it("tolerates a body without rows", () => {
+    expect(normaliseUniverseResponse({ version_key: "fs-v1" } as never).rows).toEqual([]);
+  });
+  it("is applied by api.scorecardUniverse", async () => {
+    stubFetch([[/\/api\/scorecard(\?|$)/, () => okJson(UNIVERSE_WIRE)]]);
+    const out = await api.scorecardUniverse({ limit: 600 });
+    expect(out.rows.find((r) => r.ticker === "NEWCO")?.rank).toBeNull();
+    expect(out.rows.find((r) => r.ticker === "COST")?.rank).toBe(1);
+  });
+});
+
+describe("scorecardExportDownload and the 401 seam", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setTokenProvider(null);
+  });
+  it("throws the export's 401 to the caller without dispatching the auth-required event", async () => {
+    stubFetch([["/api/scorecard/export", () => errJson(401, "scorecard export token required")]]);
+    const authRequired = vi.fn();
+    window.addEventListener(AUTH_REQUIRED_EVENT, authRequired);
+    try {
+      await expect(scorecardExportDownload({ format: "csv" })).rejects.toMatchObject({ status: 401, detail: "scorecard export token required" });
+      expect(authRequired).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(AUTH_REQUIRED_EVENT, authRequired);
+    }
+  });
+  it("keeps the default: a 401 on an ordinary read still dispatches the event", async () => {
+    stubFetch([["/api/scorecard/spec", () => errJson(401, "token expired")]]);
+    const authRequired = vi.fn();
+    window.addEventListener(AUTH_REQUIRED_EVENT, authRequired);
+    try {
+      await expect(api.scorecardSpec()).rejects.toMatchObject({ status: 401 });
+      expect(authRequired).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(AUTH_REQUIRED_EVENT, authRequired);
+    }
   });
 });
 

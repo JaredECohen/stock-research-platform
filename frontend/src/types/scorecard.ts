@@ -231,7 +231,13 @@ export interface ScorecardHistory {
 }
 
 export interface ScorecardUniverseRow {
-  /** Position in the run's overall ordering; null when the overall is unscored. */
+  /** `int` on the wire for EVERY row — `universe_table` numbers the served
+   *  order with `enumerate(start=1)`, unscored names included, after the
+   *  scored ones. The client blanks it for a row whose overall is null
+   *  (`normaliseUniverseResponse` in api/client.ts) because a position
+   *  beside nothing to rank is not a rank; the table then prints n/a and
+   *  sorts the row last. So: number for a scored name, null for an
+   *  unscored one, by the time a page sees it. */
   rank: number | null;
   ticker: string;
   company_name: string | null;
@@ -298,6 +304,9 @@ export interface ScorecardSpec {
   score_scale?: string;
   families: ScorecardSpecFamily[];
   normalization: {
+    /** A FRACTION of the distribution, not a percent: fs-v1 serialises
+     *  `NormalizationParams.winsor_pct = 0.025` verbatim (each feature is
+     *  clamped to [pct, 1 − pct]). Scale it once, where it is printed. */
     winsor_pct: number;
     sector_neutral: boolean;
     min_sector_n: number;
