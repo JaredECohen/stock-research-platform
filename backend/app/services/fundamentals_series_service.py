@@ -10,10 +10,17 @@ What this module deliberately does NOT do:
     as `not_backfilled`; the remedy is the existing research path (the
     memo job backfills history). Page reads never run provider sweeps.
   - call an LLM, import numpy or pandas, or write anything.
-  - read quarterly data. Rows with a `fiscal_quarter` are excluded; a row
-    that looks quarterly but is not flagged as such (FMP's month-derived
-    fallback label, plan §2.5) is excluded *and counted* in a WARNING so a
-    mislabelled feed shows up in the logs instead of as a silent gap.
+  - read quarterly data. v1 only ever ingests annual statements, and the
+    live providers label those inconsistently (FMP `FY2024`, or `2024Q4`
+    from its month-derived fallback; AlphaVantage `2024Q4` for income and
+    `2024-12-31` for balance/cash — see `_fiscal_year_of`), so a row's
+    label alone never decides. A fiscal year is derived from the label
+    or the stored period end, and only a *real* quarterly signature —
+    several distinct periods for one line item in one fiscal year, or a
+    lone period ending months away from the fiscal year end — is
+    excluded. Exclusions are counted in a WARNING and echoed in the
+    response `warnings` so a mislabelled feed never renders as a silent
+    gap or a false "not backfilled".
 
 The only provider-touching path is the price series for market-derived
 metrics, and that is the same `market_data_service.get_price_series`
@@ -61,6 +68,13 @@ NOT_BACKFILLED_REMEDY = (
     "No financial history is stored for this company yet. Run research on it — "
     "the memo job backfills its statement history."
 )
+# Rows exist but none of them is annual-shaped (see `_classify_rows`).
+# Saying "nothing is stored" here would be false; the honest remedy is a
+# refresh, and the response `warnings` carry the exclusion counts.
+NOT_ANNUAL_REMEDY = (
+    "Financial history is stored for this company but none of it is annual-shaped "
+    "({excluded} row(s) excluded). Re-run research to refresh its statements."
+)
 
 # Month names as `Company.fiscal_year_end` stores them (live FMP profiles
 # emit the full name; the demo dataset the same). Used only to *estimate*
@@ -82,6 +96,20 @@ def _utcnow() -> datetime:
 # Raw-row partitioning
 # ---------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class _RawRow:
+    """One `financial_periods` row as the SELECT returns it."""
+    period: str
+    period_end: date | None
+    fiscal_year: int | None
+    fiscal_quarter: int | None
+    line: str
+    value: float | None
+    currency: str | None
+    source: str | None
+    fetched_at: datetime | None
+
+
 @dataclass
 class _TickerData:
     """Everything the builder needs for one ticker, straight from raw rows."""
@@ -93,8 +121,9 @@ class _TickerData:
     sources: Counter[str] = field(default_factory=Counter)
     currencies: Counter[str] = field(default_factory=Counter)
     fetched_at: datetime | None = None
-    excluded_quarterly: int = 0   # fiscal_quarter set or a Q-shaped label
-    excluded_ambiguous: int = 0   # no usable fiscal year / unparseable label
+    excluded_quarterly: int = 0   # a real quarterly signature (see `_classify_rows`)
+    excluded_ambiguous: int = 0   # no fiscal year derivable from label, date or column
+    excluded_duplicate: int = 0   # a non-FY label beside an FY label for the same line/year
     # From `companies`: month number of the fiscal year end, current shares.
     fye_month: int | None = None
     shares_outstanding: float | None = None
@@ -102,6 +131,11 @@ class _TickerData:
     @property
     def has_rows(self) -> bool:
         return bool(self.by_year)
+
+    @property
+    def excluded(self) -> int:
+        """Rows dropped for a reason worth warning about (duplicates are not)."""
+        return self.excluded_quarterly + self.excluded_ambiguous
 
     @property
     def currency(self) -> str | None:
@@ -125,11 +159,13 @@ class _TickerData:
 
 
 def _annual_label_year(period: str, fiscal_year: int | None, fiscal_quarter: int | None) -> int | None:
-    """Fiscal year of a row that is genuinely annual, else None.
+    """Fiscal year of a row whose *label* says annual, else None.
 
-    Annual means: no `fiscal_quarter`, and a label shaped `FY2024` /
-    `2024`. A `2024Q3` label with `fiscal_quarter` unset is contradictory
-    and is treated as not-annual (the caller counts it).
+    Annual-labelled means: no `fiscal_quarter`, and a label shaped
+    `FY2024` / `2024` that agrees with the `fiscal_year` column when one
+    is set. This is the only label shape we trust without a date; every
+    other shape goes through `_fiscal_year_of`, which needs the stored
+    `period_end` to say which fiscal year the row belongs to.
     """
     if fiscal_quarter is not None:
         return None
@@ -144,52 +180,115 @@ def _annual_label_year(period: str, fiscal_year: int | None, fiscal_quarter: int
     return year
 
 
+def _fiscal_year_of(
+    period: str, period_end: date | None, fiscal_year: int | None, fiscal_quarter: int | None,
+) -> tuple[int | None, bool]:
+    """`(fiscal_year, explicit)` for one stored row; `(None, False)` when
+    no fiscal year can be derived at all.
+
+    `explicit` is True only for `FY2024` / `2024` labels. Everything else
+    is what the live providers actually write for an *annual* statement:
+    AlphaVantage labels annual income rows `2024Q4` (so `fiscal_quarter`
+    is 4) and annual balance/cash rows `2024-12-31` (so the `fiscal_year`
+    column holds 20241231); FMP's month-derived fallback label is
+    `2024Q4` as well. v1 only ever ingests annual statements, so those
+    rows ARE the annual data — the fiscal year is the year the period
+    ended, exactly as FMP's own `FY<year>` labelling defines it. Whether
+    such a row is *really* quarterly is decided from the row set, not
+    the label (`_classify_rows`).
+    """
+    year = _annual_label_year(period, fiscal_year, fiscal_quarter)
+    if year is not None:
+        return year, True
+    if period_end is not None:
+        return period_end.year, False
+    if fiscal_year is not None and 1900 <= fiscal_year <= 2999:
+        return fiscal_year, False
+    return None, False
+
+
+def _month_distance(a: int, b: int) -> int:
+    """Circular distance between two month numbers (Dec ↔ Jan is 1)."""
+    d = abs(a - b) % 12
+    return min(d, 12 - d)
+
+
+def _classify_rows(td: _TickerData, rows: list[_RawRow]) -> list[tuple[int, _RawRow]]:
+    """Decide which rows are annual and count the rest on `td`.
+
+    Three signals, in order:
+      1. no derivable fiscal year at all → `ambiguous`;
+      2. per (line item, fiscal year): an explicit `FY` label wins and any
+         non-explicit label beside it is a `duplicate` (two providers
+         wrote the same year); with no explicit label, more than one
+         distinct label in the year is a real quarterly signature and
+         every one of them is `quarterly`;
+      3. a lone non-explicit row whose period end sits more than a month
+         (circular) from the company's fiscal-year-end month is a stray
+         quarter, not a year → `quarterly`. The reference month is the
+         profile's `fiscal_year_end`, else the modal month of the rows
+         that survived step 2 (explicit-labelled ones first). The ±1
+         tolerance is for 52/53-week years, whose end drifts across a
+         month boundary; a real quarter is three months away.
+    Explicit labels are never second-guessed by step 3 — an `FY2024`
+    row is annual by construction.
+    """
+    dated: list[tuple[int, bool, _RawRow]] = []
+    for r in rows:
+        year, explicit = _fiscal_year_of(r.period, r.period_end, r.fiscal_year, r.fiscal_quarter)
+        if year is None:
+            td.excluded_ambiguous += 1
+            continue
+        dated.append((year, explicit, r))
+
+    groups: dict[tuple[str, int], list[tuple[bool, _RawRow]]] = {}
+    for year, explicit, r in dated:
+        groups.setdefault((r.line, year), []).append((explicit, r))
+
+    survivors: list[tuple[int, bool, _RawRow]] = []
+    for (_line, year), members in groups.items():
+        if any(explicit for explicit, _ in members):
+            for explicit, r in members:
+                if explicit:
+                    survivors.append((year, True, r))
+                else:
+                    td.excluded_duplicate += 1
+            continue
+        labels = {r.period for _, r in members}
+        if len(labels) > 1:
+            td.excluded_quarterly += len(members)
+            continue
+        for _, r in members:
+            survivors.append((year, False, r))
+
+    ref_month = td.fye_month
+    if ref_month is None:
+        months = Counter(
+            r.period_end.month for _, explicit, r in survivors
+            if explicit and r.period_end is not None
+        ) or Counter(r.period_end.month for _, _, r in survivors if r.period_end is not None)
+        ref_month = months.most_common(1)[0][0] if months else None
+
+    accepted: list[tuple[int, _RawRow]] = []
+    for year, explicit, r in survivors:
+        if (
+            not explicit and ref_month is not None and r.period_end is not None
+            and _month_distance(r.period_end.month, ref_month) > 1
+        ):
+            td.excluded_quarterly += 1
+            continue
+        accepted.append((year, r))
+    return accepted
+
+
 def _load_rows(
     db: Session, tickers: list[str], line_items: tuple[str, ...],
 ) -> dict[str, _TickerData]:
     """One SELECT for the whole ticker batch, partitioned per ticker."""
     data = {t: _TickerData(ticker=t) for t in tickers}
-    stmt = select(
-        FinancialPeriod.ticker, FinancialPeriod.period, FinancialPeriod.period_end,
-        FinancialPeriod.fiscal_year, FinancialPeriod.fiscal_quarter,
-        FinancialPeriod.line_item, FinancialPeriod.value, FinancialPeriod.currency,
-        FinancialPeriod.source, FinancialPeriod.fetched_at,
-    ).where(
-        FinancialPeriod.ticker.in_(tickers),
-        FinancialPeriod.line_item.in_(line_items),
-    )
-    for (ticker, period, period_end, fy, fq, line, value, currency, source,
-         fetched_at) in db.execute(stmt):
-        td = data.get(ticker)
-        if td is None:  # pragma: no cover — IN filter guarantees membership
-            continue
-        year = _annual_label_year(period, fy, fq)
-        if year is None:
-            label = (period or "").upper()
-            if fq is not None or "Q" in label:
-                td.excluded_quarterly += 1
-            else:
-                td.excluded_ambiguous += 1
-            continue
-        bucket = td.by_year.setdefault(year, {})
-        # The unique index makes (period, statement, line) unique, but two
-        # statements could in principle both carry a line; last write wins
-        # only when the earlier value was null so real data is never lost.
-        if line not in bucket or bucket[line] is None:
-            bucket[line] = None if value is None else float(value)
-        if period_end is not None:
-            prev = td.period_end.get(year)
-            if prev is None or period_end > prev:
-                td.period_end[year] = period_end
-        else:
-            td.period_end.setdefault(year, None)
-        if source:
-            td.sources[source] += 1
-        if currency:
-            td.currencies[currency] += 1
-        if fetched_at is not None and (td.fetched_at is None or fetched_at > td.fetched_at):
-            td.fetched_at = fetched_at
 
+    # Profile first: the fiscal-year-end month is an input to row
+    # classification, not just to period-end estimation.
     for cid, fye, shares in db.execute(
         select(Company.ticker, Company.fiscal_year_end, Company.shares_outstanding)
         .where(Company.ticker.in_(tickers))
@@ -200,17 +299,70 @@ def _load_rows(
         td.fye_month = _MONTHS.get((fye or "").strip().lower())
         td.shares_outstanding = float(shares) if shares else None
 
-    for td in data.values():
-        excluded = td.excluded_quarterly + td.excluded_ambiguous
-        if excluded:
-            # WARNING, not DEBUG: v1 ingests annual rows only, so any
-            # quarterly-shaped row is a mislabelled feed (plan §2.5).
+    stmt = select(
+        FinancialPeriod.ticker, FinancialPeriod.period, FinancialPeriod.period_end,
+        FinancialPeriod.fiscal_year, FinancialPeriod.fiscal_quarter,
+        FinancialPeriod.line_item, FinancialPeriod.value, FinancialPeriod.currency,
+        FinancialPeriod.source, FinancialPeriod.fetched_at,
+    ).where(
+        FinancialPeriod.ticker.in_(tickers),
+        FinancialPeriod.line_item.in_(line_items),
+    )
+    raw: dict[str, list[_RawRow]] = {t: [] for t in tickers}
+    for (ticker, period, period_end, fy, fq, line, value, currency, source,
+         fetched_at) in db.execute(stmt):
+        if ticker not in raw:  # pragma: no cover — IN filter guarantees membership
+            continue
+        raw[ticker].append(_RawRow(
+            period=period or "", period_end=period_end, fiscal_year=fy, fiscal_quarter=fq,
+            line=line, value=None if value is None else float(value), currency=currency,
+            source=source, fetched_at=fetched_at,
+        ))
+
+    for t, td in data.items():
+        for year, r in _classify_rows(td, raw[t]):
+            bucket = td.by_year.setdefault(year, {})
+            # The unique index makes (period, statement, line) unique, but two
+            # statements could in principle both carry a line; last write wins
+            # only when the earlier value was null so real data is never lost.
+            if r.line not in bucket or bucket[r.line] is None:
+                bucket[r.line] = r.value
+            if r.period_end is not None:
+                prev = td.period_end.get(year)
+                if prev is None or r.period_end > prev:
+                    td.period_end[year] = r.period_end
+            else:
+                td.period_end.setdefault(year, None)
+            if r.source:
+                td.sources[r.source] += 1
+            if r.currency:
+                td.currencies[r.currency] += 1
+            if r.fetched_at is not None and (td.fetched_at is None or r.fetched_at > td.fetched_at):
+                td.fetched_at = r.fetched_at
+        if td.excluded_duplicate:
+            log.debug(
+                "fundamentals series: %s skipped %d duplicate row(s) already covered by an FY label",
+                td.ticker, td.excluded_duplicate,
+            )
+        if td.excluded:
+            # WARNING, not DEBUG: v1 ingests annual rows only, so a real
+            # quarterly signature or an undatable row is a mislabelled
+            # feed (plan §2.5). `build_series` also surfaces the count in
+            # the response so the user does not see a silent gap.
             log.warning(
                 "fundamentals series: %s excluded %d non-annual row(s) from annual output "
                 "(quarterly-labelled=%d, ambiguous=%d)",
-                td.ticker, excluded, td.excluded_quarterly, td.excluded_ambiguous,
+                td.ticker, td.excluded, td.excluded_quarterly, td.excluded_ambiguous,
             )
     return data
+
+
+def _exclusion_warning(td: _TickerData) -> str:
+    return (
+        f"{td.ticker}: {td.excluded} stored row(s) excluded from annual output "
+        f"(quarterly-labelled={td.excluded_quarterly}, ambiguous={td.excluded_ambiguous}); "
+        "some fiscal years may show missing_line"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +559,9 @@ def build_series(
     finally:
         if own:
             session.close()
+    for t in tickers:
+        if data[t].excluded:
+            warnings.append(_exclusion_warning(data[t]))
 
     # Shared axis: every fiscal year from the oldest any selected ticker
     # reports to the newest, *contiguous* so a year nobody filed is a gap
@@ -429,8 +584,11 @@ def build_series(
         td = data[t]
         prov = _provenance(td, now)
         if not td.has_rows:
-            unavailable.append(UnavailableTicker(ticker=t, reason="not_backfilled",
-                                                 remedy=NOT_BACKFILLED_REMEDY))
+            remedy = (
+                NOT_ANNUAL_REMEDY.format(excluded=td.excluded) if td.excluded
+                else NOT_BACKFILLED_REMEDY
+            )
+            unavailable.append(UnavailableTicker(ticker=t, reason="not_backfilled", remedy=remedy))
         for spec in specs:
             points = _points_for(td, spec, axis, prices.get(t))
             indexed = False

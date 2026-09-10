@@ -56,7 +56,7 @@ def db():
 @pytest.fixture
 def clean(db):
     """Remove every row of the throwaway tickers before and after a test."""
-    tickers = ("FXA", "FXB", "FXC", "FXQ", "FXS")
+    tickers = ("FXA", "FXB", "FXC", "FXQ", "FXS", "FXV")
 
     def _wipe():
         db.query(FinancialPeriod).filter(FinancialPeriod.ticker.in_(tickers)).delete(
@@ -363,27 +363,194 @@ def test_indexed_rebases_currency_only_and_refuses_nonpositive_bases(db, clean, 
 
 
 # ---------------------------------------------------------------------------
-# Mislabelled quarterly rows
+# Provider label shapes: what the live fallback chain actually writes
 # ---------------------------------------------------------------------------
 
-def test_quarterly_labelled_row_is_excluded_from_annual_output_with_a_warning(db, clean, clock, caplog):
+def _av_report(date_str: str, **fields):
+    """One AlphaVantage `annualReports` entry (strings, like the API)."""
+    base = {"fiscalDateEnding": date_str, "reportedCurrency": "USD"}
+    base.update({k: str(v) for k, v in fields.items()})
+    return base
+
+
+def _ingest_av_year(db, ticker: str, date_str: str, scale: float) -> None:
+    """Ingest one AlphaVantage-shaped fiscal year exactly as the live
+    `financials` fallback does: provider row builders → history_service."""
+    from app.providers.alpha_vantage_provider import AlphaVantageProvider as AV
+    income = AV._income_row(_av_report(
+        date_str, totalRevenue=1000 * scale, grossProfit=600 * scale,
+        operatingIncome=250 * scale, netIncome=180 * scale, ebitda=300 * scale,
+        incomeBeforeTax=240 * scale, incomeTaxExpense=60 * scale,
+    ))
+    balance = AV._balance_row(_av_report(
+        date_str, totalShareholderEquity=600 * scale, shortLongTermDebtTotal=400 * scale,
+        cashAndCashEquivalentsAtCarryingValue=150 * scale, shortTermInvestments=50 * scale,
+    ))
+    cash = AV._cash_row(_av_report(
+        date_str, operatingCashflow=320 * scale, capitalExpenditures=70 * scale,
+        stockBasedCompensation=40 * scale,
+    ))
+    # Sanity: these are the shapes the finding describes.
+    assert income["period"].endswith("Q4") and balance["period"] == date_str
+    for statement, rows, lines in (
+        ("income", [income], history_service._INCOME_LINES),
+        ("balance", [balance], history_service._BALANCE_LINES),
+        ("cash", [cash], history_service._CASH_LINES),
+    ):
+        history_service._ingest_statement_rows(db, ticker, statement, rows, lines, "alpha_vantage")
+
+
+def test_alpha_vantage_shaped_annual_rows_are_annual_not_not_backfilled(db, clean, clock, caplog):
+    """The high finding: AV labels annual income rows `2024Q4` (fiscal_quarter=4)
+    and balance/cash rows `2024-12-31` (fiscal_year=20241231). They are the
+    annual data and must render, not collapse into a false `not_backfilled`."""
+    _ingest_av_year(db, "FXV", "2023-12-31", 1.0)
+    _ingest_av_year(db, "FXV", "2024-12-31", 1.1)
+    db.commit()
+    stored = db.query(FinancialPeriod).filter(FinancialPeriod.ticker == "FXV").all()
+    assert {r.period for r in stored} == {"2023Q4", "2024Q4", "2023-12-31", "2024-12-31"}
+    assert {r.fiscal_quarter for r in stored} == {4, None}
+
+    with caplog.at_level(logging.WARNING, logger="app.services.fundamentals_series_service"):
+        resp = fss.build_series(["FXV"], ["revenue", "free_cash_flow", "fcf_after_sbc", "net_debt"])
+    assert resp.periods == ["FY2023", "FY2024"]
+    assert resp.unavailable == [] and resp.warnings == []
+    assert not [r for r in caplog.records if "FXV" in r.getMessage()]
+    rev = _values(resp, "FXV", "revenue")
+    assert rev[0] == ("FY2023", 1000.0, None) and _close(rev[1][1], 1100.0)
+    fcf = _series(resp, "FXV", "free_cash_flow")
+    assert _close(fcf.points[0].value, 250.0) and fcf.points[0].period_end == date(2023, 12, 31)
+    assert not fcf.points[0].estimated  # a stored date, not an estimated FYE
+    assert _close(_series(resp, "FXV", "fcf_after_sbc").points[0].value, 210.0)
+    assert _close(_series(resp, "FXV", "net_debt").points[0].value, 400.0 - 150.0 - 50.0)
+    assert fcf.provenance.source == "alpha_vantage" and not fcf.provenance.stale
+
+
+def test_fmp_month_derived_fallback_label_is_annual(db, clean, clock):
+    """FMP's `_period_label` falls back to `2024Q4` when the API omits
+    `period` — still an annual statement (the endpoint defaults to annual)."""
+    from app.providers.fmp_provider import FMPProvider
+    label = FMPProvider._period_label("2024-12-31", None)
+    assert label == "2024Q4"
     seed_annual_periods(db, "FXQ", {2023: FULL}, fetched_at=FRESH)
-    # FMP's month-derived fallback label (plan §2.5): looks quarterly.
-    db.add(make_financial_period("FXQ", 2024, "revenue", 9_999.0, period="2024Q3", fiscal_quarter=3,
-                                 period_end=date(2024, 9, 30), fetched_at=FRESH))
-    # Contradictory: Q-shaped label without the quarter flag.
-    db.add(make_financial_period("FXQ", 2024, "net_income", 1.0, period="2024Q4", fiscal_quarter=None,
-                                 fetched_at=FRESH))
+    db.add(make_financial_period("FXQ", 2024, "revenue", 1200.0, period=label, fiscal_quarter=4,
+                                 period_end=date(2024, 12, 31), fetched_at=FRESH))
+    db.commit()
+    resp = fss.build_series(["FXQ"], ["revenue", "revenue_growth_yoy"])
+    assert resp.periods == ["FY2023", "FY2024"] and resp.warnings == []
+    assert _values(resp, "FXQ", "revenue")[1] == ("FY2024", 1200.0, None)
+    assert _close(_series(resp, "FXQ", "revenue_growth_yoy").points[1].value, 0.2)
+
+
+def test_real_quarterly_signature_is_excluded_with_a_warning(db, clean, clock, caplog):
+    """Several distinct periods for one line in one fiscal year is quarterly
+    data whatever the labels say: excluded, counted, and echoed in `warnings`."""
+    seed_annual_periods(db, "FXQ", {2023: FULL}, fetched_at=FRESH)
+    for q, month in ((1, 3), (2, 6), (3, 9), (4, 12)):
+        db.add(make_financial_period("FXQ", 2024, "revenue", 300.0, period=f"2024Q{q}", fiscal_quarter=q,
+                                     period_end=date(2024, month, monthrange(2024, month)[1]),
+                                     fetched_at=FRESH))
     db.commit()
 
     with caplog.at_level(logging.WARNING, logger="app.services.fundamentals_series_service"):
-        resp = fss.build_series(["FXQ"], ["revenue", "net_income"])
+        resp = fss.build_series(["FXQ"], ["revenue"])
     assert resp.periods == ["FY2023"]
     assert _values(resp, "FXQ", "revenue") == [("FY2023", 1000.0, None)]
+    assert resp.warnings == [
+        "FXQ: 4 stored row(s) excluded from annual output (quarterly-labelled=4, ambiguous=0); "
+        "some fiscal years may show missing_line"
+    ]
     records = [r for r in caplog.records if "excluded" in r.getMessage() and "FXQ" in r.getMessage()]
     assert len(records) == 1 and records[0].levelno == logging.WARNING
-    assert "excluded 2 non-annual row(s)" in records[0].getMessage()
-    assert "quarterly-labelled=2" in records[0].getMessage()
+    assert "excluded 4 non-annual row(s)" in records[0].getMessage()
+    assert "quarterly-labelled=4" in records[0].getMessage()
+
+
+def test_stray_quarter_months_from_the_fiscal_year_end_is_excluded(db, clean, clock):
+    """A lone `2025Q2` row (June end) for a December-FYE company is a quarter
+    that the annual filing has not caught up with, not FY2025."""
+    db.add(Company(ticker="FXQ", company_name="FXQ Corp", sector="Technology", industry="Software",
+                   fiscal_year_end="December"))
+    seed_annual_periods(db, "FXQ", {2023: FULL, 2024: FULL}, fetched_at=FRESH)
+    db.add(make_financial_period("FXQ", 2025, "revenue", 260.0, period="2025Q2", fiscal_quarter=2,
+                                 period_end=date(2025, 6, 30), fetched_at=FRESH))
+    db.commit()
+    resp = fss.build_series(["FXQ"], ["revenue"])
+    assert resp.periods == ["FY2023", "FY2024"]
+    assert len(resp.warnings) == 1 and "quarterly-labelled=1" in resp.warnings[0]
+
+
+def test_stray_quarter_uses_the_modal_month_when_the_profile_is_missing(db, clean, clock):
+    # No Company row: the reference month comes from the other rows.
+    seed_annual_periods(db, "FXQ", {2022: FULL, 2023: FULL, 2024: FULL}, fetched_at=FRESH)
+    db.add(make_financial_period("FXQ", 2025, "revenue", 260.0, period="2025Q1", fiscal_quarter=1,
+                                 period_end=date(2025, 3, 31), fetched_at=FRESH))
+    db.commit()
+    resp = fss.build_series(["FXQ"], ["revenue"])
+    assert resp.periods == ["FY2022", "FY2023", "FY2024"]
+    assert len(resp.warnings) == 1 and "quarterly-labelled=1" in resp.warnings[0]
+
+
+def test_fifty_two_week_year_drift_across_a_month_boundary_is_still_annual(db, clean, clock):
+    """Retail fiscal years end on the Saturday nearest 31 Jan, so consecutive
+    years land in January and February: within tolerance, never a quarter."""
+    db.add(Company(ticker="FXQ", company_name="FXQ Retail", sector="Consumer", industry="Retail",
+                   fiscal_year_end="January"))
+    db.add(make_financial_period("FXQ", 2024, "revenue", 500.0, period="2024Q1", fiscal_quarter=1,
+                                 period_end=date(2024, 2, 3), fetched_at=FRESH))
+    db.add(make_financial_period("FXQ", 2025, "revenue", 550.0, period="2025Q1", fiscal_quarter=1,
+                                 period_end=date(2025, 1, 31), fetched_at=FRESH))
+    db.commit()
+    resp = fss.build_series(["FXQ"], ["revenue"])
+    assert resp.warnings == []
+    assert _values(resp, "FXQ", "revenue") == [("FY2024", 500.0, None), ("FY2025", 550.0, None)]
+
+
+def test_fy_label_wins_over_a_duplicate_provider_label_without_a_warning(db, clean, clock, caplog):
+    """FMP (`FY2024`) and AlphaVantage (`2024Q4`) both wrote FY2024 revenue:
+    the explicit label is used, the other is a duplicate — not a mislabelled feed."""
+    seed_annual_periods(db, "FXQ", {2024: FULL}, fetched_at=FRESH)
+    db.add(make_financial_period("FXQ", 2024, "revenue", 999.0, period="2024Q4", fiscal_quarter=4,
+                                 period_end=date(2024, 12, 31), source="alpha_vantage", fetched_at=FRESH))
+    db.commit()
+    with caplog.at_level(logging.WARNING, logger="app.services.fundamentals_series_service"):
+        resp = fss.build_series(["FXQ"], ["revenue"])
+    assert _values(resp, "FXQ", "revenue") == [("FY2024", 1000.0, None)]
+    assert resp.warnings == []
+    assert not [r for r in caplog.records if "FXQ" in r.getMessage()]
+    assert _series(resp, "FXQ", "revenue").provenance.source == "test"
+
+
+def test_undatable_row_is_ambiguous_and_counted(db, clean, clock, caplog):
+    seed_annual_periods(db, "FXQ", {2023: FULL}, fetched_at=FRESH)
+    # Q-shaped label, no period_end, no usable fiscal_year column: nothing
+    # says which fiscal year this belongs to.
+    row = make_financial_period("FXQ", 2024, "net_income", 1.0, period="garbage", fiscal_quarter=None,
+                                fetched_at=FRESH)
+    row.fiscal_year = None
+    db.add(row)
+    db.commit()
+    with caplog.at_level(logging.WARNING, logger="app.services.fundamentals_series_service"):
+        resp = fss.build_series(["FXQ"], ["revenue", "net_income"])
+    assert resp.periods == ["FY2023"]
+    assert resp.warnings == [
+        "FXQ: 1 stored row(s) excluded from annual output (quarterly-labelled=0, ambiguous=1); "
+        "some fiscal years may show missing_line"
+    ]
+    assert "ambiguous=1" in caplog.records[-1].getMessage()
+
+
+def test_all_rows_excluded_is_unavailable_with_an_honest_remedy(db, clean, clock):
+    for q, month in ((1, 3), (2, 6)):
+        db.add(make_financial_period("FXQ", 2024, "revenue", 300.0, period=f"2024Q{q}", fiscal_quarter=q,
+                                     period_end=date(2024, month, 30), fetched_at=FRESH))
+    db.commit()
+    resp = fss.build_series(["FXQ"], ["revenue"])
+    assert resp.periods == []
+    assert [u.reason for u in resp.unavailable] == ["not_backfilled"]
+    assert resp.unavailable[0].remedy == fss.NOT_ANNUAL_REMEDY.format(excluded=2)
+    assert "none of it is annual-shaped (2 row(s) excluded)" in resp.unavailable[0].remedy
+    assert len(resp.warnings) == 1
 
 
 def test_annual_label_year_accepts_fy_and_bare_year_only():
@@ -395,6 +562,28 @@ def test_annual_label_year_accepts_fy_and_bare_year_only():
     assert fss._annual_label_year("FY2024", 2024, 4) is None
     assert fss._annual_label_year("FY2023", 2024, None) is None
     assert fss._annual_label_year("garbage", None, None) is None
+
+
+def test_fiscal_year_of_derives_from_label_then_date_then_column():
+    assert fss._fiscal_year_of("FY2024", None, 2024, None) == (2024, True)
+    assert fss._fiscal_year_of("2024", None, None, None) == (2024, True)
+    # AV income: Q-label + quarter column + date → the date's year, not explicit.
+    assert fss._fiscal_year_of("2024Q4", date(2024, 12, 31), 2024, 4) == (2024, False)
+    # AV balance/cash: date label parsed into a nonsense fiscal_year column.
+    assert fss._fiscal_year_of("2024-12-31", date(2024, 12, 31), 20241231, None) == (2024, False)
+    # January FYE: the fiscal year is the calendar year the period ended in.
+    assert fss._fiscal_year_of("2025Q1", date(2025, 1, 31), 2025, 1) == (2025, False)
+    # No date: a plausible fiscal_year column is the last resort.
+    assert fss._fiscal_year_of("2024Q4", None, 2024, 4) == (2024, False)
+    assert fss._fiscal_year_of("2024-12-31", None, 20241231, None) == (None, False)
+    assert fss._fiscal_year_of("garbage", None, None, None) == (None, False)
+
+
+def test_month_distance_is_circular():
+    assert fss._month_distance(12, 1) == 1
+    assert fss._month_distance(1, 12) == 1
+    assert fss._month_distance(3, 12) == 3
+    assert fss._month_distance(6, 6) == 0
 
 
 # ---------------------------------------------------------------------------
