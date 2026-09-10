@@ -346,6 +346,48 @@ def test_admin_enqueue_refuses_a_future_as_of(with_token, client):
         assert "future" in resp.text
 
 
+def _seed_disagreement(status="open"):
+    from app.agents import scorecard_context
+    from app.database import SessionLocal
+    from app.models import ScorecardDisagreement
+    with SessionLocal() as db:
+        ScorecardDisagreement.__table__.create(bind=db.get_bind(), checkfirst=True)
+        row = ScorecardDisagreement(
+            ticker="ZRT0", scorecard_score_id=1, version_key="fs-v1", as_of=AS_OF, memo_rating="Bullish",
+            memo_rating_score=70.0, scorecard_percentile=20.0, gap=50.0, severity="material", dimension="overall",
+            status=status, seed_question="Why does the narrative outrun the quant read?", created_at=scorecard_context._utcnow(),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+
+
+def test_admin_disagreements_list_and_dismiss(with_token, client):
+    assert client.get("/api/admin/scorecard/disagreements").status_code == 401
+    open_id = _seed_disagreement("open")
+    reviewed_id = _seed_disagreement("reviewed")
+    listed = client.get("/api/admin/scorecard/disagreements", headers=with_token)
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    ids = [it["id"] for it in body["items"]]
+    assert open_id in ids and reviewed_id not in ids and body["status"] == "open"
+    assert body["items"][ids.index(open_id)]["severity"] == "material"
+    everything = client.get("/api/admin/scorecard/disagreements", params={"status": "all", "limit": 500}, headers=with_token).json()
+    assert {open_id, reviewed_id} <= {it["id"] for it in everything["items"]}
+    assert client.get("/api/admin/scorecard/disagreements", params={"status": "nope"}, headers=with_token).status_code == 422
+
+    dismissed = client.post(f"/api/admin/scorecard/disagreements/{open_id}/dismiss", headers=with_token)
+    assert dismissed.status_code == 200 and dismissed.json()["changed"] is True
+    assert dismissed.json()["item"]["status"] == "dismissed" and dismissed.json()["item"]["resolved_at"]
+    again = client.post(f"/api/admin/scorecard/disagreements/{open_id}/dismiss", headers=with_token)
+    assert again.status_code == 200 and again.json()["changed"] is False
+    kept = client.post(f"/api/admin/scorecard/disagreements/{reviewed_id}/dismiss", headers=with_token)
+    assert kept.status_code == 200 and kept.json()["changed"] is False and kept.json()["item"]["status"] == "reviewed"
+    assert client.post("/api/admin/scorecard/disagreements/999999/dismiss", headers=with_token).status_code == 404
+    assert open_id not in [it["id"] for it in client.get("/api/admin/scorecard/disagreements", headers=with_token).json()["items"]]
+
+
 def test_admin_refresh_enqueues_and_coalesces(with_token, client):
     body = {"as_of": "2019-12-31", "tickers": ["zrt0", "ZRT1"], "kind": "manual"}
     first = client.post("/api/admin/scorecard/refresh", json=body, headers=with_token)

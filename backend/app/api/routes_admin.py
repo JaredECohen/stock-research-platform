@@ -1192,3 +1192,48 @@ def scorecard_backfill_endpoint(payload: ScorecardBackfillRequest | None = None)
               "Month ends older than the cached 252-day price window score without a price (valuation n/a)."),
     )
 
+
+
+
+@router.get("/api/admin/scorecard/disagreements")
+def scorecard_disagreements_endpoint(
+    status: str = Query("open", pattern="^(open|queued_review|reviewed|dismissed|all)$"),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict[str, Any]:
+    """Open (by default) memo-vs-scorecard disagreements, newest first.
+    Read-only; the rows are written by the memo pipeline
+    (`agents/scorecard_context.persist_disagreement`)."""
+    from ..agents import scorecard_context
+    from ..database import SessionLocal
+    from ..models import ScorecardDisagreement
+    with SessionLocal() as db:
+        ScorecardDisagreement.__table__.create(bind=db.get_bind(), checkfirst=True)
+        q = db.query(ScorecardDisagreement)
+        if status != "all":
+            q = q.filter(ScorecardDisagreement.status == status)
+        rows = q.order_by(ScorecardDisagreement.created_at.desc(), ScorecardDisagreement.id.desc()).limit(limit).all()
+        items = [scorecard_context._disagreement_dict(r) for r in rows]
+    return {"status": status, "count": len(items), "items": items}
+
+
+@router.post("/api/admin/scorecard/disagreements/{disagreement_id}/dismiss")
+def scorecard_disagreement_dismiss_endpoint(disagreement_id: int) -> dict[str, Any]:
+    """Close a disagreement without a review regen. Idempotent: a row that
+    is already dismissed comes back unchanged; a row a review already
+    closed (`reviewed`) is left as it is and reported as such."""
+    from ..agents import scorecard_context
+    from ..database import SessionLocal
+    from ..models import ScorecardDisagreement
+    with SessionLocal() as db:
+        ScorecardDisagreement.__table__.create(bind=db.get_bind(), checkfirst=True)
+        row = db.get(ScorecardDisagreement, disagreement_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"no scorecard disagreement #{disagreement_id}")
+        changed = False
+        if row.status in (scorecard_context.STATUS_OPEN, scorecard_context.STATUS_QUEUED_REVIEW):
+            row.status = scorecard_context.STATUS_DISMISSED
+            row.resolved_at = scorecard_context._utcnow()
+            db.commit()
+            db.refresh(row)
+            changed = True
+        return {"changed": changed, "item": scorecard_context._disagreement_dict(row)}

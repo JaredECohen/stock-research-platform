@@ -487,7 +487,8 @@ class DataService:
         if cik:
             return cik
         # SEC fallback. Persist back to `companies` so the next call is free.
-        cik = self.sec.lookup_cik(ticker_up)
+        # Silent under demo-only mode like every other provider read.
+        cik = None if settings.use_demo_data_only else self.sec.lookup_cik(ticker_up)
         if cik:
             try:
                 with SessionLocal() as db:

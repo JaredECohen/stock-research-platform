@@ -28,6 +28,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from ..config import settings
 from ..data_catalog import (
     SERIES_REGISTRY,
     by_id,
@@ -245,7 +246,11 @@ def _resolve_provider(source: str) -> Any | None:
         for provider in chain:
             if str(getattr(provider, "name", "")).upper() == source_u:
                 return provider
-    # Direct attribute lookups for the static-attached providers.
+    # Direct attribute lookups for the static-attached providers — never
+    # under demo-only mode, where the chain above is deliberately empty
+    # and reaching past it would be the one provider call the suite makes.
+    if settings.use_demo_data_only:
+        return None
     if source_u == "FRED":
         return getattr(ds, "fred", None)
     if source_u == "EIA":
