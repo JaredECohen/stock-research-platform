@@ -157,9 +157,14 @@ def test_memo_survives_three_simultaneous_failures(monkeypatch):
 
 
 def test_memo_with_no_failures_has_empty_degraded_agents():
+    # A deployment with no scorecard rows (CI, a dev box without the
+    # worker) carries the spec-mandated soft 'Fundamental Scorecard'
+    # DataUnavailable entry on every memo; nothing else may degrade.
+    from app.agents.scorecard_context import AGENT_NAME
     memo = graph.run_stock_memo("MSFT")
-    assert memo.degraded_agents == []
-    assert memo.degradation_events == []
+    assert [a for a in memo.degraded_agents if a != AGENT_NAME] == []
+    assert [e for e in memo.degradation_events if e["agent"] != AGENT_NAME] == []
+    assert all(e["error_type"] == "DataUnavailable" for e in memo.degradation_events)
     assert memo.extra_agent_views == {}
 
 

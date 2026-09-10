@@ -159,6 +159,16 @@ def run_once() -> dict:
         problems.append(f"drain:{type(exc).__name__}")
         log.warning("scorecard_loop drain failed: %s", safe_exc(exc))
 
+    # Disagreement review (flag-gated inside; a no-op returning enabled=False
+    # by default, so cron-health output is unchanged when off).
+    try:
+        from ..services.update_orchestrator import handle_scorecard_disagreements
+        review = handle_scorecard_disagreements()
+        counts["review_queued"] = int(review.get("queued", 0))
+    except Exception as exc:
+        problems.append(f"review:{type(exc).__name__}")
+        log.warning("scorecard_loop disagreement review failed: %s", safe_exc(exc))
+
     if daily:
         try:
             counts["gc"] = scorecard_service.gc_daily_rows(today=now.date())
@@ -171,6 +181,7 @@ def run_once() -> dict:
         f"claimed={counts['claimed']} written={counts['written']} skipped={counts['skipped']} "
         f"failed={counts['failed']} recovered={counts['recovered_failed']} expired={counts['recovered_expired']} "
         f"gc={counts['gc']}"
+        f" review_queued={counts.get('review_queued', 0)}"
     )
     if problems:
         note += " errors=" + ",".join(problems)
