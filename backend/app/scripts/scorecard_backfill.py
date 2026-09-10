@@ -24,8 +24,11 @@ Usage (from `backend/`)::
     python -m app.scripts.scorecard_backfill --prices --tickers NVDA,MSFT
     python -m app.scripts.scorecard_backfill --available-at
 
-Exit status is 1 only when a per-ticker price sync raised; an empty
-universe or zero NULL rows is a successful no-op, not an error. The worker
+Exit status is 1 when any per-ticker price sync failed — including a
+provider outage, which `sync_price_month_ends` raises as
+`PriceSeriesUnavailable` and this pass reports under `unavailable` as well
+as `errors`. An empty universe or zero NULL rows is a successful no-op,
+not an error. The worker
 runs the same two functions as `run_kind="pit_prepare"` before a scorecard
 backfill; this CLI exists for operators and for environments where the
 worker is not scheduled.
@@ -68,14 +71,27 @@ def run_available_at(tickers: list[str] | None) -> dict[str, Any]:
 def run_prices(tickers: list[str] | None, *, days: int = 252) -> dict[str, Any]:
     """Sync month-end closes per ticker; one bad ticker never stops the rest."""
     universe = tickers if tickers is not None else _universe_tickers()
-    totals: dict[str, Any] = {"tickers": len(universe), "months": 0, "written": 0, "errors": 0}
+    totals: dict[str, Any] = {
+        "tickers": len(universe), "months": 0, "written": 0,
+        "errors": 0, "unavailable": 0, "failed_tickers": [],
+    }
     for t in universe:
         try:
             res = scorecard_pit.sync_price_month_ends(t, days=days)
             totals["months"] += res["months"]
             totals["written"] += res["written"]
+        except scorecard_pit.PriceSeriesUnavailable as exc:
+            # A provider outage is a failed sync, not a ticker with no
+            # months — an operator reading `months: 0` must not mistake it
+            # for a young listing. Counted under both keys so `errors`
+            # stays the single "did anything go wrong" number.
+            totals["errors"] += 1
+            totals["unavailable"] += 1
+            totals["failed_tickers"].append(t)
+            log.warning("scorecard_backfill: no price series for %s: %s", t, safe_exc(exc))
         except Exception as exc:
             totals["errors"] += 1
+            totals["failed_tickers"].append(t)
             log.warning("scorecard_backfill: price sync failed for %s: %s", t, safe_exc(exc))
     return totals
 

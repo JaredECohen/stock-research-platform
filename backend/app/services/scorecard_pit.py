@@ -71,6 +71,15 @@ SOURCE_LAG_RULE = "lag_rule"
 SOURCE_ASSUMED_FYE = "assumed_fye"
 SOURCES = (SOURCE_PROVIDER, SOURCE_FILING_DOC, SOURCE_LAG_RULE, SOURCE_ASSUMED_FYE)
 
+
+class PriceSeriesUnavailable(RuntimeError):
+    """`data_service.get_price_history` returned None: every provider in the
+    chain failed (or the ticker is unknown to all of them). Raised rather
+    than folded into "zero months" so an outage never records as a clean
+    sync — a month-end row that silently never lands drops the ticker from
+    that month's evaluation leg with no trace. An EMPTY series is different
+    and legitimate (a listing younger than one complete month)."""
+
 # A statement row and the filing that carried it name the same period end,
 # give or take the odd day a provider rounds a 52/53-week year to.
 FILING_DOC_MATCH_DAYS = 7
@@ -347,11 +356,20 @@ def sync_price_month_ends(
     provider call. Idempotent: `(ticker, month_end)` is unique and an
     unchanged close is not rewritten. Returns `{months, written, skipped}`
     where `skipped` is the count of incomplete trailing months (0 or 1).
+
+    Raises `PriceSeriesUnavailable` when the provider chain returned no
+    series at all (None). Callers that loop over a universe (the CLI, the
+    worker's pit_prepare step) must count that as a failure for the ticker,
+    not as a successful zero-month sync; the DB is not touched in that case.
     """
     from .data_service import get_data_service
     ticker = ticker.upper()
     ds = get_data_service()
-    series = ds.get_price_history(ticker, days=days) or []
+    series = ds.get_price_history(ticker, days=days)
+    if series is None:
+        raise PriceSeriesUnavailable(
+            f"no price series for {ticker}: provider chain returned nothing"
+        )
     month_rows = select_month_end_rows(series)
     months_seen: set[tuple[int, int]] = set()
     for r in series:

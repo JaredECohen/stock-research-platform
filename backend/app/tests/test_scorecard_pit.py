@@ -11,6 +11,7 @@ other suites seed for the demo names.
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -413,6 +414,44 @@ def test_sync_price_month_ends_rewrites_a_changed_close_without_duplicating(monk
     _clear(T)
 
 
+def test_sync_price_month_ends_raises_when_the_provider_chain_returns_none(monkeypatch):
+    """None from `get_price_history` means every provider failed. That must
+    surface as an error — folding it into `{months: 0}` would let the CLI
+    and the worker record a clean sync that wrote nothing."""
+    _clear(T)
+    from app.services import data_service as ds_mod
+
+    class _DownDS:
+        def get_price_history(self, ticker, days=252):
+            return None
+
+        def mode(self):
+            return "test"
+
+    monkeypatch.setattr(ds_mod, "get_data_service", lambda: _DownDS())
+    with pytest.raises(scorecard_pit.PriceSeriesUnavailable):
+        scorecard_pit.sync_price_month_ends(T)
+    with SessionLocal() as db:
+        assert db.query(PriceMonthEnd).filter(PriceMonthEnd.ticker == T).count() == 0
+
+
+def test_sync_price_month_ends_treats_an_empty_series_as_a_legitimate_zero(monkeypatch):
+    """An EMPTY series (a listing younger than one complete month) is not
+    an outage: it is a successful sync of zero months, no exception."""
+    _clear(T)
+    from app.services import data_service as ds_mod
+
+    class _EmptyDS:
+        def get_price_history(self, ticker, days=252):
+            return []
+
+        def mode(self):
+            return "test"
+
+    monkeypatch.setattr(ds_mod, "get_data_service", lambda: _EmptyDS())
+    assert scorecard_pit.sync_price_month_ends(T) == {"months": 0, "written": 0, "skipped": 0}
+
+
 # ---------------------------------------------------------------------------
 # snapshot_as_of — the point-in-time read
 # ---------------------------------------------------------------------------
@@ -570,6 +609,27 @@ def test_cli_prices_pass_syncs_the_requested_tickers(capsys):
     with SessionLocal() as db:
         assert db.query(PriceMonthEnd).filter(PriceMonthEnd.ticker == "NVDA").count() >= 1
     _clear("NVDA")
+
+
+def test_cli_counts_a_provider_outage_as_a_failed_ticker_and_exits_1(monkeypatch, capsys):
+    """Regression: a None series used to report `months: 0, errors: 0` and
+    exit 0. It is now an error, tagged `unavailable` so an operator can
+    tell an outage from a genuinely young listing."""
+    from app.services import data_service as ds_mod
+
+    class _DownDS:
+        def get_price_history(self, ticker, days=252):
+            return None
+
+        def mode(self):
+            return "test"
+
+    monkeypatch.setattr(ds_mod, "get_data_service", lambda: _DownDS())
+    assert scorecard_backfill.main(["--prices", "--tickers", "ZZZNOPE"]) == 1
+    report = json.loads(capsys.readouterr().out)["prices"]
+    assert report["errors"] == 1 and report["unavailable"] == 1
+    assert report["failed_tickers"] == ["ZZZNOPE"]
+    assert report["months"] == 0 and report["written"] == 0
 
 
 def test_cli_runs_both_passes_by_default_and_reports_a_failed_ticker(monkeypatch, capsys):
