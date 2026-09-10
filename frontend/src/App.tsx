@@ -11,6 +11,7 @@ import DCFLab from "@/pages/DCFLab";
 import Comps from "@/pages/Comps";
 import Fundamentals from "@/pages/Fundamentals";
 import Screener from "@/pages/Screener";
+import Scorecard from "@/pages/Scorecard";
 import PortfolioBuilder from "@/pages/PortfolioBuilder";
 import Macro from "@/pages/Macro";
 import Settings from "@/pages/Settings";
@@ -38,6 +39,7 @@ export const LEGACY_APP_PATHS = [
   "/comps",
   "/fundamentals",
   "/screener",
+  "/scorecard",
   "/portfolio",
   "/macro",
   "/track-record",
@@ -74,6 +76,7 @@ export default function App() {
             <Route path="comps" element={<Comps />} />
             <Route path="fundamentals" element={<Fundamentals />} />
             <Route path="screener" element={<Screener />} />
+            <Route path="scorecard" element={<Scorecard />} />
             <Route path="portfolio" element={<PortfolioBuilder />} />
             <Route path="macro" element={<Macro />} />
             <Route path="track-record" element={<TrackRecord />} />

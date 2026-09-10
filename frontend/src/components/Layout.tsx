@@ -7,6 +7,7 @@ import {
   Briefcase,
   ChevronDown,
   GanttChart,
+  Gauge,
   LineChart,
   Lock,
   MessageCircle,
@@ -38,6 +39,9 @@ const links: Array<{ to: string; label: string; icon: LucideIcon; end?: boolean;
   // no `feature` lock here.
   { to: "/app/fundamentals", label: "Fundamentals", icon: LineChart },
   { to: "/app/screener", label: "Screener", icon: Search },
+  // Phase 6: reads are Pro under the wall (`auth/features.py` `scorecard`);
+  // the lock only shows once /api/me lists the entitlement.
+  { to: "/app/scorecard", label: "Scorecard", icon: Gauge, feature: "scorecard" },
   { to: "/app/portfolio", label: "Portfolio Builder", icon: Briefcase, feature: "portfolio" },
   { to: "/app/macro", label: "Macro", icon: GanttChart, feature: "macro" },
   { to: "/app/track-record", label: "Track Record", icon: Award, feature: "track_record" },
