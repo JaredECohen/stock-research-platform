@@ -293,6 +293,34 @@ def test_valuation_contradiction_flags_on_the_verdict_word():
     assert both is not None and both.dimension == "overall"
 
 
+def test_valuation_contradiction_is_material_even_when_the_overall_gap_only_reaches_watch():
+    """Plan §5.5 verbatim: material = coverage >= 0.6 AND (|gap| >= 40 OR a
+    valuation contradiction). The overall gap sitting in the watch band
+    must not downgrade a contradiction the plan calls material (review
+    finding: pct 40 / val 20 / Bullish+undervalued returned 'watch')."""
+    flag = scorecard_context.detect_disagreement(
+        _summary(pct=40.0, val_pct=20.0, coverage=0.9), _memo_stub("Bullish", verdict="undervalued"),
+    )
+    assert flag is not None
+    assert (flag.severity, flag.dimension, flag.direction) == ("material", "valuation", "narrative_above_quant")
+    assert flag.gap == pytest.approx(70.0 - 20.0)
+    # The note names both triggers so a reviewer sees why it is material.
+    assert "undervalued" in flag.note and "20.0" in flag.note
+    assert "overall gap +30.0" in flag.note and "40.0" in flag.note
+    # Coverage below the floor still holds it at watch — never material.
+    held = scorecard_context.detect_disagreement(
+        _summary(pct=40.0, val_pct=20.0, coverage=0.45), _memo_stub("Bullish", verdict="undervalued"),
+    )
+    assert held is not None and held.severity == "watch" and held.dimension == "valuation"
+    assert "held at watch" in held.note
+    # The mirror case (Bearish + overvalued against a cheap valuation family).
+    mirror = scorecard_context.detect_disagreement(
+        _summary(pct=60.0, val_pct=80.0, coverage=0.9), _memo_stub("Bearish", verdict="overvalued"),
+    )
+    assert mirror is not None
+    assert (mirror.severity, mirror.dimension, mirror.direction) == ("material", "valuation", "narrative_below_quant")
+
+
 def test_missing_percentile_is_na_not_a_flag():
     assert scorecard_context.detect_disagreement(_summary(pct=None), _memo_stub("Very Bullish")) is None
     assert scorecard_context.summarize(None, _memo_stub("Bullish")) is None
@@ -314,6 +342,19 @@ def test_seed_question_names_the_observed_figures():
     assert q.target_agent == "valuation"
     assert "NVDA" in q.question and "accruals_ratio" in q.question and "falsify" in q.question
     assert len(q.question) <= 600
+
+
+def test_seed_questions_target_valuation_and_earnings():
+    """Plan §5.5: the seeded question targets `valuation` AND `earnings`.
+    One stored text, one CritiqueQuestion per target, in that order."""
+    s = _summary()
+    flag = scorecard_context.detect_disagreement(s, _memo_stub("Bullish"))
+    assert flag is not None
+    qs = scorecard_context.seed_questions("NVDA", s, flag)
+    assert [q.target_agent for q in qs] == list(scorecard_context.SEED_TARGETS) == ["valuation", "earnings"]
+    assert len({q.question for q in qs}) == 1
+    assert qs[0].question == scorecard_context.seed_question("NVDA", s, flag).question
+    assert all(q.why_it_matters for q in qs) and qs[0].why_it_matters != qs[1].why_it_matters
 
 
 # ---------------------------------------------------------------------------
@@ -508,10 +549,11 @@ def test_queued_review_row_seeds_round_one_and_is_marked_reviewed(monkeypatch):
     # returned no questions.
     r1 = next(r for r in memo.round_findings if r.round == 1)
     assert r1.early_exit is False
-    assert [q.target_agent for q in r1.pm_questions][:1] == ["valuation"]
-    assert "5th-percentile" in r1.pm_questions[0].question
-    assert "valuation" in r1.findings
-    assert "seeded 1 review question" in r1.pm_rationale
+    # One row seeds one question per target (plan §5.5: valuation + earnings).
+    assert [q.target_agent for q in r1.pm_questions][:2] == ["valuation", "earnings"]
+    assert all("5th-percentile" in q.question for q in r1.pm_questions[:2])
+    assert "valuation" in r1.findings and "earnings" in r1.findings
+    assert "seeded 2 review question" in r1.pm_rationale
     snap = memo_store.latest_memo("NVDA")
     with SessionLocal() as db:
         reviewed = db.query(ScorecardDisagreement).filter(
@@ -525,6 +567,80 @@ def test_queued_review_row_seeds_round_one_and_is_marked_reviewed(monkeypatch):
 def test_pending_seed_questions_respects_the_kill_switch(monkeypatch):
     monkeypatch.setattr(settings, "enable_scorecard", False)
     assert scorecard_context.pending_seed_questions("NVDA") == []
+
+
+def _queued_review_row(score_id: int, *, ticker: str = "NVDA", text: str = "seed?") -> None:
+    with SessionLocal() as db:
+        db.add(ScorecardDisagreement(
+            ticker=ticker, memo_snapshot_id=None, scorecard_score_id=score_id, version_key=VERSION_KEY,
+            as_of=AS_OF, memo_rating="Bullish", memo_rating_score=70.0, scorecard_percentile=5.0, gap=65.0,
+            severity="material", dimension="overall", status="queued_review", seed_question=text, created_at=NOW,
+        ))
+        db.commit()
+
+
+def test_pending_seed_questions_emit_one_per_target_and_dedupe_per_target():
+    _run_id, score_id, _ = _seed_score_row("NVDA", _summary(pct=5.0, val_pct=5.0))
+    _queued_review_row(score_id, text="Same question?")
+    _queued_review_row(score_id, text="Same question?")   # a duplicate row must not double the re-fires
+    _queued_review_row(score_id, text="Another question?")
+    qs = scorecard_context.pending_seed_questions("NVDA")
+    assert [(q.target_agent, q.question) for q in qs] == [
+        ("valuation", "Same question?"), ("earnings", "Same question?"),
+        ("valuation", "Another question?"), ("earnings", "Another question?"),
+    ]
+    assert all("queued for review" in q.why_it_matters for q in qs)
+
+
+def test_review_rows_are_closed_even_when_the_scorecard_read_returns_none(monkeypatch):
+    """Review finding: `mark_reviewed` used to sit under `memo.scorecard is
+    not None`, so a review regen whose read came back None (row GC'd, DB
+    hiccup) consumed the seeds but left the `queued_review` rows open — and
+    every later memo re-asked the stale seed, spending LLM budget each
+    time. The seeds were asked; the row is reviewed regardless."""
+    _run_id, score_id, _ = _seed_score_row("NVDA", _summary(pct=5.0, val_pct=5.0))
+    _queued_review_row(score_id, text="Which observed figures justify the Bullish call?")
+    monkeypatch.setattr(scorecard_context, "load_for_memo", lambda *_a, **_k: None)
+    monkeypatch.setattr(scorecard_context, "_utcnow", lambda: NOW)
+    memo = graph.run_stock_memo("NVDA", force_refresh=True)
+    assert memo.scorecard is None
+    assert scorecard_context.AGENT_NAME in memo.degraded_agents      # soft: no row on file
+    r1 = next(r for r in memo.round_findings if r.round == 1)
+    assert r1.early_exit is False and "seeded 2 review question" in r1.pm_rationale
+    with SessionLocal() as db:
+        rows = db.query(ScorecardDisagreement).filter(ScorecardDisagreement.scorecard_score_id == score_id).all()
+        assert [r.status for r in rows] == ["reviewed"]
+        assert rows[0].resolved_at == NOW
+    # Nothing left to re-fire on the next run.
+    assert scorecard_context.pending_seed_questions("NVDA") == []
+
+
+def test_backtest_memo_carries_the_flag_but_writes_no_disagreement_row():
+    """Review finding: a reproduced historical memo (`as_of_date` set) used
+    to write an `open` row like a live one, and `handle_scorecard_disagreements`
+    cannot tell them apart — so a two-year-old disagreement could enqueue a
+    present-day review regen. The flag stays on the memo (content); the
+    finding row (what drives regen) is live-only."""
+    _run_id, score_id, _ = _seed_score_row("NVDA", _summary(pct=5.0, val_pct=5.0))
+
+    def _nvda_rows() -> int:
+        with SessionLocal() as db:
+            return db.query(ScorecardDisagreement).filter(ScorecardDisagreement.ticker == "NVDA").count()
+
+    before = _nvda_rows()
+    old_material, old_watch = settings.scorecard_disagreement_material, settings.scorecard_disagreement_watch
+    settings.scorecard_disagreement_material = 3.0
+    settings.scorecard_disagreement_watch = 1.0
+    try:
+        memo = graph.run_stock_memo("NVDA", force_refresh=True, as_of_date=date(2026, 7, 15))
+    finally:
+        settings.scorecard_disagreement_material = old_material
+        settings.scorecard_disagreement_watch = old_watch
+    assert memo.scorecard is not None and memo.scorecard.as_of == AS_OF
+    assert memo.scorecard.disagreement is not None
+    assert _nvda_rows() == before
+    with SessionLocal() as db:
+        assert db.query(ScorecardDisagreement).filter(ScorecardDisagreement.scorecard_score_id == score_id).count() == 0
 
 
 # ---------------------------------------------------------------------------

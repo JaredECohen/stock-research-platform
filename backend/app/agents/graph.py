@@ -2181,17 +2181,26 @@ def _persist(memo: StockMemoOut, inputs: MemoInputs) -> StockMemoOut:
     # and the review rows this run answered. Finding records, not memo
     # content: a failure is logged, never raised and never a degradation
     # (the memo is already saved and whole).
-    if memo.scorecard is not None:
-        snapshot_id = getattr(snapshot, "id", None)
+    snapshot_id = getattr(snapshot, "id", None)
+    # Live memos only: a backtest (`as_of_date` set) still carries the
+    # flag on `memo.scorecard.disagreement` — that is memo content — but
+    # writes no finding row, because an `open` row is what
+    # `handle_scorecard_disagreements` turns into a present-day review
+    # regen, and a reproduced historical disagreement must not spend one
+    # of the day's regen slots.
+    if memo.scorecard is not None and inputs.as_of_date is None:
         safe_call(
             scorecard_context.persist_disagreement, memo, snapshot_id,
             fallback=None, name="Scorecard Disagreement", log_to=None,
         )
-        if inputs.scorecard_seeds_consumed:
-            safe_call(
-                scorecard_context.mark_reviewed, inputs.ticker, snapshot_id,
-                fallback=0, name="Scorecard Review", log_to=None,
-            )
+    # Independent of whether the summary survived: the seeds were asked in
+    # round 1 whatever the later read returned (a GC'd row, a DB hiccup),
+    # and a queued_review row left open re-fires on every later memo run.
+    if inputs.scorecard_seeds_consumed:
+        safe_call(
+            scorecard_context.mark_reviewed, inputs.ticker, snapshot_id,
+            fallback=0, name="Scorecard Review", log_to=None,
+        )
     return memo
 
 

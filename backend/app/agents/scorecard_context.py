@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from typing import Any
+from typing import Any, cast
 
 from ..config import settings
 from ..finance import scorecard_spec
@@ -225,12 +225,19 @@ def detect_disagreement(summary: ScorecardSummary, memo: StockMemoOut) -> Scorec
     valuation verdict with the valuation family's percentile.
 
     * ``material``: coverage >= `scorecard_min_coverage` AND (|gap| >=
-      `scorecard_disagreement_material` OR a valuation contradiction).
+      `scorecard_disagreement_material` OR a valuation contradiction). The
+      two triggers are independent: a valuation contradiction is material
+      even when the overall gap only reaches the watch band.
     * ``watch``: |gap| >= `scorecard_disagreement_watch`, or a material
       trigger that low coverage held back (never material under 0.6 —
       too few observed features to call the narrative wrong).
     * none otherwise, and none when the percentile is unavailable: a
       missing rank is n/a, not "agrees".
+
+    Dimension precedence: ``overall`` when the overall gap alone is
+    material, or when it is the only trigger; ``valuation`` when the
+    contradiction is what carries the flag (alone, or alongside an overall
+    gap in the watch band — the note then names both).
     """
     pct = summary.universe_percentile
     if pct is None:
@@ -256,29 +263,33 @@ def detect_disagreement(summary: ScorecardSummary, memo: StockMemoOut) -> Scorec
 
     overall_material = abs(gap) >= material_at
     overall_watch = abs(gap) >= watch_at
+    # The plan's rule verbatim: either trigger makes the flag material when
+    # coverage allows; low coverage holds it at watch rather than dropping it.
+    material_trigger = overall_material or val_direction is not None
+    if not (material_trigger or overall_watch):
+        return None
+    severity = "material" if (material_trigger and enough_coverage) else "watch"
+    held = " — held at watch: coverage below the material floor" if (material_trigger and not enough_coverage) else ""
     coverage_note = f"coverage {coverage:.0%}"
-    if overall_material or overall_watch:
+    if overall_material or val_direction is None:
         direction = "narrative_above_quant" if gap > 0 else "narrative_below_quant"
-        severity = "material" if (overall_material and enough_coverage) else "watch"
-        held = " — held at watch: coverage below the material floor" if (overall_material and not enough_coverage) else ""
         note = (
             f"Memo rates {rating} (bucket {rating_score:.0f}) vs scorecard universe percentile {float(pct):.1f} "
             f"(gap {gap:+.1f}; {coverage_note}){held}."
         )
         return ScorecardDisagreementFlag(severity=severity, dimension="overall", direction=direction, gap=round(gap, 2), note=note)
-    if val_direction is not None:
-        assert val_pct is not None
-        val_gap = float(rating_score) - float(val_pct)
-        severity = "material" if enough_coverage else "watch"
-        held = " — held at watch: coverage below the material floor" if not enough_coverage else ""
-        note = (
-            f"Valuation verdict '{verdict}' vs valuation-family universe percentile {float(val_pct):.1f} "
-            f"(rating {rating}; {coverage_note}){held}."
-        )
-        return ScorecardDisagreementFlag(
-            severity=severity, dimension="valuation", direction=val_direction, gap=round(val_gap, 2), note=note,
-        )
-    return None
+    assert val_pct is not None
+    val_gap = float(rating_score) - float(val_pct)
+    overall_note = (
+        f"; overall gap {gap:+.1f} vs universe percentile {float(pct):.1f} also in the watch band" if overall_watch else ""
+    )
+    note = (
+        f"Valuation verdict '{verdict}' vs valuation-family universe percentile {float(val_pct):.1f} "
+        f"(rating {rating}; {coverage_note}{overall_note}){held}."
+    )
+    return ScorecardDisagreementFlag(
+        severity=severity, dimension="valuation", direction=val_direction, gap=round(val_gap, 2), note=note,
+    )
 
 
 def summarize(summary: ScorecardSummary | None, memo: StockMemoOut) -> ScorecardSummary | None:
@@ -292,10 +303,36 @@ def summarize(summary: ScorecardSummary | None, memo: StockMemoOut) -> Scorecard
     return out
 
 
+# Plan §5.5: the review question goes to the valuation analyst (the
+# "what is priced in" leg) AND the earnings analyst (earnings quality and
+# profitability are where the quant read and the narrative most often part
+# ways). One stored question text; one CritiqueQuestion per target.
+SEED_TARGETS: tuple[str, ...] = ("valuation", "earnings")
+
+_SEED_WHY: dict[str, str] = {
+    "valuation": "A material score-vs-narrative gap must be reconciled with observed figures or lower conviction.",
+    "earnings": (
+        "The earnings-quality and profitability families must be reconciled with the observed "
+        "figures before the narrative overrides the quant read."
+    ),
+}
+
+
+def _seed_for_target(target: str, question: str, *, why: str | None = None) -> CritiqueQuestion:
+    return CritiqueQuestion(
+        target_agent=cast(Any, target),  # SEED_TARGETS are members of the Literal
+        question=question[:600],
+        why_it_matters=why if why is not None else _SEED_WHY.get(target, _SEED_WHY["valuation"]),
+    )
+
+
 def seed_question(ticker: str, summary: ScorecardSummary, flag: ScorecardDisagreementFlag) -> CritiqueQuestion:
-    """The deep-research question a review regen re-fires with. Names the
-    observed figures so the specialist argues with numbers, and asks for a
-    falsifier so the answer is checkable."""
+    """The deep-research question a review regen re-fires with, addressed
+    to the valuation analyst (the primary target; `seed_questions` fans it
+    out to every `SEED_TARGETS` member). Names the observed figures so the
+    specialist argues with numbers, and asks for a falsifier so the answer
+    is checkable. Its text is what `scorecard_disagreements.seed_question`
+    stores."""
     worst = ", ".join(
         f"{c.feature} ({c.family}) z {_fmt_z(c.z)}" for c in (summary.top_negative or [])[:2]
     ) or "no negative contributors on file"
@@ -312,10 +349,14 @@ def seed_question(ticker: str, summary: ScorecardSummary, flag: ScorecardDisagre
         f"The fundamental scorecard ({summary.version_key}, as of {summary.as_of.isoformat()}) places {ticker} at the "
         f"{_fmt_pct(summary.universe_percentile)} of the universe overall, {stance} ({flag.note}). {ask}"
     )
-    return CritiqueQuestion(
-        target_agent="valuation", question=text[:600],
-        why_it_matters="A material score-vs-narrative gap must be reconciled with observed figures or lower conviction.",
-    )
+    return _seed_for_target(SEED_TARGETS[0], text)
+
+
+def seed_questions(ticker: str, summary: ScorecardSummary, flag: ScorecardDisagreementFlag) -> list[CritiqueQuestion]:
+    """`seed_question` addressed to every `SEED_TARGETS` member, in order
+    (plan §5.5: valuation and earnings). Same text, per-target rationale."""
+    primary = seed_question(ticker, summary, flag)
+    return [_seed_for_target(t, primary.question) for t in SEED_TARGETS]
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +449,7 @@ def pending_seed_questions(ticker: str) -> list[CritiqueQuestion]:
     (`status=queued_review`). Empty when the feature is off or nothing is
     queued. The deep-research loop re-fires these on round 1 regardless
     of the PM critique (`deep_research.run_dialog_loop(seed_questions=)`).
+    Each row yields one question per `SEED_TARGETS` member.
     """
     if not settings.enable_scorecard:
         return []
@@ -421,17 +463,20 @@ def pending_seed_questions(ticker: str) -> list[CritiqueQuestion]:
             .order_by(ScorecardDisagreement.created_at.asc(), ScorecardDisagreement.id.asc())
             .all()
         )
+        # One question per (row, target): the stored text is asked of every
+        # `SEED_TARGETS` specialist (plan §5.5), de-duplicated per target.
         out: list[CritiqueQuestion] = []
-        seen: set[str] = set()
+        seen: set[tuple[str, str]] = set()
         for r in rows:
             q = (r.seed_question or "").strip()
-            if not q or q in seen:
+            if not q:
                 continue
-            seen.add(q)
-            out.append(CritiqueQuestion(
-                target_agent="valuation", question=q[:600],
-                why_it_matters=f"scorecard disagreement #{r.id} ({r.severity}, {r.dimension}) queued for review",
-            ))
+            why = f"scorecard disagreement #{r.id} ({r.severity}, {r.dimension}) queued for review"
+            for target in SEED_TARGETS:
+                if (target, q) in seen:
+                    continue
+                seen.add((target, q))
+                out.append(_seed_for_target(target, q, why=why))
         return out
 
 
@@ -468,6 +513,7 @@ __all__ = [
     "PROFILE_THRESHOLD_Z",
     "PROMPT_BLOCK_MAX_CHARS",
     "REGEN_SOURCE",
+    "SEED_TARGETS",
     "STATUS_DISMISSED",
     "STATUS_OPEN",
     "STATUS_QUEUED_REVIEW",
@@ -482,5 +528,6 @@ __all__ = [
     "profile_reads",
     "prompt_block",
     "seed_question",
+    "seed_questions",
     "summarize",
 ]
