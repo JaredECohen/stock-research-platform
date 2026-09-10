@@ -7,6 +7,7 @@ import {
   Briefcase,
   ChevronDown,
   GanttChart,
+  LineChart,
   Lock,
   MessageCircle,
   Newspaper,
@@ -33,6 +34,9 @@ const links: Array<{ to: string; label: string; icon: LucideIcon; end?: boolean;
   { to: "/app/research", label: "Stock Research", icon: Newspaper },
   { to: "/app/dcf", label: "DCF Lab", icon: TrendingUp },
   { to: "/app/comps", label: "Comps", icon: BarChart3 },
+  // Available on every plan (the plan shapes the chart, not the page), so
+  // no `feature` lock here.
+  { to: "/app/fundamentals", label: "Fundamentals", icon: LineChart },
   { to: "/app/screener", label: "Screener", icon: Search },
   { to: "/app/portfolio", label: "Portfolio Builder", icon: Briefcase, feature: "portfolio" },
   { to: "/app/macro", label: "Macro", icon: GanttChart, feature: "macro" },

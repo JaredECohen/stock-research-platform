@@ -14,7 +14,10 @@ import type {
   AnalyzeJob,
   BillingInterval,
   BootstrapResponse,
+  CatalogResponse,
   ChatResponse,
+  CommentaryRequestWire,
+  CommentaryResponse,
   CompanyOut,
   CompsResult,
   DCFAssumptions,
@@ -26,6 +29,8 @@ import type {
   ProvidersStatusResponse,
   RateLimitRefusal,
   ScreenerResult,
+  SeriesRequest,
+  SeriesResponseWire,
   StockMemoOut,
   StructuredErrorDetail,
   UsageResponse,
@@ -196,8 +201,62 @@ export type MemoFetchResult =
   | { kind: "memo"; memo: StockMemoOut; stale: boolean; staleReason: string | null }
   | { kind: "queued"; job: AnalyzeJob };
 
+/**
+ * FEAT-001: the backend serialises `limits.applied` as
+ * `{companies, metrics, years}` (schemas/fundamentals.py `AppliedLimits`)
+ * while a 402's `extra.limits` and the chart engine's TypeScript mirror use
+ * `{max_companies, max_metrics, max_years}` (auth/features.py `Shape`).
+ * Fold both spellings into the mirror here so every page and test sees one
+ * shape. Nothing is invented: an absent count stays 0 and absent years stay
+ * null (the full history).
+ */
+export function normaliseSeriesResponse(raw: unknown): SeriesResponseWire {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const limits = (r.limits ?? {}) as Record<string, unknown>;
+  const a = (limits.applied ?? {}) as Record<string, unknown>;
+  const num = (...vals: unknown[]): number => {
+    for (const v of vals) if (typeof v === "number" && Number.isFinite(v)) return v;
+    return 0;
+  };
+  const years = [a.max_years, a.years].find((v) => typeof v === "number") as number | undefined;
+  return {
+    ...(r as unknown as SeriesResponseWire),
+    series: Array.isArray(r.series) ? (r.series as SeriesResponseWire["series"]) : [],
+    unavailable: Array.isArray(r.unavailable) ? (r.unavailable as SeriesResponseWire["unavailable"]) : [],
+    periods: Array.isArray(r.periods) ? (r.periods as string[]) : [],
+    warnings: Array.isArray(r.warnings) ? (r.warnings as string[]) : [],
+    fingerprint: typeof r.fingerprint === "string" ? r.fingerprint : "",
+    limits: {
+      applied: {
+        max_companies: num(a.max_companies, a.companies),
+        max_metrics: num(a.max_metrics, a.metrics),
+        max_years: years ?? null,
+      },
+      capped_by_plan: limits.capped_by_plan === true,
+    },
+  };
+}
+
 export const api = {
   health: () => request<{ status: string; mode: string; llm_configured: boolean }>("/health"),
+
+  // --- FEAT-001 fundamentals explorer ---------------------------------
+  // Browser-called, outside /api/admin. The backend shapes each request to
+  // the plan (402 `plan_required` names the exact limits) and meters
+  // commentary. `years` omitted = the plan's default range, which the
+  // backend does NOT report as a cap.
+  fundamentalsCatalog: () => request<CatalogResponse>("/api/fundamentals/catalog"),
+  fundamentalsSeries: async (req: SeriesRequest): Promise<SeriesResponseWire> => {
+    const body: Record<string, unknown> = { tickers: req.tickers, metrics: req.metrics };
+    if (typeof req.years === "number") body.years = req.years;
+    if (req.normalize && req.normalize !== "none") body.normalize = req.normalize;
+    const raw = await request<unknown>("/api/fundamentals/series", { method: "POST", body: JSON.stringify(body) });
+    return normaliseSeriesResponse(raw);
+  },
+  /** Charged before the model call and released when it returns nothing;
+   *  a degraded body (no LLM, anonymous visitor) costs nothing. */
+  fundamentalsCommentary: (req: CommentaryRequestWire) =>
+    request<CommentaryResponse>("/api/fundamentals/commentary", { method: "POST", body: JSON.stringify(req) }),
   providersStatus: () => request<ProvidersStatusResponse>("/api/providers/status"),
 
   // --- FEAT-002 account / billing -------------------------------------

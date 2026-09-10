@@ -800,3 +800,40 @@ export interface AnalyzeJob {
   current_generated_at: string | null;
   note: string;
 }
+
+// ---------------------------------------------------------------------------
+// FEAT-001 — Fundamentals Explorer. The chart engine's contract lives in
+// ./fundamentals and is re-exported so pages import one module. The `*Wire`
+// shapes add what the backend (`schemas/fundamentals.py`) serialises beyond
+// that mirror — the series fingerprint the commentary route verifies, the
+// shared period axis, server warnings, the per-ticker remedy — and the
+// request the commentary route actually accepts (`years` is nullable: null
+// is the full stored history the server applied).
+// ---------------------------------------------------------------------------
+
+export * from "./fundamentals";
+import type { NormalizeMode, SeriesResponse, UnavailableTicker } from "./fundamentals";
+
+export interface UnavailableTickerWire extends UnavailableTicker {
+  /** What fixes it (for `not_backfilled`: run research on the company). */
+  remedy?: string;
+}
+
+export interface SeriesResponseWire extends SeriesResponse {
+  /** sha256 over the displayed values; echoed to the commentary route. */
+  fingerprint: string;
+  /** The shared fiscal-year axis, oldest first. */
+  periods: string[];
+  warnings: string[];
+  normalize?: NormalizeMode;
+  frequency?: "annual";
+  unavailable: UnavailableTickerWire[];
+}
+
+export interface CommentaryRequestWire {
+  tickers: string[];
+  metrics: string[];
+  /** The years the server applied to the displayed series (null = full history). */
+  years: number | null;
+  fingerprint: string;
+}

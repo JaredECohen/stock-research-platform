@@ -9,6 +9,7 @@ import Chat from "@/pages/Chat";
 import Research from "@/pages/Research";
 import DCFLab from "@/pages/DCFLab";
 import Comps from "@/pages/Comps";
+import Fundamentals from "@/pages/Fundamentals";
 import Screener from "@/pages/Screener";
 import PortfolioBuilder from "@/pages/PortfolioBuilder";
 import Macro from "@/pages/Macro";
@@ -35,6 +36,7 @@ export const LEGACY_APP_PATHS = [
   "/research",
   "/dcf",
   "/comps",
+  "/fundamentals",
   "/screener",
   "/portfolio",
   "/macro",
@@ -70,6 +72,7 @@ export default function App() {
             <Route path="research" element={<Research />} />
             <Route path="dcf" element={<DCFLab />} />
             <Route path="comps" element={<Comps />} />
+            <Route path="fundamentals" element={<Fundamentals />} />
             <Route path="screener" element={<Screener />} />
             <Route path="portfolio" element={<PortfolioBuilder />} />
             <Route path="macro" element={<Macro />} />
