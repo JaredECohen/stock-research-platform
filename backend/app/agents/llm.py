@@ -461,8 +461,25 @@ def _usage_from_gemini(resp: Any) -> tuple[int, int]:
 # Client factories
 # ---------------------------------------------------------------------------
 
+_demo_only_noted = False
+
+
+def _demo_only() -> bool:
+    """USE_DEMO_DATA=true with ENABLE_LIVE_DATA=false (every test run) means
+    no LLM traffic either: a developer .env carrying live keys must not turn
+    the suite into paid calls. Callers see "no client", the same path as a
+    missing key, so breaker and failover bookkeeping are untouched."""
+    global _demo_only_noted
+    if not settings.use_demo_data_only:
+        return False
+    if not _demo_only_noted:
+        _demo_only_noted = True
+        log.debug("demo-only mode: LLM clients are not constructed")
+    return True
+
+
 def _openai_client() -> Any | None:
-    if not settings.openai_api_key or OpenAI is None:
+    if _demo_only() or not settings.openai_api_key or OpenAI is None:
         return None
     try:
         return OpenAI(api_key=settings.openai_api_key)
@@ -472,7 +489,7 @@ def _openai_client() -> Any | None:
 
 
 def _anthropic_client() -> Any | None:
-    if not settings.anthropic_api_key or Anthropic is None:
+    if _demo_only() or not settings.anthropic_api_key or Anthropic is None:
         return None
     try:
         return Anthropic(api_key=settings.anthropic_api_key)
@@ -490,7 +507,7 @@ def _gemini_client() -> Any | None:
       2. Direct API:   `GEMINI_API_KEY` set → `Client(api_key=…)`.
       3. Otherwise:    None (caller falls back to deterministic stub).
     """
-    if _genai is None:
+    if _genai is None or _demo_only():
         return None
     try:
         if settings.has_vertex:
