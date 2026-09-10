@@ -12,6 +12,12 @@
 > legal / tax advice. Model portfolios and stock analyses are illustrative and
 > scenario-based. Conduct your own diligence or consult a qualified advisor before acting.
 
+The harness-neutral, durable investment-research methodology lives in
+[`docs/research/`](docs/research/). Start every substantive research session with
+[`docs/research/Research_State.md`](docs/research/Research_State.md), then load the 163-sub-industry
+handbook and structured map it names. Those files are the canonical local copies; matching
+copies in the ChatGPT **Investment Research** project Sources provide app access.
+
 ---
 
 ## What it does
