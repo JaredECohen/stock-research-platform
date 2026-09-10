@@ -36,7 +36,7 @@ import logging
 import math
 from collections.abc import Callable
 from datetime import date, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import select
 
@@ -140,6 +140,16 @@ def _prev_month_end(d: date, back: int = 1) -> date:
     return date(y, m, monthrange(y, m)[1])
 
 
+class _PanelRow(NamedTuple):
+    as_of: date
+    ticker: str
+    sector: str
+    overall_z: float | None
+    coverage: float | None
+    roa: float | None
+    market_cap: float | None
+
+
 def build_panel(version_key: str, *, db=None) -> dict[str, Any]:
     """Month-end observations for the evaluation.
 
@@ -167,7 +177,10 @@ def build_panel(version_key: str, *, db=None) -> dict[str, Any]:
             .execution_options(yield_per=500)
         )
         latest_run_for_month: dict[date, int] = {}
-        picked: list[ScorecardScore] = []
+        # Keep only the seven fields the panel reads, not the ORM row with
+        # its four JSON columns: the whole month-end history streams
+        # through here on the 512 MB worker.
+        picked: list[_PanelRow] = []
         for score, run_row_id in rows:
             best = latest_run_for_month.get(score.as_of)
             if best is None:
@@ -175,7 +188,13 @@ def build_panel(version_key: str, *, db=None) -> dict[str, Any]:
                 best = run_row_id
             if run_row_id != best:
                 continue
-            picked.append(score)
+            raw = score.feature_raw or {}
+            ctx = raw.get("_context") or {}
+            picked.append(_PanelRow(
+                as_of=score.as_of, ticker=score.ticker, sector=score.sector or "",
+                overall_z=_finite(score.overall_z), coverage=_finite(score.coverage),
+                roa=_finite(raw.get("roa")), market_cap=_finite(ctx.get("market_cap")),
+            ))
         tickers = sorted({s.ticker for s in picked})
         months = sorted(latest_run_for_month)
         if not picked:
@@ -218,19 +237,17 @@ def build_panel(version_key: str, *, db=None) -> dict[str, Any]:
         if fwd is None:
             n_missing += 1
         observations.append(sem.PanelObservation(
-            as_of=s.as_of.isoformat(), ticker=s.ticker, score=_finite(s.overall_z), forward_return=fwd,
-            coverage=_finite(s.coverage),
+            as_of=s.as_of.isoformat(), ticker=s.ticker, score=s.overall_z, forward_return=fwd,
+            coverage=s.coverage,
         ))
-        raw = s.feature_raw or {}
-        ctx = raw.get("_context") or {}
-        mktcap = _finite(ctx.get("market_cap"))
+        mktcap = s.market_cap
         controls.append({
             "log_mktcap": math.log(mktcap) if mktcap is not None and mktcap > 0 else None,
             "momentum_12_1": _ret(s.ticker, _prev_month_end(s.as_of, 12), _prev_month_end(s.as_of, 1)),
             "reversal_1m": _ret(s.ticker, _prev_month_end(s.as_of, 1), s.as_of),
             "beta": betas.get(s.ticker),
-            "roa": _finite(raw.get("roa")),
-            "sector": s.sector or "",
+            "roa": s.roa,
+            "sector": s.sector,
         })
     return {"observations": observations, "controls": controls, "months": [m.isoformat() for m in months],
             "n_rows": len(picked), "n_missing_return": n_missing}

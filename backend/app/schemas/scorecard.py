@@ -24,7 +24,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Building blocks shared by the memo summary and the detail response
@@ -211,22 +211,38 @@ class ScorecardRunOut(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+def _not_in_the_future(value: date | None) -> date | None:
+    """Readers resolve "latest succeeded run" by `as_of DESC`, so one
+    mistyped future date would become the cross-section every read and
+    the memo's summary return until a later-dated run existed. Refuse it
+    at the edge (422) rather than let a typo pin the scorecard."""
+    if value is not None and value > datetime.utcnow().date():
+        raise ValueError("as_of may not be in the future")
+    return value
+
+
 class ScorecardRefreshRequest(BaseModel):
     as_of: date | None = None
     version_key: str | None = None
     tickers: list[str] | None = Field(None, max_length=600)
     kind: Literal["manual", "month_end"] = "manual"
 
+    _as_of_bounded = field_validator("as_of")(_not_in_the_future)
+
 
 class ScorecardEvaluateRequest(BaseModel):
     version_key: str | None = None
     as_of: date | None = None
+
+    _as_of_bounded = field_validator("as_of")(_not_in_the_future)
 
 
 class ScorecardBackfillRequest(BaseModel):
     version_key: str | None = None
     months: int | None = Field(None, ge=1, le=240)
     end: date | None = None
+
+    _end_bounded = field_validator("end")(_not_in_the_future)
 
 
 class ScorecardEnqueueOut(BaseModel):

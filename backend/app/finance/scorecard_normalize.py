@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from statistics import mean, pstdev
 from typing import Any
 
-# `_z_to_100` is the app's one z→0-100 mapping (50 = median, ±2.5 z = 0/100).
+# `_z_to_100` is the app's one z→0-100 mapping (50 = z of 0, the sector/universe mean; ±2.5 z = 0/100).
 # Sharing it keeps the scorecard's `overall_score` on the same scale as the
 # memo's factor scores rather than introducing a second, drifting mapping.
 from app.finance.factor_scores import _z_to_100

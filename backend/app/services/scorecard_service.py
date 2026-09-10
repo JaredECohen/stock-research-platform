@@ -140,10 +140,21 @@ def _today() -> date:
     return _utcnow().date()
 
 
+_TABLES_READY: set[int] = set()
+
+
 def _ensure_tables(db: Session) -> None:
+    """Lazy-create the scorecard tables once per engine. Every reader
+    calls this, and `ticker_detail` three times over, so without the
+    per-bind memo each `/api/scorecard/{ticker}` request paid ~18 catalog
+    `has_table` round-trips on Postgres before its first data query."""
     bind = db.get_bind()
+    key = id(bind)
+    if key in _TABLES_READY:
+        return
     for model in (ScorecardVersion, ScorecardRun, ScorecardScore, ScorecardEvaluation, FinancialPeriod, Company):
         model.__table__.create(bind=bind, checkfirst=True)
+    _TABLES_READY.add(key)
 
 
 def _month_end(d: date) -> date:

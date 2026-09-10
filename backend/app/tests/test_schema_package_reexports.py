@@ -62,6 +62,23 @@ SCHEMA_NAMES = [
     "SeriesProvenance", "MetricSeries", "AppliedLimits", "SeriesLimits", "UnavailableTicker",
     "SeriesResponse", "CommentaryRequest", "CommentaryRef", "ObservedItem", "MemoViewItem",
     "CommentaryOut",
+    "ScorecardBackfillOut",
+    "ScorecardBackfillRequest",
+    "ScorecardCategory",
+    "ScorecardContribution",
+    "ScorecardDetailOut",
+    "ScorecardDisagreementFlag",
+    "ScorecardEnqueueOut",
+    "ScorecardEvaluateRequest",
+    "ScorecardEvaluationItem",
+    "ScorecardEvaluationOut",
+    "ScorecardFeatureOut",
+    "ScorecardHistoryPoint",
+    "ScorecardRefreshRequest",
+    "ScorecardRunOut",
+    "ScorecardSummary",
+    "ScorecardUniverseOut",
+    "ScorecardUniverseRow",
 ]
 
 # `typing.Literal` aliases are not classes and carry no `__module__`.

@@ -304,6 +304,20 @@ def test_admin_routes_are_protected(path, with_token, client):
     assert client.post(path, json={}, headers={"Authorization": "Bearer wrong"}).status_code == 401
 
 
+def test_admin_enqueue_refuses_a_future_as_of(with_token, client):
+    """Readers resolve the latest run by `as_of DESC`; a mistyped future
+    date would pin the cross-section until a later-dated run existed."""
+    future = "2999-01-01"
+    for path, body in (
+        ("/api/admin/scorecard/refresh", {"as_of": future}),
+        ("/api/admin/scorecard/evaluate", {"as_of": future}),
+        ("/api/admin/scorecard/backfill", {"end": future}),
+    ):
+        resp = client.post(path, json=body, headers=with_token)
+        assert resp.status_code == 422, (path, resp.text)
+        assert "future" in resp.text
+
+
 def test_admin_refresh_enqueues_and_coalesces(with_token, client):
     body = {"as_of": "2019-12-31", "tickers": ["zrt0", "ZRT1"], "kind": "manual"}
     first = client.post("/api/admin/scorecard/refresh", json=body, headers=with_token)
