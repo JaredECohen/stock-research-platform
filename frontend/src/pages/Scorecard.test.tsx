@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import Scorecard from "@/pages/Scorecard";
-import { normaliseEvaluationResponse, scorecardExportUrl } from "@/api/client";
+import { filenameFromDisposition, normaliseEvaluationResponse, scorecardExportUrl, setTokenProvider } from "@/api/client";
 import { resetAccountCache } from "@/auth/useAccount";
 import {
   ALL_CAVEATS,
   AS_OF,
+  RUN_ID,
   VERSION,
   makeDetail,
   makeFF6Result,
@@ -15,7 +16,7 @@ import {
   makeSpec,
   makeUniverse,
 } from "@/test/fixtures/scorecard";
-import { errJson, okJson, renderWithProviders, stubFetch, type Responder } from "@/test/providers";
+import { SIGNED_IN, errJson, okJson, renderWithProviders, stubFetch, type Responder } from "@/test/providers";
 
 // The page renders the real recharts components inside ResponsiveContainer;
 // jsdom has no layout, so the chart draws nothing and the tests assert on
@@ -97,6 +98,35 @@ function mount(route = "/app/scorecard") {
   return renderWithProviders(<Scorecard />, { route, path: "/app/scorecard" });
 }
 
+/** The page under the login wall, signed in, with the client's bearer
+ *  installed the way `TokenBridge` does it. */
+function mountWalled(route = "/app/scorecard") {
+  setTokenProvider(async () => "stub-token");
+  return renderWithProviders(<Scorecard />, { route, path: "/app/scorecard", config: { auth_enabled: true }, auth: SIGNED_IN });
+}
+
+const CSV_BODY = "ticker,as_of,overall_score\nCOST,2026-08-31,62.400000\n";
+
+/** A streamed export as `routes_scorecard.export_scorecard` answers it. */
+function exportResponse(format: "csv" | "json" = "csv"): Partial<Response> {
+  const body = format === "csv" ? CSV_BODY : JSON.stringify({ rows: [] });
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({
+      "Content-Type": format === "csv" ? "text/csv; charset=utf-8" : "application/json",
+      "Content-Disposition": `attachment; filename="scorecard_${VERSION}_${AS_OF}.${format}"`,
+      "X-Scorecard-Contract": "v1",
+      "X-Scorecard-Version": VERSION,
+      "X-Scorecard-As-Of": AS_OF,
+      "X-Scorecard-Run-Id": RUN_ID,
+    }),
+    blob: async () => new Blob([body], { type: format === "csv" ? "text/csv" : "application/json" }),
+    text: async () => body,
+    json: async () => JSON.parse(format === "csv" ? "{}" : body),
+  };
+}
+
 const location = () => screen.getByTestId("location").textContent;
 
 function bodyRows() {
@@ -117,6 +147,8 @@ describe("Scorecard page", () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    setTokenProvider(null);
   });
 
   describe("tabs and URL persistence", () => {
@@ -240,6 +272,74 @@ describe("Scorecard page", () => {
       expect(screen.queryByTestId("export-link")).toBeNull();
     });
 
+    describe("export under the login wall", () => {
+      // jsdom has no object URLs; install them so the download path runs.
+      let createObjectURL: ReturnType<typeof vi.fn>;
+      let revokeObjectURL: ReturnType<typeof vi.fn>;
+      beforeEach(() => {
+        createObjectURL = vi.fn(() => "blob:mock-export");
+        revokeObjectURL = vi.fn();
+        Object.defineProperty(URL, "createObjectURL", { value: createObjectURL, configurable: true, writable: true });
+        Object.defineProperty(URL, "revokeObjectURL", { value: revokeObjectURL, configurable: true, writable: true });
+      });
+      afterEach(() => {
+        delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
+        delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
+      });
+
+      it("fetches the export with the bearer, saves it through an object URL it revokes, and renders no plain link", async () => {
+        const mock = stubFetch([specRoute, ["/api/scorecard/export", () => exportResponse("csv")], universeRoute]);
+        const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+        mountWalled();
+        await screen.findByTestId("universe-table");
+        expect(screen.queryByTestId("export-link")).toBeNull();
+        expect(screen.queryByTestId("export-json-link")).toBeNull();
+        expect(document.querySelector('a[href*="/api/scorecard/export"]')).toBeNull();
+
+        fireEvent.click(screen.getByTestId("export-csv-button"));
+        await screen.findByTestId("export-saved");
+        expect(screen.getByTestId("export-saved")).toHaveTextContent(`saved scorecard_${VERSION}_${AS_OF}.csv`);
+
+        const call = mock.mock.calls.find(([u]) => String(u).includes("/api/scorecard/export"));
+        expect(call).toBeDefined();
+        const [url, init] = call as [string, RequestInit];
+        expect(url).toBe(`/api/scorecard/export?format=csv&contract=v1&version=${VERSION}&as_of=${AS_OF}`);
+        expect(url).not.toMatch(/token|bearer|authorization/i);
+        expect(new Headers(init.headers).get("Authorization")).toBe("Bearer stub-token");
+
+        expect(createObjectURL).toHaveBeenCalledTimes(1);
+        const blob = createObjectURL.mock.calls[0][0] as Blob;
+        expect(await blob.text()).toBe(CSV_BODY);
+        expect(click).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:mock-export"));
+        // The temporary anchor is gone again; nothing linkable to the export remains.
+        expect(document.querySelector('a[download]')).toBeNull();
+      });
+
+      it("renders the upgrade prompt when the export itself is refused with 402", async () => {
+        stubFetch([
+          specRoute,
+          ["/api/scorecard/export", () => errJson(402, { code: "plan_required", message: "The scorecard export is part of Pro.", feature: "scorecard", plan: "free", upgrade_url: "/pricing" })],
+          universeRoute,
+        ]);
+        mountWalled();
+        await screen.findByTestId("universe-table");
+        fireEvent.click(screen.getByTestId("export-json-button"));
+        await screen.findByTestId("upgrade-prompt");
+        expect(createObjectURL).not.toHaveBeenCalled();
+      });
+
+      it("shows an export-token refusal verbatim with a retry", async () => {
+        stubFetch([specRoute, ["/api/scorecard/export", () => errJson(401, "scorecard export token required")], universeRoute]);
+        mountWalled();
+        await screen.findByTestId("universe-table");
+        fireEvent.click(screen.getByTestId("export-csv-button"));
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("scorecard export token required");
+        expect(within(alert).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+      });
+    });
+
     it("renders the methodology from /api/scorecard/spec", async () => {
       stubFetch([specRoute, universeRoute]);
       mount();
@@ -290,13 +390,15 @@ describe("Scorecard page", () => {
       mount("/app/scorecard?tab=evaluation");
       await screen.findByTestId("scorecard-evaluation");
 
-      // Top-level caveats and the per-card lists all carry the backend's exact sentences.
-      const top = within(screen.getByTestId("evaluation-caveats")).getAllByRole("listitem");
-      expect(top.map((li) => li.textContent)).toEqual(ALL_CAVEATS);
+      // Every card carries the backend's exact sentences; the page-level
+      // block collapses to a pointer rather than printing them a fourth time.
       for (const kind of ["quintile_ls", "ff6_regression", "double_lasso"]) {
         const items = within(screen.getByTestId(`caveats-${kind}`)).getAllByRole("listitem");
         expect(items.map((li) => li.textContent)).toEqual(ALL_CAVEATS);
       }
+      expect(screen.queryByTestId("evaluation-caveats")).toBeNull();
+      expect(screen.getByTestId("evaluation-caveats-pointer")).toHaveTextContent("Each card below carries the evaluation's 5 caveats verbatim.");
+      expect(screen.getAllByText(ALL_CAVEATS[0])).toHaveLength(3);
       expect(screen.getByTestId("evaluation-note")).toHaveTextContent(NOTE);
 
       const lasso = screen.getByTestId("eval-double_lasso");
@@ -331,12 +433,31 @@ describe("Scorecard page", () => {
       expect(screen.queryByTestId("price-store-depth")).toBeNull();
     });
 
-    it("shows the not-run cards when no evaluation exists yet", async () => {
+    it("prints a caveat no card carries in the page-level block, verbatim", async () => {
+      // Every result carries its own list, as the worker writes it; the
+      // response-level list then has one sentence no card repeats.
+      const wire = evaluationWire();
+      for (const row of Object.values(wire.evaluations) as Array<{ result: Record<string, unknown> }>) row.result = { ...row.result, caveats: ALL_CAVEATS };
+      const extra = "The sample ends before the latest constituent change.";
+      stubFetch([specRoute, ["/api/scorecard/evaluation", () => okJson({ ...wire, caveats: [...ALL_CAVEATS, extra] })], universeRoute]);
+      mount("/app/scorecard?tab=evaluation");
+      await screen.findByTestId("scorecard-evaluation");
+      const top = within(screen.getByTestId("evaluation-caveats")).getAllByRole("listitem");
+      expect(top.map((li) => li.textContent)).toEqual([extra]);
+      expect(screen.getByTestId("evaluation-caveats")).toHaveTextContent("not carried by any card below");
+      expect(screen.queryByTestId("evaluation-caveats-pointer")).toBeNull();
+    });
+
+    it("shows the not-run cards and the full caveat list when no evaluation exists yet", async () => {
       stubFetch([specRoute, ["/api/scorecard/evaluation", () => okJson({ version_key: VERSION, evaluations: {}, caveats: ALL_CAVEATS, note: "no evaluation has run for this version yet; nothing here is a result" })], universeRoute]);
       mount("/app/scorecard?tab=evaluation");
       await screen.findByTestId("scorecard-evaluation");
       expect(screen.getByTestId("eval-quintile_ls")).toHaveAttribute("data-state", "not-run");
       expect(screen.getByTestId("evaluation-note")).toHaveTextContent("no evaluation has run for this version yet; nothing here is a result");
+      // No card carries them, so the page-level block is the only verbatim copy.
+      const top = within(screen.getByTestId("evaluation-caveats")).getAllByRole("listitem");
+      expect(top.map((li) => li.textContent)).toEqual(ALL_CAVEATS);
+      expect(screen.queryByTestId("evaluation-caveats-pointer")).toBeNull();
     });
   });
 
@@ -380,6 +501,16 @@ describe("Scorecard page", () => {
       await screen.findByTestId("universe-table");
       expect(screen.getByTestId("tab-universe")).toHaveAttribute("aria-selected", "true");
     });
+  });
+});
+
+describe("filenameFromDisposition", () => {
+  it("takes the attachment basename and refuses a path", () => {
+    expect(filenameFromDisposition('attachment; filename="scorecard_fs-v1_2026-08-31.csv"', "fallback.csv")).toBe("scorecard_fs-v1_2026-08-31.csv");
+    expect(filenameFromDisposition("attachment; filename=plain.json", "fallback.csv")).toBe("plain.json");
+    expect(filenameFromDisposition("attachment; filename*=UTF-8''sc%20v1.csv", "fallback.csv")).toBe("sc v1.csv");
+    expect(filenameFromDisposition('attachment; filename="../../etc/passwd"', "fallback.csv")).toBe("fallback.csv");
+    expect(filenameFromDisposition(null, "fallback.csv")).toBe("fallback.csv");
   });
 });
 

@@ -629,7 +629,8 @@ export type FeatureName =
   | "macro"
   | "track_record"
   | "memo_history"
-  | "data_catalog";
+  | "data_catalog"
+  | "scorecard";
 
 export interface Entitlement {
   feature: string;
@@ -848,70 +849,8 @@ export interface CommentaryRequestWire {
 // Phase 6 — Fundamental Factor Scorecard. The client-side mirror of
 // `schemas/scorecard.py` lives in ./scorecard (types, the fs-v1 client
 // rules and the score-scale captions) and is re-exported so pages import
-// one module. The `*Wire` shapes below add what the backend serialises
-// beyond that mirror — the month-end history embedded in the detail row
-// (there is no separate history route), the run bookkeeping on the
-// universe response, the registry `source` / `score_scale` on the spec,
-// and the evaluation response's top-level `caveats` / `note` — so the
-// page can show them without the mirror inventing fields.
+// one module.
 // ---------------------------------------------------------------------------
 
 export * from "./scorecard";
-import type { ScorecardDetail, ScorecardEvaluation, ScorecardHistoryPoint, ScorecardSpec, ScorecardSummary, ScorecardUniverse } from "./scorecard";
-
-export interface ScorecardHistoryPointWire extends ScorecardHistoryPoint {
-  is_month_end?: boolean;
-  overall_z?: number | null;
-}
-
-/** `GET /api/scorecard/{ticker}` as `ScorecardDetailOut` serialises it. */
-export interface ScorecardDetailWire extends ScorecardDetail {
-  company_name?: string;
-  sector_raw?: string | null;
-  is_month_end?: boolean;
-  spec_hash?: string;
-  inputs_hash?: string;
-  /** Month-end rows from succeeded runs, oldest first (`months` query). */
-  history?: ScorecardHistoryPointWire[];
-  /** Price-context bookkeeping (e.g. `price_stale`); shown, never interpreted. */
-  context?: Record<string, unknown>;
-  /** Worker notes for this row (fallbacks taken, stale price store) — rendered verbatim. */
-  notes?: string[];
-}
-
-/** `GET /api/scorecard` as `ScorecardUniverseOut` serialises it. */
-export interface ScorecardUniverseWire extends ScorecardUniverse {
-  spec_hash?: string;
-  is_month_end?: boolean;
-  scored?: number;
-  insufficient?: number;
-  sort_by?: string;
-  order?: string;
-  /** True when the latest run is older than the retention window. */
-  stale?: boolean;
-  generated_at?: string;
-}
-
-/** `GET /api/scorecard/spec`: the in-code spec plus where it was served from. */
-export interface ScorecardSpecWire extends ScorecardSpec {
-  /** "registry" when the worker (or a lazy route hit) registered the version, else "code". */
-  source?: string;
-  /** The backend's own one-line description of the 0–100 scale. */
-  score_scale?: string;
-  rules?: Record<string, unknown>;
-  sectors?: { canonical: string[]; aliases: Record<string, string> };
-  profiles?: Record<string, unknown>;
-}
-
-/** `GET /api/scorecard/evaluation` after `normaliseEvaluationResponse`:
- *  the backend keys `evaluations` by kind and carries the caveats once at
- *  the top level; the client folds them into the array shape the
- *  evaluation component renders, keeping the originals here. */
-export interface ScorecardEvaluationWire {
-  version_key: string;
-  evaluations: ScorecardEvaluation[];
-  /** Rendered verbatim: the evaluation is only honest with these. */
-  caveats: string[];
-  /** Verbatim shortfall text ("kind: insufficient — reasons") or "". */
-  note: string;
-}
+import type { ScorecardSummary } from "./scorecard";

@@ -87,6 +87,11 @@ const STATIC_COPY: Record<FeatureName, StaticCopy> = {
     singular: "data catalog",
     pitch: "The data catalog and sector overlays.",
   },
+  scorecard: {
+    label: "scorecard",
+    singular: "scorecard",
+    pitch: "The fundamental factor scorecard: a versioned, sector-neutral read of reported fundamentals across the universe, with its evaluation and the frozen-contract export.",
+  },
 };
 
 function capitalize(s: string): string {

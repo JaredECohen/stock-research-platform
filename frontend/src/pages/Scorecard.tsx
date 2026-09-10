@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, historyFromDetail, isApiError, scorecardExportUrl } from "@/api/client";
+import { api, historyFromDetail, isApiError, scorecardExportUrl, type ScorecardExportFile } from "@/api/client";
+import { useConfig } from "@/auth/ConfigProvider";
 import RateLimitNotice from "@/components/RateLimitNotice";
 import TickerPicker from "@/components/TickerPicker";
 import UpgradePrompt from "@/components/UpgradePrompt";
@@ -10,15 +11,7 @@ import ScorecardPanel from "@/components/scorecard/ScorecardPanel";
 import ScorecardUniverseTable from "@/components/scorecard/ScorecardUniverseTable";
 import { familyLabel, na } from "@/components/scorecard/format";
 import { SCORECARD_CLIENT_RULES, SCORECARD_EXPORT_CONTRACT, SCORECARD_SCORE_SCALE_LONG, evalParam } from "@/types/scorecard";
-import type {
-  CompanyOut,
-  EntitlementRefusal,
-  RateLimitRefusal,
-  ScorecardDetailWire,
-  ScorecardEvaluationWire,
-  ScorecardSpecWire,
-  ScorecardUniverseWire,
-} from "@/types";
+import type { CompanyOut, EntitlementRefusal, RateLimitRefusal, ScorecardDetail, ScorecardEvaluationResponse, ScorecardSpec, ScorecardUniverse } from "@/types";
 
 /**
  * Phase 6 — /app/scorecard. Three views over what the worker persisted
@@ -37,6 +30,11 @@ import type {
  * 404 `feature_disabled` a quiet "not enabled" card, a plain 404 the
  * "no run yet" state, 429 a retry notice. Research and education only —
  * a rank is a research queue, not a buy or sell list.
+ *
+ * Export: with the login wall off the export is a plain link (the route
+ * is unrestricted); with it on a navigation cannot carry the bearer and
+ * a token may never ride in the URL, so the page fetches the file through
+ * the API client and hands the viewer an object-URL download instead.
  */
 
 export const SCORECARD_TABS = ["universe", "ticker", "evaluation"] as const;
@@ -181,14 +179,14 @@ function DisabledCard({ detail }: { detail: string }) {
 // client rules only when the row lacks them — and the page says which.
 // ---------------------------------------------------------------------------
 
-function paramsOf(evaluation: ScorecardEvaluationWire): Record<string, unknown> {
+function paramsOf(evaluation: ScorecardEvaluationResponse): Record<string, unknown> {
   // Every kind shares `params_common`; the first row is representative.
   return evaluation.evaluations[0]?.params ?? {};
 }
 
 /** The first row whose params carry a string at `key`; the worker writes
  *  `controls_deferred` on the LASSO row only, `price_store_depth` on all. */
-function paramFromAnyRow(evaluation: ScorecardEvaluationWire, key: string): unknown {
+function paramFromAnyRow(evaluation: ScorecardEvaluationResponse, key: string): unknown {
   for (const row of evaluation.evaluations) {
     const v = row.params?.[key];
     if (v !== undefined && v !== null) return v;
@@ -196,7 +194,7 @@ function paramFromAnyRow(evaluation: ScorecardEvaluationWire, key: string): unkn
   return undefined;
 }
 
-function Minimums({ evaluation }: { evaluation: ScorecardEvaluationWire }) {
+function Minimums({ evaluation }: { evaluation: ScorecardEvaluationResponse }) {
   const params = paramsOf(evaluation);
   const items: Array<[label: string, key: "min_leg" | "min_months" | "min_obs", fallback: number, unit: string]> = [
     ["quintile leg", "min_leg", SCORECARD_CLIENT_RULES.evalMinLeg, "names"],
@@ -248,9 +246,121 @@ function Minimums({ evaluation }: { evaluation: ScorecardEvaluationWire }) {
   );
 }
 
+/**
+ * The response carries the caveats once at the top level and the worker
+ * writes the same sentences on every result, which the evaluation
+ * component renders per card. Printing the list a fourth time above the
+ * cards adds nothing, so the page-level block shows only what no card
+ * carries — every caveat when nothing has run yet, otherwise the ones a
+ * result somehow lacks — and points at the cards the rest of the time.
+ * Nothing is paraphrased and nothing is hidden: a sentence is either on
+ * a card verbatim or in this block verbatim.
+ */
+function ResponseCaveats({ evaluation }: { evaluation: ScorecardEvaluationResponse }) {
+  const rows = evaluation.evaluations;
+  const caveats = evaluation.caveats ?? [];
+  const onCards = new Set(rows.flatMap((r) => r.result.caveats ?? []));
+  const uncovered = rows.length === 0 ? caveats : caveats.filter((c) => !onCards.has(c));
+  if (uncovered.length > 0) {
+    return (
+      <div className="card-tight text-xs" data-testid="evaluation-caveats">
+        <div className="text-slate-400 uppercase tracking-widest text-[10px] mb-1">
+          Caveats (verbatim from the evaluation{rows.length > 0 ? "; not carried by any card below" : ""})
+        </div>
+        <ul className="list-disc pl-4 text-slate-300 space-y-0.5">
+          {uncovered.map((c) => (
+            <li key={c}>{c}</li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  if (caveats.length === 0) return null;
+  return (
+    <p className="text-xs text-slate-500" data-testid="evaluation-caveats-pointer">
+      Each card below carries the evaluation&apos;s {caveats.length} caveat{caveats.length === 1 ? "" : "s"} verbatim.
+    </p>
+  );
+}
+
+/** Hand the viewer a fetched file. The object URL is revoked on the next
+ *  tick — some browsers abort a download whose URL is revoked before the
+ *  click has been processed. */
+function saveFile(file: ScorecardExportFile): void {
+  const url = URL.createObjectURL(file.blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = file.filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  try {
+    a.click();
+  } finally {
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
+type ExportFormat = "csv" | "json";
+
+/** Under the wall: fetch the export with the bearer, then download it.
+ *  A refusal renders exactly as it would for any other read (402 → the
+ *  upgrade prompt, 401 from an export-token deployment → its message). */
+function ExportButtons({ run }: { run: ScorecardUniverse }) {
+  const [busy, setBusy] = useState<ExportFormat | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [failed, setFailed] = useState<(Failure & { key: string; format: ExportFormat }) | null>(null);
+
+  const download = useCallback(
+    async (format: ExportFormat) => {
+      setBusy(format);
+      setSaved(null);
+      setFailed(null);
+      try {
+        const file = await api.scorecardExport({ format, version: run.version_key, as_of: run.as_of });
+        saveFile(file);
+        setSaved(file.filename);
+      } catch (e) {
+        setFailed({ key: `export-${format}`, format, ...classify(e) });
+      } finally {
+        setBusy(null);
+      }
+    },
+    [run.version_key, run.as_of],
+  );
+
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-testid="export-buttons">
+      {(["csv", "json"] as const).map((format) => (
+        <button
+          key={format}
+          type="button"
+          onClick={() => void download(format)}
+          disabled={busy !== null}
+          className="btn-ghost !py-1 !px-2 text-xs"
+          data-testid={`export-${format}-button`}
+          title={`Frozen column order, contract ${SCORECARD_EXPORT_CONTRACT}; fetched with your session, saved as a file`}
+        >
+          {busy === format ? "Fetching…" : `Export ${format.toUpperCase()} (contract ${SCORECARD_EXPORT_CONTRACT})`}
+        </button>
+      ))}
+      {saved && (
+        <span className="text-slate-500" data-testid="export-saved">
+          saved {saved}
+        </span>
+      )}
+      {failed && (
+        <div className="basis-full">
+          <ResourceState res={failed} onRetry={() => void download(failed.format)} missing={<span className="text-slate-400">{na(failed.state === "missing" ? failed.detail : "export unavailable")}</span>} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 
-function SpecBlock({ spec }: { spec: ScorecardSpecWire }) {
+function SpecBlock({ spec }: { spec: ScorecardSpec }) {
   const norm = spec.normalization;
   return (
     <details className="card-tight text-xs" data-testid="spec">
@@ -313,6 +423,10 @@ function SpecBlock({ spec }: { spec: ScorecardSpecWire }) {
 // ---------------------------------------------------------------------------
 
 export default function Scorecard() {
+  const { config } = useConfig();
+  // With the wall on the plain links would go out without the bearer
+  // (a 401 at best); the buttons fetch through the client instead.
+  const wallOn = config.auth_enabled;
   const [params, setParams] = useSearchParams();
   const urlTab = params.get("tab");
   const tab: ScorecardTab = isTab(urlTab) ? urlTab : loadTab();
@@ -357,10 +471,10 @@ export default function Scorecard() {
   }
 
   const run = universe?.state === "ok" ? universe.data : null;
-  const csvHref = run ? scorecardExportUrl({ format: "csv", version: run.version_key, as_of: run.as_of }) : undefined;
-  const jsonHref = run ? scorecardExportUrl({ format: "json", version: run.version_key, as_of: run.as_of }) : undefined;
+  const csvHref = run && !wallOn ? scorecardExportUrl({ format: "csv", version: run.version_key, as_of: run.as_of }) : undefined;
+  const jsonHref = run && !wallOn ? scorecardExportUrl({ format: "json", version: run.version_key, as_of: run.as_of }) : undefined;
   const specData = spec?.state === "ok" ? spec.data : null;
-  const currentDetail: ScorecardDetailWire | null = detail?.state === "ok" && detail.key === ticker ? detail.data : null;
+  const currentDetail: ScorecardDetail | null = detail?.state === "ok" && detail.key === ticker ? detail.data : null;
   const stockUniverse: CompanyOut[] = stocks?.state === "ok" ? stocks.data : [];
 
   return (
@@ -422,6 +536,7 @@ export default function Scorecard() {
                     Export JSON (contract {SCORECARD_EXPORT_CONTRACT})
                   </a>
                 )}
+                {wallOn && <ExportButtons run={run} />}
               </div>
             )}
             {run ? (
@@ -433,8 +548,9 @@ export default function Scorecard() {
             )}
             {run && (
               <p className="text-[11px] text-slate-500">
-                Exports stream the run under contract {SCORECARD_EXPORT_CONTRACT} (fixed column order; a new order is a new contract). The link carries no credential: a
-                deployment that requires an export token expects downstream systems to present it as a bearer header.
+                Exports stream the run under contract {SCORECARD_EXPORT_CONTRACT} (fixed column order; a new order is a new contract). The URL carries no credential:
+                {wallOn ? " the page fetches the file with your session and saves it locally;" : " the link is a plain download;"} a deployment that requires an export
+                token expects downstream systems to present it as a bearer header.
               </p>
             )}
             {specData && <SpecBlock spec={specData} />}
@@ -518,16 +634,7 @@ export default function Scorecard() {
                     {evaluation.data.note}
                   </p>
                 )}
-                {evaluation.data.caveats.length > 0 && (
-                  <div className="card-tight text-xs" data-testid="evaluation-caveats">
-                    <div className="text-slate-400 uppercase tracking-widest text-[10px] mb-1">Caveats (verbatim from the evaluation)</div>
-                    <ul className="list-disc pl-4 text-slate-300 space-y-0.5">
-                      {evaluation.data.caveats.map((c) => (
-                        <li key={c}>{c}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                <ResponseCaveats evaluation={evaluation.data} />
                 <ScorecardEvaluation evaluation={evaluation.data} />
               </>
             ) : (

@@ -28,11 +28,12 @@ import type {
   PortfolioRequest,
   ProvidersStatusResponse,
   RateLimitRefusal,
-  ScorecardDetailWire,
-  ScorecardEvaluationWire,
+  ScorecardDetail,
+  ScorecardEvaluationOut,
+  ScorecardEvaluationResponse,
   ScorecardHistory,
-  ScorecardSpecWire,
-  ScorecardUniverseWire,
+  ScorecardSpec,
+  ScorecardUniverse,
   ScreenerResult,
   SeriesRequest,
   SeriesResponseWire,
@@ -138,14 +139,12 @@ interface Raw<T> {
   headers: Headers;
 }
 
-async function requestRaw<T>(path: string, init?: RequestInit): Promise<Raw<T>> {
-  const method = (init?.method || "GET").toUpperCase();
-  // Don't trace the trace endpoint — would self-recurse on every flush.
-  const trace = !path.startsWith("/api/admin/ui-log");
-  const started = performance.now();
-  let res: Response | null = null;
-  let errorMsg: string | undefined;
-
+/** Every API call's headers: JSON unless the caller says otherwise and
+ *  the session / anon ids the backend middleware reads. Synchronous on
+ *  purpose — the bearer is added by `fetchApi` and awaited only when a
+ *  provider is installed, so with the wall off a request still reaches
+ *  `fetch` in the same tick it was made (pollers assert on that). */
+function baseHeaders(init?: RequestInit): Headers {
   const headers = new Headers({
     "Content-Type": "application/json",
     // Match the session header the backend middleware reads.
@@ -153,6 +152,22 @@ async function requestRaw<T>(path: string, init?: RequestInit): Promise<Raw<T>> 
     "X-Anon-Id": getAnonId(),
   });
   if (init?.headers) new Headers(init.headers).forEach((v, k) => headers.set(k, v));
+  return headers;
+}
+
+/** `fetch` with the shared headers, the bearer (header only, never a
+ *  query param), the `api_call` trace and the refusal mapping (non-2xx →
+ *  `ApiError`; 401 raises the auth-required event, 402 the account
+ *  refresh). Returns the raw `Response` so a caller can read a body that
+ *  is not JSON — the scorecard export streams CSV. */
+async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
+  const method = (init?.method || "GET").toUpperCase();
+  // Don't trace the trace endpoint — would self-recurse on every flush.
+  const trace = !path.startsWith("/api/admin/ui-log");
+  const started = performance.now();
+  let res: Response | null = null;
+  let errorMsg: string | undefined;
+  const headers = baseHeaders(init);
   if (tokenProvider) {
     let token: string | null = null;
     try {
@@ -193,6 +208,11 @@ async function requestRaw<T>(path: string, init?: RequestInit): Promise<Raw<T>> 
     }
     throw err;
   }
+  return res;
+}
+
+async function requestRaw<T>(path: string, init?: RequestInit): Promise<Raw<T>> {
+  const res = await fetchApi(path, init);
   const body = res.status === 204 ? (undefined as unknown as T) : ((await res.json()) as T);
   return { status: res.status, body, headers: res.headers };
 }
@@ -288,27 +308,89 @@ export interface ScorecardExportParams {
   include_features?: boolean;
 }
 
-/**
- * The export is a plain `<a href>` download under the FROZEN v1 column
- * contract. The URL carries no credential of any kind: the bearer (when
- * the wall is on) rides in a header the client attaches, and the
- * optional `SCORECARD_EXPORT_TOKEN` is for downstream systems to present
- * themselves — a token in a query string would land in ui_logs.
- */
-export function scorecardExportUrl(params: ScorecardExportParams = {}): string {
+/** `/api/scorecard/export?…&contract=v1`, BASE-relative. The query carries
+ *  no credential of any kind: the bearer (when the wall is on) rides in a
+ *  header the client attaches, and the optional `SCORECARD_EXPORT_TOKEN`
+ *  is for downstream systems to present themselves — a token in a query
+ *  string would land in ui_logs. */
+export function scorecardExportPath(params: ScorecardExportParams = {}): string {
   const q = new URLSearchParams();
   q.set("format", params.format ?? "csv");
   q.set("contract", SCORECARD_EXPORT_CONTRACT);
   if (params.version) q.set("version", params.version);
   if (params.as_of) q.set("as_of", params.as_of);
   if (params.include_features) q.set("include_features", "true");
-  return `${BASE}/api/scorecard/export?${q.toString()}`;
+  return `/api/scorecard/export?${q.toString()}`;
+}
+
+/**
+ * The plain `<a href>` for the export under the FROZEN v1 column
+ * contract. Only usable when the login wall is off: a navigation cannot
+ * carry the bearer, so under `AUTH_ENABLED` the page goes through
+ * `scorecardExportDownload` instead.
+ */
+export function scorecardExportUrl(params: ScorecardExportParams = {}): string {
+  return `${BASE}${scorecardExportPath(params)}`;
+}
+
+/** What `scorecardExportDownload` hands the page: the streamed bytes and
+ *  the contract headers the route stamps on the response. */
+export interface ScorecardExportFile {
+  blob: Blob;
+  filename: string;
+  contract: string;
+  version: string;
+  as_of: string;
+  run_id: string;
+}
+
+/** The `filename` of a `Content-Disposition: attachment` header, or the
+ *  fallback. Only a bare basename is accepted — a header must never pick
+ *  a path on the viewer's machine. */
+export function filenameFromDisposition(header: string | null | undefined, fallback: string): string {
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header || "");
+  let name = "";
+  if (m) {
+    try {
+      name = decodeURIComponent(m[1]).trim();
+    } catch {
+      name = m[1].trim();
+    }
+  }
+  return name && !/[\\/]/.test(name) ? name : fallback;
+}
+
+/**
+ * Fetch the export with the client's headers — the bearer under the wall,
+ * the same structured refusals as every other read (402 `plan_required`
+ * renders the upgrade prompt, 401 from a deployment that requires
+ * `SCORECARD_EXPORT_TOKEN` surfaces verbatim) — so the page can hand the
+ * viewer the bytes as an object-URL download. The URL is the same
+ * credential-free one `scorecardExportUrl` builds.
+ */
+export async function scorecardExportDownload(params: ScorecardExportParams = {}): Promise<ScorecardExportFile> {
+  const format = params.format ?? "csv";
+  const res = await fetchApi(scorecardExportPath(params), {
+    headers: { Accept: format === "json" ? "application/json" : "text/csv" },
+  });
+  const blob = await res.blob();
+  const version = res.headers.get("X-Scorecard-Version") || params.version || "";
+  const asOf = res.headers.get("X-Scorecard-As-Of") || params.as_of || "";
+  const fallback = `scorecard_${version || "active"}_${asOf || "latest"}.${format}`;
+  return {
+    blob,
+    filename: filenameFromDisposition(res.headers.get("Content-Disposition"), fallback),
+    contract: res.headers.get("X-Scorecard-Contract") || SCORECARD_EXPORT_CONTRACT,
+    version,
+    as_of: asOf,
+    run_id: res.headers.get("X-Scorecard-Run-Id") || "",
+  };
 }
 
 /** The detail row embeds its month-end history (`ScorecardDetailOut.
  *  history`); there is no separate history route. Lift it into the shape
  *  the history chart draws, oldest first as the backend orders it. */
-export function historyFromDetail(detail: ScorecardDetailWire): ScorecardHistory {
+export function historyFromDetail(detail: ScorecardDetail): ScorecardHistory {
   return {
     ticker: detail.ticker,
     version_key: detail.version_key,
@@ -322,16 +404,18 @@ function stringList(v: unknown): string[] {
 
 /**
  * `ScorecardEvaluationOut` keys `evaluations` by kind and carries the
- * caveats once, at the top level; the evaluation component renders an
- * array with the caveats on each result. Fold the wire shape into that
- * without inventing anything: a result that carries its own `caveats`
- * keeps them, one that does not gets the response's list verbatim, and
- * the quintile bucket table is renamed from the backend's
- * `quantile_table` / `n_months` to the mirror's `quintile_table` / `n`.
- * Every other key (`reasons`, `interpretation`, `stats_note`, …) passes
- * through untouched so nothing the worker said is lost.
+ * caveats once at the top level as well as on every result (the worker
+ * attaches `EVALUATION_CAVEATS` to each kind); the evaluation component
+ * renders an array with the caveats read from each result. Fold the wire
+ * shape into that without inventing anything: a result keeps its own
+ * `caveats`, a result without any (defensive — the backend always writes
+ * them) gets the response's list verbatim, and the quintile bucket table
+ * is renamed from the backend's `quantile_table` / `n_months` to the
+ * mirror's `quintile_table` / `n`. Every other key (`reasons`,
+ * `interpretation`, `stats_note`, …) passes through untouched so nothing
+ * the worker said is lost.
  */
-export function normaliseEvaluationResponse(raw: unknown): ScorecardEvaluationWire {
+export function normaliseEvaluationResponse(raw: ScorecardEvaluationOut | Record<string, unknown> | null | undefined): ScorecardEvaluationResponse {
   const r = (raw ?? {}) as Record<string, unknown>;
   const caveats = stringList(r.caveats);
   const wire = r.evaluations;
@@ -366,7 +450,7 @@ export function normaliseEvaluationResponse(raw: unknown): ScorecardEvaluationWi
         n_obs: typeof item.n_obs === "number" ? item.n_obs : 0,
         params: (item.params && typeof item.params === "object" ? item.params : {}) as Record<string, unknown>,
         result,
-      } as unknown as ScorecardEvaluationWire["evaluations"][number];
+      } as unknown as ScorecardEvaluationResponse["evaluations"][number];
     });
   return {
     version_key: typeof r.version_key === "string" ? r.version_key : "",
@@ -530,7 +614,7 @@ export const api = {
     if (typeof params.limit === "number") q.set("limit", String(Math.max(1, Math.min(600, Math.round(params.limit)))));
     if (typeof params.min_coverage === "number") q.set("min_coverage", String(params.min_coverage));
     const qs = q.toString();
-    return request<ScorecardUniverseWire>(`/api/scorecard${qs ? `?${qs}` : ""}`);
+    return request<ScorecardUniverse>(`/api/scorecard${qs ? `?${qs}` : ""}`);
   },
   /** Latest score for one name with every feature's observed value and
    *  model read, plus `months` of month-end history. 404 when no
@@ -541,25 +625,27 @@ export const api = {
     if (opts.version) q.set("version", opts.version);
     if (typeof opts.months === "number") q.set("months", String(opts.months));
     const qs = q.toString();
-    return request<ScorecardDetailWire>(`/api/scorecard/${encodeURIComponent(ticker.toUpperCase())}${qs ? `?${qs}` : ""}`);
+    return request<ScorecardDetail>(`/api/scorecard/${encodeURIComponent(ticker.toUpperCase())}${qs ? `?${qs}` : ""}`);
   },
   /** Month-end history for the chart, lifted from the detail row. */
   scorecardHistory: async (ticker: string, months = 36): Promise<ScorecardHistory> =>
-    historyFromDetail(await request<ScorecardDetailWire>(`/api/scorecard/${encodeURIComponent(ticker.toUpperCase())}?months=${months}`)),
+    historyFromDetail(await request<ScorecardDetail>(`/api/scorecard/${encodeURIComponent(ticker.toUpperCase())}?months=${months}`)),
   /** The methodology: families, features, normalisation, the score-scale
    *  caption and the version label the page shows. */
   scorecardSpec: (version?: string) =>
-    request<ScorecardSpecWire>(`/api/scorecard/spec${version ? `?version=${encodeURIComponent(version)}` : ""}`),
+    request<ScorecardSpec>(`/api/scorecard/spec${version ? `?version=${encodeURIComponent(version)}` : ""}`),
   /** Latest evaluation per kind with the caveats folded onto each result. */
-  scorecardEvaluation: async (opts: { version?: string; kind?: string } = {}): Promise<ScorecardEvaluationWire> => {
+  scorecardEvaluation: async (opts: { version?: string; kind?: string } = {}): Promise<ScorecardEvaluationResponse> => {
     const q = new URLSearchParams();
     if (opts.version) q.set("version", opts.version);
     if (opts.kind) q.set("kind", opts.kind);
     const qs = q.toString();
-    return normaliseEvaluationResponse(await request<unknown>(`/api/scorecard/evaluation${qs ? `?${qs}` : ""}`));
+    return normaliseEvaluationResponse(await request<ScorecardEvaluationOut>(`/api/scorecard/evaluation${qs ? `?${qs}` : ""}`));
   },
-  /** Plain href for the frozen v1 export (see `scorecardExportUrl`). */
+  /** Plain href for the frozen v1 export (wall off; see `scorecardExportUrl`). */
   scorecardExportUrl,
+  /** The export fetched with the bearer and handed back as a file (wall on). */
+  scorecardExport: scorecardExportDownload,
 
   chat: (message: string) =>
     request<ChatResponse>("/api/chat", {

@@ -133,6 +133,7 @@ export function featureMatrix(over: Partial<Record<string, Partial<FeatureMatrix
     track_record: row("Track record and outcome evaluation", false, true),
     memo_history: row("Memo version history, agent memory and DCF versions", false, true),
     data_catalog: row("Data catalog and sector overlays", false, true),
+    scorecard: row("Fundamental factor scorecard", false, true),
   };
   for (const [name, patch] of Object.entries(over)) {
     base[name] = { ...base[name], ...(patch || {}) };
