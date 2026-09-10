@@ -94,11 +94,16 @@ def _shape_exceeded(grant: Grant, shape: features.Shape, requested: dict[str, in
 
 
 def _cap_years(requested: int | None, max_years: int | None) -> tuple[int | None, bool]:
-    """(years to draw, capped_by_plan). `None` requested = everything on
-    record; a plan with a year ceiling turns that into the ceiling."""
+    """(years to draw, capped_by_plan). `None` requested = the plan's
+    default range: everything on record for an uncapped plan, the plan
+    ceiling otherwise — and that is NOT a cap, since nothing was asked for
+    beyond the plan (a Free page load with the default range must not nag
+    about upgrading). Only an explicit request above the ceiling is capped."""
     if max_years is None:
         return requested, False
-    if requested is None or requested > max_years:
+    if requested is None:
+        return max_years, False
+    if requested > max_years:
         return max_years, True
     return requested, False
 
@@ -177,7 +182,9 @@ def post_series(
 
     # Metric ids first (no DB): a typo in the selection is a 422 whatever
     # the tickers are, so the client learns about the wrong thing.
-    unknown = [m for m in req.metrics if m not in catalog.CATALOG]
+    # Echo the offending ids bounded (they are user input): at most a few,
+    # each clipped, so a junk request cannot inflate the response or logs.
+    unknown = [m[:64] for m in req.metrics if m not in catalog.CATALOG][:10]
     if unknown:
         raise _structured(
             422, "invalid_request", "unknown metric id(s): " + ", ".join(unknown),

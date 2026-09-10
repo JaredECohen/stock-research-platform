@@ -36,7 +36,10 @@ class ChartCommentary(Base):
     # sha256 hex over the full cache input (see module docstring).
     cache_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     # The series response's fingerprint the commentary was written against.
-    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    # Indexed through the composite (fingerprint, created_at) below; a
+    # second single-column index would only add write cost, and nothing in
+    # this repo drops indexes once a table exists in production.
+    fingerprint: Mapped[str] = mapped_column(String(64))
     # Who asked (FEAT-002 `users.id`); NULL for the anonymous default and
     # for rows written before accounts existed.
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
@@ -50,14 +53,17 @@ class ChartCommentary(Base):
     memo_versions: Mapped[dict] = mapped_column(JSON, default=dict)
     # The `CommentaryOut` body as served.
     output: Mapped[dict] = mapped_column(JSON, default=dict)
-    provider: Mapped[str] = mapped_column(String(16), default="")
+    provider: Mapped[str] = mapped_column(String(32), default="")
     model: Mapped[str] = mapped_column(String(64), default="")
     tokens_in: Mapped[int] = mapped_column(Integer, default=0)
     tokens_out: Mapped[int] = mapped_column(Integer, default=0)
     # A degraded row is the deterministic observed-only body; it is stored
     # so the reason is auditable, and it was never charged.
     degraded: Mapped[bool] = mapped_column(Boolean, default=False)
-    degraded_reason: Mapped[str] = mapped_column(String(64), default="")
+    # Wide enough for a sentence: Postgres raises on overflow where sqlite
+    # silently accepts it, so a narrow column here would pass tests and
+    # fail in production the first time a longer reason is written.
+    degraded_reason: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 

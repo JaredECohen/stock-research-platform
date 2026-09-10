@@ -22,6 +22,11 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
+def _utcnow() -> datetime:
+    """Clock seam so tests can pin the retention boundary."""
+    return datetime.utcnow()
+
+
 def gc_chart_commentaries(*, max_age_days: int = 90, db: Session | None = None) -> int:
     """Delete `chart_commentaries` rows older than `max_age_days`; returns
     the count. One DELETE — the table is bounded (one row per distinct
@@ -29,7 +34,7 @@ def gc_chart_commentaries(*, max_age_days: int = 90, db: Session | None = None) 
     own = db is None
     session = db or SessionLocal()
     try:
-        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        cutoff = _utcnow() - timedelta(days=max_age_days)
         result = session.execute(delete(ChartCommentary).where(ChartCommentary.created_at < cutoff))
         session.commit()
         return int(result.rowcount or 0)

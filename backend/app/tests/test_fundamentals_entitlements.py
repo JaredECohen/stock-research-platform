@@ -118,7 +118,7 @@ def test_free_shape_exceeded_is_a_structured_402(auth_on, client, seeded, ticker
 
 
 @pytest.mark.parametrize("requested,applied,capped", [
-    (None, 5, True),   # "max" on Free is the plan's 5 years
+    (None, 5, False),  # default range = plan max, not a cap,   # "max" on Free is the plan's 5 years
     (10, 5, True),     # a Pro user's shared URL still renders, capped
     (5, 5, False),
     (3, 3, False),
