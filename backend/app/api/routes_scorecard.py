@@ -14,6 +14,7 @@ apart from the model read (z, score, percentiles). Missing evidence is
 """
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import date
 
@@ -26,10 +27,36 @@ from ..schemas.scorecard import ScorecardDetailOut, ScorecardEvaluationOut, Scor
 from ..services import scorecard_service
 from .gating import feature_disabled, rate_scope
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 
 EXPORT_FORMATS = ("csv", "json")
 EXPORT_CONTRACTS = (scorecard_service.EXPORT_CONTRACT,)
+
+# Whether THIS process has already tried to register the in-code spec.
+# Only a memo of an attempt — the registry row in `scorecard_versions`
+# is the state, shared with the worker through the database — so a GET
+# does not repeat an idempotent write on every request.
+_registry_attempted = False
+
+
+def _register_version_lazily() -> None:
+    """Register the in-code methodology from the web process the first
+    time a scorecard route is hit. The worker does the same at boot and
+    on every daily tick; doing it here too means `/api/scorecard/spec`
+    reports `source: registry` even on a deployment whose worker has not
+    ticked yet. Best-effort: any failure (a race with the worker's own
+    upsert, a read-only replica) is logged by type and the readers fall
+    back to the in-code spec exactly as before."""
+    global _registry_attempted
+    if _registry_attempted:
+        return
+    _registry_attempted = True
+    try:
+        scorecard_service.ensure_version_registered()
+    except Exception as exc:
+        log.warning("scorecard lazy version registration failed (serving the in-code spec): %s",
+                    type(exc).__name__)
 
 
 def _require_enabled() -> None:
@@ -37,6 +64,7 @@ def _require_enabled() -> None:
     404 `feature_disabled`, the route is simply not there."""
     if not settings.enable_scorecard:
         raise feature_disabled("the fundamental scorecard is not enabled on this deployment", feature="scorecard")
+    _register_version_lazily()
 
 
 def _version_or_404(fn, *args, **kwargs):

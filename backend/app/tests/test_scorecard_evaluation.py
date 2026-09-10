@@ -42,14 +42,15 @@ def _month_ends(n: int, start: date = date(2022, 1, 31)) -> list[date]:
 
 
 def seed_panel(version: str, *, prefix: str, n_names: int, n_months: int, slope: float = 0.02,
-               noise: float = 0.03, seed: int = 0) -> list[str]:
+               noise: float = 0.03, seed: int = 0, pre_months: int = 13) -> list[str]:
     """Month-end succeeded runs + score rows + a price path whose next-month
-    return is `slope·score + noise`. Prices start 13 months before the first
-    score month so 12-1 momentum exists for every panel row."""
+    return is `slope·score + noise`. Prices start `pre_months` months before
+    the first score month — 13 (the default) so 12-1 momentum exists for
+    every panel row; fewer to mimic a young price store."""
     rng = np.random.RandomState(seed)
     months = _month_ends(n_months)
     tickers = [f"{prefix}{i:03d}" for i in range(n_names)]
-    pre = [prev_month_end(months[0], k) for k in range(13, 0, -1)]
+    pre = [prev_month_end(months[0], k) for k in range(pre_months, 0, -1)]
     all_months = pre + months + [next_month_end(months[-1])]
     prices = {t: {} for t in tickers}
     with SessionLocal() as db:
@@ -100,24 +101,31 @@ def synthetic_factors(months: list[str], *, seed: int = 1) -> dict[str, list[dic
 
 BIG = {"prefix": "ZEV", "n_names": 90, "n_months": 28}
 SMALL = {"prefix": "ZET", "n_names": 5, "n_months": 3}
+# A launch-shaped panel: enough names per leg, but a price store only two
+# months deeper than the first score month, so 12-1 momentum is missing.
+YOUNG = {"prefix": "ZEY", "n_names": 80, "n_months": 6, "pre_months": 2}   # 16 per quintile leg
+VK_YOUNG = "fs-evalyoung"
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _panels():
     big = [f"ZEV{i:03d}" for i in range(BIG["n_names"])]
     small = [f"ZET{i:03d}" for i in range(SMALL["n_names"])]
-    purge(big + small, versions=(VK, VK_SMALL))
+    young = [f"ZEY{i:03d}" for i in range(YOUNG["n_names"])]
+    purge(big + small + young, versions=(VK, VK_SMALL, VK_YOUNG))
     seed_panel(VK, **BIG)
     seed_panel(VK_SMALL, **SMALL, slope=0.0)
-    # Register the synthetic version (inactive) so the read model resolves it.
+    seed_panel(VK_YOUNG, **YOUNG)
+    # Register the synthetic versions (inactive) so the read model resolves them.
     from app.finance import scorecard_spec
     from app.models import ScorecardVersion
     with SessionLocal() as db:
-        db.add(ScorecardVersion(version_key=VK, spec_hash="test", is_active=False,
-                                spec_json=scorecard_spec.spec_as_dict(version_key=VK)))
+        for vk in (VK, VK_SMALL, VK_YOUNG):
+            db.add(ScorecardVersion(version_key=vk, spec_hash="test", is_active=False,
+                                    spec_json=scorecard_spec.spec_as_dict(version_key=vk)))
         db.commit()
     yield
-    purge(big + small, versions=(VK, VK_SMALL))
+    purge(big + small + young, versions=(VK, VK_SMALL, VK_YOUNG))
 
 
 @pytest.fixture(autouse=True)
@@ -135,7 +143,7 @@ def _purge_evaluate_runs() -> None:
     """Only the rows `run_evaluation` creates (kind=evaluate), never the panel."""
     with SessionLocal() as db:
         db.query(ScorecardRun).filter(
-            ScorecardRun.version_key.in_((VK, VK_SMALL)), ScorecardRun.run_kind == "evaluate",
+            ScorecardRun.version_key.in_((VK, VK_SMALL, VK_YOUNG)), ScorecardRun.run_kind == "evaluate",
         ).delete(synchronize_session=False)
         db.commit()
 
@@ -263,6 +271,53 @@ def test_thin_panel_writes_honest_insufficient_rows():
     lasso = rows[ev.KIND_LASSO].result
     assert lasso["verdict"] == dsl.VERDICT_INSUFFICIENT and lasso["coef_d"] is None
     assert "lasso_verdict=insufficient_data" in out["note"]
+    # Momentum exists here (13 pre-months): the shortfall is the sample (no
+    # month reaches 15 per leg), not the price store — and the row says which.
+    assert lasso["price_depth_limited"] is False
+    assert lasso["n_skipped_by_reason"] == {"month_not_eligible": SMALL["n_names"] * SMALL["n_months"]}
+    assert ev.PRICE_DEPTH_NOTE not in lasso["reasons"]
+    # The read model repeats the reasons next to the verdict instead of a bare marker.
+    from app.services import scorecard_service
+    view = scorecard_service.evaluation_view(VK_SMALL)
+    assert view.note.startswith("quintile_ls: insufficient") or "double_lasso: insufficient" in view.note
+    assert "double_lasso: insufficient — " in view.note and "ff6_regression: insufficient — " in view.note
+
+
+def test_lasso_row_records_the_deferred_plan_controls():
+    _clear_rows(VK)
+    months = ev.build_panel(VK)["months"]
+    ev.run_evaluation(VK, factor_loader=lambda: synthetic_factors(months))
+    row = _rows(VK)[ev.KIND_LASSO]
+    assert row.params["controls"] == list(ev.LASSO_CONTROLS)
+    assert set(row.params["controls_deferred"]) == {"book_to_market", "asset_growth_1y", "net_debt_to_assets"}
+    assert row.result["controls_deferred"] == ev.LASSO_CONTROLS_DEFERRED
+    assert all(row.params["controls_deferred"][k] for k in row.params["controls_deferred"]), "each names its reason"
+    assert row.params["price_store_depth"] == ev.PRICE_DEPTH_NOTE
+    assert _rows(VK)[ev.KIND_QUINTILE].params["price_store_depth"] == ev.PRICE_DEPTH_NOTE
+
+
+def test_young_price_store_names_the_depth_reason_on_the_insufficient_lasso():
+    """Launch state: forward returns and the score exist, but the store is
+    not 13 months deep, so momentum_12_1 is None on every row. The verdict
+    must say why — `insufficient_data` alone reads as a broken panel."""
+    _clear_rows(VK_YOUNG)
+    panel = ev.build_panel(VK_YOUNG)
+    assert panel["n_rows"] == YOUNG["n_names"] * YOUNG["n_months"] and panel["n_missing_return"] == 0
+    assert all(c["momentum_12_1"] is None for c in panel["controls"])
+    out = ev.run_evaluation(VK_YOUNG, factor_loader=lambda: synthetic_factors(panel["months"]))
+    assert out["run"]["status"] == scorecard_queue.STATUS_SUCCEEDED
+    rows = _rows(VK_YOUNG)
+    assert rows[ev.KIND_QUINTILE].result["n_months"] == YOUNG["n_months"], "the spread is still measured"
+    lasso = rows[ev.KIND_LASSO].result
+    assert lasso["verdict"] == dsl.VERDICT_INSUFFICIENT and lasso["n_obs"] == 0
+    assert lasso["n_skipped_by_reason"] == {"missing_control:momentum_12_1": panel["n_rows"]}
+    assert lasso["price_depth_limited"] is True
+    assert ev.PRICE_DEPTH_NOTE in lasso["reasons"]
+    assert f"missing_control:momentum_12_1={panel['n_rows']}" in " ".join(lasso["reasons"])
+    assert lasso["interpretation"].startswith("No verdict:") and "252-day" in lasso["interpretation"]
+    from app.services import scorecard_service
+    view = scorecard_service.evaluation_view(VK_YOUNG)
+    assert "double_lasso: insufficient — " in view.note and "252-day cached price series" in view.note
 
 
 def test_factor_series_outage_is_an_insufficient_regression_not_a_failed_run():

@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from app.api import admin_auth
 from app.auth import policy
 from app.config import settings
+from app.database import SessionLocal
 from app.finance import scorecard_spec
 from app.finance.scorecard_evaluation_math import EVALUATION_CAVEATS
 from app.main import app
@@ -145,6 +146,48 @@ def test_spec_and_evaluation_endpoints(client):
     ev = client.get("/api/scorecard/evaluation").json()
     assert ev["version_key"] == svc.VERSION_KEY and ev["caveats"] == list(EVALUATION_CAVEATS)
     assert client.get("/api/scorecard/evaluation", params={"kind": "double_lasso"}).status_code == 200
+
+
+def test_first_read_registers_the_in_code_spec_lazily_and_falls_back_on_failure(client, monkeypatch):
+    """The decision: the registry is ensured by the loop AND by the routes
+    lazily. A web process that answers before the worker has ticked must
+    still report `source: registry`, and a failed attempt must degrade to
+    the in-code spec rather than break the read."""
+    from app.api import routes_scorecard
+    from app.models import ScorecardVersion
+    with SessionLocal() as db:
+        db.query(ScorecardVersion).filter(ScorecardVersion.version_key == svc.VERSION_KEY).delete()
+        db.commit()
+    monkeypatch.setattr(routes_scorecard, "_registry_attempted", False)
+    spec = client.get("/api/scorecard/spec").json()
+    assert spec["source"] == "registry" and spec["spec_hash"] == scorecard_spec.spec_hash()
+    with SessionLocal() as db:
+        rows = db.query(ScorecardVersion).filter(ScorecardVersion.version_key == svc.VERSION_KEY).all()
+    assert len(rows) == 1 and rows[0].is_active
+
+    # Attempted once per process, not once per request.
+    calls: list[int] = []
+    monkeypatch.setattr(svc, "ensure_version_registered", lambda **kw: calls.append(1))
+    client.get("/api/scorecard/spec")
+    assert calls == []
+
+    # A failing registration is logged and the in-code spec is served.
+    with SessionLocal() as db:
+        db.query(ScorecardVersion).filter(ScorecardVersion.version_key == svc.VERSION_KEY).delete()
+        db.commit()
+    monkeypatch.setattr(routes_scorecard, "_registry_attempted", False)
+
+    def broken(**kw):
+        raise RuntimeError("db is read-only")
+
+    monkeypatch.setattr(svc, "ensure_version_registered", broken)
+    resp = client.get("/api/scorecard/spec")
+    assert resp.status_code == 200 and resp.json()["source"] == "code"
+    # Kill switch short-circuits before the registry attempt.
+    monkeypatch.setattr(routes_scorecard, "_registry_attempted", False)
+    monkeypatch.setattr(settings, "enable_scorecard", False)
+    assert client.get("/api/scorecard/spec").status_code == 404
+    assert routes_scorecard._registry_attempted is False
 
 
 def test_kill_switch_turns_every_read_into_a_feature_disabled_404(client, monkeypatch):

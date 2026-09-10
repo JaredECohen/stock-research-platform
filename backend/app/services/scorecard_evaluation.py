@@ -18,6 +18,15 @@ cannot be computed are None with a reason, never 0. Model output for
 research and education — a scenario read of one sample, not a
 recommendation.
 
+Control set deviation from plan §5.4 (recorded, not hidden): fs-v1 runs
+the LASSO with `LASSO_CONTROLS` + sector one-hots only; `book_to_market`,
+`asset_growth_1y` and `net_debt_to_assets` are deferred
+(`LASSO_CONTROLS_DEFERRED`, persisted on every LASSO row) because the
+score row does not keep the lines they need. And because the price store
+is fed from the 252-day cached series, forward returns and 12-1 momentum
+exist only for stored months — the LASSO reports `insufficient_data`,
+with `PRICE_DEPTH_NOTE` in its reasons, until the store has deepened.
+
 numpy is imported inside functions (the module must stay importable on
 the web process, which only reads the persisted rows).
 """
@@ -49,10 +58,32 @@ EVAL_KINDS: tuple[str, ...] = (KIND_QUINTILE, KIND_FF6, KIND_LASSO)
 # Controls the double-selection test can build from what the scorecard
 # already stores plus the month-end price store and `companies.beta`:
 # size, 12-1 momentum, 1-month reversal, market beta, return on assets,
-# then sector one-hots (today's labels — a documented residue). The
-# plan's book-to-market / asset-growth / net-debt-to-assets controls need
-# lines the score row does not keep and are left for fs-v2.
+# then sector one-hots (today's labels — a documented residue).
 LASSO_CONTROLS: tuple[str, ...] = ("log_mktcap", "momentum_12_1", "reversal_1m", "beta", "roa")
+# Plan §5.4 also named these three. They are NOT in fs-v1: the score row
+# keeps feature values, not the balance-sheet lines they need, and the
+# spec is frozen under `spec_hash`. Persisted on every LASSO row
+# (`params.controls_deferred`) so a reader of the verdict sees the
+# narrower control set rather than inferring it from the code. fs-v2 hook:
+# store `shareholders_equity`, `total_assets` (t, t-1) and net debt on the
+# row's `_context` and add them here.
+LASSO_CONTROLS_DEFERRED: dict[str, str] = {
+    "book_to_market": "needs shareholders_equity on the score row (only the derived ratio is stored)",
+    "asset_growth_1y": "needs total_assets for two fiscal years on the score row",
+    "net_debt_to_assets": "needs net debt and total_assets on the score row; null for Financials by the sector mask",
+}
+# Why the panel is thin for a long time after launch, stated where the
+# verdict is read: the store is fed from the app's 252-day cached series
+# (a Phase 6 decision, no new provider key), so it starts ~12 months deep
+# and gains one month per `pit_prepare`.
+PRICE_DEPTH_NOTE = (
+    "price_month_ends is fed from the 252-day cached price series, so it starts about 12 months deep and "
+    "deepens by one month per month: a forward return exists only for months whose next month-end close is "
+    "stored, and momentum_12_1 needs 13 stored month ends per ticker. The LASSO's min_obs (2000) and "
+    "min_months (24) are not reachable until the store has grown, and the quintile / FF6 samples cover only "
+    "the stored months — expect insufficient_data here for well over a year after launch; the rows are honest, "
+    "not broken."
+)
 DEFAULT_MIN_MONTHS = dsl.DEFAULT_MIN_MONTHS
 DEFAULT_MIN_OBS = dsl.DEFAULT_MIN_OBS
 
@@ -262,15 +293,34 @@ def _lasso(
     X: list[list[float]] = []
     month_ids: list[str] = []
     n_skipped = 0
+    # Why each row fell out, so an `insufficient_data` verdict can name
+    # the cause (a thin price store looks exactly like a broken panel
+    # from `n_obs` alone).
+    skipped_by_reason: dict[str, int] = {}
+
+    def _skip(reason: str) -> None:
+        nonlocal n_skipped
+        n_skipped += 1
+        skipped_by_reason[reason] = skipped_by_reason.get(reason, 0) + 1
+
     for obs, ctl in zip(panel["observations"], panel["controls"]):
         ew = ew_by_month.get(obs.as_of)
-        if (ew is None or obs.score is None or obs.forward_return is None
-                or obs.coverage is None or obs.coverage < min_coverage):
-            n_skipped += 1
+        if obs.forward_return is None:
+            _skip("no_forward_return")
+            continue
+        if ew is None:
+            _skip("month_not_eligible")
+            continue
+        if obs.score is None:
+            _skip("no_score")
+            continue
+        if obs.coverage is None or obs.coverage < min_coverage:
+            _skip("low_coverage")
             continue
         base = [ctl.get(k) for k in LASSO_CONTROLS]
-        if any(v is None for v in base):
-            n_skipped += 1
+        missing = [k for k, v in zip(LASSO_CONTROLS, base) if v is None]
+        if missing:
+            _skip("missing_control:" + missing[0])
             continue
         one_hot = [1.0 if ctl.get("sector") == s else 0.0 for s in sectors]
         y.append(obs.forward_return - ew)
@@ -291,7 +341,24 @@ def _lasso(
                                       min_months=min_months, min_obs=min_obs)
         out = result.to_dict()
     out["controls"] = names
+    out["controls_deferred"] = dict(LASSO_CONTROLS_DEFERRED)
     out["n_skipped_rows"] = n_skipped
+    out["n_skipped_by_reason"] = dict(sorted(skipped_by_reason.items()))
+    price_depth_limited = bool(
+        skipped_by_reason.get("no_forward_return") or skipped_by_reason.get("missing_control:momentum_12_1")
+        or skipped_by_reason.get("missing_control:reversal_1m")
+    )
+    if out.get("verdict") == dsl.VERDICT_INSUFFICIENT:
+        reasons = list(out.get("reasons") or [])
+        if skipped_by_reason:
+            reasons.append(
+                "rows dropped: " + ", ".join(f"{k}={v}" for k, v in sorted(skipped_by_reason.items()))
+            )
+        if price_depth_limited:
+            reasons.append(PRICE_DEPTH_NOTE)
+        out["reasons"] = reasons
+        out["interpretation"] = "No verdict: " + "; ".join(reasons) + "."
+    out["price_depth_limited"] = price_depth_limited
     out["outcome"] = "next-month return minus the equal-weight universe return, demeaned within month"
     out["treatment"] = "scorecard overall z at the formation month end, demeaned within month"
     out["caveats"] = list(sem.EVALUATION_CAVEATS)
@@ -339,6 +406,9 @@ def run_evaluation(
             "n_quantiles": sem.DEFAULT_N_QUANTILES, "n_panel_rows": panel["n_rows"],
             "n_missing_forward_return": panel["n_missing_return"], "price_basis": "adjusted_close when both "
             "ends carry one, else close (FMP-sourced rows are unadjusted)",
+            # The sample can only be as deep as the price store; say so
+            # next to the counts a reader will otherwise misread.
+            "price_store_depth": PRICE_DEPTH_NOTE,
         }
         results = {
             KIND_QUINTILE: (quintile, quintile.get("n_months", 0) and sum(m["n_eligible"] for m in quintile["months"])),
@@ -350,9 +420,12 @@ def run_evaluation(
         with SessionLocal() as db:
             _ensure_tables(db)
             for kind, (result, n_obs) in results.items():
+                params = dict(params_common)
+                if kind == KIND_LASSO:
+                    params["controls"] = list(LASSO_CONTROLS)
+                    params["controls_deferred"] = dict(LASSO_CONTROLS_DEFERRED)
                 row = ScorecardEvaluation(
-                    version_key=version_key, eval_kind=kind, params={**params_common, "controls": LASSO_CONTROLS}
-                    if kind == KIND_LASSO else dict(params_common), result=_jsonable(result),
+                    version_key=version_key, eval_kind=kind, params=params, result=_jsonable(result),
                     sample_start=sample_start, sample_end=sample_end, n_obs=int(n_obs or 0), run_id=run_id or "",
                     created_at=now,
                 )
@@ -416,6 +489,8 @@ __all__ = [
     "KIND_LASSO",
     "KIND_QUINTILE",
     "LASSO_CONTROLS",
+    "LASSO_CONTROLS_DEFERRED",
+    "PRICE_DEPTH_NOTE",
     "build_panel",
     "run_evaluation",
 ]
