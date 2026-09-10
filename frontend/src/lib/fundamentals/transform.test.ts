@@ -116,6 +116,18 @@ describe("observedChange", () => {
     expect(c.pct).toBeNull();
   });
 
+  it("returns a null pct when the last observed value is not positive (sign change)", () => {
+    const c = observedChange(makeSeries("X", "free_cash_flow", [1e9, 2e9, 3e9, 4e9, -2e9]).points)!;
+    expect(c.first.value).toBe(1e9);
+    expect(c.last.value).toBe(-2e9);
+    expect(c.pct).toBeNull();
+    expect(observedChange(makeSeries("X", "free_cash_flow", [1e9, null, 0]).points)!.pct).toBeNull();
+  });
+
+  it("returns a relative change when both ends are positive", () => {
+    expect(observedChange(makeSeries("X", "revenue", [100, null, 150]).points)!.pct).toBeCloseTo(0.5);
+  });
+
   it("returns null with no observed points", () => {
     expect(observedChange(makeSeries("X", "revenue", [null, null]).points)).toBeNull();
   });

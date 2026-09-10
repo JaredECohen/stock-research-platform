@@ -4,7 +4,7 @@
 // equivalent of the chart. Everything here is derived from observed points;
 // a missing point is counted and named, never described as flat or zero.
 import type { MetricSeries } from "@/types/fundamentals";
-import { formatValue, humanizeMetric } from "./format";
+import { formatValue, humanizeMetric, type FormatUnit } from "./format";
 import { observedChange, seriesId, statusCounts } from "./transform";
 import type { PanelSpec } from "./layout";
 
@@ -23,17 +23,38 @@ export function seriesName(s: { ticker: string; metric: string }, labels?: Recor
   return `${s.ticker} ${metricLabel(s.metric, labels)}`;
 }
 
-/** "rose 42%", "fell 12%", "moved from -$1.2B to $3.4B", or "has no observed
- *  points". Uses the drawn unit so an indexed panel reads in index points. */
-export function describeChange(s: MetricSeries, unit: "index" | MetricSeries["unit_type"] = s.unit_type): string {
+/** Units whose change is described in the unit itself rather than as a
+ *  relative percentage: "gross margin rose 21%" for 38.2% → 46.2% is heard
+ *  as a 21-point rise, so percent series report percentage points, and
+ *  ratios/multiples report the plain difference. `flat` is half of the
+ *  displayed precision, so a change that would print as "0.0 points" is
+ *  called flat rather than a rise. */
+const ABSOLUTE_CHANGE: Partial<Record<FormatUnit, { flat: number; delta: (d: number) => string }>> = {
+  percent: { flat: 0.0005, delta: (d) => `${(Math.abs(d) * 100).toFixed(1)} points` },
+  ratio: { flat: 0.005, delta: (d) => Math.abs(d).toFixed(2) },
+  multiple: { flat: 0.05, delta: (d) => `${Math.abs(d).toFixed(1)}x` },
+};
+
+/** "rose 42% from FY2020 to FY2024" (currency, count, index), "rose 8.0
+ *  points from 38.2% (FY2020) to 46.2% (FY2024)" (percent), "fell 1.2x from
+ *  14.0x (FY2020) to 12.8x (FY2024)" (multiple), "moved from -$1.2B to $3.4B"
+ *  when a relative change is undefined (sign change or non-positive start),
+ *  or "has no observed points". Uses the drawn unit so an indexed panel
+ *  reads in index points. */
+export function describeChange(s: MetricSeries, unit: FormatUnit = s.unit_type): string {
   const change = observedChange(s.points);
   if (!change) return "has no observed points";
   const { first, last, pct } = change;
-  if (first.period === last.period) return `has one observed point (${formatValue(first.value, unit, { currency: s.currency })} in ${first.period})`;
+  const fmt = (v: number) => formatValue(v, unit, { currency: s.currency });
+  if (first.period === last.period) return `has one observed point (${fmt(first.value)} in ${first.period})`;
+  const absolute = ABSOLUTE_CHANGE[unit];
+  if (absolute) {
+    const delta = last.value - first.value;
+    if (Math.abs(delta) < absolute.flat) return `was flat from ${first.period} to ${last.period}`;
+    return `${delta > 0 ? "rose" : "fell"} ${absolute.delta(delta)} from ${fmt(first.value)} (${first.period}) to ${fmt(last.value)} (${last.period})`;
+  }
   if (pct === null) {
-    const from = formatValue(first.value, unit, { currency: s.currency });
-    const to = formatValue(last.value, unit, { currency: s.currency });
-    return `moved from ${from} (${first.period}) to ${to} (${last.period})`;
+    return `moved from ${fmt(first.value)} (${first.period}) to ${fmt(last.value)} (${last.period})`;
   }
   const abs = Math.abs(pct * 100);
   const word = pct > 0.0005 ? "rose" : pct < -0.0005 ? "fell" : "was flat";

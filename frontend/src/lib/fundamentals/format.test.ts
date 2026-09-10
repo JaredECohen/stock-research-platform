@@ -18,11 +18,11 @@ import type { MissingReason } from "@/types/fundamentals";
 
 describe("formatValue by unit", () => {
   const cases: Array<[number, Parameters<typeof formatValue>[1], string, string | null]> = [
-    [274.5e9, "currency", "$274.5B", null],
-    [1.5e12, "currency", "$1.50T", null],
-    [12.34e6, "currency", "$12.3M", null],
-    [999, "currency", "$999", null],
-    [-1.2e9, "currency", "-$1.2B", null],
+    [274.5e9, "currency", "$274.5B", "USD"],
+    [1.5e12, "currency", "$1.50T", "USD"],
+    [12.34e6, "currency", "$12.3M", "USD"],
+    [999, "currency", "$999", "USD"],
+    [-1.2e9, "currency", "-$1.2B", "USD"],
     [1.2e9, "currency", "€1.2B", "EUR"],
     [1.2e9, "currency", "SEK 1.2B", "SEK"],
     [1.2e9, "currency", "CHF 1.2B", "CHF"],
@@ -38,6 +38,18 @@ describe("formatValue by unit", () => {
       expect(formatValue(v, unit, { currency })).toBe(expected);
     });
   }
+
+  it("never assumes USD: an unknown reporting currency prints no symbol", () => {
+    // The backend may omit `currency`; a EUR reporter must not be shown in
+    // dollars. The header/axis says "currency" so the bare number is honest.
+    expect(formatValue(1.2e9, "currency", { currency: null })).toBe("1.2B");
+    expect(formatValue(1.2e9, "currency")).toBe("1.2B");
+    expect(formatValue(-3.5e6, "currency", { currency: undefined })).toBe("-3.5M");
+    expect(formatCurrency(999)).toBe("999");
+    expect(axisTickFormatter("currency")(250e9)).toBe("250B");
+    expect(axisTickFormatter("currency", null)(-3e9)).toBe("-3B");
+    expect(unitLabel("currency", null)).toBe("currency");
+  });
 
   it("never renders a missing value as zero — always n/a with the reason", () => {
     expect(formatValue(null, "currency", { reason: "no_price" })).toBe("n/a (no price at period end)");
@@ -72,7 +84,9 @@ describe("individual formatters", () => {
   it("axis ticks are terser than cell values", () => {
     expect(axisTickFormatter("currency", "USD")(250e9)).toBe("$250B");
     expect(axisTickFormatter("currency", "EUR")(-3e9)).toBe("-€3B");
-    expect(axisTickFormatter("percent")(0.4)).toBe("40%");
+    // Plan §6.4 rule 7: percent axes carry one decimal.
+    expect(axisTickFormatter("percent")(0.4)).toBe("40.0%");
+    expect(axisTickFormatter("percent")(0.4625)).toBe("46.3%");
     expect(axisTickFormatter("multiple")(12.6)).toBe("13x");
     expect(axisTickFormatter("count")(16e9)).toBe("16B");
     expect(axisTickFormatter("index")(142.4)).toBe("142");

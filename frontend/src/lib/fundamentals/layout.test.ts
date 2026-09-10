@@ -96,6 +96,17 @@ describe("computeLayout — currency mismatch", () => {
     expect(out.panels.map((p) => p.id)).toEqual(["revenue:AAPL", "revenue:SAP", "gross_margin"]);
   });
 
+  it("keeps mixed currencies in one indexed panel and says the view compares trajectories", () => {
+    // Indexing is unit-less, so the per-company warning would misdescribe
+    // what is on screen.
+    const out = computeLayout([rev("AAPL"), rev("SAP", 1, { currency: "EUR" })], { view: "indexed", metricLabels: METRIC_LABELS });
+    expect(out.resolved).toBe("indexed");
+    expect(out.panels.map((p) => p.id)).toEqual(["indexed"]);
+    expect(out.warnings).toEqual([
+      "Currencies differ (USD, EUR); the indexed view compares trajectories in each company's reporting currency, not magnitudes, and no FX conversion is attempted.",
+    ]);
+  });
+
   it("treats an unknown currency as not comparable-mismatched (no split)", () => {
     const out = computeLayout([rev("AAPL"), rev("XYZ", 1, { currency: null })], { view: "auto" });
     expect(out.resolved).toBe("shared");

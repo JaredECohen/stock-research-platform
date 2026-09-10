@@ -49,8 +49,13 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
   TWD: "NT$",
 };
 
+/** Symbol or ISO-code prefix for a known currency; an empty string when the
+ *  reporting currency is unknown. USD is never assumed: a series without a
+ *  `currency` may be a EUR or JPY reporter, and printing "$" would put a
+ *  wrong unit in front of the reader (and the screen reader). The axis and
+ *  table header say "currency" in that case, so the number stays honest. */
 export function currencySymbol(currency?: string | null): string {
-  if (!currency) return "$";
+  if (!currency) return "";
   const code = currency.toUpperCase();
   return CURRENCY_SYMBOLS[code] ?? `${code} `;
 }
@@ -144,7 +149,9 @@ export function axisTickFormatter(unit: FormatUnit, currency?: string | null): (
     case "currency":
       return (v) => (isNum(v) ? `${v < 0 ? "-" : ""}${currencySymbol(currency)}${compactMagnitude(v, { digits: 0 })}` : "");
     case "percent":
-      return (v) => (isNum(v) ? `${(v * 100).toFixed(0)}%` : "");
+      // Plan §6.4 rule 7: a percent axis is labelled with 1 decimal, since
+      // margin series often move by tenths of a point between ticks.
+      return (v) => (isNum(v) ? `${(v * 100).toFixed(1)}%` : "");
     case "multiple":
       return (v) => (isNum(v) ? `${v.toFixed(0)}x` : "");
     case "count":

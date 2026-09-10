@@ -152,9 +152,6 @@ export function computeLayout(input: MetricSeries[], opts: LayoutOptions): Layou
   const unitGroups = uniq(metrics.map((m) => drawable.find((s) => s.metric === m)!.unit_type));
   const currencies = currenciesOf(drawable);
   const currencyMismatch = currencies.length > 1;
-  if (currencyMismatch) {
-    warnings.push(`Currencies differ (${currencies.join(", ")}); currency series are shown per company and no FX conversion is attempted.`);
-  }
 
   // --- availability -------------------------------------------------------
   const dualReason = (() => {
@@ -248,6 +245,17 @@ export function computeLayout(input: MetricSeries[], opts: LayoutOptions): Layou
   } else {
     mode = "small-multiples";
     panels = smallMultiplePanels(drawable, metrics, labels);
+  }
+
+  // --- warnings -----------------------------------------------------------
+  if (currencyMismatch) {
+    // The indexed view is unit-less, so mixed currencies share one panel
+    // there; the warning must say what the reader is actually looking at.
+    warnings.push(
+      mode === "indexed"
+        ? `Currencies differ (${currencies.join(", ")}); the indexed view compares trajectories in each company's reporting currency, not magnitudes, and no FX conversion is attempted.`
+        : `Currencies differ (${currencies.join(", ")}); currency series are shown per company and no FX conversion is attempted.`,
+    );
   }
 
   // --- suggestion (rule 5) -----------------------------------------------

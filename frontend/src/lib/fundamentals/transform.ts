@@ -180,11 +180,13 @@ export function latestValueRatio(series: MetricSeries[]): number | null {
 }
 
 /** Percentage change from the first to the last observed point, or null
- *  when the first is not positive (a ratio across ≤ 0 is undefined). */
+ *  unless both are positive: a ratio across ≤ 0 is undefined, and a series
+ *  that crosses zero ("fell 300%") reads as nonsense, so callers describe
+ *  those as "moved from X to Y" instead. */
 export function observedChange(points: MetricPoint[]): { first: MetricPoint & { value: number }; last: MetricPoint & { value: number }; pct: number | null } | null {
   const first = firstObserved(points);
   const last = lastObserved(points);
   if (!first || !last) return null;
-  const pct = first.value > 0 ? last.value / first.value - 1 : null;
+  const pct = first.value > 0 && last.value > 0 ? last.value / first.value - 1 : null;
   return { first, last, pct };
 }
