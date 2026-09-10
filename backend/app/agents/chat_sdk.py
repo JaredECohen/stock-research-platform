@@ -276,6 +276,30 @@ def _build_chat_agent() -> Any | None:
                 "rows": [r.model_dump() for r in result.rows],
             }
 
+        @function_tool
+        def get_industry_context(
+            tickers: list[str] | None = None, code: str | None = None,
+        ) -> dict[str, Any]:
+            """Return the stored weekly Industry Analysis context for the
+            GICS industry group(s) of `tickers` (a single name or a whole
+            portfolio — the tool takes a list) and/or an explicit 4-digit
+            industry-group `code`: each group's row from the latest
+            cross-industry snapshot (1W/1M/YTD equal-weight returns,
+            relative-to-universe, breadth, valuation median, regime label,
+            sample size) and a short excerpt of its latest published
+            report (analyst view, what changed, whether the edition was
+            degraded), plus the dependency-linked groups. Reads stored
+            artifacts only — never generates a report or fetches prices.
+            Use for "how is the industry doing", "what's my portfolio's
+            industry exposure", or cross-industry market-colour questions.
+            Returns `status: taxonomy_not_imported` or `snapshot: {status:
+            no_snapshot}` when nothing has been published yet."""
+            from .pm_context import industry_context_payload
+            try:
+                return industry_context_payload(tickers=list(tickers or []), code=code)
+            except Exception as exc:
+                return {"error": f"industry context unavailable: {type(exc).__name__}"}
+
         # Wave 10 — specialists as live tools. Each `ask_*` re-fires the
         # corresponding specialist with the user's question routed
         # through the existing `prior_round_critique` channel. Bounded
@@ -447,6 +471,11 @@ def _build_chat_agent() -> Any | None:
                 "    rule-based filter on raw metrics. Use when the "
                 "    user gives numeric thresholds ('gross margin > "
                 "    70% and P/E < 25').\n"
+                "  • `get_industry_context(tickers?, code?)` — stored "
+                "    weekly industry-group statistics, regime reads and "
+                "    report excerpts for one name, a portfolio (pass the "
+                "    list) or an explicit group code. Observed data; "
+                "    treat analyst views as scenarios.\n"
                 "Live specialist follow-ups (use sparingly — ~$0.05 "
                 "each, max 2 per turn):\n"
                 "  • `ask_sector(ticker, question)` — re-fire the "
@@ -485,6 +514,7 @@ def _build_chat_agent() -> Any | None:
             tools=[
                 get_memo, get_dcf_summary, get_comps, get_macro_snapshot,
                 get_company_lite, list_universe, screener_query, custom_screen,
+                get_industry_context,
                 ask_sector, ask_earnings, ask_filings, ask_valuation, ask_macro,
             ],
         )

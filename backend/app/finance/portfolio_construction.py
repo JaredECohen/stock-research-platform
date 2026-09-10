@@ -8,8 +8,69 @@ solver needed for a self-contained demo.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
+from typing import Any
 
 from ..schemas import ModelPortfolio, PortfolioHolding, PortfolioRequest
+
+# FEAT-003 — classification states that place a holding in an industry
+# group. A `fallback` row knows only its sector, so it is reported as
+# unmapped here rather than inflating a group's weight.
+_GROUP_STATES = frozenset({"mapped", "conflict"})
+
+
+def industry_group_exposure(
+    holdings: list[PortfolioHolding],
+    classifications: Mapping[str, Mapping[str, Any]],
+    group_names: Mapping[str, str],
+) -> dict[str, Any]:
+    """Portfolio weight by GICS industry group, from stored classifications.
+
+    Pure arithmetic: ``classifications`` is ``{ticker: row_dict}`` from
+    ``industry_classification.current_for`` and ``group_names`` maps a
+    4-digit code to its name. A holding without a group-level mapping is
+    listed under ``unmapped`` with its state and weight — the mapped
+    weight and the unmapped weight always add up to the portfolio's
+    total, so nothing is silently dropped or booked to a neutral bucket.
+    """
+    by_group: dict[str, dict[str, Any]] = {}
+    unmapped: list[dict[str, Any]] = []
+    mapped_weight = 0.0
+    unmapped_weight = 0.0
+    for h in holdings:
+        ticker = (h.ticker or "").upper()
+        row = classifications.get(ticker)
+        code = row.get("industry_group_code") if row else None
+        state = str(row.get("state")) if row else "unclassified"
+        weight = float(h.weight or 0.0)
+        if code and state in _GROUP_STATES:
+            entry = by_group.setdefault(str(code), {
+                "code": str(code),
+                "name": group_names.get(str(code)),
+                "sector_code": str(code)[:2],
+                "weight": 0.0,
+                "tickers": [],
+            })
+            entry["weight"] += weight
+            entry["tickers"].append(ticker)
+            mapped_weight += weight
+        else:
+            unmapped.append({"ticker": ticker, "weight": round(weight, 4), "state": state})
+            unmapped_weight += weight
+    groups = sorted(by_group.values(), key=lambda g: (-g["weight"], g["code"]))
+    for g in groups:
+        g["weight"] = round(g["weight"], 4)
+        g["tickers"] = sorted(g["tickers"])
+    largest = groups[0] if groups else None
+    return {
+        "by_group": groups,
+        "unmapped": sorted(unmapped, key=lambda u: (-u["weight"], u["ticker"])),
+        "n_groups": len(groups),
+        "mapped_weight": round(mapped_weight, 4),
+        "unmapped_weight": round(unmapped_weight, 4),
+        "largest": {"code": largest["code"], "name": largest["name"], "weight": largest["weight"]} if largest else None,
+        "weighting": "portfolio weight summed per group; equal to the holdings' weights, not market-cap weighted",
+    }
 
 SCENARIO_KEYWORDS: dict[str, dict[str, float]] = {
     "soft_landing": {
