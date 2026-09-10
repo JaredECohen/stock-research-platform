@@ -21,6 +21,8 @@ from .api import (
     routes_comps,
     routes_data_catalog,
     routes_dcf,
+    routes_fundamentals,
+    routes_fundamentals_commentary,
     routes_health,
     routes_macro,
     routes_portfolio,
@@ -166,6 +168,12 @@ def create_app() -> FastAPI:
     app.include_router(routes_account.router, tags=["account"])
     app.include_router(routes_public.router, tags=["public"])
     app.include_router(routes_billing.router, tags=["billing"])
+    # FEAT-001: catalog + series (S2) and commentary (S3 fills the stub).
+    # One flag mounts both, so ENABLE_FUNDAMENTALS_EXPLORER=false is the
+    # whole rollback: the page sees 404s and nothing else changes.
+    if settings.enable_fundamentals_explorer:
+        app.include_router(routes_fundamentals.router, tags=["fundamentals"])
+        app.include_router(routes_fundamentals_commentary.router, tags=["fundamentals"])
 
     @app.on_event("startup")
     def _startup() -> None:

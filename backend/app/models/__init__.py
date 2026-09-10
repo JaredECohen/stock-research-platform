@@ -39,6 +39,7 @@ from .documents import (
     FinancialPeriod,
     ProviderCache,
 )
+from .fundamentals import ChartCommentary
 from .jobs import CatalystEvent, CronLoopRun, RegenJob, ThemeExposure
 from .memo import (
     MemoOutcome,
@@ -96,4 +97,6 @@ __all__ = [
     "CatalystEvent",
     "RegenJob",
     "CronLoopRun",
+    # fundamentals (FEAT-001)
+    "ChartCommentary",
 ]

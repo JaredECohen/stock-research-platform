@@ -33,6 +33,25 @@ FOLLOWS_MEMO = "follows_memo"
 
 
 @dataclass(frozen=True)
+class Shape:
+    """Request-shape ceiling for a chart feature (FEAT-001): how many
+    companies × metrics one request may draw and how many fiscal years
+    back it may reach. `max_years=None` is the full stored history. Kept
+    on the feature rather than in the route so the pricing page renders
+    the same numbers the route clamps to."""
+    max_companies: int
+    max_metrics: int
+    max_years: int | None
+
+    def as_dict(self) -> dict[str, int | None]:
+        return {
+            "max_companies": self.max_companies,
+            "max_metrics": self.max_metrics,
+            "max_years": self.max_years,
+        }
+
+
+@dataclass(frozen=True)
 class Feature:
     name: str
     description: str
@@ -48,6 +67,9 @@ class Feature:
     # Charge once per (user, resource, month) rather than per call.
     distinct_resources: bool = False
     period: str = "month"
+    # Per-plan request shape for chart features; None = no shape limit.
+    shape_free: Shape | None = None
+    shape_pro: Shape | None = None
 
 
 FEATURES: dict[str, Feature] = {
@@ -64,13 +86,23 @@ FEATURES: dict[str, Feature] = {
             "pm_chat", "Ask-the-PM chat turn (also macro analysis and the NL screener)",
             free=10, pro=300, metered=True, cost_bearing=True, max_concurrent=2,
         ),
+        # FEAT-001. Commentary is one cheap-route LLM call per request:
+        # metered per month, at most two in flight per user (DEVPLAN
+        # "lightweight LLM actions"), released when the call yields
+        # nothing so a degraded answer is free.
         Feature(
-            "chart_commentary", "AI commentary on a chart (reserved for FEAT-001)",
-            free=5, pro=100, metered=True, cost_bearing=True,
+            "chart_commentary", "AI commentary on a fundamentals chart",
+            free=5, pro=100, metered=True, cost_bearing=True, max_concurrent=2,
         ),
+        # The explorer itself is DB reads: allowed on every plan, and the
+        # plan only shapes the request (DEVPLAN: Free 2 companies × 2
+        # metrics × 5 years; Pro 5 × 4 × the full stored history). With
+        # the login wall off the anonymous visitor gets the Pro shape.
         Feature(
-            "fundamentals_explorer", "Fundamentals explorer (reserved for FEAT-001)",
+            "fundamentals_explorer", "Fundamentals explorer (historical statements and ratios)",
             free=True, pro=True,
+            shape_free=Shape(max_companies=2, max_metrics=2, max_years=5),
+            shape_pro=Shape(max_companies=5, max_metrics=4, max_years=None),
         ),
         Feature(
             "dcf", "DCF model on a ticker",
@@ -171,11 +203,27 @@ def allowance(name: str, plan: str) -> Resolved:
     return Resolved(allowed=False, limit=0)
 
 
+def shape(name: str, plan: str) -> Shape:
+    """The request shape `plan` may ask of feature `name`.
+
+    Free is the only plan with the smaller shape; every other plan value
+    — `pro`, and the `unrestricted` plan `authorize()` reports while the
+    login wall is off — gets the Pro shape, which is the owner decision
+    for anonymous visitors. Raises `ValueError` for a feature that has
+    no shape: a route asking for one is a wiring bug, not a request to
+    wave through.
+    """
+    feat = get(name)
+    if feat.shape_free is None or feat.shape_pro is None:
+        raise ValueError(f"feature {name!r} has no request shape")
+    return feat.shape_free if plan == "free" else feat.shape_pro
+
+
 def registry_for_config() -> dict[str, dict[str, Any]]:
     """The matrix as the pricing page needs it (JSON-safe)."""
     out: dict[str, dict[str, Any]] = {}
     for name, feat in FEATURES.items():
-        out[name] = {
+        entry: dict[str, Any] = {
             "description": feat.description,
             "free": raw_allowance(name, "free"),
             "pro": raw_allowance(name, "pro"),
@@ -183,4 +231,7 @@ def registry_for_config() -> dict[str, dict[str, Any]]:
             "period": feat.period,
             "distinct_resources": feat.distinct_resources,
         }
+        if feat.shape_free is not None and feat.shape_pro is not None:
+            entry["shape"] = {"free": feat.shape_free.as_dict(), "pro": feat.shape_pro.as_dict()}
+        out[name] = entry
     return out

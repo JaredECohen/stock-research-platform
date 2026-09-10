@@ -186,3 +186,49 @@ def test_feat_002_columns_are_all_nullable_or_defaulted():
         for name in names:
             col = model.__table__.columns[name]
             assert col.nullable or col.default is not None or col.server_default is not None, f"{model.__tablename__}.{name}"
+
+
+# ---------------------------------------------------------------------------
+# FEAT-001 — the chart-commentary cache table
+# ---------------------------------------------------------------------------
+
+def test_feat_001_chart_commentaries_is_created():
+    init_db()
+    assert "chart_commentaries" in set(sa_inspect(engine).get_table_names())
+    have = _columns("chart_commentaries")
+    assert {"cache_key", "fingerprint", "user_id", "output", "degraded", "degraded_reason", "created_at"} <= have
+
+
+# The row's identity, set on every insert and created with the table —
+# the same standing as `users.external_id`. Everything else must be
+# addable to a live table later by `reconcile_missing_columns`, the only
+# migration path this repo has.
+_CHART_COMMENTARY_IDENTITY = {"id", "cache_key", "fingerprint"}
+
+
+def test_feat_001_chart_commentaries_columns_are_all_nullable_or_defaulted():
+    from app.models import ChartCommentary
+    names = {c.name for c in ChartCommentary.__table__.columns}
+    assert _CHART_COMMENTARY_IDENTITY <= names
+    for col in ChartCommentary.__table__.columns:
+        if col.name in _CHART_COMMENTARY_IDENTITY:
+            continue
+        assert col.nullable or col.default is not None or col.server_default is not None, col.name
+
+
+def test_feat_001_chart_commentaries_columns_are_repaired_on_a_live_table():
+    """The production scenario once the table exists: a column added
+    later must be restored, with its index, by the boot-time reconcile."""
+    init_db()
+    assert "degraded_reason" in _columns("chart_commentaries")
+    _drop_column("chart_commentaries", "user_id", "ix_chart_commentaries_user_id")
+    assert "user_id" not in _columns("chart_commentaries"), "setup failed"
+
+    added = reconcile_missing_columns()
+    assert "chart_commentaries.user_id" in added
+    assert "user_id" in _columns("chart_commentaries")
+    indexed = {
+        col for idx in sa_inspect(engine).get_indexes("chart_commentaries")
+        for col in (idx.get("column_names") or [])
+    }
+    assert {"user_id", "fingerprint", "cache_key"} <= indexed

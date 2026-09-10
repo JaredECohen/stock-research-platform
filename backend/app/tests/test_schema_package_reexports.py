@@ -57,6 +57,11 @@ SCHEMA_NAMES = [
     # FEAT-002 (additive, `schemas/accounts.py`).
     "StructuredError", "EntitlementOut", "PlanStateOut", "UserOut", "BillingOut",
     "AccountOut", "BootstrapOut", "UsageHistoryItem", "UsageOut", "PublicConfigOut",
+    # FEAT-001 (additive, `schemas/fundamentals.py`).
+    "MetricSpecOut", "CatalogOut", "SeriesRequest", "SeriesPoint", "SeriesCoverage",
+    "SeriesProvenance", "MetricSeries", "AppliedLimits", "SeriesLimits", "UnavailableTicker",
+    "SeriesResponse", "CommentaryRequest", "CommentaryRef", "ObservedItem", "MemoViewItem",
+    "CommentaryOut",
 ]
 
 # `typing.Literal` aliases are not classes and carry no `__module__`.
@@ -75,6 +80,8 @@ MODEL_NAMES = [
     "User", "Subscription", "UsageCounter", "UsageEvent", "AdminOverride",
     "BillingWebhookEvent", "RateLimitWindow", "ActiveAction",
     "PublicSample", "AnalyticsEvent",
+    # FEAT-001 (`models/fundamentals.py`).
+    "ChartCommentary",
 ]
 
 # Frozen at the split. `research_snapshots` / `cache_cost_logs` live in
@@ -92,15 +99,17 @@ TABLE_NAMES = sorted([
     "users", "subscriptions", "usage_counters", "usage_events", "admin_overrides",
     "billing_webhook_events", "rate_limit_windows", "active_actions",
     "public_samples", "analytics_events",
+    # FEAT-001 (`models/fundamentals.py`).
+    "chart_commentaries",
 ])
 
 SCHEMA_SUBMODULES = [
     "common", "agents", "dcf", "comps", "macro", "portfolio", "screener",
-    "memo", "chat", "accounts",
+    "memo", "chat", "accounts", "fundamentals",
 ]
 MODEL_SUBMODULES = [
     "universe", "documents", "memo", "dcf", "portfolio", "telemetry", "jobs",
-    "accounts", "public",
+    "accounts", "public", "fundamentals",
 ]
 
 # sha256 of `StockMemoOut.model_json_schema()` (sorted keys, compact

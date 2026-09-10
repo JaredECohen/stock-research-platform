@@ -293,6 +293,24 @@ class Settings(BaseSettings):
     # behind any proxy (every caller then looks like the proxy).
     trusted_proxy_hops: int = 1
 
+    # ------------------------------------------------------------------
+    # FEAT-001 — Fundamentals Explorer.
+    # ------------------------------------------------------------------
+    # `enable_fundamentals_explorer` is the rollback switch: off, and
+    # `main.create_app` mounts neither fundamentals router, so the page
+    # sees 404s and nothing else changes. `fundamentals_anon_commentary`
+    # governs the commentary endpoint while the login wall is OFF: the
+    # default (False) answers an anonymous visitor with the deterministic
+    # degraded shape — no LLM call, nothing charged — because DEVPLAN's
+    # logged-out surface has no commentary generation and a spoofable
+    # session header is not a meter. Under AUTH_ENABLED the flag is moot:
+    # the `chart_commentary` feature meters signed-in users.
+    # `fundamentals_commentary_model` pins the commentary model; empty
+    # means the cheap route's provider default.
+    enable_fundamentals_explorer: bool = True
+    fundamentals_anon_commentary: bool = False
+    fundamentals_commentary_model: str = ""
+
     @property
     def auth_configured(self) -> bool:
         """Enough Clerk config to verify a token at all."""

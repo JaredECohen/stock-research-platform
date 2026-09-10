@@ -68,11 +68,9 @@ from .dcf import (
     SensitivityCell,
 )
 
-# FEAT-001 (`schemas/fundamentals.py`). Importable as `from app.schemas
-# import SeriesResponse` like every other schema, but deliberately NOT in
-# `__all__` yet: `test_schema_package_reexports` pins `__all__` to a
-# frozen name list that this slice does not own. Add these names there
-# and to `__all__` in the same commit.
+# FEAT-001 (`schemas/fundamentals.py`): the catalog, series and
+# commentary contracts. Pinned in `test_schema_package_reexports`
+# alongside everything else here.
 from .fundamentals import (
     AppliedLimits,
     CatalogOut,
@@ -190,4 +188,21 @@ __all__ = [
     "UsageHistoryItem",
     "UsageOut",
     "PublicConfigOut",
+    # fundamentals (FEAT-001)
+    "MetricSpecOut",
+    "CatalogOut",
+    "SeriesRequest",
+    "SeriesPoint",
+    "SeriesCoverage",
+    "SeriesProvenance",
+    "MetricSeries",
+    "AppliedLimits",
+    "SeriesLimits",
+    "UnavailableTicker",
+    "SeriesResponse",
+    "CommentaryRequest",
+    "CommentaryRef",
+    "ObservedItem",
+    "MemoViewItem",
+    "CommentaryOut",
 ]
