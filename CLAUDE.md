@@ -57,7 +57,7 @@ Two Render services share one Docker image, differing only by entrypoint:
 - **web** (`marketmosaic`) — uvicorn. Serves the API and the built frontend.
 - **worker** (`marketmosaic-worker`) — `python -m app.worker`. Owns the memo-regen
   queue and every monitoring loop in `app/monitoring/__init__.py::KNOWN_LOOPS`
-  (17 as of FEAT-002 S4; `test_worker_service` pins the count to that tuple).
+  (18 as of Phase 6 `scorecard_loop`; `test_worker_service` pins the count to that tuple).
 
 They coordinate only through Postgres. Keep `ENABLE_MONITORING` and
 `ENABLE_REGEN_WORKER` **false** on web and **true** on the worker; flipping either
