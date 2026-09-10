@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     use_agents_sdk: bool = False
     # Phase 5: always-on monitoring loops (EDGAR, news, social, macro). Default
     # off in dev/test; flip on in prod via env.
+    # Render injects RENDER_GIT_COMMIT into every service; surfacing it on
+    # /health makes a deploy verifiable from outside (the deploy-visible canary).
+    render_git_commit: str = ""
     enable_monitoring: bool = False
     # Theme 5: DB-backed memo-regen queue. The worker thread that drains
     # `regen_jobs` starts with the app; disable to run an API-only

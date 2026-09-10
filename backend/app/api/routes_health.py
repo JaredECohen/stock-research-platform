@@ -113,6 +113,8 @@ def health() -> dict:
         "mode": get_data_service().mode(),
         "llm_configured": settings.has_llm,
         "llm_provider": settings.active_llm_provider,
+        # The deploy-visible canary: Render's RENDER_GIT_COMMIT, null outside Render.
+        "build": {"git_commit": settings.render_git_commit or None},
     }
 
 
