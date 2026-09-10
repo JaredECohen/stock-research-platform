@@ -44,6 +44,16 @@ describe("ScorecardEvaluation", () => {
     expect(lasso).toHaveTextContent("30 · 14");
   });
 
+  it("points each card at the list above when the page rendered the caveats first", () => {
+    render(<ScorecardEvaluation evaluation={makeEvaluation()} caveatsRenderedAbove width={640} />);
+    for (const kind of ["quintile_ls", "ff6_regression", "double_lasso"]) {
+      const el = screen.getByTestId(`caveats-${kind}`);
+      expect(el).toHaveAttribute("data-rendered-above", "true");
+      expect(el).toHaveTextContent("listed above, verbatim");
+      expect(within(el).queryAllByRole("listitem")).toHaveLength(0);
+    }
+  });
+
   it("renders the caveats verbatim on every card", () => {
     render(<ScorecardEvaluation evaluation={makeEvaluation()} {...SIZE} />);
     const q = within(screen.getByTestId("caveats-quintile_ls")).getAllByRole("listitem");

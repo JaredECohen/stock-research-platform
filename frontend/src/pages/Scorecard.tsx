@@ -248,38 +248,36 @@ function Minimums({ evaluation }: { evaluation: ScorecardEvaluationResponse }) {
 
 /**
  * The response carries the caveats once at the top level and the worker
- * writes the same sentences on every result, which the evaluation
- * component renders per card. Printing the list a fourth time above the
- * cards adds nothing, so the page-level block shows only what no card
- * carries — every caveat when nothing has run yet, otherwise the ones a
- * result somehow lacks — and points at the cards the rest of the time.
- * Nothing is paraphrased and nothing is hidden: a sentence is either on
- * a card verbatim or in this block verbatim.
+ * writes the same sentences on every result. The page prints the
+ * response's list once, verbatim, and — when that list covers every
+ * card's caveats — the cards point up instead of repeating it. A card
+ * carrying a sentence the response lacks keeps its own verbatim list, so
+ * nothing is paraphrased and nothing is hidden.
  */
+function caveatsCoverCards(evaluation: ScorecardEvaluationResponse): boolean {
+  const top = new Set(evaluation.caveats ?? []);
+  if (top.size === 0) return false;
+  return evaluation.evaluations.every((r) => (r.result.caveats ?? []).every((c) => top.has(c)));
+}
+
 function ResponseCaveats({ evaluation }: { evaluation: ScorecardEvaluationResponse }) {
-  const rows = evaluation.evaluations;
   const caveats = evaluation.caveats ?? [];
-  const onCards = new Set(rows.flatMap((r) => r.result.caveats ?? []));
-  const uncovered = rows.length === 0 ? caveats : caveats.filter((c) => !onCards.has(c));
-  if (uncovered.length > 0) {
-    return (
-      <div className="card-tight text-xs" data-testid="evaluation-caveats">
-        <div className="text-slate-400 uppercase tracking-widest text-[10px] mb-1">
-          Caveats (verbatim from the evaluation{rows.length > 0 ? "; not carried by any card below" : ""})
-        </div>
-        <ul className="list-disc pl-4 text-slate-300 space-y-0.5">
-          {uncovered.map((c) => (
-            <li key={c}>{c}</li>
-          ))}
-        </ul>
-      </div>
-    );
-  }
   if (caveats.length === 0) return null;
+  const covers = caveatsCoverCards(evaluation);
   return (
-    <p className="text-xs text-slate-500" data-testid="evaluation-caveats-pointer">
-      Each card below carries the evaluation&apos;s {caveats.length} caveat{caveats.length === 1 ? "" : "s"} verbatim.
-    </p>
+    <div className="card-tight text-xs" data-testid="evaluation-caveats" data-covers-cards={covers ? "true" : "false"}>
+      <div className="text-slate-400 uppercase tracking-widest text-[10px] mb-1">Caveats (verbatim from the evaluation)</div>
+      <ul className="list-disc pl-4 text-slate-300 space-y-0.5">
+        {caveats.map((c) => (
+          <li key={c}>{c}</li>
+        ))}
+      </ul>
+      {!covers && evaluation.evaluations.length > 0 ? (
+        <p className="mt-1 text-slate-500" data-testid="evaluation-caveats-more">
+          A card below carries a caveat this list does not; each card keeps its own verbatim list.
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -660,7 +658,7 @@ export default function Scorecard() {
                   </p>
                 )}
                 <ResponseCaveats evaluation={evaluation.data} />
-                <ScorecardEvaluation evaluation={evaluation.data} />
+                <ScorecardEvaluation evaluation={evaluation.data} caveatsRenderedAbove={caveatsCoverCards(evaluation.data)} />
               </>
             ) : (
               <ResourceState res={evaluation} onRetry={reloadEvaluation} missing={<ScorecardEvaluation evaluation={null} />} />

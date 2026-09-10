@@ -281,7 +281,7 @@ export function makeUniverse(extra = 21, over: Partial<ScorecardUniverse> = {}):
       category_score: { ...makeUniverseRow().category_score, leverage: null, efficiency: null },
     }),
     makeUniverseRow({
-      rank: null,
+      rank: 8, // positional: universe_table ranks every row, unscored names last
       ticker: "NEWCO",
       company_name: "Newly Listed Co",
       sector: "Technology",
@@ -339,7 +339,7 @@ export function makeSpec(over: Partial<ScorecardSpec> = {}): ScorecardSpec {
         ],
       },
     ],
-    normalization: { winsor_pct: 2.5, sector_neutral: true, min_sector_n: 5, clip_z: 3 },
+    normalization: { winsor_pct: 0.025, sector_neutral: true, min_sector_n: 5, clip_z: 3 },
     ...over,
   };
 }

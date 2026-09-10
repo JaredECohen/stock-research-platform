@@ -33,7 +33,9 @@ const NUMERIC_DEFAULT_DESC: SortKey[] = ["overall_score", "universe_percentile",
 function valueOf(row: ScorecardUniverseRow, key: SortKey): number | string | null {
   switch (key) {
     case "rank":
-      return isNum(row.rank) ? row.rank : null;
+      // The wire rank is positional for every row (unscored names last), so
+      // an unscored name has no rank worth sorting or showing.
+      return isNum(row.rank) && isNum(row.overall_score) ? row.rank : null;
     case "ticker":
       return row.ticker;
     case "sector":
@@ -207,8 +209,8 @@ export default function ScorecardUniverseTable({ universe, onSelect, exportHref,
               const noContributor = unscored ? "overall not scored" : "none listed";
               return (
                 <tr key={r.ticker} className="border-t border-ink-700/60 table-row-hover" data-testid={`row-${r.ticker}`} data-ticker={r.ticker} data-unscored={unscored ? "true" : undefined}>
-                  <td className="px-2 py-1 text-right font-mono text-slate-400 whitespace-nowrap" data-missing={isNum(r.rank) ? undefined : "true"}>
-                    {isNum(r.rank) ? r.rank : na(unscored ? "unscored" : "not ranked")}
+                  <td className="px-2 py-1 text-right font-mono text-slate-400 whitespace-nowrap" data-missing={isNum(r.rank) && !unscored ? undefined : "true"}>
+                    {isNum(r.rank) && !unscored ? r.rank : na(unscored ? "unscored" : "not ranked")}
                   </td>
                   <th scope="row" className="px-2 py-1 text-left font-normal whitespace-nowrap">
                     {onSelect ? (

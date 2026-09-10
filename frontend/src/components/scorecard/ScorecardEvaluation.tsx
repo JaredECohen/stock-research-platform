@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { createContext, useContext, useMemo } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useReducedMotion } from "@/components/public/hooks";
 import {
@@ -34,6 +34,11 @@ import { fmtReturn, fmtStat, humanize, isNum, na } from "./format";
  */
 export interface ScorecardEvaluationProps {
   evaluation: ScorecardEvaluationResponse | null | undefined;
+  /** The page already printed the response's caveat list verbatim above
+   *  these cards: each card then points up instead of repeating the same
+   *  sentences. Only set it when the page's list covers every card's
+   *  caveats — the cards render their own lists otherwise. */
+  caveatsRenderedAbove?: boolean;
   /** Fixed chart size (tests, print). */
   width?: number;
   height?: number;
@@ -66,8 +71,18 @@ function verdictInfo(v: string): VerdictInfo {
   return VERDICT_TEXT[v as LassoVerdict] ?? { label: humanize(v), tone: "badge-neutral", gloss: () => "Verdict not recognised by this client version." };
 }
 
+const CaveatsAbove = createContext(false);
+
 function Caveats({ caveats, kind }: { caveats: string[] | undefined; kind: string }) {
   const list = caveats ?? [];
+  const above = useContext(CaveatsAbove);
+  if (above && list.length > 0) {
+    return (
+      <p className="text-[11px] text-slate-500" data-testid={`caveats-${kind}`} data-rendered-above="true">
+        Caveats: the {list.length} sentence{list.length === 1 ? "" : "s"} this result carries are listed above, verbatim.
+      </p>
+    );
+  }
   return (
     <div className="text-[11px]" data-testid={`caveats-${kind}`}>
       <div className="text-slate-400 uppercase tracking-widest text-[10px] mb-1">Caveats (verbatim from the evaluation)</div>
@@ -336,7 +351,7 @@ function LassoCard({ row, result }: { row: EvaluationRow; result: DoubleLassoRes
   );
 }
 
-export default function ScorecardEvaluation({ evaluation, width, height = 220, className = "" }: ScorecardEvaluationProps) {
+export default function ScorecardEvaluation({ evaluation, width, height = 220, className = "", caveatsRenderedAbove = false }: ScorecardEvaluationProps) {
   const reduced = useReducedMotion();
   const byKind = useMemo(() => {
     const m = new Map<string, EvaluationRow>();
@@ -357,6 +372,7 @@ export default function ScorecardEvaluation({ evaluation, width, height = 220, c
   const lasso = byKind.get("double_lasso");
 
   return (
+    <CaveatsAbove.Provider value={caveatsRenderedAbove}>
     <div className={`space-y-4 ${className}`} data-testid="scorecard-evaluation">
       <p className="text-xs text-slate-400">
         Evaluations of spec {evaluation.version_key} computed by the worker from month-end runs. They describe a scoring rule's past association with returns — model outputs for research and education, not a
@@ -366,5 +382,6 @@ export default function ScorecardEvaluation({ evaluation, width, height = 220, c
       {ff6 && ff6.kind === "ff6_regression" ? <FF6Card row={ff6} result={ff6.result} /> : <NotRun kind="ff6_regression" title="Fama-French 5 + momentum regression" />}
       {lasso && lasso.kind === "double_lasso" ? <LassoCard row={lasso} result={lasso.result} /> : <NotRun kind="double_lasso" title="Double-selection LASSO" />}
     </div>
+    </CaveatsAbove.Provider>
   );
 }

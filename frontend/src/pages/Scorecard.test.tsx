@@ -509,15 +509,19 @@ describe("Scorecard page", () => {
       mount("/app/scorecard?tab=evaluation");
       await screen.findByTestId("scorecard-evaluation");
 
-      // Every card carries the backend's exact sentences; the page-level
-      // block collapses to a pointer rather than printing them a fourth time.
+      // The page prints the backend's exact sentences once; every card
+      // points up instead of repeating them.
+      const top = within(screen.getByTestId("evaluation-caveats")).getAllByRole("listitem");
+      expect(top.map((li) => li.textContent)).toEqual(ALL_CAVEATS);
+      expect(screen.getByTestId("evaluation-caveats")).toHaveAttribute("data-covers-cards", "true");
       for (const kind of ["quintile_ls", "ff6_regression", "double_lasso"]) {
-        const items = within(screen.getByTestId(`caveats-${kind}`)).getAllByRole("listitem");
-        expect(items.map((li) => li.textContent)).toEqual(ALL_CAVEATS);
+        const pointer = screen.getByTestId(`caveats-${kind}`);
+        expect(pointer).toHaveAttribute("data-rendered-above", "true");
+        expect(pointer).toHaveTextContent("listed above, verbatim");
+        expect(within(pointer).queryAllByRole("listitem")).toHaveLength(0);
       }
-      expect(screen.queryByTestId("evaluation-caveats")).toBeNull();
-      expect(screen.getByTestId("evaluation-caveats-pointer")).toHaveTextContent("Each card below carries the evaluation's 5 caveats verbatim.");
-      expect(screen.getAllByText(ALL_CAVEATS[0])).toHaveLength(3);
+      expect(screen.getAllByText(ALL_CAVEATS[0])).toHaveLength(1);
+      expect(screen.queryByTestId("evaluation-caveats-more")).toBeNull();
       expect(screen.getByTestId("evaluation-note")).toHaveTextContent(NOTE);
 
       const lasso = screen.getByTestId("eval-double_lasso");
@@ -552,19 +556,25 @@ describe("Scorecard page", () => {
       expect(screen.queryByTestId("price-store-depth")).toBeNull();
     });
 
-    it("prints a caveat no card carries in the page-level block, verbatim", async () => {
-      // Every result carries its own list, as the worker writes it; the
-      // response-level list then has one sentence no card repeats.
+    it("keeps a card's own verbatim list when it carries a caveat the response list lacks", async () => {
+      // A result the worker annotated beyond the response-level list: the
+      // page still prints its list once, but the cards may not point up
+      // because that would hide the extra sentence.
       const wire = evaluationWire();
-      for (const row of Object.values(wire.evaluations) as Array<{ result: Record<string, unknown> }>) row.result = { ...row.result, caveats: ALL_CAVEATS };
       const extra = "The sample ends before the latest constituent change.";
-      stubFetch([specRoute, ["/api/scorecard/evaluation", () => okJson({ ...wire, caveats: [...ALL_CAVEATS, extra] })], universeRoute]);
+      for (const row of Object.values(wire.evaluations) as Array<{ result: Record<string, unknown> }>) row.result = { ...row.result, caveats: [...ALL_CAVEATS, extra] };
+      stubFetch([specRoute, ["/api/scorecard/evaluation", () => okJson({ ...wire, caveats: ALL_CAVEATS })], universeRoute]);
       mount("/app/scorecard?tab=evaluation");
       await screen.findByTestId("scorecard-evaluation");
       const top = within(screen.getByTestId("evaluation-caveats")).getAllByRole("listitem");
-      expect(top.map((li) => li.textContent)).toEqual([extra]);
-      expect(screen.getByTestId("evaluation-caveats")).toHaveTextContent("not carried by any card below");
-      expect(screen.queryByTestId("evaluation-caveats-pointer")).toBeNull();
+      expect(top.map((li) => li.textContent)).toEqual(ALL_CAVEATS);
+      expect(screen.getByTestId("evaluation-caveats")).toHaveAttribute("data-covers-cards", "false");
+      expect(screen.getByTestId("evaluation-caveats-more")).toHaveTextContent("each card keeps its own verbatim list");
+      for (const kind of ["quintile_ls", "ff6_regression", "double_lasso"]) {
+        const items = within(screen.getByTestId(`caveats-${kind}`)).getAllByRole("listitem");
+        expect(items.map((li) => li.textContent)).toEqual([...ALL_CAVEATS, extra]);
+      }
+      expect(screen.getAllByText(extra)).toHaveLength(3);
     });
 
     it("shows the not-run cards and the full caveat list when no evaluation exists yet", async () => {
@@ -576,7 +586,7 @@ describe("Scorecard page", () => {
       // No card carries them, so the page-level block is the only verbatim copy.
       const top = within(screen.getByTestId("evaluation-caveats")).getAllByRole("listitem");
       expect(top.map((li) => li.textContent)).toEqual(ALL_CAVEATS);
-      expect(screen.queryByTestId("evaluation-caveats-pointer")).toBeNull();
+      expect(screen.queryByTestId("evaluation-caveats-more")).toBeNull();
     });
   });
 
