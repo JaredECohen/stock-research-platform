@@ -67,6 +67,30 @@ from .dcf import (
     ScenarioDriver,
     SensitivityCell,
 )
+
+# FEAT-001 (`schemas/fundamentals.py`). Importable as `from app.schemas
+# import SeriesResponse` like every other schema, but deliberately NOT in
+# `__all__` yet: `test_schema_package_reexports` pins `__all__` to a
+# frozen name list that this slice does not own. Add these names there
+# and to `__all__` in the same commit.
+from .fundamentals import (
+    AppliedLimits,
+    CatalogOut,
+    CommentaryOut,
+    CommentaryRef,
+    CommentaryRequest,
+    MemoViewItem,
+    MetricSeries,
+    MetricSpecOut,
+    ObservedItem,
+    SeriesCoverage,
+    SeriesLimits,
+    SeriesPoint,
+    SeriesProvenance,
+    SeriesRequest,
+    SeriesResponse,
+    UnavailableTicker,
+)
 from .macro import MacroScenarioRequest, MacroScenarioResult, MacroSeries, MacroSeriesPoint
 from .memo import MispricingThesis, StockMemoOut, ValuationVerdict
 from .portfolio import ModelPortfolio, PortfolioBrief, PortfolioHolding, PortfolioRequest
