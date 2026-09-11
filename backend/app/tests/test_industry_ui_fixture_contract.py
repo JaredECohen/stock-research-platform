@@ -52,10 +52,13 @@ BODIES: tuple[tuple[str, type[BaseModel]], ...] = (
     ("changes", IndustryChangesOut),
 )
 
+GENERATOR = Path(__file__).resolve().parents[1] / "scripts" / "capture_industry_ui_fixture.py"
 RECAPTURE = (
-    "Re-capture it: run the weekly path against the demo universe and read the public "
-    "routes through TestClient (see `meta.generated_by` in the fixture), then update "
-    "`frontend/src/types/industries.ts` and the tests that read the changed field."
+    "Re-capture it, from `backend/` and against a throwaway database:\n"
+    '  ENABLE_LIVE_DATA=false USE_DEMO_DATA=true OPENAI_API_KEY="" ANTHROPIC_API_KEY="" '
+    'GEMINI_API_KEY="" DATABASE_URL="sqlite:////tmp/industry-fixture.db" '
+    "python -m app.scripts.capture_industry_ui_fixture\n"
+    "then update `frontend/src/types/industries.ts` and the tests that read the changed field."
 )
 
 
@@ -121,6 +124,22 @@ def test_nested_row_shapes_match_their_models(wire):
     editions = wire["history"]["items"]
     assert editions, "the captured history has no editions"
     assert set(editions[0]) == _serialised_keys(IndustryReportHistoryItemOut)
+
+
+def test_the_recapture_instruction_names_something_that_exists():
+    """The failure messages above tell a reader to re-capture. That is only
+    useful while the thing they name is in the repo — the first version of
+    this fixture pointed at a generator in one developer's scratch
+    directory, which nobody else could run."""
+    assert GENERATOR.is_file(), f"{GENERATOR} is missing, but every failure here tells the reader to run it"
+
+
+def test_the_fixture_says_what_generated_it(wire):
+    """`meta.generated_by` is the fixture's own account of where it came
+    from, and a capture whose provenance line names a file that does not
+    exist is worse than none."""
+    generated_by = wire["meta"]["generated_by"]
+    assert "app.scripts.capture_industry_ui_fixture" in generated_by, generated_by
 
 
 def test_the_fixture_declares_what_was_edited_after_capture(wire):

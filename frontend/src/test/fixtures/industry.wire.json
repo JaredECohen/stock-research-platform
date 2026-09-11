@@ -1,6 +1,6 @@
 {
  "meta": {
-  "generated_by": "scratchpad gen/make_fixture.py \u2014 the real weekly path (classify -> enqueue_period -> drain) against the demo universe, captured through TestClient",
+  "generated_by": "python -m app.scripts.capture_industry_ui_fixture \u2014 the real weekly path (classify -> enqueue_period -> drain) against the demo universe, captured through TestClient",
   "taxonomy_version": "gics-2026-04",
   "code": "4530",
   "empty_code": "6010",
