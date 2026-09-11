@@ -33,7 +33,59 @@ def pytest_runtest_protocol(item, nextitem):
     netguard.set_current(f"<after {item.nodeid}>")
 
 
+_REUSED_DB_TABLES = ("memo_snapshots", "research_snapshots")
+_reused_db: dict[str, int] = {}
+
+
+def _check_database_is_fresh() -> None:
+    """Record whether the target database already holds this suite's data.
+
+    Several tests assert a first write lands at version 1, or that a query
+    returns exactly the rows they just seeded. Those assertions are only
+    true against a fresh database, which is why CLAUDE.md says to pass a
+    unique `DATABASE_URL`. Re-run the suite against a database a previous
+    run populated and four unrelated tests fail with arithmetic that looks
+    like nondeterminism (`assert 2 == 1`) five minutes in — a real
+    investigation once went looking for a race that was never there.
+
+    So: detect it up front and say so, rather than letting the symptom
+    masquerade as a flake. A warning rather than a hard error, because
+    re-running against a populated development database is a legitimate
+    thing to do deliberately.
+    """
+    try:
+        from sqlalchemy import text
+
+        from app.database import engine
+        with engine.connect() as conn:
+            for table in _REUSED_DB_TABLES:
+                try:
+                    n = conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() or 0
+                except Exception:
+                    continue          # table not created yet: a fresh DB
+                if n:
+                    _reused_db[table] = int(n)
+    except Exception:                  # pragma: no cover — diagnostics only
+        return
+
+
+def pytest_sessionstart(session):
+    _check_database_is_fresh()
+
+
 def pytest_terminal_summary(terminalreporter):
+
+    if _reused_db:
+        terminalreporter.section("database was not empty when this run started")
+        for table, n in sorted(_reused_db.items()):
+            terminalreporter.line(f"{table}: {n} row(s) already present")
+        terminalreporter.line(
+            "Tests that assert a first write is version 1, or that count the rows they "
+            "just seeded, fail against a reused database — most visibly test_memo_store, "
+            "test_outcome_tracking and test_scorecard_memo_integration. Pass a unique "
+            "DATABASE_URL (see CLAUDE.md) before treating those failures as real."
+        )
+
     offenders = netguard.hits()
     if not offenders:
         return

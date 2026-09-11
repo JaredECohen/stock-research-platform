@@ -42,9 +42,18 @@ Two things to know before you trust a local run:
   already silent under the `USE_DEMO_DATA=true` / `ENABLE_LIVE_DATA=false` pair;
   the guard makes that a property. `RUN_LIVE_TESTS=1` (the `live` marker's
   opt-in) or `MM_ALLOW_NETWORK=1` lifts it.
-- **Use an isolated database.** The default sqlite file is shared, so two
-  concurrent runs produce flaky memo-version failures. Pass
+- **Use an isolated database, and a NEW one each run.** The default sqlite file
+  is shared, so two concurrent runs produce flaky memo-version failures. Pass
   `DATABASE_URL="sqlite:////tmp/<something-unique>.db"`.
+
+  Re-using a file a previous run populated breaks the suite the same way, and
+  the symptom is misleading: tests that assert a first write is version 1 fail
+  with bare arithmetic (`assert 6 == 2`) in `test_memo_store`,
+  `test_outcome_tracking` and `test_scorecard_memo_integration`, minutes into
+  the run and nowhere near the cause. That cost a real investigation once. The
+  harness now counts pre-existing rows at session start and says so in the
+  terminal summary, so check for the "database was not empty" section before
+  treating any of those failures as a regression.
 
 CI installs from `requirements.txt`, which pins floors rather than ceilings, so
 **CI resolves newer dependencies than a long-lived dev environment**. Tests that
