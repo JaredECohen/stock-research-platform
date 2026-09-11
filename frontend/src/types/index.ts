@@ -855,3 +855,12 @@ export interface CommentaryRequestWire {
 
 export * from "./scorecard";
 import type { ScorecardSummary } from "./scorecard";
+
+// ---------------------------------------------------------------------------
+// FEAT-003 — Industry Analysis. The mirror of `schemas/industry.py` lives
+// in ./industries (report, taxonomy, companies, history, changes, and the
+// access block the UI reads to explain a gate) and is re-exported so
+// pages import one module.
+// ---------------------------------------------------------------------------
+
+export * from "./industries";

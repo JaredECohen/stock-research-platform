@@ -1,0 +1,134 @@
+import React from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import SectorGroupPicker, { optionId } from "@/components/industries/SectorGroupPicker";
+import * as fx from "@/test/fixtures/industry";
+
+// The picker is the only way into a 25-group list, so the two failures
+// that matter are (1) a listbox a keyboard cannot drive and (2) a wide
+// list rendered on a phone. Both are asserted here against the real
+// taxonomy the API served.
+
+function mountWide(value: string | null = null) {
+  const onSelect = vi.fn();
+  render(<SectorGroupPicker taxonomy={fx.taxonomy} value={value} onSelect={onSelect} />);
+  return { onSelect, listbox: screen.getByRole("listbox") };
+}
+
+/** jsdom has no matchMedia; installing one lets the component take the
+ *  narrow branch exactly as a phone would. */
+function stubMatchMedia(matches: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    (query: string) =>
+      ({
+        matches,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList,
+  );
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("SectorGroupPicker — wide", () => {
+  it("renders every group in the response, grouped by sector", () => {
+    const { listbox } = mountWide();
+    expect(within(listbox).getAllByRole("option")).toHaveLength(fx.allGroups.length);
+    expect(within(listbox).getAllByRole("group")).toHaveLength(fx.taxonomy.sectors.length);
+    const sector = fx.taxonomy.sectors[0];
+    expect(within(listbox).getByRole("group", { name: `${sector.code} ${sector.name}` })).toBeInTheDocument();
+  });
+
+  it("moves aria-activedescendant with the arrow keys and Home/End", () => {
+    const { listbox } = mountWide();
+    const codes = fx.allGroups.map((g) => g.code);
+
+    expect(listbox).toHaveAttribute("aria-activedescendant", optionId(codes[0]));
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(listbox).toHaveAttribute("aria-activedescendant", optionId(codes[1]));
+    fireEvent.keyDown(listbox, { key: "ArrowUp" });
+    expect(listbox).toHaveAttribute("aria-activedescendant", optionId(codes[0]));
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(listbox).toHaveAttribute("aria-activedescendant", optionId(codes[codes.length - 1]));
+    fireEvent.keyDown(listbox, { key: "Home" });
+    expect(listbox).toHaveAttribute("aria-activedescendant", optionId(codes[0]));
+  });
+
+  it("does not run off either end of the list", () => {
+    const { listbox } = mountWide();
+    const codes = fx.allGroups.map((g) => g.code);
+    fireEvent.keyDown(listbox, { key: "ArrowUp" });
+    expect(listbox).toHaveAttribute("aria-activedescendant", optionId(codes[0]));
+    fireEvent.keyDown(listbox, { key: "End" });
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(listbox).toHaveAttribute("aria-activedescendant", optionId(codes[codes.length - 1]));
+  });
+
+  it("selects the active option with Enter and with Space", () => {
+    const { listbox, onSelect } = mountWide();
+    const codes = fx.allGroups.map((g) => g.code);
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledWith(codes[1]);
+    fireEvent.keyDown(listbox, { key: " " });
+    expect(onSelect).toHaveBeenLastCalledWith(codes[1]);
+  });
+
+  it("marks the selected group and starts the cursor there on a deep link", () => {
+    const target = fx.groupWithEdition.code;
+    const { listbox } = mountWide(target);
+    expect(listbox).toHaveAttribute("aria-activedescendant", optionId(target));
+    expect(screen.getByRole("option", { selected: true })).toHaveAttribute("id", optionId(target));
+  });
+
+  it("says what a group's edition is, or that it has none, on every row", () => {
+    mountWide();
+    const withEdition = fx.groupWithEdition;
+    const row = document.getElementById(optionId(withEdition.code))!;
+    expect(row.textContent).toContain(`v${withEdition.latest_report!.version}`);
+
+    const without = fx.allGroups.find((g) => g.latest_report === null);
+    if (without) {
+      expect(document.getElementById(optionId(without.code))!.textContent).toContain("no published edition yet");
+    }
+  });
+});
+
+describe("SectorGroupPicker — narrow", () => {
+  it("renders the platform select with an optgroup per sector", () => {
+    stubMatchMedia(true);
+    render(<SectorGroupPicker taxonomy={fx.taxonomy} value={null} onSelect={() => {}} />);
+
+    const select = screen.getByTestId("industry-picker-select");
+    expect(select.tagName).toBe("SELECT");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(select.querySelectorAll("optgroup")).toHaveLength(fx.taxonomy.sectors.length);
+    // The placeholder is the extra option.
+    expect(select.querySelectorAll("option")).toHaveLength(fx.allGroups.length + 1);
+  });
+
+  it("selecting an option calls back with the code", () => {
+    stubMatchMedia(true);
+    const onSelect = vi.fn();
+    render(<SectorGroupPicker taxonomy={fx.taxonomy} value={null} onSelect={onSelect} />);
+    fireEvent.change(screen.getByTestId("industry-picker-select"), { target: { value: fx.groupWithEdition.code } });
+    expect(onSelect).toHaveBeenCalledWith(fx.groupWithEdition.code);
+  });
+});
+
+describe("SectorGroupPicker — empty taxonomy", () => {
+  it("says the taxonomy has no groups rather than rendering an empty box", () => {
+    const empty = fx.clone(fx.taxonomy);
+    empty.sectors = [];
+    render(<SectorGroupPicker taxonomy={empty} value={null} onSelect={() => {}} />);
+    expect(screen.getByTestId("industry-picker-empty")).toHaveTextContent("no industry groups");
+  });
+});
