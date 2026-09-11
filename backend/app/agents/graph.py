@@ -1417,7 +1417,11 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
     # Default = run the whole applicable roster. Decision is logged on
     # the memo for audit.
     from .intake import run_intake, stub_finding
-    intake = run_intake(profile)
+    specs = roster.applicable(inputs)  # each spec's `applies_to`, once per run
+    # The PM chooses among THIS run's roster: a spec whose predicate said no
+    # is not on the run, so offering it would waste one of the three skips
+    # and put an absent agent in the memo's intake audit line.
+    intake = run_intake(profile, specialists=[spec.key for spec in specs])
 
     # Round 0 fan-out, in roster order. Each specialist runs with its own
     # llm_call_context so any LLM calls it makes get tagged with the right
@@ -1425,7 +1429,6 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
     # influence the rating — positioning context only.)
     from .llm import llm_call_context
     findings: dict[str, AgentFinding] = {}
-    specs = roster.applicable(inputs)  # each spec's `applies_to`, once per run
     for spec in specs:
         if not intake.runs(spec.key):
             findings[spec.key] = AgentFinding(**stub_finding(spec.key, intake.rationale))

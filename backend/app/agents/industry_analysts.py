@@ -84,6 +84,17 @@ _SYSTEM_FALLBACK = (
     "causal inference and forecast assumption; research and education only."
 )
 
+# Header field caps for `company_context_block`. The company name and the
+# classification label are the only free-text fields in the template; the
+# rest are codes and versions. Capping them keeps the header's length
+# predictable so the mandate's budget is real.
+_NAME_CHARS = 120
+_LABEL_CHARS = 320
+_TICKER_CHARS = 24
+# Below this, a mandate block cannot carry a line of prose AND its
+# attribution, so the block says the mandate was omitted instead.
+_MIN_MANDATE_CHARS = 240
+
 _CACHE: dict[tuple[str, int], IndustryAnalyst] = {}
 _CACHE_LOCK = threading.Lock()
 _CONSTRUCTIONS = 0
@@ -123,24 +134,51 @@ class IndustryAnalyst:
         max_chars: int = 4000, mandate_chars: int | None = None,
     ) -> str:
         """The company-context block: who the company is inside the group,
-        how we know (classification source label), then the mandate."""
+        how we know (classification source label), then the mandate.
+
+        The mandate's budget is what is LEFT after the header is rendered,
+        measured rather than guessed. A fixed reserve was wrong in both
+        directions: the header grows with the company name and with a stale
+        row's provenance clause, and when it overran, the tail that fell off
+        the end was the mandate's attribution line — the one line
+        ``as_prompt_block`` reserves budget for, because every sub-industry
+        brief is original analysis and must say so wherever it is shown.
+        `mandate_chars`, when given, is a CEILING on that budget, never a
+        licence to overrun `max_chars`.
+        """
         sub = _sub_industry_of(classification)
-        budget = mandate_chars if mandate_chars is not None else max(400, max_chars - 700)
         cls = classification or {}
-        block = prompts.INDUSTRY_GROUP_COMPANY_CONTEXT.format(
-            ticker=str(profile.get("ticker") or "").upper() or "n/a",
-            company_name=profile.get("company_name") or "n/a",
-            group_code=self.code, group_name=self.name,
-            sector_code=self.sector_code, sector_name=self.sector_name,
-            taxonomy_version=self.taxonomy_version_key,
-            knowledge_version=self.mandate.knowledge_version or "n/a",
-            sub_industry=(f"{sub['code']} {sub['name']}" if sub else "n/a (classified at group level only)"),
-            classification_label=classification_source_label(classification),
-            state=cls.get("state") or "n/a",
-            source_as_of=cls.get("source_as_of") or "n/a",
-            mandate_block=self.mandate.as_prompt_block(max_chars=budget),
+        fields = {
+            "ticker": _clip(str(profile.get("ticker") or "").upper(), _TICKER_CHARS) or "n/a",
+            # The only two free-text fields in the header; bounded so a
+            # pathological company name cannot crowd out the mandate.
+            "company_name": _clip(profile.get("company_name") or "n/a", _NAME_CHARS),
+            "group_code": self.code, "group_name": self.name,
+            "sector_code": self.sector_code, "sector_name": self.sector_name,
+            "taxonomy_version": self.taxonomy_version_key,
+            "knowledge_version": self.mandate.knowledge_version or "n/a",
+            "sub_industry": (f"{sub['code']} {sub['name']}" if sub else "n/a (classified at group level only)"),
+            "classification_label": _clip(classification_source_label(classification), _LABEL_CHARS),
+            "state": cls.get("state") or "n/a",
+            "source_as_of": cls.get("source_as_of") or "n/a",
+        }
+        header = prompts.INDUSTRY_GROUP_COMPANY_CONTEXT.format(mandate_block="", **fields)
+        budget = max_chars - len(header)
+        if mandate_chars is not None:
+            budget = min(mandate_chars, budget)
+        if budget < _MIN_MANDATE_CHARS:
+            # No honest room for a mandate: say so instead of shipping a
+            # block whose provenance has been sliced off the end. Only the
+            # omission note can be cut here, and there is no mandate behind
+            # it whose attribution could go missing.
+            block = prompts.INDUSTRY_GROUP_COMPANY_CONTEXT.format(
+                mandate_block="(mandate omitted: no prompt budget left after the company context.)",
+                **fields,
+            )
+            return block if len(block) <= max_chars else block[: max(0, max_chars - 1)].rstrip() + "…"
+        return prompts.INDUSTRY_GROUP_COMPANY_CONTEXT.format(
+            mandate_block=self.mandate.as_prompt_block(max_chars=budget), **fields,
         )
-        return block if len(block) <= max_chars else block[: max_chars - 1].rstrip() + "…"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -153,6 +191,12 @@ class IndustryAnalyst:
 
 
 # --- provenance helpers --------------------------------------------------------
+
+
+def _clip(text: str, limit: int) -> str:
+    """A header field bounded to `limit`, ellipsis included in the count."""
+    text = str(text)
+    return text if len(text) <= limit else text[: max(0, limit - 1)].rstrip() + "…"
 
 
 def _no_mapping_reason(classification: dict[str, Any] | None) -> str:

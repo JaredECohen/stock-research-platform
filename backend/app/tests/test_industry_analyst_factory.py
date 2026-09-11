@@ -123,6 +123,45 @@ def test_every_group_system_prompt_keeps_the_attribution_and_the_sub_industry_la
         assert len(block) <= 4000 and ik.BRIEF_ATTRIBUTION in block, g["code"]
 
 
+def test_a_long_header_shortens_the_mandate_instead_of_cutting_its_attribution():
+    """REGRESSION: the mandate's budget was a fixed `max_chars - 700`, so a
+    long company name or a stale row's provenance clause pushed the block
+    past `max_chars` and the hard truncation cut the tail — which is the
+    BRIEF_ATTRIBUTION line `as_prompt_block` deliberately reserves budget
+    for. Sub-industry briefs are original analysis and must never be shown
+    without that label."""
+    row = ic.current_for(["NVDA"])["NVDA"]
+    stale = {**row, "state": "stale", "evidence": {
+        **(row.get("evidence") or {}), "previous_state": "mapped",
+        "stale_reason": "inputs_changed", "stale_detected_at": "2026-09-08T03:40:00+00:00",
+    }}
+    for g in ik.list_industry_groups():
+        analyst = ia.get_industry_analyst(g["code"])
+        for name_len in (10, 85, 95, 100, 105, 215, 400):
+            for cls in (None, row, stale):
+                block = analyst.company_context_block(
+                    {"ticker": "NVDA", "company_name": "N" * name_len}, cls,
+                )
+                assert len(block) <= 4000, (g["code"], name_len)
+                assert ik.BRIEF_ATTRIBUTION in block, (g["code"], name_len, cls and cls["state"])
+                assert not block.endswith("…"), (g["code"], name_len)
+
+
+def test_a_header_that_leaves_no_budget_says_the_mandate_was_omitted():
+    """The floor: when `max_chars` cannot hold the header plus a mandate,
+    the block announces the omission rather than shipping a mandate whose
+    provenance has been sliced off."""
+    analyst = ia.get_industry_analyst("4530")
+    profile = {"ticker": "NVDA", "company_name": "NVIDIA"}
+    block = analyst.company_context_block(profile, None, max_chars=700)
+    assert "mandate omitted: no prompt budget left" in block
+    assert "## Industry Group mandate" not in block
+    assert len(block) <= 700
+    # A ceiling too small for a mandate is the same story, not a silent cut.
+    block = analyst.company_context_block(profile, None, mandate_chars=50)
+    assert "mandate omitted: no prompt budget left" in block
+
+
 def test_company_context_block_names_sub_industry_and_source_label():
     analyst = ia.get_industry_analyst("4510")
     row = ic.current_for(["MSFT"])["MSFT"]
@@ -387,6 +426,50 @@ def test_the_intake_prompt_and_the_critique_targets_come_from_the_roster():
     assert "industry_group" in intake.ALL_SPECIALISTS
     assert dr._addressable({}) == tuple(intake.ALL_SPECIALISTS)
     assert dr._addressable({"macro": None, "sector": None}) == ("sector", "macro")  # roster order
+
+
+def test_intake_is_offered_only_the_specialists_this_run_will_run(monkeypatch):
+    """REGRESSION: the intake prompt listed the WHOLE roster, so with
+    ENABLE_INDUSTRY_ANALYST_ROUTING off the PM was still offered
+    `industry_group` — an agent `roster.applicable` had already excluded.
+    One of the three skips could be spent on it (letting a specialist the
+    PM wanted deprioritized run anyway) and the memo's `intake_decision`
+    audit line named an agent that was never on the run."""
+    seen: dict[str, str] = {}
+
+    def fake_chat_json(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return {"skip": ["industry_group", "technical"], "rationale": "r"}
+
+    monkeypatch.setattr(intake.llm, "chat_json", fake_chat_json)
+    monkeypatch.setattr(intake.settings, "openai_api_key", "sk-test")
+    offered = [k for k in intake.ALL_SPECIALISTS if k != "industry_group"]
+    decision = intake.run_intake({"ticker": "MSFT"}, specialists=offered)
+    assert "industry_group" not in seen["prompt"]
+    assert f"{len(offered)} specialists are available" in seen["prompt"]
+    # A key the model names anyway is not on this run, so it cannot consume
+    # one of the three skips.
+    assert decision.skipped == {"technical"}
+    # No argument still means the whole roster.
+    intake.run_intake({"ticker": "MSFT"})
+    assert "industry_group" in seen["prompt"]
+
+
+def test_the_memo_hands_intake_exactly_this_runs_roster(monkeypatch):
+    """The flag is a no-op end to end: with routing off the PM never sees
+    the industry analyst; with it on, it does."""
+    seen: list[list[str]] = []
+
+    def spy(profile, news_alerts=None, **kwargs):
+        seen.append(list(kwargs.get("specialists") or []))
+        return intake.IntakeDecision()
+
+    monkeypatch.setattr(intake, "run_intake", spy)
+    graph.run_stock_memo("MSFT")
+    assert seen[-1] == [k for k in intake.ALL_SPECIALISTS if k != "industry_group"]
+    monkeypatch.setattr(settings, "enable_industry_analyst_routing", True)
+    graph.run_stock_memo("MSFT")
+    assert seen[-1] == intake.ALL_SPECIALISTS
 
 
 # --- the runner on its own -----------------------------------------------------------

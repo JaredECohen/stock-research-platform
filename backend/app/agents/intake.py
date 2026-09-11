@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -63,12 +64,25 @@ def run_intake(
     news_alerts: list[dict[str, Any]] | None = None,
     *,
     macro_regime: str | None = None,
+    specialists: Sequence[str] | None = None,
 ) -> IntakeDecision:
     """Decide which specialists to run for this memo.
 
     Default: run the whole roster. LLM may deprioritize up to `_MAX_SKIPS`
     with a one-line rationale per skip. Returns the decision (caller
-    threads it through the fan-out)."""
+    threads it through the fan-out).
+
+    `specialists` is THIS run's roster — the keys `roster.applicable`
+    returned. A spec whose `applies_to` said no is not on the run at all,
+    so it must not be offered to the PM: offering it lets one of the three
+    skips be spent on an analyst that was never going to run (a real
+    specialist the PM wanted deprioritized then runs anyway) and writes an
+    `intake_decision` audit line naming an absent agent.
+    """
+    available = [s for s in (ALL_SPECIALISTS if specialists is None else specialists)
+                 if s in _DISPLAY_NAMES]
+    if not available:
+        return IntakeDecision()
     if not getattr(settings, "openai_api_key", None):
         return IntakeDecision()
     payload = {
@@ -86,8 +100,8 @@ def run_intake(
         ],
     }
     out = llm.chat_json(
-        f"You are the PM doing intake on a memo run. {len(ALL_SPECIALISTS)} "
-        "specialists are available — " + ", ".join(ALL_SPECIALISTS) + ". "
+        f"You are the PM doing intake on a memo run. {len(available)} "
+        "specialists are available — " + ", ".join(available) + ". "
         "Default: run them all. You may "
         f"DEPRIORITIZE up to {_MAX_SKIPS} specialists for this memo "
         "ONLY when running them adds little to the thesis (e.g., a "
@@ -109,7 +123,7 @@ def run_intake(
         return IntakeDecision()
     cleaned = {
         str(s).strip().lower() for s in raw_skip
-        if isinstance(s, str) and s.strip().lower() in ALL_SPECIALISTS
+        if isinstance(s, str) and s.strip().lower() in available
     }
     if len(cleaned) > _MAX_SKIPS:
         cleaned = set(list(cleaned)[:_MAX_SKIPS])
