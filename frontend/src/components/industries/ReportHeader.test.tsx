@@ -115,6 +115,53 @@ describe("ReportHeader", () => {
     expect(fx.report.disclaimer.toLowerCase()).toContain("research and education only");
   });
 
+  it("prints the server's reason for a missing statistics row instead of inventing its own", () => {
+    // `stats_unavailable_reason` exists so no caller has to guess. With
+    // `stats` null the header used to say "weighting not recorded on the
+    // statistics row" and "breadth window not recorded" — two reasons it
+    // made up — while dropping the one the API supplied.
+    const r = fx.clone(fx.report);
+    r.stats = null;
+    r.stats_unavailable_reason = "the group was below min_sample (2 of 3 priced) for 2026-W36";
+    render(<ReportHeader report={r} />);
+    expect(screen.getByTestId("stats-unavailable")).toHaveTextContent(r.stats_unavailable_reason);
+    expect(screen.getByTestId("method-weighting")).toHaveTextContent(`n/a (${r.stats_unavailable_reason})`);
+    expect(screen.getByTestId("report-coverage")).not.toHaveTextContent("weighting not recorded on the statistics row");
+    expect(screen.getByTestId("report-coverage")).not.toHaveTextContent("breadth window not recorded");
+  });
+
+  it("says nothing about a statistics row that is present", () => {
+    render(<ReportHeader report={fx.report} />);
+    expect(fx.report.stats).not.toBeNull();
+    expect(screen.queryByTestId("stats-unavailable")).not.toBeInTheDocument();
+  });
+
+  it("shows the errors behind the degradation labels rather than only the labels", () => {
+    const r = fx.degradedReport();
+    r.errors = [
+      { section: "themes", type: "ThemesUnavailable", message: "no cohort filings in the period" },
+      "cross_industry: the snapshot for 2026-W36 was not written",
+    ];
+    render(<ReportHeader report={r} />);
+    const errors = screen.getByTestId("report-errors");
+    expect(errors).toHaveTextContent("2 errors recorded on this run");
+    expect(errors).toHaveTextContent("themes: ThemesUnavailable: no cohort filings in the period");
+    expect(errors).toHaveTextContent("the snapshot for 2026-W36 was not written");
+  });
+
+  it("prints what the edition cost, with the call count, rather than omitting a zero", () => {
+    render(<ReportHeader report={fx.report} />);
+    // The captured edition ran no LLM call, so $0.0000 is the true cost —
+    // leaving it out would read as "not measured".
+    expect(fx.report.generation.llm_calls).toBe(0);
+    expect(screen.getByTestId("llm-cost")).toHaveTextContent("LLM cost $0.0000 over 0 calls");
+
+    const r = fx.clone(fx.report);
+    r.llm_cost_usd = null;
+    render(<ReportHeader report={r} />);
+    expect(screen.getAllByTestId("llm-cost")[1]).toHaveTextContent("n/a (cost not recorded on this edition)");
+  });
+
   it("says a missing coverage figure is missing rather than printing a zero", () => {
     const r = fx.clone(fx.report);
     r.coverage = {};

@@ -140,7 +140,14 @@ export default function CompaniesTable({ companies, editionNPriced = null, class
           <caption className="text-left text-xs text-slate-400 mb-2" data-testid="companies-caption">
             {companies.name} ({companies.code}) membership as of{" "}
             {companies.as_of ? fmtDate(companies.as_of) : na("no statistics as-of")}: {companies.count} classified
-            constituents, {companies.n_priced} priced by the latest statistics row.{" "}
+            constituents,{" "}
+            {/* With no statistics row there is nothing that priced
+                anything, and `n_priced` is 0 for that reason rather than
+                because no member had a price. The server says which, and
+                printing its reason is the difference between the two. */}
+            {companies.stats
+              ? `${companies.n_priced} priced by the latest statistics row.`
+              : `price coverage ${na(companies.stats_unavailable_reason ?? "no statistics row on file, and no reason recorded")}.`}{" "}
             {companies.truncated > 0
               ? `${companies.truncated} further member${companies.truncated === 1 ? "" : "s"} not shown (page limit ${companies.limit}).`
               : ""}{" "}

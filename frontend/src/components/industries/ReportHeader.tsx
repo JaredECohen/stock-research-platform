@@ -3,6 +3,7 @@ import { AlertTriangle, Clock } from "lucide-react";
 import type { IndustryReport } from "@/types/industries";
 import { degradationText, fmtDate, fmtDateTime, fmtShare, humanize, isNum, na } from "./format";
 
+
 /**
  * Everything a reader needs before they read a number: which taxonomy
  * edition this is, what it is as of, how much of the group it could
@@ -55,6 +56,19 @@ function benchmarks(report: IndustryReport): Array<{ id: string; definition: str
   }));
 }
 
+/** One recorded error, as a line. The shape is the writer's — usually
+ *  `{section, type, message}` — and an unrecognised one is printed whole
+ *  rather than summarised away. */
+function errorText(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object") {
+    const r = e as Record<string, unknown>;
+    const parts = [r.section, r.type ?? r.error_type, r.message ?? r.error_message].filter(Boolean).map(String);
+    if (parts.length > 0) return parts.join(": ");
+  }
+  return JSON.stringify(e);
+}
+
 export interface ReportHeaderProps {
   report: IndustryReport;
   /** `GET /api/industries/taxonomy`'s attribution — the MSCI / S&P line
@@ -81,10 +95,19 @@ export default function ReportHeader({
   const nMembers = coverage.n_constituents;
   const nPriced = coverage.n_with_prices;
   const excluded = Array.isArray(coverage.excluded) ? (coverage.excluded as Array<Record<string, unknown>>) : [];
+  // The ONE reason a reader gets for an edition written without a
+  // statistics row. Every field below that would otherwise invent its own
+  // ("weighting not recorded on the statistics row") defers to it: the
+  // API supplies `stats_unavailable_reason` precisely so no caller has to
+  // guess, and an invented reason is a claim the server never made.
+  const statsReason = report.stats
+    ? null
+    : report.stats_unavailable_reason || "no statistics row on this edition, and no reason recorded";
   const method = (report.stats?.method ?? {}) as Record<string, unknown>;
   const weighting = Array.isArray(method.weighting) ? (method.weighting as string[]) : [];
   const breadth = (method.breadth_mean_window ?? {}) as Record<string, unknown>;
   const bms = benchmarks(report);
+  const llmCalls = (report.generation as Record<string, unknown>)?.llm_calls;
   const stale = report.stale === true;
   const attempt = report.last_attempt;
   const failedAttempt = attempt && attempt.status !== "succeeded" ? attempt : null;
@@ -133,6 +156,16 @@ export default function ReportHeader({
         </div>
       )}
 
+      {statsReason && (
+        <div className="card-tight text-xs" role="status" data-testid="stats-unavailable">
+          <span className="text-slate-200">No statistics row on this edition</span>{" "}
+          <span className="text-slate-400">— {statsReason}.</span>{" "}
+          <span className="text-slate-500">
+            The observed numbers below are whatever the writer could record without one; the rest say so.
+          </span>
+        </div>
+      )}
+
       {report.degraded.length > 0 && (
         <details className="card-tight text-xs" data-testid="degraded-list">
           <summary className="cursor-pointer text-slate-300">
@@ -145,6 +178,24 @@ export default function ReportHeader({
               </li>
             ))}
           </ul>
+          {/* The labels say WHAT degraded; `errors` is the detail behind
+              them, and an edition that carries one and shows only the
+              label is asking the reader to take the degradation on
+              faith. */}
+          {report.errors.length > 0 && (
+            <div className="mt-2" data-testid="report-errors">
+              <div className="text-slate-500 uppercase tracking-widest text-[10px]">
+                {report.errors.length} error{report.errors.length === 1 ? "" : "s"} recorded on this run
+              </div>
+              <ul className="mt-1 space-y-0.5 text-slate-400">
+                {report.errors.map((e, i) => (
+                  <li key={i} className="font-mono text-[10px] break-words">
+                    {errorText(e)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </details>
       )}
 
@@ -174,12 +225,12 @@ export default function ReportHeader({
         <div className="card-tight">
           <dt className="text-slate-500 uppercase tracking-widest text-[10px]">Weighting</dt>
           <dd className="text-slate-200" data-testid="method-weighting">
-            {weighting.length > 0 ? weighting.join(" and ") : na("weighting not recorded on the statistics row")}
+            {weighting.length > 0 ? weighting.join(" and ") : na(statsReason ?? "weighting not recorded on the statistics row")}
           </dd>
           <dd className="text-slate-500 mt-1">
             {isNum(breadth.sessions)
               ? `Breadth mean window: ${breadth.sessions} sessions${breadth.basis ? ` — ${String(breadth.basis)}` : ""}`
-              : na("breadth window not recorded")}
+              : na(statsReason ?? "breadth window not recorded")}
           </dd>
         </div>
         <div className="card-tight">
@@ -194,6 +245,17 @@ export default function ReportHeader({
             {(report.generation as Record<string, unknown>)?.generation_mode
               ? humanize(String((report.generation as Record<string, unknown>).generation_mode))
               : na("generation mode not recorded")}
+          </dd>
+          {/* What the edition cost to write. Zero is a real number here —
+              a deterministic edition made no calls — so it is printed
+              with the call count beside it rather than left out, which
+              would read as "not measured". */}
+          <dd className="text-slate-500 mt-1" data-testid="llm-cost">
+            LLM cost{" "}
+            {isNum(report.llm_cost_usd)
+              ? `$${report.llm_cost_usd.toFixed(4)}`
+              : na("cost not recorded on this edition")}
+            {isNum(llmCalls) ? ` over ${llmCalls} call${llmCalls === 1 ? "" : "s"}` : ""}
           </dd>
         </div>
       </dl>

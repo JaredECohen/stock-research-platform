@@ -127,6 +127,19 @@ describe("CompaniesTable", () => {
     expect(row).not.toHaveTextContent(/(^|[^.\d])0%/);
   });
 
+  it("prints the server's reason when there is no statistics row, not a zero", () => {
+    // `n_priced` is 0 here because nothing priced anything, not because
+    // no member had a price — and the API says which.
+    const none = fx.clone(fx.companies);
+    none.stats = null;
+    none.n_priced = 0;
+    none.stats_unavailable_reason = "no statistics row for 2026-W36: the group is below min_sample";
+    render(<CompaniesTable companies={none} />);
+    const caption = screen.getByTestId("companies-caption");
+    expect(caption).toHaveTextContent(`n/a (${none.stats_unavailable_reason})`);
+    expect(caption).not.toHaveTextContent("0 priced");
+  });
+
   it("says the group has no classified members rather than rendering an empty table", () => {
     const empty = fx.clone(fx.companies);
     empty.items = [];
