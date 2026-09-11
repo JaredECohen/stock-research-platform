@@ -67,3 +67,76 @@ LIMITS = {
     "seed_universe":    "1/minute",
     "admin_backfill":  "1/5minute",
 }
+
+
+# ---------------------------------------------------------------------------
+# slowapi cannot see routes behind an included router — patched here
+# ---------------------------------------------------------------------------
+
+def _find_route_handler(routes, scope):
+    """Resolve the endpoint for `scope`, descending into nested routers.
+
+    This replaces `slowapi.middleware._find_route_handler`, which scans one
+    level deep and takes `hasattr(route, "endpoint")` as its test. Under the
+    pinned FastAPI (0.141.1) an `include_router` call leaves a nested router
+    object in `app.routes` instead of flattening every `APIRoute` into it —
+    `app.routes` holds 22 entries where the older FastAPI held 106. That
+    object matches the request FULL but exposes no `endpoint`, so slowapi
+    resolved `None`, and `_should_exempt(limiter, None)` is **True**.
+
+    The effect was silent and total: every request looked exempt, so NO
+    per-IP limit applied anywhere — not the global 60/minute default, not
+    `memo_analyze` (5/minute, the route that spends model budget), not
+    `bootstrap` (3/hour, the only per-IP bound on how many trials one
+    address can start). It reproduced only against the pinned versions,
+    which is what CI and Render install; a developer environment on the
+    older FastAPI limited correctly and every test passed.
+
+    Kept faithful to the original in the one respect that matters: the LAST
+    full match wins, because that is how slowapi resolves overlapping
+    routes and the exemption registry is keyed on the name it returns.
+    """
+    from starlette.routing import Match
+
+    handler = None
+    for route in routes:
+        try:
+            match, child_scope = route.matches(scope)
+        except Exception:       # a route that cannot match is not a handler
+            continue
+        if match != Match.FULL:
+            continue
+        endpoint = getattr(route, "endpoint", None)
+        if endpoint is not None:
+            handler = endpoint
+            continue
+        # `_IncludedRouter` (the pinned FastAPI's wrapper) exposes neither
+        # `routes` nor `router`; the included APIRouter is on
+        # `original_router`. Try each shape rather than naming one version's,
+        # so a future FastAPI that flattens again, or nests differently,
+        # still resolves.
+        nested = None
+        for attr in ("routes", "router", "original_router"):
+            candidate = getattr(route, attr, None)
+            candidate = getattr(candidate, "routes", candidate)
+            if candidate:
+                try:
+                    nested = list(candidate)
+                except TypeError:
+                    nested = None
+                if nested:
+                    break
+        if nested:
+            inner = _find_route_handler(nested, {**scope, **(child_scope or {})})
+            if inner is not None:
+                handler = inner
+    return handler
+
+
+def _install_route_resolution() -> None:
+    """Point slowapi's middleware at the resolver above. Idempotent."""
+    from slowapi import middleware as _slowapi_middleware
+    _slowapi_middleware._find_route_handler = _find_route_handler
+
+
+_install_route_resolution()
