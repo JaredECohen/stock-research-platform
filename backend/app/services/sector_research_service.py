@@ -14,11 +14,13 @@ from pathlib import Path
 from statistics import mean, median, pstdev
 from typing import Any
 
+from ..finance.scorecard_spec import normalize_sector
 from .data_service import get_data_service
 from .filings_service import get_filings
 from .fundamentals_service import get_full_financials
 
 _SECTOR_CONFIG_CACHE: dict[str, dict] | None = None
+_CANONICAL_INDEX_CACHE: dict[str, str] | None = None
 
 
 def _sector_config() -> dict[str, dict]:
@@ -30,23 +32,91 @@ def _sector_config() -> dict[str, dict]:
     return _SECTOR_CONFIG_CACHE
 
 
+def _canonical_index() -> dict[str, str]:
+    """Canonical GICS sector name -> the `sector_configs.json` key serving it.
+
+    The config file spells sectors its own way ("Technology", "Healthcare")
+    and FMP spells them another ("Financial Services", "Consumer Cyclical",
+    "Health Care", "Basic Materials"). `normalize_sector` already owns that
+    crosswalk for the scorecard, so the index is built by running every
+    config key through it rather than by retyping the alias table here: one
+    place to fix a provider label, not two. Each of the eleven config keys
+    normalises to a distinct canonical sector, so the map is 1:1.
+    """
+    global _CANONICAL_INDEX_CACHE
+    if _CANONICAL_INDEX_CACHE is None:
+        index: dict[str, str] = {}
+        for key in _sector_config():
+            canonical = normalize_sector(key)
+            if canonical:
+                index.setdefault(canonical, key)
+        _CANONICAL_INDEX_CACHE = index
+    return _CANONICAL_INDEX_CACHE
+
+
+# The KPI groups a company has regardless of what sector it is in: the
+# groups and metrics EVERY config in `sector_configs.json` agrees on.
+# Derived rather than hand-picked, and derived at import from the configs
+# themselves, so it cannot drift into being one sector's list again.
+def _neutral_kpi_groups() -> dict[str, list[str]]:
+    cfg = _sector_config()
+    groups = [c.get("kpi_groups") or {} for c in cfg.values()]
+    if not groups:
+        return {}
+    shared_names = set(groups[0])
+    for g in groups[1:]:
+        shared_names &= set(g)
+    out: dict[str, list[str]] = {}
+    for name in sorted(shared_names):
+        common = set(groups[0][name])
+        for g in groups[1:]:
+            common &= set(g[name])
+        if common:
+            out[name] = sorted(common)
+    return out
+
+
 def _neutral_sector_block(sector: str) -> dict:
     """The block for a sector label no config matches.
 
-    The old fallback was `next(iter(cfg.values()))` — the FIRST config,
-    which is Technology — so every `Financial Services` company (FMP's
-    label for banks, insurers and payments) was researched against
-    Technology's drivers, KPIs and valuation lens and nothing said so.
-    A neutral block keeps the generic KPI groups (so placements still
-    compute), carries no sector-specific drivers or lens, and names the
-    label it failed to match so the gap is visible instead of silent.
+    The fallback before this was `next(iter(cfg.values()))` — the FIRST
+    config, which is Technology — so an unmatched company was researched
+    against Technology's drivers, KPIs and valuation lens and nothing said
+    so. Copying Technology's `kpi_groups` and relabelling them "generic"
+    was the same defect wearing a different name: a bank placed against
+    `rd_pct_revenue` and `EV_EBITDA` is not being measured neutrally, it is
+    being measured as a software company.
+
+    So the KPI groups here are the ones every config agrees on
+    (`_neutral_kpi_groups`) — revenue growth and operating margin, which
+    mean the same thing in any sector. The groups that could not be filled
+    are named in `kpi_groups_omitted` with the reason, because a KPI group
+    that silently vanished reads as "this sector has no valuation lens"
+    rather than "we do not know which one applies".
     """
-    cfg = _sector_config()
-    first = next(iter(cfg.values()))
+    kpi_groups = _neutral_kpi_groups()
+    configs = list(_sector_config().values())
+    any_group: set[str] = set()
+    all_groups: set[str] | None = None
+    for c in configs:
+        names = set(c.get("kpi_groups") or {})
+        any_group |= names
+        all_groups = names if all_groups is None else (all_groups & names)
+    omitted = {}
+    for name in sorted(any_group - set(kpi_groups)):
+        omitted[name] = (
+            "no metric common to every sector config; which one applies is sector-specific"
+            if name in (all_groups or set()) else
+            "not a group every sector config carries; it is sector-specific"
+        )
     return {
         "key_drivers": [],
-        "kpi_groups": {k: list(v) for k, v in (first.get("kpi_groups") or {}).items()},
-        "valuation_lens": "n/a: no sector config matched; generic multiples only.",
+        "kpi_groups": kpi_groups,
+        "kpi_groups_omitted": omitted,
+        "valuation_lens": (
+            f"n/a: no sector config matches {sector!r}, and the valuation lens is sector-specific "
+            "— none is asserted rather than borrowing another sector's."
+        ),
         "macro_sensitivities": [],
         "common_risks": [],
         "secular_trends": [],
@@ -57,14 +127,33 @@ def _neutral_sector_block(sector: str) -> dict:
 
 
 def _resolve_sector_block(sector: str) -> dict:
+    """The config a sector label researches against, or a neutral block.
+
+    Three passes, most certain first. The alias pass is the one that
+    matters: FMP labels its banks, insurers and payment networks
+    "Financial Services", which is neither an exact key nor a substring of
+    "Financials" either way round — so every one of them fell through to
+    the neutral block while the correct config sat in the file. The same
+    was true of "Consumer Cyclical", "Consumer Defensive", "Health Care"
+    and "Telecom".
+
+    The substring pass is kept for labels no alias table knows ("Technology
+    Hardware"), but only when exactly ONE config matches: an ambiguous
+    substring is a guess, and a guess is what put Technology's KPIs in
+    front of a bank in the first place.
+    """
     cfg = _sector_config()
-    sector = sector or ""
+    sector = (sector or "").strip()
     if sector in cfg:
         return cfg[sector]
-    if sector.strip():
-        for k, v in cfg.items():
-            if k.lower() in sector.lower() or sector.lower() in k.lower():
-                return v
+    canonical = normalize_sector(sector)
+    if canonical and canonical in _canonical_index():
+        return cfg[_canonical_index()[canonical]]
+    if sector:
+        low = sector.lower()
+        hits = [v for k, v in cfg.items() if k.lower() in low or low in k.lower()]
+        if len(hits) == 1:
+            return hits[0]
     return _neutral_sector_block(sector)
 
 
