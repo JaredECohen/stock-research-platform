@@ -242,3 +242,49 @@ def test_errors_are_deduplicated():
     }
     errs = v.validate(p, _facts())
     assert errs.count("outlook: number '+9.9%' is not in the facts") == 1
+
+
+@pytest.mark.parametrize("text, token", [
+    ("Revenue grew 1700% year over year.", "1700%"),
+    ("Margins expanded 1700 bps.", "1700 bps"),
+    ("The cohort trades at 1700x earnings.", "1700x"),
+])
+def test_an_integer_count_does_not_license_its_hundredfold(text, token):
+    """REGRESSION: every fact value was also accepted multiplied by 100, so
+    the sample size `n_constituents == 17` silently supported "1700%" — a
+    fabricated figure published as if observed. Only a ratio scales."""
+    p = _payload()
+    p["sections"]["performance"]["interpretation"] = _interp(text)
+    assert v.validate(p, _facts()) == [f"performance: number {token!r} is not in the facts"]
+
+
+def test_a_research_priority_of_five_does_not_license_500_bps():
+    facts = _facts()
+    facts["overview"]["research_priority"] = 5
+    p = _payload(facts)
+    p["sections"]["overview"]["interpretation"] = _interp("Margins expanded 500 bps on the quarter.")
+    assert any("number '500 bps' is not in the facts" in e for e in v.validate(p, facts))
+
+
+def test_ratios_still_scale_to_percentages_in_both_directions():
+    """The percent expansion the fix narrows must still hold for real
+    ratios: a decimal return, a ratio of exactly 1, and a single name up
+    more than 100% (stored as 1.8)."""
+    facts = _facts()
+    facts["performance"]["returns"]["1M"]["breadth"] = 1.0
+    facts["performance"]["returns"]["1Y"] = {"leader": 1.8, "equal_weight": -0.031}
+    p = _payload(facts)
+    p["sections"]["performance"]["interpretation"] = _interp(
+        "Observed -3.1% over 1M with 100.0% of names positive; the leader is up 180.0% over 1Y."
+    )
+    assert v.validate(p, facts) == []
+
+
+def test_a_large_non_integer_fact_does_not_license_its_hundredfold():
+    """A median EV/EBITDA of 26.5 is a rendered multiple, not a ratio; it
+    must not license "2650 bps"."""
+    facts = _facts()
+    facts["statistics"]["valuation"] = {"ev_ebitda": {"median": 26.5}}
+    p = _payload(facts)
+    p["sections"]["performance"]["interpretation"] = _interp("Spreads widened 2650 bps.")
+    assert any("number '2650 bps' is not in the facts" in e for e in v.validate(p, facts))

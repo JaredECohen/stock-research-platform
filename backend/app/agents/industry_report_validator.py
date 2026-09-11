@@ -71,6 +71,9 @@ _NUMBER_RE = re.compile(
     r"(?:%|x|bps|pp|bp|pts?|bn|mm|m|k|tn|t|b)?(?![\w/])", re.I,
 )
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+# A ratio of ±1000% is already an extreme; beyond it a fact is a rendered
+# figure (a multiple, a price, a market cap), not something to scale.
+_RATIO_CEILING = 10.0
 
 
 # --- helpers -------------------------------------------------------------------
@@ -152,14 +155,38 @@ def _is_exempt(raw: str) -> bool:
     return len(raw) == 4 and 1900 <= v <= 2100
 
 
+def _percent_form(a: float) -> float | None:
+    """`a` rendered as a percentage, when `a` is plausibly a RATIO.
+
+    Returns and breadth live in the facts as decimals (-0.031), and the
+    writer renders them as "-3.1%", so the gate has to accept the scaled
+    form. It must not accept it for every fact: the facts always carry
+    small counts — ``n_constituents``, ``research_priority``, the number
+    of industries — and scaling those by 100 manufactured support for
+    "Revenue grew 1700%" out of ``n_constituents == 17``.
+
+    A ratio is either inside [-1, 1] or fractional (a single name up 180%
+    is stored as 1.8); a bare integer above 1 is a count, never a ratio.
+    ``_RATIO_CEILING`` stops a large non-integer fact (a median EV/EBITDA
+    of 26.5) from licensing "2650".
+    """
+    if a != a or a in (float("inf"), float("-inf")):  # NaN / inf are not ratios
+        return None
+    if abs(a) <= 1.0 or (a != int(a) and abs(a) <= _RATIO_CEILING):
+        return a * 100.0
+    return None
+
+
 def _supported(raw: str, value: float, decimals: int, allowed: set[float]) -> bool:
     if _is_exempt(raw):
         return True
     tol = 0.5 * (10 ** -decimals) + 1e-9
     for a in allowed:
-        for candidate in (a, a * 100.0):
-            if abs(candidate - value) <= tol:
-                return True
+        if abs(a - value) <= tol:
+            return True
+        percent = _percent_form(a)
+        if percent is not None and abs(percent - value) <= tol:
+            return True
     return False
 
 
