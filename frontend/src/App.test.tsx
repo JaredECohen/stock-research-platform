@@ -73,6 +73,10 @@ describe("App routing", () => {
       ["/macro", "/app/macro"],
       ["/track-record?horizon=90", "/app/track-record?horizon=90"],
       ["/settings", "/app/settings"],
+      // FEAT-003: the index, and the one legacy path with a segment under
+      // it — a shared /industries/4530?version=2 link has to keep both.
+      ["/industries", "/app/industries"],
+      ["/industries/4530?version=2&tab=performance", "/app/industries/4530?version=2&tab=performance"],
     ])("redirects legacy %s to %s keeping query and hash", async (from, to) => {
       stubFetch();
       mountApp(from, { auth_enabled: false });
@@ -170,6 +174,13 @@ describe("App routing", () => {
       // Free items are plain links to their pages.
       expect(screen.getByRole("link", { name: "Stock Research" })).toHaveAttribute("href", "/app/research");
       expect(screen.queryByTestId("lock-chat")).not.toBeInTheDocument();
+      // FEAT-003: the latest industry edition follows
+      // INDUSTRY_ANALYSIS_ACCESS (public by default) and the page explains
+      // its own gate from the API's `access` block, so the nav item must
+      // NOT carry a lock — locking it would hide a surface this
+      // deployment serves to everyone, Free account included.
+      expect(screen.getByRole("link", { name: "Industry Analysis" })).toHaveAttribute("href", "/app/industries");
+      expect(screen.queryByTestId("lock-industry_analysis")).not.toBeInTheDocument();
     });
 
     it("shows the unavailable notice when the wall is on but no provider is configured", async () => {

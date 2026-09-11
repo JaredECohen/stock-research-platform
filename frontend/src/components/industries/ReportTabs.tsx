@@ -1,0 +1,244 @@
+import React, { useMemo, useRef } from "react";
+import type { IndustryInterpretation, IndustryReport } from "@/types/industries";
+import { INDUSTRY_FACTS_ONLY_SECTIONS, INDUSTRY_SECTIONS, INDUSTRY_SECTION_LABELS } from "@/types/industries";
+import FactsView from "./FactsView";
+import { humanize, na } from "./format";
+
+/**
+ * The edition's sections, one tab each, with the two layers separated by
+ * a heading that names them: **Observed data** (server-computed `facts`)
+ * and **Analyst interpretation** (the model's or the template's reading
+ * of those facts). That separation is the whole research contract of
+ * this feature, and it is a structural heading rather than a style so a
+ * screen reader hits it too.
+ *
+ * The tab list is `payload.section_order` when the edition carries one,
+ * so a section added by a later writer shows up without a deploy here;
+ * `INDUSTRY_SECTIONS` is only the fallback ordering. A section the order
+ * names but the payload lacks is rendered as a stated absence rather
+ * than dropped.
+ *
+ * Keyboard: the tablist is a roving tabindex — Left/Right move and
+ * select, Home/End reach the ends. Only the selected tab is tabbable, so
+ * Tab from the page moves past the strip rather than through thirteen
+ * stops.
+ */
+
+const FACTS_HEADING = "Observed data";
+const INTERPRETATION_HEADING = "Analyst interpretation";
+
+function sectionLabel(name: string): string {
+  return (INDUSTRY_SECTION_LABELS as Record<string, string>)[name] ?? humanize(name);
+}
+
+/** The analyst layer: prose, the eight-stage spine when the section is
+ *  ordered by it, scenarios (labelled as scenarios), and each claim with
+ *  the evidence it rests on and what would break it. */
+function Interpretation({ interp, mode }: { interp: IndustryInterpretation; mode: string }) {
+  return (
+    <div className="text-sm space-y-3" data-testid="interpretation-view">
+      <p className="text-slate-200 whitespace-pre-line">{interp.text}</p>
+
+      {Array.isArray(interp.stages) && interp.stages.length > 0 && (
+        <ol className="space-y-1 text-xs" data-testid="interpretation-stages">
+          {interp.stages.map((s, i) => (
+            <li key={s.id || i}>
+              <span className="text-slate-500 mr-1">{i + 1}. {humanize(s.id)}:</span>
+              <span className="text-slate-300">{s.text}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {interp.scenarios && Object.keys(interp.scenarios).length > 0 && (
+        <div className="space-y-1 text-xs" data-testid="interpretation-scenarios">
+          <div className="text-slate-500 uppercase tracking-widest text-[10px]">
+            Scenarios — not forecasts, not recommendations
+          </div>
+          <ul className="space-y-1">
+            {Object.entries(interp.scenarios).map(([name, s]) => (
+              <li key={name}>
+                <span className="text-slate-400">{humanize(name)}:</span>{" "}
+                <span className="text-slate-300">{s.text}</span>
+                {s.falsifiers && s.falsifiers.length > 0 && (
+                  <div className="text-slate-500">
+                    Falsifier{s.falsifiers.length === 1 ? "" : "s"}: {s.falsifiers.join("; ")}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {Array.isArray(interp.claims) && interp.claims.length > 0 && (
+        <details className="text-xs" data-testid="interpretation-claims">
+          <summary className="cursor-pointer text-slate-400">
+            {interp.claims.length} claim{interp.claims.length === 1 ? "" : "s"}, with basis and falsifier
+          </summary>
+          <ul className="mt-1 space-y-1">
+            {interp.claims.map((c, i) => (
+              <li key={i} className="border-l border-ink-800 pl-2">
+                <span className="badge text-[10px] border-ink-700 text-slate-400 mr-1">{humanize(c.type)}</span>
+                <span className="text-slate-300">{c.text}</span>
+                <div className="text-slate-500">
+                  Basis: {c.basis.length > 0 ? c.basis.join(", ") : na("no basis recorded")}
+                </div>
+                <div className="text-slate-500">
+                  Falsifier:{" "}
+                  {c.falsifier || (
+                    <span>
+                      {na(
+                        c.type === "observed_fact"
+                          ? "an observed fact carries no falsifier"
+                          : "none recorded on this claim",
+                      )}
+                    </span>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      <p className="text-[11px] text-slate-500" data-testid="interpretation-provenance">
+        Written by: {mode === "llm" ? "the industry analyst model" : `deterministic template (${mode || "mode not recorded"})`}.
+      </p>
+    </div>
+  );
+}
+
+export interface ReportTabsProps {
+  report: IndustryReport;
+  /** The selected section; the page keeps it in the URL. */
+  section: string;
+  onSelect: (section: string) => void;
+  /** Extra content for a section, rendered under the observed-data
+   *  heading — the companies table, the changes panel. */
+  extras?: Record<string, React.ReactNode>;
+  className?: string;
+}
+
+export default function ReportTabs({ report, section, onSelect, extras = {}, className = "" }: ReportTabsProps) {
+  const order = useMemo(() => {
+    const fromPayload = report.payload?.section_order;
+    return Array.isArray(fromPayload) && fromPayload.length > 0 ? fromPayload : [...INDUSTRY_SECTIONS];
+  }, [report]);
+  const current = order.includes(section) ? section : order[0];
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  const go = (to: number) => {
+    const i = Math.max(0, Math.min(order.length - 1, to));
+    const next = order[i];
+    onSelect(next);
+    tabRefs.current[next]?.focus();
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const i = order.indexOf(current);
+    switch (e.key) {
+      case "ArrowRight":
+        e.preventDefault();
+        go(i + 1 >= order.length ? 0 : i + 1);
+        break;
+      case "ArrowLeft":
+        e.preventDefault();
+        go(i - 1 < 0 ? order.length - 1 : i - 1);
+        break;
+      case "Home":
+        e.preventDefault();
+        go(0);
+        break;
+      case "End":
+        e.preventDefault();
+        go(order.length - 1);
+        break;
+      default:
+        break;
+    }
+  };
+
+  const body = report.payload?.sections?.[current];
+  const narrativeMode = report.payload?.narrative_by_section?.[current] ?? report.payload?.analyst_narrative ?? "";
+  const factsOnly = INDUSTRY_FACTS_ONLY_SECTIONS.includes(current);
+
+  return (
+    <div className={`space-y-3 ${className}`} data-testid="industry-report-tabs">
+      <div
+        role="tablist"
+        aria-label="Report sections"
+        onKeyDown={onKeyDown}
+        className="card-tight flex flex-wrap gap-1"
+      >
+        {order.map((name) => (
+          <button
+            key={name}
+            type="button"
+            role="tab"
+            id={`industry-tab-${name}`}
+            aria-selected={name === current}
+            aria-controls={`industry-panel-${name}`}
+            tabIndex={name === current ? 0 : -1}
+            ref={(el) => {
+              tabRefs.current[name] = el;
+            }}
+            onClick={() => onSelect(name)}
+            data-testid={`tab-${name}`}
+            className={`px-2 py-1 rounded text-xs ${
+              name === current ? "bg-accent-600/15 text-accent-500 border border-accent-600/30" : "text-slate-300 border border-transparent hover:bg-ink-800"
+            }`}
+          >
+            {sectionLabel(name)}
+          </button>
+        ))}
+      </div>
+
+      <section
+        role="tabpanel"
+        id={`industry-panel-${current}`}
+        aria-labelledby={`industry-tab-${current}`}
+        tabIndex={0}
+        className="space-y-4"
+        data-testid={`panel-${current}`}
+      >
+        <h2 className="section-title">{sectionLabel(current)}</h2>
+
+        {!body ? (
+          <p className="card-tight text-xs text-slate-400" role="status" data-testid="section-missing">
+            {na(`this edition carries no "${sectionLabel(current)}" section`)}
+          </p>
+        ) : (
+          <>
+            <div className="card space-y-2">
+              <h3 className="text-xs uppercase tracking-widest text-slate-500" data-testid="heading-facts">
+                {FACTS_HEADING}
+              </h3>
+              {extras[current]}
+              <FactsView facts={body.facts ?? {}} />
+            </div>
+
+            <div className="card space-y-2">
+              <h3 className="text-xs uppercase tracking-widest text-slate-500" data-testid="heading-interpretation">
+                {INTERPRETATION_HEADING}
+              </h3>
+              {body.interpretation ? (
+                <Interpretation interp={body.interpretation} mode={narrativeMode} />
+              ) : (
+                <p className="text-xs text-slate-400" data-testid="interpretation-absent">
+                  {na(
+                    factsOnly
+                      ? "this section is observed data only — the analyst does not write it"
+                      : "no analyst interpretation on this edition",
+                  )}
+                </p>
+              )}
+            </div>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+export { FACTS_HEADING, INTERPRETATION_HEADING };

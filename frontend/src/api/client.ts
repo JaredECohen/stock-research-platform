@@ -23,6 +23,11 @@ import type {
   DCFAssumptions,
   DCFResult,
   EntitlementRefusal,
+  IndustryChanges,
+  IndustryCompanies,
+  IndustryHistory,
+  IndustryReport,
+  IndustryTaxonomy,
   MacroScenarioResult,
   ModelPortfolio,
   PortfolioRequest,
@@ -689,6 +694,43 @@ export const api = {
   scorecardExportUrl,
   /** The export fetched with the bearer and handed back as a file (wall on). */
   scorecardExport: scorecardExportDownload,
+
+  // --- FEAT-003 Industry Analysis reads -------------------------------
+  // Browser-called, outside /api/admin, and every one of them is a row
+  // fetch: the weekly worker generates, the page only reads. There is
+  // deliberately no regenerate/publish method here — a page view must
+  // never queue work (the repo's "no expensive work in a page request"
+  // rule, and the reason these routes can be public at all).
+  /** Sectors → industry groups with per-group counts and a pointer at the
+   *  latest edition. Answers in every configuration, including before the
+   *  taxonomy is imported (503 with a remedy) and when the reports behind
+   *  it are Pro — its `access.surfaces` block is how the UI learns that. */
+  industryTaxonomy: () => request<IndustryTaxonomy>("/api/industries/taxonomy"),
+  /** One edition: `latest` (the published one) or an edition number. */
+  industryReport: (code: string, version: string | number = "latest") =>
+    request<IndustryReport>(
+      `/api/industries/${encodeURIComponent(code)}/report?version=${encodeURIComponent(String(version))}`,
+    ),
+  /** The group's classified membership with the price coverage of each
+   *  name. `limit` caps the page; the response counts what it dropped. */
+  industryCompanies: (code: string, limit?: number) =>
+    request<IndustryCompanies>(
+      `/api/industries/${encodeURIComponent(code)}/companies${typeof limit === "number" ? `?limit=${Math.max(1, Math.min(500, Math.round(limit)))}` : ""}`,
+    ),
+  /** Prior editions, newest first, metadata only. Pro under the wall. */
+  industryHistory: (code: string, limit?: number) =>
+    request<IndustryHistory>(
+      `/api/industries/${encodeURIComponent(code)}/history${typeof limit === "number" ? `?limit=${Math.max(1, Math.min(104, Math.round(limit)))}` : ""}`,
+    ),
+  /** What moved between two editions. `from` defaults to the edition the
+   *  target actually replaced (its parent), not `version - 1`. Pro. */
+  industryChanges: (code: string, opts: { from?: number; to?: string | number } = {}) => {
+    const q = new URLSearchParams();
+    if (typeof opts.from === "number") q.set("from", String(opts.from));
+    if (opts.to !== undefined) q.set("to", String(opts.to));
+    const qs = q.toString();
+    return request<IndustryChanges>(`/api/industries/${encodeURIComponent(code)}/changes${qs ? `?${qs}` : ""}`);
+  },
 
   chat: (message: string) =>
     request<ChatResponse>("/api/chat", {

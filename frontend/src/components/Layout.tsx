@@ -6,6 +6,7 @@ import {
   BarChart3,
   Briefcase,
   ChevronDown,
+  Factory,
   GanttChart,
   Gauge,
   LineChart,
@@ -42,6 +43,11 @@ const links: Array<{ to: string; label: string; icon: LucideIcon; end?: boolean;
   // Phase 6: reads are Pro under the wall (`auth/features.py` `scorecard`);
   // the lock only shows once /api/me lists the entitlement.
   { to: "/app/scorecard", label: "Scorecard", icon: Gauge, feature: "scorecard" },
+  // FEAT-003: the latest edition follows INDUSTRY_ANALYSIS_ACCESS (public
+  // by default) and the page explains its own gate from the `access`
+  // block, so no `feature` lock here — locking the nav item would hide a
+  // surface this deployment serves to everyone.
+  { to: "/app/industries", label: "Industry Analysis", icon: Factory },
   { to: "/app/portfolio", label: "Portfolio Builder", icon: Briefcase, feature: "portfolio" },
   { to: "/app/macro", label: "Macro", icon: GanttChart, feature: "macro" },
   { to: "/app/track-record", label: "Track Record", icon: Award, feature: "track_record" },

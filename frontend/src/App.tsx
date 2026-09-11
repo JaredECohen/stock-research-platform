@@ -1,5 +1,5 @@
 import React from "react";
-import { Navigate, Route, Routes, useLocation, type RouteObject } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useParams, type RouteObject } from "react-router-dom";
 import Layout from "@/components/Layout";
 import RequireAuth from "@/components/RequireAuth";
 import RouteTracker from "@/components/RouteTracker";
@@ -10,6 +10,7 @@ import Research from "@/pages/Research";
 import DCFLab from "@/pages/DCFLab";
 import Comps from "@/pages/Comps";
 import Fundamentals from "@/pages/Fundamentals";
+import IndustryAnalysis from "@/pages/IndustryAnalysis";
 import Screener from "@/pages/Screener";
 import Scorecard from "@/pages/Scorecard";
 import PortfolioBuilder from "@/pages/PortfolioBuilder";
@@ -40,6 +41,7 @@ export const LEGACY_APP_PATHS = [
   "/fundamentals",
   "/screener",
   "/scorecard",
+  "/industries",
   "/portfolio",
   "/macro",
   "/track-record",
@@ -49,6 +51,13 @@ export const LEGACY_APP_PATHS = [
 function LegacyRedirect({ to }: { to: string }) {
   const { search, hash } = useLocation();
   return <Navigate replace to={{ pathname: to, search, hash }} />;
+}
+
+/** `/industries/:code` → `/app/industries/:code`, keeping `?version=` and
+ *  `?tab=` — the parts of the URL that make an edition citable. */
+function LegacyIndustryRedirect() {
+  const { code = "" } = useParams();
+  return <LegacyRedirect to={`/app/industries/${encodeURIComponent(code)}`} />;
 }
 
 /** RouteObject[] → <Route> elements, recursing into children. */
@@ -77,6 +86,12 @@ export default function App() {
             <Route path="fundamentals" element={<Fundamentals />} />
             <Route path="screener" element={<Screener />} />
             <Route path="scorecard" element={<Scorecard />} />
+            {/* FEAT-003: the index lists the groups, `:code` reads one
+                edition. `?version=` and `?tab=` are search params, not
+                path segments, so an edition and a section stay citable
+                without multiplying routes. */}
+            <Route path="industries" element={<IndustryAnalysis />} />
+            <Route path="industries/:code" element={<IndustryAnalysis />} />
             <Route path="portfolio" element={<PortfolioBuilder />} />
             <Route path="macro" element={<Macro />} />
             <Route path="track-record" element={<TrackRecord />} />
@@ -91,6 +106,10 @@ export default function App() {
         {LEGACY_APP_PATHS.map((p) => (
           <Route key={p} path={p} element={<LegacyRedirect to={`/app${p}`} />} />
         ))}
+        {/* The only legacy path with a segment under it: a shared
+            /industries/4530 link has to keep the code, and the flat map
+            above cannot carry one. */}
+        <Route path="/industries/:code" element={<LegacyIndustryRedirect />} />
 
         <Route path="*" element={<NotFound />} />
       </Routes>
