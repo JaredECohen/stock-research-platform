@@ -294,6 +294,29 @@ def cache_put(
             db.close()
 
 
+_UPDATE_CHUNK = 500
+
+
+def _bulk_update(db: Session, ids: List[int], **values: Any) -> int:
+    """Apply `values` to `ids` in chunks, without loading a single row.
+
+    Chunked because some drivers cap bound parameters per statement, and a
+    cascade over a large lineage can touch far more ids than that cap.
+    `synchronize_session=False` is safe here: every caller commits straight
+    after, which expires the session's objects anyway.
+    """
+    if not ids:
+        return 0
+    for start in range(0, len(ids), _UPDATE_CHUNK):
+        db.execute(
+            update(ResearchSnapshot)
+            .where(ResearchSnapshot.id.in_(ids[start:start + _UPDATE_CHUNK]))
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+    return len(ids)
+
+
 def invalidate(
     subject: str,
     kind: Optional[str] = None,
@@ -302,16 +325,17 @@ def invalidate(
 ) -> int:
     """Mark all live snapshots for `subject` (and optional `kind`) invalidated.
 
-    Returns the count of rows touched. Cascades by calling
-    `mark_stale_descendants` for each invalidated snapshot.
+    Returns the count of rows touched, and cascades once for the whole set.
     """
     own = db is None
     if own:
         db = SessionLocal()
     try:
         _ensure_table(db)
+        # Ids only. These rows carry `payload` JSON blobs that this function
+        # never reads, and a hot subject accumulates thousands of them.
         stmt = (
-            select(ResearchSnapshot)
+            select(ResearchSnapshot.id)
             .where(
                 ResearchSnapshot.subject == subject,
                 ResearchSnapshot.invalidated_at.is_(None),
@@ -319,51 +343,174 @@ def invalidate(
         )
         if kind:
             stmt = stmt.where(ResearchSnapshot.kind == kind)
-        rows = db.execute(stmt).scalars().all()
-        now = _now()
-        count = 0
-        for row in rows:
-            row.invalidated_at = now
-            row.stale = True
-            count += 1
-            mark_stale_descendants(row.id, db=db)
+        ids = [row_id for (row_id,) in db.execute(stmt).all()]
+        if not ids:
+            return 0
+        _bulk_update(db, ids, invalidated_at=_now(), stale=True)
+        # One cascade for the whole seed set, not one per row: the lineage
+        # walk is shared, so N invalidated rows cost one scan, not N.
+        mark_stale_descendants(ids, db=db)
         db.commit()
-        return count
+        return len(ids)
     finally:
         if own:
             db.close()
 
 
-def mark_stale_descendants(snapshot_id: int, *, db: Optional[Session] = None) -> int:
+def mark_stale_descendants(
+    snapshot_id: "int | Iterable[int]",
+    *,
+    db: Optional[Session] = None,
+) -> int:
     """Mark every snapshot whose lineage references `snapshot_id` as stale.
 
-    BFS through parent_snapshot_ids since SQLite JSON doesn't support GIN/JSONB
-    operators portably. Returns count of newly-stale rows.
+    Accepts one id or many. Pass the whole seed set at once: the lineage
+    scan is shared, so N seeds cost one scan rather than N.
+
+    The edge lives in a JSON column, which has no portable index, so the
+    walk itself happens in Python. What must not happen is loading the rows
+    to do it. This function used to run `select(ResearchSnapshot)` — every
+    column, `payload` blob included — with no LIMIT, once per frontier
+    node, from a caller that re-entered it once per invalidated row. Since
+    `research_snapshots` is insert-only and was never reaped, that scan grew
+    with the table until it no longer fit in memory: on 2026-09-10 it
+    OOM-killed the 512 MB production worker once an hour, every hour, with
+    no traceback (SIGKILL leaves none). Keep this function projecting only
+    the columns it reads, and keep the query out of the loop.
+
+    Returns the count of newly-stale rows.
     """
+    seeds = [snapshot_id] if isinstance(snapshot_id, int) else [int(s) for s in snapshot_id]
+    if not seeds:
+        return 0
     own = db is None
     if own:
         db = SessionLocal()
     try:
         _ensure_table(db)
-        frontier = [snapshot_id]
-        seen: set[int] = set()
-        count = 0
+        # The two columns the walk actually reads, fetched ONCE. Previously
+        # this was `select(ResearchSnapshot)` — every column including the
+        # `payload` JSON blob — re-run once per frontier node, inside a
+        # caller that re-entered it once per invalidated row. See the
+        # docstring: that is what killed the worker hourly.
+        children: Dict[int, List[int]] = {}
+        rows = db.execute(
+            select(ResearchSnapshot.id, ResearchSnapshot.parent_snapshot_ids)
+            .where(ResearchSnapshot.stale.is_(False))
+        ).all()
+        for row_id, parents in rows:
+            for parent_id in (parents or []):
+                try:
+                    children.setdefault(int(parent_id), []).append(row_id)
+                except (TypeError, ValueError):  # hand-written lineage
+                    continue
+
+        frontier = list(seeds)
+        seen: set[int] = set(seeds)
+        descendants: List[int] = []
         while frontier:
-            current = frontier.pop()
-            if current in seen:
-                continue
-            seen.add(current)
-            stmt = select(ResearchSnapshot).where(
-                ResearchSnapshot.stale.is_(False),
-            )
-            rows = db.execute(stmt).scalars().all()
-            for row in rows:
-                if current in (row.parent_snapshot_ids or []):
-                    row.stale = True
-                    count += 1
-                    frontier.append(row.id)
+            for child_id in children.get(frontier.pop(), ()):
+                if child_id in seen:
+                    continue
+                seen.add(child_id)
+                descendants.append(child_id)
+                frontier.append(child_id)
+
+        _bulk_update(db, descendants, stale=True)
         db.commit()
-        return count
+        return len(descendants)
+    finally:
+        if own:
+            db.close()
+
+
+# Retention. `cache_put` is insert-only — every write appends a row and
+# leaves the previous one behind, live and un-stale — and until 2026-09-10
+# nothing ever deleted from this table. The EDGAR poller alone appends ~170
+# bookkeeping rows every 30 minutes (~8k/day), none of which is ever
+# invalidated. The table therefore grew without bound, and the unbounded
+# lineage scan above eventually could not fit in the worker's memory.
+# Bounding the scan stops the crash; this keeps the table from growing back
+# into the next one.
+SNAPSHOT_RETENTION_DAYS = 14
+SNAPSHOT_KEEP_PER_KEY = 1
+_GC_MAX_DELETE = 50_000
+_GC_STREAM_ROWS = 1_000
+
+
+def gc_snapshots(
+    *,
+    retention_days: int = SNAPSHOT_RETENTION_DAYS,
+    keep_per_key: int = SNAPSHOT_KEEP_PER_KEY,
+    max_delete: int = _GC_MAX_DELETE,
+    now: Optional[datetime] = None,
+    db: Optional[Session] = None,
+) -> Dict[str, int]:
+    """Delete superseded snapshots. Returns `{scanned, deleted, capped}`.
+
+    The rule is deliberately conservative, because deleting a row that is
+    still serving reads turns a cache hit into a recompute (and, for the
+    LLM-backed kinds, into real money): for every `(subject, kind)` the
+    newest `keep_per_key` rows are kept **whatever their age**. Only rows
+    that something newer has already superseded, and that are older than
+    `retention_days`, are removed. A key written once and never again keeps
+    its single row forever.
+
+    Memory-bounded on purpose — it would be absurd for the reaper that
+    exists to prevent an OOM to cause one. It streams four small columns
+    (never `payload`), and stops after `max_delete` rows so a first run
+    against a very large table is a bounded amount of work; the next run
+    continues where it left off.
+    """
+    cutoff = (now or _now()) - timedelta(days=retention_days)
+    own = db is None
+    if own:
+        db = SessionLocal()
+    try:
+        _ensure_table(db)
+        stmt = (
+            select(
+                ResearchSnapshot.id,
+                ResearchSnapshot.subject,
+                ResearchSnapshot.kind,
+                ResearchSnapshot.generated_at,
+            )
+            .order_by(
+                ResearchSnapshot.subject,
+                ResearchSnapshot.kind,
+                ResearchSnapshot.generated_at.desc(),
+                ResearchSnapshot.id.desc(),
+            )
+            .execution_options(yield_per=_GC_STREAM_ROWS)
+        )
+        doomed: List[int] = []
+        scanned = 0
+        capped = 0
+        current_key: Optional[tuple] = None
+        rank = 0
+        for row_id, subject, kind, generated_at in db.execute(stmt):
+            scanned += 1
+            key = (subject, kind)
+            if key != current_key:
+                current_key, rank = key, 0
+            rank += 1
+            if rank <= keep_per_key:
+                continue          # newest per key is never touched
+            if generated_at is not None and generated_at >= cutoff:
+                continue          # superseded, but still inside retention
+            doomed.append(row_id)
+            if len(doomed) >= max_delete:
+                capped = 1
+                break
+
+        deleted = 0
+        for start in range(0, len(doomed), _UPDATE_CHUNK):
+            chunk = doomed[start:start + _UPDATE_CHUNK]
+            result = db.execute(delete(ResearchSnapshot).where(ResearchSnapshot.id.in_(chunk)))
+            deleted += result.rowcount if result.rowcount is not None else len(chunk)
+        db.commit()
+        log.info("gc_snapshots: scanned=%d deleted=%d capped=%d", scanned, deleted, capped)
+        return {"scanned": scanned, "deleted": deleted, "capped": capped}
     finally:
         if own:
             db.close()
