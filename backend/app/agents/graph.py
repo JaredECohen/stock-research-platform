@@ -1414,7 +1414,8 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
     # Wave 10 — PM intake step. Lets the PM deprioritize up to 3
     # specialists for this memo (e.g., skip technicals on a regulated
     # bank, skip filings re-pass when nothing material has changed).
-    # Default = run all 8. Decision is logged on the memo for audit.
+    # Default = run the whole applicable roster. Decision is logged on
+    # the memo for audit.
     from .intake import run_intake, stub_finding
     intake = run_intake(profile)
 
