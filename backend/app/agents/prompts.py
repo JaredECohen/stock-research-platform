@@ -128,12 +128,18 @@ Return strict JSON with keys:
 # the industry analyst's own user prompt. `classification_label` is the
 # provenance sentence ("research map" vs "derived from provider
 # classification"); it travels with every display of a mapping.
+# The two editions are named separately on purpose: the registry version
+# governs the codes and names (it follows the classification row), while the
+# mandate prose below always comes from the single bundled knowledge base.
+# Claiming one version for both would be a lie the reader cannot check.
 INDUSTRY_GROUP_COMPANY_CONTEXT = """## Industry group context for {ticker}
 {ticker} ({company_name}) sits in GICS industry group {group_code} {group_name} \
 (sector {sector_code} {sector_name}; taxonomy {taxonomy_version}).
 Sub-industry: {sub_industry}.
 Classification: {classification_label} (state: {state}; as of {source_as_of}). \
 Mappings are derived from provider classification, not licensed GICS security assignments.
+The mandate below is the bundled knowledge edition {knowledge_version}; it does not vary \
+by taxonomy version.
 {mandate_block}"""
 
 INDUSTRY_GROUP_ANALYST_PROMPT = """{company_context}

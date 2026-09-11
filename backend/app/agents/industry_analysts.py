@@ -22,10 +22,23 @@ run — an unmapped ticker records a soft "no mapping" degradation and the
 sector analyst stays primary, exactly as it is with routing off (the
 default until a production A/B is read).
 
+Stale rows still route
+----------------------
+``industry_classification`` flips a drifted row to ``stale`` IN PLACE: it
+keeps its ``industry_group_code`` and files the state it held under
+``evidence.previous_state``. Dropping those rows would make the analyst
+vanish from memos — and the sector analyst lose its mandate block —
+between a drift flag and the next classification run, which is a silent
+capability loss on exactly the names whose classification is moving. So a
+stale row routes on its previous state (``routed_state`` below) and the
+provenance string SAYS it is stale, with the reason and the detection
+date: a reader is told the mapping is being re-checked rather than
+shown nothing.
+
 Provenance travels with every display: the classification source label
-("research map" vs "derived from provider classification"), the
-sub-industry name, the taxonomy version and the mapping caveat all ride
-on ``finding.data["industry_group"]``.
+("research map" vs "derived from provider classification", plus the
+staleness when there is any), the sub-industry name, the taxonomy version
+and the mapping caveat all ride on ``finding.data["industry_group"]``.
 """
 from __future__ import annotations
 
@@ -59,7 +72,7 @@ log = logging.getLogger(__name__)
 AGENT_NAME = "Industry Group Analyst"
 NO_MAPPING_KIND = "NoMapping"
 # States whose row names an industry group the analyst may route on. A
-# `fallback` row knows only the sector; `missing` / `stale` name nothing.
+# `fallback` row knows only the sector, and a `missing` row names nothing.
 ROUTABLE_STATES: tuple[str, ...] = (
     industry_classification.STATE_MAPPED,
     industry_classification.STATE_CONFLICT,
@@ -120,6 +133,7 @@ class IndustryAnalyst:
             group_code=self.code, group_name=self.name,
             sector_code=self.sector_code, sector_name=self.sector_name,
             taxonomy_version=self.taxonomy_version_key,
+            knowledge_version=self.mandate.knowledge_version or "n/a",
             sub_industry=(f"{sub['code']} {sub['name']}" if sub else "n/a (classified at group level only)"),
             classification_label=classification_source_label(classification),
             state=cls.get("state") or "n/a",
@@ -141,18 +155,44 @@ class IndustryAnalyst:
 # --- provenance helpers --------------------------------------------------------
 
 
+def routed_state(classification: dict[str, Any] | None) -> str:
+    """The state routing decides on. A ``stale`` row was flipped in place
+    and kept the state it held under ``evidence.previous_state``, so that
+    is what it routes on; everything else routes on its own state."""
+    cls = classification or {}
+    state = str(cls.get("state") or "")
+    if state != industry_classification.STATE_STALE:
+        return state
+    previous = (cls.get("evidence") or {}).get("previous_state")
+    return str(previous or state)
+
+
+def _staleness_note(classification: dict[str, Any] | None) -> str:
+    """The clause appended to a stale row's provenance, so no display ever
+    presents a drifted mapping as settled."""
+    cls = classification or {}
+    if cls.get("state") != industry_classification.STATE_STALE:
+        return ""
+    evidence = cls.get("evidence") or {}
+    reason = evidence.get("stale_reason") or "inputs_changed"
+    detected = evidence.get("stale_detected_at") or "unknown date"
+    return (f"; mapping STALE since {detected} ({reason}) — routed on its previous "
+            f"state pending the next classification run")
+
+
 def classification_source_label(classification: dict[str, Any] | None) -> str:
     """The sentence a reader sees next to a mapping: which source placed
-    the company, and who authored it."""
+    the company, who authored it, and whether the mapping is stale."""
     if not classification:
         return "unclassified"
     source = classification.get("source")
     author = classification.get("author") or ""
+    stale = _staleness_note(classification)
     if source == industry_classification.SOURCE_RESEARCH_MAP:
-        return f"research map ({author})" if author else "research map"
+        return (f"research map ({author})" if author else "research map") + stale
     if source == industry_classification.SOURCE_PROVIDER_ALIAS:
-        return (f"derived from provider classification ({author})" if author
-                else "derived from provider classification")
+        return ((f"derived from provider classification ({author})" if author
+                 else "derived from provider classification") + stale)
     return f"unmapped ({classification.get('state') or 'unknown'})"
 
 
@@ -174,6 +214,9 @@ def industry_group_summary(
         "code": cls.get("industry_group_code"),
         "name": analyst.name if analyst else None,
         "state": cls.get("state") or "missing",
+        # What routing actually decided on: differs from `state` only for a
+        # stale row, which routes on the state it held before the drift.
+        "routed_state": routed_state(classification) or "missing",
         "source": cls.get("source") or industry_classification.SOURCE_NONE,
         "source_label": classification_source_label(classification),
         "author": cls.get("author") or "",
@@ -238,17 +281,28 @@ def clear_cache() -> None:
 
 
 def is_routable(classification: dict[str, Any] | None) -> bool:
+    """Whether the row names a group this analyst may reason about. Stale
+    rows are included on their previous state — see the module docstring."""
     return bool(
         classification
-        and classification.get("state") in ROUTABLE_STATES
+        and routed_state(classification) in ROUTABLE_STATES
         and classification.get("industry_group_code")
     )
 
 
 def analyst_for_classification(classification: dict[str, Any] | None) -> IndustryAnalyst | None:
     """The analyst a classification row routes to, or None when the row
-    names no group. The row's own taxonomy version is used, so a memo
-    written against version N stays on N's analyst even mid-switch."""
+    names no group.
+
+    The row's own ``taxonomy_version_id`` selects the REGISTRY edition —
+    the group's code and name, and the sector it hangs under — so a memo
+    written against version N keeps N's names even mid-switch. The mandate
+    text does NOT follow it: ``group_mandate`` reads the single bundled
+    knowledge base, so the prose is always the bundled edition
+    (``mandate.knowledge_version``). Versioned mandates would need a
+    per-version knowledge document, which does not exist; the prompt header
+    names both editions rather than implying one.
+    """
     if not is_routable(classification):
         return None
     assert classification is not None

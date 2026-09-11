@@ -141,6 +141,65 @@ def test_company_context_block_names_sub_industry_and_source_label():
     assert ia.classification_source_label({"state": "missing", "source": "none"}) == "unmapped (missing)"
 
 
+def test_a_stale_row_still_routes_and_the_provenance_says_it_is_stale():
+    """`industry_classification` flips a drifted row to `stale` IN PLACE —
+    the group code survives, the old state moves to
+    `evidence.previous_state`. Dropping those rows would make the analyst
+    disappear from memos between the drift flag and the next classification
+    run, so they route on the previous state and every display says so."""
+    row = ic.current_for(["NVDA"])["NVDA"]
+    assert row["state"] == "mapped"
+    stale = {**row, "state": "stale", "evidence": {
+        **(row.get("evidence") or {}),
+        "previous_state": "mapped",
+        "stale_reason": "inputs_changed",
+        "stale_detected_at": "2026-09-08T03:40:00+00:00",
+    }}
+    assert ia.routed_state(stale) == "mapped"
+    assert ia.is_routable(stale)
+    analyst = ia.analyst_for_classification(stale)
+    assert analyst is not None and analyst.code == row["industry_group_code"]
+
+    label = ia.classification_source_label(stale)
+    assert "mapping STALE since 2026-09-08T03:40:00+00:00 (inputs_changed)" in label
+    assert "routed on its previous state" in label
+    summary = ia.industry_group_summary(stale, analyst)
+    # The raw state stays truthful; `routed_state` says what routing used.
+    assert summary["state"] == "stale" and summary["routed_state"] == "mapped"
+    assert "STALE" in summary["source_label"]
+    block = analyst.company_context_block({"ticker": "NVDA", "company_name": "NVIDIA"}, stale)
+    assert "mapping STALE since" in block
+
+    # A stale row whose PREVIOUS state was never routable stays unroutable:
+    # staleness does not promote a fallback row into a group mandate.
+    was_fallback = {**stale, "evidence": {**stale["evidence"], "previous_state": "fallback"}}
+    assert ia.routed_state(was_fallback) == "fallback"
+    assert not ia.is_routable(was_fallback)
+    assert ia.analyst_for_classification(was_fallback) is None
+
+
+def test_prompt_header_names_the_bundled_knowledge_edition_not_a_versioned_mandate():
+    """The mandate prose is the single bundled knowledge base for every
+    taxonomy version; only the codes and names follow the row's registry
+    version. The header must not imply otherwise."""
+    analyst = ia.get_industry_analyst("4530")
+    row = ic.current_for(["NVDA"])["NVDA"]
+    block = analyst.company_context_block({"ticker": "NVDA", "company_name": "NVIDIA"}, row)
+    knowledge = analyst.mandate.knowledge_version
+    assert knowledge == ik.load_industry_knowledge()["taxonomy_version"]
+    assert f"taxonomy {analyst.taxonomy_version_key}" in block
+    assert f"The mandate below is the bundled knowledge edition {knowledge}" in block
+    assert "it does not vary by taxonomy version" in " ".join(block.split())
+    # The claim is checkable: a mandate built under any other taxonomy
+    # version still carries the bundled edition, because there is only one
+    # knowledge document. `version_key` is a cache key, not a mandate.
+    other = igk.group_mandate("4530", version_key="gics-2099-99")
+    assert other.version_key == "gics-2099-99"
+    assert other.knowledge_version == knowledge
+    assert other.as_prompt_block() != analyst.mandate.as_prompt_block()  # only the header line differs
+    assert other.as_prompt_block().split("\n", 1)[1] == analyst.mandate.as_prompt_block().split("\n", 1)[1]
+
+
 def test_industry_group_summary_carries_provenance_and_caveat():
     analyst = ia.get_industry_analyst("4530")
     row = ic.current_for(["NVDA"])["NVDA"]
