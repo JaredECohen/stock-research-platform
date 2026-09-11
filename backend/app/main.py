@@ -24,6 +24,8 @@ from .api import (
     routes_fundamentals,
     routes_fundamentals_commentary,
     routes_health,
+    routes_industries,
+    routes_industries_admin,
     routes_macro,
     routes_portfolio,
     routes_public,
@@ -182,6 +184,15 @@ def create_app() -> FastAPI:
     # set (and the auth policy coverage test) is static; ENABLE_SCORECARD
     # is checked per request and turns the whole surface into 404s.
     app.include_router(routes_scorecard.router, tags=["scorecard"])
+    # FEAT-003: Industry Analysis reads (public, `/api/industries/*`) and
+    # the ops surface (`/api/admin/industries/*`, guarded by the admin
+    # prefix middleware). Always mounted, for the same reason as the
+    # scorecard: the route set stays static, and a deployment with no
+    # taxonomy imported answers 503 with the remedy rather than 404ing a
+    # route the frontend expects to exist. Nothing here generates — the
+    # worker owns report generation.
+    app.include_router(routes_industries.router, tags=["industries"])
+    app.include_router(routes_industries_admin.router, tags=["industries", "admin"])
 
     @app.on_event("startup")
     def _startup() -> None:

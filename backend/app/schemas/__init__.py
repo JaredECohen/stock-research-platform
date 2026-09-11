@@ -89,6 +89,35 @@ from .fundamentals import (
     SeriesResponse,
     UnavailableTicker,
 )
+
+# FEAT-003 (`schemas/industry.py`). Reachable as
+# `app.schemas.IndustryReportOut` etc. NOT listed in `__all__` below:
+# `test_schema_package_reexports.test_all_lists_match_the_frozen_name_sets`
+# pins `__all__` to a frozen name list that lives in a test file this
+# slice does not own. The re-export is what callers need; the `__all__`
+# entries and the matching `SCHEMA_NAMES` rows must be added together, in
+# one commit, or the frozen-list test fails for a cosmetic reason.
+from .industry import (
+    ClassifyOut,
+    ClassifyRequest,
+    FactDeltaOut,
+    IndustryAccessOut,
+    IndustryChangesOut,
+    IndustryCompaniesOut,
+    IndustryCompanyRowOut,
+    IndustryHistoryOut,
+    IndustryJobOut,
+    IndustryJobsOut,
+    IndustryReportHistoryItemOut,
+    IndustryReportOut,
+    IndustrySnapshotOut,
+    IndustryStatsOut,
+    RegenerateOut,
+    RegenerateRequest,
+    TaxonomyImportOut,
+    TaxonomyImportRequest,
+    TaxonomyOut,
+)
 from .macro import MacroScenarioRequest, MacroScenarioResult, MacroSeries, MacroSeriesPoint
 from .memo import MispricingThesis, StockMemoOut, ValuationVerdict
 from .portfolio import ModelPortfolio, PortfolioBrief, PortfolioHolding, PortfolioRequest
