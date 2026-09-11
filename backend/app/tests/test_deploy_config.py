@@ -96,6 +96,33 @@ def test_web_and_worker_own_disjoint_background_work():
     )
 
 
+def test_exactly_one_service_owns_the_industry_report_queue():
+    """FEAT-003: `ENABLE_INDUSTRY_REPORTS` must be true on one service.
+
+    Both on: two processes run the Sunday loop and two drainers race the
+    queue — duplicated provider spend, and the web service back on the
+    hook for the worker's peak. Both off (or the key missing): the weekly
+    loop records "disabled" forever and no Industry Analysis is ever
+    generated, with nothing user-visible to say so.
+    """
+    values = {}
+    for svc in _services():
+        env = {e["key"]: e.get("value") for e in svc.get("envVars", []) if "value" in e}
+        assert "ENABLE_INDUSTRY_REPORTS" in env, (
+            f"{svc['name']} does not define ENABLE_INDUSTRY_REPORTS; the flag must be "
+            f"explicit on every service, not inherited from a code default"
+        )
+        values[svc["name"]] = env["ENABLE_INDUSTRY_REPORTS"]
+    owners = sorted(name for name, value in values.items() if value == "true")
+    assert len(owners) == 1, (
+        f"expected exactly one service with ENABLE_INDUSTRY_REPORTS=true, got {owners} "
+        f"(all values: {values})"
+    )
+    web, worker = _web_and_worker()
+    assert values[worker["name"]] == "true", "the worker owns report generation"
+    assert values[web["name"]] == "false", "a page view must never generate a report"
+
+
 def test_every_service_caps_malloc_arenas():
     """MALLOC_ARENA_MAX is the cheapest guard against RSS ratcheting in
     these thread-heavy processes; a new service silently omitting it
