@@ -29,7 +29,7 @@ a migration.
 | 1 | **Public or Pro?** Who can read the latest report for an industry group. | `INDUSTRY_ANALYSIS_ACCESS=public` — the latest edition and the constituent list answer to everyone; **history**, **changes-since-prior** and the PM's cross-industry block are Pro whenever `AUTH_ENABLED` is on. | Set `INDUSTRY_ANALYSIS_ACCESS=pro` on the **web** service. Both gates (`auth/policy.py` and the handler seam) read it from `industry_report_store.access_policy()`, so one edit moves both. | It decides whether this is an acquisition surface or a Pro feature, and the pricing page copy follows it. |
 | 2 | **Benchmark set.** What a group's return is measured against. | `INDUSTRY_BENCHMARKS=universe_ew,sector_ew,KFR.MKT_RF.D` — our own universe equal-weight, the sector equal-weight cohort, and the Ken French daily market factor. | Changing it to SPY / sector ETFs needs **ETF price data rights we do not have**; do not set it until that is bought. | A benchmark we may not redistribute is a licensing exposure, not a config choice. |
 | 3 | **Publication time.** | Sunday **06:30 UTC**, as-of the prior **Friday** close, `period_key` = the ISO week of that Friday (`INDUSTRY_REPORTS_CRON_DOW/HOUR/MINUTE`, `INDUSTRY_REPORTS_AS_OF_WEEKDAY`). | Env vars on the **worker**. An admin regenerate derives the same `period_key` from the same settings, so a manual refresh and the cron cannot create two edition series. | Moving it after launch changes what "this week's report" means to a reader mid-week. |
-| 4 | **Auto-publish or review?** | `INDUSTRY_REPORTS_REQUIRE_REVIEW=false` — an edition that passes the validator publishes itself. The `pending_review` status value exists and the flag is honoured, but **there is no publish endpoint**: setting it to `true` today means nothing publishes until one is built. | Leave `false` until a review UI exists. | Turning it on without a publisher is an outage that looks like a quiet week. |
+| 4 | **Auto-publish or review?** | `INDUSTRY_REPORTS_REQUIRE_REVIEW=false` — an edition that passes the validator publishes itself. The `pending_review` status value exists and the flag is honoured, but **there is no publish endpoint**: setting it to `true` today means nothing publishes until one is built. | Leave `false` until a review UI exists. | Turning it on without a publisher is an outage that looks like a quiet week. Second-order effect, now handled: with review on, `version` keeps incrementing while `parent_report_id` stays on the last *published* edition, so `/changes` resolves its default basis through `parent_report_id` rather than `version - 1` — otherwise it would diff against an edition no reader has ever seen. |
 | 5 | **GICS display and data rights.** | Codes and names are displayed with the attribution string in `gics_registry.ATTRIBUTION`. Every company→group mapping is labelled *derived from provider classification, not licensed GICS security assignments*. Assignments taken from the research map are labelled *economic research examples; not official licensed issuer GICS mapping*. No S&P/MSCI constituent file is in the repo, and `internal_labels` display mode is reserved but **not built**. | A licence would let us drop the caveats and ship real constituent lists. | Shipping unlabelled mappings as licensed GICS is the one claim here that is not ours to make. |
 
 ### The sub-industry layer
@@ -179,6 +179,10 @@ on them must keep apart too:
    could price) as separate fields, and every unpriced name carries a
    reason. A group with three members and no price history is
    `insufficient_sample` — a labelled state, not an error and not a zero.
+   Both counters, and `membership_states`, describe the **whole**
+   membership; `items` is one page (`limit` / `truncated`). So
+   `n_priced / count` is a coverage figure that does not move when a
+   caller pages, and `counts_basis` on the response says so.
 2. **Numbers travel with their method.** Never show `benchmark_relative`
    without `method.benchmark_cohort_basis` (the cohort deliberately excludes
    constituents the group's own numbers include — they are named under
@@ -189,10 +193,33 @@ on them must keep apart too:
    attempt failed; `last_attempt` names the failure. A failed week leaves the
    previous edition in place, flagged — it never blanks the page.
 
+4. **Staleness is one verdict, rendered twice.** `/taxonomy`'s
+   `stale_by_age` on a group's `latest_report` pointer is the same
+   comparison `/report`'s `stale` makes, at full precision. `age_days` is
+   floored to whole days for display only — never compare it with the
+   threshold, or the picker will call an edition fresh that its own page
+   calls stale.
+
 Before the first import, every read answers `503 taxonomy_not_imported` with
 the remedy, and `/api/industries/taxonomy` answers **in every
 configuration** — including `INDUSTRY_ANALYSIS_ACCESS=pro` — carrying the
 access policy, so the UI can explain a gate instead of rendering a 401.
+
+### What a 401 actually contains (known gap)
+
+With `AUTH_ENABLED=true`, a refusal on a Pro surface comes from the customer
+middleware, **before** the handler. Its body is the plain FEAT-002 shape —
+`auth_required` (401) or `plan_required` + `feature` + `plan` +
+`upgrade_url` (402) — and carries **no `required_tier` and no `surface`**.
+The richer refusal in `api/entitlements_industry._refusal()` is defence in
+depth behind the wall and is not what a browser sees.
+
+A client that needs the tier reads it from `GET /api/industries/taxonomy`,
+which answers unauthenticated in every configuration and names every
+surface's tier under `access.surfaces`. Closing the gap properly means
+teaching `auth/middleware.py` to attach the `pol.feature`-derived tier to
+its 401/402 bodies; that file is outside this slice's ownership and the
+change is recorded in the slice's open issues.
 
 ---
 

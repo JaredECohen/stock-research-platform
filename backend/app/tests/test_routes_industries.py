@@ -303,6 +303,45 @@ def test_an_old_as_of_is_stale_by_age_with_the_reason(client, group, taxonomy, m
     assert str(settings.industry_report_stale_after_days) in body["stale_reason"]
 
 
+def test_the_picker_and_the_page_agree_about_staleness_inside_a_day(
+    client, group, taxonomy, monkeypatch,
+):
+    """`/taxonomy`'s `stale_by_age` is the report endpoint's `stale`.
+
+    `_age_days` floored the age to whole days before comparing it with
+    the same threshold the store compares as a full timedelta, so an
+    edition N days and twelve hours old was `stale_by_age: false` in the
+    picker and `stale: true` on its own page — for every edition in the
+    [N, N+1) day window.
+    """
+    _seed_report(group, taxonomy, period_key="2026-W36", stats_id=None)
+    stale_after = int(settings.industry_report_stale_after_days)
+    half_past = AS_OF + timedelta(days=stale_after, hours=12)
+    monkeypatch.setattr(store, "_utcnow", lambda: half_past)
+
+    report = client.get(f"/api/industries/{group.code}/report").json()
+    pointer = _pointer(client, group)
+    assert report["stale"] is True and str(stale_after) in report["stale_reason"]
+    assert pointer["stale_by_age"] is True
+    # `age_days` stays the floored whole number a UI renders — the verdict
+    # is what had to stop being computed from it.
+    assert pointer["age_days"] == stale_after
+
+    # And the boundary still reads fresh on both, rather than over-flagging.
+    monkeypatch.setattr(store, "_utcnow", lambda: AS_OF + timedelta(days=stale_after))
+    assert client.get(f"/api/industries/{group.code}/report").json()["stale"] is False
+    assert _pointer(client, group)["stale_by_age"] is False
+
+
+def _pointer(client, group) -> dict:
+    """This group's `latest_report` pointer out of the taxonomy tree."""
+    body = client.get("/api/industries/taxonomy").json()
+    entry = next(
+        g for s in body["sectors"] for g in s["industry_groups"] if g["code"] == group.code)
+    assert entry["latest_report"] is not None
+    return entry["latest_report"]
+
+
 def test_report_version_number_and_bad_version(client, group, taxonomy):
     _seed_report(group, taxonomy, period_key="2026-W36", stats_id=None)
     _seed_report(group, taxonomy, period_key="2026-W37", stats_id=None)
@@ -366,6 +405,61 @@ def test_changes_accepts_explicit_non_adjacent_versions(client, group, taxonomy)
     assert body["adjacent"] is False
 
 
+# --- review fixes: the default basis is the edition that was REPLACED ---
+
+
+def test_changes_defaults_to_the_parent_edition_not_version_minus_one(
+    client, group, taxonomy, monkeypatch,
+):
+    """With review required, `version - 1` diffs against an edition no
+    reader has ever seen.
+
+    `save_report` increments `version` on every save but points
+    `parent_report_id` at the latest *good* edition, so a group can hold
+    v1 (published), v2 (pending_review) and v3 (published, parent v1).
+    The default basis must be v1 — the edition v3 actually replaced.
+    """
+    a = _seed_stats(group, taxonomy, period_key="2026-W35", ret_1m=0.01)
+    c = _seed_stats(group, taxonomy, period_key="2026-W37", ret_1m=0.04)
+    _seed_report(group, taxonomy, period_key="2026-W35", stats_id=a)
+    monkeypatch.setattr(settings, "industry_reports_require_review", True)
+    held = _seed_report(group, taxonomy, period_key="2026-W36", stats_id=None)
+    assert held.status == "pending_review" and held.version == 2
+    monkeypatch.setattr(settings, "industry_reports_require_review", False)
+    published = _seed_report(group, taxonomy, period_key="2026-W37", stats_id=c)
+    assert published.version == 3
+
+    body = client.get(f"/api/industries/{group.code}/changes").json()
+    assert body["from"]["version"] == 1, "defaulted to the unpublished v2"
+    assert body["to"]["version"] == 3
+    assert body["adjacent"] is True  # v3's parent IS v1
+    assert body["facts_delta"]["returns.1m.ew"]["delta"] == pytest.approx(0.03)
+
+
+def test_changes_without_a_parent_counts_the_editions_it_is_not_first_over(
+    client, group, taxonomy, monkeypatch,
+):
+    """The other half of the same bug: `parent_report_id is None` means
+    nothing was published before, NOT that this is the first edition on
+    file. Claiming "first on file" over two unpublished editions is a
+    false statement about the data."""
+    monkeypatch.setattr(settings, "industry_reports_require_review", True)
+    _seed_report(group, taxonomy, period_key="2026-W35", stats_id=None)
+    monkeypatch.setattr(settings, "industry_reports_require_review", False)
+    _seed_report(group, taxonomy, period_key="2026-W36", stats_id=None)
+
+    resp = client.get(f"/api/industries/{group.code}/changes")
+    assert resp.status_code == 404
+    detail = resp.json()["detail"]
+    assert detail["code"] == "no_prior_edition"
+    assert detail["earlier_editions"] == 1
+    assert "none was published" in detail["message"]
+    assert "first on file" not in detail["message"]
+    # …and the basis it refused to guess is still reachable explicitly.
+    body = client.get(f"/api/industries/{group.code}/changes?from=1&to=2").json()
+    assert body["from"]["version"] == 1 and body["to"]["version"] == 2
+
+
 # ---------------------------------------------------------------------------
 # Companies
 # ---------------------------------------------------------------------------
@@ -411,6 +505,32 @@ def test_companies_separates_membership_from_price_coverage(client, group, taxon
     assert unpriced["unpriced_reason"] == "not in the latest statistics row"
     assert unpriced["last_close"] is None  # never a zero
     assert {e["ticker"] for e in body["excluded"]} == {TICKERS[2]}
+
+
+def test_companies_counters_describe_the_membership_not_the_page(client, group, taxonomy):
+    """`count` and `n_priced` are one coverage figure; paging must not move it.
+
+    Counting `n_priced` and `membership_states` inside the `rows[:limit]`
+    loop made a capped call report `0 of 4 priced` for a group whose full
+    page said `2 of 4` — two numbers in one object describing different
+    populations. The whole-membership counters are what a reader is told
+    the coverage is, so they are what a truncated call must still report.
+    """
+    base = _baseline(client, group)
+    _seed_members(group, taxonomy)
+    _seed_stats(group, taxonomy, period_key="2026-W36", ret_1m=0.02)
+
+    full = client.get(f"/api/industries/{group.code}/companies").json()
+    capped = client.get(f"/api/industries/{group.code}/companies?limit=1").json()
+
+    assert capped["count"] == full["count"] == base["count"] + len(TICKERS)
+    assert capped["n_priced"] == full["n_priced"] == 2
+    assert capped["membership_states"] == full["membership_states"]
+    # Only the page and its drop-count move.
+    assert len(capped["items"]) == 1
+    assert capped["truncated"] == capped["count"] - 1
+    assert full["truncated"] == 0
+    assert capped["counts_basis"]
 
 
 def test_companies_carries_the_sub_industry_layer_and_its_provenance(client, group, taxonomy):

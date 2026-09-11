@@ -37,7 +37,7 @@ of showing an error.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -91,8 +91,16 @@ _SOURCE_LABELS = {
 
 
 def _utcnow() -> datetime:
-    """Clock seam — tests monkeypatch this instead of freezing time."""
-    return datetime.utcnow()
+    """Clock seam — tests monkeypatch this instead of freezing time.
+
+    It defers to the store's clock rather than reading its own, because
+    `/taxonomy`'s `stale_by_age` and `/report`'s `stale` are two renderings
+    of ONE verdict. Two independent seams could be patched apart in a test
+    (and skewed apart by two processes' clocks in production), which is
+    exactly the drift that let the picker call an edition fresh while its
+    own page called it stale.
+    """
+    return store._utcnow()
 
 
 def _error(status: int, error_code: str, message: str, **extra: Any) -> HTTPException:
@@ -132,13 +140,28 @@ def _group_or_404(code: str, info: gics_registry.VersionInfo) -> gics_registry.N
                      taxonomy_version=info.version_key) from None
 
 
-def _age_days(as_of: str | None, now: datetime) -> int | None:
+def _age(as_of: str | None, now: datetime) -> timedelta | None:
+    """How old an edition's as-of is, or `None` when it has none."""
     if not as_of:
         return None
     try:
-        return max(0, (now - datetime.fromisoformat(as_of)).days)
+        return max(timedelta(0), now - datetime.fromisoformat(as_of))
     except ValueError:  # pragma: no cover — stored values are isoformat
         return None
+
+
+def _stale_by_age(age: timedelta | None, stale_after_days: int) -> bool:
+    """The SAME comparison `industry_report_store.freshness` makes.
+
+    It must be the full timedelta, not `age.days`: flooring to whole days
+    first made an edition 10 days and 12 hours old read as `age_days: 10`
+    and therefore fresh on `/taxonomy`, while `/report` — comparing
+    `now - as_of > timedelta(days=10)` — called the same edition stale.
+    The picker and the page disagreed for everything in the [N, N+1) day
+    window. `age_days` stays a floored whole number because that is what
+    a UI renders; only the verdict is computed from the real age.
+    """
+    return age is not None and age > timedelta(days=stale_after_days)
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +205,7 @@ def get_industry_taxonomy(
         edition = latest.get(node.code)
         pointer = None
         if edition is not None:
-            age = _age_days(edition.get("as_of"), now)
+            age = _age(edition.get("as_of"), now)
             pointer = {
                 "version": edition["version"],
                 "period_key": edition.get("period_key") or "",
@@ -191,8 +214,8 @@ def get_industry_taxonomy(
                 "generated_at": edition.get("generated_at"),
                 "degraded": bool(edition.get("degraded")),
                 "degraded_reasons": list(edition.get("degraded") or []),
-                "stale_by_age": bool(age is not None and age > stale_after),
-                "age_days": age,
+                "stale_by_age": _stale_by_age(age, stale_after),
+                "age_days": None if age is None else age.days,
             }
         groups_by_sector.setdefault(node.code[:2], []).append({
             "code": node.code,
@@ -352,6 +375,66 @@ def get_industry_history(
     )
 
 
+def _parent_version_or_404(
+    node: gics_registry.NodeInfo, info: gics_registry.VersionInfo, target: dict[str, Any],
+) -> int:
+    """The edition `target` actually replaced, resolved through
+    `parent_report_id` — never `version - 1`.
+
+    `save_report` points `parent_report_id` at the latest *good* edition
+    at save time and increments `version` unconditionally, so the two are
+    not the same thing the moment an edition is not published. With
+    `INDUSTRY_REPORTS_REQUIRE_REVIEW=true` a group can hold v1
+    (published), v2 (pending_review, never served) and v3 (published,
+    parent v1); `version - 1` diffed v3 against the edition no reader has
+    ever seen. And when the parent is None it is not proof the target is
+    first on file — the earlier editions may simply all be unpublished —
+    so that refusal counts them before making the claim.
+    """
+    parent_id = target.get("parent_report_id")
+    with SessionLocal() as db:
+        if parent_id is not None:
+            parent_version = db.execute(
+                select(IndustryReport.version).where(
+                    IndustryReport.id == int(parent_id),
+                    IndustryReport.taxonomy_version_id == info.id,
+                    IndustryReport.industry_group_code == node.code,
+                )
+            ).scalar_one_or_none()
+            if parent_version is not None:
+                return int(parent_version)
+            raise _error(
+                404, "no_prior_edition",
+                f"{node.name} ({node.code}) edition {target['version']} records edition id "
+                f"{parent_id} as the one it replaced, but that row is no longer on file; "
+                "pass ?from=<version> to choose a basis explicitly",
+                industry_group_code=node.code, version=target["version"],
+                parent_report_id=int(parent_id),
+            )
+        earlier = int(db.execute(
+            select(func.count(IndustryReport.id)).where(
+                IndustryReport.taxonomy_version_id == info.id,
+                IndustryReport.industry_group_code == node.code,
+                IndustryReport.version < int(target["version"]),
+            )
+        ).scalar() or 0)
+    if earlier:
+        raise _error(
+            404, "no_prior_edition",
+            f"{node.name} ({node.code}) edition {target['version']} replaced no published "
+            f"edition ({earlier} earlier edition(s) exist but none was published); "
+            "pass ?from=<version> to compare with one of them anyway",
+            industry_group_code=node.code, version=target["version"],
+            earlier_editions=earlier,
+        )
+    raise _error(
+        404, "no_prior_edition",
+        f"{node.name} ({node.code}) edition {target['version']} is the first on file; "
+        "there is no prior edition to compare it with",
+        industry_group_code=node.code, version=target["version"], earlier_editions=0,
+    )
+
+
 @router.get("/api/industries/{code}/changes", response_model=IndustryChangesOut)
 @limiter.limit(LIMITS["industry_read"])
 def get_industry_changes(
@@ -378,15 +461,7 @@ def get_industry_changes(
                      industry_group_code=node.code, taxonomy_version=info.version_key)
     source_version = from_version
     if source_version is None:
-        parent = target.get("parent_report_id")
-        if parent is None:
-            raise _error(
-                404, "no_prior_edition",
-                f"{node.name} ({node.code}) edition {target['version']} is the first on file; "
-                "there is no prior edition to compare it with",
-                industry_group_code=node.code, version=target["version"],
-            )
-        source_version = max(1, int(target["version"]) - 1)
+        source_version = _parent_version_or_404(node, info, target)
     try:
         delta = store.diff(node.code, source_version, to, version=info)
     except store.ReportNotFound as exc:
@@ -410,6 +485,15 @@ def get_industry_changes(
 # ---------------------------------------------------------------------------
 # Companies
 # ---------------------------------------------------------------------------
+
+
+def _is_priced(stat: dict[str, Any] | None) -> bool:
+    """Did the latest statistics row actually price this name? One
+    definition, used by both the page rows and the `n_priced` counter, so
+    the two can never drift apart."""
+    if not stat:
+        return False
+    return stat.get("last_close") is not None and not stat.get("exclusion")
 
 
 def _membership(code: str, info: gics_registry.VersionInfo) -> list[tuple[Any, Any]]:
@@ -464,15 +548,23 @@ def get_industry_companies(
         "no statistics row for this group yet — membership is shown without prices"
     )
 
+    # The counters describe the WHOLE membership, the items describe the
+    # page. Counting them in one loop over `rows[:limit]` made `count`
+    # (all members) and `n_priced` / `membership_states` (this page)
+    # describe different populations, so a capped call reported a
+    # coverage figure that was simply wrong — `3 of 4 priced` became
+    # `0 of 4 priced` at `?limit=1`.
     states: dict[str, int] = {}
-    items: list[dict[str, Any]] = []
     n_priced = 0
-    for classification, company in rows[:limit]:
+    for classification, _company in rows:
         states[classification.state] = states.get(classification.state, 0) + 1
-        stat = per_ticker.get(classification.ticker) or {}
-        priced = bool(stat) and stat.get("last_close") is not None and not stat.get("exclusion")
-        if priced:
+        if _is_priced(per_ticker.get(classification.ticker)):
             n_priced += 1
+
+    items: list[dict[str, Any]] = []
+    for classification, company in rows[:limit]:
+        stat = per_ticker.get(classification.ticker) or {}
+        priced = _is_priced(stat)
         sub_code = classification.sub_industry_code
         sub_node = gics_registry.node(sub_code, version=info, include_inactive=True) if sub_code else None
         industry_node = (

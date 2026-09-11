@@ -101,6 +101,16 @@ def test_public_allowlist_is_exactly_what_the_plan_says():
         ("POST", "/api/public/events"),
         ("POST", "/api/admin/ui-log"),
         ("POST", "/api/billing/webhook"),  # Stripe-signed; the signature is its authentication (S4)
+        # FEAT-003. `latest` follows INDUSTRY_ANALYSIS_ACCESS (owner
+        # decision 1, default `public`), so these two are public only while
+        # the setting says so — `test_industry_entitlements` pins that they
+        # move behind the wall together when it is `pro`.
+        ("GET", "/api/industries/{code}/report"),
+        ("GET", "/api/industries/{code}/companies"),
+        # …and the taxonomy is public unconditionally, because it is how a
+        # signed-out UI learns that what is behind it costs Pro. A 401 here
+        # would leave it with nothing to explain the gate with.
+        ("GET", "/api/industries/taxonomy"),
     }, sorted(public)
 
 

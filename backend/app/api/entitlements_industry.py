@@ -20,9 +20,22 @@ Layering (the repo's existing shape, not a new one):
   charged and refused by the same machinery as every other feature. It
   also hands the handler the `access` block every response carries.
 
-Refusals keep their structured FEAT-002 shape (`auth_required`,
-`plan_required`, …) and gain `required_tier` and `surface`, so a client
-can say "this is a Pro surface" rather than "an error occurred".
+Where a client actually learns the tier — stated plainly, because the
+obvious reading of `_refusal()` below is wrong:
+
+* **On the wire, a refusal does NOT carry `required_tier`.** For a Pro
+  surface the customer middleware refuses at the wall, before this
+  dependency runs, with the plain FEAT-002 body (`auth_required` /
+  `plan_required` — no `surface`, no `required_tier`). `_refusal()` is
+  the in-handler shape, reachable only when something calls `enforce()`
+  past the wall; it is defence in depth, not the documented contract.
+  `test_the_wire_refusal_is_the_plain_middleware_shape` pins that, and
+  `open_issues` on this slice records the exact `auth/middleware.py`
+  change (a file this slice does not own) that would close the gap.
+* **`GET /api/industries/taxonomy` is the tier's source of truth.** It
+  answers in every configuration and its `access.surfaces` block names
+  the tier of every surface, so a client that got a bare 401 can still
+  render "this is a Pro surface" from one extra unauthenticated call.
 
 With `AUTH_ENABLED=false` — today's default deployment — nothing is
 enforced and nothing is charged; the `access` block says so
@@ -100,7 +113,12 @@ def _refusal(exc: EntitlementError, surface: str, tier: str) -> HTTPException:
     needs. `StructuredError` has no `required_tier` field, so the detail
     dict is extended rather than rebuilt — the FEAT-002 keys (`code`,
     `message`, `plan`, `upgrade_url`, …) and the `WWW-Authenticate`
-    challenge survive untouched."""
+    challenge survive untouched.
+
+    NOT the shape a browser sees: the wall refuses these routes first (see
+    the module docstring). Do not document this body as the API contract
+    until `auth/middleware.py` carries the same two fields.
+    """
     detail: dict[str, Any]
     if isinstance(exc.detail, dict):
         detail = dict(exc.detail)

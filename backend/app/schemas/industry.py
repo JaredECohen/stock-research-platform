@@ -83,7 +83,13 @@ class LatestReportOut(BaseModel):
     `as_of` only — a failed refresh is the other half of staleness and
     costs a query per group, so it is reported by
     `GET /api/industries/{code}/report` and named here rather than
-    silently folded in."""
+    silently folded in.
+
+    `stale_by_age` is the FULL-precision comparison the report endpoint
+    makes, not `age_days > N`: `age_days` is floored to whole days for
+    display, and comparing the floored value made an edition ten days and
+    twelve hours old read as fresh here while its own page called it
+    stale."""
     version: int
     period_key: str = ""
     as_of: str | None = None
@@ -296,9 +302,12 @@ class IndustryCompanyRowOut(BaseModel):
 class IndustryCompaniesOut(BaseModel):
     """Membership first, price coverage second, and both counted.
 
-    `items` is the classified membership of the group. `n_priced` is how
-    many of those the latest stats row could price; the rest carry
-    `priced=false` with `unpriced_reason`. A caller that wants "the names
+    `items` is ONE PAGE of the classified membership (`limit`, with
+    `truncated` counting what was dropped). `count`, `n_priced` and
+    `membership_states` describe the WHOLE membership, not the page, so
+    `n_priced / count` is a coverage figure that does not move when a
+    caller pages. The rest of the members carry `priced=false` with
+    `unpriced_reason` on their own page. A caller that wants "the names
     behind the statistics" uses `n_priced`, not `count`.
     """
     code: str
@@ -308,6 +317,7 @@ class IndustryCompaniesOut(BaseModel):
     as_of: str | None = None
     count: int = 0
     n_priced: int = 0
+    counts_basis: str = "count / n_priced / membership_states cover the whole membership, not just `items`"
     membership_source: str = ""
     membership_states: dict[str, int] = Field(default_factory=dict)
     stats: dict[str, Any] | None = None

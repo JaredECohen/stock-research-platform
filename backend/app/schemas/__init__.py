@@ -90,13 +90,11 @@ from .fundamentals import (
     UnavailableTicker,
 )
 
-# FEAT-003 (`schemas/industry.py`). Reachable as
-# `app.schemas.IndustryReportOut` etc. NOT listed in `__all__` below:
-# `test_schema_package_reexports.test_all_lists_match_the_frozen_name_sets`
-# pins `__all__` to a frozen name list that lives in a test file this
-# slice does not own. The re-export is what callers need; the `__all__`
-# entries and the matching `SCHEMA_NAMES` rows must be added together, in
-# one commit, or the frozen-list test fails for a cosmetic reason.
+# FEAT-003 (`schemas/industry.py`). Re-exported AND listed in `__all__`
+# below, with the matching rows in
+# `test_schema_package_reexports.SCHEMA_NAMES` — the two lists are one
+# change and must never be split across commits, or the frozen-list test
+# fails for a cosmetic reason.
 from .industry import (
     ClassifyOut,
     ClassifyRequest,
@@ -274,4 +272,24 @@ __all__ = [
     "ScorecardSummary",
     "ScorecardUniverseOut",
     "ScorecardUniverseRow",
+    # FEAT-003 (`schemas/industry.py`).
+    "ClassifyOut",
+    "ClassifyRequest",
+    "FactDeltaOut",
+    "IndustryAccessOut",
+    "IndustryChangesOut",
+    "IndustryCompaniesOut",
+    "IndustryCompanyRowOut",
+    "IndustryHistoryOut",
+    "IndustryJobOut",
+    "IndustryJobsOut",
+    "IndustryReportHistoryItemOut",
+    "IndustryReportOut",
+    "IndustrySnapshotOut",
+    "IndustryStatsOut",
+    "RegenerateOut",
+    "RegenerateRequest",
+    "TaxonomyImportOut",
+    "TaxonomyImportRequest",
+    "TaxonomyOut",
 ]

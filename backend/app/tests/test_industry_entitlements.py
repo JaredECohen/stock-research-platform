@@ -25,7 +25,11 @@ What is pinned here:
 * reading a report is not metered: the LLM was paid for once, when the
   worker generated the edition, and no reader is charged again;
 * the ops routes are `admin`, refused without the bearer token even for
-  a Pro customer.
+  a Pro customer;
+* the shape of a refusal ON THE WIRE. The wall answers first, so a
+  browser gets the plain FEAT-002 body — no `surface`, no
+  `required_tier`. The seam's richer refusal is defence in depth, not
+  the published contract, and a test says so in both places.
 """
 from __future__ import annotations
 
@@ -141,6 +145,33 @@ def test_anonymous_is_401_on_the_pro_surfaces(auth_on, client, group, surface):
 
 def test_anonymous_is_401_on_the_cross_industry_snapshot(auth_on, client):
     assert_structured(client.get("/api/industries/snapshot"), code="auth_required", status=401)
+
+
+def test_the_wire_refusal_is_the_plain_middleware_shape(auth_on, client, group):
+    """What a browser actually receives — and what it does NOT.
+
+    `_refusal()` above adds `surface` + `required_tier`, but the wall
+    refuses these routes before the handler ever runs, so that richer
+    body never reaches a client. This pins the real contract so nothing
+    documents the unreachable one: an anonymous call gets the plain
+    FEAT-002 body, and the tier is discoverable from `/taxonomy`, which
+    answers in every configuration.
+
+    If `auth/middleware.py` is later taught to carry the tier (the change
+    is recorded in this slice's open issues), this test is the one to
+    update — deliberately, in that commit.
+    """
+    detail = assert_structured(
+        client.get(_paths(group)["history"]), code="auth_required", status=401)
+    assert "required_tier" not in detail, (
+        "the wire refusal now carries the tier — update the module docstring in "
+        "api/entitlements_industry.py, which says it does not"
+    )
+    assert "surface" not in detail
+
+    # The one call that always answers is what closes the gap for a client.
+    surfaces = client.get(_paths(group)["taxonomy"]).json()["access"]["surfaces"]
+    assert surfaces["history"] == "pro"
 
 
 def test_anonymous_still_reads_the_taxonomy_and_the_public_surfaces(auth_on, client, group):
