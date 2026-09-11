@@ -77,12 +77,13 @@ def _loaders(
     caps: dict[str, float] | None = None, metrics: dict[str, dict[str, Any]] | None = None,
     fetch: dict[str, list[dict[str, Any]] | None] | None = None,
     factor: list[dict[str, Any]] | None = None, prior: dict[str, Any] | None = None,
-    spy: list[str] | None = None,
+    spy: list[str] | None = None, inactive: set[str] | None = None,
 ) -> ia.Loaders:
     caps = caps or {}
     metrics = metrics or {}
     fetch = fetch or {}
     spy = spy if spy is not None else []
+    dead = inactive or set()
 
     def fetch_prices(ticker: str):
         spy.append(ticker)
@@ -92,7 +93,7 @@ def _loaders(
         constituents_by_group=lambda version: groups,
         companies=lambda tickers: {
             t: {"company_name": f"{t} Co", "sector": "x", "market_cap": caps.get(t),
-                "shares_outstanding": None, "last_price": None, "is_active": True}
+                "shares_outstanding": None, "last_price": None, "is_active": t not in dead}
             for t in tickers
         },
         metrics=lambda tickers: {t: metrics[t] for t in tickers if t in metrics},
@@ -258,6 +259,75 @@ def test_market_factor_cumulates_daily_excess_returns_over_the_window(codes):
     assert row.payload["benchmark_relative"][ia.MARKET_FACTOR_ID]["1w"]["value"] == pytest.approx(0.0 - (1.01 ** 7 - 1), abs=1e-6)
 
 
+def test_the_benchmark_cohort_applies_the_same_exclusions_the_group_applies(codes):
+    """A stale series and a delisted company are thrown out of the group's
+    numbers. If they stay in the universe/sector cohort, the group is
+    measured against the very rows it ruled unusable and
+    ``benchmark_relative`` — and the regime label the PM reads off it —
+    reports leadership that is not there."""
+    code, _ = codes
+    stale = _step_series(20.0, 10.0, cutoff=CUTOFF - timedelta(days=ia.STALE_PRICE_DAYS + 5))
+    ld = _loaders(
+        groups={code: ["AAA", "BBB", "CCC", "DEAD", "OLD"]},
+        prices={**{t: _step_series(10.0, 11.0) for t in ("AAA", "BBB", "CCC")},
+                "DEAD": _step_series(20.0, 10.0), "OLD": stale},
+        inactive={"DEAD"},
+    )
+    row = ia.compute_group_stats(code, as_of=AS_OF, loaders=ld, persist=False, max_fetch=0)
+    assert row.sample["excluded"] == [
+        {"ticker": "DEAD", "reason": ia.REASON_INACTIVE}, {"ticker": "OLD", "reason": ia.REASON_STALE_PRICES},
+    ]
+    assert row.payload["returns"]["1m"]["equal_weight"] == pytest.approx(0.10)
+    # The cohort is the same three tickers, so like-for-like relative is 0.
+    for bid in (ia.BENCHMARK_UNIVERSE, ia.BENCHMARK_SECTOR):
+        bench = row.payload["benchmarks"][bid]["1m"]
+        assert bench["n"] == 3 and bench["value"] == pytest.approx(0.10)
+        assert row.payload["benchmark_relative"][bid]["1m"]["value"] == pytest.approx(0.0, abs=1e-9)
+    by_id = {b["id"]: b for b in row.method["benchmarks"]}
+    assert by_id[ia.BENCHMARK_UNIVERSE]["excluded_by_reason"] == {
+        ia.REASON_INACTIVE: 1, ia.REASON_STALE_PRICES: 1,
+    }
+    cohort = row.sample["benchmark_cohort"]
+    assert cohort == {
+        "n_universe": 5, "n_eligible": 3,
+        "excluded_by_reason": {ia.REASON_INACTIVE: 1, ia.REASON_STALE_PRICES: 1},
+        "group_members_outside_cohort": [],
+    }
+    assert "fixed before any group is computed" in row.method["benchmark_cohort_basis"]
+
+
+def test_a_groups_row_does_not_depend_on_which_group_was_drained_first(codes):
+    """Two groups share one context (the pattern the weekly drainer uses).
+    ``ensure_prices`` grows ``ctx.prices`` per group, so a cohort read off
+    ``ctx.prices`` would give the first group a 3-ticker universe and the
+    second a 6-ticker one — same inputs, two different benchmarks, two
+    different ``inputs_hash`` values, and a regime label that flips with
+    drain order."""
+    code, other = codes
+    cached = {t: _step_series(10.0, 11.0) for t in ("A1", "A2", "A3")}      # +10% 1M, in the cache
+    fetched = {t: _step_series(20.0, 10.0) for t in ("B1", "B2", "B3")}     # −50% 1M, fetched on demand
+    groups = {code: sorted(cached), other: sorted(fetched)}
+
+    def run(order: list[str]) -> dict[str, Any]:
+        ld = _loaders(groups=groups, prices=cached, fetch=fetched)
+        ctx = ia.load_context(AS_OF, version=None, max_fetch=10, loaders=ld)
+        rows = {c: ia.compute_group_stats(c, as_of=AS_OF, context=ctx, persist=False) for c in order}
+        return {c: rows[c] for c in sorted(order)}
+
+    forward = run([code, other])
+    backward = run([other, code])
+    for c in (code, other):
+        assert forward[c].inputs_hash == backward[c].inputs_hash
+        assert forward[c].payload == backward[c].payload
+    # And the cohort is the baseline three, in both orders — the on-demand
+    # fetches count in their own group but are not retro-fitted into it.
+    universe = forward[code].payload["benchmarks"][ia.BENCHMARK_UNIVERSE]["1m"]
+    assert universe["n"] == 3 and universe["value"] == pytest.approx(0.10)
+    assert forward[code].payload["benchmark_relative"][ia.BENCHMARK_UNIVERSE]["1m"]["value"] == pytest.approx(0.0, abs=1e-9)
+    outside = forward[other].sample["benchmark_cohort"]["group_members_outside_cohort"]
+    assert outside == [{"ticker": t, "reason": ia.REASON_NO_PRICES} for t in ("B1", "B2", "B3")]
+
+
 # --- fetch budget -------------------------------------------------------------------
 
 
@@ -322,6 +392,68 @@ def test_valuation_medians_exclude_non_positive_multiples_and_momentum_needs_a_p
     assert row.payload["fundamental_momentum"]["value"] == pytest.approx(0.05)
     assert row.payload["fundamental_momentum"]["prior_period_key"] == "2026-W35"
     assert "proxy" in row.payload["fundamental_momentum"]["basis"]
+
+
+# --- breadth window ----------------------------------------------------------------------
+
+
+def _weekday_series(cutoff: date = CUTOFF, *, length: int = 200) -> list[dict[str, Any]]:
+    """Weekday-only bars: 100 until 55 calendar days before the cutoff, 80
+    for the next 30, 82 for the last 25. Over the last 50 TRADING sessions
+    the mean sits above 82; over the last 50 CALENDAR days (≈36 bars) it
+    sits below. The two windows disagree about the same series, which is
+    the whole point."""
+    rows = []
+    for i in range(length, -1, -1):
+        d = cutoff - timedelta(days=i)
+        if d.weekday() >= 5:
+            continue
+        close = 100.0 if i > 55 else (80.0 if i > 25 else 82.0)
+        rows.append({"date": d.isoformat(), "close": close})
+    return rows
+
+
+def test_above_50d_mean_counts_trading_sessions_not_calendar_days():
+    """The field is named for a 50-day moving average and a report will
+    quote it as one. A 50-calendar-day window is about 35 bars and answers
+    a different question — here it flips the flag from below to above."""
+    series = ia.close_series(_weekday_series())
+    sessions = [px for _, px in series][-ia.MEAN_WINDOW_SESSIONS:]
+    assert len(sessions) == ia.MEAN_WINDOW_SESSIONS
+    assert sessions[-1] < sum(sessions) / len(sessions)  # genuinely below its 50-session mean
+    flag, why = ia.above_mean_window(series, CUTOFF)
+    assert flag is False and why is None
+    # The window this replaced: fewer bars, and the opposite answer.
+    calendar = [px for d, px in series if CUTOFF - timedelta(days=50) < d <= CUTOFF]
+    assert len(calendar) < ia.MEAN_WINDOW_SESSIONS
+    assert calendar[-1] > sum(calendar) / len(calendar)
+
+
+def test_a_series_that_cannot_support_the_50_session_mean_is_null_with_a_reason():
+    short = ia.close_series(_step_series(10.0, 11.0, length=40))
+    assert ia.above_mean_window(short, CUTOFF) == (None, ia.REASON_MEAN_WINDOW_SHORT)
+    # 60 weekly closes are 60 bars but reach back more than a year; calling
+    # their mean a "50-day mean" would be a factual error.
+    weekly = ia.close_series([
+        {"date": (CUTOFF - timedelta(days=7 * i)).isoformat(), "close": 10.0 + i} for i in range(59, -1, -1)
+    ])
+    assert ia.above_mean_window(weekly, CUTOFF) == (None, ia.REASON_MEAN_WINDOW_SPARSE)
+
+
+def test_breadth_reports_the_window_it_used_and_names_who_it_could_not_place(codes):
+    code, _ = codes
+    prices = {t: _weekday_series() for t in ("AAA", "BBB", "CCC")}
+    prices["SHORT"] = _step_series(10.0, 11.0, length=30)  # too few bars for a 50-session mean
+    ld = _loaders(groups={code: sorted(prices)}, prices=prices)
+    row = ia.compute_group_stats(code, as_of=AS_OF, loaders=ld, persist=False, max_fetch=0)
+    above = row.payload["breadth"]["above_50d_mean"]
+    assert above["share"] == 0.0 and above["n"] == 3
+    assert above["window_sessions"] == ia.MEAN_WINDOW_SESSIONS
+    assert above["excluded_by_reason"] == {ia.REASON_MEAN_WINDOW_SHORT: 1}
+    assert row.per_ticker["SHORT"]["above_50d_mean"] is None
+    assert row.per_ticker["SHORT"]["above_50d_mean_reason"] == ia.REASON_MEAN_WINDOW_SHORT
+    window = row.method["breadth_mean_window"]
+    assert window["sessions"] == 50 and "not calendar days" in window["basis"]
 
 
 # --- determinism and persistence ------------------------------------------------------------

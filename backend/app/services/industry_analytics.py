@@ -24,7 +24,10 @@ Rules this module encodes, in order of how often they have bitten:
 * **Determinism.** ``inputs_hash`` covers every input the payload depends
   on; recomputing with identical inputs returns the existing row and an
   identical payload (tested). Nothing time-dependent goes into the
-  payload — ``compute_ms`` and ``computed_at`` are columns.
+  payload — ``compute_ms`` and ``computed_at`` are columns. The benchmark
+  cohort is fixed when the period's inputs are loaded, so a group's row
+  does not depend on which other groups were computed first (tested with
+  two groups sharing one context, in both drain orders).
 * **The method is stated in the row.** ``method`` records weighting,
   benchmark definitions with their own sample sizes, the sample floor,
   the missing-data policy, the price window and the as-of, so a report
@@ -36,6 +39,14 @@ Ken-French daily market factor ``KFR.MKT_RF.D`` (an excess return over
 the risk-free rate — labelled as such, never presented as a total
 return). No ETF or index-vendor series. A missing benchmark is a
 ``degraded`` entry, not a silent gap.
+
+The two equal-weight cohorts pass the same eligibility test the group's
+own constituents pass — active company, a series present at context load,
+not stale at the as-of (``AnalyticsContext.cohort_members``). Comparing a
+group against a cohort that still contained the delisted and stale rows
+the group had just excluded made ``benchmark_relative`` (and the regime
+label the PM reads off it) wrong in the group's favour; every exclusion
+is now counted by reason in ``method.benchmarks`` and ``sample``.
 
 Horizons beyond the 252-day price window (``1y`` on a 252-trading-day
 cache, ``ytd`` late in the year) return ``history_window`` — a deliberate
@@ -80,7 +91,20 @@ MAX_WEEKLY_CLOSES = 60
 # A series whose last close is older than this (relative to the as-of) is
 # not evidence about the as-of week; the ticker is excluded, not stretched.
 STALE_PRICE_DAYS = 10
-MEAN_WINDOW_DAYS = 50
+# `above_50d_mean` is the share of constituents trading above their 50-day
+# moving average — 50 TRADING SESSIONS, which is what the name claims and
+# what a reader will check. Counting 50 calendar days instead takes about
+# 35 bars and silently answers a different question (it once flipped the
+# flag to True for a cohort where every member was below its real 50-day
+# mean), so the window is taken as the last 50 closes in the series.
+MEAN_WINDOW_SESSIONS = 50
+# …but only when those 50 closes are a daily series. The stored weekly
+# closes a later period reuses would otherwise make "50 sessions" reach
+# back a year. 50 trading days span ~70 calendar days; anything wider than
+# this is not daily data and the flag is null with a reason.
+MEAN_WINDOW_MAX_SPAN_DAYS = 100
+REASON_MEAN_WINDOW_SHORT = "window_too_short"
+REASON_MEAN_WINDOW_SPARSE = "series_not_daily"
 # Size of each `IN (...)` chunk — under SQLite's 999-variable ceiling with
 # room for the other predicates.
 _CHUNK = 200
@@ -207,6 +231,22 @@ def weekly_closes(series: PriceSeries, *, limit: int = MAX_WEEKLY_CLOSES) -> lis
         by_week[(iso[0], iso[1])] = (d, px)
     rows = [[d.isoformat(), px] for d, px in sorted(by_week.values())]
     return rows[-limit:]
+
+
+def above_mean_window(series: PriceSeries, cutoff: date) -> tuple[bool | None, str | None]:
+    """Is the last close on or before ``cutoff`` above the mean of the last
+    ``MEAN_WINDOW_SESSIONS`` closes? ``(None, reason)`` when the series
+    cannot support the claim — fewer than 50 closes, or closes too sparse
+    to be a daily series (the reason travels into ``per_ticker`` so the
+    breadth row can say why a constituent is absent rather than counting
+    it as "not above")."""
+    bars = [(d, px) for d, px in series if d <= cutoff]
+    if len(bars) < MEAN_WINDOW_SESSIONS:
+        return None, REASON_MEAN_WINDOW_SHORT
+    window = bars[-MEAN_WINDOW_SESSIONS:]
+    if (window[-1][0] - window[0][0]).days > MEAN_WINDOW_MAX_SPAN_DAYS:
+        return None, REASON_MEAN_WINDOW_SPARSE
+    return window[-1][1] > mean(px for _, px in window), None
 
 
 def _series_from_weekly(rows: Iterable[Any]) -> PriceSeries:
@@ -393,12 +433,78 @@ class AnalyticsContext:
     fetches: int = 0
     fetch_failed: set[str] = field(default_factory=set)
     fetch_skipped: set[str] = field(default_factory=set)
+    # The tickers that had a series when the period's inputs were loaded,
+    # BEFORE any group was computed. The benchmark cohorts are drawn from
+    # this set alone (see `cohort_members`), never from `prices`, which
+    # grows as groups are drained.
+    baseline: set[str] = field(default_factory=set)
     _factor: Any = _UNSET
     _horizons: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
+    _companies: Any = _UNSET
+    _cohort: Any = _UNSET
 
     @property
     def universe(self) -> list[str]:
         return sorted({t for tickers in self.groups.values() for t in tickers})
+
+    def companies_map(self) -> dict[str, dict[str, Any]]:
+        """The company rows for the whole universe, read once per context.
+        Per-group work slices this rather than issuing its own SELECT, and
+        the benchmark cohort needs ``is_active`` for tickers outside the
+        group being computed."""
+        if self._companies is _UNSET:
+            universe = self.universe
+            try:
+                self._companies = self.loaders.companies(universe) if universe else {}
+            except Exception as exc:  # a missing company row is missing evidence, not a crash
+                log.debug("company read failed for the universe: %s", type(exc).__name__)
+                self._companies = {}
+        return self._companies
+
+    def cohort_members(self) -> dict[str, str | None]:
+        """``{ticker: exclusion_reason | None}`` for the whole universe —
+        who may stand in a benchmark cohort.
+
+        Two properties this has to hold, both of which it once did not:
+
+        * **The same exclusions the group applies.** A delisted company or
+          a series that stops ten days before the as-of is thrown out of
+          the group's own numbers; leaving it in the universe cohort made
+          ``benchmark_relative`` compare the group against a cohort built
+          from the very rows it had just ruled unusable.
+        * **Independence from drain order.** Membership is decided from
+          ``baseline`` — the series present when the period's inputs were
+          loaded — so it cannot change as ``ensure_prices`` fetches series
+          for whichever group happens to be computed first. Two groups in
+          one period are then measured against the same cohort, and a
+          recompute of one group yields the same ``inputs_hash`` whatever
+          ran before it.
+
+        A constituent fetched on demand still counts in its own group's
+        statistics; it is simply not retro-fitted into the benchmark. The
+        counts and the basis are recorded in ``method`` and ``sample``.
+        """
+        if self._cohort is _UNSET:
+            companies = self.companies_map()
+            out: dict[str, str | None] = {}
+            for t in self.universe:
+                company = companies.get(t) or {}
+                if company.get("is_active") is False:
+                    out[t] = REASON_INACTIVE
+                    continue
+                series = self.prices.get(t) if t in self.baseline else None
+                if not series:
+                    out[t] = REASON_NO_PRICES
+                    continue
+                end = _last_close_on_or_before(series, self.cutoff)
+                if end is None:
+                    out[t] = REASON_NO_PRICE_AT_AS_OF
+                elif (self.cutoff - end[0]).days > STALE_PRICE_DAYS:
+                    out[t] = REASON_STALE_PRICES
+                else:
+                    out[t] = None
+            self._cohort = out
+        return self._cohort
 
     def sector_tickers(self, sector_code: str) -> list[str]:
         return sorted({
@@ -472,6 +578,9 @@ def load_context(
             if series:
                 ctx.prices[ticker.upper()] = series
                 ctx.price_source[ticker.upper()] = "cache"
+    # Frozen here, before any group runs: the benchmark cohorts are drawn
+    # from this set so they cannot drift with drain order.
+    ctx.baseline = set(ctx.prices)
     return ctx
 
 
@@ -547,10 +656,21 @@ def _distribution(values: list[float]) -> dict[str, Any]:
 
 
 def _cohort_returns(ctx: AnalyticsContext, tickers: list[str]) -> dict[str, dict[str, Any]]:
-    """Equal-weight mean per horizon over the tickers with a usable
-    return — the definition of both the universe and sector benchmarks."""
+    """Equal-weight mean per horizon over the cohort-eligible tickers — the
+    definition of both the universe and sector benchmarks.
+
+    Eligibility comes from ``ctx.cohort_members()``, which applies the same
+    exclusions the group's own numbers apply (inactive company, stale or
+    absent series) and is fixed at context load. Whoever is dropped is
+    counted by reason so the row can say what the benchmark is made of."""
+    eligible = ctx.cohort_members()
     per: dict[str, dict[str, dict[str, Any]]] = {}
+    excluded: dict[str, int] = {}
     for t in tickers:
+        reason = eligible.get(t, REASON_NO_PRICES)
+        if reason is not None:
+            excluded[reason] = excluded.get(reason, 0) + 1
+            continue
         rets = ctx.returns_for(t)
         if rets is not None:
             per[t] = rets
@@ -561,7 +681,8 @@ def _cohort_returns(ctx: AnalyticsContext, tickers: list[str]) -> dict[str, dict
             out[h] = {"value": _r(mean(vals.values())), "n": len(vals)}
         else:
             out[h] = {"value": None, "n": 0, "reason": "no_constituent_returns"}
-    out["_n_with_prices"] = {"value": len(per), "n": len(tickers)}
+    out["_n_with_prices"] = {"value": len(per), "n": len(tickers),
+                             "excluded_by_reason": dict(sorted(excluded.items()))}
     return out
 
 
@@ -643,6 +764,7 @@ def _inputs_hash(code: str, ctx: AnalyticsContext, per_ticker: dict[str, dict[st
             "returns": row.get("returns"),
             "return_reasons": row.get("return_reasons"),
             "above_50d_mean": row.get("above_50d_mean"),
+            "above_50d_mean_reason": row.get("above_50d_mean_reason"),
             "weekly_closes": row.get("weekly_closes"),
             "metrics": {m: (metrics.get(t) or {}).get(m) for m in hashed_metrics},
         })
@@ -688,7 +810,9 @@ def compute_group_stats(
     floor = _sample_floor(min_sample)
     tickers = list(ctx.groups.get(group.code, []))
 
-    companies = ctx.loaders.companies(tickers) if tickers else {}
+    # One companies read per context, shared with the benchmark cohort —
+    # draining N groups must not re-read the universe N times.
+    companies = ctx.companies_map()
     metrics = ctx.loaders.metrics(tickers) if tickers else {}
     ctx.ensure_prices(tickers)
 
@@ -748,9 +872,12 @@ def compute_group_stats(
                 row["returns"] = {h: (_r(e.get("value")) if e.get("value") is not None else None) for h, e in rets.items()}
                 row["return_reasons"] = {h: e["reason"] for h, e in rets.items() if e.get("reason")}
                 row["weekly_closes"] = weekly_closes(series)
-                # Share of the trailing 50 days the last close sits above.
-                window = [px for d, px in series if ctx.cutoff - timedelta(days=MEAN_WINDOW_DAYS) < d <= ctx.cutoff]
-                row["above_50d_mean"] = (end[1] > mean(window)) if len(window) >= 10 else None
+                # Above the mean of the last 50 trading sessions — sessions,
+                # not calendar days, because that is what "50-day mean" means.
+                flag, why = above_mean_window(series, ctx.cutoff)
+                row["above_50d_mean"] = flag
+                if why:
+                    row["above_50d_mean_reason"] = why
                 returns_by_ticker[t] = rets
                 if cap is not None:
                     caps[t] = cap
@@ -763,7 +890,13 @@ def compute_group_stats(
     for t, cap in caps.items():
         per_ticker[t]["weight_mcw"] = _r(cap / mcw_total) if mcw_total > 0 else None
 
-    # Benchmarks over the same series, each with its own n.
+    # Benchmarks over the cohort fixed at context load — same exclusions as
+    # the group's own numbers, and independent of which group ran first.
+    cohort = ctx.cohort_members()
+    cohort_excluded: dict[str, int] = {}
+    for reason in cohort.values():
+        if reason is not None:
+            cohort_excluded[reason] = cohort_excluded.get(reason, 0) + 1
     universe_rets = _cohort_returns(ctx, ctx.universe)
     sector_rets = _cohort_returns(ctx, ctx.sector_tickers(group.sector_code))
     factor_rets = _factor_returns(ctx.market_factor_points(), ctx.cutoff)
@@ -820,11 +953,26 @@ def compute_group_stats(
         else:
             breadth[h] = {"pct_positive": _r(sum(1 for v in vals.values() if v > 0) / len(vals)), "n": len(vals)}
     above = [per_ticker[t]["above_50d_mean"] for t in returns_by_ticker if per_ticker[t].get("above_50d_mean") is not None]
+    # A constituent whose series cannot support a 50-session mean is named
+    # under its reason, not folded in as "not above".
+    above_reasons: dict[str, int] = {}
+    for t in returns_by_ticker:
+        why = per_ticker[t].get("above_50d_mean_reason")
+        if why:
+            above_reasons[why] = above_reasons.get(why, 0) + 1
+    mean_window_meta: dict[str, Any] = {"window_sessions": MEAN_WINDOW_SESSIONS}
+    if above_reasons:
+        mean_window_meta["excluded_by_reason"] = dict(sorted(above_reasons.items()))
     if insufficient or not above:
-        breadth["above_50d_mean"] = {"share": None, "n": len(above),
-                                     "reason": REASON_INSUFFICIENT if insufficient else "window_too_short"}
+        breadth["above_50d_mean"] = {
+            "share": None, "n": len(above),
+            "reason": REASON_INSUFFICIENT if insufficient else (
+                next(iter(sorted(above_reasons))) if above_reasons else REASON_MEAN_WINDOW_SHORT
+            ),
+            **mean_window_meta,
+        }
     else:
-        breadth["above_50d_mean"] = {"share": _r(sum(1 for a in above if a) / len(above)), "n": len(above)}
+        breadth["above_50d_mean"] = {"share": _r(sum(1 for a in above if a) / len(above)), "n": len(above), **mean_window_meta}
 
     vals_1m = _values(returns_by_ticker, "1m")
     if insufficient or len(vals_1m) < 2:
@@ -908,17 +1056,43 @@ def compute_group_stats(
         },
         "fetches_this_run": ctx.fetches,
         "fetch_budget": ctx.max_fetch,
+        "benchmark_cohort": {
+            "n_universe": len(cohort),
+            "n_eligible": sum(1 for reason in cohort.values() if reason is None),
+            "excluded_by_reason": dict(sorted(cohort_excluded.items())),
+            # Named because these constituents count in the group's own
+            # numbers but not in the cohort it is measured against.
+            "group_members_outside_cohort": [
+                {"ticker": t, "reason": cohort.get(t) or REASON_NO_PRICES}
+                for t in sorted(returns_by_ticker) if cohort.get(t) is not None
+            ],
+        },
     }
     method = {
         "version": METHOD_VERSION,
         "weighting": ["equal", "market_cap"],
         "benchmarks": [
-            {"id": BENCHMARK_UNIVERSE, "definition": "equal-weight mean of every classified constituent with a usable series",
-             "n": universe_rets["_n_with_prices"]["value"], "n_universe": universe_rets["_n_with_prices"]["n"]},
-            {"id": BENCHMARK_SECTOR, "definition": f"equal-weight mean of the sector {group.sector_code} cohort",
-             "n": sector_rets["_n_with_prices"]["value"], "n_universe": sector_rets["_n_with_prices"]["n"]},
+            {"id": BENCHMARK_UNIVERSE, "definition": "equal-weight mean of every cohort-eligible classified constituent",
+             "n": universe_rets["_n_with_prices"]["value"], "n_universe": universe_rets["_n_with_prices"]["n"],
+             "excluded_by_reason": universe_rets["_n_with_prices"].get("excluded_by_reason", {})},
+            {"id": BENCHMARK_SECTOR, "definition": f"equal-weight mean of the cohort-eligible sector {group.sector_code} constituents",
+             "n": sector_rets["_n_with_prices"]["value"], "n_universe": sector_rets["_n_with_prices"]["n"],
+             "excluded_by_reason": sector_rets["_n_with_prices"].get("excluded_by_reason", {})},
             {"id": MARKET_FACTOR_ID, "definition": "Ken-French daily market factor, cumulative over the horizon; an EXCESS return over the risk-free rate, not a total return"},
         ],
+        "benchmark_cohort_basis": (
+            "a classified constituent whose company is active and whose price series was present when the "
+            "period's inputs were loaded and is not stale at the as-of. The same exclusions the group's own "
+            "numbers apply, fixed before any group is computed — so the benchmark does not depend on the "
+            "order groups are drained, and a constituent fetched on demand counts in its group but is not "
+            "retro-fitted into the cohort."
+        ),
+        "breadth_mean_window": {
+            "sessions": MEAN_WINDOW_SESSIONS,
+            "basis": "the last 50 closes in the series on or before the as-of — trading sessions, not calendar days",
+            "max_span_days": MEAN_WINDOW_MAX_SPAN_DAYS,
+            "unavailable": "fewer than 50 closes, or closes too sparse to be daily, yield null with a reason — never a default",
+        },
         "min_sample": floor,
         "missing_data": "exclude_and_report",
         "horizons": list(HORIZONS),
