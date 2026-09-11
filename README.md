@@ -30,8 +30,9 @@ copies in the ChatGPT **Investment Research** project Sources provide app access
 | Comps with self-historical lens | `/app/comps` | `finance/comps.py` + `finance/comps_history.py` |
 | Historical fundamentals charts with memo-aware commentary | `/app/fundamentals` | `services/fundamentals_series_service.py` + `services/chart_commentary.py` |
 | Point-in-time fundamental factor scorecard + frozen CSV/JSON export | `/app/scorecard` | `services/scorecard_service.py` + `finance/scorecard_*.py` |
+| Weekly GICS Industry Group analysis — 25 groups, versioned editions | `/app/industries` | `services/industry_analytics.py` + `agents/industry_report_writer.py` |
 | Macro scenario analysis | `/app/macro` | `agents/macro_agent.py` |
-| Conversational PM (memo / DCF / comps / macro / universe / screener / custom screen) | `/app/chat` | `agents/orchestrator.py` + `agents/chat_sdk.py` |
+| Conversational PM (memo / DCF / comps / macro / universe / screener / custom screen / industry context) | `/app/chat` | `agents/orchestrator.py` + `agents/chat_sdk.py` |
 | Scenario-based portfolio builder | `/app/portfolio` | `finance/portfolio_construction.py` |
 
 Pages live under `/app/*`. The bare paths (`/research`, `/dcf`, …) still work — see
@@ -47,8 +48,9 @@ served from cache until a new filing or earnings transcript invalidates the memo
 
 The **PM chat** routes follow-up turns and conceptual questions ("which has the strongest
 moat?", "show me cheap software with margins above 70%") through an OpenAI Agents SDK
-agent with eight tools — `get_memo`, `get_dcf_summary`, `get_comps`, `get_macro_snapshot`,
-`get_company_lite`, `list_universe`, `screener_query`, `custom_screen`. Workflow handlers
+agent with nine tools — `get_memo`, `get_dcf_summary`, `get_comps`, `get_macro_snapshot`,
+`get_company_lite`, `list_universe`, `screener_query`, `custom_screen`, `get_industry_context`
+(the last reads stored industry artifacts only; it never computes or generates). Workflow handlers
 still fire for unambiguous first-message asks ("Analyze NVDA", "Build a 10-stock
 portfolio") so the heavy memo path runs only when the user wants it.
 
@@ -60,6 +62,20 @@ Fama-French 5 + momentum regression and a double-selection LASSO, each with its 
 caveats and an explicit `insufficient_data` verdict when the sample cannot support one.
 The scorecard never moves a memo's rating; where it disagrees with the memo it raises a
 flagged disagreement instead.
+
+The **Industry Analysis** surface publishes one versioned edition per GICS industry
+group per week. The taxonomy is imported from a single knowledge base — 11 sectors, 25
+groups, 74 industries and 163 sub-industries — and no count is ever hardcoded: the registry
+is asked. Companies are classified through a research map first and the provider's own
+labels second, with every row carrying which source decided it.
+
+An edition separates what was observed from what was interpreted, and the separation is
+enforced rather than encouraged: a validator rejects a number that is not in the facts
+payload, a causal claim with no falsifier, and advice phrasing. Membership and price
+coverage are reported as different numbers, because a company that lost its price series
+has not left the industry. Where the weekly generation fails, the previous edition stays
+published and is flagged with what the failed attempt was, rather than the page going
+blank.
 
 **Accounts, plans and billing** (FEAT-002) ship behind flags and are **off by default**:
 with `AUTH_ENABLED=false` every route is open and plans resolve to `unrestricted`. Turned
