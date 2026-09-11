@@ -303,6 +303,38 @@ describe("IndustryAnalysis — one group", () => {
     expectNoWrites(fetchMock);
   });
 
+  it("never shows one edition's numbers under another edition's heading", async () => {
+    const prior = fx.priorEdition();
+    let release: (() => void) | null = null;
+    mount(`/app/industries/${fx.CODE}`, [
+      ["/api/industries/taxonomy", () => okJson(fx.taxonomy)],
+      [
+        /\/report/,
+        (url) =>
+          url.includes(`version=${prior.version}`)
+            ? new Promise<Partial<Response>>((resolve) => {
+                release = () => resolve(okJson(prior));
+              })
+            : okJson(fx.report),
+      ],
+      [/\/companies/, () => okJson(fx.companies)],
+      [/\/history/, () => okJson(fx.history)],
+    ]);
+    await settle();
+    expect(screen.getByTestId("industry-report-header")).toHaveTextContent(`Edition v${fx.report.version}`);
+
+    // Ask for the older edition; while it is in flight the page must not
+    // keep rendering the newer one under the new URL.
+    fireEvent.change(screen.getByTestId("history-select"), { target: { value: String(prior.version) } });
+    await settle();
+    expect(screen.queryByTestId("industry-report-header")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("industry-loading")[0]).toBeInTheDocument();
+
+    release!();
+    await settle();
+    expect(screen.getByTestId("industry-report-header")).toHaveTextContent(`Edition v${prior.version}`);
+  });
+
   it("fetches the diff only when the what-changed tab is open", async () => {
     const { fetchMock } = mount(`/app/industries/${fx.CODE}`);
     await settle();

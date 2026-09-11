@@ -71,12 +71,23 @@ function classify(e: unknown): Failure {
   return { state: "error", detail: e instanceof Error ? e.message : String(e) };
 }
 
-/** Load `loader()` whenever `key` changes and `enabled` is true. Disabled
- *  means the page decided NOT to call — a gate, or no group selected —
- *  and the resource stays null so nothing renders a spinner for a
- *  request that will never be made. */
+/**
+ * Load `loader()` whenever `key` changes and `enabled` is true.
+ *
+ * Disabled means the page decided NOT to call — a gate, or no group
+ * selected — and the resource reads as null so nothing renders a spinner
+ * for a request that will never be made.
+ *
+ * The result carries the `key` it was loaded for and a result for a
+ * different key is never returned. Effects run after paint, so between
+ * the render that changes the group (or the edition) and the effect that
+ * starts the new fetch there is one frame in which the state still holds
+ * the PREVIOUS group's report — a frame in which this page would put one
+ * industry's numbers under another industry's name. That frame reads as
+ * loading instead.
+ */
 function useResource<T>(enabled: boolean, key: string, loader: () => Promise<T>): Resource<T> | null {
-  const [res, setRes] = useState<Resource<T> | null>(null);
+  const [res, setRes] = useState<(Resource<T> & { key: string }) | null>(null);
   const seq = useRef(0);
   const loaderRef = useRef(loader);
   loaderRef.current = loader;
@@ -87,18 +98,19 @@ function useResource<T>(enabled: boolean, key: string, loader: () => Promise<T>)
       return;
     }
     const s = ++seq.current;
-    setRes({ state: "loading" });
+    setRes({ key, state: "loading" });
     loaderRef
       .current()
       .then((data) => {
-        if (s === seq.current) setRes({ state: "ok", data });
+        if (s === seq.current) setRes({ key, state: "ok", data });
       })
       .catch((e: unknown) => {
-        if (s === seq.current) setRes(classify(e));
+        if (s === seq.current) setRes({ key, ...classify(e) });
       });
   }, [enabled, key]);
 
-  return res;
+  if (!enabled) return null;
+  return res && res.key === key ? res : { state: "loading" };
 }
 
 function Loading({ what }: { what: string }) {
@@ -232,7 +244,13 @@ export default function IndustryAnalysis() {
 
   const extras = useMemo(() => {
     const out: Record<string, React.ReactNode> = {};
-    const editionNPriced = report?.payload?.sections?.companies?.facts?.n_priced;
+    // Only on the published edition: `/companies` prices its rows from
+    // the LATEST statistics row, so comparing its count with an older
+    // edition's would be comparing two different weeks and calling the
+    // difference a disagreement.
+    const editionNPriced = report?.is_latest_good
+      ? report.payload?.sections?.companies?.facts?.n_priced
+      : undefined;
     out.companies = companiesRes ? (
       companiesRes.state === "ok" ? (
         <CompaniesTable
