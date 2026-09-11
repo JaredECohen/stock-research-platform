@@ -21,14 +21,28 @@ import type { IndustryGate } from "./format";
 export default function AccessGate({
   gate,
   what,
+  latestAvailable = false,
   className = "",
 }: {
   gate: NonNullable<IndustryGate>;
   /** The thing being gated, in the reader's words ("edition history"). */
   what: string;
+  /**
+   * Whether the published edition is on the page BELOW this card.
+   *
+   * It is false by default, and the reassurance is printed only when it
+   * is true and this card is not the one standing where that edition
+   * would be. The sentence was once unconditional, which made the card
+   * assert the opposite of the policy it had just read: a deployment
+   * with `INDUSTRY_ANALYSIS_ACCESS=pro` renders this card INSTEAD of the
+   * report and then told the reader the edition below was public. There
+   * was no edition below.
+   */
+  latestAvailable?: boolean;
   className?: string;
 }) {
   const tier = gate.tier === "pro" ? "Pro" : gate.tier;
+  const alsoBelow = latestAvailable && gate.surface !== "latest";
   return (
     <div
       className={`card-tight text-sm text-slate-300 ${className}`}
@@ -46,7 +60,7 @@ export default function AccessGate({
           <Link to="/sign-in" className="underline text-accent-500">
             Sign in
           </Link>{" "}
-          to read it. The latest published edition below is public.
+          to read it.{alsoBelow ? " The published edition itself is still shown below." : ""}
         </p>
       ) : (
         <p className="text-slate-400">
@@ -54,7 +68,7 @@ export default function AccessGate({
           <Link to="/app/account?upgrade=industry_analysis" className="underline text-accent-500">
             See plans
           </Link>
-          . The latest published edition below is public.
+          .{alsoBelow ? " The published edition itself is still shown below." : ""}
         </p>
       )}
     </div>

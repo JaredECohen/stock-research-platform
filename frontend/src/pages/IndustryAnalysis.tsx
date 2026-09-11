@@ -264,7 +264,7 @@ export default function IndustryAnalysis() {
       )
     ) : null;
     out.what_changed = changesGate ? (
-      <AccessGate gate={changesGate} what="the edition-to-edition diff" />
+      <AccessGate gate={changesGate} what="the edition-to-edition diff" latestAvailable={!latestGate} />
     ) : version !== "latest" ? (
       <p className="text-xs text-slate-400" data-testid="changes-only-on-latest">
         {na("the diff is served against the published edition; clear the version to see it")}
@@ -279,7 +279,7 @@ export default function IndustryAnalysis() {
       )
     ) : null;
     return out;
-  }, [companiesRes, changesRes, changesGate, report, version, retry]);
+  }, [companiesRes, changesRes, changesGate, latestGate, report, version, retry]);
 
   // ---- taxonomy-level states ------------------------------------------
   if (!taxonomyRes || taxonomyRes.state === "loading") return <Loading what="the industry taxonomy" />;
@@ -342,7 +342,7 @@ export default function IndustryAnalysis() {
       <div className="space-y-4 min-w-0">
         {picker}
         {historyGate ? (
-          <AccessGate gate={historyGate} what="edition history" />
+          <AccessGate gate={historyGate} what="edition history" latestAvailable={!latestGate} />
         ) : historyRes?.state === "ok" ? (
           <HistoryPicker
             history={historyRes.data}

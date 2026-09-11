@@ -425,6 +425,43 @@ describe("IndustryAnalysis — access", () => {
     expect(calls(fetchMock, "/report")).toHaveLength(0);
   });
 
+  it("does not tell a reader the edition is public on a page that is hiding it", async () => {
+    // The gate card stands WHERE the report would be. A card that says
+    // "the latest published edition below is public" under a policy that
+    // just refused it states the opposite of the policy it read.
+    const { fetchMock } = mount(`/app/industries/${fx.CODE}`, [
+      ["/api/industries/taxonomy", () => okJson(fx.gatedTaxonomy())],
+      [/\/report/, () => okJson(fx.report)],
+      [/\/companies/, () => okJson(fx.companies)],
+      [/\/history/, () => okJson(fx.history)],
+    ], { auth: SIGNED_OUT, config: { auth_enabled: true } });
+    await settle();
+
+    for (const card of screen.getAllByTestId(/^industry-gate-/)) {
+      expect(card).not.toHaveTextContent(/edition below is public/);
+      expect(card).not.toHaveTextContent(/published edition itself is still shown below/);
+    }
+    expect(screen.queryByTestId("industry-report-header")).not.toBeInTheDocument();
+    expectNoWrites(fetchMock);
+  });
+
+  it("does point at the edition when it is only history that is gated", async () => {
+    const t: IndustryTaxonomy = fx.clone(fx.taxonomy);
+    t.access = { ...t.access, enforced: true, surfaces: { ...t.access.surfaces, latest: "public", history: "pro" } };
+    mount(`/app/industries/${fx.CODE}`, [
+      ["/api/industries/taxonomy", () => okJson(t)],
+      [/\/report/, () => okJson(fx.report)],
+      [/\/companies/, () => okJson(fx.companies)],
+      [/\/history/, () => okJson(fx.history)],
+    ], { auth: SIGNED_OUT, config: { auth_enabled: true } });
+    await settle();
+
+    expect(screen.getByTestId("industry-gate-history")).toHaveTextContent(
+      /published edition itself is still shown below/,
+    );
+    expect(screen.getByTestId("industry-report-header")).toBeInTheDocument();
+  });
+
   it("gates nothing while the login wall is off, whatever the tiers say", async () => {
     const { fetchMock } = mount(`/app/industries/${fx.CODE}`, [
       // `enforced: false` with Pro tiers is today's default deployment.

@@ -6,13 +6,19 @@ import AccessGate from "@/components/industries/AccessGate";
 import { gateFor } from "@/components/industries/format";
 import * as fx from "@/test/fixtures/industry";
 
-function mount(gate: NonNullable<ReturnType<typeof gateFor>>, what = "edition history") {
+function mount(
+  gate: NonNullable<ReturnType<typeof gateFor>>,
+  what = "edition history",
+  latestAvailable = false,
+) {
   return render(
     <MemoryRouter>
-      <AccessGate gate={gate} what={what} />
+      <AccessGate gate={gate} what={what} latestAvailable={latestAvailable} />
     </MemoryRouter>,
   );
 }
+
+const CLAIM = /published edition itself is still shown below/;
 
 describe("gateFor", () => {
   const access = fx.taxonomy.access;
@@ -58,16 +64,33 @@ describe("gateFor", () => {
 });
 
 describe("AccessGate", () => {
-  it("offers sign-in, and says the public edition is still there", () => {
-    mount({ reason: "sign_in", tier: "pro", surface: "history" });
+  it("offers sign-in, and points at the edition still on the page", () => {
+    mount({ reason: "sign_in", tier: "pro", surface: "history" }, "edition history", true);
     const card = screen.getByTestId("industry-gate-history");
     expect(card).toHaveAttribute("data-gate-reason", "sign_in");
     expect(card).toHaveTextContent("edition history is part of Pro");
+    expect(card).toHaveTextContent(CLAIM);
     expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/sign-in");
   });
 
+  it("does NOT promise an edition below when it is the edition that is gated", () => {
+    // `INDUSTRY_ANALYSIS_ACCESS=pro` renders this card INSTEAD of the
+    // report. The sentence used to be unconditional, so the card asserted
+    // the opposite of the policy it had just read.
+    for (const reason of ["sign_in", "plan"] as const) {
+      const view = mount({ reason, tier: "pro", surface: "latest" }, "industry reports", true);
+      expect(screen.getByTestId("industry-gate-latest")).not.toHaveTextContent(CLAIM);
+      view.unmount();
+    }
+  });
+
+  it("does NOT promise an edition below when no edition was loaded", () => {
+    mount({ reason: "sign_in", tier: "pro", surface: "history" }, "edition history", false);
+    expect(screen.getByTestId("industry-gate-history")).not.toHaveTextContent(CLAIM);
+  });
+
   it("offers the plan page when the refusal is the plan, not the session", () => {
-    mount({ reason: "plan", tier: "pro", surface: "latest" }, "industry reports");
+    mount({ reason: "plan", tier: "pro", surface: "latest" }, "industry reports", true);
     const card = screen.getByTestId("industry-gate-latest");
     expect(card).toHaveAttribute("data-gate-reason", "plan");
     expect(screen.getByRole("link", { name: "See plans" })).toHaveAttribute(
