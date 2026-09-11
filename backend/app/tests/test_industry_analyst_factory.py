@@ -178,6 +178,11 @@ def test_a_stale_row_still_routes_and_the_provenance_says_it_is_stale():
     assert ia.routed_state(was_fallback) == "fallback"
     assert not ia.is_routable(was_fallback)
     assert ia.analyst_for_classification(was_fallback) is None
+    # …and the banner names the state it actually routed on, so the reader
+    # is not told "stale" when the row was only ever a sector-level fallback.
+    assert ia._no_mapping_reason(was_fallback) == "no mapping: classification state stale (was fallback)"
+    assert ia._no_mapping_reason({"state": "missing"}) == "no mapping: classification state missing"
+    assert ia._no_mapping_reason(None) == "no mapping: no classification row"
 
 
 def test_prompt_header_names_the_bundled_knowledge_edition_not_a_versioned_mandate():

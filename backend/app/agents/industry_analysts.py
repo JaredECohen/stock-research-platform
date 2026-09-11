@@ -155,6 +155,21 @@ class IndustryAnalyst:
 # --- provenance helpers --------------------------------------------------------
 
 
+def _no_mapping_reason(classification: dict[str, Any] | None) -> str:
+    """Why the analyst is absent, in the banner's own words. A stale row
+    names the state it routed on as well as `stale`, so the reader is not
+    told "stale" when the real reason is that it was only ever a
+    sector-level fallback."""
+    cls = classification or {}
+    state = cls.get("state")
+    if not state:
+        return "no mapping: no classification row"
+    routed = routed_state(cls)
+    if routed and routed != state:
+        return f"no mapping: classification state {state} (was {routed})"
+    return f"no mapping: classification state {state}"
+
+
 def routed_state(classification: dict[str, Any] | None) -> str:
     """The state routing decides on. A ``stale`` row was flipped in place
     and kept the state it held under ``evidence.previous_state``, so that
@@ -333,9 +348,8 @@ def applies_to(inputs: MemoInputs) -> bool:
         return False
     if is_routable(inputs.industry_group):
         return True
-    state = (inputs.industry_group or {}).get("state")
-    reason = f"no mapping: classification state {state}" if state else "no mapping: no classification row"
-    inputs.degradation.record_soft(AGENT_NAME, reason, kind=NO_MAPPING_KIND)
+    inputs.degradation.record_soft(AGENT_NAME, _no_mapping_reason(inputs.industry_group),
+                                   kind=NO_MAPPING_KIND)
     return False
 
 
@@ -382,7 +396,7 @@ def _ratios_snapshot(ratios: dict[str, Any]) -> dict[str, Any]:
 def _unmapped_finding(ticker: str, classification: dict[str, Any] | None) -> AgentFinding:
     state = (classification or {}).get("state") or "missing"
     summary = industry_group_summary(classification, None)
-    note_soft(AGENT_NAME, f"no mapping: classification state {state}", kind=NO_MAPPING_KIND)
+    note_soft(AGENT_NAME, _no_mapping_reason(classification), kind=NO_MAPPING_KIND)
     return AgentFinding(
         agent=AGENT_NAME,
         headline="Industry group read unavailable: no mapping.",
