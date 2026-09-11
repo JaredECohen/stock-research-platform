@@ -83,13 +83,18 @@ def dependency_graph() -> dict[str, Any]:
     except FileNotFoundError:
         log.warning("atlas_dependencies.json missing at %s — snapshot spillovers unavailable", ATLAS_PATH)
         return {"edges": [], "relationships": [], "links": [], "available": False,
-                "atlas_snapshot_date": None, "unlabelled_edges": 0}
+                "atlas_snapshot_date": None, "unlabelled_edges": 0,
+                "unlabelled_relationships": 0}
     links: list[dict[str, Any]] = []
-    unlabelled = 0
+    # Counted apart: an unresolved map relationship is not an unresolved
+    # Atlas edge, and one shared counter published as `unlabelled_edges`
+    # reported it as one.
+    unlabelled_edges = 0
+    unlabelled_relationships = 0
     for edge in raw.get("edges") or []:
         codes = sorted({str(c) for c in (edge.get("industry_group_codes") or []) if c})
         if not codes:
-            unlabelled += 1
+            unlabelled_edges += 1
             continue
         links.append({
             "kind": "edge",
@@ -104,7 +109,7 @@ def dependency_graph() -> dict[str, Any]:
     for i, rel in enumerate(raw.get("relationships") or []):
         codes = sorted({str(c) for c in (rel.get("industry_group_codes") or []) if c})
         if not codes:
-            unlabelled += 1
+            unlabelled_relationships += 1
             continue
         links.append({
             "kind": "relationship",
@@ -123,7 +128,8 @@ def dependency_graph() -> dict[str, Any]:
         "available": True,
         "atlas_snapshot_date": raw.get("atlas_snapshot_date"),
         "knowledge_map_as_of": raw.get("knowledge_map_as_of"),
-        "unlabelled_edges": unlabelled,
+        "unlabelled_edges": unlabelled_edges,
+        "unlabelled_relationships": unlabelled_relationships,
     }
 
 
@@ -527,6 +533,7 @@ def compute_cross_snapshot(
             "knowledge_map_as_of": graph.get("knowledge_map_as_of"),
             "n_links": len(graph["links"]),
             "unlabelled_edges": graph.get("unlabelled_edges", 0),
+            "unlabelled_relationships": graph.get("unlabelled_relationships", 0),
             "caveat": "analyst causal hypotheses and themed relationships, not estimated correlations",
         },
         "major_events": major,
@@ -760,18 +767,23 @@ def render_pm_block(snapshot: CrossIndustrySnapshot | dict[str, Any] | None, max
                 parts.append("… omitted for length: " + " and ".join(bits) + ".")
         return "\n".join(parts)
 
-    # Preference order: the whole spine, then shed context from the least
-    # load-bearing end (catalyst count, spillovers), then the legend, then
-    # the missing-groups line. Within each spine, keep as many group lines
-    # as fit. The first configuration that fits wins.
-    configs = ([(True, n) for n in range(len(tail), -1, -1)]
-               + [(False, n) for n in range(len(tail), -1, -1)])
+    # Preference order, strongest first: the head (always), the legend
+    # (without it the columns are unreadable), the group lines, then the
+    # tail context — shed from its least load-bearing end, so the catalyst
+    # count goes before the spillovers and the missing-groups line goes
+    # last. The first configuration that fits wins.
+    #
+    # The nesting matters and used to be inverted: with the tail in the
+    # outer loop, every group line was shed before a single context line
+    # was, so a tight budget returned all the context and none of the data
+    # it was describing. Group lines are the outer loop now.
     for compact in (False, True):
-        for keep_legend, n_tail in configs:
+        for keep_legend in (True, False):
             for k in range(len(lines), -1, -1):
-                text = assemble(k, keep_legend, n_tail, compact=compact)
-                if len(text) <= budget:
-                    return text
+                for n_tail in range(len(tail), -1, -1):
+                    text = assemble(k, keep_legend, n_tail, compact=compact)
+                    if len(text) <= budget:
+                        return text
     # Nothing fits around the head itself — the caller's budget is smaller
     # than one sentence. Clip, and say so with the ellipsis.
     return head[: budget - 1] + "…" if budget > 1 else head[:budget]

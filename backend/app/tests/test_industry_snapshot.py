@@ -388,3 +388,39 @@ def test_the_news_loader_reads_stored_alerts_only_and_filters_by_severity_and_wi
         "ticker": ticker, "event_type": "news", "event_date": "2026-09-02", "title": "Recall announced",
         "materiality": "high", "source": "news_service", "url": "u1",
     }
+
+
+def test_unresolved_relationships_are_not_counted_as_unresolved_atlas_edges(_taxonomy):
+    """The two counters were one, published under the edges' name, so an
+    unresolved map relationship was reported as an unresolved Atlas edge."""
+    from app.services.industry_snapshot import dependency_graph
+    graph = dependency_graph()
+    assert "unlabelled_edges" in graph and "unlabelled_relationships" in graph
+    assert isinstance(graph["unlabelled_edges"], int)
+    assert isinstance(graph["unlabelled_relationships"], int)
+    # Counted apart, so neither can inflate the other.
+    atlas_unlabelled = sum(
+        1 for e in graph["edges"] if not [c for c in (e.get("industry_group_codes") or []) if c]
+    )
+    rel_unlabelled = sum(
+        1 for r in graph["relationships"] if not [c for c in (r.get("industry_group_codes") or []) if c]
+    )
+    assert graph["unlabelled_edges"] == atlas_unlabelled
+    assert graph["unlabelled_relationships"] == rel_unlabelled
+
+
+def test_pm_block_sheds_context_before_it_sheds_the_data(_taxonomy):
+    """The configuration search used to drop every group line before a
+    single tail context line, returning all the commentary and none of the
+    numbers it described."""
+    render_pm_block = isn.render_pm_block
+    codes = _codes(6)
+    stats = {c: _stats(c, sid=i + 1, ret_1m=0.05 - i * 0.01, rel=0.02) for i, c in enumerate(codes)}
+    snap = isn.compute_cross_snapshot(PERIOD, AS_OF, version=_taxonomy, persist=False, loaders=_loaders(stats))
+    full = render_pm_block(snap, max_chars=4000)
+    n_full_lines = len([ln for ln in full.split("\n") if " | " in ln])
+    assert n_full_lines >= 3, "fixture should produce several group lines"
+    squeezed = render_pm_block(snap, max_chars=len(full) - 200)
+    kept = len([ln for ln in squeezed.split("\n") if " | " in ln])
+    assert kept > 0, "a tighter budget must not strip every group line first"
+    assert len(squeezed) <= len(full) - 200

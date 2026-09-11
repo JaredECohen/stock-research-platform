@@ -222,11 +222,20 @@ def horizon_returns(series: PriceSeries, cutoff: date) -> dict[str, dict[str, An
     return out
 
 
-def weekly_closes(series: PriceSeries, *, limit: int = MAX_WEEKLY_CLOSES) -> list[list[Any]]:
+def weekly_closes(
+    series: PriceSeries, *, limit: int = MAX_WEEKLY_CLOSES, cutoff: date | None = None,
+) -> list[list[Any]]:
     """The last close of each ISO week, newest ``limit`` weeks — what a
-    later period reuses when the daily cache row has expired."""
+    later period reuses when the daily cache row has expired.
+
+    Clipped at ``cutoff`` (the row's as-of). Without it a row stamped with
+    a Friday could carry closes dated after that Friday, and a later period
+    reusing them would be reading the future into a point-in-time row.
+    """
     by_week: dict[tuple[int, int], tuple[date, float]] = {}
     for d, px in series:
+        if cutoff is not None and d > cutoff:
+            continue
         iso = d.isocalendar()
         by_week[(iso[0], iso[1])] = (d, px)
     rows = [[d.isoformat(), px] for d, px in sorted(by_week.values())]
@@ -871,7 +880,7 @@ def compute_group_stats(
                 rets = ctx.returns_for(t) or {}
                 row["returns"] = {h: (_r(e.get("value")) if e.get("value") is not None else None) for h, e in rets.items()}
                 row["return_reasons"] = {h: e["reason"] for h, e in rets.items() if e.get("reason")}
-                row["weekly_closes"] = weekly_closes(series)
+                row["weekly_closes"] = weekly_closes(series, cutoff=ctx.cutoff)
                 # Above the mean of the last 50 trading sessions — sessions,
                 # not calendar days, because that is what "50-day mean" means.
                 flag, why = above_mean_window(series, ctx.cutoff)
@@ -1031,12 +1040,20 @@ def compute_group_stats(
         }
 
     ranked = [] if insufficient else sorted(vals_1m.items(), key=lambda kv: (-kv[1], kv[0]))
+    # Disjoint by construction. Taking the top and bottom LEADER_COUNT of
+    # one ranking re-listed the same names in both sections whenever a
+    # group had fewer than 2 * LEADER_COUNT priced constituents, so a small
+    # group appeared to be both leading and lagging on the same company.
+    # Splitting the ranking keeps the two halves apart at any size: a
+    # 3-name group reports one leader and one laggard, a 1-name group
+    # reports neither, and a group of 10 or more is unchanged.
+    n_ends = min(LEADER_COUNT, len(ranked) // 2)
     leaders = [
-        {"ticker": t, "ret_1m": _r(v), "weight_mcw": per_ticker[t].get("weight_mcw")} for t, v in ranked[:LEADER_COUNT]
+        {"ticker": t, "ret_1m": _r(v), "weight_mcw": per_ticker[t].get("weight_mcw")} for t, v in ranked[:n_ends]
     ]
     laggards = [
         {"ticker": t, "ret_1m": _r(v), "weight_mcw": per_ticker[t].get("weight_mcw")}
-        for t, v in sorted(ranked[-LEADER_COUNT:], key=lambda kv: (kv[1], kv[0]))
+        for t, v in sorted(ranked[len(ranked) - n_ends:], key=lambda kv: (kv[1], kv[0]))
     ]
 
     dates = [row["last_date"] for row in per_ticker.values() if row.get("last_date")]

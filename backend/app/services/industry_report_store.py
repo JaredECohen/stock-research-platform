@@ -459,6 +459,10 @@ def diff(code: str, from_version: int | str, to_version: int | str = "latest",
             entry["delta"] = None
             entry["reason"] = (
                 "no stats on either edition" if sa is None and sb is None else
+                # Both-missing first: the old chain fell through to
+                # "missing in from-edition" and blamed one side for a fact
+                # that neither edition carried.
+                "missing in both editions" if va is None and vb is None else
                 "missing in from-edition" if va is None else
                 "missing in to-edition"
             )

@@ -151,7 +151,9 @@ def test_diff_between_non_adjacent_versions_is_arithmetic_over_stored_facts(code
     assert out["adjacent"] is True
     assert out["facts_delta"]["returns.1m.ew"] == {"from": 0.02, "to": 0.05, "delta": pytest.approx(0.03)}
     assert out["facts_delta"]["returns.1m.mcw"]["delta"] is None
-    assert out["facts_delta"]["returns.1m.mcw"]["reason"] == "missing in from-edition"
+    # market_cap_weight is absent from BOTH editions in this fixture; the
+    # old chain fell through and blamed the from-edition for it.
+    assert out["facts_delta"]["returns.1m.mcw"]["reason"] == "missing in both editions"
     assert out["constituents"] == {"added": [], "removed": [], "n_from": 2, "n_to": 2}
 
     out = rs.diff(code, 1, "latest", version=_taxonomy)

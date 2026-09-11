@@ -156,8 +156,10 @@ def test_equal_weight_and_market_cap_weight_on_three_tickers(codes):
     assert row.per_ticker["CCC"]["weight_mcw"] == pytest.approx(0.8)
     assert row.payload["breadth"]["1m"]["pct_positive"] == pytest.approx(1 / 3)
     assert row.payload["dispersion"]["n"] == 3 and row.payload["dispersion"]["range"] == pytest.approx(0.2)
-    assert [x["ticker"] for x in row.payload["leaders"]] == ["AAA", "BBB", "CCC"]
-    assert row.payload["laggards"][0]["ticker"] == "CCC"
+    # Three names split one/one: listing all three as leaders AND CCC as a
+    # laggard (the old behaviour) said the same company was both.
+    assert [x["ticker"] for x in row.payload["leaders"]] == ["AAA"]
+    assert [x["ticker"] for x in row.payload["laggards"]] == ["CCC"]
     assert row.method["weighting"] == ["equal", "market_cap"]
 
 
@@ -553,3 +555,36 @@ def test_warm_up_reports_failed_fetches_and_stops_at_the_budget(_taxonomy, codes
     out = ia.warm_up_prices(budget=10, version=_taxonomy, loaders=ld)
     assert spy == ["A1", "A2", "A3"]
     assert out["fetched"] == 1 and out["failed"] == ["A1", "A3"] and out["remaining_missing"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Review low findings
+# ---------------------------------------------------------------------------
+
+def test_leaders_and_laggards_never_name_the_same_company(codes):
+    """Below 2 x LEADER_COUNT priced names the two sections used to be the
+    top and bottom of one short ranking, so they overlapped."""
+    code, _ = codes
+    prices = {t: _step_series(100.0, 100.0 + i) for i, t in enumerate(["AAA", "BBB", "CCC", "DDD", "EEE"])}
+    ld = _loaders(groups={code: ["AAA", "BBB", "CCC", "DDD", "EEE"]}, prices=prices)
+    row = ia.compute_group_stats(code, as_of=AS_OF, loaders=ld, persist=False, max_fetch=0)
+    leaders = {x["ticker"] for x in row.payload["leaders"]}
+    laggards = {x["ticker"] for x in row.payload["laggards"]}
+    assert leaders and laggards
+    assert leaders & laggards == set(), "a company cannot lead and lag its own group"
+
+
+def test_weekly_closes_never_run_past_the_as_of():
+    """A point-in-time row must not carry closes dated after its as-of —
+    a later period reuses these, so the future would leak backwards."""
+    from datetime import date as _date
+
+    from app.services.industry_analytics import weekly_closes
+    series = [(_date(2026, 8, 24), 10.0), (_date(2026, 9, 4), 11.0), (_date(2026, 9, 11), 12.0)]
+    cutoff = _date(2026, 9, 4)
+    rows = weekly_closes(series, cutoff=cutoff)
+    assert rows, "expected the weeks on or before the cutoff"
+    assert all(r[0] <= cutoff.isoformat() for r in rows), rows
+    assert not any(r[1] == 12.0 for r in rows), "the post-cutoff close must be dropped"
+    # Without a cutoff the helper is unchanged.
+    assert any(r[1] == 12.0 for r in weekly_closes(series))
