@@ -17,7 +17,7 @@ system is marked **OWNER** and is not something an agent performs.
 | GICS registry + classification audit (FEAT-003 slice 1) | merged | `ENABLE_INDUSTRY_ANALYST_ROUTING=false` |
 | Snapshot-cascade OOM fix + `snapshot_gc` retention (hotfix) | merged | always on; GC daily 04:15 UTC |
 | Provider-key log leak fix (hotfix) | merged | always on |
-| Industry analysts, analytics, weekly reports, API, UI (FEAT-003 slices 2–6) | TODO: fill in when merged | `ENABLE_INDUSTRY_REPORTS` false on web / true on worker; `INDUSTRY_ANALYSIS_ACCESS=public` |
+| Industry analysts, analytics, weekly reports, API, UI (FEAT-003 slices 2–6) | merged | `ENABLE_INDUSTRY_REPORTS` false on web / true on worker; `ENABLE_INDUSTRY_ANALYST_ROUTING=false`; `INDUSTRY_REPORTS_REQUIRE_REVIEW=false`; `INDUSTRY_ANALYSIS_ACCESS=public` |
 
 ## 1. Pre-flight (agent-verifiable, all green before asking for authorization)
 
@@ -28,8 +28,8 @@ system is marked **OWNER** and is not something an agent performs.
       sockets (`app/tests/netguard.py`) and lists any test that reached for the network.
 - [ ] `frontend/`: `npm run lint`, `npm test`, `npm run build`.
 - [ ] `test_deploy_config` passes: `ENABLE_MONITORING`/`ENABLE_REGEN_WORKER` false on web,
-      true on the worker; `ENABLE_INDUSTRY_REPORTS` true on exactly one service (TODO after slice 4).
-- [ ] `KNOWN_LOOPS` count in `CLAUDE.md` matches `app/monitoring/__init__.py` (21: slice 1's two loops plus `snapshot_gc`).
+      true on the worker; `ENABLE_INDUSTRY_REPORTS` true on exactly one service.
+- [ ] `KNOWN_LOOPS` count in `CLAUDE.md` matches `app/monitoring/__init__.py` (21).
 - [ ] Route audit doc has a live row for every route (`test_route_audit`).
 
 ## 2. Deploy-visible canary (lock this first)
@@ -92,6 +92,21 @@ Unrelated to the deploy and **owner-only**: four provider API keys
 (FMP, Alpha Vantage, Polygon, Census) were written to Render's logs in
 plaintext and still need rotating. The code fix stops the leak; it does not
 undo it.
+
+### The first Industry Analysis Sunday will look wrong, and is not
+
+Most groups will report `insufficient_sample` until the weekly price warm-up budget
+(`INDUSTRY_PRICE_WARMUP_BUDGET`, 150 calls) has filled coverage over several weeks. In the
+demo universe only 5 of 25 groups clear the sample floor on a first run. That is the
+labelled state working as designed — the alternative is a number computed from three
+companies presented as an industry's return. Decide deliberately whether to raise the
+budget for the first few weeks; do not read it as a failed deploy.
+
+Also expect, and do not treat as errors, these labelled degradations on early editions:
+`generation:deterministic_final_attempt:<n>` (the week was rescued by the no-LLM writer),
+and `cross_industry:snapshot:prior_period:<key>` / `companies:events:prior_period:<key>` /
+`outlook:macro_regime:prior_period:<key>` (a group report generated before its own period's
+snapshot exists quotes the prior one, and says so).
 
 ## 5. Rollback
 
