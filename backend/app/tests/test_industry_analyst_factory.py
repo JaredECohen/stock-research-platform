@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from app.agents import deep_research as dr
-from app.agents import graph, intake, prompts, roster
+from app.agents import graph, intake, prompts, roster, safe_runner
 from app.agents import industry_analysts as ia
 from app.config import settings
 from app.schemas import AgentFinding
@@ -376,6 +376,56 @@ def test_no_classification_row_is_reported_as_such(monkeypatch):
     events = [e for e in memo.degradation_events if e["agent"] == "Industry Group Analyst"]
     assert events[0]["message"] == "no mapping: no classification row"
     assert "industry_group" not in memo.sector_agent_view.data
+
+
+@pytest.mark.parametrize("malformed", [
+    [{"headline": "h"}],                      # a top-level JSON array
+    ["causal_chain", "kpis_to_watch"],
+    "a bare string",
+])
+def test_a_malformed_llm_response_degrades_instead_of_raising(monkeypatch, malformed):
+    """REGRESSION: `run_industry_group_agent` read `.get` straight off
+    whatever `chat_json` handed back. `chat_json` is annotated `dict | None`,
+    but a provider in JSON mode can answer with a top-level array, and
+    `list.get` is an AttributeError that failed the whole memo. Every other
+    agent in this repo degrades to its deterministic fallback on a malformed
+    response; this one now does too — and records WHICH malformation, rather
+    than swallowing it or filing it as "no usable output"."""
+    monkeypatch.setattr(ia.llm, "chat_json", lambda *a, **k: malformed)
+    monkeypatch.setattr(type(settings), "has_llm", property(lambda self: True))
+    row = ic.current_for(["MSFT"])["MSFT"]
+
+    log = safe_runner.DegradationLog()
+    with log.activate():
+        finding = ia.run_industry_group_agent({"ticker": "MSFT", "company_name": "Microsoft"},
+                                              {"ROIC": 0.5}, classification=row)
+
+    assert finding.agent == "Industry Group Analyst"
+    assert finding.confidence == 0.55                      # the deterministic read
+    assert finding.data["industry_group"]["code"] == "4510"
+    shape = type(malformed).__name__
+    assert finding.data["deterministic_fallback"] == (
+        f"Industry Group LLM returned a JSON {shape}, not an object; "
+        "mandate-grounded deterministic read shipped instead."
+    )
+    # Degradation recorded on the run, not swallowed.
+    assert log.events() == [{
+        "agent": "Industry Group Analyst", "error_type": "DeterministicFallback",
+        "message": f"Industry Group LLM returned a JSON {shape}, not an object; deterministic read shipped",
+    }]
+
+
+def test_an_empty_llm_response_still_reports_the_original_outcome(monkeypatch):
+    """The wrong-shape wording must not leak onto the pre-existing path: a
+    model that answers with nothing is a different degradation from one that
+    answers with the wrong container."""
+    monkeypatch.setattr(ia.llm, "chat_json", lambda *a, **k: None)
+    monkeypatch.setattr(type(settings), "has_llm", property(lambda self: True))
+    row = ic.current_for(["MSFT"])["MSFT"]
+    finding = ia.run_industry_group_agent({"ticker": "MSFT", "company_name": "Microsoft"},
+                                          {"ROIC": 0.5}, classification=row)
+    assert finding.data["deterministic_fallback"].startswith(
+        "Industry Group LLM returned no usable output;")
 
 
 # --- the PM dialog can reach the new analyst ----------------------------------------

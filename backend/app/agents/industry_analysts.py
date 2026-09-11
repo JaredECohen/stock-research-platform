@@ -458,10 +458,15 @@ def _unmapped_finding(ticker: str, classification: dict[str, Any] | None) -> Age
 
 def _deterministic_finding(
     analyst: IndustryAnalyst, profile: dict[str, Any], classification: dict[str, Any] | None,
+    *, llm_outcome: str = "returned no usable output",
 ) -> AgentFinding:
     """The mandate-grounded read with no LLM: observed placement plus the
     mandate's own tests. Every line names its source; the causal chain is
-    honest that stage 1 is n/a rather than inventing a world change."""
+    honest that stage 1 is n/a rather than inventing a world change.
+
+    `llm_outcome` names WHY this path was taken, so the memo banner
+    distinguishes a model that answered with nothing from one that answered
+    with the wrong shape. It is only read when an LLM was configured."""
     m = analyst.mandate
     ticker = str(profile.get("ticker") or "").upper()
     sub = _sub_industry_of(classification)
@@ -526,7 +531,7 @@ def _deterministic_finding(
         # The graph promotes this into `degraded_agents` when an LLM was
         # configured; in no-key deterministic mode this path is the design.
         data["deterministic_fallback"] = (
-            "Industry Group LLM returned no usable output; mandate-grounded "
+            f"Industry Group LLM {llm_outcome}; mandate-grounded "
             "deterministic read shipped instead."
         )
     return AgentFinding(
@@ -593,6 +598,17 @@ def run_industry_group_agent(
     )
     if not llm_out:
         return _deterministic_finding(analyst, profile, classification)
+    if not isinstance(llm_out, dict):
+        # `chat_json` is annotated `dict | None`, but a provider in JSON mode
+        # can and does answer with a top-level array — and reading `.get` off
+        # a list raises AttributeError, which failed the whole memo instead of
+        # degrading it. Every other agent here treats a malformed response as
+        # no response; this one now does too, and the wrong SHAPE is recorded
+        # as its own outcome rather than collapsed into "no usable output".
+        outcome = f"returned a JSON {type(llm_out).__name__}, not an object"
+        log.warning("Industry Group LLM %s for %s", outcome, ticker)
+        note_soft(AGENT_NAME, f"Industry Group LLM {outcome}; deterministic read shipped")
+        return _deterministic_finding(analyst, profile, classification, llm_outcome=outcome)
 
     chain = llm_out.get("causal_chain") or []
     data: dict[str, Any] = {
