@@ -151,6 +151,25 @@ def test_insufficient_sample_is_a_labelled_state_not_an_error(analyst):
     assert v.validate(res.payload, facts) == []
 
 
+def test_a_declared_horizon_with_no_return_names_why_never_a_bare_na(analyst):
+    """REGRESSION: `method.horizons` declares five horizons and the payload
+    carried three, so QTD and YTD rendered "QTD n/a (n/a)" — an n/a with no
+    reason, which the house rule forbids. Three cases, three distinct
+    answers: a horizon the payload never carried says it is absent, one
+    that is null-with-a-reason quotes the reason, and one that is null with
+    no reason at all says the row recorded none."""
+    stats = _stats()
+    # A cell that is present, null, and silent about why.
+    stats["payload"]["returns"]["QTD"] = {"equal_weight": None, "n": 0}
+    res = w.write_report(analyst, stats, None, None, [], run_id="run-12")
+    text = res.payload["sections"]["performance"]["interpretation"]["text"]
+    assert "n/a (n/a)" not in text
+    assert "1Y n/a (history_window)" in text
+    assert "YTD n/a (declared in method.horizons, absent from the statistics returns payload)" in text
+    assert "QTD n/a (no return and no reason recorded on the statistics row)" in text
+    assert v.validate(res.payload, _facts_of(res.payload)) == []
+
+
 def test_prior_report_produces_a_facts_delta_and_constituent_changes(analyst):
     first = w.write_report(analyst, _stats(), None, None, [], run_id="run-6a")
     prior = {"payload": first.payload, "version": 1, "as_of": datetime(2026, 8, 28, 20, 0),

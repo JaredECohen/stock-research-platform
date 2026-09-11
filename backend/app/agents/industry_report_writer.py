@@ -540,6 +540,24 @@ def _register_causal(text: str, claims: list[dict[str, Any]], basis: list[str]) 
             ))
 
 
+def _horizon_reason(cell: Any) -> str:
+    """Why a horizon carries no return — never a bare "n/a".
+
+    The statistics payload already answers this for a horizon it computed
+    and could not anchor: `{"value": null, "reason": "history_window"}`.
+    The case that used to print "n/a (n/a)" is the OTHER one — a horizon
+    `method.horizons` declares that the payload never carried at all,
+    where the absence itself is the reason and the reader is entitled to
+    be told which of the two it is looking at. A cell that is present but
+    silent about why is reported as exactly that, so a payload that stops
+    recording reasons shows up as a defect instead of as "n/a".
+    """
+    if not isinstance(cell, dict):
+        return "declared in method.horizons, absent from the statistics returns payload"
+    reason = str(cell.get("reason") or "").strip()
+    return reason or "no return and no reason recorded on the statistics row"
+
+
 def _fmt_pct(value: Any) -> str:
     return f"{float(value) * 100:.1f}%" if isinstance(value, (int, float)) and not isinstance(value, bool) else "n/a"
 
@@ -626,8 +644,7 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
             if isinstance(cell, dict) and isinstance(cell.get("equal_weight"), (int, float)):
                 bits.append(f"{h} equal-weight {_fmt_pct(cell['equal_weight'])} (n={cell.get('n', 'n/a')})")
             else:
-                reason = (cell or {}).get("reason", "n/a") if isinstance(cell, dict) else "n/a"
-                bits.append(f"{h} n/a ({reason})")
+                bits.append(f"{h} n/a ({_horizon_reason(cell)})")
         text = "Observed group returns: " + "; ".join(bits) + ". Benchmarks: " + (
             ", ".join(b.get("id") if isinstance(b, dict) else str(b) for b in pf.get("benchmarks") or []) or "n/a"
         ) + "."
