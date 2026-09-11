@@ -18,6 +18,7 @@ Pinned here:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,7 @@ from app.agents import industry_analysts as ia
 from app.config import settings
 from app.services import gics_registry as reg
 from app.services import industry_classification as ic
+from app.services import industry_group_knowledge as igk
 from app.services import industry_knowledge as ik
 from app.services.industry_group_knowledge import thesis_stages, universal_research_rules
 from app.tests.gating_helpers import seed_demo_universe
@@ -100,6 +102,23 @@ def test_system_prompt_loads_methodology_rules_and_mandate_from_the_knowledge_ba
         assert f"- {key}:" in prompt
     assert "## Industry Group mandate — 4530" in prompt
     assert ik.BRIEF_ATTRIBUTION in prompt
+
+
+def test_every_group_system_prompt_keeps_the_attribution_and_the_sub_industry_layer():
+    """A long mandate must never push the sub-industry layer or the
+    attribution line off the end of the bounded prompt (it did for 9 of
+    the real groups before the budget counted rendered lines)."""
+    profile = {"ticker": "NVDA", "company_name": "NVIDIA"}
+    for g in ik.list_industry_groups():
+        prompt = ia.get_industry_analyst(g["code"]).system_prompt()
+        assert prompt.rstrip().endswith(ik.BRIEF_ATTRIBUTION), g["code"]
+        assert igk.SUB_INDUSTRY_HEADER in prompt, g["code"]
+        shown = re.findall(r"^- \d{8} .*$", prompt, re.M)
+        omitted = re.search(r"… (\d+) more sub-industr", prompt)
+        assert not any(line.endswith("…") for line in shown), g["code"]
+        assert len(shown) + (int(omitted.group(1)) if omitted else 0) == len(ik.list_sub_industries(g["code"]))
+        block = ia.get_industry_analyst(g["code"]).company_context_block(profile, None)
+        assert len(block) <= 4000 and ik.BRIEF_ATTRIBUTION in block, g["code"]
 
 
 def test_company_context_block_names_sub_industry_and_source_label():

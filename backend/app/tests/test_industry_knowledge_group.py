@@ -10,6 +10,8 @@ knows how many groups exist.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from app.services import industry_group_knowledge as igk
@@ -136,7 +138,11 @@ def test_sub_industries_carry_one_line_economics_advantage_test_and_provenance(s
 def test_prompt_block_is_bounded_and_carries_provenance_on_each_line(synthetic):
     m = igk.group_mandate("9910", version_key="test")
     block = m.as_prompt_block(max_chars=400)
-    assert len(block) <= 400 and block.endswith("…")
+    # Too small for the mandate prose (the ellipsis marks the cut), yet the
+    # attribution line survives and the brief that no longer fits is counted.
+    assert len(block) <= 400 and "…" in block
+    assert block.rstrip().endswith(ik.BRIEF_ATTRIBUTION)
+    assert "1 more sub-industry omitted for length" in block
     full = m.as_prompt_block()
     assert "Core KPIs: Bookings [991010,991020]" in full
     assert "Research priority: 5/5 (set by 991020 Beta)" in full
@@ -162,6 +168,47 @@ def test_unknown_group_raises_rather_than_returning_an_empty_mandate(synthetic):
         igk.group_mandate("0000", version_key="test")
 
 
+def _assert_sub_layer_is_honest(block: str, total: int, label: str) -> None:
+    """Every brief is either displayed or counted, the attribution closes
+    the block, and no brief is cut mid-line."""
+    assert block.rstrip().endswith(ik.BRIEF_ATTRIBUTION), label
+    shown = re.findall(r"^- \d{8} .*$", block, re.M)
+    assert not any(line.endswith("…") for line in shown), label
+    omitted = re.search(r"… (\d+) more sub-industr", block)
+    assert len(shown) + (int(omitted.group(1)) if omitted else 0) == total, (label, len(shown), omitted)
+
+
+def test_sub_industry_budget_counts_the_rendered_line(synthetic):
+    m = igk.group_mandate("9910", version_key="test")
+    (brief,) = m.sub_industries
+    exact = len(igk.SUB_INDUSTRY_HEADER) + 1 + len(brief.render())
+    kept, omitted, text = igk._fit_briefs(m.sub_industries, exact)
+    assert kept == m.sub_industries and omitted == 0 and text == m.sub_industry_block()
+    # One character short of the rendered line: the brief is counted, not cut.
+    kept, omitted, text = igk._fit_briefs(m.sub_industries, exact - 1)
+    assert kept == () and omitted == 1
+    assert len(text) <= exact - 1 and text.endswith("1 more sub-industry omitted for length.")
+    assert "…" not in text.replace("- … 1", "")
+    # A refit at a smaller budget adds to what the build budget already left out.
+    _, omitted, text = igk._fit_briefs(m.sub_industries, exact - 1, already_omitted=4)
+    assert omitted == 5 and "5 more sub-industries omitted" in text
+
+
+def test_prompt_block_trims_the_mandate_prose_by_whole_units_and_keeps_the_tail(synthetic):
+    m = igk.group_mandate("9910", version_key="test")
+    full = m.as_prompt_block()
+    total = len(m.sub_industries) + m.sub_industries_truncated
+    for budget in (len(full) - 1, len(full) * 2 // 3, len(full) // 2):
+        block = m.as_prompt_block(max_chars=budget)
+        assert len(block) <= budget, budget
+        _assert_sub_layer_is_honest(block, total, str(budget))
+        assert "omitted for length" in block, budget
+        # Whole-unit trims come first: the title and the industry list are
+        # never cut, and each cut is announced.
+        assert block.startswith("## Industry Group mandate — 9910 Synthetic Group")
+        assert "Industries: 991010 Alpha; 991020 Beta." in block
+
+
 # --- the real knowledge base --------------------------------------------------
 
 
@@ -175,7 +222,13 @@ def test_every_real_group_aggregates_to_a_non_empty_mandate():
         assert m.lists["core_kpis"], g["code"]
         assert m.research_priority is not None, g["code"]
         assert m.research_priority_source.startswith(tuple(m.industry_codes))
-        assert len(m.as_prompt_block()) <= igk.PROMPT_BLOCK_MAX_CHARS
+        for budget in (igk.PROMPT_BLOCK_MAX_CHARS, 3300):  # the analyst's and the sector agent's cut
+            block = m.as_prompt_block(max_chars=budget)
+            assert len(block) <= budget, (g["code"], budget)
+            _assert_sub_layer_is_honest(block, len(ik.list_sub_industries(g["code"])), g["code"])
+        sub = m.sub_industry_block()
+        assert len(sub) <= igk.SUB_INDUSTRY_BLOCK_MAX_CHARS and not sub.endswith("…"), g["code"]
+        assert ("omitted for length" in sub) == (m.sub_industries_truncated > 0), g["code"]
         # Provenance on every ranked item resolves to one of the group's industries.
         for ranked in m.lists.values():
             for item in ranked:
@@ -187,19 +240,40 @@ def test_every_real_group_aggregates_to_a_non_empty_mandate():
 
 
 def test_sub_industry_budget_truncates_honestly_instead_of_dropping(monkeypatch):
-    monkeypatch.setattr(igk, "SUB_INDUSTRY_BLOCK_MAX_CHARS", 200)
+    """At a budget that holds exactly one rendered brief, that brief is
+    shown whole and every other one is COUNTED. The budget is derived from
+    the rendered line (header + line + the widest omission line), not
+    guessed: an undercounted budget is what let the block overrun its cap
+    while still reporting `sub_industries_truncated == 0`."""
+    biggest = max(ik.list_industry_groups(), key=lambda g: len(ik.list_sub_industries(g["code"])))
+    total = len(ik.list_sub_industries(biggest["code"]))
+    assert total >= 2
+    first = igk.group_mandate(biggest["code"], version_key="budget-test").sub_industries[0]
+    budget = (len(igk.SUB_INDUSTRY_HEADER) + 1 + len(first.render())
+              + 1 + len(igk._omission_line(total)))
+    monkeypatch.setattr(igk, "SUB_INDUSTRY_BLOCK_MAX_CHARS", budget)
     igk.clear_cache()
     try:
-        biggest = max(ik.list_industry_groups(), key=lambda g: len(ik.list_sub_industries(g["code"])))
         m = igk.group_mandate(biggest["code"], version_key="budget-test")
-        total = len(ik.list_sub_industries(biggest["code"]))
-        assert total >= 2
-        assert len(m.sub_industries) >= 1
-        assert len(m.sub_industries) + m.sub_industries_truncated == total
-        assert m.sub_industries_truncated >= 1
-        assert "omitted for length" in m.sub_industry_block()
+        assert m.sub_industries == (first,)
+        assert m.sub_industries_truncated == total - 1
+        block = m.sub_industry_block()
+        assert len(block) <= budget
+        # Shown whole — never cut mid-sentence — and the rest counted.
+        assert first.render() in block
+        assert block.endswith(igk._omission_line(total - 1))
     finally:
         igk.clear_cache()
+
+
+def test_budget_too_small_for_any_brief_reports_them_all_as_omitted(synthetic):
+    """The honest floor: when not even the header plus one line fits, the
+    block is the omission count alone rather than a brief cut in half."""
+    m = igk.group_mandate("9910", version_key="test")
+    budget = len(igk._omission_line(1))
+    block = m.sub_industry_block(budget)
+    assert len(block) <= budget
+    assert block == igk._omission_line(1)
 
 
 def test_universal_rules_and_sources_are_loaded_not_retyped():

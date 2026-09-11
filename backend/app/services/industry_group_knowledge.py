@@ -59,6 +59,15 @@ LIST_FIELDS: tuple[str, ...] = (
 PROMPT_BLOCK_MAX_CHARS = 6000
 SUB_INDUSTRY_BLOCK_MAX_CHARS = 2400
 _ITEMS_PER_FIELD = 8
+# When the mandate prose alone would fill a prompt block, list fields are
+# trimmed by whole ranked items down to this floor before anything is cut
+# mid-sentence; every trim is counted in an omission line.
+_MIN_ITEMS_PER_FIELD = 3
+# The sub-industry layer is guaranteed this share of a prompt block (up to
+# its own cap) so a long mandate can never push it — or the attribution
+# line after it — off the end of the prompt.
+_SUB_BLOCK_SHARE = 3
+SUB_INDUSTRY_HEADER = "Sub-industries (original analyst briefs; provenance per line):"
 _PRIORITY_RE = re.compile(r"(\d)\s*/\s*5")
 
 
@@ -89,6 +98,15 @@ class SubIndustryBrief:
     advantage_test: str
     source_ids: tuple[str, ...]
     attribution: str
+
+    def render(self) -> str:
+        """The one prompt line for this brief — the unit every char budget
+        is measured against, so the budget counts what is actually shown."""
+        src = ",".join(self.source_ids) if self.source_ids else "n/a"
+        return (
+            f"- {self.code} {self.name} [industry {self.industry_code}; sources {src}] — "
+            f"{self.economics} | Advantage test: {self.advantage_test}"
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -180,7 +198,28 @@ class GroupMandate:
         Item provenance is the industry code list in brackets; a reader
         (or the validator) can trace any KPI back to the encyclopedia entry
         that named it.
+
+        The budget is split so nothing is lost silently: the attribution
+        line is reserved first (every brief is original analysis and must
+        say so wherever it is displayed), the sub-industry layer is
+        guaranteed a share, and the mandate prose is trimmed by whole
+        ranked items — each trim counted — before the ellipsis fallback.
         """
+        attribution_line = f"Attribution: {self.attribution}"
+        has_subs = bool(self.sub_industries or self.sub_industries_truncated)
+        sub_reserve = min(SUB_INDUSTRY_BLOCK_MAX_CHARS, max_chars // _SUB_BLOCK_SHARE) if has_subs else 0
+        head_budget = max_chars - (len(attribution_line) + 1) - (sub_reserve + 1 if sub_reserve else 0)
+        head = self._fit_head(head_budget)
+        parts = [head]
+        if has_subs:
+            remaining = max_chars - len(head) - 1 - (len(attribution_line) + 1)
+            sub_block = self.sub_industry_block(min(SUB_INDUSTRY_BLOCK_MAX_CHARS, remaining))
+            if sub_block:
+                parts.append(sub_block)
+        parts.append(attribution_line)
+        return _bounded("\n".join(parts), max_chars)
+
+    def _head_lines(self, items_per_field: int) -> list[str]:
         lines: list[str] = [
             f"## Industry Group mandate — {self.code} {self.name} "
             f"(sector {self.sector_code} {self.sector_name}; taxonomy {self.version_key})",
@@ -209,40 +248,61 @@ class GroupMandate:
             "ideal_compounder_setup": "Ideal compounder setup",
             "ideal_inflection_setup": "Ideal inflection setup",
         }
+        omitted = 0
         for key in LIST_FIELDS:
             ranked = self.lists.get(key, ())
             if not ranked:
                 continue
+            omitted += max(0, len(ranked) - items_per_field)
             lines.append(
-                f"{labels[key]}: " + "; ".join(_with_codes(r) for r in ranked[:_ITEMS_PER_FIELD]) + "."
+                f"{labels[key]}: " + "; ".join(_with_codes(r) for r in ranked[:items_per_field]) + "."
+            )
+        if omitted:
+            lines.append(
+                f"({omitted} lower-ranked list item{'s' if omitted != 1 else ''} omitted for length; "
+                "the full ranked lists are in the mandate record.)"
             )
         if self.highest_evi_questions:
             lines.append("Highest-EVI questions:")
             lines.extend(f"- [{code}] {q}" for code, q in self.highest_evi_questions)
-        sub_block = self.sub_industry_block()
-        if sub_block:
-            lines.append(sub_block)
-        lines.append(f"Attribution: {self.attribution}")
-        return _bounded("\n".join(lines), max_chars)
+        return lines
 
-    def sub_industry_block(self, max_chars: int = SUB_INDUSTRY_BLOCK_MAX_CHARS) -> str:
+    def _fit_head(self, budget: int) -> str:
+        """Mandate prose within `budget`, cut by whole units and counted at
+        every step: fewer items per list field first, then whole trailing
+        lines (the highest-EVI questions go before the ranked lists), and
+        the ellipsis only when not even the title and industry list fit."""
+        lines: list[str] = []
+        for n in range(_ITEMS_PER_FIELD, _MIN_ITEMS_PER_FIELD - 1, -1):
+            lines = self._head_lines(n)
+            text = "\n".join(lines)
+            if len(text) <= budget:
+                return text
+        # The title and the industry list are the identity of the mandate;
+        # everything after them is droppable, one whole line at a time.
+        keep = list(lines)
+        while len(keep) > 2:
+            dropped = len(lines) - len(keep) + 1
+            note = (
+                f"({dropped} further mandate line{'s' if dropped != 1 else ''} omitted for length; "
+                "the full mandate is in the record.)"
+            )
+            candidate = "\n".join(keep[:-1] + [note])
+            if len(candidate) <= budget:
+                return candidate
+            keep.pop()
+        return _bounded("\n".join(lines[:2]), max(0, budget))
+
+    def sub_industry_block(self, max_chars: int | None = None) -> str:
         """Sub-industries as `code name [industry] — economics | advantage
-        test (sources)`. Empty when the group carries none."""
-        if not self.sub_industries:
+        test (sources)`, refitted to `max_chars` with every brief that does
+        not fit counted in the omission line. Empty when the group carries
+        none."""
+        if not (self.sub_industries or self.sub_industries_truncated):
             return ""
-        lines = ["Sub-industries (original analyst briefs; provenance per line):"]
-        for sub in self.sub_industries:
-            src = ",".join(sub.source_ids) if sub.source_ids else "n/a"
-            lines.append(
-                f"- {sub.code} {sub.name} [industry {sub.industry_code}; sources {src}] — "
-                f"{sub.economics} | Advantage test: {sub.advantage_test}"
-            )
-        if self.sub_industries_truncated:
-            lines.append(
-                f"- … {self.sub_industries_truncated} more sub-industr"
-                f"{'y' if self.sub_industries_truncated == 1 else 'ies'} omitted for length."
-            )
-        return _bounded("\n".join(lines), max_chars)
+        budget = SUB_INDUSTRY_BLOCK_MAX_CHARS if max_chars is None else max_chars
+        _, _, text = _fit_briefs(self.sub_industries, budget, self.sub_industries_truncated)
+        return text
 
 
 # --- parsing helpers ----------------------------------------------------------
@@ -324,18 +384,53 @@ def _bounded(text: str, max_chars: int) -> str:
 # --- the mandate ---------------------------------------------------------------
 
 
+def _omission_line(count: int) -> str:
+    return f"- … {count} more sub-industr{'y' if count == 1 else 'ies'} omitted for length."
+
+
+def _fit_briefs(
+    briefs: tuple[SubIndustryBrief, ...] | list[SubIndustryBrief], max_chars: int, already_omitted: int = 0,
+) -> tuple[tuple[SubIndustryBrief, ...], int, str]:
+    """Keep briefs in taxonomy order while the RENDERED block — header, one
+    line per brief and the omission line whenever anything is left out —
+    fits `max_chars`. Returns `(kept, omitted, text)`; `omitted` counts
+    `already_omitted` (briefs an earlier, larger budget already dropped)
+    so the reader always sees the true shortfall."""
+    rendered = [b.render() for b in briefs]
+    lines = [SUB_INDUSTRY_HEADER, *rendered]
+    if already_omitted:
+        lines.append(_omission_line(already_omitted))
+    text = "\n".join(lines)
+    if len(text) <= max_chars:
+        return tuple(briefs), already_omitted, text
+    total = len(briefs) + already_omitted
+    # Reserve the omission line at its widest so adding it never overruns.
+    reserve = len(_omission_line(total)) + 1
+    used = len(SUB_INDUSTRY_HEADER)
+    if used + reserve > max_chars:
+        # Not even the header fits: say only what was left out.
+        return (), total, _bounded(_omission_line(total), max_chars)
+    kept: list[SubIndustryBrief] = []
+    for brief, line in zip(briefs, rendered):
+        if used + 1 + len(line) + reserve > max_chars:
+            continue
+        kept.append(brief)
+        used += 1 + len(line)
+    omitted = total - len(kept)
+    text = "\n".join([SUB_INDUSTRY_HEADER, *(b.render() for b in kept), _omission_line(omitted)])
+    return tuple(kept), omitted, text
+
+
 def _sub_industry_briefs(
     industries: list[dict[str, Any]], budget: int,
 ) -> tuple[tuple[SubIndustryBrief, ...], int]:
-    """Briefs in taxonomy order until `budget` characters are spent; the
-    rest are counted, not dropped silently."""
+    """Briefs in taxonomy order until `budget` characters of the rendered
+    block are spent; the rest are counted, not dropped silently."""
     briefs: list[SubIndustryBrief] = []
-    spent = 0
-    truncated = 0
     for industry in industries:
         for sub in industry.get("sub_industries") or []:
             fields = sub.get("fields") or {}
-            brief = SubIndustryBrief(
+            briefs.append(SubIndustryBrief(
                 code=str(sub.get("code", "")),
                 name=str(sub.get("name", "")),
                 industry_code=str(industry.get("code", "")),
@@ -343,14 +438,11 @@ def _sub_industry_briefs(
                 advantage_test=first_sentence(fields.get("advantage_test")),
                 source_ids=tuple(str(s) for s in (sub.get("source_ids") or [])),
                 attribution=industry_knowledge.BRIEF_ATTRIBUTION,
-            )
-            size = len(brief.economics) + len(brief.advantage_test) + len(brief.name) + 40
-            if spent + size > budget and briefs:
-                truncated += 1
-                continue
-            briefs.append(brief)
-            spent += size
-    return tuple(briefs), truncated
+            ))
+    if not briefs:
+        return (), 0
+    kept, omitted, _ = _fit_briefs(briefs, budget)
+    return kept, omitted
 
 
 def build_mandate(group: dict[str, Any], *, version_key: str, payload: dict[str, Any]) -> GroupMandate:

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 from app.agents import industry_report_validator as v
 from app.agents.prompts import DISCLAIMER
 from app.services.industry_group_knowledge import thesis_stages
@@ -101,6 +103,32 @@ def test_number_absent_from_facts_is_rejected_and_present_numbers_pass():
     # the sample size and a count word like "2 quarters".
     p["sections"]["performance"]["interpretation"] = _interp(
         "Observed -3.1% equal-weight over 1M with n=17 across 2 quarters of data."
+    )
+    assert v.validate(p, _facts()) == []
+
+
+@pytest.mark.parametrize("text, token", [
+    ("Margins compressed 8% this quarter.", "8%"),
+    ("The group trades at 10x EBITDA.", "10x"),
+    ("Spreads widened 12 bps.", "12 bps"),
+    ("Returned 2000 bps.", "2000 bps"),
+    ("Trades at $5.", "$5"),
+    ("Grew +7% year over year.", "+7%"),
+])
+def test_small_unit_suffixed_figures_are_measurements_not_counts(text, token):
+    """The count/year exemption is decided on the raw token: a unit suffix,
+    a sign or a currency mark makes a small integer a claim the facts must
+    carry (an LLM edition once sailed through with "8%", "10x", "12 bps")."""
+    p = _payload()
+    p["sections"]["performance"]["interpretation"] = _interp(text)
+    errs = v.validate(p, _facts())
+    assert errs == [f"performance: number {token!r} is not in the facts"], errs
+
+
+def test_bare_counts_ordinals_and_years_stay_exempt():
+    p = _payload()
+    p["sections"]["performance"]["interpretation"] = _interp(
+        "Two of 3 industries in 2026 across 12 months at stage 4; 0 excluded, 1 flagged in 1999."
     )
     assert v.validate(p, _facts()) == []
 

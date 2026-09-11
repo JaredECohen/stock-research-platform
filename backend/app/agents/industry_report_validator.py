@@ -132,20 +132,28 @@ def numeric_tokens(text: str) -> list[tuple[str, float, int]]:
     return out
 
 
-def _is_exempt(value: float, decimals: int) -> bool:
-    """Counts and ordinals ("2 quarters", "stage 3"), 4-digit years, and
-    GICS-shaped integer codes are identifiers, not measurements."""
-    if decimals == 0 and value.is_integer():
-        v = int(value)
-        if 0 <= v <= 12:
-            return True
-        if 1900 <= v <= 2100:
-            return True
-    return False
+def _is_exempt(raw: str) -> bool:
+    """Bare counts and ordinals ("2 quarters", "stage 3") and bare 4-digit
+    years are identifiers, not measurements.
+
+    The exemption is decided on the RAW token, never the parsed value: a
+    unit suffix, a sign or a currency mark turns the same digits into a
+    measurement the facts must carry. "8 quarters" is a count; "8%",
+    "10x", "12 bps" and "$5" are claims. `str.isdigit()` is the whole
+    test — it rejects a suffix, a sign, a decimal point and a thousands
+    comma in one go — so a bare token is always integral and only a
+    4-digit one can be a year.
+    """
+    if not raw.isdigit():
+        return False
+    v = int(raw)
+    if 0 <= v <= 12:
+        return True
+    return len(raw) == 4 and 1900 <= v <= 2100
 
 
-def _supported(value: float, decimals: int, allowed: set[float]) -> bool:
-    if _is_exempt(value, decimals):
+def _supported(raw: str, value: float, decimals: int, allowed: set[float]) -> bool:
+    if _is_exempt(raw):
         return True
     tol = 0.5 * (10 ** -decimals) + 1e-9
     for a in allowed:
@@ -273,7 +281,7 @@ def validate(payload: dict[str, Any], facts: dict[str, Any]) -> list[str]:
                 if phrase in low:
                     errors.append(f"{name}: advice phrasing {phrase!r}")
             for raw, value, decimals in numeric_tokens(text):
-                if not _supported(value, decimals, allowed):
+                if not _supported(raw, value, decimals, allowed):
                     errors.append(f"{name}: number {raw!r} is not in the facts")
             for sentence in _sentences(text):
                 if _has_causal_marker(sentence) and not _claim_supports(sentence, claims):
