@@ -91,17 +91,29 @@ def industry_context_payload(
     is what the chat tool returns and what the block below renders;
     nothing here fetches prices, runs analytics or calls an LLM."""
     from ..services import gics_registry
-    from ..services.industry_report_store import latest_good_many
+    from ..services.industry_report_store import access_policy, latest_good_many
     from ..services.industry_snapshot import group_rows, latest_snapshot, relevant_groups_detail
 
     symbols = [str(t).strip().upper() for t in (tickers or []) if str(t).strip()]
+    # The tier this answer is served under. The chat tool itself already
+    # sits behind the `pm_chat` feature; carrying the policy means the UI
+    # (and slice 4's read routes) read one answer rather than each
+    # inventing its own from the setting.
+    policy = access_policy()
+    access = {
+        "surface": "pm_chat",
+        "tier": policy["surfaces"]["pm_chat"],
+        "enforced": policy["enforced"],
+        "latest_report_tier": policy["surfaces"]["latest"],
+    }
     try:
         info = gics_registry.active_version()
     except Exception as exc:  # DB unavailable — say so, never guess
         log.debug("industry context: taxonomy read failed: %s", type(exc).__name__)
         info = None
     if info is None:
-        return {"status": "taxonomy_not_imported", "tickers": symbols, "code": code, "groups": []}
+        return {"status": "taxonomy_not_imported", "tickers": symbols, "code": code, "groups": [],
+                "access": access}
 
     detail = relevant_groups_detail(symbols, version=info) if symbols else {
         "tickers": [], "own": [], "linked": [], "unmapped": [], "cap": 0, "by_ticker": {},
@@ -152,6 +164,7 @@ def industry_context_payload(
             "n_missing_groups": len((snapshot.get("payload") or {}).get("missing_groups") or []),
         } if snapshot else {"status": "no_snapshot"},
         "groups": groups,
+        "access": access,
         "attribution": gics_registry.ATTRIBUTION,
         "mapping_caveat": gics_registry.MAPPING_CAVEAT,
         "note": "stored weekly artifacts (observed statistics + labelled interpretation); scenarios, not recommendations",

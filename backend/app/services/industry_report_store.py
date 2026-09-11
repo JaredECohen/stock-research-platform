@@ -81,6 +81,60 @@ class ReportNotFound(LookupError):
 
 
 # ---------------------------------------------------------------------------
+# Access policy (owner decision 1) — the Phase 4 seam
+# ---------------------------------------------------------------------------
+
+# The surfaces this store and the PM integration expose, and the tier each
+# one needs. `latest` follows INDUSTRY_ANALYSIS_ACCESS (default "public");
+# the rest are Pro — the deeper reads are the paid part of the feature.
+PUBLIC = "public"
+PRO = "pro"
+_SURFACE_TIERS: dict[str, str] = {
+    "latest": PUBLIC,      # the current edition for one group
+    "history": PRO,        # prior editions
+    "changes": PRO,        # changes-since-prior (`diff`)
+    "pm_chat": PRO,        # the industry block in Ask-the-PM / the chat tool
+}
+
+
+def access_policy() -> dict[str, Any]:
+    """What each Industry Analysis surface costs, and whether that is being
+    enforced right now.
+
+    Two different questions, kept apart on purpose. ``surfaces`` is the
+    policy — stable, and what a UI shows when it explains gating. ``enforced``
+    is whether ``AUTH_ENABLED`` is on; with the login wall off every surface
+    answers to everyone, and a caller that reported the policy as the served
+    tier would be telling the user they paid for something they did not.
+
+    ``INDUSTRY_ANALYSIS_ACCESS`` moves the ``latest`` surface only: set it to
+    ``pro`` and the whole feature is Pro. No route enforces this yet (there is
+    no read API until slice 4); this is the single place that answer lives, so
+    the routes and the chat tool agree rather than each inventing one."""
+    setting = str(settings.industry_analysis_access or PUBLIC).strip().lower()
+    if setting not in (PUBLIC, PRO):
+        log.warning("unknown INDUSTRY_ANALYSIS_ACCESS %r — falling back to %r", setting, PRO)
+        setting = PRO  # an unreadable policy fails closed, never open
+    surfaces = dict(_SURFACE_TIERS)
+    surfaces["latest"] = setting
+    return {
+        "setting": setting,
+        "surfaces": surfaces,
+        "auth_enabled": bool(settings.auth_enabled),
+        "enforced": bool(settings.auth_enabled),
+        "note": (
+            "tiers are the policy; with AUTH_ENABLED off nothing is gated and every surface "
+            "answers publicly. Pro surfaces meter through the pm_chat / portfolio features."
+        ),
+    }
+
+
+def surface_tier(surface: str) -> str:
+    """The tier one surface needs. Unknown surfaces fail closed at Pro."""
+    return access_policy()["surfaces"].get(str(surface), PRO)
+
+
+# ---------------------------------------------------------------------------
 # Projections
 # ---------------------------------------------------------------------------
 

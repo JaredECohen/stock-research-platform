@@ -20,6 +20,7 @@ import pytest
 from sqlalchemy import delete
 
 from app.agents import chat_sdk, pm_context
+from app.config import settings
 from app.database import SessionLocal
 from app.models import CrossIndustrySnapshot, IndustryReport
 from app.services import gics_registry as reg
@@ -191,6 +192,26 @@ def test_chat_tool_reports_missing_snapshot_and_taxonomy_honestly(clean, tools, 
     assert out["groups"][0]["snapshot_row"] is None
     monkeypatch.setattr(reg, "active_version", lambda: None)
     assert tools["get_industry_context"](tickers=["NVDA"])["status"] == "taxonomy_not_imported"
+
+
+def test_chat_tool_carries_the_access_policy_it_was_served_under(clean, tools, monkeypatch):
+    """Owner decision 1: the PM integration is a Pro surface when the login
+    wall is on, the latest report follows INDUSTRY_ANALYSIS_ACCESS. The
+    answer carries the tier so the UI can explain gating from one source
+    rather than re-deriving it from the setting — and it carries the
+    taxonomy-missing answer too, where the tier is the same."""
+    monkeypatch.setattr(settings, "industry_analysis_access", "public", raising=False)
+    monkeypatch.setattr(settings, "auth_enabled", False, raising=False)
+    out = tools["get_industry_context"](tickers=["NVDA"])
+    assert out["access"] == {"surface": "pm_chat", "tier": "pro", "enforced": False, "latest_report_tier": "public"}
+    assert out["access"]["tier"] == rs.surface_tier("pm_chat")
+
+    monkeypatch.setattr(settings, "auth_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "industry_analysis_access", "pro", raising=False)
+    monkeypatch.setattr(reg, "active_version", lambda: None)
+    missing = tools["get_industry_context"](tickers=["NVDA"])
+    assert missing["status"] == "taxonomy_not_imported"
+    assert missing["access"] == {"surface": "pm_chat", "tier": "pro", "enforced": True, "latest_report_tier": "pro"}
 
 
 def test_chat_tool_reads_every_groups_edition_in_one_query(clean, tools):

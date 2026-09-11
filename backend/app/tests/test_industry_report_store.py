@@ -227,3 +227,33 @@ def test_latest_good_many_reads_every_group_in_one_query(code, _taxonomy):
     assert out[code]["version"] == 1 and out[code]["is_latest_good"] is True
     assert len(selects) == 1, selects
     assert rs.latest_good_many([], version=_taxonomy) == {}
+
+
+# --- access policy (owner decision 1) ------------------------------------------
+
+
+def test_access_policy_reads_the_setting_and_keeps_the_tier_apart_from_enforcement(monkeypatch):
+    """One place answers "what does this surface cost" so the routes, the
+    UI and the chat tool cannot each invent a different answer. The tier
+    is the policy; ``enforced`` is whether the login wall is on — a caller
+    that conflated them would tell a user they paid for an open surface."""
+    monkeypatch.setattr(settings, "industry_analysis_access", "public", raising=False)
+    monkeypatch.setattr(settings, "auth_enabled", False, raising=False)
+    policy = rs.access_policy()
+    assert policy["surfaces"] == {"latest": "public", "history": "pro", "changes": "pro", "pm_chat": "pro"}
+    assert policy["enforced"] is False and policy["setting"] == "public"
+    assert rs.surface_tier("history") == "pro" and rs.surface_tier("latest") == "public"
+
+    monkeypatch.setattr(settings, "auth_enabled", True, raising=False)
+    assert rs.access_policy()["enforced"] is True
+
+    # The setting moves `latest` only — the deeper reads stay Pro.
+    monkeypatch.setattr(settings, "industry_analysis_access", "pro", raising=False)
+    assert rs.access_policy()["surfaces"]["latest"] == "pro"
+
+
+def test_an_unreadable_access_setting_fails_closed(monkeypatch):
+    monkeypatch.setattr(settings, "industry_analysis_access", "everyone", raising=False)
+    policy = rs.access_policy()
+    assert policy["setting"] == "pro" and policy["surfaces"]["latest"] == "pro"
+    assert rs.surface_tier("something_new") == "pro"
