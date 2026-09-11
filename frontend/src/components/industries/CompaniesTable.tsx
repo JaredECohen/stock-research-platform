@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import type { IndustryCompanies, IndustryCompanyRow } from "@/types/industries";
-import { fmtCap, fmtDate, fmtPctSigned, fmtPrice, fmtShare, isNum, na } from "./format";
+import { fmtCap, fmtDate, fmtPct, fmtPctSigned, fmtPrice, isNum, na } from "./format";
 
 /**
  * The group's classified membership — who is in it, how each name got
@@ -185,7 +185,11 @@ export default function CompaniesTable({ companies, editionNPriced = null, class
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums">{fmtCap(row.market_cap)}</td>
                   <td className="px-2 py-1 text-right tabular-nums">
-                    {fmtShare(row.weight_mcw, row.priced ? "no market cap on file" : (row.unpriced_reason ?? "not priced"))}
+                    {/* Two decimals, not a whole percent: a group of any
+                        real size has members at a few tenths of a
+                        percent of its market cap, and rounding those to
+                        "0%" prints a nonzero weight as nothing. */}
+                    {fmtPct(row.weight_mcw, row.priced ? "no market cap on file" : (row.unpriced_reason ?? "not priced"))}
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums">
                     {row.priced ? (

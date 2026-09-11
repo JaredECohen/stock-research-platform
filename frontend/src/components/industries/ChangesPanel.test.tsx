@@ -2,6 +2,7 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import ChangesPanel from "@/components/industries/ChangesPanel";
+import FactsView from "@/components/industries/FactsView";
 import * as fx from "@/test/fixtures/industry";
 
 describe("ChangesPanel", () => {
@@ -54,6 +55,30 @@ describe("ChangesPanel", () => {
     const block = screen.getByTestId("changes-analyst-view");
     expect(block).toHaveTextContent("Analyst interpretation");
     expect(block).toHaveTextContent(String((fx.changes.analyst_view as { what_changed: string }).what_changed));
+  });
+
+  it("agrees with the facts view about which facts are percents", () => {
+    // Both cards sit on the same tab, and they used to disagree: this
+    // table printed `returns.1m.n` as the count 4 while the facts view
+    // two cards above printed the same fact as "+400.00%". They share
+    // `format.unitFor` now, and this is the check that they still do.
+    const c = fx.clone(fx.changes);
+    const counts = Object.keys(c.facts_delta).filter((k) => /(^|\.)n(_[a-z]+)?$/.test(k));
+    expect(counts.length).toBeGreaterThan(0);
+    render(<ChangesPanel changes={c} />);
+    const table = screen.getByTestId("changes-table");
+    expect(table).not.toHaveTextContent("400.00%");
+    for (const key of counts) {
+      const row = screen.getByTestId(`delta-${key}`);
+      const to = c.facts_delta[key].to;
+      if (typeof to === "number") expect(row).toHaveTextContent(String(to));
+    }
+
+    // The same facts, rendered by the other card, in the same units.
+    const view = render(
+      <FactsView facts={fx.report.payload.sections.what_changed.facts as Record<string, unknown>} />,
+    );
+    expect(view.getByTestId("facts-view")).not.toHaveTextContent("400.00%");
   });
 
   it("says so when neither edition stored a comparable statistics row", () => {

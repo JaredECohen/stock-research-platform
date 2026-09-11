@@ -1,5 +1,5 @@
 import React from "react";
-import { fmtDateTime, fmtPctSigned, humanize, isNum, na } from "./format";
+import { fmtByPath, fmtDateTime, humanize, isNum, na, unitFor } from "./format";
 
 /**
  * A generic, honest renderer for a report section's `facts`.
@@ -34,25 +34,17 @@ const LIST_CAP = 12;
 const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 
 /**
- * Is a number at this PATH a rate the analytics layer emitted as a
- * fraction?
+ * Is a number at this PATH a percent?
  *
- * The path, not the leaf key: `returns.1m.median` and
- * `benchmark_relative.universe_ew.1m.value` are returns, but their leaf
- * keys are "median" and "value". Deciding on the leaf alone printed
- * "Equal weight: +1.08%" directly above "Median: 0.009186" — the same
- * quantity, two units, in adjacent rows.
- *
- * Sample sizes travel inside those same blocks, so they are excluded by
- * name: `n`, `n_mcw`, `benchmark_n` are counts however deep they sit.
+ * The unit rules live in `format.unitFor` because two renderers share
+ * them — this one and the changes table — and a quantity that printed as
+ * "+5.82%" on one card and "0.058221" on the next was the bug that moved
+ * them there. Kept as a named export because it is the thing worth
+ * asserting on directly in a test.
  */
-const RATE_ANCESTORS = /(^|\.)(returns?|ret|benchmark_relative|breadth|dispersion|margins?|growth|coverage|weight|yield|pct|share)(\.|$)/i;
-const COUNT_LEAF = /^(n|n_[a-z_]+|[a-z_]*_n|count|sessions|order|id|code|version|year|limit|budget|min_sample|attempts|max_attempts)$/i;
-
 export function isRate(path: string): boolean {
-  const leaf = path.split(".").pop() ?? path;
-  if (COUNT_LEAF.test(leaf)) return false;
-  return RATE_ANCESTORS.test(path);
+  const unit = unitFor(path);
+  return unit === "return" || unit === "share";
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -75,7 +67,11 @@ function Scalar({ path, value }: { path: string; value: unknown }) {
   }
   if (typeof value === "boolean") return <span>{value ? "yes" : "no"}</span>;
   if (isNum(value)) {
-    return <span className="tabular-nums">{isRate(path) && Math.abs(value) <= 10 ? fmtPctSigned(value) : String(value)}</span>;
+    // No magnitude guard: a number whose path says "percent" prints as a
+    // percent whatever its size. The old `<= 10` bound let a
+    // misclassified count print raw beside a correctly classified rate,
+    // which hides the misclassification instead of showing it.
+    return <span className="tabular-nums">{fmtByPath(path, value)}</span>;
   }
   if (typeof value === "string" && ISO_DATETIME.test(value)) {
     // The same rendering the header gives an as-of, for the same reason:

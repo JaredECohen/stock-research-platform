@@ -2,7 +2,17 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import FactsView, { OMITTED_KEYS, isRate } from "@/components/industries/FactsView";
-import { degradationText, fmtCap, fmtDateTime, fmtPctSigned, fmtShare, humanize, na } from "@/components/industries/format";
+import {
+  degradationText,
+  fmtCap,
+  fmtDateTime,
+  fmtPct,
+  fmtPctSigned,
+  fmtShare,
+  humanize,
+  na,
+  unitFor,
+} from "@/components/industries/format";
 import * as fx from "@/test/fixtures/industry";
 
 // The generic facts renderer is what stands between a backend that says
@@ -73,6 +83,48 @@ describe("FactsView", () => {
     expect(view).not.toHaveTextContent("+400.00%");
   });
 
+  it("keeps a sample size a count inside the delta shape the API actually ships", () => {
+    // The regression: `facts_delta` names the quantity ONE LEVEL ABOVE
+    // the number — `returns.1m.n` becomes `returns.1m.n.{from,to,change}`
+    // — so a rule that read the leaf saw `to`, missed the count, and
+    // printed a priced sample of 4 names as "+400.00%" directly above the
+    // same row in the diff table printing the honest 4.
+    const facts = fx.report.payload.sections.what_changed.facts as Record<string, unknown>;
+    const delta = facts.facts_delta as Record<string, { from: unknown; to: unknown; change: unknown }>;
+    expect(delta["returns.1m.n"]).toEqual({ from: 0, to: 4, change: 4 });
+    render(<FactsView facts={facts} />);
+    const view = screen.getByTestId("facts-view");
+    expect(view).not.toHaveTextContent("+400.00%");
+    expect(view).not.toHaveTextContent("0.009186");
+    // …and the rate sitting in the same block is still a percent.
+    expect(view).toHaveTextContent("+0.92%");
+  });
+
+  it("gives a company's return and weight the same units the table gives them", () => {
+    // `leaders.ret_1m` and `per_ticker.weight_mcw` are separated by `_`,
+    // not `.`, and a rule that only split on `.` printed them as raw
+    // fractions on the Companies tab while the table above printed the
+    // same numbers as percents.
+    const facts = fx.report.payload.sections.companies.facts as Record<string, unknown>;
+    const leader = (facts.leaders as Array<Record<string, number>>)[0];
+    render(<FactsView facts={facts} />);
+    const view = screen.getByTestId("facts-view");
+    expect(view).toHaveTextContent(fmtPctSigned(leader.ret_1m));
+    expect(view).toHaveTextContent(fmtPct(leader.weight_mcw));
+    expect(view).not.toHaveTextContent(String(leader.ret_1m));
+    expect(view).not.toHaveTextContent(String(leader.weight_mcw));
+  });
+
+  it("renders a price and a market cap as money, like the table does", () => {
+    const row = (fx.report.payload.sections.companies.facts.per_ticker as Array<Record<string, unknown>>).find(
+      (r) => typeof r.last_close === "number",
+    )!;
+    render(<FactsView facts={{ per_ticker: [row] }} />);
+    const view = screen.getByTestId("facts-view");
+    expect(view).toHaveTextContent(fmtCap(row.market_cap));
+    expect(view).toHaveTextContent(`$${(row.last_close as number).toFixed(2)}`);
+  });
+
   it("renders a nested timestamp as the UTC instant, like the header does", () => {
     render(<FactsView facts={{ as_of: "2026-09-04T21:00:00" }} />);
     expect(screen.getByTestId("facts-view")).toHaveTextContent("2026-09-04 21:00 UTC");
@@ -99,6 +151,36 @@ describe("isRate", () => {
     expect(isRate("statistics.inputs_hash")).toBe(false);
     expect(isRate("valuation.ev_ebitda.median")).toBe(false);
   });
+
+  it("reads `_` as a separator, so a return and a weight are not raw fractions", () => {
+    expect(unitFor("companies.leaders.ret_1m")).toBe("return");
+    expect(unitFor("companies.laggards.weight_mcw")).toBe("share");
+    expect(unitFor("companies.largest.weight_mcw")).toBe("share");
+    expect(isRate("companies.leaders.ret_1m")).toBe(true);
+    expect(isRate("companies.per_ticker.weight_mcw")).toBe(true);
+  });
+
+  it("looks above the delta wrappers for the name of the quantity", () => {
+    expect(unitFor("facts_delta.returns.1m.n.to")).toBe("count");
+    expect(unitFor("facts_delta.returns.1m.n.change")).toBe("count");
+    expect(unitFor("facts_delta.returns.1m.n_mcw.from")).toBe("count");
+    expect(unitFor("facts_delta.returns.1m.equal_weight.to")).toBe("return");
+  });
+
+  it("keeps window sizes counts even inside a percent-bearing block", () => {
+    expect(unitFor("statistics.breadth.above_50d_mean.window_sessions")).toBe("count");
+    expect(unitFor("statistics.method.breadth_mean_window.max_span_days")).toBe("count");
+    expect(unitFor("statistics.breadth.above_50d_mean.share")).toBe("share");
+  });
+
+  it("separates a signed return from an unsigned share", () => {
+    expect(unitFor("performance.returns.1m.median")).toBe("return");
+    expect(unitFor("statistics.sample.coverage")).toBe("share");
+    expect(unitFor("statistics.dispersion.stdev")).toBe("share");
+    expect(unitFor("companies.per_ticker.market_cap")).toBe("money");
+    expect(unitFor("companies.per_ticker.last_close")).toBe("price");
+    expect(unitFor("overview.research_priority")).toBe("plain");
+  });
 });
 
 describe("format helpers", () => {
@@ -113,6 +195,19 @@ describe("format helpers", () => {
     expect(fmtShare(undefined, "not computed")).toBe("n/a (not computed)");
     expect(fmtCap(2.9e12)).toBe("$2.90T");
     expect(fmtCap(null)).toBe("n/a (not on file)");
+  });
+
+  it("keeps a small weight visible instead of rounding it to nothing", () => {
+    // `fmtShare` is right for a coverage headline and wrong here: a
+    // constituent at 0.3% of the group's market cap is not 0%.
+    expect(fmtShare(0.003)).toBe("0%");
+    expect(fmtPct(0.003)).toBe("0.30%");
+    expect(fmtPct(0.046569)).toBe("4.66%");
+    // Too small to show at this precision is a statement about the
+    // DISPLAY; a real zero still prints as one.
+    expect(fmtPct(0.00000004)).toBe("<0.01%");
+    expect(fmtPct(0)).toBe("0%");
+    expect(fmtPct(null, "no market cap on file")).toBe("n/a (no market cap on file)");
   });
 
   it("stamps a naive timestamp UTC instead of shifting it by the viewer's offset", () => {

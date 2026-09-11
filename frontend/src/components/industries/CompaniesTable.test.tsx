@@ -114,6 +114,19 @@ describe("CompaniesTable", () => {
     expect(screen.queryByTestId("coverage-disagreement")).not.toBeInTheDocument();
   });
 
+  it("shows a small market-cap weight instead of rounding it to 0%", () => {
+    // A real group spreads its cap over dozens of names, so members sit
+    // at a few tenths of a percent. The captured group has five members
+    // and none that small, so this is the case the fixture cannot make.
+    const thin = fx.clone(fx.companies);
+    thin.items[0].weight_mcw = 0.003;
+    thin.items[0].priced = true;
+    render(<CompaniesTable companies={thin} />);
+    const row = screen.getByTestId(`company-row-${thin.items[0].ticker}`);
+    expect(row).toHaveTextContent("0.30%");
+    expect(row).not.toHaveTextContent(/(^|[^.\d])0%/);
+  });
+
   it("says the group has no classified members rather than rendering an empty table", () => {
     const empty = fx.clone(fx.companies);
     empty.items = [];

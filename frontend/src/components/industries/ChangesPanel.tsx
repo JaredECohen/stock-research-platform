@@ -1,6 +1,6 @@
 import React from "react";
 import type { IndustryChanges, IndustryFactDelta } from "@/types/industries";
-import { fmtDate, fmtPctSigned, humanize, isNum, na } from "./format";
+import { fmtByPath, fmtDate, fmtPctSigned, humanize, isNum, na, unitFor } from "./format";
 
 /**
  * What moved between two editions.
@@ -21,16 +21,19 @@ function side(v: Record<string, unknown> | undefined, fallback: string): string 
   return `v${v.version} · ${String(v.period_key || "no period")} · as of ${fmtDate(String(v.as_of ?? ""))}`;
 }
 
-/** Rate-like facts (returns, breadth, dispersion, margins) read as
- *  percents; counts and ids do not. The key names the quantity — the
- *  wire carries no unit. */
-function isRate(key: string): boolean {
-  return /(^|\.)(returns|breadth|dispersion|margin|growth|coverage)/i.test(key) && !/\.n(_\w+)?$/.test(key);
+/** A delta is a MOVE, so it is signed even for a quantity whose level is
+ *  not (breadth going from 50% to 75% is "+25.00%"). Which quantities
+ *  are percents at all is `format.unitFor`'s call — the same one the
+ *  facts view makes, so the two cards on this tab cannot disagree about
+ *  what `returns.1m.n` is. */
+function isPercent(key: string): boolean {
+  const unit = unitFor(key);
+  return unit === "return" || unit === "share";
 }
 
 function value(key: string, v: unknown): string {
   if (v === null || v === undefined) return na("missing");
-  if (isNum(v)) return isRate(key) ? fmtPctSigned(v) : String(v);
+  if (isNum(v)) return fmtByPath(key, v);
   return String(v);
 }
 
@@ -45,7 +48,7 @@ function DeltaRow({ name, row }: { name: string; row: IndustryFactDelta }) {
       <td className="px-2 py-1 text-right tabular-nums">
         {isNum(row.delta) ? (
           <span className={row.delta > 0 ? "text-accent-500" : row.delta < 0 ? "text-danger-500" : "text-slate-300"}>
-            {isRate(name) ? fmtPctSigned(row.delta) : row.delta}
+            {isPercent(name) ? fmtPctSigned(row.delta) : row.delta}
           </span>
         ) : (
           <span className="text-slate-500">{na(row.reason ?? "no reason recorded")}</span>
