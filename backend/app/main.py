@@ -34,9 +34,12 @@ from .api import (
 from .api.admin_auth import admin_auth_middleware
 from .auth.middleware import customer_auth_middleware
 from .config import settings
+from .log_setup import configure_logging
 from .rate_limit import limiter, rate_limit_exceeded_handler
 
-logging.basicConfig(level=logging.INFO)
+# See `app/log_setup.py`: also silences httpx's per-request logging and
+# scrubs query-string credentials, which were leaking into production logs.
+configure_logging()
 log = logging.getLogger("marketmosaic")
 
 

@@ -36,10 +36,12 @@ import signal
 import sys
 import threading
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+from .log_setup import configure_logging
+
+# Quiets httpx's per-request logging and scrubs query-string credentials
+# out of every record — provider keys were reaching Render's logs in
+# plaintext. See `app/log_setup.py`.
+configure_logging()
 log = logging.getLogger("app.worker")
 
 _shutdown = threading.Event()

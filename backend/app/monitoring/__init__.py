@@ -42,6 +42,7 @@ KNOWN_LOOPS: tuple[str, ...] = (
     "sample_build_loop",
     "scorecard_loop",
     "sector_digest_loop",
+    "snapshot_gc",
     "social_loop",
     "theme_exposure_loop",
     "transcripts_poller",
@@ -142,6 +143,7 @@ from . import (  # noqa: E402,F401
     sample_build_loop,
     scorecard_loop,
     sector_digest_loop,
+    snapshot_gc,
     social_loop,
     theme_exposure_loop,
     transcripts_poller,
@@ -152,7 +154,8 @@ __all__ = [
     "billing_loop", "catalyst_loop", "checkpoint_gc", "edgar_poller", "history_backfill",
     "industry_classification_loop", "industry_weekly_loop",
     "llm_log_gc", "macro_loop", "mispricing_audit_loop", "news_loop",
-    "outcome_loop", "postmortem_loop", "sample_build_loop", "scorecard_loop", "sector_digest_loop", "social_loop",
+    "outcome_loop", "postmortem_loop", "sample_build_loop", "scorecard_loop",
+    "sector_digest_loop", "snapshot_gc", "social_loop",
     "theme_exposure_loop", "transcripts_poller", "weekly_digest_loop",
     "register_all", "record_run", "status_snapshot", "KNOWN_LOOPS",
 ]
@@ -169,6 +172,7 @@ def register_all(scheduler) -> None:
     history_backfill.register(scheduler)
     outcome_loop.register(scheduler)
     checkpoint_gc.register(scheduler)
+    snapshot_gc.register(scheduler)
     # Wave 10 — postmortem feedback loop, catalyst refresh, theme exposure,
     # weekly filing digest, sector cohort digest, mispricing-audit nightly.
     postmortem_loop.register(scheduler)
