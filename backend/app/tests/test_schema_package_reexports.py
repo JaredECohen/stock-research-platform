@@ -147,11 +147,18 @@ MODEL_SUBMODULES = [
 # separators). The split itself did not move this hash (it was taken on
 # the pre-split `schemas.py` and matched after the move); RP-001 then
 # added `degradation_events` + `extra_agent_views`; Phase 6 (slice D) then
-# added the optional `scorecard: ScorecardSummary | None`, which is the
-# value pinned here. Update this deliberately, in the same commit, whenever
-# `StockMemoOut` itself changes — never to make an accidental drift pass.
+# added the optional `scorecard: ScorecardSummary | None`. FEAT-003 then
+# widened `CritiqueQuestion.target_agent` from a frozen 8-value `Literal`
+# to `str`, because the roster — not this schema — is the authority on
+# which specialists exist, and `schemas` cannot import `agents.roster`
+# without a cycle (roster imports `..schemas`). The frozen enum is what
+# made the Industry Group Analyst unreachable from the PM dialog;
+# `deep_research._addressable` validates against the live roster instead.
+# That widened value is what is pinned here. Update this deliberately, in
+# the same commit, whenever `StockMemoOut` itself changes — never to make
+# an accidental drift pass.
 STOCK_MEMO_OUT_SCHEMA_SHA256 = (
-    "42b0ffc8c9158fd2ea25cbb76b7f59672aa2a776495666d966dcb5504fb6dec1"
+    "c259e5b6e1901f1146b6c3450a012b4816fb5b14d7b0131fbf37becb4f91a562"
 )
 
 

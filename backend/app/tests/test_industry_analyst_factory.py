@@ -23,9 +23,11 @@ from pathlib import Path
 
 import pytest
 
-from app.agents import graph, prompts
+from app.agents import deep_research as dr
+from app.agents import graph, intake, prompts, roster
 from app.agents import industry_analysts as ia
 from app.config import settings
+from app.schemas import AgentFinding
 from app.services import gics_registry as reg
 from app.services import industry_classification as ic
 from app.services import industry_group_knowledge as igk
@@ -321,6 +323,65 @@ def test_no_classification_row_is_reported_as_such(monkeypatch):
     events = [e for e in memo.degradation_events if e["agent"] == "Industry Group Analyst"]
     assert events[0]["message"] == "no mapping: no classification row"
     assert "industry_group" not in memo.sector_agent_view.data
+
+
+# --- the PM dialog can reach the new analyst ----------------------------------------
+
+
+def test_pm_critique_can_target_the_industry_analyst_and_the_refire_lands(monkeypatch):
+    """`deep_research` hard-coded the eight legacy specialist keys, so a PM
+    question aimed at `industry_group` was silently dropped and
+    `run_industry_group_agent`'s `prior_round_critique` path was
+    unreachable from a memo run. The accepted set is now the roster."""
+    monkeypatch.setattr(settings, "enable_industry_analyst_routing", True)
+    round0 = {
+        "sector": AgentFinding(agent="Sector Analyst", headline="h", summary="s"),
+        "industry_group": AgentFinding(agent="Industry Group Analyst", headline="h", summary="s"),
+    }
+    prompts_seen: list[str] = []
+
+    def fake_chat_json(prompt, **kwargs):
+        prompts_seen.append(prompt)
+        return {"questions": [
+            {"target_agent": "industry_group", "question": "Which sub-industry brief applies?",
+             "why_it_matters": "placement drives the KPI set"},
+            {"target_agent": "not_a_specialist", "question": "q", "why_it_matters": "w"},
+        ], "no_further_questions": False, "rationale": "r"}
+
+    monkeypatch.setattr(dr.llm, "chat_json", fake_chat_json)
+    out = dr.pm_critique(round_num=0, current_findings=round0, rounds_so_far=[], run_id="t")
+    # The roster key is offered to the model and accepted back; a key that
+    # is not on the roster is still rejected.
+    assert "industry_group" in prompts_seen[0]
+    assert [q.target_agent for q in out.questions] == ["industry_group"]
+
+    # …and the question reaches the analyst's own runner as its critique.
+    asked: list[str] = []
+
+    def refire(q: str) -> AgentFinding:
+        asked.append(q)
+        return ia.run_industry_group_agent(
+            {"ticker": "NVDA", "company_name": "NVIDIA"}, {"roic": 0.51},
+            prior_round_critique=q, classification=ic.current_for(["NVDA"])["NVDA"],
+        )
+
+    current, rounds = dr.run_dialog_loop(
+        run_id="t", initial_findings=round0,
+        re_fire={"sector": lambda q: round0["sector"], "industry_group": refire},
+        max_rounds=1,
+    )
+    assert asked == ["Which sub-industry brief applies?"]
+    assert rounds[1].pm_questions[0].target_agent == "industry_group"
+    assert current["industry_group"].agent == "Industry Group Analyst"
+
+
+def test_the_intake_prompt_and_the_critique_targets_come_from_the_roster():
+    """Neither list is spelled out: adding a roster entry must not require
+    editing prose in two other modules (it did, and the analyst was lost)."""
+    assert intake.ALL_SPECIALISTS == [spec.key for spec in roster.AGENTS]
+    assert "industry_group" in intake.ALL_SPECIALISTS
+    assert dr._addressable({}) == tuple(intake.ALL_SPECIALISTS)
+    assert dr._addressable({"macro": None, "sector": None}) == ("sector", "macro")  # roster order
 
 
 # --- the runner on its own -----------------------------------------------------------

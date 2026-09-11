@@ -37,11 +37,17 @@ class CritiqueQuestion(BaseModel):
     `target_agent` names which specialist's runner re-fires with this
     question as additional prompt context. `why_it_matters` is captured
     in the audit trail so reviewers can see *why* the PM dug in.
+
+    `target_agent` is a plain roster key, deliberately NOT a `Literal`:
+    the roster is the single authority on which specialists exist, and
+    `schemas` cannot import `agents.roster` (roster imports these models,
+    so the Literal would be a cycle). Freezing the eight legacy keys here
+    is what made the Industry Group Analyst unreachable — a critique aimed
+    at it failed validation after the loop had already accepted it.
+    `deep_research._addressable` does the checking against the live roster,
+    before this model is constructed.
     """
-    target_agent: Literal[
-        "sector", "earnings", "valuation", "comps",
-        "risk", "filing", "macro", "technical",
-    ]
+    target_agent: str
     question: str
     why_it_matters: str = ""
 

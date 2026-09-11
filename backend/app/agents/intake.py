@@ -2,8 +2,8 @@
 
 Before the parallel fan-out, the PM looks at the company profile +
 recent news alerts + macro regime and decides which specialists matter
-most for *this* memo. Default = run all 8. PM can deprioritize up to
-3 specialists per run, with a logged rationale.
+most for *this* memo. Default = run the whole roster. PM can deprioritize
+up to 3 specialists per run, with a logged rationale.
 
 Why this matters:
 - A regulated bank doesn't need a deep technical read.
@@ -32,8 +32,9 @@ from .roster import AGENTS
 log = logging.getLogger(__name__)
 
 # Derived from the roster so a new analyst is skippable (and stubbable)
-# without a second hand-maintained list here. The prompt below still
-# spells the eight names out for the model; extend it when the roster grows.
+# without a second hand-maintained list here — the prompt below is
+# generated from the same list, so the model is never offered a roster
+# that has drifted from the code.
 ALL_SPECIALISTS: list[str] = [spec.key for spec in AGENTS]
 _DISPLAY_NAMES: dict[str, str] = {spec.key: spec.display_name for spec in AGENTS}
 
@@ -65,9 +66,9 @@ def run_intake(
 ) -> IntakeDecision:
     """Decide which specialists to run for this memo.
 
-    Default: run all 8. LLM may deprioritize up to `_MAX_SKIPS` with a
-    one-line rationale per skip. Returns the decision (caller threads
-    it through the fan-out)."""
+    Default: run the whole roster. LLM may deprioritize up to `_MAX_SKIPS`
+    with a one-line rationale per skip. Returns the decision (caller
+    threads it through the fan-out)."""
     if not getattr(settings, "openai_api_key", None):
         return IntakeDecision()
     payload = {
@@ -85,9 +86,9 @@ def run_intake(
         ],
     }
     out = llm.chat_json(
-        "You are the PM doing intake on a memo run. Eight specialists "
-        "are available — sector, earnings, filing, valuation, comps, "
-        "macro, risk, technical. Default: run them all. You may "
+        f"You are the PM doing intake on a memo run. {len(ALL_SPECIALISTS)} "
+        "specialists are available — " + ", ".join(ALL_SPECIALISTS) + ". "
+        "Default: run them all. You may "
         f"DEPRIORITIZE up to {_MAX_SKIPS} specialists for this memo "
         "ONLY when running them adds little to the thesis (e.g., a "
         "regulated bank rarely needs a technical read; a name with "
