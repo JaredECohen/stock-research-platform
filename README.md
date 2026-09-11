@@ -24,13 +24,19 @@ copies in the ChatGPT **Investment Research** project Sources provide app access
 
 | Workflow | Page | Backed by |
 |---|---|---|
-| Single-stock memo (any ticker, with typeahead picker) | `/research` | `agents/graph.py::run_stock_memo` |
-| Three screener views — AI rank · factor rank · custom rule builder | `/screener` | `services/screener_service.py` + `services/screener_metrics_service.py` |
-| Editable DCF lab + sensitivity tables | `/dcf` | `finance/dcf.py` + `services/dcf_store.py` |
-| Comps with self-historical lens | `/comps` | `finance/comps.py` + `finance/comps_history.py` |
-| Macro scenario analysis | `/macro` | `agents/macro_agent.py` |
-| Conversational PM (8 tools — memo / DCF / comps / macro / universe / screener / custom screen) | `/chat` | `agents/orchestrator.py` + `agents/chat_sdk.py` |
-| Scenario-based portfolio builder | `/portfolio` | `finance/portfolio_construction.py` |
+| Single-stock memo (any ticker, with typeahead picker) | `/app/research` | `agents/graph.py::run_stock_memo` |
+| Three screener views — AI rank · factor rank · custom rule builder | `/app/screener` | `services/screener_service.py` + `services/screener_metrics_service.py` |
+| Editable DCF lab + sensitivity tables | `/app/dcf` | `finance/dcf.py` + `services/dcf_store.py` |
+| Comps with self-historical lens | `/app/comps` | `finance/comps.py` + `finance/comps_history.py` |
+| Historical fundamentals charts with memo-aware commentary | `/app/fundamentals` | `services/fundamentals_series_service.py` + `services/chart_commentary.py` |
+| Point-in-time fundamental factor scorecard + frozen CSV/JSON export | `/app/scorecard` | `services/scorecard_service.py` + `finance/scorecard_*.py` |
+| Macro scenario analysis | `/app/macro` | `agents/macro_agent.py` |
+| Conversational PM (memo / DCF / comps / macro / universe / screener / custom screen) | `/app/chat` | `agents/orchestrator.py` + `agents/chat_sdk.py` |
+| Scenario-based portfolio builder | `/app/portfolio` | `finance/portfolio_construction.py` |
+
+Pages live under `/app/*`. The bare paths (`/research`, `/dcf`, …) still work — see
+`LEGACY_APP_PATHS` in `frontend/src/App.tsx` — but they redirect, preserving query and
+hash, and are not the canonical URLs.
 
 The **curated screener universe** is the S&P 500 plus curated extensions (foreign-listed
 ADRs, sub-industry semis), pre-analyzed nightly. Any ticker outside it is researchable on
@@ -45,6 +51,22 @@ agent with eight tools — `get_memo`, `get_dcf_summary`, `get_comps`, `get_macr
 `get_company_lite`, `list_universe`, `screener_query`, `custom_screen`. Workflow handlers
 still fire for unambiguous first-message asks ("Analyze NVDA", "Build a 10-stock
 portfolio") so the heavy memo path runs only when the user wants it.
+
+The **fundamental factor scorecard** scores the universe from stored filings at a
+versioned, point-in-time `available_at` — a row is only fed features that were knowable on
+its as-of date — and normalises them sector-neutrally into family and composite scores. It
+is evaluated, not asserted: the worker writes a quintile long/short spread, a
+Fama-French 5 + momentum regression and a double-selection LASSO, each with its own
+caveats and an explicit `insufficient_data` verdict when the sample cannot support one.
+The scorecard never moves a memo's rating; where it disagrees with the memo it raises a
+flagged disagreement instead.
+
+**Accounts, plans and billing** (FEAT-002) ship behind flags and are **off by default**:
+with `AUTH_ENABLED=false` every route is open and plans resolve to `unrestricted`. Turned
+on, Clerk owns identity and Stripe is the only authority on what a customer has paid for —
+a checkout redirect is never treated as proof of payment, and no entitlement is ever
+decided in the frontend. `ADMIN_API_TOKEN` remains a separate, unrelated credential for
+`/api/admin/*`.
 
 ---
 
@@ -338,6 +360,8 @@ curl localhost:8000/api/providers/status | jq .
 | `GET /api/admin/sdk-traces` | OpenAI Agents SDK exchange traces (when SDK runtime is on) |
 | `GET /api/admin/track-record` | Memo rating accuracy vs. realized forward returns |
 | `POST /api/screener/custom` | Rule-based screen against `screener_metrics` |
+| `POST /api/admin/scorecard/refresh` \| `/evaluate` \| `/backfill` | Enqueue a scorecard run; the worker drains it (202, enqueue-only) |
+| `GET /api/admin/scorecard/disagreements` | Open memo-vs-scorecard disagreements; `/{id}/dismiss` closes one |
 
 ---
 
