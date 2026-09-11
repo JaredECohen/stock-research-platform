@@ -289,23 +289,81 @@ def test_sector_prompt_block_is_empty_for_a_non_routable_row():
 # --- routing off: the memo is unchanged versus the base commit -----------------
 
 
-# This slice can only reach the sector analyst (its `{industry_group_block}`
-# placeholder) and the new roster entry. Every OTHER analyst's degradation
-# is a function of what the shared database happens to hold — whether some
-# other suite scored MSFT, whether price history was seeded — so comparing
-# it makes the golden fail for reasons that have nothing to do with the
-# flag. The blast radius is compared exactly; the rest is scoped out by
-# name, not filtered per incident.
+# WHAT THE GOLDEN COMPARES, AND WHY EACH EXCLUDED FIELD IS EXCLUDED
+#
+# The claim under test is narrow and total: with ENABLE_INDUSTRY_ANALYST_
+# ROUTING off, this slice changes NOTHING a demo memo says. The slice can
+# reach the memo through exactly two doors — the sector analyst's
+# `{industry_group_block}` prompt placeholder (and the `industry_group`
+# key the routed path adds to its finding data) and the new roster entry
+# (a new `extra_agent_views` key, a new name in the degradation lists).
+# So the projection below carries every field either door opens onto, and
+# excludes only fields whose value is a function of what the shared
+# database happens to hold on this run:
+#
+#   COMPARED, exactly, against the capture:
+#     sector_agent_view.agent / headline / summary / sources  — computed
+#       from the demo fixtures; the prompt placeholder is the only way
+#       this slice could move them.
+#     sector_agent_view.data_keys — the sorted key set, which is how an
+#       `industry_group` payload leaking onto the finding would show up.
+#     sector_agent_view.key_points, minus the macro tail (see below).
+#     extra_agent_views — a new roster entry lands here or nowhere.
+#     degraded_agents / degradation_events, restricted to _BLAST_RADIUS.
+#     rating_label — the memo's own verdict, the end of the pipeline.
+#
+#   EXCLUDED, by name, with the reason:
+#     the macro-overlay tail of key_points. The sector agent appends up to
+#       four `narrative_hints` read off `sector_data_context.overlays`, and
+#       those quote live macro series ("Sticky core CPI at 3.6% YoY") whose
+#       values move with whichever suite last seeded the database. They are
+#       not excluded on trust: the tail is re-derived from THIS memo's own
+#       overlays every run, and every excluded entry must be one of them,
+#       so foreign content cannot hide there.
+#     every degradation outside _BLAST_RADIUS. Whether the Fundamental
+#       Scorecard has a row for MSFT, whether price history was seeded —
+#       none of it is reachable from this flag, and comparing it makes the
+#       golden fail for reasons that have nothing to do with the slice.
+#       Scoped out by name, not filtered per incident.
+#
+# `test_routing_off_leaves_no_trace_anywhere_in_the_memo_json` then sweeps
+# the WHOLE serialised memo for industry-group markers, so a leak into a
+# field this projection does not name is still caught.
 _BLAST_RADIUS = {"Sector Analyst", "Industry Group Analyst", "Long-form (Sector)",
                  "Long-form (Industry Group)"}
 
+# Where the capture's `key_points` splits. `sector_agents` builds the list
+# in one order — KPI placements, cohort trends, filing themes (all computed
+# from the demo fixtures, all invariant) — and only then appends the macro
+# overlay hints. The capture holds nine of the former and three of the
+# latter. It is a constant here only because the golden is a flat list of
+# strings with no data payload to re-derive the boundary from; the MEMO
+# side re-derives it from its own overlays on every run, and the test
+# asserts the two agree on where the boundary falls.
+_GOLDEN_N_COHORT_KEY_POINTS = 9
 
-def _subset(memo) -> dict:
+
+def _overlay_hints(view) -> set[str]:
+    """The key_points the sector agent appended from the macro overlays,
+    read back off the finding's own `sector_data_context`."""
+    data = view.data if isinstance(view.data, dict) else {}
+    bundles = ((data.get("sector_data_context") or {}).get("overlays") or {}).get("bundles") or {}
+    hints: set[str] = set()
+    for bundle in bundles.values():
+        if isinstance(bundle, dict) and bundle.get("available"):
+            hints.update(str(h) for h in (bundle.get("narrative_hints") or []))
+    return hints
+
+
+def _invariant_projection(memo) -> dict:
+    """The part of the memo that is the same on every run with routing off."""
     sv = memo.sector_agent_view
+    hints = _overlay_hints(sv)
+    cohort_points = [p for p in sv.key_points if p not in hints]
     return {
         "sector_agent_view": {
             "agent": sv.agent, "headline": sv.headline, "summary": sv.summary,
-            "key_points": sv.key_points, "sources": sv.sources,
+            "cohort_key_points": cohort_points, "sources": sv.sources,
             "data_keys": sorted(sv.data.keys()) if isinstance(sv.data, dict) else None,
         },
         "extra_agent_views": sorted(memo.extra_agent_views.keys()),
@@ -317,15 +375,47 @@ def _subset(memo) -> dict:
 
 def test_routing_off_demo_memo_matches_the_base_commit_golden():
     """Golden captured at 3038e78 (before this slice) from the same demo
-    run; with the flag off the roster, the sector prompt and the memo
-    views must be exactly what they were."""
+    run; with the flag off the roster, the sector prompt and the memo views
+    must be exactly what they were. See the comment above `_BLAST_RADIUS`
+    for what is compared and why each excluded field is excluded."""
     assert settings.enable_industry_analyst_routing is False
     golden = json.loads(GOLDEN.read_text())
+    gsv = golden["sector_agent_view"]
+    gsv["cohort_key_points"] = gsv.pop("key_points")[:_GOLDEN_N_COHORT_KEY_POINTS]
     golden["degraded_agents"] = [a for a in golden["degraded_agents"] if a in _BLAST_RADIUS]
     golden["degradation_events"] = [e for e in golden["degradation_events"] if e["agent"] in _BLAST_RADIUS]
+
     memo = graph.run_stock_memo("MSFT")
-    assert _subset(memo) == golden
+    projection = _invariant_projection(memo)
+    assert projection == golden
+
+    # The exclusion is bounded on all sides, so it cannot become a hole a
+    # leak could sit in:
+    sv = memo.sector_agent_view
+    hints = _overlay_hints(sv)
+    cohort_points = projection["sector_agent_view"]["cohort_key_points"]
+    #  - the two sides agree on where the macro tail begins;
+    assert len(cohort_points) == _GOLDEN_N_COHORT_KEY_POINTS
+    #  - the excluded entries are a suffix, never interleaved;
+    assert sv.key_points[:len(cohort_points)] == cohort_points
+    #  - and every excluded entry is an overlay hint carried by this very
+    #    memo, so nothing else can ride along in the part not compared.
+    assert all(p in hints for p in sv.key_points[len(cohort_points):])
+
     assert "industry_group" not in memo.sector_agent_view.data
+    assert ia.construction_count() == 0
+
+
+def test_routing_off_leaves_no_trace_anywhere_in_the_memo_json():
+    """The projection above names the fields this slice can reach. This
+    names none of them: the whole serialised memo must not contain a single
+    industry-group marker while the flag is off, so a leak into a field
+    nobody thought to project is caught anyway."""
+    assert settings.enable_industry_analyst_routing is False
+    blob = graph.run_stock_memo("MSFT").model_dump_json()
+    for marker in ("industry_group", "Industry Group", "industry_knowledge:", "IndustryAnalyst",
+                   "industry group mandate", "gics:"):
+        assert marker not in blob, marker
     assert ia.construction_count() == 0
 
 
