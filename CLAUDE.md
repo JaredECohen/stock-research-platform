@@ -56,7 +56,11 @@ Two things to know before you trust a local run:
   treating any of those failures as a regression.
 
 CI installs from `requirements.txt`, which pins floors rather than ceilings, so
-**CI resolves newer dependencies than a long-lived dev environment**. Tests that
+**CI resolves newer dependencies than a long-lived dev environment**. Run the
+suite against those versions before trusting a green local run — on 2026-09-11
+that difference was hiding a production defect in which the per-IP rate limiter
+silently enforced nothing at all (see `rate_limit._find_route_handler`), and
+every configuration-level test still passed. Tests that
 introspect framework internals can pass locally and fail there. To reproduce CI's
 versions cheaply:
 
