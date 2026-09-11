@@ -376,9 +376,13 @@ def _with_codes(item: RankedItem) -> str:
 
 
 def _bounded(text: str, max_chars: int) -> str:
+    """Never returns more than `max_chars` — the ellipsis costs a character
+    too, and a non-positive budget buys nothing at all."""
     if len(text) <= max_chars:
         return text
-    return text[: max(0, max_chars - 1)].rstrip() + "…"
+    if max_chars <= 0:
+        return ""
+    return text[: max_chars - 1].rstrip() + "…"
 
 
 # --- the mandate ---------------------------------------------------------------

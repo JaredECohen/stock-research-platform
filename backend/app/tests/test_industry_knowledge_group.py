@@ -276,6 +276,18 @@ def test_budget_too_small_for_any_brief_reports_them_all_as_omitted(synthetic):
     assert block == igk._omission_line(1)
 
 
+def test_no_budget_is_ever_overrun_for_any_real_group():
+    """The budget is a promise, not a hint: sweep every group against every
+    budget from 0 up, including the degenerate ones, and assert the block
+    never exceeds what it was given. An off-by-one here is what let the
+    sub-industry block overrun its cap while reporting nothing omitted."""
+    for g in ik.list_industry_groups():
+        m = igk.group_mandate(g["code"], version_key="sweep")
+        for budget in (0, 1, 2, 40, 120, 400, 1200, 3300, igk.PROMPT_BLOCK_MAX_CHARS):
+            assert len(m.as_prompt_block(max_chars=budget)) <= budget, (g["code"], budget)
+            assert len(m.sub_industry_block(budget)) <= budget, (g["code"], budget)
+
+
 def test_universal_rules_and_sources_are_loaded_not_retyped():
     payload = ik.load_industry_knowledge()
     assert igk.universal_research_rules() == list(payload["universal_research_rules"])
