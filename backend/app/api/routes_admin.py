@@ -331,8 +331,21 @@ def cron_health_endpoint() -> dict[str, Any]:
         snap.setdefault(name, {"last_run_at": None, "success": None, "note": "never run"})
     out_loops: list[dict[str, Any]] = []
     now = datetime.utcnow()
-    weekly_loops = {"weekly_digest_loop", "sector_digest_loop", "sample_build_loop"}
+    weekly_loops = {
+        "weekly_digest_loop", "sector_digest_loop", "sample_build_loop",
+        # FEAT-003: enqueues the Industry Analysis period every Sunday
+        # 06:30 UTC. Without it here it would read stale six days out of
+        # seven and bury the daily loops that are genuinely late.
+        "industry_weekly_loop",
+    }
     monthly_loops = {"theme_exposure_loop"}
+    # FEAT-003: `industry_report_worker` is not a scheduled loop — it is the
+    # report-queue drainer thread (app/services/industry_report_worker.py),
+    # which reports every 5 minutes for as long as it lives. The 26h daily
+    # window would call a drainer that died this morning "fresh" all day,
+    # so it gets an hour. (`worker_heartbeat` keeps the daily window it has
+    # always had; widening or narrowing that is a separate decision.)
+    heartbeat_loops = {"industry_report_worker"}
     for loop_name, info in snap.items():
         last_run_str = info.get("last_run_at") if isinstance(info, dict) else None
         stale = True
@@ -341,7 +354,9 @@ def cron_health_endpoint() -> dict[str, Any]:
             try:
                 last_run = datetime.fromisoformat(last_run_str)
                 age_seconds = (now - last_run).total_seconds()
-                if loop_name in monthly_loops:
+                if loop_name in heartbeat_loops:
+                    stale = age_seconds > 3600
+                elif loop_name in monthly_loops:
                     stale = age_seconds > 32 * 24 * 3600
                 elif loop_name in weekly_loops:
                     stale = age_seconds > 8 * 24 * 3600

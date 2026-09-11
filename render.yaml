@@ -87,6 +87,14 @@ services:
         value: "false"
       - key: ENABLE_REGEN_WORKER
         value: "false"
+      # FEAT-003 — the weekly Industry Analysis loop and its report-queue
+      # drainer. Same split, same reason: generating a report is minutes of
+      # analytics plus LLM calls, which is worker work. This service still
+      # READS every report and can enqueue an admin regenerate; a page view
+      # never generates. Keep "false" here — flipping it on would put the
+      # worker's peak back on the traffic-exposed service.
+      - key: ENABLE_INDUSTRY_REPORTS
+        value: "false"
       # glibc opens up to 8 arenas per core and each keeps its own
       # high-water mark, so a transient spike in one thread permanently
       # inflates RSS — which is what Render bills and kills on. This
@@ -282,6 +290,15 @@ services:
       - key: ENABLE_MONITORING
         value: "true"
       - key: ENABLE_REGEN_WORKER
+        value: "true"
+      # FEAT-003 — this process owns the weekly Industry Analysis: the
+      # Sunday 06:30 UTC loop (price warm-up + enqueue) and the drainer
+      # thread that computes the stats, writes each edition and validates
+      # it. Exactly one service may own it, asserted by
+      # test_deploy_config.py; both on would duplicate provider spend and
+      # race the queue, both off would mean reports are enqueued and never
+      # generated.
+      - key: ENABLE_INDUSTRY_REPORTS
         value: "true"
       - key: MALLOC_ARENA_MAX
         value: "2"
