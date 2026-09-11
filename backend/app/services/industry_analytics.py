@@ -630,29 +630,29 @@ def _inputs_hash(code: str, ctx: AnalyticsContext, per_ticker: dict[str, dict[st
     the same evidence); the second is derived from the caps already here.
     """
     hashed_metrics = VALUATION_METRICS + FUNDAMENTAL_METRICS + ("market_cap",)
+    evidence: list[dict[str, Any]] = []
+    for t in sorted(per_ticker):
+        row = per_ticker[t]
+        evidence.append({
+            "ticker": t,
+            "last_date": row.get("last_date"),
+            "last_close": row.get("last_close"),
+            "market_cap": row.get("market_cap"),
+            "metrics_last_updated": row.get("metrics_last_updated"),
+            "exclusion": row.get("exclusion"),
+            "returns": row.get("returns"),
+            "return_reasons": row.get("return_reasons"),
+            "above_50d_mean": row.get("above_50d_mean"),
+            "weekly_closes": row.get("weekly_closes"),
+            "metrics": {m: (metrics.get(t) or {}).get(m) for m in hashed_metrics},
+        })
     identity = {
         "method": METHOD_VERSION,
         "taxonomy_version_id": ctx.version.id,
         "code": code,
         "as_of": ctx.as_of.isoformat(),
         "min_sample": min_sample,
-        "tickers": [
-            {
-                "ticker": t,
-                "last_date": row.get("last_date"),
-                "last_close": row.get("last_close"),
-                "market_cap": row.get("market_cap"),
-                "metrics_last_updated": row.get("metrics_last_updated"),
-                "exclusion": row.get("exclusion"),
-                "returns": row.get("returns"),
-                "return_reasons": row.get("return_reasons"),
-                "above_50d_mean": row.get("above_50d_mean"),
-                "weekly_closes": row.get("weekly_closes"),
-                "metrics": {m: (metrics.get(t) or {}).get(m) for m in hashed_metrics},
-            }
-            for t in sorted(per_ticker)
-            for row in [per_ticker[t]]
-        ],
+        "tickers": evidence,
         "benchmarks": {
             bid: {h: (entry.get("value"), entry.get("n"), entry.get("reason")) for h, entry in b.items()
                   if h in HORIZONS}
