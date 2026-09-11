@@ -191,3 +191,31 @@ def test_chat_tool_reports_missing_snapshot_and_taxonomy_honestly(clean, tools, 
     assert out["groups"][0]["snapshot_row"] is None
     monkeypatch.setattr(reg, "active_version", lambda: None)
     assert tools["get_industry_context"](tickers=["NVDA"])["status"] == "taxonomy_not_imported"
+
+
+def test_chat_tool_reads_every_groups_edition_in_one_query(clean, tools):
+    """A portfolio question puts several groups in scope; the editions
+    must come back in one SELECT, not one per group, because this runs on
+    a web request."""
+    from sqlalchemy import event
+
+    codes = [g.code for g in reg.industry_groups(version=clean)]
+    _snapshot(clean, codes)
+    for c in codes[:3]:
+        rs.save_report(code=c, period_key=PERIOD, as_of=AS_OF, version=clean,
+                       payload={"sections": {"outlook": {"interpretation": {"analyst_view": "x"}}}})
+
+    selects: list[str] = []
+
+    def _count(conn, cursor, statement, params, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT") and "industry_reports" in statement:
+            selects.append(statement)
+
+    engine = SessionLocal.kw["bind"]
+    event.listen(engine, "before_cursor_execute", _count)
+    try:
+        out = tools["get_industry_context"](tickers=["NVDA", "JPM", "AAPL", "MSFT"])
+    finally:
+        event.remove(engine, "before_cursor_execute", _count)
+    assert out["status"] == "ok" and len(out["groups"]) >= 2
+    assert len(selects) == 1, f"{len(selects)} report queries for {len(out['groups'])} groups"

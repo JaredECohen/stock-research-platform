@@ -227,6 +227,38 @@ def latest_good(code: str, *, version: VersionInfo | str | int | None = None) ->
         return report_dict(row) if row is not None else None
 
 
+def latest_good_many(
+    codes: list[str] | tuple[str, ...], *, version: VersionInfo | str | int | None = None,
+) -> dict[str, dict[str, Any]]:
+    """``{code: edition}`` for several groups in ONE query.
+
+    The chat tool and the PM block ask about a whole portfolio's groups at
+    once; calling ``latest_good`` per code would put a SELECT per group on
+    a web request. Codes with no edition are simply absent from the map —
+    the caller reports that as "no edition yet", never as an empty report.
+    """
+    wanted = sorted({str(c) for c in codes if str(c)})
+    if not wanted:
+        return {}
+    try:
+        info = gics_registry.resolve_version(version)
+    except gics_registry.TaxonomyNotImported:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    with SessionLocal() as db:
+        for i in range(0, len(wanted), 200):
+            rows = db.execute(
+                select(IndustryReport).where(
+                    IndustryReport.taxonomy_version_id == info.id,
+                    IndustryReport.industry_group_code.in_(wanted[i:i + 200]),
+                    IndustryReport.is_latest_good.is_(True),
+                ).order_by(IndustryReport.version)
+            ).scalars().all()
+            for row in rows:
+                out[row.industry_group_code] = report_dict(row)
+    return out
+
+
 def get(code: str, version_number: int | str, *, version: VersionInfo | str | int | None = None) -> dict[str, Any] | None:
     """One edition by version number (``"latest"`` → latest-good)."""
     if str(version_number).lower() == "latest":

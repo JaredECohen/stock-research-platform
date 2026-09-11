@@ -44,12 +44,10 @@ def _clip(text: Any, limit: int) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
-def _report_excerpt(code: str, *, max_chars: int = INDUSTRY_EXCERPT_MAX_CHARS) -> dict[str, Any] | None:
+def _excerpt_from(code: str, report: dict[str, Any] | None, *, max_chars: int = INDUSTRY_EXCERPT_MAX_CHARS) -> dict[str, Any] | None:
     """The parts of a latest-good edition the PM needs: the analyst view,
     what changed since the prior edition, and whether the edition was a
     degraded (deterministic) one. ``None`` when the group has no edition."""
-    from ..services.industry_report_store import latest_good
-    report = latest_good(code)
     if report is None:
         return None
     sections = (report.get("payload") or {}).get("sections") or {}
@@ -77,6 +75,13 @@ def _report_excerpt(code: str, *, max_chars: int = INDUSTRY_EXCERPT_MAX_CHARS) -
     }
 
 
+def _report_excerpt(code: str, *, max_chars: int = INDUSTRY_EXCERPT_MAX_CHARS) -> dict[str, Any] | None:
+    """One group's excerpt — one query. Use ``_excerpt_from`` with a
+    batched read when several groups are in scope."""
+    from ..services.industry_report_store import latest_good
+    return _excerpt_from(code, latest_good(code), max_chars=max_chars)
+
+
 def industry_context_payload(
     *, tickers: list[str] | None = None, code: str | None = None,
 ) -> dict[str, Any]:
@@ -86,6 +91,7 @@ def industry_context_payload(
     is what the chat tool returns and what the block below renders;
     nothing here fetches prices, runs analytics or calls an LLM."""
     from ..services import gics_registry
+    from ..services.industry_report_store import latest_good_many
     from ..services.industry_snapshot import group_rows, latest_snapshot, relevant_groups_detail
 
     symbols = [str(t).strip().upper() for t in (tickers or []) if str(t).strip()]
@@ -116,6 +122,9 @@ def industry_context_payload(
     snapshot = latest_snapshot(version=info)
     rows = group_rows(snapshot, codes) if snapshot else []
     names = {n.code: n.name for n in gics_registry.industry_groups(version=info)}
+    # One query for every group's edition — a portfolio question can put
+    # a dozen groups in scope and this runs on a web request.
+    editions = latest_good_many(codes, version=info) if codes else {}
     groups = []
     for c in codes:
         entry: dict[str, Any] = {
@@ -124,7 +133,7 @@ def industry_context_payload(
             "relation": ("requested" if explicit and explicit.get("code") == c else
                          "own" if c in detail["own"] else "linked"),
             "snapshot_row": next((r for r in rows if r.get("code") == c), None) if snapshot else None,
-            "report": _report_excerpt(c),
+            "report": _excerpt_from(c, editions.get(c)),
         }
         if entry["relation"] == "linked":
             entry["via"] = next((item["via"] for item in detail["linked"] if item["code"] == c), [])
@@ -159,6 +168,7 @@ def industry_context_block(
     excerpts follow for the companies' own groups only (the linked
     groups are already lines in the snapshot), so the block is bounded
     by the render cap plus one excerpt per own group."""
+    from ..services.industry_report_store import latest_good_many
     from ..services.industry_snapshot import latest_snapshot, relevant_groups_detail, render_pm_block
 
     snapshot = latest_snapshot()
@@ -172,8 +182,9 @@ def industry_context_block(
     ]
     if scope:
         detail = relevant_groups_detail(scope)
+        editions = latest_good_many(detail["own"]) if detail["own"] else {}
         for code in detail["own"]:
-            excerpt = _report_excerpt(code)
+            excerpt = _excerpt_from(code, editions.get(code))
             if excerpt is None:
                 parts.append(f"Industry group {code}: no published Industry Analysis edition yet.")
                 continue

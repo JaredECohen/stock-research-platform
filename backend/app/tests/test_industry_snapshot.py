@@ -232,3 +232,67 @@ def test_group_rows_name_codes_the_snapshot_does_not_carry(_taxonomy):
     a = _codes(1)[0]
     snap = {"payload": {"groups": [{"code": a, "ret_1m_ew": 0.1}]}}
     assert isn.group_rows(snap, [a, "9999"]) == [{"code": a, "ret_1m_ew": 0.1}, {"code": "9999", "status": "not_in_snapshot"}]
+
+
+def test_render_never_exceeds_its_budget_and_always_counts_what_it_dropped(_taxonomy):
+    """The budget is a hard ceiling AND the block stays honest inside it.
+
+    The failure this guards against is a block that fits by being cut
+    mid-sentence while still reading as a complete table: every line the
+    renderer emits must be a whole line it would have emitted with an
+    unlimited budget, and any group line it left out must be counted in
+    the closing note.
+    """
+    groups = reg.industry_groups(version=_taxonomy)
+    with_stats = groups[: max(1, len(groups) - 3)]
+    stats = {g.code: _stats(g.code, sid=i + 1, ret_1m=0.03 * (i % 5 - 2)) for i, g in enumerate(with_stats)}
+    row = isn.compute_cross_snapshot(PERIOD, AS_OF, version=_taxonomy, persist=False, loaders=_loaders(stats))
+    whole = set(isn.render_pm_block(row, max_chars=100_000).split("\n"))
+    n_lines = sum(1 for line in whole if line[:4].isdigit() and "|" in line)
+    assert n_lines == len(with_stats)
+
+    for budget in range(240, 2400, 11):
+        block = isn.render_pm_block(row, max_chars=budget)
+        assert len(block) <= budget, f"budget {budget} overrun: {len(block)}"
+        shown = 0
+        for line in block.split("\n"):
+            if line.startswith("… omitted for length:") or line == "… truncated for length.":
+                continue
+            assert line in whole, f"budget {budget} emitted a partial line: {line!r}"
+            if line[:4].isdigit() and "|" in line:
+                shown += 1
+        if shown < n_lines:
+            assert "omitted for length" in block, f"budget {budget} dropped {n_lines - shown} line(s) silently"
+            if "… truncated for length." not in block:
+                note = next(line for line in block.split("\n") if line.startswith("… omitted for length:"))
+                assert f"{n_lines - shown} of {n_lines} group line(s)" in note, note
+        else:
+            assert "group line(s)" not in block
+
+
+def test_unlabelled_dependency_edges_are_counted_and_never_become_spillovers(_taxonomy):
+    """An Atlas edge whose exposures resolve to no industry group is
+    unlabelled: it names no groups, so it can say nothing about any. It
+    must be dropped from the links AND counted, not silently absent and
+    not attached to an arbitrary group. Counts come from the JSON.
+    """
+    import json
+
+    raw = json.loads(isn.ATLAS_PATH.read_text(encoding="utf-8"))
+    unlabelled_ids = {str(e.get("edge_id")) for e in raw["edges"] if not (e.get("industry_group_codes") or [])}
+    assert unlabelled_ids, "fixture expectation: the Atlas carries at least one unresolved edge"
+
+    graph = isn.dependency_graph()
+    labelled = [link for link in graph["links"] if link["kind"] == "edge"]
+    assert len(labelled) == len(raw["edges"]) - len(unlabelled_ids)
+    assert graph["unlabelled_edges"] == len(unlabelled_ids)
+    assert not (unlabelled_ids & {link["id"] for link in labelled})
+
+    a = _codes(1)[0]
+    row = isn.compute_cross_snapshot(PERIOD, AS_OF, version=_taxonomy, persist=False,
+                                     loaders=_loaders({a: _stats(a, sid=1, ret_1m=0.09)}))
+    assert not (unlabelled_ids & {s["id"] for s in row.payload["spillovers"]})
+    assert row.payload["dependency_graph"]["unlabelled_edges"] == len(unlabelled_ids)
+    # Every edge that DID survive names at least one group, so its signal
+    # is a statement about observed moves rather than an empty claim.
+    assert all(s["codes"] for s in row.payload["spillovers"])

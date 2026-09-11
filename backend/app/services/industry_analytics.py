@@ -611,18 +611,48 @@ def _factor_returns(points: list[dict[str, Any]] | None, cutoff: date) -> dict[s
 
 
 def _inputs_hash(code: str, ctx: AnalyticsContext, per_ticker: dict[str, dict[str, Any]],
-                 benchmarks: dict[str, dict[str, Any]], min_sample: int) -> str:
+                 metrics: dict[str, dict[str, Any]], benchmarks: dict[str, dict[str, Any]],
+                 min_sample: int) -> str:
+    """A digest of every input the payload is a function of.
+
+    The identity has to cover the *evidence*, not just its endpoints: a
+    provider revision that leaves the last close untouched but rewrites a
+    mid-window day still moves ``breadth.above_50d_mean`` and the weekly
+    closes a later period reuses, and a metrics refresh still moves the
+    valuation medians. Hashing only (last_date, last_close, market_cap)
+    let such a recompute collide with the stored row, which ``_persist``
+    would then return in place of the new numbers — a stale row wearing a
+    fresh timestamp. So the per-ticker entry carries the returns, the
+    50-day flag, the weekly closes and the metric values actually read.
+
+    Deliberately excluded: ``price_source`` and ``weight_mcw``. The first
+    is provenance (the same series reached from the cache or a fetch is
+    the same evidence); the second is derived from the caps already here.
+    """
+    hashed_metrics = VALUATION_METRICS + FUNDAMENTAL_METRICS + ("market_cap",)
     identity = {
         "method": METHOD_VERSION,
         "taxonomy_version_id": ctx.version.id,
         "code": code,
         "as_of": ctx.as_of.isoformat(),
         "min_sample": min_sample,
-        "tickers": sorted(
-            (t, row.get("last_date"), row.get("last_close"), row.get("market_cap"),
-             row.get("metrics_last_updated"), row.get("exclusion"))
-            for t, row in per_ticker.items()
-        ),
+        "tickers": [
+            {
+                "ticker": t,
+                "last_date": row.get("last_date"),
+                "last_close": row.get("last_close"),
+                "market_cap": row.get("market_cap"),
+                "metrics_last_updated": row.get("metrics_last_updated"),
+                "exclusion": row.get("exclusion"),
+                "returns": row.get("returns"),
+                "return_reasons": row.get("return_reasons"),
+                "above_50d_mean": row.get("above_50d_mean"),
+                "weekly_closes": row.get("weekly_closes"),
+                "metrics": {m: (metrics.get(t) or {}).get(m) for m in hashed_metrics},
+            }
+            for t in sorted(per_ticker)
+            for row in [per_ticker[t]]
+        ],
         "benchmarks": {
             bid: {h: (entry.get("value"), entry.get("n"), entry.get("reason")) for h, entry in b.items()
                   if h in HORIZONS}
@@ -940,7 +970,7 @@ def compute_group_stats(
         sample=sample,
         payload=payload,
         per_ticker=per_ticker,
-        inputs_hash=_inputs_hash(group.code, ctx, per_ticker, benchmarks, floor),
+        inputs_hash=_inputs_hash(group.code, ctx, per_ticker, metrics, benchmarks, floor),
         compute_ms=int((time.perf_counter() - started) * 1000),
         computed_at=_utcnow(),
     )

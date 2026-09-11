@@ -557,22 +557,36 @@ def _short(name: str, width: int = 26) -> str:
 
 def render_pm_block(snapshot: CrossIndustrySnapshot | dict[str, Any] | None, max_chars: int = PM_BLOCK_MAX_CHARS) -> str:
     """The compact cross-industry block the PM reads — never longer than
-    ``max_chars``. One line per group, sorted by 1M relative return
-    (unknowns last), then the missing count, then the active spillovers.
-    When the budget runs out the block says how many lines it dropped."""
+    ``max_chars``, and never quietly shorter than it claims.
+
+    The block is assembled from four parts in a fixed priority order: a
+    one-line head (period, coverage, macro regime) that is always
+    present; the column legend; one line per group with stats, sorted by
+    1M relative return (unknowns last); and a tail of context lines
+    (groups without stats, active dependency links, catalyst count).
+    Whatever does not fit is DROPPED AS WHOLE LINES and counted in a
+    closing note — the block never ends mid-sentence and never presents
+    a partial table as a complete one. Only a budget too small for the
+    head itself (under ~120 characters) falls back to clipping, because
+    at that size there is nothing honest left to say.
+    """
     if snapshot is None:
         return ""
     doc = snapshot_dict(snapshot) if isinstance(snapshot, CrossIndustrySnapshot) else dict(snapshot)
     payload = doc.get("payload") or {}
-    budget = max(200, int(max_chars))
+    budget = int(max_chars)
+    if budget <= 0:
+        return ""
     regime = (payload.get("regime") or {}).get("macro_regime") or "n/a"
     cov = payload.get("coverage") or {}
-    header = (
+    head = (
         f"Cross-industry snapshot {doc.get('period_key')} (as of {str(doc.get('as_of') or '')[:10]}; "
-        f"taxonomy {payload.get('taxonomy_version')}; macro regime: {regime}; "
-        f"{cov.get('n_with_stats', 0)}/{cov.get('n_groups', 0)} groups with stats). "
-        "Observed data from stored rows; n = constituents with prices; regime labels are rule-based reads. "
-        "Columns: code name | 1W/1M/YTD EW | rel-1M vs universe | breadth-1M | EV/EBITDA median | regime | n"
+        f"{cov.get('n_with_stats', 0)}/{cov.get('n_groups', 0)} groups with stats; macro regime: {regime})."
+    )
+    legend = (
+        f"Observed data from stored rows (taxonomy {payload.get('taxonomy_version')}); n = constituents with "
+        "prices; regime labels are rule-based reads. Columns: code name | 1W/1M/YTD EW | rel-1M vs universe "
+        "| breadth-1M | EV/EBITDA median | regime | n"
     )
     groups = list(payload.get("groups") or [])
 
@@ -610,25 +624,43 @@ def render_pm_block(snapshot: CrossIndustrySnapshot | dict[str, Any] | None, max
     if n_events:
         tail.append(f"{n_events} catalyst event(s) in the next {payload.get('events_window_days', EVENT_WINDOW_DAYS)} days across covered constituents.")
 
-    out = header
-    tail_text = ("\n" + "\n".join(tail)) if tail else ""
-    dropped = 0
-    body: list[str] = []
-    for i, line in enumerate(lines):
-        remaining = len(lines) - i - 1
-        marker = f"\n… {remaining + 1} more group line(s) omitted for length." if remaining >= 0 else ""
-        candidate = out + "\n" + "\n".join(body + [line])
-        if len(candidate + tail_text) + (len(marker) if remaining > 0 else 0) > budget:
-            dropped = len(lines) - i
-            break
-        body.append(line)
-    text = out + ("\n" + "\n".join(body) if body else "")
-    if dropped:
-        text += f"\n… {dropped} more group line(s) omitted for length."
-    text += tail_text
-    if len(text) > budget:
-        text = text[: budget - 1] + "…"
-    return text
+    def assemble(n_lines: int, keep_legend: bool, n_tail: int, *, compact: bool = False) -> str:
+        dropped_lines = len(lines) - n_lines
+        dropped_context = (0 if keep_legend else 1) + (len(tail) - n_tail)
+        parts = [head]
+        if keep_legend:
+            parts.append(legend)
+        parts.extend(lines[:n_lines])
+        parts.extend(tail[:n_tail])
+        if dropped_lines or dropped_context:
+            if compact:
+                # Budget too small even for the counted note: still say that
+                # the block is partial rather than read as complete.
+                parts.append("… truncated for length.")
+            else:
+                bits = []
+                if dropped_lines:
+                    bits.append(f"{dropped_lines} of {len(lines)} group line(s)")
+                if dropped_context:
+                    bits.append(f"{dropped_context} context line(s)")
+                parts.append("… omitted for length: " + " and ".join(bits) + ".")
+        return "\n".join(parts)
+
+    # Preference order: the whole spine, then shed context from the least
+    # load-bearing end (catalyst count, spillovers), then the legend, then
+    # the missing-groups line. Within each spine, keep as many group lines
+    # as fit. The first configuration that fits wins.
+    configs = ([(True, n) for n in range(len(tail), -1, -1)]
+               + [(False, n) for n in range(len(tail), -1, -1)])
+    for compact in (False, True):
+        for keep_legend, n_tail in configs:
+            for k in range(len(lines), -1, -1):
+                text = assemble(k, keep_legend, n_tail, compact=compact)
+                if len(text) <= budget:
+                    return text
+    # Nothing fits around the head itself — the caller's budget is smaller
+    # than one sentence. Clip, and say so with the ellipsis.
+    return head[: budget - 1] + "…" if budget > 1 else head[:budget]
 
 
 # ---------------------------------------------------------------------------

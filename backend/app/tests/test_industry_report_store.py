@@ -200,3 +200,30 @@ def test_freshness_flags_a_failed_refresh_and_an_old_as_of(code, _taxonomy, monk
     monkeypatch.setattr(rs, "_utcnow", lambda: AS_OF + timedelta(days=settings.industry_report_stale_after_days + 1))
     aged = rs.freshness(code, version=_taxonomy)
     assert aged["stale"] is True and f"older than {settings.industry_report_stale_after_days} days" in aged["stale_reason"]
+
+
+def test_latest_good_many_reads_every_group_in_one_query(code, _taxonomy):
+    """The chat tool and the PM block ask about a portfolio's groups at
+    once; one SELECT, and a group without an edition is absent from the
+    map rather than present with an empty report."""
+    from sqlalchemy import event
+
+    other = next(g.code for g in reg.industry_groups(version=_taxonomy) if g.code != code)
+    rs.save_report(code=code, period_key="2026-W36", as_of=AS_OF, version=_taxonomy, payload={"sections": {}})
+
+    selects: list[str] = []
+
+    def _count(conn, cursor, statement, params, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT") and "industry_reports" in statement:
+            selects.append(statement)
+
+    engine = SessionLocal.kw["bind"]
+    event.listen(engine, "before_cursor_execute", _count)
+    try:
+        out = rs.latest_good_many([code, other, "9999"], version=_taxonomy)
+    finally:
+        event.remove(engine, "before_cursor_execute", _count)
+    assert set(out) == {code}
+    assert out[code]["version"] == 1 and out[code]["is_latest_good"] is True
+    assert len(selects) == 1, selects
+    assert rs.latest_good_many([], version=_taxonomy) == {}

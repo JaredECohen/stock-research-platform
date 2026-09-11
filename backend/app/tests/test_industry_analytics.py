@@ -350,6 +350,45 @@ def test_same_inputs_give_the_same_hash_payload_and_row(_taxonomy, codes):
     assert "compute_ms" not in third.payload  # nothing time-dependent lives in the payload
 
 
+def test_a_revision_the_endpoints_hide_still_changes_the_hash(_taxonomy, codes):
+    """A provider revision that leaves the last close and every horizon
+    anchor untouched still moves the payload (the 50-day breadth flag and
+    the weekly closes a later period reuses). If the hash misses it,
+    ``_persist`` hands back the stored row and the recompute is silently
+    discarded — a stale row wearing a fresh timestamp.
+    """
+    code, _ = codes
+    base = {t: _step_series(10.0, 11.0) for t in ("AAA", "BBB", "CCC")}
+    revised = {t: [dict(r) for r in rows] for t, rows in base.items()}
+    mid = (CUTOFF - timedelta(days=20)).isoformat()
+    for row in revised["AAA"]:
+        if row["date"] == mid:
+            row["close"] = 33.0  # a back-fill inside the 50-day window
+    first = ia.compute_group_stats(code, as_of=AS_OF, period_key="2026-W35", max_fetch=0,
+                                   loaders=_loaders(groups={code: sorted(base)}, prices=base))
+    second = ia.compute_group_stats(code, as_of=AS_OF, period_key="2026-W35", max_fetch=0,
+                                    loaders=_loaders(groups={code: sorted(revised)}, prices=revised))
+    assert first.per_ticker["AAA"]["last_close"] == second.per_ticker["AAA"]["last_close"]
+    assert first.per_ticker["AAA"]["returns"] == second.per_ticker["AAA"]["returns"]
+    assert second.inputs_hash != first.inputs_hash and second.id != first.id
+    assert second.payload["breadth"]["above_50d_mean"] != first.payload["breadth"]["above_50d_mean"]
+
+
+def test_metric_values_are_part_of_the_identity_even_when_the_timestamp_is_not(_taxonomy, codes):
+    """Valuation medians come from ``screener_metrics``; a refreshed value
+    with no ``last_updated`` must not collide with the stored row."""
+    code, _ = codes
+    prices = {t: _step_series(10.0, 11.0) for t in ("AAA", "BBB", "CCC")}
+    cheap = {t: {"ev_ebitda": 10.0, "last_updated": None} for t in prices}
+    rich = {**cheap, "AAA": {"ev_ebitda": 30.0, "last_updated": None}, "BBB": {"ev_ebitda": 30.0, "last_updated": None}}
+    first = ia.compute_group_stats(code, as_of=AS_OF, period_key="2026-W35", max_fetch=0,
+                                   loaders=_loaders(groups={code: sorted(prices)}, prices=prices, metrics=cheap))
+    second = ia.compute_group_stats(code, as_of=AS_OF, period_key="2026-W35", max_fetch=0,
+                                    loaders=_loaders(groups={code: sorted(prices)}, prices=prices, metrics=rich))
+    assert second.inputs_hash != first.inputs_hash
+    assert second.payload["valuation"]["ev_ebitda"]["median"] != first.payload["valuation"]["ev_ebitda"]["median"]
+
+
 def test_unknown_group_code_raises_before_any_read():
     with pytest.raises(reg.UnknownNode):
         ia.compute_group_stats("0000", as_of=AS_OF, loaders=_loaders(groups={}, prices={}), persist=False, max_fetch=0)
