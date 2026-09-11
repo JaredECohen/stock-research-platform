@@ -508,7 +508,8 @@ export type DeepResearchTarget =
   | "risk"
   | "filing"
   | "macro"
-  | "technical";
+  | "technical"
+  | "industry_group";
 
 export interface CritiqueQuestion {
   target_agent: DeepResearchTarget;

@@ -38,10 +38,24 @@ RATING_ORDER: list[str] = [
     "Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish",
 ]
 
-ALL_AGENTS: list[str] = [
-    "sector", "earnings", "filing", "valuation",
-    "comps", "macro", "risk", "technical",
-]
+def _all_agents() -> list[str]:
+    """Every specialist on the roster, in roster order.
+
+    This was a hand-maintained copy of the eight original keys — the sixth
+    such copy in the codebase — so an agent added to the roster was absent
+    from calibration for ever, silently. Deriving it means a new agent
+    shows up immediately with an empty record, which is the honest answer
+    until it has realized returns to be scored against.
+
+    Imported inside the function: `agents.roster` imports `app.schemas`,
+    and services are imported from the agent modules, so a module-level
+    import here would risk a cycle.
+    """
+    from ..agents.roster import AGENTS
+    return [spec.key for spec in AGENTS]
+
+
+ALL_AGENTS: list[str] = _all_agents()
 
 
 # ---------------------------------------------------------------------------

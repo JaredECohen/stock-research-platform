@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from typing import Any, cast
+from typing import Any
 
 from ..config import settings
 from ..finance import scorecard_spec
@@ -320,7 +320,7 @@ _SEED_WHY: dict[str, str] = {
 
 def _seed_for_target(target: str, question: str, *, why: str | None = None) -> CritiqueQuestion:
     return CritiqueQuestion(
-        target_agent=cast(Any, target),  # SEED_TARGETS are members of the Literal
+        target_agent=target,
         question=question[:600],
         why_it_matters=why if why is not None else _SEED_WHY.get(target, _SEED_WHY["valuation"]),
     )
