@@ -79,14 +79,22 @@ step 4 until the web commit matches.
 
 ## 4b. The production incident this branch also carries
 
-`fix/snapshot-scan-oom` (commits `f66c86a`, `92b8a8a`) is merged here, but it
-is **independently deployable from `main`** and should ship first: the worker
+`fix/snapshot-scan-oom` (commits `f66c86a`, `92b8a8a`, `e3423db`) is merged here,
+but it is **independently deployable from `main`** and should ship first: the worker
 was OOM-killed hourly on 2026-09-10 and the fix does not need the rest of this
 branch. After deploying it, confirm from the Render events API that
 `reason.oomKilled` stops recurring (the email only fires once, so the inbox is
 not the signal), and watch the first `snapshot_gc` note in cron-health — a run
 that reports `capped=1` for several days means retention is not keeping up
 with write volume.
+
+That branch also carries `e3423db`, which restores per-IP rate limiting. It was
+enforcing **nothing** in production — not the global 60/minute default, not
+`memo_analyze` (5/minute, the route that spends model budget), not `bootstrap`
+(3/hour). slowapi cannot resolve endpoints behind `include_router` on the pinned
+FastAPI and treats an unresolved handler as exempt, so every request was exempt,
+silently. After deploying, confirm a burst past a ceiling returns 429 and that
+responses carry `X-RateLimit-*` headers; their absence is the symptom.
 
 Unrelated to the deploy and **owner-only**: four provider API keys
 (FMP, Alpha Vantage, Polygon, Census) were written to Render's logs in
