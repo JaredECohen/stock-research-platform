@@ -828,6 +828,9 @@ def write_report(
         "llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0,
         "latency_ms": 0, "run_id": run_id, "generation_mode": "",
         "max_llm_calls": int(settings.industry_report_max_llm_calls),
+        # Which sections the call budget planned to send to the analyst at
+        # all; empty with no LLM. The rest are templates by construction.
+        "llm_planned_sections": [],
     }
     if deterministic:
         mode = NARRATIVE_DETERMINISTIC
