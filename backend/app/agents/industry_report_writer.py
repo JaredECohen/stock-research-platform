@@ -15,7 +15,10 @@ group's analyst prompt, or — with no LLM, an open breaker, or
 ``deterministic=True`` on a job's final attempt — templates over the
 mandate and the facts, labelled ``analyst_narrative: llm_unavailable`` /
 ``deterministic`` and listed in ``degraded`` so a reader knows which
-edition they hold. The drivers section is ordered by the eight-stage
+edition they hold. Degradation is per section as well as per edition:
+``narrative_by_section`` says who wrote each one, because a call budget
+that reaches only some sections still produces templates for the rest.
+The drivers section is ordered by the eight-stage
 causal order loaded from the knowledge base; the deterministic edition
 says ``n/a`` for a stage it cannot support rather than inventing one.
 
@@ -120,8 +123,15 @@ def _ranked(mandate: Any, name: str, limit: int = 8) -> list[dict[str, Any]]:
     return [r.as_dict() for r in mandate.lists.get(name, ())[:limit]]
 
 
-def _overview_facts(analyst: IndustryAnalyst, stats: Any, sample: dict[str, Any]) -> dict[str, Any]:
+def _overview_facts(analyst: IndustryAnalyst, stats: Any, sample: dict[str, Any],
+                    constituents: list[str]) -> dict[str, Any]:
     m = analyst.mandate
+    # The stats row's own count when it has one, otherwise the membership
+    # list's length — the two sections must never disagree about how many
+    # companies are in the group.
+    n_constituents = sample.get("n_constituents")
+    if not isinstance(n_constituents, int) or isinstance(n_constituents, bool):
+        n_constituents = len(constituents) or None
     return {
         "code": analyst.code,
         "name": analyst.name,
@@ -130,7 +140,7 @@ def _overview_facts(analyst: IndustryAnalyst, stats: Any, sample: dict[str, Any]
         "boundaries": [{"code": i["code"], "name": i["name"]} for i in m.industries],
         "sub_industries": [{"code": s.code, "name": s.name, "industry_code": s.industry_code}
                            for s in m.sub_industries],
-        "n_constituents": sample.get("n_constituents"),
+        "n_constituents": n_constituents,
         "n_with_prices": sample.get("n_with_prices"),
         "period_key": _field(stats, "period_key"),
         "as_of": _iso(_field(stats, "as_of")),
@@ -211,14 +221,27 @@ def _performance_facts(stats: Any, payload: dict[str, Any], sample: dict[str, An
 
 
 def _companies_facts(analyst: IndustryAnalyst, payload: dict[str, Any], per_ticker: dict[str, Any],
-                     events: list[dict[str, Any]], constituents: list[str]) -> dict[str, Any]:
+                     events: list[dict[str, Any]], constituents: list[str],
+                     sample: dict[str, Any], membership_source: str) -> dict[str, Any]:
     rows = []
     for ticker in sorted(per_ticker)[:_MAX_PER_TICKER_ROWS]:
         row = per_ticker.get(ticker)
         rows.append({"ticker": ticker, **(row if isinstance(row, dict) else {"value": row})})
+    # A constituent with no price row is n/a with a reason, not absent.
+    excluded_reason = {
+        str(e.get("ticker")): str(e.get("reason") or "excluded")
+        for e in (sample.get("excluded") or []) if isinstance(e, dict) and e.get("ticker")
+    }
+    unpriced = [
+        {"ticker": t, "reason": excluded_reason.get(t, "no price series for this period")}
+        for t in sorted(constituents) if t not in per_ticker
+    ]
     return {
         "constituents": sorted(constituents),
         "n_constituents": len(constituents),
+        "membership_source": membership_source,
+        "n_priced": len(per_ticker),
+        "unpriced": unpriced,
         "largest": list(payload.get("largest") or [])[:10],
         "leaders": list(payload.get("leaders") or [])[:5],
         "laggards": list(payload.get("laggards") or [])[:5],
@@ -458,20 +481,31 @@ def build_facts(
     snapshot_payload = _field(snapshot_row, "payload", {}) or {}
     if stats is None:
         degraded.append("statistics:missing")
-    constituents = list(per_ticker) or list(sample.get("tickers") or [])
+    # Membership is the classification's constituent list, NEVER the priced
+    # subset: a name that merely lost price coverage has not left the group,
+    # and reporting it as "removed" would turn missing price evidence into a
+    # membership fact (and make the report state two constituent counts).
+    # The priced names are a last resort, labelled as such.
+    constituents = [str(t) for t in (sample.get("tickers") or [])]
+    membership_source = "statistics.sample.tickers"
     if not constituents:
         try:
             constituents = industry_classification.constituents(analyst.code)
+            membership_source = "industry_classification.constituents"
         except Exception as exc:
             errors.append(f"companies: constituent lookup failed: {redact(exc)}")
             constituents = []
+    if not constituents and per_ticker:
+        constituents = sorted(per_ticker)
+        membership_source = "statistics.per_ticker (priced names only; membership list unavailable)"
 
     facts: dict[str, dict[str, Any]] = {
-        "overview": _overview_facts(analyst, stats, sample),
+        "overview": _overview_facts(analyst, stats, sample, constituents),
         "drivers": _drivers_facts(analyst, snapshot_payload),
         "kpis": _kpis_facts(analyst),
         "performance": _performance_facts(stats, payload, sample, method),
-        "companies": _companies_facts(analyst, payload, per_ticker, events or [], constituents),
+        "companies": _companies_facts(analyst, payload, per_ticker, events or [], constituents,
+                                      sample, membership_source),
         "statistics": _statistics_facts(stats, payload, sample, method),
         "themes": _themes_facts(analyst, constituents, errors),
         "cross_industry": _cross_industry_facts(analyst, snapshot_row, snapshot_payload, degraded),
@@ -608,14 +642,26 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
     # companies
     claims = []
     n_c = co.get("n_constituents", 0)
+    unpriced = co.get("unpriced") or []
+    # Price coverage is reported as coverage, never as membership: a name
+    # without a price series is still a constituent, and says why it has no
+    # figure this period.
+    coverage = (
+        f"Price coverage: {co.get('n_priced', 0)} of {n_c} constituents have a price series this period"
+        + ("; all constituents priced. " if not unpriced else
+           "; without prices: " + ", ".join(f"{u['ticker']} ({u['reason']})" for u in unpriced[:8])
+           + (" (further names in companies.unpriced). " if len(unpriced) > 8 else ". "))
+    )
     text = (
-        f"Constituents on file: {n_c} (mapping derived from provider classification, not licensed GICS "
-        "security assignments). "
+        f"Constituents on file: {n_c}, from {co.get('membership_source')} (mapping derived from provider "
+        "classification, not licensed GICS security assignments). "
+        + coverage
         + (f"Largest: {', '.join(str(x.get('ticker', x)) if isinstance(x, dict) else str(x) for x in co['largest'][:5])}. "
            if co.get("largest") else "Largest / leaders / laggards: n/a (no statistics row). ")
         + f"Events in window: {len(co.get('events') or [])}."
     )
-    claims.append(_claim(text, "observed_fact", ["companies.constituents", "companies.largest", "companies.events"]))
+    claims.append(_claim(text, "observed_fact", ["companies.constituents", "companies.unpriced",
+                                                 "companies.largest", "companies.events"]))
     out["companies"] = {"text": text, "claims": claims}
 
     # themes
@@ -795,10 +841,15 @@ def write_report(
 
     interpretation: dict[str, dict[str, Any]] = {}
     if mode == NARRATIVE_LLM:
+        # Two bounded calls at the default budget. A budget of 1 drops the
+        # second batch — the sections it would have written then come from
+        # the deterministic templates and are listed in `degraded` below,
+        # never passed off as the analyst's.
         plan = (
             tuple(s for s in INTERPRETED_SECTIONS if s not in ("outlook", "what_changed")),
             ("outlook", "what_changed"),
         )[: max(1, int(settings.industry_report_max_llm_calls))]
+        generation["llm_planned_sections"] = sorted({s for batch in plan for s in batch})
         for sections in plan:
             try:
                 out = _llm_call(analyst, facts, sections, run_id=run_id, generation=generation)
@@ -808,17 +859,23 @@ def write_report(
                 out = None
             for name in sections:
                 section = _coerce_section((out or {}).get(name))
-                if section is None:
-                    degraded.append(f"analyst_narrative:{name}:deterministic")
-                else:
+                if section is not None:
                     interpretation[name] = section
         if not interpretation:
             mode = NARRATIVE_LLM_UNAVAILABLE
-            degraded = [d for d in degraded if not d.startswith("analyst_narrative:")]
+        else:
+            # Every section the analyst did not write falls back to a
+            # template — whether the model returned nothing for it or the
+            # call budget (`INDUSTRY_REPORT_MAX_LLM_CALLS`) never reached
+            # it. Both are the same thing to a reader, and neither may be
+            # published silently under `analyst_narrative: "llm"`.
+            degraded.extend(f"analyst_narrative:{name}:deterministic"
+                            for name in INTERPRETED_SECTIONS if name not in interpretation)
 
     if mode != NARRATIVE_LLM:
         degraded.append(f"analyst_narrative:{mode}" if mode == NARRATIVE_LLM_UNAVAILABLE
                         else "analyst_narrative:deterministic_mode")
+    written_by_llm = set(interpretation)
     fallback = _deterministic_interpretation(facts, analyst, mode)
     for name in INTERPRETED_SECTIONS:
         interpretation.setdefault(name, fallback[name])
@@ -842,6 +899,13 @@ def write_report(
         "section_order": list(SECTION_ORDER),
         "sections": sections,
         "analyst_narrative": mode,
+        # Per section, who wrote the interpretation. `analyst_narrative`
+        # alone cannot say "llm" for an edition in which the call budget
+        # only reached some of the sections.
+        "narrative_by_section": {
+            name: (NARRATIVE_LLM if name in written_by_llm else NARRATIVE_DETERMINISTIC)
+            for name in INTERPRETED_SECTIONS
+        },
         "disclaimer": prompts.DISCLAIMER,
         "attribution": analyst.mandate.attribution,
         "mapping_caveat": industry_classification.MAPPING_CAVEAT,

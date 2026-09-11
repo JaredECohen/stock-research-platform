@@ -91,7 +91,13 @@ def test_facts_come_from_the_inputs_and_carry_provenance(analyst):
     assert facts["performance"]["returns"]["1Y"] == {"value": None, "reason": "history_window"}
     assert facts["performance"]["benchmarks"][2]["id"] == "KFR.MKT_RF.D"
     assert facts["statistics"]["inputs_hash"] == "h1"
-    assert facts["companies"]["constituents"] == ["AAPL", "AMD", "MSFT"]
+    # Membership is the sample's constituent list, not the priced subset:
+    # ORCL has no price series this period but has not left the group.
+    assert facts["companies"]["constituents"] == ["AAPL", "AMD", "MSFT", "ORCL"]
+    assert facts["companies"]["n_constituents"] == facts["overview"]["n_constituents"] == 4
+    assert facts["companies"]["n_priced"] == 3
+    assert facts["companies"]["unpriced"] == [{"ticker": "ORCL", "reason": "no_prices"}]
+    assert facts["companies"]["membership_source"] == "statistics.sample.tickers"
     assert facts["kpis"]["core_kpis"][0]["industry_codes"]
     assert facts["metadata"]["generated_at"] == "2026-09-06T06:45:00"
     assert facts["metadata"]["run_id"] == "run-2"
@@ -151,6 +157,8 @@ def test_prior_report_produces_a_facts_delta_and_constituent_changes(analyst):
              "period_key": "2026-W35"}
     stats = _stats()
     stats["payload"]["returns"]["1M"]["equal_weight"] = 0.019
+    # A real membership change: NVDA joins the group, AMD leaves it.
+    stats["sample"]["tickers"] = ["MSFT", "AAPL", "NVDA", "ORCL"]
     stats["per_ticker"]["NVDA"] = {"ret_1m": 0.01}
     del stats["per_ticker"]["AMD"]
     second = w.write_report(analyst, stats, None, prior, [], run_id="run-6b")
@@ -229,4 +237,74 @@ def test_llm_sections_are_bounded_and_fall_back_per_section(analyst, monkeypatch
         w.estimate_cost_usd("openai", "gpt-4o-mini", 1000, 500) * len(calls), abs=1e-6,
     )
     assert g["cost_usd_run"] == 0.001 and g["llm_calls_run"] == 2
+    assert v.validate(res.payload, _facts_of(res.payload)) == []
+
+
+def test_losing_price_coverage_is_not_a_membership_change(analyst):
+    """REGRESSION: membership came from `per_ticker` (the priced names), so a
+    constituent that merely lost price coverage was reported as having left
+    the group — and the report stated two different constituent counts."""
+    first = w.write_report(analyst, _stats(), None, None, [], run_id="run-11a")
+    prior = {"payload": first.payload, "version": 1, "as_of": datetime(2026, 8, 28, 20, 0),
+             "period_key": "2026-W35"}
+    stats = _stats()
+    del stats["per_ticker"]["AMD"]  # prices dropped out; still a constituent
+    stats["sample"]["n_with_prices"] = 2
+    stats["sample"]["excluded"] = [{"ticker": "ORCL", "reason": "no_prices"},
+                                   {"ticker": "AMD", "reason": "stale_prices"}]
+    second = w.write_report(analyst, stats, None, prior, [], run_id="run-11b")
+    facts = _facts_of(second.payload)
+    assert facts["what_changed"]["constituents"] == {"added": [], "removed": []}
+    assert facts["companies"]["n_constituents"] == facts["overview"]["n_constituents"] == 4
+    assert facts["companies"]["unpriced"] == [{"ticker": "AMD", "reason": "stale_prices"},
+                                              {"ticker": "ORCL", "reason": "no_prices"}]
+    text = second.payload["sections"]["companies"]["interpretation"]["text"]
+    assert "AMD (stale_prices)" in text and "ORCL (no_prices)" in text
+    assert "Price coverage: 2 of 4" in text
+    assert v.validate(second.payload, facts) == []
+
+
+def test_membership_falls_back_to_priced_names_and_says_so(analyst, monkeypatch):
+    """With no sample ticker list and no classification rows, the priced
+    names are the last resort — and the section names that source."""
+    monkeypatch.setattr(w.industry_classification, "constituents", lambda code: [])
+    stats = _stats()
+    stats["sample"] = {"n_with_prices": 3}
+    facts = _facts_of(w.write_report(analyst, stats, None, None, [], run_id="run-12").payload)
+    assert facts["companies"]["constituents"] == ["AAPL", "AMD", "MSFT"]
+    assert "priced names only" in facts["companies"]["membership_source"]
+    assert facts["companies"]["unpriced"] == []
+    assert facts["overview"]["n_constituents"] == 3
+
+
+def test_a_budget_of_one_call_reports_the_sections_it_never_reached(analyst, monkeypatch):
+    """REGRESSION: with `industry_report_max_llm_calls == 1` the second batch
+    (outlook, what_changed) was dropped from the plan, so no
+    `analyst_narrative:<section>:deterministic` entry was ever recorded and
+    the edition still called itself the analyst's."""
+    calls: list[tuple[str, ...]] = []
+
+    def fake_chat_json(prompt, **kwargs):
+        sections = prompt.split("\n", 1)[0].removeprefix("Sections to interpret now: ").rstrip(".").split(", ")
+        calls.append(tuple(sections))
+        out = {name: {"text": f"Analyst text for {name}.", "claims": []} for name in sections}
+        if "drivers" in out:  # the drivers section must carry the eight stages
+            out["drivers"]["stages"] = [{"id": s["id"], "text": f"Stage {s['id']}: the observed world change, then its consequences."}
+                                        for s in thesis_stages()]
+        return out
+
+    monkeypatch.setattr(w.settings.__class__, "has_llm", property(lambda self: True))
+    monkeypatch.setattr(w.llm, "_demo_only", lambda: False)
+    monkeypatch.setattr(w.llm, "chat_json", fake_chat_json)
+    monkeypatch.setattr(w.llm, "last_usage", lambda: {})
+    monkeypatch.setattr(w.settings, "industry_report_max_llm_calls", 1)
+    res = w.write_report(analyst, _stats(), None, None, [], run_id="run-13")
+    assert len(calls) == 1 and "outlook" not in calls[0]
+    for name in ("outlook", "what_changed"):
+        assert f"analyst_narrative:{name}:deterministic" in res.degraded
+        assert res.payload["narrative_by_section"][name] == "deterministic"
+        # …and the text really is the template, not the analyst's.
+        assert not res.payload["sections"][name]["interpretation"]["text"].startswith("Analyst text")
+    assert res.payload["narrative_by_section"]["overview"] == "llm"
+    assert "outlook" not in (res.generation["llm_planned_sections"] or [])
     assert v.validate(res.payload, _facts_of(res.payload)) == []
