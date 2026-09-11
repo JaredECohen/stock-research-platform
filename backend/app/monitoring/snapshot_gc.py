@@ -32,8 +32,11 @@ def run_once() -> dict[str, int]:
         # the first time.
         log.warning("snapshot_gc failed: %s", type(exc).__name__)
         record_run("snapshot_gc", success=False, note=f"error={type(exc).__name__}")
-        return {"scanned": 0, "deleted": 0, "capped": 0}
-    note = f"scanned={stats['scanned']} deleted={stats['deleted']} capped={stats['capped']}"
+        return {"scanned": 0, "deleted": 0, "capped": 0, "ledger_deleted": 0}
+    note = (
+        f"scanned={stats['scanned']} deleted={stats['deleted']} "
+        f"capped={stats['capped']} ledger_deleted={stats.get('ledger_deleted', 0)}"
+    )
     # `capped` means the table still has more to reap than one pass removes;
     # the next run continues, but a run that stays capped for days means
     # retention is not keeping up with write volume.

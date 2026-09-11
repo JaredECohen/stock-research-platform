@@ -27,6 +27,7 @@ from sqlalchemy import (
     String,
     Text,
     delete,
+    func,
     select,
     update,
 )
@@ -434,6 +435,9 @@ def mark_stale_descendants(
 # into the next one.
 SNAPSHOT_RETENTION_DAYS = 14
 SNAPSHOT_KEEP_PER_KEY = 1
+# The cost ledger is kept far longer: it is the record behind any
+# "tokens saved" analysis, and unlike a snapshot it is never re-derivable.
+LEDGER_RETENTION_DAYS = 90
 _GC_MAX_DELETE = 50_000
 _GC_STREAM_ROWS = 1_000
 
@@ -442,11 +446,13 @@ def gc_snapshots(
     *,
     retention_days: int = SNAPSHOT_RETENTION_DAYS,
     keep_per_key: int = SNAPSHOT_KEEP_PER_KEY,
+    ledger_retention_days: int = LEDGER_RETENTION_DAYS,
     max_delete: int = _GC_MAX_DELETE,
     now: datetime | None = None,
     db: Session | None = None,
 ) -> dict[str, int]:
-    """Delete superseded snapshots. Returns `{scanned, deleted, capped}`.
+    """Delete superseded snapshots. Returns
+    `{scanned, deleted, capped, ledger_deleted}`.
 
     The rule is deliberately conservative, because deleting a row that is
     still serving reads turns a cache hit into a recompute (and, for the
@@ -508,9 +514,30 @@ def gc_snapshots(
             chunk = doomed[start:start + _UPDATE_CHUNK]
             result = db.execute(delete(ResearchSnapshot).where(ResearchSnapshot.id.in_(chunk)))
             deleted += result.rowcount if result.rowcount is not None else len(chunk)
+
+        # The cost ledger grows faster than the snapshots themselves — a
+        # cache *hit* appends a row too — but it is append-only with no
+        # "newest per key" worth protecting, so age is the only rule it
+        # needs. Ids first, then chunked deletes, so one pass is bounded.
+        ledger_cutoff = (now or _now()) - timedelta(days=ledger_retention_days)
+        ledger_ids = [
+            row_id for (row_id,) in db.execute(
+                select(CacheCostLog.id)
+                .where(CacheCostLog.generated_at < ledger_cutoff)
+                .limit(max_delete)
+            ).all()
+        ]
+        ledger_deleted = 0
+        for start in range(0, len(ledger_ids), _UPDATE_CHUNK):
+            chunk = ledger_ids[start:start + _UPDATE_CHUNK]
+            result = db.execute(delete(CacheCostLog).where(CacheCostLog.id.in_(chunk)))
+            ledger_deleted += result.rowcount if result.rowcount is not None else len(chunk)
+
         db.commit()
-        log.info("gc_snapshots: scanned=%d deleted=%d capped=%d", scanned, deleted, capped)
-        return {"scanned": scanned, "deleted": deleted, "capped": capped}
+        log.info("gc_snapshots: scanned=%d deleted=%d capped=%d ledger_deleted=%d",
+                 scanned, deleted, capped, ledger_deleted)
+        return {"scanned": scanned, "deleted": deleted, "capped": capped,
+                "ledger_deleted": ledger_deleted}
     finally:
         if own:
             db.close()
@@ -547,22 +574,24 @@ def total_token_cost(
     exclude_hits: bool = True,
     db: Session | None = None,
 ) -> int:
-    """Sum cost_tokens since `since`. Useful for the smoke evaluation gate."""
+    """Sum cost_tokens since `since`. Useful for the smoke evaluation gate.
+
+    Summed in SQL. This used to `select(CacheCostLog)` and add the rows up
+    in Python, which is the same unbounded-scan shape that OOM-killed the
+    worker from `mark_stale_descendants` — and this ledger grows faster
+    than `research_snapshots`, because every cache *hit* appends a row too.
+    """
     own = db is None
     if own:
         db = SessionLocal()
     try:
         _ensure_table(db)
-        stmt = select(CacheCostLog)
-        rows = db.execute(stmt).scalars().all()
-        total = 0
-        for r in rows:
-            if since and r.generated_at < since:
-                continue
-            if exclude_hits and r.kind.endswith(":hit"):
-                continue
-            total += int(r.cost_tokens or 0)
-        return total
+        stmt = select(func.coalesce(func.sum(CacheCostLog.cost_tokens), 0))
+        if since is not None:
+            stmt = stmt.where(CacheCostLog.generated_at >= since)
+        if exclude_hits:
+            stmt = stmt.where(~CacheCostLog.kind.like("%:hit"))
+        return int(db.execute(stmt).scalar() or 0)
     finally:
         if own:
             db.close()

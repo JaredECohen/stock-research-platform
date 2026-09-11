@@ -190,5 +190,84 @@ def test_loop_reports_failure_without_raising(monkeypatch):
     )
     def boom(**kw): raise RuntimeError("db gone")
     monkeypatch.setattr(snapshot_gc, "gc_snapshots", boom)
-    assert snapshot_gc.run_once() == {"scanned": 0, "deleted": 0, "capped": 0}
+    assert snapshot_gc.run_once() == {"scanned": 0, "deleted": 0, "capped": 0, "ledger_deleted": 0}
     assert recorded["success"] is False and "RuntimeError" in recorded["note"]
+
+
+# ---------------------------------------------------------------------------
+# Cost ledger
+# ---------------------------------------------------------------------------
+
+def _write_cost(subject: str, kind: str, *, age_days: float, tokens: int = 10) -> int:
+    from app.cache.snapshots import CacheCostLog
+    with SessionLocal() as db:
+        row = CacheCostLog(subject=subject, kind=kind, cost_tokens=tokens, note="test")
+        db.add(row)
+        db.commit()
+        row.generated_at = datetime.utcnow() - timedelta(days=age_days)
+        db.commit()
+        return row.id
+
+
+def _cost_alive(ids: list[int]) -> set:
+    from app.cache.snapshots import CacheCostLog
+    with SessionLocal() as db:
+        return {i for i in ids if db.get(CacheCostLog, i) is not None}
+
+
+def test_cost_ledger_rows_past_their_retention_are_deleted():
+    """The ledger grows faster than the snapshots — a cache hit appends a
+    row too — so it needs reaping as well, just on a longer horizon."""
+    from app.cache.snapshots import LEDGER_RETENTION_DAYS
+    subject = _unique("ledger")
+    ancient = _write_cost(subject, "company_cold", age_days=LEDGER_RETENTION_DAYS + 5)
+    recent = _write_cost(subject, "company_cold", age_days=1)
+    stats = gc_snapshots()
+    assert stats["ledger_deleted"] >= 1
+    assert _cost_alive([ancient]) == set()
+    assert _cost_alive([recent]) == {recent}, "inside retention, kept"
+
+
+def test_cost_ledger_retention_is_far_longer_than_snapshot_retention():
+    """A snapshot is re-derivable; a cost record is not, so it is kept
+    much longer. Guards against someone equalising the two by accident."""
+    from app.cache.snapshots import LEDGER_RETENTION_DAYS, SNAPSHOT_RETENTION_DAYS
+    assert LEDGER_RETENTION_DAYS >= SNAPSHOT_RETENTION_DAYS * 4
+
+
+def test_total_token_cost_sums_in_sql_without_loading_rows():
+    """Regression: this used to select every ledger row and sum in Python,
+    the same unbounded shape that killed the worker elsewhere."""
+    from app.cache import total_token_cost
+    subject = _unique("sum")
+    _write_cost(subject, "company_cold", age_days=1, tokens=100)
+    _write_cost(subject, "company_cold:hit", age_days=1, tokens=7)
+
+    seen: list[str] = []
+
+    def before(conn, cursor, statement, params, context, executemany):
+        if "cache_cost_logs" in statement and statement.upper().lstrip().startswith("SELECT"):
+            seen.append(" ".join(statement.split()))
+
+    event.listen(engine, "before_cursor_execute", before)
+    try:
+        total = total_token_cost(since=datetime.utcnow() - timedelta(days=2))
+    finally:
+        event.remove(engine, "before_cursor_execute", before)
+
+    assert total >= 100
+    assert seen, "expected a query"
+    assert any("sum(" in s.lower() for s in seen), seen
+    assert all("note" not in s.lower() for s in seen), "row bodies must not be selected"
+
+
+def test_total_token_cost_still_excludes_hits_and_honours_since():
+    from app.cache import total_token_cost
+    subject = _unique("sum2")
+    _write_cost(subject, "k", age_days=0.5, tokens=50)
+    _write_cost(subject, "k:hit", age_days=0.5, tokens=999)
+    _write_cost(subject, "k", age_days=30, tokens=777)
+    since = datetime.utcnow() - timedelta(days=2)
+    assert total_token_cost(since=since) >= 50
+    with_hits = total_token_cost(since=since, exclude_hits=False)
+    assert with_hits >= total_token_cost(since=since) + 999
