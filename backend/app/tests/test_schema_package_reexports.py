@@ -79,6 +79,26 @@ SCHEMA_NAMES = [
     "ScorecardSummary",
     "ScorecardUniverseOut",
     "ScorecardUniverseRow",
+    # FEAT-003 (`schemas/industry.py`).
+    "ClassifyOut",
+    "ClassifyRequest",
+    "FactDeltaOut",
+    "IndustryAccessOut",
+    "IndustryChangesOut",
+    "IndustryCompaniesOut",
+    "IndustryCompanyRowOut",
+    "IndustryHistoryOut",
+    "IndustryJobOut",
+    "IndustryJobsOut",
+    "IndustryReportHistoryItemOut",
+    "IndustryReportOut",
+    "IndustrySnapshotOut",
+    "IndustryStatsOut",
+    "RegenerateOut",
+    "RegenerateRequest",
+    "TaxonomyImportOut",
+    "TaxonomyImportRequest",
+    "TaxonomyOut",
 ]
 
 # `typing.Literal` aliases are not classes and carry no `__module__`.
@@ -136,7 +156,7 @@ TABLE_NAMES = sorted([
 
 SCHEMA_SUBMODULES = [
     "common", "agents", "dcf", "comps", "macro", "portfolio", "screener",
-    "memo", "chat", "accounts", "fundamentals",
+    "memo", "chat", "accounts", "fundamentals", "industry",
 ]
 MODEL_SUBMODULES = [
     "universe", "documents", "memo", "dcf", "portfolio", "telemetry", "jobs",

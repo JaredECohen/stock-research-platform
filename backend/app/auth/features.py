@@ -138,6 +138,19 @@ FEATURES: dict[str, Feature] = {
             "scorecard", "Fundamental factor scorecard (universe, ticker detail, evaluation, export)",
             free=False, pro=True,
         ),
+        # FEAT-003. DB reads of artifacts the weekly worker already
+        # produced, so no meter and no cost: the charge for a report is
+        # paid once, when it is generated, not per reader. What the plan
+        # DOES gate is depth — the latest edition of a group follows
+        # `INDUSTRY_ANALYSIS_ACCESS` (public at launch, owner decision 1)
+        # while history, changes-since-prior and the PM's cross-industry
+        # block are Pro. `api/entitlements_industry.py` resolves which
+        # surface a route is; this entry is the plan gate those Pro
+        # surfaces charge against.
+        Feature(
+            "industry_analysis", "Industry Analysis history, changes and cross-industry context",
+            free=False, pro=True,
+        ),
     )
 }
 

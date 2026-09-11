@@ -89,6 +89,33 @@ from .fundamentals import (
     SeriesResponse,
     UnavailableTicker,
 )
+
+# FEAT-003 (`schemas/industry.py`). Re-exported AND listed in `__all__`
+# below, with the matching rows in
+# `test_schema_package_reexports.SCHEMA_NAMES` — the two lists are one
+# change and must never be split across commits, or the frozen-list test
+# fails for a cosmetic reason.
+from .industry import (
+    ClassifyOut,
+    ClassifyRequest,
+    FactDeltaOut,
+    IndustryAccessOut,
+    IndustryChangesOut,
+    IndustryCompaniesOut,
+    IndustryCompanyRowOut,
+    IndustryHistoryOut,
+    IndustryJobOut,
+    IndustryJobsOut,
+    IndustryReportHistoryItemOut,
+    IndustryReportOut,
+    IndustrySnapshotOut,
+    IndustryStatsOut,
+    RegenerateOut,
+    RegenerateRequest,
+    TaxonomyImportOut,
+    TaxonomyImportRequest,
+    TaxonomyOut,
+)
 from .macro import MacroScenarioRequest, MacroScenarioResult, MacroSeries, MacroSeriesPoint
 from .memo import MispricingThesis, StockMemoOut, ValuationVerdict
 from .portfolio import ModelPortfolio, PortfolioBrief, PortfolioHolding, PortfolioRequest
@@ -245,4 +272,24 @@ __all__ = [
     "ScorecardSummary",
     "ScorecardUniverseOut",
     "ScorecardUniverseRow",
+    # FEAT-003 (`schemas/industry.py`).
+    "ClassifyOut",
+    "ClassifyRequest",
+    "FactDeltaOut",
+    "IndustryAccessOut",
+    "IndustryChangesOut",
+    "IndustryCompaniesOut",
+    "IndustryCompanyRowOut",
+    "IndustryHistoryOut",
+    "IndustryJobOut",
+    "IndustryJobsOut",
+    "IndustryReportHistoryItemOut",
+    "IndustryReportOut",
+    "IndustrySnapshotOut",
+    "IndustryStatsOut",
+    "RegenerateOut",
+    "RegenerateRequest",
+    "TaxonomyImportOut",
+    "TaxonomyImportRequest",
+    "TaxonomyOut",
 ]

@@ -141,6 +141,39 @@ ROUTES: tuple[tuple[str, str, Policy], ...] = (
 
 SCORECARD_EXPORT_PATH = "/api/scorecard/export"
 
+# --- FEAT-003 Industry Analysis -----------------------------------------
+# These four surfaces do not have a fixed level: `latest` follows
+# `INDUSTRY_ANALYSIS_ACCESS` (owner decision 1, default `public`), while
+# history, changes and the cross-industry snapshot are Pro. The tiers live
+# in `services/industry_report_store.access_policy()` — the same function
+# the routes' own dependency and the chat tool read — so the login wall and
+# the route seam cannot disagree about a surface. Resolved per call, like
+# the scorecard export, because the setting is an env var and tests flip it.
+#
+# `/taxonomy` is always public: it carries the access policy itself, so the
+# UI can explain a gate rather than render a 401.
+INDUSTRY_SURFACES: tuple[tuple[str, str, str], ...] = (
+    ("GET", "/api/industries/taxonomy", "latest"),
+    ("GET", "/api/industries/snapshot", "pm_chat"),
+    ("GET", "/api/industries/{code}/report", "latest"),
+    ("GET", "/api/industries/{code}/companies", "latest"),
+    ("GET", "/api/industries/{code}/history", "history"),
+    ("GET", "/api/industries/{code}/changes", "changes"),
+)
+INDUSTRY_TAXONOMY_PATH = "/api/industries/taxonomy"
+INDUSTRY_FEATURE = "industry_analysis"
+
+
+def _industry_policy(surface: str, path: str) -> Policy:
+    from ..services.industry_report_store import PUBLIC as TIER_PUBLIC
+    from ..services.industry_report_store import surface_tier
+
+    if path == INDUSTRY_TAXONOMY_PATH:
+        return Policy(PUBLIC, note="always answers; carries the access policy so the UI can explain the gate")
+    if surface_tier(surface) == TIER_PUBLIC:
+        return Policy(PUBLIC, note=f"industry {surface} surface is public while INDUSTRY_ANALYSIS_ACCESS=public")
+    return _pro(INDUSTRY_FEATURE, f"industry {surface} surface")
+
 
 def _scorecard_export_policy() -> Policy:
     """The export has two audiences. With `SCORECARD_EXPORT_TOKEN` unset it
@@ -164,6 +197,10 @@ _COMPILED: tuple[tuple[str, re.Pattern[str], Policy], ...] = tuple(
     (method.upper(), _compile(template), policy) for method, template, policy in ROUTES
 )
 
+_INDUSTRY_COMPILED: tuple[tuple[str, re.Pattern[str], str], ...] = tuple(
+    (method.upper(), _compile(template), surface) for method, template, surface in INDUSTRY_SURFACES
+)
+
 _ADMIN = Policy(ADMIN, note="admin_auth owns this prefix")
 _DEFAULT_DENY = Policy(AUTHENTICATED, note="unclassified /api route — default deny")
 
@@ -179,6 +216,9 @@ def lookup(method: str, path: str) -> tuple[Policy, bool]:
         return _PUBLIC, True
     if m == "GET" and path == SCORECARD_EXPORT_PATH:
         return _scorecard_export_policy(), True
+    for rm, rx, surface in _INDUSTRY_COMPILED:
+        if rm == m and rx.match(path):
+            return _industry_policy(surface, path), True
     for rm, rx, policy in _COMPILED:
         if rm == m and rx.match(path):
             return policy, True

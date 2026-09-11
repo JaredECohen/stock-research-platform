@@ -108,6 +108,13 @@ LIMITS = {
     # Phase 6. The export streams a whole run (a few hundred rows) per
     # call; a downstream system polls it, a person does not.
     "scorecard_export":        "30/minute",
+    # FEAT-003. Industry Analysis reads are single-row JSON fetches of
+    # artifacts the worker already produced (a report payload is tens of
+    # KB), so they take the cheap-read ceiling; the ops endpoints import a
+    # taxonomy, re-classify the universe or queue a week of report jobs,
+    # and a person runs those a handful of times, never in a loop.
+    "industry_read":           "60/minute",
+    "industry_admin":          "10/minute",
 }
 
 
