@@ -748,6 +748,33 @@ def test_admin_regenerate_speaks_the_queue_s_real_contract(client, admin_token, 
         assert result[count_key] == len(result[codes_key]), (count_key, codes_key)
 
 
+def test_admin_regenerate_refuses_a_drifted_taxonomy_unless_told_otherwise(client, admin_token, group, monkeypatch):
+    """Queueing a week against a node set the deploy has already replaced
+    publishes a stale structure as this week's edition, so it is a 409
+    rather than a silent success. Overridable on purpose: re-running the
+    structure that IS active is a legitimate thing to want."""
+    from app.api import routes_industries_admin as admin_routes
+
+    drift = {
+        "kind": "same_key_changed_structure",
+        "active_version_key": "gics-2026-04",
+        "remedy": "import under a new --version-key",
+    }
+    monkeypatch.setattr(admin_routes.gics_registry, "bundled_drift", lambda *a, **k: drift)
+
+    refused = client.post("/api/admin/industries/reports/regenerate",
+                          json={"codes": [group.code]}, headers=admin_token)
+    assert refused.status_code == 409, refused.text
+    detail = refused.json()["detail"]
+    assert detail["code"] == "taxonomy_drift"
+    assert detail["drift"]["remedy"], "the refusal has to say how to resolve it"
+
+    accepted = client.post("/api/admin/industries/reports/regenerate",
+                           json={"codes": [group.code], "accept_stale_taxonomy": True},
+                           headers=admin_token)
+    assert accepted.status_code == 202, accepted.text
+
+
 def test_admin_regenerate_rejects_an_unknown_code(client, admin_token):
     resp = client.post("/api/admin/industries/reports/regenerate",
                        json={"codes": ["9999"]}, headers=admin_token)

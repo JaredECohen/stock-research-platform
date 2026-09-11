@@ -195,6 +195,25 @@ def regenerate_reports_endpoint(
     """
     payload = payload or RegenerateRequest()
     info = _active_or_503()
+
+    # A drifted taxonomy means the bundled knowledge JSON no longer
+    # describes the node set the registry is serving, so a run queued now
+    # would score groups the deploy has already changed and publish the
+    # result as this week's edition. The daily classification loop already
+    # reports this (`taxonomy_drift=1` in cron-health); refusing here keeps
+    # an operator from queueing a week against the old structure without
+    # meaning to. Explicitly overridable, because re-running the current
+    # structure deliberately is legitimate.
+    drift = gics_registry.bundled_drift(info)
+    if drift is not None and not payload.accept_stale_taxonomy:
+        raise _error(
+            409, "taxonomy_drift",
+            "the bundled knowledge base no longer matches the active taxonomy version; "
+            "import the new structure under a new version key, or pass "
+            "accept_stale_taxonomy=true to queue against the structure now active",
+            drift=drift, taxonomy_version=info.version_key,
+        )
+
     codes: list[str] | None = None
     if payload.codes is not None:
         codes = []

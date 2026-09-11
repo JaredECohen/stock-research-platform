@@ -408,6 +408,14 @@ class RegenerateRequest(BaseModel):
     codes: list[str] | None = Field(None, description="Industry group codes; default every active group.")
     period_key: str | None = Field(None, description="ISO week; default the week of the most recent as-of weekday.")
     force: bool = Field(False, description="Re-generate even when the period already published.")
+    accept_stale_taxonomy: bool = Field(
+        False,
+        description=(
+            "Queue even when the bundled knowledge JSON no longer matches the active "
+            "registry version. Without it a drifted taxonomy is a 409, because the run "
+            "would score against a node set the deploy has already replaced."
+        ),
+    )
 
 
 class RegenerateOut(BaseModel):
