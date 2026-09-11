@@ -39,6 +39,7 @@ UNKNOWN = "ZZZUNKNOWN"
 EXPECTED_TOOLS = [
     "get_memo", "get_dcf_summary", "get_comps", "get_macro_snapshot",
     "get_company_lite", "list_universe", "screener_query", "custom_screen",
+    "get_industry_context",
     "ask_sector", "ask_earnings", "ask_filings", "ask_valuation", "ask_macro",
 ]
 FINDING_KEYS = {"agent", "ticker", "headline", "summary", "key_points", "confidence"}

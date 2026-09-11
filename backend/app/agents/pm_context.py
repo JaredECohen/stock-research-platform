@@ -16,6 +16,11 @@ Assembles the markdown context block the PM reads on every synthesis
   Explicit rather than loaded here so the chat and orchestrator callers,
   which have no memo run in scope, add no DB read per turn.
 
+- FEAT-003: the cross-industry snapshot the worker persisted for the PM
+  (one indexed row read, rendered to ≤ 2,000 chars) plus a short excerpt
+  of the latest-good Industry Analysis edition for the company's own
+  group(s) — only when a snapshot exists; nothing is computed here.
+
 Returns a single markdown string ready to splice into the PM system
 prompt or user message. Empty string when nothing is loaded — callers
 can unconditionally concatenate.
@@ -23,8 +28,197 @@ can unconditionally concatenate.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 log = logging.getLogger(__name__)
+
+# Budget for the FEAT-003 block: the snapshot render is capped by its own
+# renderer; each group excerpt gets this many characters so the PM reads
+# the analyst's view and what changed, not a whole edition.
+INDUSTRY_EXCERPT_MAX_CHARS = 600
+INDUSTRY_BLOCK_MAX_CHARS = 2000
+
+
+def _clip(text: Any, limit: int) -> str:
+    s = str(text or "").strip()
+    return s if len(s) <= limit else s[: limit - 1] + "…"
+
+
+def _excerpt_from(code: str, report: dict[str, Any] | None, *, max_chars: int = INDUSTRY_EXCERPT_MAX_CHARS) -> dict[str, Any] | None:
+    """The parts of a latest-good edition the PM needs: the analyst view,
+    what changed since the prior edition, and whether the edition was a
+    degraded (deterministic) one. ``None`` when the group has no edition."""
+    if report is None:
+        return None
+    sections = (report.get("payload") or {}).get("sections") or {}
+
+    def text_of(section: str, *keys: str) -> str:
+        interp = (sections.get(section) or {}).get("interpretation")
+        if isinstance(interp, str):
+            return interp
+        if isinstance(interp, dict):
+            for key in keys:
+                if interp.get(key):
+                    return str(interp[key])
+        return ""
+
+    per_field = max(80, max_chars // 2)
+    return {
+        "code": code,
+        "version": report.get("version"),
+        "period_key": report.get("period_key"),
+        "as_of": report.get("as_of"),
+        "analyst_view": _clip(text_of("outlook", "analyst_view", "text"), per_field),
+        "what_changed": _clip(text_of("what_changed", "text"), per_field // 2),
+        "degraded": list(report.get("degraded") or []),
+        "status": report.get("status"),
+    }
+
+
+def _report_excerpt(code: str, *, max_chars: int = INDUSTRY_EXCERPT_MAX_CHARS) -> dict[str, Any] | None:
+    """One group's excerpt — one query. Use ``_excerpt_from`` with a
+    batched read when several groups are in scope."""
+    from ..services.industry_report_store import latest_good
+    return _excerpt_from(code, latest_good(code), max_chars=max_chars)
+
+
+def industry_context_payload(
+    *, tickers: list[str] | None = None, code: str | None = None,
+) -> dict[str, Any]:
+    """Stored artifacts only — the latest snapshot rows and report
+    excerpts for the groups relevant to ``tickers`` (their own groups plus
+    the capped dependency-linked ones) and/or the explicit ``code``. This
+    is what the chat tool returns and what the block below renders;
+    nothing here fetches prices, runs analytics or calls an LLM."""
+    from ..services import gics_registry
+    from ..services.industry_report_store import access_policy, latest_good_many
+    from ..services.industry_snapshot import group_rows, latest_snapshot, relevant_groups_detail
+
+    symbols = [str(t).strip().upper() for t in (tickers or []) if str(t).strip()]
+    # The tier this answer is served under. The chat tool itself already
+    # sits behind the `pm_chat` feature; carrying the policy means the UI
+    # (and slice 4's read routes) read one answer rather than each
+    # inventing its own from the setting.
+    policy = access_policy()
+    access = {
+        "surface": "pm_chat",
+        "tier": policy["surfaces"]["pm_chat"],
+        "enforced": policy["enforced"],
+        "latest_report_tier": policy["surfaces"]["latest"],
+    }
+    try:
+        info = gics_registry.active_version()
+    except Exception as exc:  # DB unavailable — say so, never guess
+        log.debug("industry context: taxonomy read failed: %s", type(exc).__name__)
+        info = None
+    if info is None:
+        return {"status": "taxonomy_not_imported", "tickers": symbols, "code": code, "groups": [],
+                "access": access}
+
+    detail = relevant_groups_detail(symbols, version=info) if symbols else {
+        "tickers": [], "own": [], "linked": [], "unmapped": [], "cap": 0, "by_ticker": {},
+    }
+    codes: list[str] = []
+    explicit: dict[str, Any] | None = None
+    if code:
+        try:
+            node = gics_registry.group(str(code), version=info)
+            explicit = {"code": node.code, "name": node.name}
+            codes.append(node.code)
+        except gics_registry.UnknownNode:
+            explicit = {"code": str(code), "error": f"industry group {code!r} not found in taxonomy {info.version_key}"}
+    for c in detail["own"] + [item["code"] for item in detail["linked"]]:
+        if c not in codes:
+            codes.append(c)
+
+    snapshot = latest_snapshot(version=info)
+    rows = group_rows(snapshot, codes) if snapshot else []
+    names = {n.code: n.name for n in gics_registry.industry_groups(version=info)}
+    # One query for every group's edition — a portfolio question can put
+    # a dozen groups in scope and this runs on a web request.
+    editions = latest_good_many(codes, version=info) if codes else {}
+    groups = []
+    for c in codes:
+        entry: dict[str, Any] = {
+            "code": c,
+            "name": names.get(c),
+            "relation": ("requested" if explicit and explicit.get("code") == c else
+                         "own" if c in detail["own"] else "linked"),
+            "snapshot_row": next((r for r in rows if r.get("code") == c), None) if snapshot else None,
+            "report": _excerpt_from(c, editions.get(c)),
+        }
+        if entry["relation"] == "linked":
+            entry["via"] = next((item["via"] for item in detail["linked"] if item["code"] == c), [])
+        groups.append(entry)
+    return {
+        "status": "ok",
+        "taxonomy_version": info.version_key,
+        "tickers": symbols,
+        "code": explicit,
+        "by_ticker": detail["by_ticker"],
+        "unmapped_tickers": detail["unmapped"],
+        "snapshot": {
+            "period_key": snapshot.get("period_key"),
+            "as_of": snapshot.get("as_of"),
+            "macro_regime": ((snapshot.get("payload") or {}).get("regime") or {}).get("macro_regime"),
+            "n_missing_groups": len((snapshot.get("payload") or {}).get("missing_groups") or []),
+        } if snapshot else {"status": "no_snapshot"},
+        "groups": groups,
+        "access": access,
+        "attribution": gics_registry.ATTRIBUTION,
+        "mapping_caveat": gics_registry.MAPPING_CAVEAT,
+        "note": "stored weekly artifacts (observed statistics + labelled interpretation); scenarios, not recommendations",
+    }
+
+
+def industry_context_block(
+    *, ticker: str | None = None, tickers: list[str] | None = None,
+    max_chars: int = INDUSTRY_BLOCK_MAX_CHARS,
+) -> str:
+    """The FEAT-003 markdown block, or ``""`` when no snapshot exists.
+
+    The snapshot render is capped at ``min(max_chars, 2000)``; report
+    excerpts follow for the companies' own groups only (the linked
+    groups are already lines in the snapshot), so the block is bounded
+    by the render cap plus one excerpt per own group."""
+    from ..services.industry_report_store import latest_good_many
+    from ..services.industry_snapshot import latest_snapshot, relevant_groups_detail, render_pm_block
+
+    snapshot = latest_snapshot()
+    if snapshot is None:
+        return ""
+    scope = [t for t in ([ticker] if ticker else []) + list(tickers or []) if t]
+    render_cap = min(int(max_chars), INDUSTRY_BLOCK_MAX_CHARS)
+    parts = [
+        "## Cross-industry snapshot (weekly, persisted; observed data + rule-based reads)",
+        render_pm_block(snapshot, max_chars=render_cap),
+    ]
+    if scope:
+        detail = relevant_groups_detail(scope)
+        editions = latest_good_many(detail["own"]) if detail["own"] else {}
+        for code in detail["own"]:
+            excerpt = _excerpt_from(code, editions.get(code))
+            if excerpt is None:
+                parts.append(f"Industry group {code}: no published Industry Analysis edition yet.")
+                continue
+            degraded = f" (degraded edition: {', '.join(excerpt['degraded'])})" if excerpt["degraded"] else ""
+            parts.append(
+                f"Industry group {code} — edition v{excerpt['version']} {excerpt['period_key']}{degraded}. "
+                f"Analyst view: {excerpt['analyst_view'] or 'n/a'} "
+                f"What changed: {excerpt['what_changed'] or 'n/a'}"
+            )
+        if detail["linked"]:
+            parts.append(
+                "Linked groups (dependency graph, analyst hypotheses): "
+                + "; ".join(f"{item['code']} via {', '.join(v['id'] for v in item['via'])}" for item in detail["linked"])
+            )
+        if detail["unmapped"]:
+            parts.append(
+                "No industry-group mapping for: "
+                + ", ".join(f"{u['ticker']} ({u['state']})" for u in detail["unmapped"])
+            )
+    parts.append("_Industry statistics are observed data; analyst views are scenario input, not recommendations._")
+    return "\n\n".join(parts)
 
 
 def build_pm_context(
@@ -34,6 +228,7 @@ def build_pm_context(
     profile: dict | None = None,
     max_chars_each: int = 3000,
     scorecard_block: str | None = None,
+    tickers: list[str] | None = None,
 ) -> str:
     """Render the markdown context the PM should read.
 
@@ -180,6 +375,21 @@ def build_pm_context(
             )
         except Exception as exc:  # pragma: no cover
             log.debug("scorecard block render failed: %s", exc)
+
+    # 7) FEAT-003 — the persisted cross-industry snapshot and the company's
+    # own industry-group edition, only when a snapshot exists. `tickers`
+    # widens the scope for portfolio-wide questions (chat, portfolio
+    # brief); the memo path passes its one ticker. One indexed row read
+    # for the snapshot, one SELECT for the classifications; nothing is
+    # generated on this path.
+    try:
+        industry = industry_context_block(
+            ticker=ticker, tickers=tickers, max_chars=min(int(max_chars_each), INDUSTRY_BLOCK_MAX_CHARS),
+        )
+        if industry and industry.strip():
+            blocks.append(industry.strip())
+    except Exception as exc:  # pragma: no cover — never block a memo on the snapshot
+        log.debug("industry snapshot block failed: %s", type(exc).__name__)
 
     if not blocks:
         return ""
