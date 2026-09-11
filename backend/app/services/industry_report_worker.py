@@ -380,8 +380,13 @@ def enqueue_period(
         "taxonomy_version": info.version_key,
         "taxonomy_version_id": info.id,
         "n_groups": len(wanted),
+        # Counts and code lists both: the weekly loop does arithmetic on the
+        # counts, the admin endpoint reports which groups moved. Same `X` /
+        # `X_codes` pairing the skipped and over-budget keys already use.
         "enqueued": len(enqueued),
+        "enqueued_codes": sorted(j["code"] for j in enqueued if j.get("code")),
         "coalesced": len(coalesced),
+        "coalesced_codes": sorted(j["code"] for j in coalesced if j.get("code")),
         "skipped_published": len(skipped_published),
         "skipped_published_codes": sorted(skipped_published),
         "unknown_codes": unknown,

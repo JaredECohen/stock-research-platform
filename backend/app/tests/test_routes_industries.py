@@ -712,6 +712,42 @@ def test_admin_regenerate_reports_an_unavailable_queue_rather_than_pretending(cl
         assert resp.json()["period_key"]
 
 
+def test_admin_regenerate_speaks_the_queue_s_real_contract(client, admin_token, group):
+    """Cross-slice contract, pinned because it already broke once.
+
+    `industry_report_worker.enqueue_period` returns COUNTS under
+    `enqueued`/`coalesced`/`skipped_published` and the code lists under the
+    matching `_codes` keys. The admin route was written against an imagined
+    contract where the count keys held lists, so `list(3)` raised and the
+    endpoint 500'd the first time it met the real queue — which only
+    happened after both slices merged, because each was tested against its
+    own idea of the other.
+
+    This asserts the two halves agree on the actual keys, in both
+    directions, so neither side can drift alone.
+    """
+    from app.services import industry_report_worker as jobs
+
+    resp = client.post("/api/admin/industries/reports/regenerate",
+                       json={"codes": [group.code]}, headers=admin_token)
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+
+    # The endpoint reports the group it moved, not a bare count.
+    moved = [row["code"] for row in body["enqueued"] + body["coalesced"]]
+    assert moved == [group.code], body
+
+    # And the producer's own shape is what the consumer assumed: counts are
+    # integers, `_codes` are lists, and they describe the same thing.
+    result = jobs.enqueue_period(body["period_key"], codes=[group.code], source="test")
+    for count_key, codes_key in (("enqueued", "enqueued_codes"),
+                                 ("coalesced", "coalesced_codes"),
+                                 ("skipped_published", "skipped_published_codes")):
+        assert isinstance(result[count_key], int), count_key
+        assert isinstance(result[codes_key], list), codes_key
+        assert result[count_key] == len(result[codes_key]), (count_key, codes_key)
+
+
 def test_admin_regenerate_rejects_an_unknown_code(client, admin_token):
     resp = client.post("/api/admin/industries/reports/regenerate",
                        json={"codes": ["9999"]}, headers=admin_token)

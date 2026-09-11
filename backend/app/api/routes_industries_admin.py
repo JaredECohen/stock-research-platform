@@ -229,9 +229,19 @@ def regenerate_reports_endpoint(
         period_key=period_key,
         taxonomy_version=info.version_key,
         requested=len(codes) if codes is not None else len(gics_registry.industry_groups(version=info)),
-        enqueued=list(result.get("enqueued") or []),
-        coalesced=list(result.get("coalesced") or []),
-        skipped=list(result.get("skipped") or []),
+        # `enqueued`/`coalesced`/`skipped_published` are COUNTS on the
+        # queue's contract; the code lists live under the `_codes` keys.
+        # Reading the counts as lists is what made this a 500.
+        enqueued=[{"code": c} for c in (result.get("enqueued_codes") or [])],
+        coalesced=[{"code": c} for c in (result.get("coalesced_codes") or [])],
+        skipped=(
+            [{"code": c, "reason": "already published this period"}
+             for c in (result.get("skipped_published_codes") or [])]
+            + [{"code": c, "reason": "over the per-run job cap"}
+               for c in (result.get("over_budget_codes") or [])]
+            + [{"code": c, "reason": "unknown to this taxonomy version"}
+               for c in (result.get("unknown_codes") or [])]
+        ),
         note=str(result.get("note") or "queued; the worker's drainer picks these up on its next tick"),
     )
 
