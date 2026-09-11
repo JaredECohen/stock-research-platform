@@ -57,7 +57,17 @@ def _stats() -> dict:
             "leaders": [{"ticker": "MSFT", "ret_1m": 0.05}], "laggards": [{"ticker": "AMD", "ret_1m": -0.06}],
             "valuation": {"ev_ebitda": {"median": 26.0, "n": 3}},
         },
-        "per_ticker": {"MSFT": {"ret_1m": 0.05}, "AAPL": {"ret_1m": -0.02}, "AMD": {"ret_1m": -0.06}},
+        # Shaped like a real statistics row: priced names carry `last_close`,
+        # and a name the row could not price is KEPT with an exclusion
+        # reason rather than dropped. The old fixture had neither, so
+        # `n_priced = len(per_ticker)` looked right here while the real
+        # producer made it count unpriced names.
+        "per_ticker": {
+            "MSFT": {"ret_1m": 0.05, "last_close": 410.0},
+            "AAPL": {"ret_1m": -0.02, "last_close": 222.0},
+            "AMD": {"ret_1m": -0.06, "last_close": 150.0},
+            "ORCL": {"ret_1m": None, "last_close": None, "exclusion": "no_prices"},
+        },
     }
 
 
@@ -185,7 +195,12 @@ def test_prior_report_produces_a_facts_delta_and_constituent_changes(analyst):
     assert wc["prior_version"] == 1 and wc["prior_period_key"] == "2026-W35"
     delta = wc["facts_delta"]["returns.1M.equal_weight"]
     assert delta == {"from": -0.031, "to": 0.019, "change": 0.05}
-    assert wc["constituents"] == {"added": ["NVDA"], "removed": ["AMD"]}
+    assert wc["constituents"] == {"added": ["NVDA"], "removed": ["AMD"], "n_added": 1, "n_removed": 1}
+    # The counts the interpretation quotes are facts, or the validator
+    # rejects the sentence that quotes them.
+    assert wc["n_facts_moved"] == sum(
+        1 for v in wc["facts_delta"].values() if isinstance(v, dict) and v.get("change") not in (None, 0)
+    )
     text = second.payload["sections"]["what_changed"]["interpretation"]["text"]
     assert "Versus edition 1" in text
     assert v.validate(second.payload, _facts_of(second.payload)) == []
@@ -343,7 +358,7 @@ def test_losing_price_coverage_is_not_a_membership_change(analyst):
                                    {"ticker": "AMD", "reason": "stale_prices"}]
     second = w.write_report(analyst, stats, None, prior, [], run_id="run-11b")
     facts = _facts_of(second.payload)
-    assert facts["what_changed"]["constituents"] == {"added": [], "removed": []}
+    assert facts["what_changed"]["constituents"] == {"added": [], "removed": [], "n_added": 0, "n_removed": 0}
     assert facts["companies"]["n_constituents"] == facts["overview"]["n_constituents"] == 4
     assert facts["companies"]["unpriced"] == [{"ticker": "AMD", "reason": "stale_prices"},
                                               {"ticker": "ORCL", "reason": "no_prices"}]

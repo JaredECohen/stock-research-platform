@@ -226,6 +226,19 @@ def _performance_facts(stats: Any, payload: dict[str, Any], sample: dict[str, An
     return facts
 
 
+def _is_priced_row(row: Any) -> bool:
+    """Did the statistics row actually price this name?
+
+    The row keeps the names it could not price, with `last_close: None` and
+    an `exclusion` reason, so membership in `per_ticker` is not coverage.
+    Counting the map made a report claim full price coverage with an empty
+    `unpriced` list while the same edition's `coverage` block named the
+    excluded ticker. Same definition as `routes_industries._is_priced`, on
+    purpose: the page and the report must not disagree about who was priced.
+    """
+    return isinstance(row, dict) and row.get("last_close") is not None and not row.get("exclusion")
+
+
 def _companies_facts(analyst: IndustryAnalyst, payload: dict[str, Any], per_ticker: dict[str, Any],
                      events: list[dict[str, Any]], constituents: list[str],
                      sample: dict[str, Any], membership_source: str) -> dict[str, Any]:
@@ -238,15 +251,26 @@ def _companies_facts(analyst: IndustryAnalyst, payload: dict[str, Any], per_tick
         str(e.get("ticker")): str(e.get("reason") or "excluded")
         for e in (sample.get("excluded") or []) if isinstance(e, dict) and e.get("ticker")
     }
+    # A name in `per_ticker` is not necessarily priced: the statistics row
+    # keeps the ones it could not price, with `last_close: None` and an
+    # `exclusion` reason. Counting the map made the report claim full
+    # coverage with an empty `unpriced` list while the same edition's
+    # `coverage` block named the excluded ticker — the membership-vs-price
+    # collapse the read API deliberately avoids (`routes_industries._is_priced`).
+    priced = {t for t, row in per_ticker.items() if _is_priced_row(row)}
     unpriced = [
-        {"ticker": t, "reason": excluded_reason.get(t, "no price series for this period")}
-        for t in sorted(constituents) if t not in per_ticker
+        {"ticker": t, "reason": (
+            excluded_reason.get(t)
+            or str((per_ticker.get(t) or {}).get("exclusion") or "")
+            or "no price series for this period"
+        )}
+        for t in sorted(constituents) if t not in priced
     ]
     return {
         "constituents": sorted(constituents),
         "n_constituents": len(constituents),
         "membership_source": membership_source,
-        "n_priced": len(per_ticker),
+        "n_priced": len(priced),
         "unpriced": unpriced,
         "largest": list(payload.get("largest") or [])[:10],
         "leaders": list(payload.get("leaders") or [])[:5],
@@ -402,7 +426,8 @@ def _what_changed_facts(prior_report: Any, current: dict[str, dict[str, Any]]) -
             "prior_version": None,
             "prior_as_of": None,
             "facts_delta": _na("first edition; no prior report to compare"),
-            "constituents": {"added": [], "removed": []},
+            "constituents": {"added": [], "removed": [], "n_added": 0, "n_removed": 0},
+            "n_facts_moved": 0,
         }
     prior_payload = _field(prior_report, "payload", {}) or {}
     prior_sections = prior_payload.get("sections") or {}
@@ -417,12 +442,23 @@ def _what_changed_facts(prior_report: Any, current: dict[str, dict[str, Any]]) -
     }
     prev_c = set(prior_companies.get("constituents") or [])
     now_c = set(current["companies"].get("constituents") or [])
+    added, removed = sorted(now_c - prev_c), sorted(prev_c - now_c)
+    # The counts the interpretation quotes have to BE facts: the validator
+    # rejects any number in interpretive prose that the facts payload does
+    # not carry, and the deterministic sentence quoted all three of these.
+    # A whole period's editions failed validation on it.
     return {
         "prior_version": _field(prior_report, "version"),
         "prior_as_of": _iso(_field(prior_report, "as_of")),
         "prior_period_key": _field(prior_report, "period_key"),
         "facts_delta": delta if delta else _na("no comparable return facts on either edition"),
-        "constituents": {"added": sorted(now_c - prev_c), "removed": sorted(prev_c - now_c)},
+        "n_facts_moved": sum(
+            1 for v in delta.values() if isinstance(v, dict) and v.get("change") not in (None, 0)
+        ),
+        "constituents": {
+            "added": added, "removed": removed,
+            "n_added": len(added), "n_removed": len(removed),
+        },
     }
 
 
@@ -507,7 +543,10 @@ def build_facts(
             errors.append(f"companies: constituent lookup failed: {redact(exc)}")
             constituents = []
     if not constituents and per_ticker:
-        constituents = sorted(per_ticker)
+        # Priced names, not every key: the statistics row keeps the names it
+        # could not price too, so `sorted(per_ticker)` would quietly admit
+        # them to a list whose own label says "priced names only".
+        constituents = sorted(t for t, row in per_ticker.items() if _is_priced_row(row))
         membership_source = "statistics.per_ticker (priced names only; membership list unavailable)"
 
     facts: dict[str, dict[str, Any]] = {
@@ -881,11 +920,11 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
     if isinstance(delta, dict) and "reason" in delta and delta.get("value") is None:
         text = f"What changed: n/a ({delta['reason']})."
     else:
-        moved = [k for k, v in (delta or {}).items() if isinstance(v, dict) and v.get("change") not in (None, 0)]
         text = (
             f"Versus edition {wc.get('prior_version')} (as of {wc.get('prior_as_of')}): "
-            f"{len(moved)} return facts moved; constituents added {len(wc['constituents']['added'])}, "
-            f"removed {len(wc['constituents']['removed'])}."
+            f"{wc.get('n_facts_moved', 0)} return facts moved; "
+            f"constituents added {wc['constituents'].get('n_added', 0)}, "
+            f"removed {wc['constituents'].get('n_removed', 0)}."
         )
     claims.append(_claim(text, "observed_fact", ["what_changed.facts_delta", "what_changed.constituents"]))
     out["what_changed"] = {"text": text, "claims": claims}
