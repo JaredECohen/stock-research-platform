@@ -179,6 +179,38 @@ def test_unregistered_causal_claim_is_rejected_and_a_registered_one_passes():
     assert any("unsupported causal claim" in e for e in v.validate(p, _facts()))
 
 
+@pytest.mark.parametrize("placeholder", [
+    "", "   ", "n/a", "N/A.", "n / a", "none", "None", "TBD", "unknown", "not applicable",
+    # The exact string the deterministic writer used to stamp on every
+    # causal sentence it registered.
+    "n/a: mandate-level mechanism quoted from the knowledge base; no dated falsifier in this edition",
+    "margins fall",  # too short to name an observation anyone could check
+])
+def test_a_placeholder_falsifier_does_not_satisfy_the_causal_gate(placeholder):
+    """REGRESSION: "every causal link needs a falsifier" was satisfied by ANY
+    non-empty string, so the literal "n/a" passed it — and the deterministic
+    writer relied on exactly that, which made the gate prove nothing. A
+    placeholder now fails twice over: the claim is named as having no usable
+    falsifier, and it no longer counts as support for its own sentence."""
+    p = _payload()
+    sentence = "Margins compress because capacity is returning."
+    p["sections"]["risks"]["interpretation"] = {"text": sentence, "claims": [
+        {"type": "causal_inference", "text": sentence, "basis": ["risks.common_failure_modes"],
+         "falsifier": placeholder},
+    ]}
+    errs = v.validate(p, _facts())
+    assert any("no usable falsifier" in e for e in errs), errs
+    assert any("unsupported causal claim" in e for e in errs), errs
+
+
+def test_a_falsifier_that_names_an_observation_is_accepted():
+    assert v.is_real_falsifier("Utilization rises while margins hold.")
+    assert v.is_real_falsifier("No quarter in the next year shows bookings above the mandate's floor.")
+    # Not a judgement on whether the observation is the RIGHT one — the gate
+    # cannot know that, and pretending it could would be a worse lie.
+    assert v.is_real_falsifier("The sky is observed to be a different colour entirely.")
+
+
 def test_unknown_claim_type_is_rejected():
     p = _payload()
     p["sections"]["risks"]["interpretation"]["claims"][0]["type"] = "opinion"

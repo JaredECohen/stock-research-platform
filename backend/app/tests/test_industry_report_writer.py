@@ -191,6 +191,72 @@ def test_prior_report_produces_a_facts_delta_and_constituent_changes(analyst):
     assert v.validate(second.payload, _facts_of(second.payload)) == []
 
 
+def test_every_deterministic_causal_claim_carries_a_real_falsifier():
+    """REGRESSION: `_register_causal` stamped every causal sentence it
+    registered with "n/a: ... no dated falsifier in this edition", and the
+    validator accepted it because any non-empty string counted as a
+    falsifier. The deterministic edition now names the mandate's own tests
+    — the observation that would show the quoted mechanism does not apply
+    to this group. 2030 is in the list because its mandate is the one whose
+    highest-EVI question carries a causal marker."""
+    ia.clear_cache()
+    seen = 0
+    for code in ("2030", "4510", "4530"):
+        a = ia.get_industry_analyst(code)
+        res = w.write_report(a, _stats(), None, None, [], run_id=f"fals-{code}")
+        assert v.validate(res.payload, _facts_of(res.payload)) == [], code
+        for section in res.payload["sections"].values():
+            interp = section.get("interpretation")
+            for claim in (interp or {}).get("claims") or []:
+                if claim["type"] == "causal_inference":
+                    seen += 1
+                    assert v.is_real_falsifier(claim["falsifier"]), (code, claim)
+    assert seen, "no causal claim was registered, so the falsifier path went untested"
+
+
+def test_a_causal_sentence_with_no_falsifier_is_withheld_not_stamped_na():
+    """The other half of the rule: when there is no observation to offer,
+    the claim is not registered — and the sentence is not printed either,
+    because a mechanism the report cannot test does not belong in it. The
+    omission is stated, not silent."""
+    claims: list[dict] = []
+    text = "Capacity returns because the capital cycle turned. Utilization is the KPI that tests it."
+    out = w._register_causal(text, claims, ["drivers.value_capture"], "")
+    assert claims == []
+    assert "because the capital cycle turned" not in out
+    assert "Utilization is the KPI that tests it." in out
+    assert w.WITHHELD_CAUSAL_NOTE in out
+    # The stand-in line must not itself trip the gate it exists to satisfy.
+    assert not v._has_causal_marker(w.WITHHELD_CAUSAL_NOTE)
+    assert not v.numeric_tokens(w.WITHHELD_CAUSAL_NOTE)
+    # With an observation on offer the same sentence is kept and registered.
+    claims = []
+    kept = w._register_causal(text, claims, ["drivers.value_capture"],
+                              "Utilization rises while the capital cycle is said to be turning.")
+    assert kept == text
+    assert [c["type"] for c in claims] == ["causal_inference"]
+
+
+def test_scenario_falsifiers_name_an_observation_or_say_why_they_cannot(analyst):
+    """REGRESSION: the bull scenario's falsifier list was the bare string
+    "n/a" whenever the mandate listed no failure mode, and the other two
+    hedged a real observation into nothing with "(n/a in this edition)"."""
+    res = w.write_report(analyst, _stats(), None, None, [], run_id="run-scen")
+    scenarios = res.payload["sections"]["outlook"]["interpretation"]["scenarios"]
+    assert set(scenarios) == {"base", "bull", "bear"}
+    for name, sc in scenarios.items():
+        assert sc["falsifiers"], name
+        for f in sc["falsifiers"]:
+            assert f.strip().lower() != "n/a", (name, f)
+            # Either it names an observation, or it is an n/a WITH a reason.
+            assert v.is_real_falsifier(f) or f.startswith("n/a: "), (name, f)
+    # This mandate has both leading indicators and core KPIs, so all three
+    # scenarios reach the observation-naming branch.
+    for name, sc in scenarios.items():
+        assert v.is_real_falsifier(sc["falsifiers"][0]), (name, sc["falsifiers"])
+    assert v.validate(res.payload, _facts_of(res.payload)) == []
+
+
 def test_cross_industry_facts_label_each_dependency_with_its_source(analyst):
     snapshot = {"id": 3, "as_of": datetime(2026, 9, 4, 21, 0), "period_key": "2026-W36",
                 "payload": {"regime": {"macro_regime": "late_cycle"},

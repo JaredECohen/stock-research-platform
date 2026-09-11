@@ -198,6 +198,45 @@ def _norm(text: str) -> str:
     return " ".join(text.lower().split()).strip(" .")
 
 
+# A falsifier is a statement of the observation that would break the claim.
+# These openings are the strings that occupy the field without being one:
+# "n/a", "none", "tbd" — and, just as empty, "n/a: no dated falsifier in
+# this edition", which explains the ABSENCE of a falsifier rather than
+# supplying one. A reason belongs where a missing value is reported; it is
+# not a falsifier, and the gate must not read it as one.
+_PLACEHOLDER_FALSIFIER_RE = re.compile(
+    r"^(n\s*/?\s*a|none|nil|null|tbd|tba|todo|unknown|pending|"
+    r"not\s+applicable|not\s+available|no\s+falsifier|see\s+above|same\s+as\s+above)\b",
+    re.I,
+)
+# A usefully specific falsifier names an observation someone could go and
+# check, which does not fit in a handful of characters. The floors are
+# deliberately low — the gate's job is to reject a field that was filled in
+# to get past it, not to grade prose.
+_MIN_FALSIFIER_CHARS = 24
+_MIN_FALSIFIER_WORDS = 4
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'\u2019-]*")
+
+
+def is_real_falsifier(value: Any) -> bool:
+    """True when `value` states what observation would disprove the claim.
+
+    The "every causal link carries a falsifier" gate used to be satisfied
+    by ANY non-empty string, so the literal "n/a" passed it and the gate
+    proved nothing. Three things disqualify a string: it opens like a
+    placeholder, it is too short to name an observation, or it is blank
+    once stripped. Everything else is taken at face value — the gate
+    cannot judge whether a stated observation is the RIGHT one, and
+    pretending otherwise would be a worse lie than the one it replaces.
+    """
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return False
+    if _PLACEHOLDER_FALSIFIER_RE.match(text):
+        return False
+    return len(text) >= _MIN_FALSIFIER_CHARS and len(_WORD_RE.findall(text)) >= _MIN_FALSIFIER_WORDS
+
+
 def _has_causal_marker(sentence: str) -> bool:
     low = f" {sentence.lower()} "
     return any(f" {m} " in low or f" {m}," in low for m in CAUSAL_MARKERS)
@@ -213,7 +252,7 @@ def _claim_supports(sentence: str, claims: list[dict[str, Any]]) -> bool:
     for claim in claims:
         if claim.get("type") != "causal_inference":
             continue
-        if not claim.get("basis") or not str(claim.get("falsifier") or "").strip():
+        if not claim.get("basis") or not is_real_falsifier(claim.get("falsifier")):
             continue
         text = _norm(str(claim.get("text") or ""))
         if not text:
@@ -302,6 +341,15 @@ def validate(payload: dict[str, Any], facts: dict[str, Any]) -> list[str]:
         for claim in claims:
             if claim.get("type") not in CLAIM_TYPES:
                 errors.append(f"{name}: claim type {claim.get('type')!r} is not one of {CLAIM_TYPES}")
+            # Named as its own rejection rather than left to surface as
+            # "unsupported causal claim": a registered link whose falsifier
+            # is a placeholder is a different defect from one nobody
+            # registered, and the writer that emitted it needs to hear so.
+            if claim.get("type") == "causal_inference" and not is_real_falsifier(claim.get("falsifier")):
+                errors.append(
+                    f"{name}: causal_inference claim has no usable falsifier "
+                    f"({str(claim.get('falsifier') or '')[:40]!r})"
+                )
         for text in _interpretation_texts(interp):
             low = text.lower()
             for phrase in FORBIDDEN_PHRASES:

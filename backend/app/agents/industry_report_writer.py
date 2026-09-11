@@ -50,7 +50,13 @@ from ..services.industry_group_knowledge import primary_sources, thesis_stages
 from ..services.llm_metrics import cost_per_run, estimate_cost_usd
 from . import llm, prompts
 from .industry_analysts import IndustryAnalyst
-from .industry_report_validator import CAUSAL_MARKERS, INTERPRETED_SECTIONS, SECTION_ORDER, _sentences
+from .industry_report_validator import (
+    INTERPRETED_SECTIONS,
+    SECTION_ORDER,
+    _has_causal_marker,
+    _sentences,
+    is_real_falsifier,
+)
 from .log_safety import log_safely, redact
 
 log = logging.getLogger(__name__)
@@ -527,17 +533,99 @@ def _claim(text: str, kind: str, basis: list[str], falsifier: str = "") -> dict[
     return {"type": kind, "text": text, "basis": basis, "falsifier": falsifier}
 
 
-def _register_causal(text: str, claims: list[dict[str, Any]], basis: list[str]) -> None:
-    """Every sentence in `text` with a causal marker becomes a registered
-    causal_inference claim (basis = where it came from) so the deterministic
-    edition satisfies the same gate the LLM edition must."""
+# A line that stands in for prose withheld under `_register_causal`. Kept
+# free of numbers and of causal markers of its own so it cannot itself
+# trip the gate it exists to satisfy.
+WITHHELD_CAUSAL_NOTE = (
+    "A mandate sentence is withheld here: it states a mechanism this edition has no "
+    "observation on file to test, and an untestable mechanism is not printed."
+)
+
+
+def _marker_free_items(items: list[dict[str, Any]] | None, limit: int) -> str:
+    """`_items_text` over the items that carry no causal marker of their own.
+
+    Mandate prose is quoted verbatim, and a falsifier is prose the
+    validator reads back: quoting a mechanism INSIDE a falsifier would
+    assert a second causal link, which would then need a falsifier of its
+    own. Skipping those items keeps the falsifier a statement of what to
+    observe, which is all it is supposed to be.
+    """
+    clean = [i for i in (items or []) if isinstance(i, dict) and not _has_causal_marker(str(i.get("text") or ""))]
+    return _items_text(clean, limit)
+
+
+def _mandate_falsifier(kp: dict[str, Any], rk: dict[str, Any]) -> str:
+    """What observation would disprove a mechanism quoted from the mandate.
+
+    The deterministic edition asserts no dated world change, but a mandate
+    mechanism it prints is still an assertion that the mechanism applies to
+    THIS group — and the mandate names its own tests, so the falsifier does
+    not have to be invented. It is assembled from the group's core KPIs,
+    its leading indicators and its named failure modes.
+
+    A mandate carrying none of the three yields "", and the caller then
+    withholds the sentence: a causal link nothing could break does not
+    belong in the report, which is the rule the gate exists to enforce.
+    """
+    kpis = _marker_free_items(kp.get("core_kpis"), 2)
+    leading = _marker_free_items(kp.get("leading_indicators"), 1)
+    failures = _marker_free_items(rk.get("common_failure_modes"), 1)
+    parts: list[str] = []
+    if kpis:
+        parts.append(f"the group's core KPIs ({kpis}) move against it over consecutive reported periods")
+    if leading:
+        parts.append(f"its leading indicator ({leading}) turns while the mechanism is said to hold")
+    if failures:
+        parts.append(f"the mandate's named failure mode is observed ({failures})")
+    if not parts:
+        return ""
+    return "Disproved by an observation on this group: " + "; or ".join(parts) + "."
+
+
+def _edge_falsifier(ci: dict[str, Any]) -> str:
+    """The observation that would break the dependency reading. Empty when
+    no edge touches the group, so the sentence is withheld instead."""
+    if not (ci.get("edges") or []):
+        return ""
+    return (
+        "Disproved when the dependency edition this section cites drops the edge named here, or "
+        "when the destination group's returns hold through a move in the origin's over the horizons on file."
+    )
+
+
+def _register_causal(text: str, claims: list[dict[str, Any]], basis: list[str],
+                     falsifier: str) -> str:
+    """Register the causal sentences of `text`, and return what may be printed.
+
+    Every sentence with a causal marker becomes a registered
+    causal_inference claim (basis = where it came from) carrying
+    `falsifier` — so the deterministic edition satisfies the same gate the
+    LLM edition must, and satisfies it with a real falsifier rather than
+    with the placeholder it used to emit.
+
+    When the caller has no observation to offer, `falsifier` is empty and
+    the sentence is neither registered NOR printed: the alternative is a
+    report that asserts a mechanism it cannot test. The omission is
+    replaced by `WITHHELD_CAUSAL_NOTE` so a reader sees that something was
+    dropped and why, instead of reading a paragraph with a hole in it.
+    """
+    usable = is_real_falsifier(falsifier)
+    kept: list[str] = []
+    withheld = False
     for sentence in _sentences(text):
-        low = f" {sentence.lower()} "
-        if any(f" {m} " in low or f" {m}," in low for m in CAUSAL_MARKERS):
-            claims.append(_claim(
-                sentence, "causal_inference", basis,
-                "n/a: mandate-level mechanism quoted from the knowledge base; no dated falsifier in this edition",
-            ))
+        if not _has_causal_marker(sentence):
+            kept.append(sentence)
+            continue
+        if usable:
+            claims.append(_claim(sentence, "causal_inference", basis, falsifier))
+            kept.append(sentence)
+        else:
+            withheld = True
+    if not withheld:
+        return text
+    kept.append(WITHHELD_CAUSAL_NOTE)
+    return " ".join(kept)
 
 
 def _horizon_reason(cell: Any) -> str:
@@ -576,6 +664,11 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
     label = ("Deterministic edition (no analyst narrative)" if mode == NARRATIVE_LLM_UNAVAILABLE
              else "Deterministic edition (deterministic mode)")
     out: dict[str, dict[str, Any]] = {}
+    # One falsifier serves every sentence this edition quotes from the
+    # mandate, because every one of them makes the same assertion: that the
+    # mandate's mechanism applies to this group. The mandate's own tests are
+    # what would show it does not.
+    mandate_falsifier = _mandate_falsifier(kp, rk)
 
     # overview
     claims: list[dict[str, Any]] = []
@@ -612,9 +705,11 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
         "valuation": "Valuation lenses per the mandate: " + (_items_text(kp.get("valuation_lenses") or [], 3) or "n/a") + ".",
     }
     for s in dr.get("stage_order") or []:
-        txt = stage_text.get(s["id"], "n/a: stage not covered in this edition")
+        txt = _register_causal(
+            stage_text.get(s["id"], "n/a: stage not covered in this edition"),
+            claims, [f"drivers.{s['id']}", f"mandate:{analyst.code}"], mandate_falsifier,
+        )
         stages.append({"id": s["id"], "text": txt})
-        _register_causal(txt, claims, [f"drivers.{s['id']}", f"mandate:{analyst.code}"])
     text = " ".join(f"{i + 1}. {s['text']}" for i, s in enumerate(stages))
     claims.insert(0, _claim(
         "Stage texts quote the group mandate; nothing here is a company-level thesis.",
@@ -631,7 +726,7 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
             f"[{q['industry_code']}] {q['question']}" for q in (kp.get("highest_evi_questions") or [])[:2]
         ) + "." if kp.get("highest_evi_questions") else "")
     )
-    _register_causal(text, claims, ["kpis.core_kpis", f"mandate:{analyst.code}"])
+    text = _register_causal(text, claims, ["kpis.core_kpis", f"mandate:{analyst.code}"], mandate_falsifier)
     claims.append(_claim(text, "observed_fact", ["kpis.core_kpis", "kpis.leading_indicators"]))
     out["kpis"] = {"text": text, "claims": claims}
 
@@ -711,7 +806,7 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
         + (" (n/a: no cross-industry snapshot for this period)" if isinstance(ci.get("snapshot"), dict)
            and "reason" in ci["snapshot"] else "") + ". Edges are analyst causal hypotheses, not estimated correlations."
     )
-    _register_causal(text, claims, ["cross_industry.edges"])
+    text = _register_causal(text, claims, ["cross_industry.edges"], _edge_falsifier(ci))
     claims.append(_claim(text, "observed_fact", ["cross_industry.edges", "cross_industry.relationships",
                                                   "cross_industry.spillovers"]))
     out["cross_industry"] = {"text": text, "claims": claims}
@@ -726,18 +821,39 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
            and ledger["price_implied"].get("value") else "price-implied n/a; ")
         + "our forecast n/a (deterministic edition). Scenarios below are mandate templates, not forecasts."
     )
-    compounder = _items_text(m.as_checklists()["compounder"], 2) or "n/a"
-    inflection = _items_text(m.as_checklists()["inflection"], 2) or "n/a"
+    compounder = _items_text(m.as_checklists()["compounder"], 2) or "n/a (no compounder checklist in the mandate)"
+    inflection = _items_text(m.as_checklists()["inflection"], 2) or "n/a (no inflection checklist in the mandate)"
+    # Scenario falsifiers name the mandate's own observables. The previous
+    # texts hedged every one of them with a parenthetical "(n/a in this
+    # edition)" — or, for the bull case with no failure mode on file, were
+    # the bare string "n/a" — which is a scenario nothing can break.
+    leading_obs = _marker_free_items(kp.get("leading_indicators"), 2)
+    kpi_obs = _marker_free_items(kp.get("core_kpis"), 2)
+    failure_obs = _marker_free_items(rk.get("common_failure_modes"), 1)
     scenarios = {
         "base": {"text": "Base scenario: the group's KPIs track the mandate's cadence with no regime change asserted.",
-                 "falsifiers": ["A dated break in the mandate's leading indicators (n/a in this edition)."]},
+                 "falsifiers": [
+                     f"Observed: the mandate's leading indicators ({leading_obs}) turn while the group's core "
+                     f"KPIs ({kpi_obs}) hold their reported cadence." if leading_obs and kpi_obs else
+                     "n/a: the mandate lists neither a leading indicator nor a core KPI for this group, so this "
+                     "edition can name no observation that would break the base case."]},
         "bull": {"text": f"Bull scenario (compounder mandate): {compounder}.",
-                 "falsifiers": [f"Failure mode observed: {r['text']}" for r in (rk.get('common_failure_modes') or [])[:1]] or ["n/a"]},
+                 "falsifiers": [
+                     f"Observed on this group: the mandate's named failure mode ({failure_obs})." if failure_obs else
+                     "n/a: the mandate names no failure mode for this group, so this edition can name no "
+                     "observation that would break the bull case."]},
         "bear": {"text": f"Bear scenario (inflection mandate breaks): {inflection} fails to materialise.",
-                 "falsifiers": ["Leading indicators turn before the KPI does (n/a: not dated in this edition)."]},
+                 "falsifiers": [
+                     f"Observed: the group's core KPIs ({kpi_obs}) reach the mandate's inflection cadence while "
+                     f"its leading indicators ({leading_obs}) hold." if leading_obs and kpi_obs else
+                     "n/a: the mandate lists neither a leading indicator nor a core KPI for this group, so this "
+                     "edition can name no observation that would break the bear case."]},
     }
     for sc in scenarios.values():
-        _register_causal(sc["text"], claims, ["outlook.expectations_ledger", f"mandate:{analyst.code}"])
+        sc["text"] = _register_causal(
+            sc["text"], claims, ["outlook.expectations_ledger", f"mandate:{analyst.code}"],
+            next((f for f in sc["falsifiers"] if is_real_falsifier(f)), ""),
+        )
     claims.append(_claim(text, "observed_fact", ["outlook.expectations_ledger"]))
     claims.append(_claim("Scenarios are mandate templates, not forecasts.", "forecast_assumption",
                          ["outlook.scenario_policy"], "n/a: template scenario carries no dated forecast"))
@@ -749,7 +865,8 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
         "Common failure modes per the mandate: " + (_items_text(rk.get("common_failure_modes") or [], 4) or "n/a") + ". "
         "Accounting and data traps: " + (_items_text(rk.get("accounting_data_traps") or [], 4) or "n/a") + "."
     )
-    _register_causal(text, claims, ["risks.common_failure_modes", f"mandate:{analyst.code}"])
+    text = _register_causal(text, claims, ["risks.common_failure_modes", f"mandate:{analyst.code}"],
+                            mandate_falsifier)
     claims.append(_claim(text, "observed_fact", ["risks.common_failure_modes", "risks.accounting_data_traps"]))
     out["risks"] = {"text": text, "claims": claims}
 
