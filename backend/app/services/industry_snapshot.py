@@ -2,12 +2,13 @@
 
 One deterministic row per period (``industry_snapshots``), computed from
 that period's ``industry_stats`` rows — never from prices, never from an
-LLM — plus three cheap context reads: the hourly macro broadcast, the
-forward catalyst calendar for the constituents, and the checked-in
-dependency graph (``atlas_dependencies.json``: the Atlas's analyst causal
-edges and the universe map's themed relationships, each labelled with
-its source). The PM reads it as a ≤ 2,000-character block; the chat
-tool and the portfolio builder read the same row.
+LLM — plus four cheap context reads, all of stored rows: the hourly
+macro broadcast, the forward catalyst calendar for the constituents, the
+material news the hourly news loop has already persisted, and the
+checked-in dependency graph (``atlas_dependencies.json``: the Atlas's
+analyst causal edges and the universe map's themed relationships, each
+labelled with its source). The PM reads it as a ≤ 2,000-character block;
+the chat tool and the portfolio builder read the same row.
 
 What the snapshot refuses to do:
 
@@ -17,7 +18,12 @@ What the snapshot refuses to do:
   line carries the graph's own status text ("analyst causal hypothesis")
   and its source label;
 * re-render anything expensive on a page view — ``latest_snapshot`` is
-  one indexed row read, ``render_pm_block`` is string formatting.
+  one indexed row read, ``render_pm_block`` is string formatting;
+* let an event channel go quiet without saying so — ``events_sources``
+  names each channel, what window it covered and why it is empty, so a
+  short ``major_events`` list is never mistaken for a quiet week. Neither
+  channel ever calls a provider: ``news_service`` is one provider call per
+  ticker, which a universe-wide weekly pass must not loop.
 """
 from __future__ import annotations
 
@@ -34,7 +40,7 @@ from sqlalchemy import select
 
 from ..config import settings
 from ..database import SessionLocal
-from ..models import CatalystEvent, CrossIndustrySnapshot
+from ..models import CatalystEvent, CrossIndustrySnapshot, ResearchSnapshot
 from . import gics_registry, industry_analytics, industry_classification
 from .gics_registry import VersionInfo
 
@@ -184,6 +190,74 @@ def _db_events(tickers: list[str], cutoff: date, days: int) -> list[dict[str, An
     return out
 
 
+def _db_news(tickers: list[str], cutoff: date, days: int) -> list[dict[str, Any]]:
+    """Material and breaking news the news agent already STORED for the
+    constituents, from the trailing ``days`` — one chunked ``IN`` over
+    ``research_snapshots``.
+
+    Read, never fetch: ``news_service`` is a provider call per ticker, and
+    a snapshot over the whole universe cannot loop one of those (nor be
+    deterministic if it did). What the weekly loop sees is what the hourly
+    news loop has persisted; when that is nothing, ``events_sources`` says
+    so instead of the snapshot implying there was no news."""
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    if not tickers:
+        return []
+    symbols = sorted({t.upper() for t in tickers})
+    since = cutoff - timedelta(days=max(1, int(days)))
+    with SessionLocal() as db:
+        for i in range(0, len(symbols), _CHUNK):
+            chunk = symbols[i:i + _CHUNK]
+            rows = db.execute(
+                select(ResearchSnapshot).where(
+                    ResearchSnapshot.kind == "news_hot",
+                    ResearchSnapshot.subject.in_([f"news_hot:{t}" for t in chunk]),
+                    ResearchSnapshot.invalidated_at.is_(None),
+                    ResearchSnapshot.stale.is_(False),
+                ).order_by(ResearchSnapshot.generated_at.desc(), ResearchSnapshot.id.desc())
+            ).scalars().all()
+            seen: set[str] = set()
+            for row in rows:
+                subject = str(row.subject or "")
+                if subject in seen:  # newest snapshot per ticker only
+                    continue
+                seen.add(subject)
+                payload = row.payload if isinstance(row.payload, dict) else {}
+                ticker = str(payload.get("ticker") or subject.split(":")[-1]).upper()
+                for alert in payload.get("alerts") or []:
+                    if not isinstance(alert, dict):
+                        continue
+                    if str(alert.get("severity") or "") not in ("material", "breaking"):
+                        continue
+                    published = _parse_day(alert.get("published_at")) or (
+                        row.generated_at.date() if row.generated_at else None
+                    )
+                    if published is None or not (since <= published <= cutoff):
+                        continue
+                    title = str(alert.get("title") or "")[:256]
+                    out[(ticker, title)] = {
+                        "ticker": ticker,
+                        "event_type": "news",
+                        "event_date": published.isoformat(),
+                        "title": title,
+                        "materiality": "high" if alert.get("severity") == "breaking" else "medium",
+                        "source": str(alert.get("source") or "news_agent"),
+                        "url": str(alert.get("url") or ""),
+                    }
+    return [out[k] for k in sorted(out)]
+
+
+def _parse_day(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
 def _db_report_versions(version: VersionInfo) -> dict[str, int]:
     from .industry_report_store import latest_versions
     return latest_versions(version=version)
@@ -196,6 +270,7 @@ class SnapshotLoaders:
     )
     macro: Callable[[], dict[str, Any] | None] = _db_macro
     events: Callable[[list[str], date, int], list[dict[str, Any]]] = _db_events
+    news: Callable[[list[str], date, int], list[dict[str, Any]]] = _db_news
     report_versions: Callable[[VersionInfo], dict[str, int]] = _db_report_versions
 
 
@@ -253,7 +328,8 @@ def _pick(stats: dict[str, Any], *path: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _group_row(node: gics_registry.NodeInfo, stats: dict[str, Any] | None, events_count: int) -> dict[str, Any]:
+def _group_row(node: gics_registry.NodeInfo, stats: dict[str, Any] | None, events_count: int,
+               news_count: int = 0) -> dict[str, Any]:
     row: dict[str, Any] = {
         "code": node.code,
         "name": node.name,
@@ -268,6 +344,7 @@ def _group_row(node: gics_registry.NodeInfo, stats: dict[str, Any] | None, event
         "fund_momentum": None,
         "regime_label": regime_label(stats),
         "events_14d": events_count,
+        "news_14d": news_count,
         "stats_id": None,
         "reasons": {},
     }
@@ -326,23 +403,53 @@ def compute_cross_snapshot(
     for code, row in stats.items():
         for ticker in (row.get("per_ticker") or {}):
             members[str(ticker).upper()] = code
-    try:
-        events = ld.events(sorted(members), cutoff, EVENT_WINDOW_DAYS) if members else []
-    except Exception as exc:
-        log.debug("catalyst read failed for snapshot: %s", type(exc).__name__)
-        events = []
+    # Two channels, both read from stored rows: the forward catalyst
+    # calendar and the material news the hourly loop has already persisted.
+    # Each reports its own reason when it is empty, so "no major events"
+    # is never a channel that was silently skipped.
+    channels: dict[str, dict[str, Any]] = {}
+
+    def read(name: str, fn: Callable[[list[str], date, int], list[dict[str, Any]]], kind: str) -> list[dict[str, Any]]:
+        if not members:
+            channels[name] = {"n": 0, "reason": "no_covered_constituents"}
+            return []
+        try:
+            rows = list(fn(sorted(members), cutoff, EVENT_WINDOW_DAYS) or [])
+        except Exception as exc:
+            log.debug("%s read failed for snapshot: %s", name, type(exc).__name__)
+            channels[name] = {"n": 0, "reason": f"read_failed:{type(exc).__name__}"}
+            return []
+        for row in rows:
+            row["kind"] = kind
+        channels[name] = {"n": len(rows), "reason": None if rows else "none_stored_in_window"}
+        return rows
+
+    catalysts = read("catalysts", ld.events, "catalyst")
+    channels["catalysts"]["window"] = f"forward {EVENT_WINDOW_DAYS} days from the as-of"
+    channels["catalysts"]["source"] = "catalyst_events table"
+    news = read("news", ld.news, "news")
+    channels["news"]["window"] = f"trailing {EVENT_WINDOW_DAYS} days to the as-of"
+    channels["news"]["source"] = "stored news_hot snapshots, material/breaking only (never a live provider call)"
+    events = catalysts + news
     events_by_group: dict[str, int] = {}
+    news_by_group: dict[str, int] = {}
     for ev in events:
         code = members.get(str(ev.get("ticker") or "").upper())
         if code:
             ev["industry_group_code"] = code
-            events_by_group[code] = events_by_group.get(code, 0) + 1
+            if ev.get("kind") == "news":
+                news_by_group[code] = news_by_group.get(code, 0) + 1
+            else:
+                events_by_group[code] = events_by_group.get(code, 0) + 1
     major = sorted(
         events,
         key=lambda e: (_MATERIALITY_RANK.get(str(e.get("materiality")), 3), e.get("event_date") or "", e.get("ticker") or ""),
     )[:MAX_MAJOR_EVENTS]
 
-    rows = [_group_row(node, stats.get(node.code), events_by_group.get(node.code, 0)) for node in groups]
+    rows = [
+        _group_row(node, stats.get(node.code), events_by_group.get(node.code, 0), news_by_group.get(node.code, 0))
+        for node in groups
+    ]
     missing = [
         {"code": node.code, "name": node.name, "reason": "no_stats_for_period"}
         for node in groups if node.code not in stats
@@ -424,7 +531,9 @@ def compute_cross_snapshot(
         },
         "major_events": major,
         "events_window_days": EVENT_WINDOW_DAYS,
-        "n_events": len(events),
+        "n_events": len(catalysts),
+        "n_news": len(news),
+        "events_sources": channels,
         "observed_vs_interpretation": (
             "groups[], missing_groups[], major_events[] are observed data from stored rows; "
             "regime_label and spillover signal are rule-based reads stated in regime.group_rules"
@@ -620,9 +729,14 @@ def render_pm_block(snapshot: CrossIndustrySnapshot | dict[str, Any] | None, max
             )
             parts.append(f"{s['id']} {_short(s.get('label') or '', 40)} [{s.get('source')}]: {moved}")
         tail.append("Dependency links with a ≥5% 1M move (analyst hypotheses, not correlations): " + "; ".join(parts) + ".")
-    n_events = payload.get("n_events")
-    if n_events:
-        tail.append(f"{n_events} catalyst event(s) in the next {payload.get('events_window_days', EVENT_WINDOW_DAYS)} days across covered constituents.")
+    window_days = payload.get("events_window_days", EVENT_WINDOW_DAYS)
+    channel_bits = []
+    if payload.get("n_events"):
+        channel_bits.append(f"{payload['n_events']} forward catalyst(s) in the next {window_days} days")
+    if payload.get("n_news"):
+        channel_bits.append(f"{payload['n_news']} material news item(s) in the trailing {window_days} days")
+    if channel_bits:
+        tail.append("; ".join(channel_bits) + " across covered constituents.")
 
     def assemble(n_lines: int, keep_legend: bool, n_tail: int, *, compact: bool = False) -> str:
         dropped_lines = len(lines) - n_lines

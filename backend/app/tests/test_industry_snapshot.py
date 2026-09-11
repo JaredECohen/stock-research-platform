@@ -70,11 +70,13 @@ def _stats(code: str, *, sid: int, ret_1m: float | None, breadth: float | None =
 
 
 def _loaders(stats: dict[str, dict[str, Any]], *, macro: dict[str, Any] | None = None,
-             events: list[dict[str, Any]] | None = None) -> isn.SnapshotLoaders:
+             events: list[dict[str, Any]] | None = None,
+             news: list[dict[str, Any]] | None = None) -> isn.SnapshotLoaders:
     return isn.SnapshotLoaders(
         stats=lambda period_key, version: stats,
         macro=lambda: macro,
         events=lambda tickers, cutoff, days: [e for e in (events or []) if e["ticker"] in tickers],
+        news=lambda tickers, cutoff, days: [e for e in (news or []) if e["ticker"] in tickers],
         report_versions=lambda version: {code: 1 for code in stats},
     )
 
@@ -296,3 +298,93 @@ def test_unlabelled_dependency_edges_are_counted_and_never_become_spillovers(_ta
     # Every edge that DID survive names at least one group, so its signal
     # is a statement about observed moves rather than an empty claim.
     assert all(s["codes"] for s in row.payload["spillovers"])
+
+
+# --- event channels -----------------------------------------------------------
+
+
+def test_both_event_channels_are_read_and_each_says_why_it_is_empty(_taxonomy):
+    """The snapshot's major events come from the catalyst calendar AND the
+    stored news. A channel that returns nothing must say so under
+    ``events_sources`` — otherwise a short list reads as a quiet week when
+    it may just be a channel nobody consulted."""
+    a, b = _codes(2)
+    stats = {a: _stats(a, sid=1, ret_1m=0.02, tickers=("AAA", "BBB")), b: _stats(b, sid=2, ret_1m=0.0, tickers=("CCC",))}
+    events = [
+        {"ticker": "AAA", "event_type": "earnings", "event_date": "2026-09-10", "title": "Q3",
+         "materiality": "medium", "source": "fmp"},
+    ]
+    news = [
+        {"ticker": "CCC", "event_type": "news", "event_date": "2026-09-02", "title": "Plant fire",
+         "materiality": "high", "source": "news_agent", "url": "https://example.test/1"},
+        {"ticker": "ZZZ", "event_type": "news", "event_date": "2026-09-02", "title": "Ignored",
+         "materiality": "high", "source": "news_agent", "url": ""},
+    ]
+    row = isn.compute_cross_snapshot(
+        PERIOD, AS_OF, version=_taxonomy, persist=False, loaders=_loaders(stats, events=events, news=news),
+    )
+    payload = row.payload
+    assert payload["n_events"] == 1 and payload["n_news"] == 1  # ZZZ is not a covered constituent
+    by_code = {r["code"]: r for r in payload["groups"]}
+    assert by_code[a]["events_14d"] == 1 and by_code[a]["news_14d"] == 0
+    assert by_code[b]["events_14d"] == 0 and by_code[b]["news_14d"] == 1
+    # The high-materiality news item outranks the medium catalyst.
+    assert [(e["ticker"], e["kind"]) for e in payload["major_events"]] == [("CCC", "news"), ("AAA", "catalyst")]
+    sources = payload["events_sources"]
+    assert sources["catalysts"]["n"] == 1 and sources["news"]["n"] == 1
+    assert "never a live provider call" in sources["news"]["source"]
+    assert "trailing" in sources["news"]["window"] and "forward" in sources["catalysts"]["window"]
+
+    quiet = isn.compute_cross_snapshot(
+        PERIOD, AS_OF, version=_taxonomy, persist=False, loaders=_loaders(stats, events=events),
+    )
+    assert quiet.payload["events_sources"]["news"]["reason"] == "none_stored_in_window"
+    assert quiet.payload["events_sources"]["catalysts"]["reason"] is None
+
+
+def test_a_failing_event_channel_is_named_not_swallowed(_taxonomy):
+    a = _codes(1)[0]
+    stats = {a: _stats(a, sid=1, ret_1m=0.02, tickers=("AAA",))}
+
+    def boom(tickers, cutoff, days):
+        raise RuntimeError("news store down")
+
+    loaders = _loaders(stats)
+    loaders.news = boom
+    row = isn.compute_cross_snapshot(PERIOD, AS_OF, version=_taxonomy, persist=False, loaders=loaders)
+    assert row.payload["events_sources"]["news"] == {
+        "n": 0, "reason": "read_failed:RuntimeError",
+        "window": f"trailing {isn.EVENT_WINDOW_DAYS} days to the as-of",
+        "source": "stored news_hot snapshots, material/breaking only (never a live provider call)",
+    }
+    assert row.payload["n_news"] == 0
+
+
+def test_the_news_loader_reads_stored_alerts_only_and_filters_by_severity_and_window():
+    """The real loader: material and breaking alerts the news agent already
+    persisted, inside the trailing window, newest snapshot per ticker. A
+    provider is never called — ``news_service`` is one HTTP call per
+    ticker and a universe-wide weekly pass cannot loop one."""
+    from datetime import date, timedelta
+
+    from app.cache import cache_put
+
+    cutoff = date(2026, 9, 4)
+    ticker = "NEWSTEST"
+    cache_put(
+        f"news_hot:{ticker}", "news_hot",
+        payload={"ticker": ticker, "alerts": [
+            {"title": "Recall announced", "severity": "breaking", "published_at": "2026-09-02", "url": "u1",
+             "source": "news_service"},
+            {"title": "Analyst chatter", "severity": "routine", "published_at": "2026-09-02", "url": "u2"},
+            {"title": "Old guidance cut", "severity": "material",
+             "published_at": (cutoff - timedelta(days=isn.EVENT_WINDOW_DAYS + 5)).isoformat(), "url": "u3"},
+        ]},
+        generated_by="test", cost_tokens=0,
+    )
+    rows = isn._db_news([ticker, "NOSUCHTICKER"], cutoff, isn.EVENT_WINDOW_DAYS)
+    assert [r["title"] for r in rows] == ["Recall announced"]
+    assert rows[0] == {
+        "ticker": ticker, "event_type": "news", "event_date": "2026-09-02", "title": "Recall announced",
+        "materiality": "high", "source": "news_service", "url": "u1",
+    }
