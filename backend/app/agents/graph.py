@@ -1375,6 +1375,16 @@ def _gather_inputs(
                 name="Scorecard Review Seeds", log_to=None,
             )
 
+    # FEAT-003 — the company's industry-group classification, read once
+    # (one SELECT, or the on-demand hook for a symbol no loop has seen).
+    # Only with routing on: off, nothing downstream reads it.
+    industry_group = None
+    if settings.enable_industry_analyst_routing:
+        from .industry_analysts import AGENT_NAME as _IG_NAME
+        from .industry_analysts import lookup_classification
+        industry_group = safe_call(lookup_classification, ticker, fallback=None,
+                                   name=_IG_NAME, log_to=degradation)
+
     # `profile` is shared with every later stage and mutated in place — see
     # the mutation contract in `memo_context`.
     return MemoInputs(
@@ -1382,7 +1392,7 @@ def _gather_inputs(
         as_of_date=as_of_date, fin=fin, profile=profile, ratios=ratios,
         earnings=earnings, transcript=transcript, filings=filings,
         dcf=dcf, comps=comps, degradation=degradation,
-        scorecard=scorecard, scorecard_seeds=seeds,
+        scorecard=scorecard, scorecard_seeds=seeds, industry_group=industry_group,
     )
 
 
@@ -1404,9 +1414,14 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
     # Wave 10 — PM intake step. Lets the PM deprioritize up to 3
     # specialists for this memo (e.g., skip technicals on a regulated
     # bank, skip filings re-pass when nothing material has changed).
-    # Default = run all 8. Decision is logged on the memo for audit.
+    # Default = run the whole applicable roster. Decision is logged on
+    # the memo for audit.
     from .intake import run_intake, stub_finding
-    intake = run_intake(profile)
+    specs = roster.applicable(inputs)  # each spec's `applies_to`, once per run
+    # The PM chooses among THIS run's roster: a spec whose predicate said no
+    # is not on the run, so offering it would waste one of the three skips
+    # and put an absent agent in the memo's intake audit line.
+    intake = run_intake(profile, specialists=[spec.key for spec in specs])
 
     # Round 0 fan-out, in roster order. Each specialist runs with its own
     # llm_call_context so any LLM calls it makes get tagged with the right
@@ -1414,7 +1429,7 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
     # influence the rating — positioning context only.)
     from .llm import llm_call_context
     findings: dict[str, AgentFinding] = {}
-    for spec in roster.AGENTS:
+    for spec in specs:
         if not intake.runs(spec.key):
             findings[spec.key] = AgentFinding(**stub_finding(spec.key, intake.rationale))
             continue
@@ -1436,7 +1451,7 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
         def _refire_for(spec: roster.AgentSpec) -> Callable[[str], AgentFinding]:
             return lambda q: spec.run(inputs, q)
 
-        re_fire = {spec.key: _refire_for(spec) for spec in roster.AGENTS}
+        re_fire = {spec.key: _refire_for(spec) for spec in specs}
 
         # Loop reads `findings` keyed by short agent name — same as the
         # `re_fire` map. Returns the latest-per-agent findings dict + the
@@ -1485,7 +1500,7 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
         refired = {
             key for r in round_findings if r.round > 0 for key in r.findings
         }
-        for spec in roster.AGENTS:
+        for spec in specs:
             _f = findings[spec.key]
             if not (spec.uses_llm_round0 or spec.key in refired):
                 continue
@@ -1505,7 +1520,7 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
     # blocks the memo. Mutates each finding's `long_form_report` in place.
     from .long_form import attach_long_form
     _t = profile.get("ticker", inputs.ticker)
-    for spec in roster.AGENTS:
+    for spec in specs:
         safe_call(attach_long_form, findings[spec.key], ticker=_t,
                   agent_name=spec.display_name, profile=profile, fallback=None,
                   name=spec.long_form_name, log_to=degradation)
@@ -1776,11 +1791,12 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     # no dedicated field rides in `extra_agent_views` (none today — the risk
     # read is deliberately unsurfaced, see `roster.NO_MEMO_VIEW`).
     views: dict[str, Any] = {
-        spec.memo_field: findings[spec.key] for spec in roster.AGENTS if spec.memo_field
+        spec.memo_field: findings[spec.key] for spec in roster.AGENTS
+        if spec.memo_field and spec.key in findings
     }
     extra_views: dict[str, AgentFinding] = {
         spec.key: findings[spec.key] for spec in roster.AGENTS
-        if spec.memo_field is None and spec.key not in roster.NO_MEMO_VIEW
+        if spec.memo_field is None and spec.key not in roster.NO_MEMO_VIEW and spec.key in findings
     }
     memo = StockMemoOut(
         ticker=profile.get("ticker"),

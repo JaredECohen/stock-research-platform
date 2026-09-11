@@ -105,12 +105,22 @@ class MemoInputs:
     # with them) so the persist stage knows to mark the rows reviewed.
     scorecard_seeds: list[CritiqueQuestion] = field(default_factory=list)
     scorecard_seeds_consumed: bool = False
+    # FEAT-003 — the company's current industry-group classification row
+    # (`industry_classification.row_dict` shape), or None. Read once in the
+    # gather stage, and only when ENABLE_INDUSTRY_ANALYST_ROUTING is on; the
+    # Industry Group Analyst spec's `applies_to` and the sector analyst's
+    # `{industry_group_block}` both read it here, so a memo never looks the
+    # mapping up twice. With routing off it stays None and nothing reads it.
+    industry_group: dict[str, Any] | None = None
 
 
 @dataclass
 class AnalystRound:
     """Output of the fan-out (+ deep-research dialog + long-form pass)."""
-    findings: dict[str, AgentFinding]        # roster order, keyed by AgentSpec.key
+    # Roster order, keyed by AgentSpec.key — over the specs that applied to
+    # this run (`roster.applicable`); a spec whose predicate said no has no
+    # entry, so consumers index by key only after checking membership.
+    findings: dict[str, AgentFinding]
     intake: IntakeDecision
     round_findings: list[RoundFindings] = field(default_factory=list)
 

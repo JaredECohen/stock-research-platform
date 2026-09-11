@@ -31,6 +31,7 @@ from ..schemas import (
     RoundFindings,
 )
 from . import llm
+from .intake import ALL_SPECIALISTS
 from .llm import llm_call_context
 
 log = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ _PM_CRITIQUE_PROMPT_TEMPLATE = (
     "Decide: are there any specific dig-deeper questions that would "
     "MATERIALLY change the rating, the confidence, or the key risks?\n\n"
     "If yes, emit up to {max_questions} questions targeting one of: "
-    "sector, earnings, filing, valuation, comps, macro, risk, technical. "
+    "{specialists}. "
     "Each question must be specific (NOT 'tell me more about X' — but "
     "'why does the cohort op margin show compression while the target's "
     "is expanding — what's the cohort outlier driving the median?'). "
@@ -103,6 +104,26 @@ def _format_prior_rounds(rounds: list[RoundFindings]) -> str:
     return "\n".join(lines) if lines else "(no prior critique rounds)"
 
 
+def _addressable(current_findings: dict[str, AgentFinding]) -> tuple[str, ...]:
+    """The specialist keys the PM may target this round, in roster order.
+
+    Derived from the roster (via `intake.ALL_SPECIALISTS`), never spelled
+    out here: a literal list is how a new analyst becomes unreachable, and
+    it already had — the Industry Group Analyst joined the roster and every
+    critique aimed at `industry_group` was dropped by this filter, leaving
+    `run_industry_group_agent`'s `prior_round_critique` path unreachable
+    from a memo run.
+
+    Narrowed to the specialists whose findings are actually in front of the
+    PM, so the prompt never offers a target that did not run — the industry
+    analyst is gated on routing AND on the company having a mapping. An
+    empty round falls back to the full roster rather than offering nothing.
+    """
+    present = set(current_findings)
+    targets = tuple(k for k in ALL_SPECIALISTS if k in present)
+    return targets or tuple(ALL_SPECIALISTS)
+
+
 def pm_critique(
     *, round_num: int, current_findings: dict[str, AgentFinding],
     rounds_so_far: list[RoundFindings], run_id: str,
@@ -118,11 +139,13 @@ def pm_critique(
         _format_finding_for_critique(k, v)
         for k, v in current_findings.items()
     )
+    targets = _addressable(current_findings)
     prompt = _PM_CRITIQUE_PROMPT_TEMPLATE.format(
         round_num=round_num,
         findings_block=findings_block[:5000],
         prior_rounds_block=_format_prior_rounds(rounds_so_far),
         max_questions=settings.deep_research_max_questions_per_round,
+        specialists=", ".join(targets),
     )
     # Use whatever provider is active — forcing OpenAI here meant the
     # dialog hard-failed on deployments configured with only an
@@ -151,10 +174,7 @@ def pm_critique(
             continue
         target = raw.get("target_agent")
         question = (raw.get("question") or "").strip()
-        if not question or target not in {
-            "sector", "earnings", "valuation", "comps",
-            "risk", "filing", "macro", "technical",
-        }:
+        if not question or target not in targets:
             continue
         questions.append(CritiqueQuestion(
             target_agent=target,

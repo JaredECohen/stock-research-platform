@@ -49,7 +49,7 @@ SECTOR_ANALYST_PROMPT = """You are a sector analyst for {sector}.
 Sector drivers: {drivers}.
 Important KPIs: {kpis}.
 Valuation lens: {valuation_lens}.
-Macro sensitivities: {macro_sensitivities}.
+Macro sensitivities: {macro_sensitivities}.{industry_group_block}
 
 Macro broadcast (current regime + favored/pressured sectors): {macro_broadcast}.
 Pending news alerts for this name: {news_alerts}.
@@ -121,6 +121,51 @@ Return strict JSON with keys:
       "sector_lean": "bull" | "bear" | "balanced"
     }}
 """
+
+# FEAT-003 — the Industry Group Analyst's context on ONE company. Rendered by
+# `industry_analysts.company_context_block` and spliced into the sector
+# analyst's prompt (as `{industry_group_block}`) when routing is on, and into
+# the industry analyst's own user prompt. `classification_label` is the
+# provenance sentence ("research map" vs "derived from provider
+# classification"); it travels with every display of a mapping.
+# The two editions are named separately on purpose: the registry version
+# governs the codes and names (it follows the classification row), while the
+# mandate prose below always comes from the single bundled knowledge base.
+# Claiming one version for both would be a lie the reader cannot check.
+INDUSTRY_GROUP_COMPANY_CONTEXT = """## Industry group context for {ticker}
+{ticker} ({company_name}) sits in GICS industry group {group_code} {group_name} \
+(sector {sector_code} {sector_name}; taxonomy {taxonomy_version}).
+Sub-industry: {sub_industry}.
+Classification: {classification_label} (state: {state}; as of {source_as_of}). \
+Mappings are derived from provider classification, not licensed GICS security assignments.
+The mandate below is the bundled knowledge edition {knowledge_version}; it does not vary \
+by taxonomy version.
+{mandate_block}"""
+
+INDUSTRY_GROUP_ANALYST_PROMPT = """{company_context}
+
+Company snapshot (observed): {profile_snapshot}
+Ratios (observed): {ratios_snapshot}
+{critique_block}
+Using ONLY the mandate above and the observed snapshot, write the industry group read on this company:
+
+1) causal_chain — one short entry per methodology stage, IN ORDER, starting with the world change
+   (say "n/a: <reason>" when a stage cannot be supported by the evidence on hand).
+2) placement — where this company sits in the group's economics (which sub-industry brief applies,
+   which mandate it resembles: compounder or inflection, and why).
+3) kpis_to_watch — the 3-5 mandate KPIs that would test the thesis for THIS name, each with the
+   industry code that supplied it.
+4) falsifiers — 2-3 dated, observable statements that would break the read.
+5) traps — the accounting/data traps from the mandate that apply here.
+
+Every number you cite must come from the snapshot or ratios; write "n/a" otherwise.
+Research and education only — no recommendations.
+
+Return strict JSON with keys: headline (string), summary (string, 4-7 sentences),
+key_points (list of strings), confidence (0-1), causal_chain (list of {{"stage": id, "text": ...}}),
+placement (string), mandate_type ("compounder" | "inflection" | "unclear"),
+kpis_to_watch (list of {{"kpi": ..., "industry_code": ..., "why": ...}}),
+falsifiers (list of strings), traps (list of strings)."""
 
 EARNINGS_ANALYST_PROMPT = """You are an institutional earnings call analyst
 with 20+ years of experience writing call breakdowns for portfolio managers.

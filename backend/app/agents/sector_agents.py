@@ -27,7 +27,7 @@ from ..schemas import (
 )
 from ..services.data_service import get_data_service
 from ..services.sector_research_service import run_sector_research
-from . import llm, prompts, sector_tools
+from . import industry_analysts, llm, prompts, sector_tools
 from .log_safety import log_safely
 
 log = logging.getLogger(__name__)
@@ -293,15 +293,39 @@ def _deterministic_bull_bear_analysis(
     )
 
 
+def _industry_group_context(
+    profile: dict, industry_group: dict | None,
+) -> tuple[str, dict | None, Any]:
+    """FEAT-003 — `(prompt block, finding summary, analyst)` for the
+    company's industry group. Empty/None unless routing is on and the gather
+    stage handed us a row; a failure here degrades to the sector-only prompt
+    and says so on the summary rather than failing the sector read."""
+    if not (settings.enable_industry_analyst_routing and industry_group):
+        return "", None, None
+    try:
+        return industry_analysts.sector_prompt_block(profile, industry_group)
+    except Exception as exc:
+        log_safely(log, f"industry group block unavailable for {profile.get('ticker')}", exc)
+        summary = industry_analysts.industry_group_summary(industry_group, None)
+        summary["error"] = "industry group block unavailable"
+        return "", summary, None
+
+
 def run_sector_agent(
     profile: dict, ratios: dict, *,
     prior_round_critique: str | None = None,
+    industry_group: dict | None = None,
 ) -> AgentFinding:
     """Produce a deeply researched sector view.
 
     Phase 6: subscribes to the latest MacroBroadcast and pending NewsAlerts,
     and populates `cross_sector_relevance` so PM can pull through related
     names from other sectors.
+
+    FEAT-003: `industry_group` is the company's classification row (passed
+    by the roster only when ENABLE_INDUSTRY_ANALYST_ROUTING is on). It adds
+    the industry-group mandate to the prompt and a provenance block to
+    `data["industry_group"]`; absent, nothing about the sector read changes.
     """
     ticker = profile.get("ticker")
     if not ticker:
@@ -328,6 +352,9 @@ def run_sector_agent(
         ticker, profile=profile,
     )
     sector_context_block = sector_tools.render_prompt_block(sector_context)
+    industry_group_block, industry_summary, industry_analyst = _industry_group_context(
+        profile, industry_group,
+    )
 
     # Long-term agent memory (gated by ENABLE_LONG_TERM_MEMORY). Read both
     # files: the company-specific notebook and the sector-wide self-reflection
@@ -339,7 +366,11 @@ def run_sector_agent(
             sm = SectorMemory.for_sector(profile.get("sector") or "unknown")
             company_block = cm.as_prompt_context(max_chars=2500)
             sector_block = sm.as_prompt_context_for(ticker, max_chars=2500)
-            chunks = [b for b in (company_block, sector_block) if b]
+            group_block = (
+                industry_analyst.memory().as_prompt_context_for(ticker, max_chars=1500)
+                if industry_analyst is not None else ""
+            )
+            chunks = [b for b in (company_block, sector_block, group_block) if b]
             if chunks:
                 memory_context = "\n\n".join(chunks)
         except Exception:  # pragma: no cover — memory should never block a memo
@@ -416,6 +447,9 @@ def run_sector_agent(
             kpis=", ".join(kpi_names) if kpi_names else "-",
             valuation_lens=research.get("valuation_lens", ""),
             macro_sensitivities=", ".join(research.get("macro_sensitivities", [])),
+            # Always passed: `str.format` has no defaults, and '' leaves the
+            # template byte-identical to the pre-FEAT-003 prompt.
+            industry_group_block=industry_group_block,
             macro_broadcast=json.dumps(macro_broadcast, default=str)[:600] or "{}",
             news_alerts=json.dumps(news_alerts, default=str)[:600] or "[]",
         )
@@ -453,6 +487,8 @@ def run_sector_agent(
         finding_data["macro_broadcast"] = macro_broadcast
         finding_data["pending_news_alerts"] = news_alerts
         finding_data["sector_data_context"] = sector_context
+        if industry_summary is not None:
+            finding_data["industry_group"] = industry_summary
         # Wave 3A: pull through the structured bull/bear analysis. If the
         # LLM didn't produce a parseable block, fall back to the
         # cohort-grounded deterministic builder so this contract is
@@ -552,6 +588,8 @@ def run_sector_agent(
     finding_data["macro_broadcast"] = macro_broadcast
     finding_data["pending_news_alerts"] = news_alerts
     finding_data["sector_data_context"] = sector_context
+    if industry_summary is not None:
+        finding_data["industry_group"] = industry_summary
     # Wave 3A: contract-satisfying bull/bear analysis even on the no-LLM path.
     finding_data["bull_bear_analysis"] = (
         _deterministic_bull_bear_analysis(profile, research).model_dump()
