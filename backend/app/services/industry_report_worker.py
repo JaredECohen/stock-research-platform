@@ -56,7 +56,7 @@ from ..agents.llm import llm_call_context
 from ..agents.log_safety import redact, safe_exc
 from ..config import settings
 from ..database import SessionLocal
-from ..models import IndustryReportJob
+from ..models import IndustryReport, IndustryReportJob
 from ..monitoring import record_run
 from . import gics_registry, industry_analytics, industry_report_store, industry_snapshot
 
@@ -97,6 +97,13 @@ AS_OF_HOUR_UTC = 21
 _MAX_PROGRESS_ENTRIES = 50
 _MAX_ERROR_CHARS = 500
 _MAX_VALIDATION_PROBLEMS = 10
+
+# Every report section that reads the cross-industry snapshot payload. When
+# the period's own snapshot does not exist yet, ALL THREE quote a prior
+# period, so all three are labelled — see `_snapshot_for`.
+_SNAPSHOT_FED_SECTIONS: tuple[str, ...] = (
+    "cross_industry:snapshot", "companies:events", "outlook:macro_regime",
+)
 
 # Serializes enqueue's check-then-insert within the process, exactly as the
 # memo queue does: an admin regenerate racing the Sunday cron must not
@@ -287,6 +294,39 @@ def enqueue(
         return _job_dict(job), True
 
 
+def _editions_for_period(codes: list[str], period_key: str,
+                         info: gics_registry.VersionInfo) -> set[str]:
+    """The groups that already HAVE an edition for ``period_key``.
+
+    One chunked query for the whole period, never one per group.
+
+    Deliberately not ``report_store.latest_good_many``: that only ever
+    returns rows flagged ``is_latest_good``, and ``save_report`` never
+    flags an edition that landed as ``pending_review``. With
+    ``INDUSTRY_REPORTS_REQUIRE_REVIEW`` on, every Sunday would therefore
+    find no published edition for last Sunday's week, re-enqueue all of
+    it, and pay the model again — forever, and invisibly, because the
+    editions it is reproducing are sitting in the review queue. A week
+    that has already been *generated* is a week not to generate again;
+    whether a human has released it is a different question.
+    """
+    out: set[str] = set()
+    with SessionLocal() as db:
+        for i in range(0, len(codes), 200):
+            rows = db.execute(
+                select(IndustryReport.industry_group_code).where(
+                    IndustryReport.taxonomy_version_id == info.id,
+                    IndustryReport.industry_group_code.in_(codes[i:i + 200]),
+                    IndustryReport.period_key == period_key,
+                    IndustryReport.status.in_(
+                        (industry_report_store.STATUS_SUCCEEDED,
+                         industry_report_store.STATUS_PENDING_REVIEW)),
+                )
+            ).all()
+            out.update(str(code) for (code,) in rows)
+    return out
+
+
 def enqueue_period(
     period_key: str, codes: list[str] | tuple[str, ...] | None = None, *,
     source: str = "weekly_cron", force: bool = False,
@@ -311,15 +351,9 @@ def enqueue_period(
         wanted = [str(c).strip() for c in codes if str(c).strip() in known]
         unknown = sorted({str(c).strip() for c in codes if str(c).strip() not in known})
 
-    published: dict[str, dict[str, Any]] = {}
-    if not force and wanted:
-        # One chunked query for the whole period, never one per group.
-        published = industry_report_store.latest_good_many(wanted, version=info)
-    skipped_published = [
-        code for code in wanted
-        if (published.get(code) or {}).get("period_key") == period_key
-    ]
-    todo = [code for code in wanted if code not in set(skipped_published)]
+    already = set() if force or not wanted else _editions_for_period(wanted, period_key, info)
+    skipped_published = [code for code in wanted if code in already]
+    todo = [code for code in wanted if code not in already]
 
     cap = int(settings.industry_reports_max_jobs_per_run if max_jobs is None else max_jobs)
     over_budget = todo[cap:] if cap >= 0 else []
@@ -604,41 +638,103 @@ def _validation_message(problems: list[str]) -> str:
     return f"{len(problems)} validation problem(s): " + "; ".join(shown) + tail
 
 
-def _snapshot_for(period_key: str, info: gics_registry.VersionInfo) -> tuple[Any, str | None]:
+def _snapshot_for(period_key: str, info: gics_registry.VersionInfo) -> tuple[Any, list[str]]:
     """The cross-industry snapshot a group report should quote.
 
     The period's own snapshot is computed from the stats rows these very
     jobs write, so while the group reports are being generated it does not
     exist yet and the most recent prior snapshot is the honest stand-in.
-    Returns ``(row_or_None, degraded_reason_or_None)`` — the caller records
-    the reason on the edition; the section itself carries the snapshot's
-    own period, so a reader is never told last week's context is this
-    week's.
+    Returns ``(row_or_None, degraded_reasons)`` — the caller records them
+    on the edition; the sections themselves carry the snapshot's own
+    period, so a reader is never told last week's context is this week's.
+
+    One snapshot feeds THREE sections, not one: ``cross_industry`` (the
+    spillovers), ``companies`` (the event window) and ``outlook`` (the
+    macro regime). A single ``cross_industry:…`` label would be read as
+    scoping the degradation to the cross-industry section while the other
+    two quietly carried last week's window under this week's as-of, so
+    every section that reads the payload gets its own label.
     """
     current = industry_snapshot.snapshot_for_period(period_key, version=info)
     if current is not None:
-        return current, None
+        return current, []
     prior = industry_snapshot.latest_snapshot(version=info)
     if prior is not None:
-        return prior, f"cross_industry:snapshot:prior_period:{prior.get('period_key')}"
-    return None, "cross_industry:snapshot:none_yet"
+        return prior, [f"{s}:prior_period:{prior.get('period_key')}" for s in _SNAPSHOT_FED_SECTIONS]
+    return None, [f"{s}:none_yet" for s in _SNAPSHOT_FED_SECTIONS]
 
 
-def _events_for(snapshot: Any, code: str) -> list[dict[str, Any]]:
-    """The group's events out of the snapshot payload — stored rows only,
-    never a live provider call from inside a job."""
+def _events_for(snapshot: Any, code: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The group's events out of the snapshot payload, WITH the provenance
+    that says what a zero means — stored rows only, never a live provider
+    call from inside a job.
+
+    ``major_events`` is already truncated: ``compute_cross_snapshot`` keeps
+    the top ``MAX_MAJOR_EVENTS`` by materiality across the WHOLE universe
+    before storing them, so a group whose events ranked below the cut
+    appears here with nothing at all. Three different situations therefore
+    produce the same empty list — no snapshot, a genuinely quiet window, or
+    a group squeezed out by the global cap — and publishing "Events in
+    window: 0" for all three would state the last one as an observed fact.
+    The group's *pre-cap* counts are on the snapshot's own group row
+    (``events_14d`` / ``news_14d``), so what the cap dropped is countable
+    exactly, and it is counted.
+    """
     payload = (snapshot or {}).get("payload") or {} if isinstance(snapshot, dict) else {}
-    return [
+    events = [
         dict(e) for e in (payload.get("major_events") or [])
         if isinstance(e, dict) and e.get("industry_group_code") == code
     ]
+    row = next(
+        (r for r in (payload.get("groups") or [])
+         if isinstance(r, dict) and r.get("code") == code),
+        None,
+    )
+    in_window = (
+        None if row is None
+        else int(row.get("events_14d") or 0) + int(row.get("news_14d") or 0)
+    )
+    dropped = None if in_window is None else max(0, in_window - len(events))
+
+    if not payload:
+        reason = "no_snapshot"
+    elif row is None:
+        reason = "group_absent_from_snapshot"
+    elif in_window == 0:
+        reason = "none_stored_in_window"
+    elif dropped and not events:
+        reason = "all_dropped_by_snapshot_global_cap"
+    elif dropped:
+        reason = "partly_dropped_by_snapshot_global_cap"
+    else:
+        reason = None
+
+    provenance = {
+        "snapshot_period_key": (snapshot or {}).get("period_key") if isinstance(snapshot, dict) else None,
+        "snapshot_as_of": payload.get("as_of"),
+        "window_days": payload.get("events_window_days"),
+        "n_in_report": len(events),
+        "n_in_window_for_group": in_window,
+        "n_dropped_by_snapshot_global_cap": dropped,
+        "snapshot_global_cap": getattr(industry_snapshot, "MAX_MAJOR_EVENTS", None),
+        "snapshot_kept_universe_wide": len(payload.get("major_events") or []),
+        "snapshot_catalysts_universe_wide": payload.get("n_events"),
+        "snapshot_news_universe_wide": payload.get("n_news"),
+        # Each channel's own window and why it is empty, carried through
+        # verbatim so "no events" can always name its channel.
+        "channels": payload.get("events_sources"),
+        "reason": reason,
+    }
+    return events, provenance
 
 
-def _coverage_of(stats: Any) -> dict[str, Any]:
-    """The report's coverage block: the stats sample plus the provider
-    cache's stale-serve ledger, so "how good was the data" is answerable
-    from the edition alone."""
+def _coverage_of(stats: Any, events: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The report's coverage block: the stats sample, the provider cache's
+    stale-serve ledger and the event-window provenance, so "how good was
+    the data" is answerable from the edition alone."""
     coverage = dict(getattr(stats, "sample", None) or {})
+    if events is not None:
+        coverage["events"] = events
     try:
         from . import provider_cache
         coverage["provider_stale"] = provider_cache.stale_stats()
@@ -665,6 +761,48 @@ def _freshness_of(stats: Any, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _server_facts(analyst: Any, stats: Any, snapshot: Any, prior: Any,
+                  events: list[dict[str, Any]], *, job: dict[str, Any],
+                  payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """An INDEPENDENT copy of the server-computed facts, for the validator.
+
+    The validator's first job is to prove that ``facts`` in the published
+    payload are exactly what the server computed — an LLM never writes into
+    facts, and every number the interpretation quotes must be present in
+    them. Both checks need a second copy built from the inputs. Reading the
+    facts back out of the payload under review instead makes the mutation
+    guard compare an object with itself (``x != x``, never true) and
+    derives the allowed-numbers whitelist from the very document it is
+    supposed to constrain, so an LLM section merged wholesale — facts key
+    and all — would validate clean and publish invented numbers.
+
+    ``build_facts`` is public for exactly this ("Exposed so a job can hand
+    the same dict to the validator after the writer returns"). Two inputs
+    have to be matched deliberately:
+
+    * ``mode`` — ``write_report`` downgrades ``llm`` to ``llm_unavailable``
+      when the model returns nothing, and stamps the final mode into the
+      metadata facts. The payload's ``analyst_narrative`` IS that final
+      mode, so passing it reproduces the same value.
+    * ``metadata.generated_at`` — a clock read, different by construction on
+      a second call. It is carried across by name rather than compared;
+      it is an identifier, not a measurement (the validator scrubs dates
+      out of the number whitelist), and it is the only field this skips.
+
+    ``degraded`` / ``errors`` go to throwaway lists: the edition's own were
+    recorded by the writer and must not be duplicated by the rebuild.
+    """
+    mode = str(payload.get("analyst_narrative") or "")
+    facts = writer.build_facts(
+        analyst, stats, snapshot, prior, list(events or []),
+        run_id=job["run_id"], mode=mode, degraded=[], errors=[],
+    )
+    published_metadata = ((payload.get("sections") or {}).get("metadata") or {}).get("facts")
+    if isinstance(published_metadata, dict) and isinstance(facts.get("metadata"), dict):
+        facts["metadata"]["generated_at"] = published_metadata.get("generated_at")
+    return facts
+
+
 def _run_group_report(job: dict[str, Any], info: gics_registry.VersionInfo,
                       ctx: industry_analytics.AnalyticsContext, as_of: datetime) -> dict[str, Any]:
     """Stats → edition → validation → save, for one claimed group job."""
@@ -682,9 +820,9 @@ def _run_group_report(job: dict[str, Any], info: gics_registry.VersionInfo,
                      n_priced=(stats.sample or {}).get("n_with_prices"))
 
     analyst = get_industry_analyst(code, version=info)
-    snapshot, snapshot_reason = _snapshot_for(period_key, info)
+    snapshot, snapshot_reasons = _snapshot_for(period_key, info)
     prior = industry_report_store.latest_good(code, version=info)
-    events = _events_for(snapshot, code)
+    events, events_provenance = _events_for(snapshot, code)
 
     _append_progress(job_id, "writing_report",
                      mode="deterministic" if deterministic else "default")
@@ -692,23 +830,17 @@ def _run_group_report(job: dict[str, Any], info: gics_registry.VersionInfo,
                           feature="industry_report", route="cheap"):
         result = writer.write_report(analyst, stats, snapshot, prior, events,
                                      run_id=job["run_id"], deterministic=deterministic)
-    if snapshot_reason:
-        result.degraded.append(snapshot_reason)
+    result.degraded.extend(snapshot_reasons)
+    dropped = events_provenance.get("n_dropped_by_snapshot_global_cap") or 0
+    if dropped:
+        # Count what was dropped. The section will print "Events in
+        # window: <kept>"; without this the difference is invisible.
+        result.degraded.append(f"companies:events:snapshot_global_cap_dropped:{dropped}")
     if deterministic:
         result.degraded.append(f"generation:deterministic_final_attempt:{job['attempts']}")
 
-    # The facts the validator checks against are the writer's own, read
-    # back off the payload. Rebuilding them here would differ in exactly
-    # one field — `metadata.generated_at`, which is a clock read — and
-    # turn every edition into a false "facts mutated" rejection. The
-    # checks that matter (numbers present in the facts, no advice
-    # phrasing, registered causal claims, the frozen section order) are
-    # unaffected by where the facts dict came from.
-    facts = {
-        name: section.get("facts")
-        for name, section in (result.payload.get("sections") or {}).items()
-        if isinstance(section, dict)
-    }
+    facts = _server_facts(analyst, stats, snapshot, prior, events, job=job,
+                          payload=result.payload)
     problems = validator.validate(result.payload, facts)
     if problems:
         _append_progress(job_id, "validation_failed", n_problems=len(problems))
@@ -720,7 +852,7 @@ def _run_group_report(job: dict[str, Any], info: gics_registry.VersionInfo,
         stats_id=stats.id,
         source_manifest=((result.payload.get("sections") or {}).get("sources") or {})
         .get("facts", {}).get("manifest", []),
-        coverage=_coverage_of(stats),
+        coverage=_coverage_of(stats, events_provenance),
         freshness=_freshness_of(stats, result.payload),
         generation=result.generation,
         degraded=result.degraded,

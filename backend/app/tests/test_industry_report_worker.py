@@ -194,6 +194,31 @@ def test_enqueue_period_skips_a_published_week_unless_forced(env):
     assert forced["cross_snapshot"]["job_id"] is not None
 
 
+def test_a_week_held_in_review_is_not_generated_a_second_time(env, monkeypatch):
+    """With `INDUSTRY_REPORTS_REQUIRE_REVIEW` on, an edition lands as
+    `pending_review` and never takes `is_latest_good`. A skip check that
+    asks "is there a latest-good edition for this period" therefore sees
+    none, re-enqueues the whole week and pays the model to reproduce
+    reports that are already sitting in the review queue — every Sunday,
+    forever. A week that has been *generated* is not generated again;
+    whether a human has released it is a separate question."""
+    monkeypatch.setattr(settings, "industry_reports_require_review", True)
+    jobs.enqueue_period(PERIOD, env["codes"], version=env["info"], include_cross_snapshot=False)
+    jobs.drain()
+
+    edition = rs.latest_good(env["codes"][0], version=env["info"])
+    assert edition is None, "a pending_review edition must not be published"
+    assert rs.history(env["codes"][0], version=env["info"])[0]["status"] == "pending_review"
+
+    again = jobs.enqueue_period(PERIOD, env["codes"], version=env["info"],
+                                include_cross_snapshot=False)
+    assert again["enqueued"] == 0
+    assert again["skipped_published"] == len(env["codes"])
+    # `force` is still the way to deliberately regenerate one.
+    assert jobs.enqueue_period(PERIOD, env["codes"][:1], version=env["info"], force=True,
+                               include_cross_snapshot=False)["enqueued"] == 1
+
+
 def test_enqueue_period_counts_everything_it_did_not_enqueue(env):
     """A truncated run must say how much it dropped. `enqueued=1` with 24
     groups silently unserved is how a week goes missing."""
@@ -388,6 +413,161 @@ def test_an_unwritable_report_never_creates_a_row(env, monkeypatch):
             IndustryReport.industry_group_code == code,
             IndustryReport.taxonomy_version_id == env["info"].id)).scalars().all()
     assert rows == []
+
+
+# --- what the snapshot feeds, and what a zero means ---------------------------
+
+
+def _snapshot(period_key: str, *, groups: list[dict[str, Any]],
+              major: list[dict[str, Any]]) -> dict[str, Any]:
+    """A cross-industry snapshot row shaped like `compute_cross_snapshot`'s."""
+    return {
+        "period_key": period_key,
+        "payload": {
+            "as_of": AS_OF.isoformat(),
+            "groups": groups,
+            "major_events": major,
+            "events_window_days": 14,
+            "n_events": 1, "n_news": 1,
+            "events_sources": {"catalysts": {"n": 1, "reason": None},
+                               "news": {"n": 1, "reason": None}},
+        },
+    }
+
+
+def test_a_prior_period_snapshot_labels_every_section_it_feeds(env, monkeypatch):
+    """One snapshot feeds three sections. The cross-industry spillovers are
+    the obvious one, but the same payload also supplies the companies
+    section's event window and the outlook's macro regime — so a single
+    `cross_industry:…` label reads as if only that section were degraded
+    while the other two quietly carry last week's window under this week's
+    as-of."""
+    prior = _snapshot("2026-W35", groups=[], major=[])
+    monkeypatch.setattr(jobs.industry_snapshot, "snapshot_for_period", lambda k, **kw: None)
+    monkeypatch.setattr(jobs.industry_snapshot, "latest_snapshot", lambda **kw: prior)
+    row, reasons = jobs._snapshot_for(PERIOD, env["info"])
+    assert row is prior
+    assert reasons == ["cross_industry:snapshot:prior_period:2026-W35",
+                       "companies:events:prior_period:2026-W35",
+                       "outlook:macro_regime:prior_period:2026-W35"]
+
+    # No snapshot at all is the same story with a different reason.
+    monkeypatch.setattr(jobs.industry_snapshot, "latest_snapshot", lambda **kw: None)
+    row, reasons = jobs._snapshot_for(PERIOD, env["info"])
+    assert row is None
+    assert reasons == ["cross_industry:snapshot:none_yet",
+                       "companies:events:none_yet",
+                       "outlook:macro_regime:none_yet"]
+
+    # And the period's own snapshot degrades nothing.
+    monkeypatch.setattr(jobs.industry_snapshot, "snapshot_for_period",
+                        lambda k, **kw: _snapshot(k, groups=[], major=[]))
+    assert jobs._snapshot_for(PERIOD, env["info"])[1] == []
+
+
+def test_events_the_snapshots_global_cap_dropped_are_counted_not_published_as_zero():
+    """`compute_cross_snapshot` keeps only the top `MAX_MAJOR_EVENTS` by
+    materiality across the WHOLE universe. A group whose events ranked
+    below that cut arrives here with an empty list, indistinguishable from
+    a genuinely quiet week — and the report would print "Events in window:
+    0" as an observed fact. The group's pre-cap counts are on the snapshot
+    row, so the drop is countable exactly, and must be counted."""
+    row = {"code": "4530", "events_14d": 2, "news_14d": 1}
+    snapshot = _snapshot(PERIOD, groups=[row], major=[])
+
+    events, prov = jobs._events_for(snapshot, "4530")
+    assert events == []
+    assert prov["n_in_window_for_group"] == 3
+    assert prov["n_dropped_by_snapshot_global_cap"] == 3
+    assert prov["reason"] == "all_dropped_by_snapshot_global_cap"
+    assert prov["snapshot_period_key"] == PERIOD and prov["window_days"] == 14
+    assert prov["snapshot_global_cap"] == jobs.industry_snapshot.MAX_MAJOR_EVENTS
+
+    # Partly dropped: one of the three survived the cut.
+    kept = [{"industry_group_code": "4530", "ticker": "AAA", "kind": "news"}]
+    events, prov = jobs._events_for(_snapshot(PERIOD, groups=[row], major=kept), "4530")
+    assert len(events) == 1
+    assert prov["n_dropped_by_snapshot_global_cap"] == 2
+    assert prov["reason"] == "partly_dropped_by_snapshot_global_cap"
+
+    # A genuinely quiet window says so, and names the channels that were read.
+    quiet = {"code": "4530", "events_14d": 0, "news_14d": 0}
+    events, prov = jobs._events_for(_snapshot(PERIOD, groups=[quiet], major=[]), "4530")
+    assert events == [] and prov["n_dropped_by_snapshot_global_cap"] == 0
+    assert prov["reason"] == "none_stored_in_window"
+    assert set(prov["channels"]) == {"catalysts", "news"}
+
+    # The two "there was nothing to read" cases keep their own reasons.
+    assert jobs._events_for(None, "4530")[1]["reason"] == "no_snapshot"
+    assert jobs._events_for(_snapshot(PERIOD, groups=[], major=[]), "4530")[1]["reason"] == (
+        "group_absent_from_snapshot")
+
+
+def test_the_edition_carries_the_event_provenance_and_counts_what_the_cap_dropped(env, monkeypatch):
+    """End to end: the provenance reaches the saved edition's coverage, and
+    a drop is named in `degraded` where a reader (and the UI) will see it."""
+    code = env["codes"][0]
+    row = {"code": code, "events_14d": 4, "news_14d": 0}
+    monkeypatch.setattr(jobs.industry_snapshot, "snapshot_for_period",
+                        lambda k, **kw: _snapshot(k, groups=[row], major=[]))
+    jobs.enqueue(code, PERIOD, version=env["info"])
+    assert jobs.process_next_job(now=SUNDAY)["status"] == "succeeded"
+
+    edition = rs.latest_good(code, version=env["info"])
+    prov = edition["coverage"]["events"]
+    assert prov["n_in_report"] == 0 and prov["n_dropped_by_snapshot_global_cap"] == 4
+    assert prov["reason"] == "all_dropped_by_snapshot_global_cap"
+    assert "companies:events:snapshot_global_cap_dropped:4" in edition["degraded"]
+
+
+# --- the validator gets facts the payload did not supply ----------------------
+
+
+def test_the_validator_checks_against_independently_built_facts(env, monkeypatch):
+    """The validator's first duty is to prove the published `facts` are the
+    server's — an LLM never writes into facts, and every number the
+    interpretation quotes must appear in them. Handing it the facts read
+    back out of the payload under review makes that guard compare an object
+    with itself (`x != x`, never true) and derives the allowed-numbers
+    whitelist from the very document it is meant to constrain."""
+    code = env["codes"][0]
+    seen: dict[str, Any] = {}
+    real_validate = jobs.validator.validate
+
+    def spy(payload, facts):
+        seen["facts"] = facts
+        seen["payload_facts"] = (payload.get("sections") or {})["overview"]["facts"]
+        return real_validate(payload, facts)
+
+    monkeypatch.setattr(jobs.validator, "validate", spy)
+    jobs.enqueue(code, PERIOD, version=env["info"])
+    assert jobs.process_next_job(now=SUNDAY)["status"] == "succeeded"
+    # Same values, different object: a second copy built from the inputs.
+    assert seen["facts"]["overview"] == seen["payload_facts"]
+    assert seen["facts"]["overview"] is not seen["payload_facts"]
+
+
+def test_facts_tampered_with_after_the_writer_are_rejected(env, monkeypatch):
+    """The guard that could never fire, firing. A writer regression that
+    merged a model's section dict wholesale — its own `facts` key included —
+    must not publish; with payload-derived facts it validated clean and the
+    invented number joined the allowed-numbers whitelist on the way."""
+    code = env["codes"][0]
+    real_write = jobs.writer.write_report
+
+    def tamper(*a, **kw):
+        result = real_write(*a, **kw)
+        result.payload["sections"]["overview"]["facts"]["n_constituents"] = 424242
+        return result
+
+    monkeypatch.setattr(jobs.writer, "write_report", tamper)
+    job, _ = jobs.enqueue(code, PERIOD, version=env["info"])
+    jobs.process_next_job(now=SUNDAY)
+
+    row = _job(job["id"])
+    assert row["status"] == "queued" and row["error_type"] == "ReportRejected"
+    assert "facts mutated: overview" in row["error_message"]
+    assert rs.latest_good(code, version=env["info"]) is None  # nothing published
 
 
 # --- recovery -----------------------------------------------------------------

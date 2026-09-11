@@ -301,3 +301,88 @@ def test_a_failed_group_does_not_hold_the_cross_industry_snapshot_hostage(univer
     n_registry = len(reg.industry_groups(version=universe["info"]))
     assert coverage.get("n_groups") == n_registry
     assert coverage.get("n_insufficient_sample") is not None
+
+
+def _run_week(when: datetime, monkeypatch) -> None:
+    """One Sunday, start to finish, on a pinned clock."""
+    monkeypatch.setattr(jobs, "_utcnow", lambda: when)
+    loop.run_once(now=when)
+    jobs.drain(now=when)
+
+
+def test_week_two_labels_every_section_that_quotes_last_weeks_snapshot(universe, monkeypatch):
+    """The cross-industry snapshot for a period is computed from the very
+    stats rows the group jobs write, so it is deliberately the last job of
+    the week — and every group report of that week therefore quotes the
+    PRIOR period's snapshot. That payload feeds three sections, not one:
+    the spillovers, the companies section's event window, and the outlook's
+    macro regime. All three get a label; labelling only the cross-industry
+    one would let a reader scope the staleness to the section it is
+    easiest to ignore."""
+    _run_week(SUNDAY, monkeypatch)
+    _run_week(NEXT_SUNDAY, monkeypatch)
+
+    published = _reports(universe)
+    for code in _eligible(universe):
+        edition = published[code]
+        assert edition["period_key"] == NEXT_PERIOD
+        assert f"cross_industry:snapshot:prior_period:{PERIOD}" in edition["degraded"]
+        assert f"companies:events:prior_period:{PERIOD}" in edition["degraded"], code
+        assert f"outlook:macro_regime:prior_period:{PERIOD}" in edition["degraded"], code
+        # The event window the reader is shown belongs to that snapshot,
+        # and the coverage block says which one.
+        assert edition["coverage"]["events"]["snapshot_period_key"] == PERIOD
+
+
+def test_the_snapshot_the_drainer_hands_the_writer_carries_this_groups_spillovers(universe, monkeypatch):
+    """This slice's half of the cross-industry contract: by week two the
+    row `_snapshot_for` returns really does contain spillovers naming the
+    group being written. Pinned separately from the edition assertion below
+    so that, when that one fails, it is unambiguous which side broke."""
+    _run_week(SUNDAY, monkeypatch)
+    row, reasons = jobs._snapshot_for(NEXT_PERIOD, universe["info"])
+    assert row is not None and row["period_key"] == PERIOD
+    assert reasons and all(r.endswith(f"prior_period:{PERIOD}") for r in reasons)
+
+    spillovers = (row["payload"] or {}).get("spillovers") or []
+    assert spillovers, "the snapshot computed no dependency spillovers at all"
+    named = {
+        code: [s for s in spillovers if code in (s.get("codes") or [])]
+        for code in _eligible(universe)
+    }
+    # Every spillover is keyed by `codes`; a link can name one group or
+    # seven, so there is no origin/destination pair to filter on.
+    assert all(isinstance(s.get("codes"), list) for s in spillovers)
+    assert any(named.values()), f"no spillover names any eligible group: {sorted(named)}"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "KNOWN CROSS-SLICE DEFECT, recorded in this slice's open_issues. "
+        "agents/industry_report_writer.py::_cross_industry_facts filters the "
+        "snapshot's spillovers on `origin_code`/`destination_code`, keys that "
+        "services/industry_snapshot.py::compute_cross_snapshot never emits — it "
+        "emits `codes`, a list of one to seven group codes per link. The filter "
+        "therefore matches nothing and EVERY published edition reports zero "
+        "spillovers in the section the PM block exists for. The fix is one line "
+        "in the writer, `analyst.code in (s.get('codes') or [])`, in a file this "
+        "slice does not own. When it lands this test XPASSes and strict=True "
+        "turns that into a failure: delete this marker."
+    ),
+)
+def test_a_published_edition_carries_the_spillovers_that_name_its_group(universe, monkeypatch):
+    """The reader-facing end of the same contract: a group named by a
+    dependency link must see it in its own cross-industry section."""
+    _run_week(SUNDAY, monkeypatch)
+    _run_week(NEXT_SUNDAY, monkeypatch)
+
+    row, _ = jobs._snapshot_for(NEXT_PERIOD, universe["info"])
+    spillovers = (row["payload"] or {}).get("spillovers") or []
+    published = _reports(universe)
+    linked = [c for c in _eligible(universe)
+              if any(c in (s.get("codes") or []) for s in spillovers)]
+    assert linked, "fixture problem: no eligible group is named by any link"
+    for code in linked:
+        facts = published[code]["payload"]["sections"]["cross_industry"]["facts"]
+        assert facts["spillovers"], f"{code} is named by a dependency link but its edition reports none"
