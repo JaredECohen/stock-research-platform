@@ -289,6 +289,17 @@ def test_sector_prompt_block_is_empty_for_a_non_routable_row():
 # --- routing off: the memo is unchanged versus the base commit -----------------
 
 
+# This slice can only reach the sector analyst (its `{industry_group_block}`
+# placeholder) and the new roster entry. Every OTHER analyst's degradation
+# is a function of what the shared database happens to hold — whether some
+# other suite scored MSFT, whether price history was seeded — so comparing
+# it makes the golden fail for reasons that have nothing to do with the
+# flag. The blast radius is compared exactly; the rest is scoped out by
+# name, not filtered per incident.
+_BLAST_RADIUS = {"Sector Analyst", "Industry Group Analyst", "Long-form (Sector)",
+                 "Long-form (Industry Group)"}
+
+
 def _subset(memo) -> dict:
     sv = memo.sector_agent_view
     return {
@@ -298,10 +309,8 @@ def _subset(memo) -> dict:
             "data_keys": sorted(sv.data.keys()) if isinstance(sv.data, dict) else None,
         },
         "extra_agent_views": sorted(memo.extra_agent_views.keys()),
-        # The scorecard entry depends on whether another suite scored MSFT
-        # in this database; it is not this slice's concern.
-        "degraded_agents": [a for a in memo.degraded_agents if a != "Fundamental Scorecard"],
-        "degradation_events": [e for e in memo.degradation_events if e["agent"] != "Fundamental Scorecard"],
+        "degraded_agents": [a for a in memo.degraded_agents if a in _BLAST_RADIUS],
+        "degradation_events": [e for e in memo.degradation_events if e["agent"] in _BLAST_RADIUS],
         "rating_label": memo.rating_label,
     }
 
@@ -312,8 +321,8 @@ def test_routing_off_demo_memo_matches_the_base_commit_golden():
     views must be exactly what they were."""
     assert settings.enable_industry_analyst_routing is False
     golden = json.loads(GOLDEN.read_text())
-    golden["degraded_agents"] = [a for a in golden["degraded_agents"] if a != "Fundamental Scorecard"]
-    golden["degradation_events"] = [e for e in golden["degradation_events"] if e["agent"] != "Fundamental Scorecard"]
+    golden["degraded_agents"] = [a for a in golden["degraded_agents"] if a in _BLAST_RADIUS]
+    golden["degradation_events"] = [e for e in golden["degradation_events"] if e["agent"] in _BLAST_RADIUS]
     memo = graph.run_stock_memo("MSFT")
     assert _subset(memo) == golden
     assert "industry_group" not in memo.sector_agent_view.data
