@@ -330,9 +330,14 @@ def _cross_industry_facts(analyst: IndustryAnalyst, snapshot_row: Any, snapshot_
         for r in (atlas.get("relationships") or [])
         if analyst.code in (r.get("industry_group_codes") or [])
     ]
+    # A snapshot spillover names its groups in `codes` — a list of one to
+    # seven — not as an origin/destination pair. Filtering on the pair
+    # matched nothing, so every published edition reported zero spillovers
+    # in the section the PM cross-industry block exists for, and the
+    # writer's own fixture used the imagined shape so the tests agreed.
     spillovers = [
         s for s in (snapshot_payload.get("spillovers") or [])
-        if isinstance(s, dict) and analyst.code in (s.get("origin_code"), s.get("destination_code"))
+        if isinstance(s, dict) and analyst.code in (s.get("codes") or [])
     ]
     return {
         "edges": edges,

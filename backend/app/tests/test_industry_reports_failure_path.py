@@ -356,21 +356,6 @@ def test_the_snapshot_the_drainer_hands_the_writer_carries_this_groups_spillover
     assert any(named.values()), f"no spillover names any eligible group: {sorted(named)}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN CROSS-SLICE DEFECT, recorded in this slice's open_issues. "
-        "agents/industry_report_writer.py::_cross_industry_facts filters the "
-        "snapshot's spillovers on `origin_code`/`destination_code`, keys that "
-        "services/industry_snapshot.py::compute_cross_snapshot never emits — it "
-        "emits `codes`, a list of one to seven group codes per link. The filter "
-        "therefore matches nothing and EVERY published edition reports zero "
-        "spillovers in the section the PM block exists for. The fix is one line "
-        "in the writer, `analyst.code in (s.get('codes') or [])`, in a file this "
-        "slice does not own. When it lands this test XPASSes and strict=True "
-        "turns that into a failure: delete this marker."
-    ),
-)
 def test_a_published_edition_carries_the_spillovers_that_name_its_group(universe, monkeypatch):
     """The reader-facing end of the same contract: a group named by a
     dependency link must see it in its own cross-industry section."""

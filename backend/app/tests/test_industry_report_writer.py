@@ -260,12 +260,16 @@ def test_scenario_falsifiers_name_an_observation_or_say_why_they_cannot(analyst)
 def test_cross_industry_facts_label_each_dependency_with_its_source(analyst):
     snapshot = {"id": 3, "as_of": datetime(2026, 9, 4, 21, 0), "period_key": "2026-W36",
                 "payload": {"regime": {"macro_regime": "late_cycle"},
-                            "spillovers": [{"edge_id": "D01", "origin_code": "4530", "destination_code": "4510",
+                            "spillovers": [{"id": "D01", "codes": ["4530", "4510"],
                                             "transmission": "x", "source": "atlas_dependencies_sheet"},
-                                           {"edge_id": "D09", "origin_code": "2010", "destination_code": "1010"}]}}
+                                           {"id": "D09", "codes": ["2010", "1010"]}]}}
     payload = w.write_report(analyst, _stats(), snapshot, None, [], run_id="run-7").payload
     ci = payload["sections"]["cross_industry"]["facts"]
-    assert [s["edge_id"] for s in ci["spillovers"]] == ["D01"]
+    # The fixture now uses the shape compute_cross_snapshot really emits
+    # (`id` + `codes`), not the origin/destination pair the writer used to
+    # filter on: with the imagined shape this assertion passed while the
+    # production filter matched nothing.
+    assert [s["id"] for s in ci["spillovers"]] == ["D01"]
     for edge in ci["edges"]:
         assert edge["source"] and "4510" in edge["industry_group_codes"]
     for rel in ci["relationships"]:
