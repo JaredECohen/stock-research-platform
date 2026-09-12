@@ -231,7 +231,9 @@ def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir, no_llm):
     outcome = _seed_outcome(snap, horizon=90, fwd=0.20, bench=0.06)
 
     report = pm.run_postmortems(horizon_days=90, limit=500)
-    assert set(report) == {"horizon_days", "due", "written", "skipped"}
+    assert set(report) == {
+        "horizon_days", "due", "written", "already_done", "deduped", "skipped",
+    }
     assert report["horizon_days"] == 90 and report["written"] >= 1
     assert {"ticker": t, "horizon": 90} in no_llm       # the LLM was asked, and declined
 
@@ -254,7 +256,11 @@ def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir, no_llm):
     again = pm.run_postmortems(horizon_days=90, limit=500)
     assert not [d for d in pm._due_memos(90, limit=500) if d["snapshot"].ticker == t]
     assert len(_postmortems(t, 90)) == 1
-    assert again["written"] + again["skipped"] == again["due"]
+    assert (
+        again["written"] + again["already_done"] + again["skipped"] == again["due"]
+    )
+    # Nothing was re-attempted and nothing reads as a failure.
+    assert again["due"] == again["written"] == again["skipped"] == 0
 
 
 def test_run_postmortems_30d_early_read_stays_out_of_memory(memory_dir, no_llm):
