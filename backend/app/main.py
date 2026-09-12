@@ -32,6 +32,7 @@ from .api import (
     routes_scorecard,
     routes_screener,
     routes_stocks,
+    routes_unit_economics,
 )
 from .api.admin_auth import admin_auth_middleware
 from .auth.middleware import customer_auth_middleware
@@ -167,6 +168,12 @@ def create_app() -> FastAPI:
     app.include_router(routes_macro.router, tags=["macro"])
     app.include_router(routes_data_catalog.router, tags=["data-catalog"])
     app.include_router(routes_admin.router, tags=["admin"])
+    # FEAT-002 pricing evidence: observed cost per metered operation, read
+    # out of `llm_call_logs` and expressed against the plan allowances. Its
+    # own module rather than another handler in `routes_admin` because the
+    # report is a service with real arithmetic behind it; the path sits under
+    # `/api/admin`, so the token middleware covers it the moment it mounts.
+    app.include_router(routes_unit_economics.router, tags=["admin"])
     # FEAT-002: account + public config (S1), public samples/events (S3)
     # and billing (S4). The latter two are stubs until their slices land;
     # including them here means `import app.main` never breaks on a
