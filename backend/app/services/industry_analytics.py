@@ -16,9 +16,10 @@ Rules this module encodes, in order of how often they have bitten:
   sample floor reports ``status = insufficient_sample`` — a labelled
   state, not an error and not a row of zeros — and ``sample.sample_floor``
   says WHICH short state it is: ``prices_not_warmed`` (transient; the
-  weekly warm-up clears it) or ``universe_too_small`` (structural; this
-  universe holds fewer constituents than the floor and never will cover
-  the group without being widened). See ``classify_sample_floor``.
+  weekly warm-up clears it) or ``universe_too_small`` (structural; the
+  classification table holds fewer constituents than the floor, and only
+  classifying more into the group changes that). See
+  ``classify_sample_floor``.
 * **Batched reads only.** One SELECT for the group map, one for the
   companies, one for the metrics, one bulk read of cached price rows
   (chunked ``IN`` lists); provider fetches for tickers without a cached
@@ -82,7 +83,16 @@ log = logging.getLogger(__name__)
 
 HORIZONS: tuple[str, ...] = ("1w", "1m", "qtd", "ytd", "1y")
 PRICE_WINDOW_DAYS = 252
-METHOD_VERSION = "industry-stats-v1"
+# The producer's identity, and the FIRST component of `_inputs_hash`.
+# `_persist` reuses a stored row whose (taxonomy version, code, period
+# key, inputs hash) already matches, so a period that already has a row
+# keeps serving it: a change to what this module WRITES — a new key in
+# `sample`, a different `payload` shape — reaches readers only if this
+# string changes with it. Bump it in the same commit as the change, or
+# the new field is invisible on every group until the period key rolls
+# over and no forced regeneration can bring it forward.
+#   v2: `sample.sample_floor` (which kind of below-the-floor a group is).
+METHOD_VERSION = "industry-stats-v2"
 MARKET_FACTOR_ID = "KFR.MKT_RF.D"
 BENCHMARK_UNIVERSE = "universe_ew"
 BENCHMARK_SECTOR = "sector_ew"
@@ -834,8 +844,11 @@ def classify_sample_floor(*, n_constituents: int, n_with_prices: int, min_sample
 
     * ``universe_too_small`` — the classification table holds fewer
       constituents than the floor. Price every one of them and the group
-      is still short, so no number of warm-up weeks reaches it; only a
-      wider universe does. **Structural.**
+      is still short, so no number of warm-up weeks reaches it; only more
+      CLASSIFIED constituents do. This counts constituents and not
+      companies on purpose: the remedy may be a wider universe or a wider
+      alias map, and only ``/api/industries/taxonomy`` can tell those
+      apart (it counts the rows no group counts). **Structural.**
     * ``prices_not_warmed`` — the membership clears the floor but this
       period could not price enough of it. The weekly warm-up fetches
       more series every run, so this clears on its own. **Transient.**
@@ -861,8 +874,11 @@ def classify_sample_floor(*, n_constituents: int, n_with_prices: int, min_sample
         state, explanation = FLOOR_UNIVERSE_TOO_SMALL, (
             f"this universe holds {_count(n_constituents, 'classified constituent')} for the group and the "
             f"floor is {floor}. Priced in full it would still be {constituents_short_by} short, so no amount "
-            f"of price warm-up can cover it — the universe would have to add "
-            f"{_count(constituents_short_by, 'company', 'companies')}."
+            f"of price warm-up can cover it — the group needs "
+            f"{_count(constituents_short_by, 'more classified constituent', 'more classified constituents')}, "
+            f"whether from companies added to the universe or from companies already in it that no group "
+            f"counts. This row knows the group's membership and not that pool, so it does not say which "
+            f"— the taxonomy response counts it."
         )
     else:
         priced = (

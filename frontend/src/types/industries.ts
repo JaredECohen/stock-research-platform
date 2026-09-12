@@ -91,16 +91,24 @@ export interface LatestReportPointer {
  *
  * Structural only — the taxonomy response knows the classified
  * membership, not which of it had a price series in any given week. A
- * group with `coverable: false` is short of COMPANIES: its statistics
- * will read `insufficient_sample` every week until the universe is
- * widened, and the page must not word that like a warm-up in progress.
- * The per-week half of the story is `IndustrySampleFloor`.
+ * group with `coverable: false` is short of CLASSIFIED CONSTITUENTS: its
+ * statistics will read `insufficient_sample` every week until more
+ * companies are classified into it, and the page must not word that like
+ * a warm-up in progress. Nor like a universe short of companies —
+ * `uncounted_in_universe` counts the companies already here that no group
+ * counts, and classifying those closes the same gap. The per-week half of
+ * the story is `IndustrySampleFloor`.
  */
 export interface GroupUniverseCoverage {
   min_sample: number;
   constituent_count: number;
   coverable: boolean;
   constituents_short_by: number;
+  /** Uncounted rows that already name this group (a `stale` row does). */
+  uncounted_for_group: number;
+  /** Uncounted rows anywhere in this universe — the pool a
+   *  re-classification could draw the shortfall from. */
+  uncounted_in_universe: number;
   /** The server's own sentence. The page prints it; it never writes one. */
   explanation: string;
 }
@@ -135,7 +143,16 @@ export interface UniverseCoverage {
   coverable: number;
   not_coverable: number;
   not_coverable_codes: string[];
+  /** Classified CONSTITUENTS, not companies — see `uncounted`. */
   constituents_needed: number;
+  /** `industry_classification.uncounted_rows()`: the companies in this
+   *  universe no group counts, by state and (where the row names one) by
+   *  group. How much of `constituents_needed` re-classification could
+   *  supply, rather than new companies. */
+  uncounted: Record<string, unknown>;
+  /** The sentence the index page prints verbatim. The page must not
+   *  compose a remedy the server did not state. */
+  explanation: string;
   basis: string;
 }
 

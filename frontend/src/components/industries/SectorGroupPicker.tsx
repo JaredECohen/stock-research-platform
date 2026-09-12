@@ -62,10 +62,11 @@ export function pointerSummary(group: IndustryGroupNode): string {
  * when it can.
  *
  * A group below the floor on MEMBERSHIP will report `insufficient_sample`
- * every week for as long as the universe stays as it is — which is a
- * different thing from a group waiting on the weekly price warm-up, and
- * the picker is where a reader decides which group to open. The text is
- * the API's; the picker never composes one.
+ * every week for as long as its classified membership stays as it is —
+ * which is a different thing from a group waiting on the weekly price
+ * warm-up, and different again from a universe short of companies. The
+ * picker is where a reader decides which group to open. The text is the
+ * API's, including which remedy applies; the picker never composes one.
  */
 export function notCoverableNote(group: IndustryGroupNode): string | null {
   const cov = group.universe_coverage;
@@ -233,10 +234,14 @@ export default function SectorGroupPicker({ taxonomy, value, onSelect, className
                     {/* Said here, not only on the report: this is where a
                         reader chooses what to open, and "4 in universe"
                         alone does not tell them the group can never be
-                        reported on. */}
+                        reported on. "Classified" is load-bearing: the
+                        shortfall is of constituents this taxonomy counts,
+                        which is not the same as a shortfall of companies,
+                        and the server's sentence that follows says which
+                        remedy applies. */}
                     {notCoverable && (
                       <div className="text-[11px] text-warn-500" data-testid={`not-coverable-${g.code}`}>
-                        Too few companies in this universe to report on — {notCoverable}
+                        Too few classified companies in this universe to report on — {notCoverable}
                       </div>
                     )}
                   </li>

@@ -327,7 +327,13 @@ export default function IndustryAnalysis() {
           {/* The structural limit of this universe, in one place. Without
               it the groups it can never cover render as "not ready yet"
               on every page, week after week, and nobody learns that the
-              universe is the thing that has to change. */}
+              universe is the thing that has to change.
+
+              The second line is the SERVER's sentence, printed verbatim.
+              The page composed one here once and it said the only remedy
+              was adding companies — which is false whenever the universe
+              already holds companies no group counts. Only the server
+              knows that, so only the server writes the remedy. */}
           <div className="card-tight">
             <dt className="text-slate-500 uppercase tracking-widest text-[10px]">Coverage limit</dt>
             {limit ? (
@@ -335,10 +341,8 @@ export default function IndustryAnalysis() {
                 <dd className={limit.not_coverable > 0 ? "text-warn-500" : "text-slate-200"} data-testid="coverage-limit">
                   {limit.not_coverable} of {limit.groups} groups cannot be covered by the current universe
                 </dd>
-                <dd className="text-slate-500 mt-1">
-                  {limit.not_coverable > 0
-                    ? `They hold fewer than ${limit.min_sample} classified companies each — ${limit.constituents_needed} more would be needed in total. The weekly price warm-up cannot change that.`
-                    : `Every group holds at least ${limit.min_sample} classified companies, so a group below the floor is waiting on prices, not on the universe.`}
+                <dd className="text-slate-500 mt-1" data-testid="coverage-limit-why">
+                  {limit.explanation || na("this deployment did not say what the limit would take to lift")}
                 </dd>
               </>
             ) : (

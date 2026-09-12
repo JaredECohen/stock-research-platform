@@ -612,6 +612,101 @@ def test_metric_values_are_part_of_the_identity_even_when_the_timestamp_is_not(_
     assert second.payload["valuation"]["ev_ebitda"]["median"] != first.payload["valuation"]["ev_ebitda"]["median"]
 
 
+# The producer identity a stored row carries, and the set of keys that
+# identity promises. `_persist` reuses any row whose (taxonomy version,
+# code, period key, inputs hash) already matches, and METHOD_VERSION is
+# the only part of that hash a writer-side change can move — so a new key
+# in `sample` that ships without a bump is invisible to every reader
+# until the period key rolls over.
+PREVIOUS_METHOD_VERSION = "industry-stats-v1"
+STORED_SAMPLE_KEYS: dict[str, set[str]] = {
+    "industry-stats-v2": {
+        "n_constituents", "n_with_prices", "sample_floor", "n_with_market_cap", "n_with_metrics",
+        "min_sample", "coverage", "excluded", "prices_max_date", "prices_min_date", "price_sources",
+        "fetches_this_run", "fetch_budget", "benchmark_cohort",
+    },
+}
+
+
+def test_the_stored_sample_block_is_pinned_to_the_method_version(codes):
+    """A change to what this module WRITES has to move METHOD_VERSION.
+
+    If it does not, `_persist` keeps serving the row the previous producer
+    stored for the current period and the new field never reaches a
+    reader — no forced regeneration can bring it forward, because the
+    regeneration recomputes the same hash. This test fails both ways: add
+    a key to `sample` without a bump and the key set will not match; bump
+    without recording the new shape here and the version is unknown.
+    """
+    code, _ = codes
+    ld = _loaders(groups={code: ["AAA", "BBB", "CCC"]},
+                  prices={t: _step_series(10.0, 11.0) for t in ("AAA", "BBB", "CCC")})
+    row = ia.compute_group_stats(code, as_of=AS_OF, loaders=ld, persist=False, max_fetch=0)
+    assert ia.METHOD_VERSION in STORED_SAMPLE_KEYS, (
+        f"the stored row's shape changed under an unrecorded method version {ia.METHOD_VERSION!r} — "
+        "record its key set here, and make sure the version was bumped in the same commit as the change"
+    )
+    assert set(row.sample) == STORED_SAMPLE_KEYS[ia.METHOD_VERSION], (
+        "the `sample` block changed shape without a METHOD_VERSION bump; every stored row for the "
+        "current period would keep being served without the new field"
+    )
+    assert row.method["version"] == ia.METHOD_VERSION
+
+
+def test_a_row_the_previous_producer_wrote_is_not_served_after_the_bump(_taxonomy, codes):
+    """The regression the bump exists for.
+
+    A deploy that adds `sample.sample_floor` without moving the method
+    version recomputes the SAME `inputs_hash`, `_persist` hands back the
+    pre-deploy row, and the page renders "this edition recorded no
+    sample-floor state" for every group until the period key rolls over.
+    """
+    _, code = codes
+    ld = _loaders(groups={code: ["AAA", "BBB", "CCC"]},
+                  prices={t: _step_series(10.0, 12.0) for t in ("AAA", "BBB", "CCC")})
+    kwargs = dict(as_of=AS_OF, period_key="2026-W35", loaders=ld, max_fetch=0)
+
+    previous = ia.METHOD_VERSION
+    ia.METHOD_VERSION = PREVIOUS_METHOD_VERSION
+    try:
+        old = ia.compute_group_stats(code, **kwargs)
+        # What that producer stored: a sample block with no floor state.
+        with SessionLocal() as db:
+            stored = db.get(IndustryStatSnapshot, old.id)
+            sample = dict(stored.sample)
+            sample.pop("sample_floor", None)
+            stored.sample = sample
+            db.commit()
+    finally:
+        ia.METHOD_VERSION = previous
+
+    again = ia.compute_group_stats(code, **kwargs)
+    assert again.id != old.id, (
+        "the pre-bump row was served again: METHOD_VERSION did not change with the stored shape, so "
+        "no regeneration can bring the new block forward within the period"
+    )
+    assert "sample_floor" in again.sample
+    assert again.sample["sample_floor"]["state"] in (
+        ia.FLOOR_MET, ia.FLOOR_PRICES_NOT_WARMED, ia.FLOOR_UNIVERSE_TOO_SMALL,
+    )
+
+
+def test_a_structurally_short_group_does_not_blame_the_company_count_alone():
+    """"Add companies" is one remedy and not the only one: a company
+    already in the universe whose row no group counts closes the same gap
+    when it is classified. The service knows the constituent count and
+    not the uncounted pool, so it must say `classified constituents` and
+    point at the response that does — never "the universe would have to
+    add N companies", which sends an operator the wrong way."""
+    text = ia.classify_sample_floor(n_constituents=2, n_with_prices=2, min_sample=3)["explanation"]
+    assert "more classified constituent" in text
+    assert "the universe would have to add" not in text
+    assert "companies already in it that no group counts" in text
+    # And it does not pretend to know how big that pool is: this row is
+    # computed from the group's membership alone.
+    assert "the taxonomy response counts it" in text
+
+
 def test_unknown_group_code_raises_before_any_read():
     with pytest.raises(reg.UnknownNode):
         ia.compute_group_stats("0000", as_of=AS_OF, loaders=_loaders(groups={}, prices={}), persist=False, max_fetch=0)
