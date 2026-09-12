@@ -49,7 +49,6 @@ from app.database import Base
 from app.models import Company, MemoSnapshot, RegenJob
 from app.monitoring import news_loop, social_loop
 from app.monitoring.research_focus import (
-    FocusSelection,
     BAND_DEGRADED,
     BAND_MEMO_FRESH,
     BAND_MEMO_STALE,
@@ -59,6 +58,7 @@ from app.monitoring.research_focus import (
     ROTATING_SLOTS,
     WITHHELD_PINNED_NO_MEMO,
     WITHHELD_REGEN_NO_MEMO,
+    FocusSelection,
     select_focus,
 )
 

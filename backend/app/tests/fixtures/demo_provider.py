@@ -70,7 +70,16 @@ class DemoProvider:
         d = _dataset().get(ticker.upper())
         return d["transcripts"] if d else None
 
-    def get_filings(self, ticker: str, *, cik: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    def get_filings(
+        self, ticker: str, *, cik: Optional[str] = None, fetch_text: bool = True,
+    ) -> Optional[List[Dict[str, Any]]]:
+        # `fetch_text` is accepted and ignored: the fixture dataset is
+        # already fully formed, and there is no network read to skip. It
+        # has to be accepted, though — `data_service.get_filings_index`
+        # passes it, and an unexpected keyword would raise inside
+        # `_try_chain`, which swallows the exception and returns None. The
+        # index would then look like "this ticker has no filings" in every
+        # test rather than failing loudly.
         d = _dataset().get(ticker.upper())
         return d["filings"] if d else None
 

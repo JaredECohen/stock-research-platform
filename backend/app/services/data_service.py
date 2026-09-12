@@ -282,6 +282,12 @@ class DataService:
             "earnings": [self.fmp, self.alpha],
             "transcripts": [self.alpha],
             "filings": [self.sec],
+            # Same provider and same method as `filings`, different cost
+            # shape: `get_filings_index` calls it with `fetch_text=False`,
+            # so this capability is one submissions.json read instead of
+            # up to ten document-body fetches. It is a separate chain
+            # entry because it is a separate cache row with its own TTL.
+            "filings_index": [self.sec],
             "news": [self.alpha, self.polygon, self.gdelt],
             "estimates": [self.fmp],
             "macro": [self.fred, self.eia, self.bls, self.census, self.ken_french],
@@ -500,6 +506,51 @@ class DataService:
             force_refresh=force_refresh,
         )
         return _clip_dated_rows(rows, "filing_date", fallback_key="period_end")
+
+    def get_filings_index(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> list[dict[str, Any]] | None:
+        """Filing metadata WITHOUT document bodies — the cheap read.
+
+        `get_filings` fetches the full text of every form it returns (up
+        to ten per ticker, a few MB each, paced against SEC's ~10 req/s
+        limit). Change detection does not need any of that: an accession
+        number that was not in the last response is a new filing. This
+        method asks the same provider with `fetch_text=False`, so a poll
+        across the curated universe costs one JSON read per ticker rather
+        than ~1,700 document downloads per pass.
+
+        Cached under its own capability (`filings_index`, 15-minute TTL)
+        so the short poll cadence cannot drag the expensive `filings`
+        bodies along with it.
+        """
+        cik = self._lookup_cik(ticker)
+        if not cik:
+            return None
+        rows = self._cached(
+            "filings_index", ticker.upper(),
+            lambda: self._try_chain(
+                "filings_index", "get_filings", ticker, cik=cik, fetch_text=False,
+            ),
+            force_refresh=force_refresh,
+        )
+        return _clip_dated_rows(rows, "filing_date", fallback_key="period_end")
+
+    def invalidate_filings_text(self, ticker: str) -> int:
+        """Drop the cached filing *bodies* for one ticker. Returns rows deleted.
+
+        Called by `edgar_poller` when the cheap index shows an accession
+        it has not seen. Without it, better detection would just mean
+        firing events about filings whose text is still the seven-day-old
+        cached response — the poller would notice the new 10-Q and every
+        downstream reader would keep reading the previous one.
+
+        The key convention (`capability="filings"`, key = upper-case
+        ticker) lives here, next to the code that writes those rows,
+        rather than being restated in the poller.
+        """
+        from . import provider_cache
+        return provider_cache.invalidate("filings", ticker.upper())
 
     def _lookup_cik(self, ticker: str) -> str | None:
         """Resolve a ticker's CIK.

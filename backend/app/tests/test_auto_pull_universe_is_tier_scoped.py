@@ -85,7 +85,10 @@ def _drive(monkeypatch, module, tickers=None) -> tuple[list[str], str]:
     polled: list[str] = []
     notes: list[str] = []
     if module is edgar_poller:
-        monkeypatch.setattr(module, "get_filings", lambda t: polled.append(t) or [])
+        # `get_filings_index`, not `get_filings`: change detection reads the
+        # accession list with `fetch_text=False` rather than pulling ten
+        # document bodies per ticker every half hour.
+        monkeypatch.setattr(module, "get_filings_index", lambda t: polled.append(t) or [])
         monkeypatch.setattr(module, "_seen_accessions", lambda t: set())
         monkeypatch.setattr(module, "_save_seen_accessions", lambda t, acc: None)
     else:

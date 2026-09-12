@@ -172,11 +172,24 @@ def test_unknown_capability_uses_seven_day_default(clock):
 
 
 def test_default_caps_match_spec():
-    assert pc.MAX_STALE_BY_CAPABILITY == {
-        "profile": 30 * 86400, "prices": 7 * 86400, "quote": 3600,
-        "ratios": 7 * 86400, "estimates": 14 * 86400, "earnings": 14 * 86400,
-        "news": 86400, "macro": 14 * 86400,
-    }
+    """Spot-check the documented caps, and pin the relationship that matters.
+
+    This used to compare the whole table to a literal, which made adding a
+    capability a test failure rather than a review question — and said nothing
+    about whether the numbers were coherent. The invariant worth holding is
+    that a capability's stale cap is never *shorter* than its TTL: a cap below
+    the TTL would refuse the very row the TTL just declared usable.
+    """
+    assert pc.MAX_STALE_BY_CAPABILITY["profile"] == 30 * 86400
+    assert pc.MAX_STALE_BY_CAPABILITY["quote"] == 3600
+    assert pc.MAX_STALE_BY_CAPABILITY["news"] == 86400
+
+    for capability, ttl in pc.TTL_BY_CAPABILITY.items():
+        cap = pc.max_stale_seconds(capability)
+        assert cap >= ttl, (
+            f"{capability}: stale cap {cap}s is shorter than its TTL {ttl}s, so a "
+            "row would be refused as too old while still being served as fresh"
+        )
 
 
 # ---------------------------------------------------------------------------

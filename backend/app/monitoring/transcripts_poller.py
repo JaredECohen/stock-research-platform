@@ -33,6 +33,9 @@ Why daily (not 30-min like EDGAR): transcripts publish weeks after
 quarter-end, on a schedule that's known well in advance. Polling
 every 30 minutes burns FMP rate-limit budget for no signal. Daily at
 06:00 UTC catches typical pre-market US releases.
+
+Handing an event to the orchestrator is the expensive half, and it is
+capped per pass — see `MAX_EVENT_TICKERS_PER_PASS`.
 """
 from __future__ import annotations
 
@@ -40,11 +43,34 @@ import logging
 from collections.abc import Iterable
 
 from ..cache import cache_get, cache_put
-from ..monitoring import record_run
+from ..monitoring import note_names, record_run
 from ..services.data_service import curated_poll_universe
 from ..services.transcripts_service import get_transcripts
 
 log = logging.getLogger(__name__)
+
+# How many tickers one pass may hand to `on_transcript_event`.
+#
+# Same reasoning as `edgar_poller.MAX_FILING_EVENTS_PER_PASS`, and the same
+# cost: `on_transcript_event` calls `_persist_raw_data_only` before its gate,
+# which re-reads the ticker's filings AND transcripts, writes them, and embeds
+# the new chunks. It is a burst risk for the same reason too — `transcripts`
+# was one of the capabilities cached forever, so the first pass after that fix
+# surfaces every period that published in the meantime, for the whole curated
+# universe at once.
+#
+# Twice the filing cap because this loop runs daily rather than every 30
+# minutes: 30 events have 24 hours to work through, which is a far lower
+# sustained rate than the filing poller's 15-per-half-hour, and it drains a
+# ~166-ticker backlog in under a week instead of eleven days. Earnings arrive
+# in two-week clusters, so a slower drain would still be catching up on Q1
+# when Q2 starts.
+MAX_EVENT_TICKERS_PER_PASS = 30
+
+# Upper bound on the per-ticker `transcripts_seen_periods` bookkeeping set.
+# Ten years of quarters. Periods are labels like "2025Q4", so this is
+# genuinely chronological, and the union used to grow without limit.
+MAX_SEEN_PERIODS = 40
 
 
 def _seen_periods(ticker: str) -> set[str]:
@@ -52,6 +78,24 @@ def _seen_periods(ticker: str) -> set[str]:
     if snap is None or not isinstance(snap.payload, dict):
         return set()
     return set(snap.payload.get("periods", []))
+
+
+def _bounded_seen(periods: set[str], seen: set[str]) -> set[str]:
+    """`periods | seen`, pruned deterministically to MAX_SEEN_PERIODS.
+
+    The provider's current window is kept whatever the cap says: dropping a
+    period that is still being returned would make the next pass read it as
+    new and re-fire the event. Only older periods are pruned, newest first.
+    """
+    merged = periods | seen
+    if len(merged) <= MAX_SEEN_PERIODS:
+        return merged
+    keep = set(periods)
+    for period in sorted(seen - periods, reverse=True):
+        if len(keep) >= MAX_SEEN_PERIODS:
+            break
+        keep.add(period)
+    return keep
 
 
 def _save_seen_periods(ticker: str, periods: set[str]) -> None:
@@ -78,6 +122,11 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     With no argument, polls the `AUTO_PULL_TIERS` slice of the universe
     (see the module docstring). An explicit `tickers=` is taken as given
     and skips the tier filter.
+
+    At most `MAX_EVENT_TICKERS_PER_PASS` tickers are handed to the
+    orchestrator. A ticker over the cap is *deferred*, not dropped: its
+    bookkeeping is left untouched, so the next pass still sees its periods
+    as new and picks it up. Deferrals are named in the run note.
     """
     excluded: int | None = None
     if tickers is None:
@@ -85,6 +134,8 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     tickers = list(tickers)
 
     events: list[dict] = []
+    deferred: list[str] = []
+    processed = 0
     for t in tickers:
         try:
             transcripts = get_transcripts(t) or []
@@ -103,6 +154,14 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         seen = _seen_periods(t)
         new = periods - seen
         if new and seen:  # skip first-run init
+            if processed >= MAX_EVENT_TICKERS_PER_PASS:
+                # Over the cap. The `continue` also skips the bookkeeping
+                # write below, and must: recording these periods as seen
+                # without having processed them would lose the event
+                # permanently — the next pass would compute an empty diff.
+                deferred.append(t)
+                continue
+            processed += 1
             for period in sorted(new):
                 regenerated = None
                 try:
@@ -119,7 +178,7 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
                     "regenerated": regenerated,
                 })
         if periods:
-            _save_seen_periods(t, periods | seen)
+            _save_seen_periods(t, _bounded_seen(periods, seen))
 
     # `kind="gate_error"` = the auto-regen gate crashed rather than
     # decided; surface it in the note instead of letting it pass as a skip.
@@ -133,6 +192,9 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     # the tickers, so no tier filter ran and there is nothing to report.
     if excluded is not None:
         note += f"; polled {len(tickers)} in-tier, skipped {excluded} out-of-tier"
+    if deferred:
+        note += f"; deferred {len(deferred)} over the {MAX_EVENT_TICKERS_PER_PASS}"
+        note += f"-ticker cap: {note_names(deferred)}"
     if gate_errors:
         note += f"; gate errors on {len(gate_errors)}: {', '.join(gate_errors[:5])}"
     record_run("transcripts_poller", success=not gate_errors, note=note)

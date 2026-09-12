@@ -50,12 +50,72 @@ KNOWN_LOOPS: tuple[str, ...] = (
 )
 
 
+# Env override, read first so an operator can settle the question without
+# depending on any inference below. Unset in production today, which is why
+# the fallbacks have to work on their own.
+PROCESS_ROLE_ENV = "MM_PROCESS_ROLE"
+_ROLES = ("worker", "web")
+
+# What `python -m app.worker` names the running module. Checked against
+# `__main__.__spec__`, which runpy sets to the spec of the module it is
+# executing — the only signal that survives `-m` intact.
+_WORKER_MODULE = "app.worker"
+
+
 def _process_role() -> str:
-    """Best-effort label for which process is reporting: worker or web."""
+    """Which process is reporting a cron run: "worker" or "web".
+
+    This is `/api/admin/cron-health`'s `reported_by`, and it was wrong for
+    every row. The whole check used to be `any("app.worker" in a for a in
+    sys.argv)`, which is never true in production: `python -m app.worker`
+    rewrites `sys.argv[0]` to the module's *file path*, `/app/app/worker.py`.
+    The literal "app.worker" — with a dot — appears nowhere in it. So every
+    loop, `worker_heartbeat` included, was labelled "web", and the endpoint's
+    one cross-process signal said the opposite of the truth.
+
+    Three signals, most authoritative first:
+
+    1. `MM_PROCESS_ROLE`, when an operator sets it. Nothing in Render sets it
+       today, which is exactly why it cannot be the only signal.
+    2. `__main__.__spec__.name` — runpy sets this to "app.worker" under
+       `python -m app.worker`, dots intact, whatever it did to argv.
+    3. The basename of `sys.argv[0]`, for `python app/worker.py`, plus the
+       original substring check for a wrapper that really does carry the
+       dotted name on its command line.
+
+    Anything else is the web service: uvicorn, pytest, a shell.
+    """
+    import os
     import sys
-    if any("app.worker" in a for a in sys.argv):
+
+    explicit = (os.environ.get(PROCESS_ROLE_ENV) or "").strip().lower()
+    if explicit in _ROLES:
+        return explicit
+
+    main = sys.modules.get("__main__")
+    if getattr(getattr(main, "__spec__", None), "name", "") == _WORKER_MODULE:
+        return "worker"
+
+    argv = list(sys.argv or [])
+    if argv and os.path.basename(argv[0].replace("\\", "/")) == "worker.py":
+        return "worker"
+    if any(_WORKER_MODULE in a for a in argv):
         return "worker"
     return "web"
+
+
+def note_names(names, limit: int = 5) -> str:
+    """Comma-joined names for a run note, truncated with a visible marker.
+
+    Standing rule in this repo: no silent caps. Anything a loop skipped,
+    deferred or failed on has to be legible in `/api/admin/cron-health`, and a
+    bare count leaves nobody able to tell *which* names are waiting. The note
+    is one column, though, so a long list is elided with a "+N more" marker
+    rather than either dumping it all or quietly dropping the tail.
+    """
+    names = list(names)
+    head = ", ".join(names[:limit])
+    return head if len(names) <= limit else f"{head}, +{len(names) - limit} more"
 
 
 def record_run(loop_name: str, *, success: bool = True, note: str = "") -> None:
@@ -157,7 +217,7 @@ __all__ = [
     "outcome_loop", "postmortem_loop", "sample_build_loop", "scorecard_loop",
     "sector_digest_loop", "snapshot_gc", "social_loop",
     "theme_exposure_loop", "transcripts_poller", "weekly_digest_loop",
-    "register_all", "record_run", "status_snapshot", "KNOWN_LOOPS",
+    "register_all", "record_run", "note_names", "status_snapshot", "KNOWN_LOOPS",
 ]
 
 

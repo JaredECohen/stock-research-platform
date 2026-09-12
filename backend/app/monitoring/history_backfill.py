@@ -48,6 +48,15 @@ def run_once(ticker: str | None = None) -> dict[str, int]:
 
     Loop status (`status_snapshot()`) reports `success=False` when ANY
     error fires so the admin endpoint flags the loop as unhealthy.
+
+    Reading the note: `fp=`, `filings=` and `transcripts=` are counts of
+    rows that actually changed, so a quiet night is `fp=0 filings=0
+    transcripts=0` and a non-zero number means new data landed. `filings=`
+    used to count every re-ingest of an unchanged row, so it read 1660 every
+    night — 166 tickers x the provider's 10-filing cap — whether or not a
+    single filing had been fetched. It was the only telemetry pointing at
+    the filings pipeline, and it said "healthy" for the system's whole life
+    while nothing was being ingested at all.
     """
     tickers = [ticker.upper()] if ticker else _tier1_tickers()
     totals = {"financial_periods": 0, "filings": 0, "transcripts": 0}

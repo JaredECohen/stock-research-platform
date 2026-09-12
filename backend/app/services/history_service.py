@@ -224,8 +224,20 @@ def _filing_word_count(sections: dict[str, Any], raw: str) -> int:
 
 
 def _ingest_filings(db: Session, ticker: str, filings: list[dict[str, Any]]) -> int:
-    """Idempotently store filings. Existing rows are updated; new rows are
-    inserted. Returns count of net writes.
+    """Idempotently store filings. Returns the count of rows that actually
+    changed — an insert, or an update whose content differs from what is
+    already stored. Re-ingesting an unchanged filing counts zero and writes
+    nothing, `_upsert_financial_period`'s contract.
+
+    That distinction is not cosmetic. This number is what `backfill_ticker`
+    reports and what the nightly `history_backfill` note shows, and while it
+    counted every UPDATE as a write the note read `filings=1660` every single
+    night — 166 tickers x the SEC provider's hard 10-filing cap — against a
+    pipeline that had not ingested a new filing since the deployment's first
+    day. The provider cache was frozen, the poller was diffing against a
+    frozen list, and the only telemetry anyone had said 1,660 writes a night.
+    A counter that cannot say "nothing happened" cannot report that anything
+    did.
 
     Wave 10 — after a NEW filing row is inserted (not on updates), we
     fire `filing_memory.post_pass` to (a) index its chunks into the
@@ -255,6 +267,20 @@ def _ingest_filings(db: Session, ticker: str, filings: list[dict[str, Any]]) -> 
             select(FilingDoc).where(FilingDoc.accession_number == accession)
         ).scalar_one_or_none()
         if existing is not None:
+            # Compare before writing, so an unchanged re-ingest is a true
+            # no-op rather than a refreshed `fetched_at` counted as a write.
+            unchanged = (
+                existing.ticker == ticker
+                and existing.filing_type == filing_type
+                and existing.filing_date == filing_date
+                and existing.period_end == period_end
+                and existing.raw_text == raw_text
+                and existing.sections == sections
+                and existing.word_count == wc
+                and existing.url == url
+            )
+            if unchanged:
+                continue
             existing.ticker = ticker
             existing.filing_type = filing_type
             existing.filing_date = filing_date
@@ -357,9 +383,14 @@ def _ingest_transcripts(
     """Persist transcripts → EarningsTranscript table. New rows are
     embedded into `doc_chunks` via `filing_memory.index_transcript`
     so the earnings analyst can retrieve speaker-attributed Q&A
-    without re-fetching the call. Re-ingest of existing periods
-    refreshes the row but skips re-indexing (idempotent — the same
-    period yields the same chunks).
+    without re-fetching the call. Re-ingest of an existing period that
+    has genuinely changed refreshes the row but skips re-indexing
+    (idempotent — the same period yields the same chunks); re-ingest of
+    an unchanged period writes nothing at all.
+
+    Returns the count of rows that actually changed, for the same reason
+    `_ingest_filings` does: the number is telemetry, and one that cannot
+    report zero reports nothing.
     """
     written = 0
     new_transcript_ids: list[int] = []
@@ -378,6 +409,16 @@ def _ingest_transcripts(
             )
         ).scalar_one_or_none()
         if existing is not None:
+            unchanged = (
+                existing.fiscal_year == fy
+                and existing.fiscal_quarter == fq
+                and existing.call_date == call_date
+                and existing.blocks == blocks
+                and existing.full_text == full_text
+                and existing.word_count == wc
+            )
+            if unchanged:
+                continue
             existing.fiscal_year = fy
             existing.fiscal_quarter = fq
             existing.call_date = call_date
@@ -412,7 +453,10 @@ def backfill_ticker(ticker: str, *, db: Session | None = None) -> dict[str, int]
     """Full backfill of one ticker against the data_service.
 
     Returns a `{financial_periods, filings, transcripts}` dict of net
-    write counts. Idempotent: re-running on unchanged data is a no-op.
+    write counts — rows inserted, plus rows whose stored content actually
+    differed from the provider's. Idempotent: re-running on unchanged data
+    writes nothing and returns zeros for all three, which is what makes the
+    nightly `history_backfill` note a usable signal rather than a constant.
     """
     from .data_service import get_data_service
     ticker = ticker.upper()
