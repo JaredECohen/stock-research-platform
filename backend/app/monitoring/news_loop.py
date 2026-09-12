@@ -33,16 +33,35 @@ _RUN_INTERVAL_HOURS = 1
 #
 # Cost math: this loop runs hourly, and `news_agent.run(force_refresh=True)`
 # makes one Gemini call per ticker (`settings.gemini_news_model`). So the
-# steady-state spend is budget x 24 calls/day — at 10, that is 240 Gemini
-# calls a day. Raising it to ~25 (600/day) would cover every ticker that
-# carries any research signal at all today: the 10 pins plus the 17 that
-# have ever had a memo generated, minus the overlap.
+# steady-state spend is budget x 24 calls/day — at 25, that is 600 Gemini
+# calls a day, up from 240 at the previous budget of 10.
 #
-# Deliberately left at 10, which is exactly what the old arbitrary
-# `list_tickers()[:10]` slice spent. This change is about WHICH ten, not
-# how many; raising it is a spend decision for the owner, not a side effect
-# of a relevance fix.
-NEWS_FOCUS_BUDGET = 10
+# The previous 10 was not a judgement about coverage. It was exactly what
+# the old arbitrary `list_tickers()[:10]` slice spent, held constant so that
+# shipping the relevance ranking changed WHICH ten ran and not how many —
+# spend being the owner's decision, not a side effect of a correctness fix.
+# The owner has now taken it: 25.
+#
+# 25 is the size of the thing worth covering rather than a round number. The
+# tickers that carry any research signal at all are the 10 curated pins plus
+# the 17 that have ever had a memo generated, which overlap by a couple, so
+# a budget of 25 reaches essentially all of them every hour. Above that the
+# ranking has nothing left to rank: band 3 runs out, and the extra calls
+# would buy news on tickers nobody has looked at.
+#
+# `research_focus`'s `LIVE_RESEARCH_RESERVE` and `ROTATING_SLOTS` are
+# unchanged and deliberately so. Both are absolute slot counts, not
+# fractions of the budget, and both exist for the *over*-budget case — the
+# reserve so a ticker someone is researching right now outranks a full pin
+# list, the rotation so the tail below the guaranteed prefix is covered in
+# turn rather than never. A budget of 25 against a pool of ~25 mostly takes
+# `_select`'s "everything fits" path, where neither fires; when the pool
+# does grow past the budget again they do exactly what they did at 10.
+# Raising either would not raise spend, only move slots between "covered
+# every run" and "covered in turn".
+#
+# `SOCIAL_FOCUS_BUDGET` is untouched: the owner approved the news budget.
+NEWS_FOCUS_BUDGET = 25
 
 
 def _last_run_for(ticker: str) -> datetime | None:
