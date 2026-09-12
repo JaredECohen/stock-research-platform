@@ -33,10 +33,20 @@ which is how tests and admin re-runs drive a specific name through here.
 
 Handing an event to the orchestrator is the expensive half, and it is capped
 per pass — see `MAX_FILING_EVENTS_PER_PASS`.
+
+The pass itself is capped too. Better chunking makes the indexing cheaper but
+does not make a 5 MB download faster, and a pass that outruns its 30-minute
+interval eats the next tick silently (`max_instances=1`). So `run_once` has a
+wall-clock budget (`MAX_PASS_SECONDS`), reports progress while it is still
+running (`PROGRESS_INTERVAL_SECONDS`) rather than only on completion, and
+rotates where it starts so the tail of the universe is covered across
+consecutive passes instead of never. A ticker the budget did not reach keeps
+its bookkeeping untouched, exactly like one deferred by the event cap.
 """
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterable
 
 from ..cache import cache_get, cache_put, invalidate
@@ -79,6 +89,37 @@ MAX_FILING_EVENTS_PER_PASS = 15
 # large cap, a couple of KB on disk, and impossible to overflow in one pass.
 MAX_SEEN_ACCESSIONS = 50
 
+# Wall-clock budget for one pass, in seconds.
+#
+# The loop is registered `interval, minutes=30` and APScheduler defaults to
+# `max_instances=1`, so a pass that outlives its interval does not overlap —
+# it silently eats the next tick, and the one after that. Measured in
+# production on 2026-09-12: the last COMPLETED pass was logged at 20:52:34Z
+# and it was still running 95 minutes later, having fired AAPL at 21:29Z and
+# AMZN at 22:05Z — 36 minutes apart, in alphabetical order, so the pass was
+# working the whole time. Nothing was wrong except that it could not finish,
+# and `record_run` fires only at the END of `run_once`, so cron-health showed
+# one stale timestamp for the entire hour and a half. An operator could not
+# tell a slow pass from a wedged loop.
+#
+# 20 minutes leaves a third of the interval as headroom for the ticker that
+# is in flight when the budget runs out (`on_filing_event` downloads
+# documents, embeds them and calls the LLM, and is never interrupted
+# mid-ticker — see `run_once`). A pass that stops here is not an error: it is
+# the same bounded-work contract as MAX_FILING_EVENTS_PER_PASS, and the
+# unvisited tickers keep their untouched bookkeeping, so the next tick — a
+# rotated one, see `_rotated` — picks them up.
+MAX_PASS_SECONDS = 20 * 60
+
+# How often a long pass reports progress to `record_run`.
+#
+# `record_run` used to fire once, at the end. Until it did, `/api/admin/
+# cron-health` reported the *previous* pass's timestamp, so a pass that ran
+# 95 minutes looked identical to a loop that had died 95 minutes ago. Calling
+# it periodically mid-pass costs one upsert every two minutes and makes the
+# difference legible: a progress note names how far the pass has got.
+PROGRESS_INTERVAL_SECONDS = 120
+
 
 def _seen_accessions(ticker: str) -> set[str]:
     snap = cache_get(ticker, "edgar_seen_accessions")
@@ -107,6 +148,48 @@ def _bounded_seen(accessions: set[str], seen: set[str]) -> set[str]:
     return keep
 
 
+# Cache key for the rotation cursor. A pseudo-ticker rather than a real one
+# because the cursor is a property of the pass, not of any company.
+_CURSOR_KEY = "__edgar_poller_pass__"
+
+
+def _resume_from() -> str | None:
+    """The ticker the previous budget-capped pass stopped before, if any."""
+    snap = cache_get(_CURSOR_KEY, "edgar_pass_cursor")
+    if not snap or not isinstance(snap.payload, dict):
+        return None
+    value = snap.payload.get("resume_from")
+    return str(value) if value else None
+
+
+def _save_resume_from(ticker: str | None) -> None:
+    cache_put(
+        _CURSOR_KEY, "edgar_pass_cursor",
+        payload={"resume_from": ticker or ""},
+        sources_used=["edgar:pass:bookkeeping"],
+        generated_by="edgar_poller",
+        cost_tokens=0,
+        ttl_seconds=365 * 24 * 3600,
+    )
+
+
+def _rotated(tickers: list[str], resume: str | None) -> list[str]:
+    """Start the pass where the last one ran out of budget.
+
+    Without this the budget would be a starvation device rather than a
+    bound: a pass that only ever gets through the first 90 names in
+    alphabetical order polls the same 90 forever, and the tail is never
+    read again. Rotating means the whole universe is covered across
+    consecutive passes — which is the only reason stopping early is
+    acceptable at all. Falls back to the head when the cursor names a
+    ticker that has since left the universe.
+    """
+    if not resume or resume not in tickers:
+        return tickers
+    i = tickers.index(resume)
+    return tickers[i:] + tickers[:i]
+
+
 def _save_seen_accessions(ticker: str, accessions: set[str]) -> None:
     cache_put(
         ticker, "edgar_seen_accessions",
@@ -122,27 +205,63 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     """Poll EDGAR once. Returns a list of `{ticker, new_accessions}` events.
 
     With no argument, polls the `AUTO_PULL_TIERS` slice of the universe
-    (see the module docstring). An explicit `tickers=` is taken as given
-    and skips the tier filter — an admin re-run for one name should not
-    have to care what tier it is in.
+    (see the module docstring), starting where the previous pass ran out of
+    wall clock. An explicit `tickers=` is taken as given: it skips the tier
+    filter, the rotation and the cursor, because an admin re-run for one
+    name should not have to care what tier it is in and must not move the
+    scheduled pass's place in the universe.
 
-    At most `MAX_FILING_EVENTS_PER_PASS` tickers are handed to the
-    orchestrator. A ticker over the cap is *deferred*, not dropped: its
-    bookkeeping is left untouched, so the next pass still sees its
-    accessions as new and picks it up. Deferrals are named in the run note.
+    Two bounds, and the same discipline behind both. At most
+    `MAX_FILING_EVENTS_PER_PASS` tickers are handed to the orchestrator,
+    and the pass stops after `MAX_PASS_SECONDS`. A ticker over either bound
+    is *deferred* or *unvisited*, never dropped: its bookkeeping is left
+    untouched, so the next pass still sees its accessions as new and picks
+    it up. Both are named in the run note.
+
+    Progress is reported to `record_run` every
+    `PROGRESS_INTERVAL_SECONDS`, so cron-health distinguishes a long pass
+    from a dead loop while it is still running.
 
     No-op for tickers without filings. The EDGAR provider returns an empty
     list in demo mode, so this loop becomes a quiet bookkeeping pass.
     """
     excluded: int | None = None
-    if tickers is None:
+    scheduled = tickers is None
+    if scheduled:
         tickers, excluded = curated_poll_universe()
-    tickers = list(tickers)
+        tickers = _rotated(list(tickers), _resume_from())
+    else:
+        tickers = list(tickers)
 
+    started = time.monotonic()
+    last_progress = started
     events: list[dict] = []
     gate_errors: list[str] = []
     deferred: list[str] = []
-    for t in tickers:
+    unvisited: list[str] = []
+    polled = 0
+
+    for index, t in enumerate(tickers):
+        # Checked before the ticker is touched, never during it.
+        # `on_filing_event` downloads documents, embeds them and calls the
+        # LLM; abandoning that half-done would leave `filing_docs` written
+        # and `seen` unadvanced, which is a worse state than not starting.
+        if time.monotonic() - started >= MAX_PASS_SECONDS:
+            unvisited = list(tickers[index:])
+            break
+
+        now = time.monotonic()
+        if now - last_progress >= PROGRESS_INTERVAL_SECONDS:
+            last_progress = now
+            record_run(
+                "edgar_poller", success=True,
+                note=(
+                    f"in progress: polled {polled}/{len(tickers)}, "
+                    f"{len(events)} new filings, {int(now - started)}s elapsed"
+                ),
+            )
+
+        polled += 1
         try:
             filings = get_filings_index(t) or []
         except Exception as exc:
@@ -197,15 +316,30 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         if accessions:
             _save_seen_accessions(t, _bounded_seen(accessions, seen))
 
+    # Where the next scheduled pass starts. The first unvisited ticker when
+    # the budget bit, otherwise back to the head of the universe. Written
+    # only for the scheduled pass — an admin re-run naming one ticker must
+    # not move the cursor.
+    if scheduled:
+        try:
+            _save_resume_from(unvisited[0] if unvisited else None)
+        except Exception as exc:  # pragma: no cover — diagnostic only
+            log.warning("edgar pass cursor write failed: %s", exc)
+
     note = f"{len(events)} new filings"
     # Say the constraint out loud. `excluded is None` means the caller named
     # the tickers, so no tier filter ran and there is nothing to report —
     # printing "0 out-of-tier" there would claim a filter that never fired.
     if excluded is not None:
-        note += f"; polled {len(tickers)} in-tier, skipped {excluded} out-of-tier"
+        note += f"; polled {polled}/{len(tickers)} in-tier, skipped {excluded} out-of-tier"
     if deferred:
         note += f"; deferred {len(deferred)} over the {MAX_FILING_EVENTS_PER_PASS}"
         note += f"-event cap: {note_names(deferred)}"
+    if unvisited:
+        note += (
+            f"; stopped at the {MAX_PASS_SECONDS}s pass budget with "
+            f"{len(unvisited)} unvisited: {note_names(unvisited)}"
+        )
     if gate_errors:
         note += f"; gate errors on {len(gate_errors)}: {', '.join(gate_errors[:5])}"
     record_run("edgar_poller", success=not gate_errors, note=note)

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 from datetime import date
 from typing import Any
 
@@ -46,36 +47,47 @@ log = logging.getLogger(__name__)
 # Indexing
 # ---------------------------------------------------------------------------
 
+def _iter_filing_chunks(filing: FilingDoc) -> Iterator[dict[str, Any]]:
+    """Yield one chunk record per section piece, holding none of them.
+
+    A generator rather than a list because the list was the problem: a
+    10-K's sections chunk to several hundred records, every one of them
+    carrying its own copy of the text, and the old `index_filing`
+    accumulated all of them before a single row was written. Yielding lets
+    `vector_store.upsert_source` embed and insert in batches, so the peak
+    working set is a batch instead of the filing.
+    """
+    meta = {
+        "accession": filing.accession_number,
+        "filing_type": filing.filing_type,
+        "filing_date": filing.filing_date.isoformat() if filing.filing_date else None,
+        "url": filing.url or "",
+    }
+    for section_name, section_text in (filing.sections or {}).items():
+        if not isinstance(section_text, str) or not section_text.strip():
+            continue
+        for piece in emb_svc.iter_chunks(section_text):
+            yield {
+                "text": piece,
+                "section": section_name,
+                "period_end": filing.period_end,
+                "meta": meta,
+            }
+
+
 def index_filing(filing: FilingDoc) -> int:
     """Chunk + embed all sections of a filing into `doc_chunks`.
 
     Returns the count of chunks written. Idempotent — re-indexing the
-    same filing replaces its prior chunks.
+    same filing replaces its prior chunks. The replacement and every
+    batch's insert share one transaction inside `upsert_source`, so
+    streaming does not weaken that guarantee.
     """
-    sections = filing.sections or {}
-    chunks: list[dict[str, Any]] = []
-    for section_name, section_text in sections.items():
-        if not isinstance(section_text, str) or not section_text.strip():
-            continue
-        for piece in emb_svc.chunk_text(section_text):
-            chunks.append({
-                "text": piece,
-                "section": section_name,
-                "period_end": filing.period_end,
-                "meta": {
-                    "accession": filing.accession_number,
-                    "filing_type": filing.filing_type,
-                    "filing_date": filing.filing_date.isoformat() if filing.filing_date else None,
-                    "url": filing.url or "",
-                },
-            })
-    if not chunks:
-        return 0
     return vector_store.upsert_source(
         ticker=filing.ticker,
         source_type="filing",
         source_id=filing.id,
-        chunks=chunks,
+        chunks=_iter_filing_chunks(filing),
     )
 
 
@@ -93,38 +105,24 @@ def index_latest_filing_for(ticker: str) -> int:
         return index_filing(row)
 
 
-def index_transcript(transcript) -> int:
-    """Chunk + embed an earnings transcript into `doc_chunks`.
+def _iter_transcript_chunks(transcript, period_end: date | None) -> Iterator[dict[str, Any]]:
+    """Yield chunk records for a transcript, block by block.
 
-    Splits by speaker block when available so retrieval can target the
-    CEO's prepared remarks separately from an analyst's pressure-test
-    question. Falls back to `chunk_text` over `full_text` when blocks
-    aren't populated.
-
-    Returns the count of chunks written. Idempotent — re-indexing the
-    same `(ticker, period)` replaces its prior chunks via the
-    `(source_type='transcript', source_id=transcript.id)` key.
+    Block-level chunks let the earnings agent retrieve "what the CFO said
+    about gross margin" without grepping the whole call. A block may itself
+    be longer than one chunk, so each is sub-chunked through the same
+    structure-aware splitter the filings use.
     """
-    from ..models import EarningsTranscript
-    if not isinstance(transcript, EarningsTranscript):
-        return 0
-    chunks: list[dict[str, Any]] = []
-    period_end: date | None = None
-    if transcript.call_date:
-        period_end = transcript.call_date
     blocks = transcript.blocks or []
     if isinstance(blocks, list) and blocks:
-        # Block-level chunks let the earnings agent retrieve "what the
-        # CFO said about gross margin" without grepping the whole call.
         for i, block in enumerate(blocks):
             if not isinstance(block, dict):
                 continue
             text = (block.get("text") or "").strip()
             if not text:
                 continue
-            # Block may itself be too large for one embed call; subchunk.
-            for j, piece in enumerate(emb_svc.chunk_text(text)):
-                chunks.append({
+            for j, piece in enumerate(emb_svc.iter_chunks(text)):
+                yield {
                     "text": piece,
                     "section": block.get("segment") or block.get("section") or "qa",
                     "period_end": period_end,
@@ -135,25 +133,40 @@ def index_transcript(transcript) -> int:
                         "block_index": i,
                         "sub_index": j,
                     },
-                })
-    else:
-        # No blocks → chunk the flat full_text. Still useful for retrieval
-        # but loses speaker attribution.
-        text = (transcript.full_text or "").strip()
-        for piece in emb_svc.chunk_text(text):
-            chunks.append({
-                "text": piece,
-                "section": "transcript",
-                "period_end": period_end,
-                "meta": {"period": transcript.period},
-            })
-    if not chunks:
+                }
+        return
+    # No blocks → chunk the flat full_text. Still useful for retrieval
+    # but loses speaker attribution.
+    for piece in emb_svc.iter_chunks((transcript.full_text or "").strip()):
+        yield {
+            "text": piece,
+            "section": "transcript",
+            "period_end": period_end,
+            "meta": {"period": transcript.period},
+        }
+
+
+def index_transcript(transcript) -> int:
+    """Chunk + embed an earnings transcript into `doc_chunks`.
+
+    Splits by speaker block when available so retrieval can target the
+    CEO's prepared remarks separately from an analyst's pressure-test
+    question. Falls back to the flat `full_text` when blocks aren't
+    populated.
+
+    Returns the count of chunks written. Idempotent — re-indexing the
+    same `(ticker, period)` replaces its prior chunks via the
+    `(source_type='transcript', source_id=transcript.id)` key.
+    """
+    from ..models import EarningsTranscript
+    if not isinstance(transcript, EarningsTranscript):
         return 0
+    period_end: date | None = transcript.call_date or None
     return vector_store.upsert_source(
         ticker=transcript.ticker,
         source_type="transcript",
         source_id=transcript.id,
-        chunks=chunks,
+        chunks=_iter_transcript_chunks(transcript, period_end),
     )
 
 

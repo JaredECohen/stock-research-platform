@@ -16,7 +16,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-from collections.abc import Sequence
+import re
+from collections.abc import Iterable, Iterator, Sequence
+from functools import lru_cache
 
 from ..config import settings
 
@@ -88,25 +90,379 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
     return dot / (na * nb)
 
 
+# ---------------------------------------------------------------------------
+# Tokenization
+# ---------------------------------------------------------------------------
+#
+# Chunk budgets are stated in *model* tokens, so they have to be measured in
+# model tokens. The previous chunker counted whitespace-separated words and
+# called them tokens, which is not a rounding error on this corpus: measured
+# against `cl100k_base`, ordinary 10-K prose runs ~1.1 tokens per word, an
+# MD&A sentence dense with figures ("increased 12.4% to $394,328 million")
+# runs ~1.8, and a segment table row runs ~4.1. A 500-"word" chunk was
+# therefore anywhere from 550 to 2,000 real tokens — silently over budget
+# exactly where the retrieval corpus is densest.
+#
+# `tiktoken` is already a pinned dependency, so exactness costs nothing but a
+# lookup. The encoding is resolved *from the embedding model in use* rather
+# than hard-coded, so swapping `EMBEDDING_MODEL` cannot leave the chunker
+# measuring against the wrong vocabulary.
+
+# Characters per token when the encoder is unavailable. Measured across the
+# four text shapes above, `cl100k_base` yields 5.9 chars/token for prose,
+# 5.1 for risk-factor boilerplate, 3.3 for figure-dense MD&A and 2.6 for
+# table rows. 3.6 sits near the dense end on purpose: over-estimating tokens
+# yields chunks a little smaller than the budget, while under-estimating
+# yields chunks over it, and only one of those degrades retrieval.
+_FALLBACK_CHARS_PER_TOKEN = 3.6
+
+# A token is at least one character, so any string shorter than the budget
+# fits by construction and needs no encoding at all. Above
+# `_MAX_CHARS_PER_TOKEN` x budget nothing plausibly fits, so we say so
+# without encoding. Between the two we encode — a bounded slice, never the
+# document. This is what keeps `iter_chunks` from tokenizing a 5 MB 10-K to
+# find out it is larger than 500 tokens.
+_MAX_CHARS_PER_TOKEN = 8.0
+
+
+@lru_cache(maxsize=1)
+def _encoding():
+    """The tiktoken encoding for `EMBEDDING_MODEL`, or None.
+
+    Never raises. `tiktoken` fetches an encoding's BPE ranks over the
+    network on first use and caches them on disk; a worker that boots
+    without that cache and without egress would otherwise take the whole
+    process down inside a filing index. Returning None puts the chunker on
+    the calibrated character heuristic, which is worse and still correct.
+    """
+    try:
+        import tiktoken
+    except Exception as exc:  # pragma: no cover — tiktoken is pinned
+        log.warning("tiktoken unavailable (%s); chunking on the char heuristic", exc)
+        return None
+    try:
+        return tiktoken.encoding_for_model(EMBEDDING_MODEL)
+    except Exception:
+        # Unknown model name — every current `text-embedding-3-*` model uses
+        # cl100k_base, so try it by name before giving up.
+        try:
+            return tiktoken.get_encoding("cl100k_base")
+        except Exception as exc:
+            log.warning(
+                "tiktoken encoding unavailable (%s); chunking on the char heuristic",
+                exc,
+            )
+            return None
+
+
+def count_tokens(text: str) -> int:
+    """Model-token count for `text`; a calibrated estimate if unencodable."""
+    if not text:
+        return 0
+    enc = _encoding()
+    if enc is not None:
+        try:
+            return len(enc.encode(text, disallowed_special=()))
+        except Exception:  # pragma: no cover — defensive
+            pass
+    return max(1, int(len(text) / _FALLBACK_CHARS_PER_TOKEN + 0.5))
+
+
+def _fits(text: str, budget: int) -> bool:
+    """`count_tokens(text) <= budget`, short-circuited on length.
+
+    The two length tests are not optimisations of an exact answer, they are
+    what makes the exact answer affordable: the encode only ever runs on a
+    string already known to be within a small multiple of the budget.
+    """
+    n = len(text)
+    if n <= budget:
+        return True
+    if n > budget * _MAX_CHARS_PER_TOKEN:
+        return False
+    return count_tokens(text) <= budget
+
+
+# ---------------------------------------------------------------------------
+# Structure-aware splitting
+# ---------------------------------------------------------------------------
+#
+# A recursive structure splitter: take the largest natural boundary the text
+# offers, and only descend to a smaller one for the pieces that are still
+# over budget. Section, then paragraph, then line, then sentence, then
+# clause, then word, and a hard character cut as the genuine last resort.
+#
+# The ordering is the whole point on SEC filings. A fixed window cuts
+# mid-sentence, mid-table-row and mid-number, which severs a figure from the
+# line item it belongs to — the one failure mode that makes a retrieved
+# passage actively misleading rather than merely incomplete.
+
+# A section break: a form heading ("Item 1A.", "PART II"), a markdown
+# heading, or a run of blank lines. Kept as a lookahead so the heading stays
+# attached to the section it introduces.
+_SECTION_BREAK = re.compile(
+    r"\n(?=\s*(?:ITEM\s+\d|Item\s+\d|PART\s+[IVX]+\b|Part\s+[IVX]+\b|#{1,6}\s))"
+    r"|\n\s*\n\s*\n+"
+)
+
+_PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
+
+# Abbreviations whose trailing period is not a sentence end. Financial prose
+# is thick with them, and a split after "Inc." or "U.S." strands the subject
+# of the sentence in the previous chunk.
+_ABBREVIATIONS = frozenset({
+    "inc", "corp", "co", "ltd", "llc", "lp", "plc", "no", "nos", "vs", "approx",
+    "est", "fig", "figs", "cf", "al", "etc", "mr", "mrs", "ms", "dr", "jr",
+    "sr", "st", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sept", "sep",
+    "oct", "nov", "dec", "u.s", "e.g", "i.e", "q1", "q2", "q3", "q4",
+})
+
+# Candidate sentence end: terminal punctuation, optional closing quote or
+# bracket, then whitespace, then something that can start a sentence.
+_SENTENCE_END = re.compile(r"[.!?][\"')\]]*\s+(?=[A-Z“‘(\"'•\-])")
+
+_CLAUSE_BREAK = re.compile(r"(?<=[;:])\s+|(?<=,)\s+(?=(?:and|or|but|while|which|including)\b)")
+
+# A table row: two or more runs of collapsed whitespace, a pipe, or a tab.
+# Financial tables in EDGAR text come through as column-aligned runs of
+# spaces, and splitting inside one puts a number in a different chunk from
+# its row label.
+_TABLE_ROW = re.compile(r"\|| {2,}\S.* {2,}|\t")
+
+_LINE_BREAK = re.compile(r"\n")
+
+# A bare figure — a number, optionally signed / currencied / parenthesised,
+# with or without a trailing unit character. The word-level last resort must
+# not put one of these at the end of a chunk, because its unit or its label
+# is in the next word.
+_BARE_FIGURE = re.compile(r"^[\(\[]?[-+$€£¥]?[\d,.]+[\)\]%]?$")
+
+
+def _iter_split(text: str, pattern: re.Pattern[str]) -> Iterator[str]:
+    """Yield `text` cut at every `pattern` boundary, lazily.
+
+    Two properties the rest of the module depends on:
+
+    * **Lossless.** Each piece runs to the *end* of the boundary match, so
+      concatenating the pieces reproduces `text` exactly. Terminal
+      punctuation and the whitespace after it therefore stay attached to
+      the sentence they belong to, and a chunk assembled by `"".join` reads
+      as the document read.
+    * **Lazy.** `re.split` materialises every piece of a multi-megabyte
+      document at once, which is the allocation this module exists to
+      avoid. `finditer` yields one slice at a time, and the "no boundary
+      here" case yields the original object rather than a copy of it.
+    """
+    start = 0
+    matched = False
+    for m in pattern.finditer(text):
+        if m.end() <= start:  # zero-width, or a boundary inside the last one
+            continue
+        matched = True
+        yield text[start:m.end()]
+        start = m.end()
+    if not matched:
+        yield text
+        return
+    if start < len(text):
+        yield text[start:]
+
+
+def _iter_words(text: str) -> Iterator[str]:
+    """Whitespace-delimited words, keeping their trailing whitespace."""
+    for m in re.finditer(r"\S+\s*", text):
+        yield m.group(0)
+
+
+def _hard_cut(text: str, budget: int) -> Iterator[str]:
+    """Last resort: fixed-width character slices of one unsplittable run.
+
+    Reached only by a single word longer than the budget — a base64 blob or
+    a run-together table dump. Sized from the character heuristic rather
+    than by encoding, because by definition there is no boundary to respect.
+    """
+    width = max(1, int(budget * _FALLBACK_CHARS_PER_TOKEN))
+    for i in range(0, len(text), width):
+        piece = text[i : i + width]
+        if piece.strip():
+            yield piece
+
+
+def _iter_atoms(text: str, budget: int, level: int = 0) -> Iterator[str]:
+    """Yield the largest structural pieces of `text` that fit `budget`.
+
+    Descends one rung of the boundary ladder per recursion, so a paragraph
+    that fits is never split into sentences and a sentence that fits is
+    never split into words. Peak memory is the recursion path plus the
+    current piece — never the whole document, and never its token list.
+    """
+    if _fits(text, budget):
+        if text.strip():
+            yield text
+        return
+
+    if level == 0:
+        pieces: Iterable[str] = _iter_split(text, _SECTION_BREAK)
+    elif level == 1:
+        pieces = _iter_split(text, _PARAGRAPH_BREAK)
+    elif level == 2:
+        pieces = _iter_split(text, _LINE_BREAK)
+    elif level == 3:
+        pieces = _iter_sentences(text)
+    elif level == 4:
+        pieces = _iter_split(text, _CLAUSE_BREAK)
+    elif level == 5:
+        pieces = _iter_words(text)
+    else:
+        yield from _hard_cut(text, budget)
+        return
+
+    for piece in pieces:
+        if piece is text:
+            # No boundary of this kind: drop a rung rather than recurse on
+            # an identical string.
+            yield from _iter_atoms(text, budget, level + 1)
+            return
+        # A table row is atomic below the line level. Its columns are one
+        # record; a figure split away from its row label retrieves as a
+        # number with no referent. Honoured up to twice the budget, past
+        # which there is no readable chunk to protect.
+        if level >= 2 and _TABLE_ROW.search(piece) and _fits(piece, budget * 2):
+            if piece.strip():
+                yield piece
+            continue
+        yield from _iter_atoms(piece, budget, level + 1)
+
+
+def _iter_sentences(text: str) -> Iterator[str]:
+    """Lossless, lazy sentence split that survives financial abbreviations.
+
+    Same contract as `_iter_split`: pieces concatenate back to `text`, and
+    a text with no sentence boundary yields the original object so the
+    caller can tell that this rung of the ladder had nothing to offer.
+    """
+    start = 0
+    matched = False
+    for m in _SENTENCE_END.finditer(text):
+        if m.end() <= start:
+            continue
+        if _ends_in_abbreviation(text[start:m.start() + 1]):
+            continue
+        matched = True
+        yield text[start:m.end()]
+        start = m.end()
+    if not matched:
+        yield text
+        return
+    if start < len(text):
+        yield text[start:]
+
+
+def _ends_in_abbreviation(fragment: str) -> bool:
+    """True when `fragment`'s trailing period closes an abbreviation.
+
+    Decimals need no rule here: `_SENTENCE_END` requires whitespace after
+    the period, and "$1.5 billion" / "12.4%" have none, so a figure is
+    never a candidate boundary in the first place. Abbreviations are the
+    case the regex cannot see — "Berkshire Hathaway Inc. reported" would
+    otherwise be cut after "Inc.".
+    """
+    stripped = fragment.rstrip()
+    if not stripped.endswith("."):
+        return False
+    body = stripped[:-1]
+    word = body.rsplit(None, 1)[-1] if body.split() else ""
+    return word.lower().strip("([\"'") in _ABBREVIATIONS
+
+
+def _overlap_tail(chunk: str, overlap_tokens: int) -> str:
+    """Whole trailing sentences of `chunk`, up to `overlap_tokens`.
+
+    Fixed-width overlap was the other half of the old chunker's problem: 50
+    words back from an arbitrary cut reproduces a sentence *fragment*, so
+    the sentence carrying the figure is still severed — now in both chunks.
+    Carrying whole sentences means the boundary never falls inside the
+    statement a retrieval hit depends on.
+    """
+    if overlap_tokens <= 0 or not chunk.strip():
+        return ""
+    tail: list[str] = []
+    total = 0
+    for sentence in reversed(list(_iter_sentences(chunk))):
+        n = count_tokens(sentence)
+        if tail and total + n > overlap_tokens:
+            break
+        tail.insert(0, sentence)
+        total += n
+        if total >= overlap_tokens:
+            break
+    out = "".join(tail)
+    # Never let the overlap be the entire chunk: the next chunk would then
+    # start where this one did and the walk would not advance.
+    if len(out) >= len(chunk):
+        return ""
+    return out
+
+
+def iter_chunks(
+    text: str, *, target_tokens: int = 500, overlap_tokens: int = 50,
+) -> Iterator[str]:
+    """Stream structure-aware, token-budgeted chunks of `text`.
+
+    A generator on purpose. `filing_memory.index_filing` used to accumulate
+    every chunk of a filing in one list before writing a single row, on a
+    512 MiB worker that Render has OOM-killed twice; this hands the caller
+    one chunk at a time so the peak working set is a chunk, not a 10-K.
+
+    `target_tokens` is a budget, not a hard cap: a table row is kept whole
+    up to twice it (see `_iter_atoms`), because a split row retrieves worse
+    than a long one.
+    """
+    if not text or not text.strip():
+        return
+    target = max(1, int(target_tokens))
+    # Half the budget is the ceiling on overlap: past that a chunk is mostly
+    # a copy of its predecessor, and the walk slows to a crawl on long docs.
+    overlap = max(0, min(int(overlap_tokens), target // 2))
+
+    buf: list[str] = []
+    buf_tokens = 0
+    for atom in _iter_atoms(text, target):
+        n = count_tokens(atom)
+        if buf and buf_tokens + n > target:
+            # Never end a chunk on a bare figure. Reached only when the
+            # boundary has already fallen through to word level inside one
+            # oversized sentence or table row, and there it matters most:
+            # "$394,328" in one chunk and "million in fiscal 2026" in the
+            # next retrieves as a number with no unit and no referent.
+            # Push the trailing figures into the next chunk instead; the
+            # loop still advances because at least one atom always stays.
+            pushed: list[str] = []
+            while len(buf) > 1 and _BARE_FIGURE.match(buf[-1].strip()):
+                pushed.insert(0, buf.pop())
+            chunk = "".join(buf)
+            if chunk.strip():
+                yield chunk
+            carry = _overlap_tail(chunk, overlap)
+            buf = ([carry] if carry else []) + pushed
+            buf_tokens = sum(count_tokens(piece) for piece in buf)
+        buf.append(atom)
+        buf_tokens += n
+    if buf:
+        chunk = "".join(buf)
+        if chunk.strip():
+            yield chunk
+
+
 def chunk_text(
     text: str, *, target_tokens: int = 500, overlap_tokens: int = 50,
 ) -> list[str]:
-    """Naive token-budgeted chunker — words as a token proxy.
+    """List form of `iter_chunks`, for callers that want one.
 
-    Sufficient for filing / transcript chunking; if a follow-up wants
-    semantic-aware chunking (paragraph-respecting + section-aware) we
-    can swap this out without changing the retrieval interface.
+    Kept because the retrieval interface must not change — every existing
+    caller passes a section or a transcript block and wants a list back.
+    Prefer `iter_chunks` for anything document-sized.
     """
-    if not text:
-        return []
-    words = text.split()
-    chunks: list[str] = []
-    i = 0
-    step = max(1, target_tokens - overlap_tokens)
-    while i < len(words):
-        chunk_words = words[i : i + target_tokens]
-        if not chunk_words:
-            break
-        chunks.append(" ".join(chunk_words))
-        i += step
-    return chunks
+    return list(iter_chunks(
+        text, target_tokens=target_tokens, overlap_tokens=overlap_tokens,
+    ))

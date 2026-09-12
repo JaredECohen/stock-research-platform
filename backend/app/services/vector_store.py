@@ -18,7 +18,7 @@ from __future__ import annotations
 import heapq
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import date
 from typing import Any
 
@@ -43,6 +43,13 @@ MAX_SCAN_CANDIDATES = int(os.getenv("VECTOR_MAX_SCAN_CANDIDATES", "20000"))
 # ~1.5 MB numpy matrix; the transient cost is the batch's decoded JSON
 # lists (~12 MB), which is released before the next batch is fetched.
 SCORE_BATCH_SIZE = int(os.getenv("VECTOR_SCORE_BATCH", "256"))
+
+# Chunks embedded (and inserted) per round trip when a source is streamed
+# into `upsert_source`. The cost being bounded is the batch's vectors: 64
+# chunks at 1536 float32 is ~0.4 MB as numpy and ~12 MB once OpenAI's JSON
+# response is boxed into Python lists, which is the transient a 10-K used to
+# pay ~15x over by embedding every chunk in one call.
+EMBED_BATCH_SIZE = int(os.getenv("VECTOR_EMBED_BATCH", "64"))
 
 # Log a search that grew RSS by more than this. Keeps the common case
 # quiet while leaving a breadcrumb for the expensive outliers.
@@ -71,6 +78,22 @@ def _numpy():
         return numpy
     except Exception:  # pragma: no cover — numpy is a hard requirement
         return None
+
+
+def _batched(items: Iterable[Any], size: int) -> Iterator[list[Any]]:
+    """Yield `items` in lists of at most `size`, pulling lazily.
+
+    Deliberately not `itertools.batched` — that is 3.12+, and this package
+    still has to import on the 3.11 floor.
+    """
+    batch: list[Any] = []
+    for item in items:
+        batch.append(item)
+        if len(batch) >= size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 
 def pgvector_available() -> bool:
@@ -294,9 +317,10 @@ def upsert_source(
     ticker: str | None,
     source_type: str,
     source_id: int | None,
-    chunks: Sequence[dict[str, Any]],
+    chunks: Iterable[dict[str, Any]],
     section: str | None = None,
     period_end: date | None = None,
+    batch_size: int = EMBED_BATCH_SIZE,
 ) -> int:
     """Insert chunks for a (source_type, source_id). Replaces any prior
     chunks for the same source so re-ingesting a filing doesn't
@@ -306,45 +330,76 @@ def upsert_source(
     meta. Embeddings are computed server-side using the configured
     embedding model.
 
+    `chunks` may be any iterable, and a **generator is the preferred
+    form**: the whole point of streaming it is that a 10-K's chunks are
+    never all resident at once. Embeddings are requested `batch_size` at a
+    time and each batch's vectors are dropped before the next is fetched,
+    so peak memory is a batch rather than a filing. `filing_memory`
+    accumulated every chunk of a filing in one list and asked for one
+    embedding call over all of them — on a 512 MiB worker Render has
+    OOM-killed twice.
+
+    **Idempotency is preserved across the batching**, which is the part
+    that needed care. The delete of the source's prior chunks and every
+    batch's insert run inside a *single transaction*, committed once at
+    the end: a caller that re-indexes a filing either sees the complete
+    new set of chunks or the complete old one, never a half-replaced
+    mixture, and a failure part-way through a long stream rolls the
+    delete back with it. An empty stream writes nothing and — because the
+    delete is rolled back too — leaves the existing chunks alone, exactly
+    as the old `if not chunks: return 0` early-out did.
+
     Returns the count of chunks written. Returns 0 on any failure so
     the calling agent flow keeps moving.
     """
-    if not chunks:
+    if chunks is None:
         return 0
-    texts = [c.get("text", "") for c in chunks]
-    if not any(t.strip() for t in texts):
-        return 0
-    try:
-        vectors = emb_svc.embed(texts)
-    except Exception as exc:  # pragma: no cover
-        log.warning("embedding batch failed for %s/%s: %s", source_type, source_id, exc)
-        return 0
-
+    batch_size = max(1, int(batch_size))
     written = 0
     try:
         with SessionLocal() as db:
             # Replace prior chunks for this source so re-ingest is idempotent.
+            # Inside the same transaction as the inserts below.
             if source_id is not None:
                 db.query(DocChunk).filter(
                     DocChunk.source_type == source_type,
                     DocChunk.source_id == source_id,
                 ).delete(synchronize_session=False)
-            for c, vec in zip(chunks, vectors):
-                row = DocChunk(
-                    ticker=(ticker or None),
-                    source_type=source_type,
-                    source_id=source_id,
-                    section=c.get("section") or section,
-                    period_end=c.get("period_end") or period_end,
-                    text=c.get("text", ""),
-                    token_count=len(c.get("text", "").split()),
-                    embedding_model=emb_svc.EMBEDDING_MODEL if len(vec) == emb_svc.EMBEDDING_DIM else "hash-fallback",
-                    embedding_dim=len(vec),
-                    embedding=list(vec),
-                    meta=c.get("meta") or {},
-                )
-                db.add(row)
-                written += 1
+            for batch in _batched(chunks, batch_size):
+                texts = [c.get("text", "") for c in batch]
+                if not any(t.strip() for t in texts):
+                    continue
+                vectors = emb_svc.embed(texts)
+                for c, vec in zip(batch, vectors):
+                    text = c.get("text", "")
+                    if not text.strip():
+                        continue
+                    db.add(DocChunk(
+                        ticker=(ticker or None),
+                        source_type=source_type,
+                        source_id=source_id,
+                        section=c.get("section") or section,
+                        period_end=c.get("period_end") or period_end,
+                        text=text,
+                        token_count=emb_svc.count_tokens(text),
+                        embedding_model=(
+                            emb_svc.EMBEDDING_MODEL
+                            if len(vec) == emb_svc.EMBEDDING_DIM else "hash-fallback"
+                        ),
+                        embedding_dim=len(vec),
+                        embedding=list(vec),
+                        meta=c.get("meta") or {},
+                    ))
+                    written += 1
+                # Push this batch's rows to the database and drop their
+                # vectors before the next batch is embedded.
+                db.flush()
+                del texts, vectors
+            if not written:
+                # Nothing to write: undo the delete rather than silently
+                # dropping a source's existing chunks.
+                db.rollback()
+                return 0
             db.commit()
     except Exception as exc:  # pragma: no cover
         log.warning("upsert chunks failed: %s", exc)

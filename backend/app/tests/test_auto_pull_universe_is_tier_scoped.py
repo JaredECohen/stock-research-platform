@@ -182,7 +182,11 @@ def test_poller_note_reports_what_the_tier_filter_skipped(
 
     _, note = _drive(monkeypatch, module)
 
-    assert f"polled {curated} in-tier" in note
+    # `edgar_poller` reports progress as "polled <done>/<total> in-tier" so a
+    # pass stopped by its wall-clock budget says how far it actually got;
+    # `transcripts_poller` has no such budget and reports the total alone.
+    # Either way the in-tier count and the exclusion have to be legible.
+    assert f"polled {curated} in-tier" in note or f"/{curated} in-tier" in note, note
     assert f"skipped {excluded} out-of-tier" in note
 
 

@@ -363,3 +363,247 @@ def test_a_small_seen_set_is_left_alone():
     current = {_accession(1), _accession(2)}
     seen = {_accession(1)}
     assert edgar_poller._bounded_seen(current, seen) == current | seen
+
+
+# ---------------------------------------------------------------------------
+# The wall-clock budget
+# ---------------------------------------------------------------------------
+#
+# Third bound, same discipline. Measured in production on 2026-09-12: the
+# last COMPLETED pass was logged at 20:52:34Z and it was still running 95
+# minutes later — it fired AAPL at 21:29Z and AMZN at 22:05Z, 36 minutes
+# apart and in alphabetical order, so it was working the whole time. The loop
+# is registered `interval, minutes=30` with APScheduler's default
+# `max_instances=1`, so that pass silently ate three ticks, and `record_run`
+# fires only at the END of `run_once`, so `/api/admin/cron-health` showed one
+# stale timestamp for the entire hour and a half. An operator could not tell
+# a slow pass from a wedged loop.
+#
+# A budget alone would be worse than none: stopping at the same place every
+# pass polls the head of the alphabet forever and never reads the tail again.
+# So the pass rotates — and the test that matters, exactly as for the event
+# cap, is the one that runs consecutive passes and asserts every ticker's
+# event actually fires.
+
+class _Clock:
+    """A wall clock that only moves when the poller polls something."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.cost = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def spend(self) -> None:
+        self.now += self.cost
+
+
+@pytest.fixture()
+def clock(monkeypatch) -> _Clock:
+    c = _Clock()
+    monkeypatch.setattr(edgar_poller, "time", c)
+    return c
+
+
+@pytest.fixture()
+def timed_index(fake_index, clock):
+    """`fake_index`, with each provider read costing `clock.cost` seconds."""
+    real = edgar_poller.get_filings_index
+
+    def charged(ticker):
+        clock.spend()
+        return real(ticker)
+
+    edgar_poller.get_filings_index = charged
+    try:
+        yield fake_index
+    finally:
+        edgar_poller.get_filings_index = real
+
+
+@pytest.fixture()
+def scheduled_universe(monkeypatch):
+    """Drive `run_once()` with no arguments — the scheduled path.
+
+    Rotation and the pass cursor are deliberately scoped to that path: an
+    admin re-run naming one ticker must not move the scheduled pass's place
+    in the universe.
+    """
+    universe: list[str] = []
+    monkeypatch.setattr(
+        edgar_poller, "curated_poll_universe", lambda: (list(universe), 0),
+    )
+    edgar_poller._save_resume_from(None)
+    return universe
+
+
+def test_the_budget_stops_the_pass_and_consecutive_passes_cover_everyone(
+    timed_index, notes, clock, scheduled_universe, monkeypatch,
+):
+    """The one that matters, and the twin of the burst-cap test above.
+
+    A ticker the budget never reached is not deferred by a decision — it is
+    simply never looked at — so the failure mode is quieter: its
+    bookkeeping is untouched (good), but if the next pass starts from the
+    same end of the universe it is never looked at again either. Asserted
+    end to end: run passes until the universe is covered, and require every
+    ticker's filing event to have fired exactly once.
+    """
+    monkeypatch.setattr(edgar_poller, "MAX_PASS_SECONDS", 180)
+    tickers = [f"ZZBG{_suffix()}{i:02d}" for i in range(10)]
+    scheduled_universe.extend(tickers)
+
+    clock.cost = 0.0          # priming is free
+    _prime(timed_index, tickers)
+    for t in tickers:
+        timed_index[t].append({"type": "8-K", "accession_number": _accession(2)})
+
+    clock.cost = 60.0         # three tickers per 180-second budget
+    handled: list[str] = []
+    fired: list[str] = []
+    for _ in range(6):
+        with patch("app.services.update_orchestrator.on_filing_event") as handler:
+            handler.return_value = {"kind": "skipped"}
+            events = edgar_poller.run_once()
+            handled.extend(c.args[0] for c in handler.call_args_list)
+        fired.extend(e["ticker"] for e in events)
+        assert len(events) <= 3, "the pass ignored its wall-clock budget"
+
+    assert sorted(fired) == sorted(tickers), (
+        "a ticker the budget skipped never had its filing event fire; a pass "
+        "that always restarts at the same end of the universe starves the "
+        "tail exactly as thoroughly as losing the event would"
+    )
+    assert sorted(handled) == sorted(tickers)
+    assert len(set(fired)) == len(fired), "a ticker's event fired twice"
+
+
+def test_an_unvisited_ticker_keeps_its_bookkeeping(
+    timed_index, notes, clock, scheduled_universe, monkeypatch,
+):
+    """Same rule as the event cap: never record what was not processed."""
+    monkeypatch.setattr(edgar_poller, "MAX_PASS_SECONDS", 60)
+    tickers = [f"ZZBK{_suffix()}{i:02d}" for i in range(6)]
+    scheduled_universe.extend(tickers)
+
+    clock.cost = 0.0
+    _prime(timed_index, tickers)
+    for t in tickers:
+        timed_index[t].append({"type": "8-K", "accession_number": _accession(2)})
+
+    clock.cost = 60.0
+    with patch("app.services.update_orchestrator.on_filing_event") as handler:
+        handler.return_value = {"kind": "skipped"}
+        visited = [e["ticker"] for e in edgar_poller.run_once()]
+
+    assert visited, "the budget stopped the pass before it did any work"
+    for t in set(tickers) - set(visited):
+        snap = cache_get(t, "edgar_seen_accessions")
+        assert snap is not None
+        assert _accession(2) not in snap.payload["accessions"], (
+            f"{t} was never visited but its new accession was recorded as "
+            "seen — its event can now never fire"
+        )
+
+
+def test_the_note_says_how_far_the_pass_got(
+    timed_index, notes, clock, scheduled_universe, monkeypatch,
+):
+    """No silent caps — cron-health has to show what is still waiting."""
+    monkeypatch.setattr(edgar_poller, "MAX_PASS_SECONDS", 180)
+    tickers = [f"ZZNB{_suffix()}{i:02d}" for i in range(8)]
+    scheduled_universe.extend(tickers)
+
+    clock.cost = 0.0
+    _prime(timed_index, tickers)
+    notes.clear()
+    clock.cost = 60.0
+    with patch("app.services.update_orchestrator.on_filing_event") as handler:
+        handler.return_value = {"kind": "skipped"}
+        edgar_poller.run_once()
+
+    note = notes[-1]
+    assert "polled 3/8" in note, note
+    assert "5 unvisited" in note, note
+    assert str(edgar_poller.MAX_PASS_SECONDS) in note, note
+    for t in tickers[3:]:
+        assert t in note or "+" in note
+
+
+def test_a_pass_that_finishes_reports_no_budget_language(
+    timed_index, notes, clock, scheduled_universe, monkeypatch,
+):
+    monkeypatch.setattr(edgar_poller, "MAX_PASS_SECONDS", 1800)
+    tickers = [f"ZZFN{_suffix()}{i:02d}" for i in range(4)]
+    scheduled_universe.extend(tickers)
+
+    clock.cost = 0.0
+    _prime(timed_index, tickers)
+    notes.clear()
+    clock.cost = 60.0
+    with patch("app.services.update_orchestrator.on_filing_event") as handler:
+        handler.return_value = {"kind": "skipped"}
+        edgar_poller.run_once()
+
+    note = notes[-1]
+    assert "unvisited" not in note, note
+    assert "polled 4/4" in note, note
+    # And the cursor is back at the head, so the next pass is a full sweep.
+    assert edgar_poller._resume_from() is None
+
+
+def test_a_long_pass_reports_progress_before_it_finishes(
+    timed_index, notes, clock, scheduled_universe, monkeypatch,
+):
+    """The other half of the production symptom.
+
+    `record_run` firing only at the end is what made a 95-minute pass
+    indistinguishable from a loop that died 95 minutes ago: cron-health had
+    nothing but the *previous* pass's timestamp to report for the whole
+    window.
+    """
+    monkeypatch.setattr(edgar_poller, "MAX_PASS_SECONDS", 100_000)
+    monkeypatch.setattr(edgar_poller, "PROGRESS_INTERVAL_SECONDS", 120)
+    tickers = [f"ZZPR{_suffix()}{i:02d}" for i in range(8)]
+    scheduled_universe.extend(tickers)
+
+    clock.cost = 0.0
+    _prime(timed_index, tickers)
+    notes.clear()
+    clock.cost = 60.0
+    with patch("app.services.update_orchestrator.on_filing_event") as handler:
+        handler.return_value = {"kind": "skipped"}
+        edgar_poller.run_once()
+
+    progress = [n for n in notes if n.startswith("in progress")]
+    assert progress, (
+        f"a pass spanning {8 * 60}s of wall clock reported nothing until it "
+        f"finished: {notes}"
+    )
+    assert "polled" in progress[0] and "elapsed" in progress[0]
+    assert not notes[-1].startswith("in progress"), (
+        "the completion note must be the last thing recorded"
+    )
+
+
+def test_an_explicit_ticker_list_does_not_move_the_scheduled_cursor(
+    fake_index, notes,
+):
+    """An admin re-run for one name must not reposition the nightly sweep."""
+    edgar_poller._save_resume_from("ZZANCHOR")
+    tickers = [f"ZZAD{_suffix()}{i:02d}" for i in range(3)]
+    _prime(fake_index, tickers)
+
+    with patch("app.services.update_orchestrator.on_filing_event") as handler:
+        handler.return_value = {"kind": "skipped"}
+        edgar_poller.run_once(tickers)
+
+    assert edgar_poller._resume_from() == "ZZANCHOR"
+
+
+def test_the_rotation_falls_back_to_the_head_for_a_departed_ticker():
+    tickers = ["A", "B", "C"]
+    assert edgar_poller._rotated(tickers, "B") == ["B", "C", "A"]
+    assert edgar_poller._rotated(tickers, "GONE") == tickers
+    assert edgar_poller._rotated(tickers, None) == tickers
