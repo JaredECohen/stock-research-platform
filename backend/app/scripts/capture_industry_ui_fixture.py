@@ -37,7 +37,13 @@ real data exercises:
   clears. ``report_universe_short`` is a group whose membership is itself
   below the floor: every member priced and still short, which no warm-up
   can fix. A hand-written stand-in for either would drift from the
-  producer, so both are captured.
+  producer, so both are captured;
+* **two reads of the same group that landed in different weeks.**
+  ``companies_warming_up`` is ``/companies`` as it answered BEFORE the
+  prices existed; the published ``report`` is the priced week. Serving
+  them together is the race the page has to survive — the edition's own
+  priced count and the live membership read disagreeing — and both bodies
+  are what the API said, so neither has to be edited into disagreement.
 
 Two edits are made after the capture, and both are declared in ``meta``:
 per-ticker ``weekly_closes`` arrays are emptied (each row keeps a
@@ -172,6 +178,16 @@ def trim_weekly_closes(report: dict[str, Any]) -> dict[str, int]:
     return {"payload.sections.companies.facts.per_ticker[].weekly_closes": total}
 
 
+def _get(client: Any, path: str, *, expect: int = 200, name: str = "") -> Any:
+    """One captured response, or a refusal. A capture that stored a body
+    the API answered with the wrong status would be a fixture of a bug."""
+    r = client.get(path)
+    if r.status_code != expect:
+        raise SystemExit(f"{path} answered {r.status_code}, expected {expect}: {r.text[:400]}")
+    print(name or path, r.status_code, path)
+    return r.json()
+
+
 def capture() -> dict[str, Any]:
     from fastapi.testclient import TestClient
     from sqlalchemy import delete
@@ -233,6 +249,9 @@ def capture() -> dict[str, Any]:
             db.execute(delete(model).where(model.taxonomy_version_id == info.id))
         db.commit()
 
+    client = TestClient(app)
+    out: dict[str, Any] = {}
+
     for period in (PRIOR_PERIOD, PERIOD):
         if period == PERIOD:
             print("seeded prices for", seed_prices(universe, skip=UNPRICED), "tickers")
@@ -244,6 +263,14 @@ def capture() -> dict[str, Any]:
                 "drained",
                 {k: drained.get(k) for k in ("id", "kind", "code", "status", "note", "error_type", "error_message")},
             )
+        if period == PRIOR_PERIOD:
+            # `/companies` prices its rows from the LATEST statistics row,
+            # so read once here, while the latest row is the un-priced
+            # week's. Paired with the published edition below it is the
+            # real race the page has to survive — two reads that landed in
+            # different weeks — and neither body has to be hand-edited to
+            # make the two counts disagree.
+            out["companies_warming_up"] = _get(client, f"/api/industries/{code}/companies")
 
     latest = rs.latest_good(code, version=info)
     if latest is None:
@@ -253,8 +280,6 @@ def capture() -> dict[str, Any]:
         )
     print("latest good edition:", latest["version"])
 
-    client = TestClient(app)
-    out: dict[str, Any] = {}
     for name, path in [
         ("taxonomy", "/api/industries/taxonomy"),
         ("report", f"/api/industries/{code}/report"),
@@ -270,12 +295,7 @@ def capture() -> dict[str, Any]:
         ("report_universe_short", f"/api/industries/{short_code}/report"),
         ("report_missing", f"/api/industries/{empty_code}/report"),
     ]:
-        r = client.get(path)
-        expected = 404 if name == "report_missing" else 200
-        if r.status_code != expected:
-            raise SystemExit(f"{path} answered {r.status_code}, expected {expected}: {r.text[:400]}")
-        print(name, r.status_code, path)
-        out[name] = r.json()
+        out[name] = _get(client, path, expect=404 if name == "report_missing" else 200, name=name)
 
     trimmed: dict[str, int] = {}
     for name in ("report", "report_warming_up", "report_universe_short"):

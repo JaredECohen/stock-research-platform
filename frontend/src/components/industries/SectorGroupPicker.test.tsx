@@ -133,7 +133,10 @@ describe("SectorGroupPicker — groups this universe cannot cover", () => {
     expect(short.universe_coverage.min_sample).toBe(fx.MIN_SAMPLE);
     mountWide();
     const note = screen.getByTestId(`not-coverable-${short.code}`);
-    expect(note).toHaveTextContent("Too few companies in this universe to report on");
+    // "classified" is load-bearing: a group short of CONSTITUENTS is not
+    // the same claim as a universe short of COMPANIES, and the remedy
+    // differs.
+    expect(note).toHaveTextContent("Too few classified companies in this universe to report on");
     // The server's sentence, verbatim — the picker composes none of it.
     expect(note).toHaveTextContent(short.universe_coverage.explanation);
   });

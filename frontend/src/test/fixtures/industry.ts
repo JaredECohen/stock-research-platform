@@ -57,6 +57,7 @@ interface Wire {
   report_warming_up: IndustryReport;
   report_universe_short: IndustryReport;
   companies: IndustryCompanies;
+  companies_warming_up: IndustryCompanies;
   history: IndustryHistory;
   changes: IndustryChanges;
   report_missing: { detail: NoReportDetail };
@@ -87,6 +88,13 @@ export const warmingUpReport: IndustryReport = w.report_warming_up;
  *  floor. The structural way to sit below it, which no warm-up fixes. */
 export const universeShortReport: IndustryReport = w.report_universe_short;
 export const companies: IndustryCompanies = w.companies;
+/** `/companies` as it answered BEFORE any price existed — the SAME
+ *  endpoint, read in the earlier week. `/companies` prices its rows from
+ *  the latest statistics row, so this body counts 0 priced while the
+ *  published edition counts its own. Served together they are the race
+ *  the page has to survive; each body is internally consistent, because
+ *  both are what the API said. */
+export const companiesWarmingUp: IndustryCompanies = w.companies_warming_up;
 export const history: IndustryHistory = w.history;
 export const changes: IndustryChanges = w.changes;
 /** The `404 no_report` body, as FastAPI serialises it. */
@@ -159,17 +167,20 @@ export function priorEdition(): IndustryReport {
 }
 
 /**
- * The published edition as it looks when the membership read raced a
- * refresh: the edition's own companies facts and `/companies` counted
- * different numbers of priced names. Both counts are real — the priced
- * count comes from the group's other captured edition — and the page must
- * print both rather than choose.
+ * The two reads whose priced counts disagree, for the page-level race
+ * test: the published edition and `/companies` as it answered in the
+ * earlier week.
+ *
+ * The disagreement lives BETWEEN the reads, which is where the real one
+ * lives — `/companies` prices from the latest statistics row, and an
+ * edition on screen may have counted a different week's. It is never
+ * grafted INTO one of them: an edition whose companies facts contradict
+ * its own coverage block and its own per-ticker rows is a body no
+ * producer can emit, and a page proved against one is proved against
+ * nothing.
  */
-export function reportWithRacedPricedCount(): IndustryReport {
-  const r = clone(report);
-  const facts = r.payload.sections.companies.facts as Record<string, unknown>;
-  facts.n_priced = warmingUpReport.payload.sections.companies.facts.n_priced;
-  return r;
+export function racedReads(): { report: IndustryReport; companies: IndustryCompanies } {
+  return { report: clone(report), companies: clone(companiesWarmingUp) };
 }
 
 /** The access block a deployment with the login wall ON serves: the tiers

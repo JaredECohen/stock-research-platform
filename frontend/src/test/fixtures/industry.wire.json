@@ -16,6 +16,342 @@
   ],
   "omitted_reason": "this slice's UI does not read it"
  },
+ "companies_warming_up": {
+  "code": "4530",
+  "name": "Semiconductors & Semiconductor Equipment",
+  "sector_code": "45",
+  "taxonomy_version": "gics-2026-04",
+  "as_of": "2026-08-28T21:00:00",
+  "count": 5,
+  "n_priced": 0,
+  "counts_basis": "count / n_priced / membership_states cover the whole membership, not just `items`",
+  "membership_source": "company_industry_classifications (states: mapped, conflict)",
+  "membership_states": {
+   "mapped": 5
+  },
+  "stats": {
+   "id": 1,
+   "period_key": "2026-W35",
+   "as_of": "2026-08-28T21:00:00",
+   "sample": {
+    "n_constituents": 5,
+    "n_with_prices": 0,
+    "sample_floor": {
+     "state": "prices_not_warmed",
+     "structural": false,
+     "clears_with_warm_up": true,
+     "min_sample": 3,
+     "n_constituents": 5,
+     "n_with_prices": 0,
+     "priced_short_by": 3,
+     "constituents_short_by": 0,
+     "explanation": "5 constituents are classified into the group but none of them had a usable price series this period \u2014 3 below the floor of 3. The weekly warm-up fetches more series each run, so this can clear without changing the universe."
+    },
+    "n_with_market_cap": 0,
+    "n_with_metrics": 0,
+    "min_sample": 3,
+    "coverage": 0.0,
+    "excluded": [
+     {
+      "ticker": "AMD",
+      "reason": "no_prices"
+     },
+     {
+      "ticker": "AVGO",
+      "reason": "no_prices"
+     },
+     {
+      "ticker": "INTC",
+      "reason": "no_prices"
+     },
+     {
+      "ticker": "NVDA",
+      "reason": "no_prices"
+     },
+     {
+      "ticker": "QCOM",
+      "reason": "no_prices"
+     }
+    ],
+    "prices_max_date": null,
+    "prices_min_date": null,
+    "price_sources": {},
+    "fetches_this_run": 5,
+    "fetch_budget": 150,
+    "benchmark_cohort": {
+     "n_universe": 35,
+     "n_eligible": 0,
+     "excluded_by_reason": {
+      "no_prices": 35
+     },
+     "group_members_outside_cohort": []
+    }
+   },
+   "method": {
+    "version": "industry-stats-v2",
+    "weighting": [
+     "equal",
+     "market_cap"
+    ],
+    "benchmarks": [
+     {
+      "id": "universe_ew",
+      "definition": "equal-weight mean of every cohort-eligible classified constituent",
+      "n": 0,
+      "n_universe": 35,
+      "excluded_by_reason": {
+       "no_prices": 35
+      },
+      "available": false
+     },
+     {
+      "id": "sector_ew",
+      "definition": "equal-weight mean of the cohort-eligible sector 45 constituents",
+      "n": 0,
+      "n_universe": 9,
+      "excluded_by_reason": {
+       "no_prices": 9
+      },
+      "available": false
+     },
+     {
+      "id": "KFR.MKT_RF.D",
+      "definition": "Ken-French daily market factor, cumulative over the horizon; an EXCESS return over the risk-free rate, not a total return",
+      "available": false
+     }
+    ],
+    "benchmark_cohort_basis": "a classified constituent whose company is active and whose price series was present when the period's inputs were loaded and is not stale at the as-of. The same exclusions the group's own numbers apply, fixed before any group is computed \u2014 so the benchmark does not depend on the order groups are drained, and a constituent fetched on demand counts in its group but is not retro-fitted into the cohort.",
+    "breadth_mean_window": {
+     "sessions": 50,
+     "basis": "the last 50 closes in the series on or before the as-of \u2014 trading sessions, not calendar days",
+     "max_span_days": 100,
+     "unavailable": "fewer than 50 closes, or closes too sparse to be daily, yield null with a reason \u2014 never a default"
+    },
+    "min_sample": 3,
+    "missing_data": "exclude_and_report",
+    "horizons": [
+     "1w",
+     "1m",
+     "qtd",
+     "ytd",
+     "1y"
+    ],
+    "price_window_days": 252,
+    "history_window_note": "horizons the cached price window cannot anchor return null with reason history_window (v1 scope cut)",
+    "stale_price_days": 10,
+    "price_field": "adjusted_close, else close",
+    "market_cap_source": "screener_metrics.market_cap, else companies.market_cap, else last_price*shares_outstanding",
+    "valuation_note": "non-positive multiples excluded from medians and counted",
+    "as_of": "2026-08-28T21:00:00",
+    "taxonomy_version": "gics-2026-04"
+   }
+  },
+  "stats_unavailable_reason": null,
+  "limit": 500,
+  "truncated": 0,
+  "items": [
+   {
+    "ticker": "AMD",
+    "company_name": "Advanced Micro Devices, Inc.",
+    "is_active": true,
+    "industry_code": "453010",
+    "industry_name": "Semiconductors & Semiconductor Equipment",
+    "sub_industry_code": null,
+    "sub_industry_name": null,
+    "sub_industry_codes": [],
+    "classification": {
+     "state": "mapped",
+     "source": "provider_alias",
+     "source_label": "provider label crosswalk (derived from provider classification)",
+     "method": "alias_industry",
+     "author": "provider_aliases.json@fmp-aliases-2026-09",
+     "as_of": "2026-09-10",
+     "confidence": 0.8,
+     "classified_at": "2026-09-12T02:44:00.669860",
+     "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
+    },
+    "market_cap": 240000000000.0,
+    "weight_mcw": null,
+    "last_close": null,
+    "last_date": null,
+    "price_source": null,
+    "returns": {},
+    "return_reasons": {},
+    "above_50d_mean": null,
+    "priced": false,
+    "unpriced_reason": "no_prices"
+   },
+   {
+    "ticker": "AVGO",
+    "company_name": "Broadcom Inc.",
+    "is_active": true,
+    "industry_code": "453010",
+    "industry_name": "Semiconductors & Semiconductor Equipment",
+    "sub_industry_code": null,
+    "sub_industry_name": null,
+    "sub_industry_codes": [],
+    "classification": {
+     "state": "mapped",
+     "source": "provider_alias",
+     "source_label": "provider label crosswalk (derived from provider classification)",
+     "method": "alias_industry",
+     "author": "provider_aliases.json@fmp-aliases-2026-09",
+     "as_of": "2026-09-10",
+     "confidence": 0.8,
+     "classified_at": "2026-09-12T02:44:00.669860",
+     "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
+    },
+    "market_cap": 750000000000.0,
+    "weight_mcw": null,
+    "last_close": null,
+    "last_date": null,
+    "price_source": null,
+    "returns": {},
+    "return_reasons": {},
+    "above_50d_mean": null,
+    "priced": false,
+    "unpriced_reason": "no_prices"
+   },
+   {
+    "ticker": "INTC",
+    "company_name": "Intel Corporation",
+    "is_active": true,
+    "industry_code": "453010",
+    "industry_name": "Semiconductors & Semiconductor Equipment",
+    "sub_industry_code": null,
+    "sub_industry_name": null,
+    "sub_industry_codes": [],
+    "classification": {
+     "state": "mapped",
+     "source": "provider_alias",
+     "source_label": "provider label crosswalk (derived from provider classification)",
+     "method": "alias_industry",
+     "author": "provider_aliases.json@fmp-aliases-2026-09",
+     "as_of": "2026-09-10",
+     "confidence": 0.8,
+     "classified_at": "2026-09-12T02:44:00.669860",
+     "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
+    },
+    "market_cap": 95000000000.0,
+    "weight_mcw": null,
+    "last_close": null,
+    "last_date": null,
+    "price_source": null,
+    "returns": {},
+    "return_reasons": {},
+    "above_50d_mean": null,
+    "priced": false,
+    "unpriced_reason": "no_prices"
+   },
+   {
+    "ticker": "NVDA",
+    "company_name": "NVIDIA Corporation",
+    "is_active": true,
+    "industry_code": "453010",
+    "industry_name": "Semiconductors & Semiconductor Equipment",
+    "sub_industry_code": "45301020",
+    "sub_industry_name": "Semiconductors",
+    "sub_industry_codes": [
+     "45301020"
+    ],
+    "classification": {
+     "state": "mapped",
+     "source": "research_map",
+     "source_label": "research map (economic research examples; not licensed issuer GICS mapping)",
+     "method": "security_reference",
+     "author": "Investment_Universe_163_Map.json@2026-09-10",
+     "as_of": "2026-09-09",
+     "confidence": 0.9,
+     "classified_at": "2026-09-12T02:44:00.669860",
+     "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
+    },
+    "market_cap": 2900000000000.0,
+    "weight_mcw": null,
+    "last_close": null,
+    "last_date": null,
+    "price_source": null,
+    "returns": {},
+    "return_reasons": {},
+    "above_50d_mean": null,
+    "priced": false,
+    "unpriced_reason": "no_prices"
+   },
+   {
+    "ticker": "QCOM",
+    "company_name": "QUALCOMM Incorporated",
+    "is_active": true,
+    "industry_code": "453010",
+    "industry_name": "Semiconductors & Semiconductor Equipment",
+    "sub_industry_code": null,
+    "sub_industry_name": null,
+    "sub_industry_codes": [],
+    "classification": {
+     "state": "mapped",
+     "source": "provider_alias",
+     "source_label": "provider label crosswalk (derived from provider classification)",
+     "method": "alias_industry",
+     "author": "provider_aliases.json@fmp-aliases-2026-09",
+     "as_of": "2026-09-10",
+     "confidence": 0.8,
+     "classified_at": "2026-09-12T02:44:00.669860",
+     "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
+    },
+    "market_cap": 190000000000.0,
+    "weight_mcw": null,
+    "last_close": null,
+    "last_date": null,
+    "price_source": null,
+    "returns": {},
+    "return_reasons": {},
+    "above_50d_mean": null,
+    "priced": false,
+    "unpriced_reason": "no_prices"
+   }
+  ],
+  "excluded": [
+   {
+    "ticker": "AMD",
+    "reason": "no_prices"
+   },
+   {
+    "ticker": "AVGO",
+    "reason": "no_prices"
+   },
+   {
+    "ticker": "INTC",
+    "reason": "no_prices"
+   },
+   {
+    "ticker": "NVDA",
+    "reason": "no_prices"
+   },
+   {
+    "ticker": "QCOM",
+    "reason": "no_prices"
+   }
+  ],
+  "access": {
+   "surface": "latest",
+   "tier": "public",
+   "required_tier": null,
+   "allowed": true,
+   "enforced": false,
+   "route_gated": true,
+   "setting": "public",
+   "surfaces": {
+    "latest": "public",
+    "history": "pro",
+    "changes": "pro",
+    "pm_chat": "pro"
+   },
+   "plan": null,
+   "note": "tiers are the policy; with AUTH_ENABLED off nothing is gated and every surface answers publicly. Pro surfaces meter through the pm_chat / portfolio features."
+  },
+  "attribution": "GICS\u00ae industry codes and names are the public structure published by MSCI and S&P Global. MarketMosaic displays them with attribution and holds no licensed constituent or issuer-assignment data.",
+  "mapping_caveat": "derived from provider classification, not licensed GICS security assignments",
+  "security_reference_caveat": "Economic research examples; not official licensed issuer GICS mapping.",
+  "disclaimer": "Research and education only. Industry statistics are observed data; the analyst narrative is interpretation and every forward view is a scenario, not a recommendation or personalised advice."
+ },
  "taxonomy": {
   "taxonomy_version": {
    "key": "gics-2026-04",
@@ -66,7 +402,9 @@
        "constituent_count": 1,
        "coverable": false,
        "constituents_short_by": 2,
-       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 2 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      }
@@ -91,7 +429,9 @@
        "constituent_count": 1,
        "coverable": false,
        "constituents_short_by": 2,
-       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 2 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      }
@@ -116,7 +456,9 @@
        "constituent_count": 1,
        "coverable": false,
        "constituents_short_by": 2,
-       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 2 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      },
@@ -135,7 +477,9 @@
        "constituent_count": 0,
        "coverable": false,
        "constituents_short_by": 3,
-       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 3 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 3 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      },
@@ -154,7 +498,9 @@
        "constituent_count": 0,
        "coverable": false,
        "constituents_short_by": 3,
-       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 3 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 3 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      }
@@ -179,7 +525,9 @@
        "constituent_count": 1,
        "coverable": false,
        "constituents_short_by": 2,
-       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 2 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      },
@@ -198,7 +546,9 @@
        "constituent_count": 1,
        "coverable": false,
        "constituents_short_by": 2,
-       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 2 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      },
@@ -217,7 +567,9 @@
        "constituent_count": 2,
        "coverable": false,
        "constituents_short_by": 1,
-       "explanation": "this universe holds 2 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 1 more company."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 2 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 1 more classified constituent, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      },
@@ -236,7 +588,9 @@
        "constituent_count": 2,
        "coverable": false,
        "constituents_short_by": 1,
-       "explanation": "this universe holds 2 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 1 more company."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 2 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 1 more classified constituent, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      }
@@ -261,7 +615,9 @@
        "constituent_count": 2,
        "coverable": false,
        "constituents_short_by": 1,
-       "explanation": "this universe holds 2 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 1 more company."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 2 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 1 more classified constituent, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      },
@@ -280,7 +636,9 @@
        "constituent_count": 0,
        "coverable": false,
        "constituents_short_by": 3,
-       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 3 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 3 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      },
@@ -299,7 +657,9 @@
        "constituent_count": 0,
        "coverable": false,
        "constituents_short_by": 3,
-       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 3 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 3 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      }
@@ -324,7 +684,9 @@
        "constituent_count": 1,
        "coverable": false,
        "constituents_short_by": 2,
-       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 2 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      },
@@ -343,6 +705,8 @@
        "constituent_count": 3,
        "coverable": true,
        "constituents_short_by": 0,
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
        "explanation": "3 classified constituents in this universe, at or above the sample floor of 3; a week below the floor is about prices, not about the size of this universe."
       },
       "latest_report": null
@@ -368,7 +732,9 @@
        "constituent_count": 2,
        "coverable": false,
        "constituents_short_by": 1,
-       "explanation": "this universe holds 2 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 1 more company."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 2 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 1 more classified constituent, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      },
@@ -387,6 +753,8 @@
        "constituent_count": 4,
        "coverable": true,
        "constituents_short_by": 0,
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
        "explanation": "4 classified constituents in this universe, at or above the sample floor of 3; a week below the floor is about prices, not about the size of this universe."
       },
       "latest_report": null
@@ -406,7 +774,9 @@
        "constituent_count": 0,
        "coverable": false,
        "constituents_short_by": 3,
-       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 3 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 3 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      }
@@ -431,6 +801,8 @@
        "constituent_count": 3,
        "coverable": true,
        "constituents_short_by": 0,
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
        "explanation": "3 classified constituents in this universe, at or above the sample floor of 3; a week below the floor is about prices, not about the size of this universe."
       },
       "latest_report": null
@@ -450,7 +822,9 @@
        "constituent_count": 1,
        "coverable": false,
        "constituents_short_by": 2,
-       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 2 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      },
@@ -469,6 +843,8 @@
        "constituent_count": 5,
        "coverable": true,
        "constituents_short_by": 0,
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
        "explanation": "5 classified constituents in this universe, at or above the sample floor of 3; a week below the floor is about prices, not about the size of this universe."
       },
       "latest_report": {
@@ -476,7 +852,7 @@
        "period_key": "2026-W36",
        "as_of": "2026-09-04T21:00:00",
        "status": "succeeded",
-       "generated_at": "2026-09-12T01:54:16.642295",
+       "generated_at": "2026-09-12T02:44:00.980757",
        "degraded": true,
        "degraded_reasons": [
         "analyst_narrative:llm_unavailable",
@@ -510,7 +886,9 @@
        "constituent_count": 0,
        "coverable": false,
        "constituents_short_by": 3,
-       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 3 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 3 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      },
@@ -529,6 +907,8 @@
        "constituent_count": 3,
        "coverable": true,
        "constituents_short_by": 0,
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
        "explanation": "3 classified constituents in this universe, at or above the sample floor of 3; a week below the floor is about prices, not about the size of this universe."
       },
       "latest_report": null
@@ -554,7 +934,9 @@
        "constituent_count": 1,
        "coverable": false,
        "constituents_short_by": 2,
-       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 2 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      }
@@ -579,14 +961,16 @@
        "constituent_count": 1,
        "coverable": false,
        "constituents_short_by": 2,
-       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 2 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 1 classified constituent for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": {
        "version": 1,
        "period_key": "2026-W36",
        "as_of": "2026-09-04T21:00:00",
        "status": "succeeded",
-       "generated_at": "2026-09-12T01:54:16.719183",
+       "generated_at": "2026-09-12T02:44:01.067061",
        "degraded": true,
        "degraded_reasons": [
         "performance:insufficient_sample",
@@ -615,7 +999,9 @@
        "constituent_count": 0,
        "coverable": false,
        "constituents_short_by": 3,
-       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the universe would have to add 3 more companies."
+       "uncounted_for_group": 0,
+       "uncounted_in_universe": 0,
+       "explanation": "this universe holds 0 classified constituents for the group and the sample floor is 3. No amount of price warm-up can cover it \u2014 the group needs 3 more classified constituents, and every company in this universe already counts towards a group, so only adding companies can supply them."
       },
       "latest_report": null
      }
@@ -667,7 +1053,19 @@
     "6020"
    ],
    "constituents_needed": 43,
-   "basis": "a group whose classified constituent count is below the sample floor cannot reach the floor however many weeks the price warm-up runs \u2014 it is short of companies, not of prices, and its statistics will read insufficient_sample every week until the universe is widened. Groups counted here are every industry group in this taxonomy version; membership comes from the classification table on every call."
+   "uncounted": {
+    "total": 0,
+    "by_state": {},
+    "by_group_code": {},
+    "without_group_code": 0,
+    "counted_states": [
+     "mapped",
+     "conflict"
+    ],
+    "note": "companies with a current classification this taxonomy does not count as a constituent of any group; classifying them is a route to a group's sample floor that does not widen the universe"
+   },
+   "explanation": "20 of 25 industry groups hold fewer than 3 classified constituents each and will report insufficient_sample every week until that changes \u2014 43 more classified constituents in total. The weekly price warm-up cannot supply them, and every company in this universe already counts towards a group, so only adding companies can.",
+   "basis": "a group whose classified constituent count is below the sample floor cannot reach the floor however many weeks the price warm-up runs \u2014 it is short of CLASSIFIED CONSTITUENTS, not of prices, and its statistics will read insufficient_sample every week until more companies are classified into it. That is not the same as being short of companies: `uncounted` counts the companies already in this universe that no group counts (a `fallback` row knows its sector and not its group, a `missing` row carries a label the alias map does not recognise, a `stale` row awaits re-classification), and classifying those closes the same gap without widening the universe. Groups counted here are every industry group in this taxonomy version; membership comes from the classification table on every call."
   },
   "reports": {
    "groups_with_a_published_edition": 2,
@@ -711,7 +1109,7 @@
   "last_attempt": {
    "job_id": 3,
    "status": "succeeded",
-   "at": "2026-09-12T01:54:16.644415",
+   "at": "2026-09-12T02:44:00.982818",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -1642,7 +2040,7 @@
        }
       },
       "method": {
-       "version": "industry-stats-v1",
+       "version": "industry-stats-v2",
        "weighting": [
         "equal",
         "market_cap"
@@ -1699,8 +2097,8 @@
        "as_of": "2026-09-04T21:00:00",
        "taxonomy_version": "gics-2026-04"
       },
-      "inputs_hash": "9651deedd5edbfc03057225e2b2fc4c927e1d63cb3fbd639a675246d38dc86a2",
-      "computed_at": "2026-09-12T01:54:16.628655",
+      "inputs_hash": "e11288397b8fdc1706b66e1389505023c0464f903a7261db4e7fc1620d82c813",
+      "computed_at": "2026-09-12T02:44:00.967590",
       "stats_id": 2
      },
      "interpretation": null
@@ -2418,7 +2816,7 @@
         "ref": "industry_stats:2",
         "as_of": "2026-09-04T21:00:00",
         "provider": "industry_analytics",
-        "inputs_hash": "9651deedd5edbfc03057225e2b2fc4c927e1d63cb3fbd639a675246d38dc86a2"
+        "inputs_hash": "e11288397b8fdc1706b66e1389505023c0464f903a7261db4e7fc1620d82c813"
        },
        {
         "kind": "benchmark",
@@ -2612,8 +3010,8 @@
     "metadata": {
      "facts": {
       "report_schema_version": 1,
-      "generated_at": "2026-09-12T01:54:16.633807",
-      "run_id": "75b6943e-0227-46a2-85e0-4e690fa4dabe",
+      "generated_at": "2026-09-12T02:44:00.972402",
+      "run_id": "1b3cbd71-e398-4d23-9608-186aead7e37e",
       "generation_mode": "llm_unavailable",
       "taxonomy_version": "gics-2026-04",
       "taxonomy_version_id": 1,
@@ -2662,7 +3060,7 @@
    "period_key": "2026-W36",
    "as_of": "2026-09-04T21:00:00",
    "method": {
-    "version": "industry-stats-v1",
+    "version": "industry-stats-v2",
     "weighting": [
      "equal",
      "market_cap"
@@ -3038,8 +3436,8 @@
      "benchmark:KFR.MKT_RF.D:missing"
     ]
    },
-   "inputs_hash": "9651deedd5edbfc03057225e2b2fc4c927e1d63cb3fbd639a675246d38dc86a2",
-   "computed_at": "2026-09-12T01:54:16.628655",
+   "inputs_hash": "e11288397b8fdc1706b66e1389505023c0464f903a7261db4e7fc1620d82c813",
+   "computed_at": "2026-09-12T02:44:00.967590",
    "per_ticker_note": "per-ticker rows are served by GET /api/industries/{code}/companies"
   },
   "stats_unavailable_reason": null,
@@ -3122,7 +3520,7 @@
    "data_as_of": "2026-09-04T21:00:00",
    "prices_max_date": "2026-09-04",
    "prices_min_date": "2026-09-04",
-   "stats_method_version": "industry-stats-v1",
+   "stats_method_version": "industry-stats-v2",
    "knowledge_version": "gics-2026-04",
    "taxonomy_version": "gics-2026-04",
    "atlas_snapshot": "2026-09-07"
@@ -3136,7 +3534,7 @@
    "completion_tokens": 0,
    "cost_usd": 0.0,
    "latency_ms": 0,
-   "run_id": "75b6943e-0227-46a2-85e0-4e690fa4dabe",
+   "run_id": "1b3cbd71-e398-4d23-9608-186aead7e37e",
    "generation_mode": "llm_unavailable",
    "max_llm_calls": 2,
    "llm_planned_sections": []
@@ -3168,7 +3566,7 @@
     "ref": "industry_stats:2",
     "as_of": "2026-09-04T21:00:00",
     "provider": "industry_analytics",
-    "inputs_hash": "9651deedd5edbfc03057225e2b2fc4c927e1d63cb3fbd639a675246d38dc86a2"
+    "inputs_hash": "e11288397b8fdc1706b66e1389505023c0464f903a7261db4e7fc1620d82c813"
    },
    {
     "kind": "benchmark",
@@ -3196,7 +3594,7 @@
    }
   ],
   "llm_cost_usd": 0.0,
-  "generated_at": "2026-09-12T01:54:16.642295",
+  "generated_at": "2026-09-12T02:44:00.980757",
   "access": {
    "surface": "latest",
    "tier": "public",
@@ -3276,7 +3674,7 @@
     }
    },
    "method": {
-    "version": "industry-stats-v1",
+    "version": "industry-stats-v2",
     "weighting": [
      "equal",
      "market_cap"
@@ -3355,7 +3753,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-12T01:54:16.367576",
+     "classified_at": "2026-09-12T02:44:00.669860",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 240000000000.0,
@@ -3392,7 +3790,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-12T01:54:16.367576",
+     "classified_at": "2026-09-12T02:44:00.669860",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 750000000000.0,
@@ -3429,7 +3827,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-12T01:54:16.367576",
+     "classified_at": "2026-09-12T02:44:00.669860",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 95000000000.0,
@@ -3462,7 +3860,7 @@
      "author": "Investment_Universe_163_Map.json@2026-09-10",
      "as_of": "2026-09-09",
      "confidence": 0.9,
-     "classified_at": "2026-09-12T01:54:16.367576",
+     "classified_at": "2026-09-12T02:44:00.669860",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 2900000000000.0,
@@ -3499,7 +3897,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-12T01:54:16.367576",
+     "classified_at": "2026-09-12T02:44:00.669860",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 190000000000.0,
@@ -3580,12 +3978,12 @@
      "completion_tokens": 0,
      "cost_usd": 0.0,
      "latency_ms": 0,
-     "run_id": "75b6943e-0227-46a2-85e0-4e690fa4dabe",
+     "run_id": "1b3cbd71-e398-4d23-9608-186aead7e37e",
      "generation_mode": "llm_unavailable",
      "max_llm_calls": 2,
      "llm_planned_sections": []
     },
-    "generated_at": "2026-09-12T01:54:16.642295"
+    "generated_at": "2026-09-12T02:44:00.980757"
    },
    {
     "version": 1,
@@ -3612,18 +4010,18 @@
      "completion_tokens": 0,
      "cost_usd": 0.0,
      "latency_ms": 0,
-     "run_id": "080090d5-e45b-4935-835c-5cfb1883a4aa",
+     "run_id": "a5cf93de-14c8-4d8d-96a8-947a48b9dc83",
      "generation_mode": "llm_unavailable",
      "max_llm_calls": 2,
      "llm_planned_sections": []
     },
-    "generated_at": "2026-09-12T01:54:16.456729"
+    "generated_at": "2026-09-12T02:44:00.759533"
    }
   ],
   "last_attempt": {
    "job_id": 3,
    "status": "succeeded",
-   "at": "2026-09-12T01:54:16.644415",
+   "at": "2026-09-12T02:44:00.982818",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -3875,7 +4273,7 @@
   "last_attempt": {
    "job_id": 3,
    "status": "succeeded",
-   "at": "2026-09-12T01:54:16.644415",
+   "at": "2026-09-12T02:44:00.982818",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -4784,7 +5182,7 @@
        }
       },
       "method": {
-       "version": "industry-stats-v1",
+       "version": "industry-stats-v2",
        "weighting": [
         "equal",
         "market_cap"
@@ -4841,8 +5239,8 @@
        "as_of": "2026-08-28T21:00:00",
        "taxonomy_version": "gics-2026-04"
       },
-      "inputs_hash": "3caa6f7232819d76748ab31fbca7abf03495f9a0d87bf03838cdd89ec5b04623",
-      "computed_at": "2026-09-12T01:54:16.444038",
+      "inputs_hash": "eb54a6668d03395a5cad68b7dcd0ad7ec2f6b9dd853d4e204261c59d28022705",
+      "computed_at": "2026-09-12T02:44:00.746322",
       "stats_id": 1
      },
      "interpretation": null
@@ -5166,7 +5564,7 @@
         "ref": "industry_stats:1",
         "as_of": "2026-08-28T21:00:00",
         "provider": "industry_analytics",
-        "inputs_hash": "3caa6f7232819d76748ab31fbca7abf03495f9a0d87bf03838cdd89ec5b04623"
+        "inputs_hash": "eb54a6668d03395a5cad68b7dcd0ad7ec2f6b9dd853d4e204261c59d28022705"
        },
        {
         "kind": "benchmark",
@@ -5360,8 +5758,8 @@
     "metadata": {
      "facts": {
       "report_schema_version": 1,
-      "generated_at": "2026-09-12T01:54:16.450755",
-      "run_id": "080090d5-e45b-4935-835c-5cfb1883a4aa",
+      "generated_at": "2026-09-12T02:44:00.753444",
+      "run_id": "a5cf93de-14c8-4d8d-96a8-947a48b9dc83",
       "generation_mode": "llm_unavailable",
       "taxonomy_version": "gics-2026-04",
       "taxonomy_version_id": 1,
@@ -5410,7 +5808,7 @@
    "period_key": "2026-W35",
    "as_of": "2026-08-28T21:00:00",
    "method": {
-    "version": "industry-stats-v1",
+    "version": "industry-stats-v2",
     "weighting": [
      "equal",
      "market_cap"
@@ -5796,8 +6194,8 @@
      ]
     }
    },
-   "inputs_hash": "3caa6f7232819d76748ab31fbca7abf03495f9a0d87bf03838cdd89ec5b04623",
-   "computed_at": "2026-09-12T01:54:16.444038",
+   "inputs_hash": "eb54a6668d03395a5cad68b7dcd0ad7ec2f6b9dd853d4e204261c59d28022705",
+   "computed_at": "2026-09-12T02:44:00.746322",
    "per_ticker_note": "per-ticker rows are served by GET /api/industries/{code}/companies"
   },
   "stats_unavailable_reason": null,
@@ -5881,7 +6279,7 @@
    "data_as_of": "2026-08-28T21:00:00",
    "prices_max_date": null,
    "prices_min_date": null,
-   "stats_method_version": "industry-stats-v1",
+   "stats_method_version": "industry-stats-v2",
    "knowledge_version": "gics-2026-04",
    "taxonomy_version": "gics-2026-04",
    "atlas_snapshot": "2026-09-07"
@@ -5895,7 +6293,7 @@
    "completion_tokens": 0,
    "cost_usd": 0.0,
    "latency_ms": 0,
-   "run_id": "080090d5-e45b-4935-835c-5cfb1883a4aa",
+   "run_id": "a5cf93de-14c8-4d8d-96a8-947a48b9dc83",
    "generation_mode": "llm_unavailable",
    "max_llm_calls": 2,
    "llm_planned_sections": []
@@ -5928,7 +6326,7 @@
     "ref": "industry_stats:1",
     "as_of": "2026-08-28T21:00:00",
     "provider": "industry_analytics",
-    "inputs_hash": "3caa6f7232819d76748ab31fbca7abf03495f9a0d87bf03838cdd89ec5b04623"
+    "inputs_hash": "eb54a6668d03395a5cad68b7dcd0ad7ec2f6b9dd853d4e204261c59d28022705"
    },
    {
     "kind": "benchmark",
@@ -5956,7 +6354,7 @@
    }
   ],
   "llm_cost_usd": 0.0,
-  "generated_at": "2026-09-12T01:54:16.456729",
+  "generated_at": "2026-09-12T02:44:00.759533",
   "access": {
    "surface": "latest",
    "tier": "public",
@@ -5995,7 +6393,7 @@
   "last_attempt": {
    "job_id": 4,
    "status": "succeeded",
-   "at": "2026-09-12T01:54:16.721121",
+   "at": "2026-09-12T02:44:01.068865",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -7381,7 +7779,7 @@
         "n_with_prices": 1,
         "priced_short_by": 2,
         "constituents_short_by": 2,
-        "explanation": "this universe holds 1 classified constituent for the group and the floor is 3. Priced in full it would still be 2 short, so no amount of price warm-up can cover it \u2014 the universe would have to add 2 companies."
+        "explanation": "this universe holds 1 classified constituent for the group and the floor is 3. Priced in full it would still be 2 short, so no amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, whether from companies added to the universe or from companies already in it that no group counts. This row knows the group's membership and not that pool, so it does not say which \u2014 the taxonomy response counts it."
        },
        "n_with_market_cap": 1,
        "n_with_metrics": 0,
@@ -7405,7 +7803,7 @@
        }
       },
       "method": {
-       "version": "industry-stats-v1",
+       "version": "industry-stats-v2",
        "weighting": [
         "equal",
         "market_cap"
@@ -7460,8 +7858,8 @@
        "as_of": "2026-09-04T21:00:00",
        "taxonomy_version": "gics-2026-04"
       },
-      "inputs_hash": "4310244895e4cd3b46284ed4b18d231630b16c7d61ad09b98bc9fe41d17b7f9c",
-      "computed_at": "2026-09-12T01:54:16.705916",
+      "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66",
+      "computed_at": "2026-09-12T02:44:01.054259",
       "stats_id": 3
      },
      "interpretation": null
@@ -8483,7 +8881,7 @@
         "ref": "industry_stats:3",
         "as_of": "2026-09-04T21:00:00",
         "provider": "industry_analytics",
-        "inputs_hash": "4310244895e4cd3b46284ed4b18d231630b16c7d61ad09b98bc9fe41d17b7f9c"
+        "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66"
        },
        {
         "kind": "benchmark",
@@ -8726,8 +9124,8 @@
     "metadata": {
      "facts": {
       "report_schema_version": 1,
-      "generated_at": "2026-09-12T01:54:16.709655",
-      "run_id": "a6367124-96f7-475e-a3e4-b29e07e4d98f",
+      "generated_at": "2026-09-12T02:44:01.058060",
+      "run_id": "2f08f461-38e3-4f3d-bad1-b4258bf34a75",
       "generation_mode": "llm_unavailable",
       "taxonomy_version": "gics-2026-04",
       "taxonomy_version_id": 1,
@@ -8776,7 +9174,7 @@
    "period_key": "2026-W36",
    "as_of": "2026-09-04T21:00:00",
    "method": {
-    "version": "industry-stats-v1",
+    "version": "industry-stats-v2",
     "weighting": [
      "equal",
      "market_cap"
@@ -8843,7 +9241,7 @@
      "n_with_prices": 1,
      "priced_short_by": 2,
      "constituents_short_by": 2,
-     "explanation": "this universe holds 1 classified constituent for the group and the floor is 3. Priced in full it would still be 2 short, so no amount of price warm-up can cover it \u2014 the universe would have to add 2 companies."
+     "explanation": "this universe holds 1 classified constituent for the group and the floor is 3. Priced in full it would still be 2 short, so no amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, whether from companies added to the universe or from companies already in it that no group counts. This row knows the group's membership and not that pool, so it does not say which \u2014 the taxonomy response counts it."
     },
     "n_with_market_cap": 1,
     "n_with_metrics": 0,
@@ -9123,12 +9521,12 @@
      "state": "universe_too_small",
      "structural": true,
      "clears_with_warm_up": false,
-     "explanation": "this universe holds 1 classified constituent for the group and the floor is 3. Priced in full it would still be 2 short, so no amount of price warm-up can cover it \u2014 the universe would have to add 2 companies.",
+     "explanation": "this universe holds 1 classified constituent for the group and the floor is 3. Priced in full it would still be 2 short, so no amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, whether from companies added to the universe or from companies already in it that no group counts. This row knows the group's membership and not that pool, so it does not say which \u2014 the taxonomy response counts it.",
      "reasons": []
     }
    },
-   "inputs_hash": "4310244895e4cd3b46284ed4b18d231630b16c7d61ad09b98bc9fe41d17b7f9c",
-   "computed_at": "2026-09-12T01:54:16.705916",
+   "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66",
+   "computed_at": "2026-09-12T02:44:01.054259",
    "per_ticker_note": "per-ticker rows are served by GET /api/industries/{code}/companies"
   },
   "stats_unavailable_reason": null,
@@ -9144,7 +9542,7 @@
     "n_with_prices": 1,
     "priced_short_by": 2,
     "constituents_short_by": 2,
-    "explanation": "this universe holds 1 classified constituent for the group and the floor is 3. Priced in full it would still be 2 short, so no amount of price warm-up can cover it \u2014 the universe would have to add 2 companies."
+    "explanation": "this universe holds 1 classified constituent for the group and the floor is 3. Priced in full it would still be 2 short, so no amount of price warm-up can cover it \u2014 the group needs 2 more classified constituents, whether from companies added to the universe or from companies already in it that no group counts. This row knows the group's membership and not that pool, so it does not say which \u2014 the taxonomy response counts it."
    },
    "n_with_market_cap": 1,
    "n_with_metrics": 0,
@@ -9206,7 +9604,7 @@
    "data_as_of": "2026-09-04T21:00:00",
    "prices_max_date": "2026-09-04",
    "prices_min_date": "2026-09-04",
-   "stats_method_version": "industry-stats-v1",
+   "stats_method_version": "industry-stats-v2",
    "knowledge_version": "gics-2026-04",
    "taxonomy_version": "gics-2026-04",
    "atlas_snapshot": "2026-09-07"
@@ -9220,7 +9618,7 @@
    "completion_tokens": 0,
    "cost_usd": 0.0,
    "latency_ms": 0,
-   "run_id": "a6367124-96f7-475e-a3e4-b29e07e4d98f",
+   "run_id": "2f08f461-38e3-4f3d-bad1-b4258bf34a75",
    "generation_mode": "llm_unavailable",
    "max_llm_calls": 2,
    "llm_planned_sections": []
@@ -9253,7 +9651,7 @@
     "ref": "industry_stats:3",
     "as_of": "2026-09-04T21:00:00",
     "provider": "industry_analytics",
-    "inputs_hash": "4310244895e4cd3b46284ed4b18d231630b16c7d61ad09b98bc9fe41d17b7f9c"
+    "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66"
    },
    {
     "kind": "benchmark",
@@ -9281,7 +9679,7 @@
    }
   ],
   "llm_cost_usd": 0.0,
-  "generated_at": "2026-09-12T01:54:16.719183",
+  "generated_at": "2026-09-12T02:44:01.067061",
   "access": {
    "surface": "latest",
    "tier": "public",

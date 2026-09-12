@@ -50,6 +50,7 @@ BODIES: tuple[tuple[str, type[BaseModel]], ...] = (
     ("report_warming_up", IndustryReportOut),
     ("report_universe_short", IndustryReportOut),
     ("companies", IndustryCompaniesOut),
+    ("companies_warming_up", IndustryCompaniesOut),
     ("history", IndustryHistoryOut),
     ("changes", IndustryChangesOut),
 )
@@ -155,6 +156,35 @@ def test_the_capture_carries_all_three_sample_floor_states(wire):
     assert short_code in wire["taxonomy"]["universe_coverage"]["not_coverable_codes"]
 
 
+def test_the_capture_carries_a_real_disagreement_between_two_reads(wire):
+    """The page prints both the edition's priced count and the live
+    membership read when they differ, and the fixture has to make them
+    differ WITHOUT either body being edited into it.
+
+    `/companies` prices from the LATEST statistics row, so the capture
+    reads it twice: once before any price existed, once after. Each body
+    is internally consistent — the early one counts 0 priced and marks
+    every row unpriced with a reason — and the disagreement lives between
+    the two reads, which is where the real one lives.
+    """
+    early = wire["companies_warming_up"]
+    edition = wire["report"]["payload"]["sections"]["companies"]["facts"]
+
+    assert wire["report"]["is_latest_good"] is True, "the page compares only on the published edition"
+    assert early["n_priced"] != edition["n_priced"], (
+        "the two captured reads agree, so the fixture no longer exercises the disagreement notice — "
+        "re-capture, and do not edit one of them into disagreeing"
+    )
+    # Each body agrees with ITSELF: the count matches its own rows, and
+    # every unpriced row says why.
+    assert early["n_priced"] == sum(1 for item in early["items"] if item["priced"])
+    assert early["count"] == wire["companies"]["count"]
+    for item in early["items"]:
+        if not item["priced"]:
+            assert item["unpriced_reason"], item["ticker"]
+    assert wire["companies"]["n_priced"] == sum(1 for item in wire["companies"]["items"] if item["priced"])
+
+
 def test_the_recapture_instruction_names_something_that_exists():
     """The failure messages above tell a reader to re-capture. That is only
     useful while the thing they name is in the repo — the first version of
@@ -171,6 +201,20 @@ def test_the_fixture_says_what_generated_it(wire):
     assert "app.scripts.capture_industry_ui_fixture" in generated_by, generated_by
 
 
+WEEKLY_CLOSES_PATH = "payload.sections.companies.facts.per_ticker[].weekly_closes"
+
+
+def _per_ticker_rows(body: object) -> list[dict]:
+    """The per-ticker rows of a stored body, or ``[]`` for one that has
+    none (the 404 detail, `/companies`, `/history`). Tolerant on purpose:
+    this is the walk that has to visit bodies nothing declared."""
+    if not isinstance(body, dict):
+        return []
+    facts = (((body.get("payload") or {}).get("sections") or {}).get("companies") or {}).get("facts") or {}
+    rows = facts.get("per_ticker")
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
 def test_the_fixture_declares_what_was_edited_after_capture(wire):
     """The honesty contract applies to the fixture itself: the only edit
     made after capture (emptying per-ticker weekly closes) is declared and
@@ -181,18 +225,31 @@ def test_the_fixture_declares_what_was_edited_after_capture(wire):
     assert meta["omitted_responses"] and meta["omitted_reason"]
 
     # `meta.trimmed` is keyed `<response>.<path within it>`: the capture
-    # now stores three report bodies (the published edition and the two
-    # below-the-floor ones) and each carries its own count.
-    for key, declared in meta["trimmed"].items():
+    # stores several report bodies and each carries its own count.
+    declared: dict[str, int] = {}
+    for key, n in meta["trimmed"].items():
         body, path = key.split(".", 1)
-        assert path == "payload.sections.companies.facts.per_ticker[].weekly_closes", key
-        per_ticker = wire[body]["payload"]["sections"]["companies"]["facts"]["per_ticker"]
-        dropped = sum(int(row.get("weekly_closes_dropped", 0)) for row in per_ticker)
-        assert dropped == declared, (
-            f"the per-row drop counts in `{body}` do not add up to meta.trimmed[{key!r}] — "
-            "a truncated artifact must count what it dropped"
+        assert path == WEEKLY_CLOSES_PATH, key
+        assert body in wire, f"meta.trimmed names `{body}`, which is not in the fixture"
+        declared[key] = int(n)
+
+    # EVERY body, not only the declared ones. Walking `meta.trimmed`
+    # alone checks the fixture's own account against itself and never
+    # looks at a body missing from it — so a hand-edit to a capture that
+    # had no closes to drop (`report_warming_up` has none) would ship
+    # undeclared, which is the edit this test is named for.
+    for name, body in wire.items():
+        if name == "meta":
+            continue
+        rows = _per_ticker_rows(body)
+        dropped = sum(int(row.get("weekly_closes_dropped", 0) or 0) for row in rows)
+        key = f"{name}.{WEEKLY_CLOSES_PATH}"
+        assert dropped == declared.get(key, 0), (
+            f"`{name}` reports {dropped} dropped weekly closes and meta.trimmed declares "
+            f"{declared.get(key, 0)} — a truncated artifact must count what it dropped, and an edit "
+            "the fixture does not declare is a hand-edit that has to be re-captured instead"
         )
-        for row in per_ticker:
+        for row in rows:
             if row.get("weekly_closes_dropped"):
                 assert row["weekly_closes"] == [], "a row that reports dropped closes still carries some"
 
