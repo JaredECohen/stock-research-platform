@@ -14,7 +14,11 @@ Rules this module encodes, in order of how often they have bitten:
   of every statistic's ``n``; a horizon the price window cannot reach is
   ``{"value": null, "reason": "history_window"}``; a group below the
   sample floor reports ``status = insufficient_sample`` — a labelled
-  state, not an error and not a row of zeros.
+  state, not an error and not a row of zeros — and ``sample.sample_floor``
+  says WHICH short state it is: ``prices_not_warmed`` (transient; the
+  weekly warm-up clears it) or ``universe_too_small`` (structural; this
+  universe holds fewer constituents than the floor and never will cover
+  the group without being widened). See ``classify_sample_floor``.
 * **Batched reads only.** One SELECT for the group map, one for the
   companies, one for the metrics, one bulk read of cached price rows
   (chunked ``IN`` lists); provider fetches for tickers without a cached
@@ -118,6 +122,13 @@ REASON_NO_PRICE_AT_AS_OF = "no_price_at_as_of"
 REASON_HISTORY_WINDOW = "history_window"
 REASON_INSUFFICIENT = "insufficient_sample"
 REASON_INACTIVE = "inactive"
+
+# The three sample-floor states. Below the floor is not one state but
+# two, and they are different statements to a reader — see
+# ``classify_sample_floor``.
+FLOOR_MET = "met"
+FLOOR_UNIVERSE_TOO_SMALL = "universe_too_small"
+FLOOR_PRICES_NOT_WARMED = "prices_not_warmed"
 
 
 def _utcnow() -> datetime:
@@ -793,8 +804,88 @@ def _inputs_hash(code: str, ctx: AnalyticsContext, per_ticker: dict[str, dict[st
     return hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
-def _sample_floor(min_sample: int | None) -> int:
+def sample_floor(min_sample: int | None = None) -> int:
+    """The configured minimum priced constituents a group needs before its
+    statistics mean anything. Public because `/api/industries/taxonomy`
+    classifies against the same number and must not carry its own copy."""
     return int(settings.industry_stats_min_sample if min_sample is None else min_sample)
+
+
+def universe_covers(n_constituents: int, min_sample: int) -> bool:
+    """Can this universe EVER put ``min_sample`` priced names in a group
+    with ``n_constituents`` classified members? The one definition of
+    "structural", shared by the analytics row and the taxonomy endpoint so
+    the two can never disagree about which groups are out of reach."""
+    return int(n_constituents) >= int(min_sample)
+
+
+def _count(n: int, singular: str, plural: str | None = None) -> str:
+    """``3 companies`` / ``1 company`` — the explanations below are read by
+    a person, and "1 constituents" reads as a bug in the number."""
+    return f"{n} {singular}" if n == 1 else f"{n} {plural or singular + 's'}"
+
+
+def classify_sample_floor(*, n_constituents: int, n_with_prices: int, min_sample: int) -> dict[str, Any]:
+    """Which sample-floor state a group is in, and why — in words.
+
+    Below the floor is two different situations, and one label for both
+    tells a reader "not ready yet" when the truth may be "this universe
+    does not hold enough of this industry":
+
+    * ``universe_too_small`` — the classification table holds fewer
+      constituents than the floor. Price every one of them and the group
+      is still short, so no number of warm-up weeks reaches it; only a
+      wider universe does. **Structural.**
+    * ``prices_not_warmed`` — the membership clears the floor but this
+      period could not price enough of it. The weekly warm-up fetches
+      more series every run, so this clears on its own. **Transient.**
+    * ``met`` — at or above the floor; the statistics are computed.
+
+    The `explanation` is written here rather than in the UI for the same
+    reason every other missing value on this surface carries its reason:
+    a page that composes its own sentence is making a claim the server
+    never made.
+    """
+    n_constituents = int(n_constituents)
+    n_with_prices = int(n_with_prices)
+    floor = int(min_sample)
+    constituents_short_by = max(floor - n_constituents, 0)
+    priced_short_by = max(floor - n_with_prices, 0)
+
+    if priced_short_by == 0:
+        state, explanation = FLOOR_MET, (
+            f"{n_with_prices} of {_count(n_constituents, 'classified constituent')} were priced this "
+            f"period, at or above the floor of {floor}."
+        )
+    elif not universe_covers(n_constituents, floor):
+        state, explanation = FLOOR_UNIVERSE_TOO_SMALL, (
+            f"this universe holds {_count(n_constituents, 'classified constituent')} for the group and the "
+            f"floor is {floor}. Priced in full it would still be {constituents_short_by} short, so no amount "
+            f"of price warm-up can cover it — the universe would have to add "
+            f"{_count(constituents_short_by, 'company', 'companies')}."
+        )
+    else:
+        priced = (
+            "none of them had a usable price series this period"
+            if n_with_prices == 0
+            else f"only {n_with_prices} had a usable price series this period"
+        )
+        state, explanation = FLOOR_PRICES_NOT_WARMED, (
+            f"{_count(n_constituents, 'constituent')} are classified into the group but {priced} — "
+            f"{priced_short_by} below the floor of {floor}. The weekly warm-up fetches more series each "
+            f"run, so this can clear without changing the universe."
+        )
+    return {
+        "state": state,
+        "structural": state == FLOOR_UNIVERSE_TOO_SMALL,
+        "clears_with_warm_up": state == FLOOR_PRICES_NOT_WARMED,
+        "min_sample": floor,
+        "n_constituents": n_constituents,
+        "n_with_prices": n_with_prices,
+        "priced_short_by": priced_short_by,
+        "constituents_short_by": constituents_short_by,
+        "explanation": explanation,
+    }
 
 
 def compute_group_stats(
@@ -816,7 +907,7 @@ def compute_group_stats(
     ctx = context or load_context(as_of, version=version, max_fetch=max_fetch, loaders=loaders)
     group: NodeInfo = gics_registry.group(code, version=ctx.version)
     key = period_key or period_key_for(ctx.as_of)
-    floor = _sample_floor(min_sample)
+    floor = sample_floor(min_sample)
     tickers = list(ctx.groups.get(group.code, []))
 
     # One companies read per context, shared with the benchmark cohort —
@@ -1057,9 +1148,17 @@ def compute_group_stats(
     ]
 
     dates = [row["last_date"] for row in per_ticker.values() if row.get("last_date")]
+    floor_state = classify_sample_floor(
+        n_constituents=len(tickers), n_with_prices=n_with_prices, min_sample=floor,
+    )
     sample = {
         "n_constituents": len(tickers),
         "n_with_prices": n_with_prices,
+        # Which floor state this group is in, and whether the shortfall is
+        # a warm-up that improves weekly or a universe that cannot hold
+        # the floor at all. Two different sentences to a reader, and this
+        # is the field that keeps them apart.
+        "sample_floor": floor_state,
         "n_with_market_cap": len(caps),
         "n_with_metrics": sum(1 for t in tickers if t in metrics),
         "min_sample": floor,
@@ -1147,8 +1246,17 @@ def compute_group_stats(
         "degraded": degraded,
     }
     if insufficient:
+        # `status` stays the one label the snapshot and the writer already
+        # count; WHICH short state it is rides alongside it, because
+        # "the warm-up has not reached this group yet" and "this universe
+        # cannot hold this group's floor" are not the same news.
         payload["insufficient_sample"] = {
             "n_with_prices": n_with_prices, "min_sample": floor,
+            "n_constituents": len(tickers),
+            "state": floor_state["state"],
+            "structural": floor_state["structural"],
+            "clears_with_warm_up": floor_state["clears_with_warm_up"],
+            "explanation": floor_state["explanation"],
             "reasons": sorted({e["reason"] for e in excluded}),
         }
 

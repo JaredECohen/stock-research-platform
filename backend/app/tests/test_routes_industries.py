@@ -35,6 +35,7 @@ from app.models import (
     IndustryStatSnapshot,
 )
 from app.services import gics_registry as reg
+from app.services import industry_analytics as ia
 from app.services import industry_report_store as store
 
 AS_OF = datetime(2026, 9, 4, 21, 0)
@@ -193,6 +194,55 @@ def test_taxonomy_sub_industry_counts_match_the_registry_per_group(client, taxon
         assert entry["sub_industry_count"] == len(reg.sub_industries_of(code, version=taxonomy)), code
 
 
+def test_taxonomy_names_the_groups_this_universe_can_never_cover(client, taxonomy, group):
+    """The structural count, in one place, and agreeing with every row.
+
+    A group whose membership is below the sample floor is short of
+    COMPANIES: it will report `insufficient_sample` every week no matter
+    how long the price warm-up runs, and an operator deciding whether to
+    widen the universe needs that number without reading 25 rows.
+    """
+    _seed_members(group, taxonomy)  # three constituents — at the floor
+    body = client.get("/api/industries/taxonomy").json()
+    floor = ia.sample_floor()
+    groups = {g["code"]: g for s in body["sectors"] for g in s["industry_groups"]}
+    summary = body["universe_coverage"]
+
+    assert summary["min_sample"] == floor
+    assert summary["setting"] == "INDUSTRY_STATS_MIN_SAMPLE"
+    assert summary["groups"] == len(groups)
+    assert summary["coverable"] + summary["not_coverable"] == summary["groups"]
+    assert summary["basis"]
+
+    # Every per-group verdict is the same arithmetic on the count beside
+    # it, and the summary is exactly the groups that failed it.
+    short = {c for c, g in groups.items() if not g["universe_coverage"]["coverable"]}
+    assert short == set(summary["not_coverable_codes"])
+    assert summary["not_coverable"] == len(short)
+    assert summary["constituents_needed"] == sum(
+        groups[c]["universe_coverage"]["constituents_short_by"] for c in short
+    )
+    for g in groups.values():
+        cov = g["universe_coverage"]
+        assert cov["min_sample"] == floor
+        assert cov["constituent_count"] == g["constituent_count"]
+        assert cov["coverable"] is (g["constituent_count"] >= floor)
+        assert cov["constituents_short_by"] == max(floor - g["constituent_count"], 0)
+        assert cov["explanation"], g["code"]
+
+    # The seeded group sits exactly at the floor: coverable, and nothing
+    # about it says "short".
+    assert groups[group.code]["universe_coverage"]["coverable"] is True
+    assert groups[group.code]["universe_coverage"]["constituents_short_by"] == 0
+
+    # And the point of the whole field: this universe leaves groups the
+    # weekly warm-up can never rescue, and they are named rather than
+    # left to render as "not ready yet".
+    assert short, "expected at least one group below the floor in this test universe"
+    thin = groups[sorted(short)[0]]["universe_coverage"]
+    assert "warm-up" in thin["explanation"] and str(floor) in thin["explanation"]
+
+
 def test_taxonomy_carries_the_access_policy(client):
     access = client.get("/api/industries/taxonomy").json()["access"]
     assert access["surface"] == "latest"
@@ -271,6 +321,76 @@ def test_report_serves_the_edition_with_its_statistics_and_method(client, group,
     # Per-ticker rows belong to /companies, and the response says so.
     assert "per_ticker" not in body["stats"]
     assert "companies" in body["stats"]["per_ticker_note"]
+
+
+def _seed_floor_state(node, taxonomy, *, n_constituents: int, n_priced: int) -> str:
+    """A stats row and its edition for a group in one sample-floor state.
+
+    The `sample_floor` block is built by the producer
+    (`industry_analytics.classify_sample_floor`) rather than typed out
+    here: a hand-written copy would agree with this test and drift from
+    the service, which is exactly the failure this repo has had before.
+    `coverage` is composed the way the worker composes it — from the
+    stats row's own `sample`.
+    """
+    floor = ia.sample_floor()
+    sample = {
+        "n_constituents": n_constituents,
+        "n_with_prices": n_priced,
+        "min_sample": floor,
+        "excluded": [],
+        "sample_floor": ia.classify_sample_floor(
+            n_constituents=n_constituents, n_with_prices=n_priced, min_sample=floor,
+        ),
+    }
+    state = str(sample["sample_floor"]["state"])
+    with SessionLocal() as db:
+        row = IndustryStatSnapshot(
+            taxonomy_version_id=taxonomy.id, industry_group_code=node.code,
+            period_key="2026-W36", as_of=AS_OF, method={"weighting": ["equal"]},
+            sample=sample,
+            payload={"status": "ok" if state == ia.FLOOR_MET else ia.REASON_INSUFFICIENT},
+            per_ticker={},
+            inputs_hash=f"floor-{n_constituents}-{n_priced}",
+        )
+        db.add(row)
+        db.commit()
+        stats_id = row.id
+    _seed_report(node, taxonomy, period_key="2026-W36", stats_id=stats_id, coverage=sample)
+    return state
+
+
+@pytest.mark.parametrize(("n_constituents", "n_priced", "expected", "structural"), [
+    (9, 1, ia.FLOOR_PRICES_NOT_WARMED, False),
+    (2, 2, ia.FLOOR_UNIVERSE_TOO_SMALL, True),
+    (9, 5, ia.FLOOR_MET, False),
+])
+def test_report_says_which_kind_of_short_the_group_is(
+    client, group, taxonomy, n_constituents, n_priced, expected, structural,
+):
+    """`insufficient_sample` alone reads as "not ready yet". The response
+    has to distinguish a warm-up that will catch up from a universe that
+    never can — on both the statistics row and the coverage block the
+    header renders."""
+    assert _seed_floor_state(group, taxonomy, n_constituents=n_constituents, n_priced=n_priced) == expected
+    body = client.get(f"/api/industries/{group.code}/report").json()
+
+    for where in (body["stats"]["sample"]["sample_floor"], body["coverage"]["sample_floor"]):
+        assert where["state"] == expected
+        assert where["structural"] is structural
+        assert where["clears_with_warm_up"] is (expected == ia.FLOOR_PRICES_NOT_WARMED)
+        assert where["min_sample"] == ia.sample_floor()
+        assert where["n_constituents"] == n_constituents
+        assert where["n_with_prices"] == n_priced
+        assert where["explanation"]
+
+    # The words differ too, not just the enum: this is what the page
+    # prints, and "not ready yet" for a structural shortfall is the bug.
+    text = body["coverage"]["sample_floor"]["explanation"]
+    if structural:
+        assert "warm-up can cover it" in text
+    elif expected == ia.FLOOR_PRICES_NOT_WARMED:
+        assert "without changing the universe" in text
 
 
 def test_report_without_a_statistics_row_says_why(client, group, taxonomy):

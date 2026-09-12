@@ -15,7 +15,11 @@ What the shapes are careful about:
 * **Membership is not price coverage.** `/companies` lists the classified
   membership of a group and marks which names the latest statistics row
   could price, with a reason for each one it could not. `n_priced` and
-  `count` are different fields on purpose.
+  `count` are different fields on purpose — and the same distinction says
+  why a group is below the sample floor: `/taxonomy`'s `universe_coverage`
+  names the groups this universe holds too few companies to ever cover,
+  which is a different statement from a week whose prices have not warmed
+  up yet.
 * **Numbers travel with their method.** The report response carries the
   statistics row's `method` and `sample` whenever it carries `payload`,
   because `benchmark_relative` without `method.benchmark_cohort_basis`
@@ -80,6 +84,51 @@ MEMBER_STATES = (industry_classification.STATE_MAPPED, industry_classification.S
 
 COMPANIES_LIMIT = 500
 HISTORY_LIMIT = 26
+
+# Why a group with too few constituents is a different statement from a
+# group whose prices have not warmed up yet. Stated once, on the
+# response, because the page must not compose this claim itself.
+UNIVERSE_COVERAGE_BASIS = (
+    "a group whose classified constituent count is below the sample floor cannot reach the floor "
+    "however many weeks the price warm-up runs — it is short of companies, not of prices, and its "
+    "statistics will read insufficient_sample every week until the universe is widened. Groups "
+    "counted here are every industry group in this taxonomy version; membership comes from the "
+    "classification table on every call."
+)
+
+
+def _group_universe_coverage(constituent_count: int, floor: int) -> dict[str, Any]:
+    """The structural half of the sample-floor story for one group.
+
+    Deliberately NOT the three-state classifier the analytics row carries:
+    this endpoint knows the membership and not the week's price coverage,
+    and a response that guessed the other half would be inventing it.
+    `industry_analytics.universe_covers` is the shared definition of
+    structural, so the two layers cannot disagree.
+    """
+    short_by = max(floor - constituent_count, 0)
+    coverable = industry_analytics.universe_covers(constituent_count, floor)
+    members = "constituent" if constituent_count == 1 else "constituents"
+    missing = "company" if short_by == 1 else "companies"
+    if coverable:
+        explanation = (
+            f"{constituent_count} classified {members} in this universe, at or above the sample floor "
+            f"of {floor}; a week below the floor is about prices, not about the size of this universe."
+        )
+    else:
+        explanation = (
+            f"this universe holds {constituent_count} classified {members} for the group and the sample "
+            f"floor is {floor}. No amount of price warm-up can cover it — the universe would have to add "
+            f"{short_by} more {missing}."
+        )
+    return {
+        "min_sample": floor,
+        "constituent_count": constituent_count,
+        "coverable": coverable,
+        "constituents_short_by": short_by,
+        "explanation": explanation,
+    }
+
 
 _SOURCE_LABELS = {
     industry_classification.SOURCE_RESEARCH_MAP:
@@ -177,8 +226,16 @@ def get_industry_taxonomy(
     _rate: None = Depends(rate_scope("data")),
 ) -> TaxonomyOut:
     """The active structure: sectors → industry groups, with each group's
-    industry and sub-industry counts, its constituent count, and the
-    pointer to its latest published edition.
+    industry and sub-industry counts, its constituent count, whether this
+    universe can cover the group at the sample floor, and the pointer to
+    its latest published edition.
+
+    `universe_coverage` answers, in one place, "how much of this taxonomy
+    can the current universe never report on": a group whose membership is
+    below the floor is short of COMPANIES, and no number of price warm-up
+    weeks changes that. It is the STRUCTURAL half only — this endpoint
+    reads no statistics row and so cannot know which groups are merely
+    un-warmed; that half is `stats.sample.sample_floor` on the report.
 
     Four reads: the active version, the version's nodes (cached per
     version id — they are immutable after import), one constituent count
@@ -200,6 +257,9 @@ def get_industry_taxonomy(
 
     now = _utcnow()
     stale_after = int(settings.industry_report_stale_after_days)
+    floor = industry_analytics.sample_floor()
+    not_coverable: list[str] = []
+    constituents_needed = 0
     groups_by_sector: dict[str, list[dict[str, Any]]] = {}
     for node in groups:
         edition = latest.get(node.code)
@@ -217,6 +277,11 @@ def get_industry_taxonomy(
                 "stale_by_age": _stale_by_age(age, stale_after),
                 "age_days": None if age is None else age.days,
             }
+        constituent_count = len(by_group.get(node.code, []))
+        coverage = _group_universe_coverage(constituent_count, floor)
+        if not coverage["coverable"]:
+            not_coverable.append(node.code)
+            constituents_needed += coverage["constituents_short_by"]
         groups_by_sector.setdefault(node.code[:2], []).append({
             "code": node.code,
             "name": node.name,
@@ -226,7 +291,8 @@ def get_industry_taxonomy(
             "effective_to": node.effective_to.isoformat() if node.effective_to else None,
             "industry_count": industries_by_group.get(node.code, 0),
             "sub_industry_count": subs_by_group.get(node.code, 0),
-            "constituent_count": len(by_group.get(node.code, [])),
+            "constituent_count": constituent_count,
+            "universe_coverage": coverage,
             "latest_report": pointer,
         })
 
@@ -246,6 +312,16 @@ def get_industry_taxonomy(
                 "constituents are companies whose current classification maps to the group; "
                 "a `fallback` row knows only its sector and is not counted here"
             ),
+        },
+        universe_coverage={
+            "min_sample": floor,
+            "setting": "INDUSTRY_STATS_MIN_SAMPLE",
+            "groups": len(groups),
+            "coverable": len(groups) - len(not_coverable),
+            "not_coverable": len(not_coverable),
+            "not_coverable_codes": sorted(not_coverable),
+            "constituents_needed": constituents_needed,
+            "basis": UNIVERSE_COVERAGE_BASIS,
         },
         reports={"groups_with_a_published_edition": len(latest), "groups": len(groups)},
         access=IndustryAccessOut(**access),

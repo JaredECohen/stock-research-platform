@@ -208,9 +208,14 @@ def test_below_the_sample_floor_is_a_labelled_state_not_numbers(codes):
                   prices={"AAA": _step_series(10.0, 11.0), "BBB": _step_series(10.0, 12.0)})
     row = ia.compute_group_stats(code, as_of=AS_OF, loaders=ld, persist=False, max_fetch=10, min_sample=3)
     assert row.payload["status"] == ia.REASON_INSUFFICIENT
-    assert row.payload["insufficient_sample"] == {
-        "n_with_prices": 2, "min_sample": 3, "reasons": [ia.REASON_NO_PRICES],
+    short = dict(row.payload["insufficient_sample"])
+    explanation = short.pop("explanation")
+    assert short == {
+        "n_with_prices": 2, "min_sample": 3, "n_constituents": 3,
+        "state": ia.FLOOR_PRICES_NOT_WARMED, "structural": False, "clears_with_warm_up": True,
+        "reasons": [ia.REASON_NO_PRICES],
     }
+    assert "warm-up" in explanation
     for h in ia.HORIZONS:
         entry = row.payload["returns"][h]
         assert entry["equal_weight"] is None and entry["market_cap_weight"] is None
@@ -220,6 +225,90 @@ def test_below_the_sample_floor_is_a_labelled_state_not_numbers(codes):
     # The per-ticker rows are still kept — the closes are evidence for the
     # next period even when this one cannot aggregate them.
     assert row.per_ticker["AAA"]["weekly_closes"]
+
+
+# --- which KIND of short ---------------------------------------------------------
+#
+# A group below the floor is one of two situations and the page must not
+# print the same words for both: prices that have not warmed up yet
+# (transient — the weekly warm-up clears it) versus a universe that holds
+# fewer constituents than the floor (structural — it never clears until
+# the universe is widened).
+
+
+def test_classify_sample_floor_separates_a_thin_universe_from_a_cold_cache():
+    structural = ia.classify_sample_floor(n_constituents=2, n_with_prices=2, min_sample=3)
+    warming = ia.classify_sample_floor(n_constituents=9, n_with_prices=2, min_sample=3)
+    healthy = ia.classify_sample_floor(n_constituents=9, n_with_prices=4, min_sample=3)
+
+    assert structural["state"] == ia.FLOOR_UNIVERSE_TOO_SMALL
+    assert (structural["structural"], structural["clears_with_warm_up"]) == (True, False)
+    # Fully priced and STILL short: that is the whole point of the state.
+    assert structural["priced_short_by"] == 1 and structural["constituents_short_by"] == 1
+
+    assert warming["state"] == ia.FLOOR_PRICES_NOT_WARMED
+    assert (warming["structural"], warming["clears_with_warm_up"]) == (False, True)
+    assert warming["priced_short_by"] == 1 and warming["constituents_short_by"] == 0
+
+    assert healthy["state"] == ia.FLOOR_MET
+    assert (healthy["structural"], healthy["clears_with_warm_up"]) == (False, False)
+    assert healthy["priced_short_by"] == 0
+
+    # Three distinct sentences, each naming the floor — a reader who sees
+    # only the text still learns which situation they are in.
+    texts = {s["explanation"] for s in (structural, warming, healthy)}
+    assert len(texts) == 3
+    assert all("3" in t for t in texts)
+    assert "warm-up can cover it" in structural["explanation"]
+    assert "without changing the universe" in warming["explanation"]
+
+
+def test_universe_covers_is_the_one_definition_of_structural():
+    assert ia.universe_covers(3, 3) is True
+    assert ia.universe_covers(2, 3) is False
+    assert ia.universe_covers(0, 1) is False
+
+
+def test_a_group_the_universe_cannot_cover_says_so_rather_than_warming_up(codes):
+    """Every member priced, still below the floor: structural."""
+    code, _ = codes
+    ld = _loaders(groups={code: ["AAA", "BBB"]},
+                  prices={t: _step_series(10.0, 11.0) for t in ("AAA", "BBB")})
+    row = ia.compute_group_stats(code, as_of=AS_OF, loaders=ld, persist=False, max_fetch=0, min_sample=3)
+
+    assert row.payload["status"] == ia.REASON_INSUFFICIENT
+    short = row.payload["insufficient_sample"]
+    assert short["state"] == ia.FLOOR_UNIVERSE_TOO_SMALL
+    assert short["structural"] is True and short["clears_with_warm_up"] is False
+    # Nothing was excluded — there is simply not enough of this industry
+    # in the universe, and the reasons list must not imply otherwise.
+    assert short["reasons"] == []
+    # The sample block carries the same verdict, with the arithmetic the
+    # payload's summary leaves out.
+    floor = row.sample["sample_floor"]
+    assert floor["state"] == ia.FLOOR_UNIVERSE_TOO_SMALL
+    assert floor["constituents_short_by"] == 1 and floor["priced_short_by"] == 1
+    assert floor["explanation"] == short["explanation"]
+
+
+def test_sample_floor_block_travels_on_every_row_including_a_healthy_one(codes):
+    """`met` is reported too: a page that only learns about the floor when
+    a group is short cannot tell the reader where a healthy group stands."""
+    code, _ = codes
+    ld = _loaders(groups={code: ["AAA", "BBB", "CCC", "DDD"]},
+                  prices={t: _step_series(10.0, 11.0) for t in ("AAA", "BBB", "CCC", "DDD")})
+    row = ia.compute_group_stats(code, as_of=AS_OF, loaders=ld, persist=False, max_fetch=0, min_sample=3)
+
+    assert row.payload["status"] == "ok"
+    assert "insufficient_sample" not in row.payload
+    floor = row.sample["sample_floor"]
+    assert floor["state"] == ia.FLOOR_MET
+    assert floor["structural"] is False and floor["clears_with_warm_up"] is False
+    assert floor["n_constituents"] == 4 and floor["n_with_prices"] == 4
+    # The block agrees with the counts beside it, always.
+    assert floor["n_constituents"] == row.sample["n_constituents"]
+    assert floor["n_with_prices"] == row.sample["n_with_prices"]
+    assert floor["min_sample"] == row.sample["min_sample"]
 
 
 # --- benchmarks -------------------------------------------------------------------
