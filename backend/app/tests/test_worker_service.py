@@ -17,7 +17,7 @@ def test_worker_module_imports_without_starting_anything():
 def test_monitoring_registers_every_loop():
     """The worker's whole job is running these. `register_all` must not
     need apscheduler at import time, or the worker can't even wire them."""
-    from app.monitoring import register_all
+    from app.monitoring import KNOWN_LOOPS, register_all
 
     class FakeScheduler:
         def __init__(self):
@@ -28,7 +28,12 @@ def test_monitoring_registers_every_loop():
 
     sched = FakeScheduler()
     register_all(sched)
-    assert len(sched.jobs) == 15
+    # Counted against KNOWN_LOOPS rather than a literal: the literal went
+    # stale every time a loop was added, and the list is already the single
+    # source of truth that `test_cron_health_cross_process` pins to
+    # `register_all`.
+    assert len(sched.jobs) == len(KNOWN_LOOPS)
+    assert set(sched.jobs) == set(KNOWN_LOOPS)
     assert "edgar_poller" in sched.jobs
     assert "history_backfill" in sched.jobs
 

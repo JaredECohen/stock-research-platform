@@ -41,7 +41,11 @@ Two things to know before you trust a local run:
   `DATABASE_URL="sqlite:////tmp/<something-unique>.db"`.
 
 CI installs from `requirements.txt`, which pins floors rather than ceilings, so
-**CI resolves newer dependencies than a long-lived dev environment**. Tests that
+**CI resolves newer dependencies than a long-lived dev environment**. Run the
+suite against those versions before trusting a green local run — on 2026-09-11
+that difference was hiding a production defect in which the per-IP rate limiter
+silently enforced nothing at all (see `rate_limit._find_route_handler`), and
+every configuration-level test still passed. Tests that
 introspect framework internals can pass locally and fail there. To reproduce CI's
 versions cheaply:
 
@@ -56,7 +60,9 @@ Two Render services share one Docker image, differing only by entrypoint:
 
 - **web** (`marketmosaic`) — uvicorn. Serves the API and the built frontend.
 - **worker** (`marketmosaic-worker`) — `python -m app.worker`. Owns the memo-regen
-  queue and all 15 monitoring loops.
+  queue and every monitoring loop in `app/monitoring/__init__.py::KNOWN_LOOPS`
+  (16 since `snapshot_gc` landed; `test_cron_health_cross_process` pins the
+  list to what `register_all` actually registers).
 
 They coordinate only through Postgres. Keep `ENABLE_MONITORING` and
 `ENABLE_REGEN_WORKER` **false** on web and **true** on the worker; flipping either
