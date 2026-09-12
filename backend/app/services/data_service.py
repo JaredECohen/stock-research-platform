@@ -486,17 +486,46 @@ class DataService:
 
     def get_earnings_transcripts(
         self, ticker: str, *, force_refresh: bool = False,
+        prefer_cached: bool = False,
     ) -> list[dict[str, Any]] | None:
+        """Transcripts for `ticker`. Four AlphaVantage requests on a miss
+        (the provider iterates four quarters).
+
+        `prefer_cached=True` accepts a cached row at any age — see
+        `get_filings` for why a universe-wide loop asks for that.
+        """
+        from . import provider_cache
         rows = self._cached(
             "transcripts", ticker.upper(),
             lambda: self._try_chain("transcripts", "get_earnings_transcripts", ticker),
             force_refresh=force_refresh,
+            ttl_override=provider_cache.NEVER_EXPIRES if prefer_cached else None,
         )
         return _clip_dated_rows(rows, "date", fallback_key="period")
 
     def get_filings(
         self, ticker: str, *, force_refresh: bool = False,
+        prefer_cached: bool = False,
     ) -> list[dict[str, Any]] | None:
+        """Filings WITH document bodies. The expensive read: up to ten
+        multi-megabyte fetches per ticker, paced against SEC's ~10 req/s.
+
+        `prefer_cached=True` serves a cached row at whatever age it is and
+        only reaches the provider when there is no row at all. It exists for
+        the one caller that sweeps the whole curated universe on a schedule
+        (`history_service.backfill_ticker` under `history_backfill`), where
+        the seven-day TTL rolling over would otherwise mean ~1,700 document
+        downloads in a single nightly job.
+
+        That is safe rather than a reintroduction of the never-expire bug,
+        because nothing but a new accession changes a filed document, and
+        `edgar_poller` responds to a new accession by calling
+        `invalidate_filings_text` for that one ticker. Freshness is driven by
+        the event, which is capped; the TTL stays the backstop for every
+        other reader, whose cost is bounded by user activity rather than by
+        the size of the universe.
+        """
+        from . import provider_cache
         cik = self._lookup_cik(ticker)
         if not cik:
             return None
@@ -504,6 +533,7 @@ class DataService:
             "filings", ticker.upper(),
             lambda: self._try_chain("filings", "get_filings", ticker, cik=cik),
             force_refresh=force_refresh,
+            ttl_override=provider_cache.NEVER_EXPIRES if prefer_cached else None,
         )
         return _clip_dated_rows(rows, "filing_date", fallback_key="period_end")
 
@@ -551,6 +581,24 @@ class DataService:
         """
         from . import provider_cache
         return provider_cache.invalidate("filings", ticker.upper())
+
+    def reads_from_cache(self, capability: str, key: str) -> bool:
+        """True when a `prefer_cached` read of `(capability, key)` will be
+        answered without consulting a provider.
+
+        Lets a loop that fans out over the whole universe ask "does this
+        ticker cost me a live provider call?" *before* it spends one, which
+        is how `history_backfill` bounds its nightly cold reads.
+
+        Reports True in the two modes where `_cached` bypasses the cache
+        entirely — a registered test fixture, an active as-of context —
+        because neither reaches a provider either. The question being asked
+        is about cost, not about which row answered.
+        """
+        if self._test_provider is not None or current_as_of_date() is not None:
+            return True
+        from . import provider_cache
+        return provider_cache.get(capability, key) is not None
 
     def _lookup_cik(self, ticker: str) -> str | None:
         """Resolve a ticker's CIK.

@@ -449,7 +449,37 @@ def _ingest_transcripts(
     return written
 
 
-def backfill_ticker(ticker: str, *, db: Session | None = None) -> dict[str, int]:
+# The two reads in `backfill_ticker` that cost real money on a miss, and so
+# are worth a budget when something fans this function out over the whole
+# curated universe. `filings` pulls up to ten document bodies of a few MB
+# each and every filing it newly inserts fires `filing_memory.post_pass`
+# (embeddings plus an LLM diff); `transcripts` costs four AlphaVantage
+# requests. The third read, `get_financial_statements`, is deliberately NOT
+# in this list: it is one JSON response with no bodies and no LLM behind it,
+# and it is the only thing that ever refreshes fundamentals, so slowing it
+# down would trade a cost problem for a correctness one.
+_BUDGETED_BACKFILL_CAPABILITIES = ("filings", "transcripts")
+
+
+def backfill_hits_provider(ticker: str) -> bool:
+    """True when `backfill_ticker(ticker, prefer_cached=True)` would still
+    have to consult a live provider for one of its expensive reads.
+
+    A caller that sweeps the universe uses this to spend a bounded number of
+    cold reads per pass instead of discovering the cost after the fact — see
+    `monitoring/history_backfill.py`.
+    """
+    from .data_service import get_data_service
+    ds = get_data_service()
+    key = ticker.upper()
+    return not all(
+        ds.reads_from_cache(cap, key) for cap in _BUDGETED_BACKFILL_CAPABILITIES
+    )
+
+
+def backfill_ticker(
+    ticker: str, *, db: Session | None = None, prefer_cached: bool = False,
+) -> dict[str, int]:
     """Full backfill of one ticker against the data_service.
 
     Returns a `{financial_periods, filings, transcripts}` dict of net
@@ -457,13 +487,25 @@ def backfill_ticker(ticker: str, *, db: Session | None = None) -> dict[str, int]
     differed from the provider's. Idempotent: re-running on unchanged data
     writes nothing and returns zeros for all three, which is what makes the
     nightly `history_backfill` note a usable signal rather than a constant.
+
+    `prefer_cached=True` reads filings and transcripts at whatever age they
+    are already cached at, reaching a provider only when there is no cached
+    row at all. That is for the nightly universe-wide sweep, which is a
+    reconciliation pass and not a freshness driver: filing bodies are
+    refreshed by `edgar_poller` invalidating the ticker it saw a new
+    accession for, and transcripts by `transcripts_poller`'s event, both of
+    which are capped per pass. Left at the default, every other caller —
+    a regen job, a user opening a ticker — still gets the capability's own
+    TTL applied.
     """
     from .data_service import get_data_service
     ticker = ticker.upper()
     ds = get_data_service()
     statements = ds.get_financial_statements(ticker) or {}
-    filings = ds.get_filings(ticker) or []
-    transcripts = ds.get_earnings_transcripts(ticker) or []
+    filings = ds.get_filings(ticker, prefer_cached=prefer_cached) or []
+    transcripts = ds.get_earnings_transcripts(
+        ticker, prefer_cached=prefer_cached,
+    ) or []
 
     own = db is None
     if own:

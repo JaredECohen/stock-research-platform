@@ -82,6 +82,15 @@ def run_backfill_endpoint(
     on first boot has 0 financial_periods rows; the `seed_universe`
     that runs at startup only fills `companies`). Without this call,
     the screener stays empty until the nightly cron at 03:15 UTC.
+
+    A full-universe run is bounded: at most
+    `history_backfill.MAX_COLD_TICKERS_PER_PASS` tickers per call actually
+    consult a provider, because each of those is up to ten SEC document
+    bodies and an LLM post-pass per new filing, and running ~166 of them
+    from one HTTP request is how the worker got OOM-killed. The response
+    reports `cold_reads` and `deferred`; call again to take the next
+    batch, or pass `?ticker=` for a specific name, which is never
+    deferred.
     """
     from ..monitoring.history_backfill import run_once
     return run_once(ticker=ticker)

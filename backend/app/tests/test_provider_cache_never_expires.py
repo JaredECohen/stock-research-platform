@@ -280,12 +280,29 @@ def _cached_capabilities() -> list[tuple[str, bool, int]]:
             )
         capability = node.args[0].value
         override = any(
-            kw.arg == "ttl_override"
-            and not (isinstance(kw.value, ast.Constant) and kw.value.value is None)
+            kw.arg == "ttl_override" and _always_states_a_ttl(kw.value)
             for kw in node.keywords
         )
         found.append((str(capability), override, node.lineno))
     return found
+
+
+def _always_states_a_ttl(value: ast.AST) -> bool:
+    """Does this `ttl_override=` expression supply a TTL on every branch?
+
+    `ttl_override=None` means "use the table", so it excuses nothing. Nor
+    does a conditional with None on one side: `get_filings` passes
+    `NEVER_EXPIRES if prefer_cached else None`, which falls back to the
+    table for every caller that did not opt in, and so still owes an entry.
+    Checking only for a literal None would read that call site as fully
+    overridden and let `filings` drop out of the table unnoticed — the
+    capability at the centre of the bug this file guards.
+    """
+    if isinstance(value, ast.Constant):
+        return value.value is not None
+    if isinstance(value, ast.IfExp):
+        return _always_states_a_ttl(value.body) and _always_states_a_ttl(value.orelse)
+    return True
 
 
 def test_the_capability_walk_finds_the_call_sites():
