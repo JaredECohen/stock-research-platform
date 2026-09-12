@@ -33,6 +33,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from . import ticker_symbols
+
 KNOWLEDGE_PATH = (
     Path(__file__).resolve().parent.parent
     / "data" / "industry_knowledge" / "gics_industries_2026.json"
@@ -216,23 +218,13 @@ def retired_sub_industries() -> list[dict[str, Any]]:
 def _symbol_variants(symbol: str) -> list[str]:
     """The map spells share classes ``BRK-B`` / ``BF-B``; providers vary
     (``BRK.B``, ``BRK/B``, ``BRK B``). Exact spelling first, then the same
-    symbol with its separator swapped (``.``/``/``/space → ``-``, and ``-``
-    → ``.`` should the map ever change spelling). Never separator-free:
-    ``BRKB`` is a different ticker, not ``BRK-B``."""
-    sym = _normalize(symbol).upper()
-    if not sym:
-        return []
-    variants = [sym]
-    for sep in (".", "/", " "):
-        if sep in sym:
-            variants.append(sym.replace(sep, "-"))
-    if "-" in sym:
-        variants.append(sym.replace("-", "."))
-    out: list[str] = []
-    for v in variants:
-        if v not in out:
-            out.append(v)
-    return out
+    symbol with its separator swapped. Never separator-free: ``BRKB`` is a
+    different ticker, not ``BRK-B``.
+
+    One definition, in `ticker_symbols`, shared with the provider chain —
+    the map and the seeder disagreeing about which spellings are the same
+    security is how Berkshire came to have no `companies` row at all."""
+    return ticker_symbols.symbol_variants(_normalize(symbol))
 
 
 def security_reference(symbol: str) -> dict[str, Any] | None:

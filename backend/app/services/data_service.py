@@ -39,6 +39,7 @@ from ..providers.ken_french_provider import KenFrenchProvider
 from ..providers.polygon_provider import PolygonProvider
 from ..providers.sec_edgar_provider import SECEdgarProvider
 from ..providers.tiingo_provider import TiingoProvider
+from .ticker_symbols import symbol_variants
 
 log = logging.getLogger(__name__)
 
@@ -322,6 +323,37 @@ class DataService:
                 log.warning("Provider %s.%s failed: %s", provider.name, fn_name, exc)
         return None
 
+    def _try_chain_symbol(
+        self, capability: str, fn_name: str, ticker: str, *args, **kwargs,
+    ) -> Any | None:
+        """`_try_chain`, retried across the spellings of a share-class ticker.
+
+        There is no agreed spelling for a dual-class symbol: our universe
+        file says `BRK.B`, the GICS map says `BRK-B`, EDGAR insists on
+        `BRK-B`, and other feeds use `BRK/B`. Asking the chain for one
+        spelling and treating a miss as "no such company" is what left
+        Berkshire with no `companies` row at all — and with it, one of the
+        ten `auto_update_memo` pins naming a ticker that did not exist.
+
+        Costs nothing for an ordinary ticker: `symbol_variants` returns a
+        single element when there is no separator to swap, so this is one
+        pass over the chain, exactly as before. A separator-bearing symbol
+        pays for the extra spellings only when the first one misses. The
+        caller's spelling stays canonical for the cache key and the
+        database — this changes what we *ask* for, never what we store.
+        """
+        variants = symbol_variants(ticker)
+        for symbol in variants:
+            result = self._try_chain(capability, fn_name, symbol, *args, **kwargs)
+            if result:
+                if symbol != variants[0]:
+                    log.info(
+                        "%s resolved %s under the provider spelling %s",
+                        capability, variants[0], symbol,
+                    )
+                return result
+        return None
+
     # ------------------------------------------------------------------
     # Provider status
     # ------------------------------------------------------------------
@@ -404,7 +436,7 @@ class DataService:
     ) -> dict[str, Any] | None:
         return self._cached(
             "profile", ticker.upper(),
-            lambda: self._try_chain("profile", "get_company_profile", ticker),
+            lambda: self._try_chain_symbol("profile", "get_company_profile", ticker),
             force_refresh=force_refresh,
         )
 
@@ -413,7 +445,7 @@ class DataService:
     ) -> list[dict[str, Any]] | None:
         rows = self._cached(
             "prices", f"{ticker.upper()}:{days}",
-            lambda: self._try_chain("prices", "get_price_history", ticker, days),
+            lambda: self._try_chain_symbol("prices", "get_price_history", ticker, days),
             force_refresh=force_refresh,
         )
         return _clip_dated_rows(rows, "date")
@@ -432,7 +464,7 @@ class DataService:
             return None
         return self._cached(
             "quote", ticker.upper(),
-            lambda: self._try_chain("quote", "get_quote", ticker),
+            lambda: self._try_chain_symbol("quote", "get_quote", ticker),
             force_refresh=force_refresh,
         )
 
@@ -443,7 +475,7 @@ class DataService:
         # is fine; force_refresh covers manual recomputes.
         statements = self._cached(
             "financials", ticker.upper(),
-            lambda: self._try_chain("financials", "get_financial_statements", ticker),
+            lambda: self._try_chain_symbol("financials", "get_financial_statements", ticker),
             force_refresh=force_refresh,
             ttl_override=86400 * 7,
         )
@@ -462,7 +494,7 @@ class DataService:
             )
         return self._cached(
             "ratios", ticker.upper(),
-            lambda: self._try_chain("ratios", "get_ratios", ticker),
+            lambda: self._try_chain_symbol("ratios", "get_ratios", ticker),
             force_refresh=force_refresh,
         )
 
@@ -471,7 +503,7 @@ class DataService:
     ) -> dict[str, Any] | None:
         return self._cached(
             "key_metrics", ticker.upper(),
-            lambda: self._try_chain("key_metrics", "get_key_metrics", ticker),
+            lambda: self._try_chain_symbol("key_metrics", "get_key_metrics", ticker),
             force_refresh=force_refresh,
         )
 
@@ -480,7 +512,7 @@ class DataService:
     ) -> dict[str, Any] | None:
         return self._cached(
             "earnings", ticker.upper(),
-            lambda: self._try_chain("earnings", "get_earnings", ticker),
+            lambda: self._try_chain_symbol("earnings", "get_earnings", ticker),
             force_refresh=force_refresh,
         )
 
@@ -497,7 +529,7 @@ class DataService:
         from . import provider_cache
         rows = self._cached(
             "transcripts", ticker.upper(),
-            lambda: self._try_chain("transcripts", "get_earnings_transcripts", ticker),
+            lambda: self._try_chain_symbol("transcripts", "get_earnings_transcripts", ticker),
             force_refresh=force_refresh,
             ttl_override=provider_cache.NEVER_EXPIRES if prefer_cached else None,
         )
@@ -531,7 +563,7 @@ class DataService:
             return None
         rows = self._cached(
             "filings", ticker.upper(),
-            lambda: self._try_chain("filings", "get_filings", ticker, cik=cik),
+            lambda: self._try_chain_symbol("filings", "get_filings", ticker, cik=cik),
             force_refresh=force_refresh,
             ttl_override=provider_cache.NEVER_EXPIRES if prefer_cached else None,
         )
@@ -559,7 +591,7 @@ class DataService:
             return None
         rows = self._cached(
             "filings_index", ticker.upper(),
-            lambda: self._try_chain(
+            lambda: self._try_chain_symbol(
                 "filings_index", "get_filings", ticker, cik=cik, fetch_text=False,
             ),
             force_refresh=force_refresh,
@@ -642,7 +674,7 @@ class DataService:
     ) -> list[dict[str, Any]] | None:
         rows = self._cached(
             "news", ticker.upper(),
-            lambda: self._try_chain("news", "get_news", ticker),
+            lambda: self._try_chain_symbol("news", "get_news", ticker),
             force_refresh=force_refresh,
         )
         return _clip_dated_rows(rows, "published_at")
@@ -652,7 +684,7 @@ class DataService:
     ) -> dict[str, Any] | None:
         return self._cached(
             "estimates", ticker.upper(),
-            lambda: self._try_chain("estimates", "get_estimates", ticker),
+            lambda: self._try_chain_symbol("estimates", "get_estimates", ticker),
             force_refresh=force_refresh,
         )
 
