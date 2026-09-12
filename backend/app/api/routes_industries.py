@@ -45,7 +45,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import func, select
 
 from ..config import settings
@@ -296,6 +296,7 @@ def _stale_by_age(age: timedelta | None, stale_after_days: int) -> bool:
 @limiter.limit(LIMITS["industry_read"])
 def get_industry_taxonomy(
     request: Request,
+    response: Response,
     access: dict = Depends(describe_surface(SURFACE_LATEST)),
     _rate: None = Depends(rate_scope("data")),
 ) -> TaxonomyOut:
@@ -443,6 +444,7 @@ def _stats_projection(stats_id: int | None) -> tuple[dict[str, Any] | None, str 
 @limiter.limit(LIMITS["industry_read"])
 def get_industry_report(
     request: Request,
+    response: Response,
     code: str,
     version: str = Query("latest", description="`latest` (the published edition) or an edition number."),
     access: dict = Depends(require_surface(SURFACE_LATEST)),
@@ -508,6 +510,7 @@ def get_industry_report(
 @limiter.limit(LIMITS["industry_read"])
 def get_industry_history(
     request: Request,
+    response: Response,
     code: str,
     limit: int = Query(HISTORY_LIMIT, ge=1, le=104),
     access: dict = Depends(require_surface(SURFACE_HISTORY)),
@@ -605,6 +608,7 @@ def _parent_version_or_404(
 @limiter.limit(LIMITS["industry_read"])
 def get_industry_changes(
     request: Request,
+    response: Response,
     code: str,
     from_version: int | None = Query(None, alias="from", description="Edition to compare from; default the current edition's parent."),
     to: str = Query("latest", description="`latest` or an edition number."),
@@ -693,6 +697,7 @@ def _membership(code: str, info: gics_registry.VersionInfo) -> list[tuple[Any, A
 @limiter.limit(LIMITS["industry_read"])
 def get_industry_companies(
     request: Request,
+    response: Response,
     code: str,
     limit: int = Query(COMPANIES_LIMIT, ge=1, le=COMPANIES_LIMIT),
     access: dict = Depends(require_surface(SURFACE_LATEST)),
@@ -810,6 +815,7 @@ def get_industry_companies(
 @limiter.limit(LIMITS["industry_read"])
 def get_industry_snapshot(
     request: Request,
+    response: Response,
     period_key: str | None = Query(None, description="ISO week; default the newest snapshot."),
     access: dict = Depends(require_surface(SURFACE_SNAPSHOT)),
     _rate: None = Depends(rate_scope("data")),

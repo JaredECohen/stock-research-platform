@@ -27,7 +27,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from sqlalchemy import func, select
 
 from ..config import settings
@@ -100,6 +100,7 @@ def default_period_key(now: datetime | None = None) -> str:
 @router.post("/api/admin/industries/taxonomy/import", response_model=TaxonomyImportOut)
 @limiter.limit(LIMITS["industry_admin"])
 def import_taxonomy_endpoint(
+    response: Response,
     request: Request, payload: TaxonomyImportRequest | None = None,
 ) -> TaxonomyImportOut:
     """Import the bundled knowledge JSON as a taxonomy version.
@@ -131,7 +132,9 @@ def import_taxonomy_endpoint(
 
 @router.post("/api/admin/industries/classify", response_model=ClassifyOut)
 @limiter.limit(LIMITS["industry_admin"])
-def classify_endpoint(request: Request, payload: ClassifyRequest | None = None) -> ClassifyOut:
+def classify_endpoint(
+    request: Request, response: Response, payload: ClassifyRequest | None = None,
+) -> ClassifyOut:
     """Re-classify the universe (or the named tickers) against the active
     taxonomy. Bulk: two reads and one insert, whatever the size."""
     payload = payload or ClassifyRequest()
@@ -184,6 +187,7 @@ def _worker():
 @router.post("/api/admin/industries/reports/regenerate", status_code=202, response_model=RegenerateOut)
 @limiter.limit(LIMITS["industry_admin"])
 def regenerate_reports_endpoint(
+    response: Response,
     request: Request, payload: RegenerateRequest | None = None,
 ) -> RegenerateOut:
     """Queue report generation for one period — the same job path the

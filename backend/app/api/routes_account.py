@@ -139,7 +139,7 @@ def _abuse_hash(value: str) -> str:
 
 @router.post("/api/me/bootstrap", response_model=BootstrapOut)
 @limiter.limit(LIMITS["bootstrap"])
-def bootstrap(request: Request, db: Session = Depends(get_db)) -> BootstrapOut:
+def bootstrap(request: Request, response: Response, db: Session = Depends(get_db)) -> BootstrapOut:
     """Idempotent first call after sign-in.
 
     Starts the card-less Pro trial exactly once: only when the email is

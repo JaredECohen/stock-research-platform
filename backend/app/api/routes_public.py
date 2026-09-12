@@ -61,7 +61,9 @@ def list_public_samples(request: Request, response: Response, db: Session = Depe
 
 @router.get("/api/public/samples/{ticker}")
 @limiter.limit(LIMITS["public_get"])
-def get_public_sample(ticker: str, request: Request, db: Session = Depends(get_db)) -> Response:
+def get_public_sample(
+    ticker: str, request: Request, response: Response, db: Session = Depends(get_db),
+) -> Response:
     """One curated sample. Strong ETag from the stored rows; `If-None-Match`
     → 304 with no body. Listed-but-unbuilt is 200 with nulls + `degraded`."""
     symbol = ticker.strip().upper()
