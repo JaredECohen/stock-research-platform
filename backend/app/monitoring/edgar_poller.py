@@ -1,10 +1,26 @@
 """SEC EDGAR submissions poller.
 
-Runs every 30 minutes (in production). For each ticker in the demo universe,
-it asks the EDGAR provider for the latest 10-K / 10-Q / 8-K. When a new
-accession number is observed, we invalidate the ticker's `company_cold`
-snapshot so downstream warm caches (sector_warm, dcf, comps) auto-stale via
-their `parent_snapshot_ids` chain.
+Runs every 30 minutes (in production). For each ticker it polls, it asks the
+EDGAR provider for the latest 10-K / 10-Q / 8-K. When a new accession number
+is observed, we invalidate the ticker's `company_cold` snapshot so downstream
+warm caches (sector_warm, dcf, comps) auto-stale via their
+`parent_snapshot_ids` chain.
+
+Which tickers it polls: the `auto_analysis` tier only (`AUTO_PULL_TIERS`),
+not the whole `companies` table.
+
+One provider call per ticker every 30 minutes is a standing cost, and it has
+to stay bounded by a curated list rather than by how many names users have
+happened to look at. Every manual search on a new ticker inserts an
+`analyzed_on_demand` row, so polling the unfiltered table means the automatic
+pull universe grows monotonically and never shrinks — 172 companies today,
+whatever the search box produced by next quarter.
+
+This constrains ingestion only. Manual research on ANY ticker is untouched:
+an on-demand name still gets filings, a memo, and everything else the moment
+a user asks for it — it just doesn't earn a permanent slot in the 30-minute
+cron. An explicit `tickers=` argument bypasses the tier filter entirely,
+which is how tests and admin re-runs drive a specific name through here.
 """
 from __future__ import annotations
 
@@ -12,7 +28,7 @@ import logging
 from collections.abc import Iterable
 
 from ..cache import cache_get, cache_put, invalidate
-from ..services.data_service import get_data_service
+from ..services.data_service import curated_poll_universe
 from ..services.filings_service import get_filings
 from . import record_run
 
@@ -42,12 +58,18 @@ def _save_seen_accessions(ticker: str, accessions: set[str]) -> None:
 def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     """Poll EDGAR once. Returns a list of `{ticker, new_accessions}` events.
 
+    With no argument, polls the `AUTO_PULL_TIERS` slice of the universe
+    (see the module docstring). An explicit `tickers=` is taken as given
+    and skips the tier filter — an admin re-run for one name should not
+    have to care what tier it is in.
+
     No-op for tickers without filings. The EDGAR provider returns an empty
     list in demo mode, so this loop becomes a quiet bookkeeping pass.
     """
+    excluded: int | None = None
     if tickers is None:
-        ds = get_data_service()
-        tickers = ds.list_tickers()
+        tickers, excluded = curated_poll_universe()
+    tickers = list(tickers)
 
     events: list[dict] = []
     gate_errors: list[str] = []
@@ -90,6 +112,11 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
             _save_seen_accessions(t, accessions | seen)
 
     note = f"{len(events)} new filings"
+    # Say the constraint out loud. `excluded is None` means the caller named
+    # the tickers, so no tier filter ran and there is nothing to report —
+    # printing "0 out-of-tier" there would claim a filter that never fired.
+    if excluded is not None:
+        note += f"; polled {len(tickers)} in-tier, skipped {excluded} out-of-tier"
     if gate_errors:
         note += f"; gate errors on {len(gate_errors)}: {', '.join(gate_errors[:5])}"
     record_run("edgar_poller", success=not gate_errors, note=note)

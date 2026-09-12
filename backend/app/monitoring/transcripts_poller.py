@@ -1,9 +1,25 @@
 """Earnings transcript poller — daily cron.
 
-Mirrors `edgar_poller.py` for transcripts. Iterates every ticker in
-`Company.universe_tier == 'auto_analysis'`, calls
+Mirrors `edgar_poller.py` for transcripts. Iterates the `auto_analysis`
+tier of the universe (`AUTO_PULL_TIERS`), calls
 `transcripts_service.latest_transcript`, and detects new periods by
 comparing against a per-ticker `transcripts_seen_periods` cache row.
+
+The tier restriction is the point, not a detail. One FMP call per ticker
+per day is a standing cost that has to be bounded by a curated list, and
+the other two tiers are the ones that grow on their own: every manual
+search on a new name inserts an `analyzed_on_demand` row, so polling the
+unfiltered `companies` table means the automatic pull universe only ever
+gets bigger. Restricting ingestion here takes nothing away from manual
+research — any ticker, at any tier, still gets its transcript pulled and
+its memo written the moment a user asks. It just doesn't buy a permanent
+slot in the daily cron by having been searched once.
+
+This docstring claimed the restriction for some time before the code
+implemented it (`run_once` called `list_tickers()` with no filter), which
+is what `test_auto_pull_universe_is_tier_scoped.py` now guards against.
+An explicit `tickers=` argument still bypasses the filter entirely — that
+is how tests and admin re-runs drive a specific name through here.
 
 When a new transcript is observed:
   - The cache_put updates the seen set so we don't re-fire.
@@ -25,7 +41,7 @@ from collections.abc import Iterable
 
 from ..cache import cache_get, cache_put
 from ..monitoring import record_run
-from ..services.data_service import get_data_service
+from ..services.data_service import curated_poll_universe
 from ..services.transcripts_service import get_transcripts
 
 log = logging.getLogger(__name__)
@@ -58,10 +74,15 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     `kind="full_reanalysis"` dict with the enqueued `regen_jobs` job id
     when the ticker is pinned / actively viewed (the worker thread runs
     the memo asynchronously; outcome lands in the job row).
+
+    With no argument, polls the `AUTO_PULL_TIERS` slice of the universe
+    (see the module docstring). An explicit `tickers=` is taken as given
+    and skips the tier filter.
     """
+    excluded: int | None = None
     if tickers is None:
-        ds = get_data_service()
-        tickers = ds.list_tickers()
+        tickers, excluded = curated_poll_universe()
+    tickers = list(tickers)
 
     events: list[dict] = []
     for t in tickers:
@@ -108,6 +129,10 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         and e["regenerated"].get("kind") == "gate_error"
     ]
     note = f"{len(events)} new transcripts"
+    # Say the constraint out loud. `excluded is None` means the caller named
+    # the tickers, so no tier filter ran and there is nothing to report.
+    if excluded is not None:
+        note += f"; polled {len(tickers)} in-tier, skipped {excluded} out-of-tier"
     if gate_errors:
         note += f"; gate errors on {len(gate_errors)}: {', '.join(gate_errors[:5])}"
     record_run("transcripts_poller", success=not gate_errors, note=note)
