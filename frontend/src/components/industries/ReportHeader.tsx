@@ -1,7 +1,17 @@
 import React from "react";
 import { AlertTriangle, Clock } from "lucide-react";
 import type { IndustryReport } from "@/types/industries";
-import { degradationText, fmtDate, fmtDateTime, fmtShare, humanize, isNum, na } from "./format";
+import {
+  degradationText,
+  fmtDate,
+  fmtDateTime,
+  fmtShare,
+  humanize,
+  isNum,
+  na,
+  sampleFloorHeadline,
+  sampleFloorOf,
+} from "./format";
 
 
 /**
@@ -14,7 +24,11 @@ import { degradationText, fmtDate, fmtDateTime, fmtShare, humanize, isNum, na } 
  *
  *   * collapse membership into coverage. `n_constituents` is who is in
  *     the group; `n_with_prices` is how many of them had a price series.
- *     Both are printed, with the excluded names' reasons;
+ *     Both are printed, with the excluded names' reasons — and when the
+ *     group is below the sample floor, WHICH kind of short it is: a week
+ *     whose prices have not warmed up yet, or a universe that holds too
+ *     few of this industry to ever cover it. One sentence for both read
+ *     as "not ready yet" for a group that will never be ready;
  *   * soften a failed refresh. A stale edition keeps its content — that
  *     is the point of keeping the last good one — but the badge names
  *     the attempt, its error and how many tries it has left, because a
@@ -95,6 +109,11 @@ export default function ReportHeader({
   const nMembers = coverage.n_constituents;
   const nPriced = coverage.n_with_prices;
   const excluded = Array.isArray(coverage.excluded) ? (coverage.excluded as Array<Record<string, unknown>>) : [];
+  // Below the sample floor is two different pieces of news — a week whose
+  // prices have not warmed up yet, and a group this universe holds too
+  // few companies to ever cover. The server decides which; the page's job
+  // is to stop printing one sentence for both.
+  const floor = sampleFloorOf(coverage);
   // The ONE reason a reader gets for an edition written without a
   // statistics row. Every field below that would otherwise invent its own
   // ("weighting not recorded on the statistics row") defers to it: the
@@ -130,6 +149,15 @@ export default function ReportHeader({
           {stale && (
             <Badge tone="warn" icon={Clock} testId="badge-stale">
               Stale — {report.stale_reason || "reason not recorded"}
+            </Badge>
+          )}
+          {floor && floor.state !== "met" && (
+            <Badge
+              tone={floor.structural ? "warn" : "mixed"}
+              icon={floor.structural ? AlertTriangle : Clock}
+              testId="badge-sample-floor"
+            >
+              {sampleFloorHeadline(floor)}
             </Badge>
           )}
           {report.degraded.length > 0 && (
@@ -219,6 +247,25 @@ export default function ReportHeader({
               {excluded
                 .map((e) => `${String(e.ticker ?? "?")} (${String(e.reason ?? "reason not recorded")})`)
                 .join(", ")}
+            </dd>
+          )}
+          {/* The sample floor, in words. `met` is printed too: a reader
+              who only ever sees the floor mentioned when a group is short
+              cannot tell where a healthy one stands. */}
+          {floor ? (
+            <dd className="mt-1" data-testid="coverage-sample-floor">
+              <span
+                className={
+                  floor.state === "met" ? "text-slate-300" : floor.structural ? "text-warn-500" : "text-slate-200"
+                }
+              >
+                {sampleFloorHeadline(floor)}
+              </span>
+              <span className="text-slate-500"> — {floor.explanation}</span>
+            </dd>
+          ) : (
+            <dd className="text-slate-500 mt-1" data-testid="coverage-sample-floor">
+              {na(statsReason ?? "this edition recorded no sample-floor state")}
             </dd>
           )}
         </div>

@@ -208,9 +208,14 @@ def test_below_the_sample_floor_is_a_labelled_state_not_numbers(codes):
                   prices={"AAA": _step_series(10.0, 11.0), "BBB": _step_series(10.0, 12.0)})
     row = ia.compute_group_stats(code, as_of=AS_OF, loaders=ld, persist=False, max_fetch=10, min_sample=3)
     assert row.payload["status"] == ia.REASON_INSUFFICIENT
-    assert row.payload["insufficient_sample"] == {
-        "n_with_prices": 2, "min_sample": 3, "reasons": [ia.REASON_NO_PRICES],
+    short = dict(row.payload["insufficient_sample"])
+    explanation = short.pop("explanation")
+    assert short == {
+        "n_with_prices": 2, "min_sample": 3, "n_constituents": 3,
+        "state": ia.FLOOR_PRICES_NOT_WARMED, "structural": False, "clears_with_warm_up": True,
+        "reasons": [ia.REASON_NO_PRICES],
     }
+    assert "warm-up" in explanation
     for h in ia.HORIZONS:
         entry = row.payload["returns"][h]
         assert entry["equal_weight"] is None and entry["market_cap_weight"] is None
@@ -220,6 +225,90 @@ def test_below_the_sample_floor_is_a_labelled_state_not_numbers(codes):
     # The per-ticker rows are still kept — the closes are evidence for the
     # next period even when this one cannot aggregate them.
     assert row.per_ticker["AAA"]["weekly_closes"]
+
+
+# --- which KIND of short ---------------------------------------------------------
+#
+# A group below the floor is one of two situations and the page must not
+# print the same words for both: prices that have not warmed up yet
+# (transient — the weekly warm-up clears it) versus a universe that holds
+# fewer constituents than the floor (structural — it never clears until
+# the universe is widened).
+
+
+def test_classify_sample_floor_separates_a_thin_universe_from_a_cold_cache():
+    structural = ia.classify_sample_floor(n_constituents=2, n_with_prices=2, min_sample=3)
+    warming = ia.classify_sample_floor(n_constituents=9, n_with_prices=2, min_sample=3)
+    healthy = ia.classify_sample_floor(n_constituents=9, n_with_prices=4, min_sample=3)
+
+    assert structural["state"] == ia.FLOOR_UNIVERSE_TOO_SMALL
+    assert (structural["structural"], structural["clears_with_warm_up"]) == (True, False)
+    # Fully priced and STILL short: that is the whole point of the state.
+    assert structural["priced_short_by"] == 1 and structural["constituents_short_by"] == 1
+
+    assert warming["state"] == ia.FLOOR_PRICES_NOT_WARMED
+    assert (warming["structural"], warming["clears_with_warm_up"]) == (False, True)
+    assert warming["priced_short_by"] == 1 and warming["constituents_short_by"] == 0
+
+    assert healthy["state"] == ia.FLOOR_MET
+    assert (healthy["structural"], healthy["clears_with_warm_up"]) == (False, False)
+    assert healthy["priced_short_by"] == 0
+
+    # Three distinct sentences, each naming the floor — a reader who sees
+    # only the text still learns which situation they are in.
+    texts = {s["explanation"] for s in (structural, warming, healthy)}
+    assert len(texts) == 3
+    assert all("3" in t for t in texts)
+    assert "warm-up can cover it" in structural["explanation"]
+    assert "without changing the universe" in warming["explanation"]
+
+
+def test_universe_covers_is_the_one_definition_of_structural():
+    assert ia.universe_covers(3, 3) is True
+    assert ia.universe_covers(2, 3) is False
+    assert ia.universe_covers(0, 1) is False
+
+
+def test_a_group_the_universe_cannot_cover_says_so_rather_than_warming_up(codes):
+    """Every member priced, still below the floor: structural."""
+    code, _ = codes
+    ld = _loaders(groups={code: ["AAA", "BBB"]},
+                  prices={t: _step_series(10.0, 11.0) for t in ("AAA", "BBB")})
+    row = ia.compute_group_stats(code, as_of=AS_OF, loaders=ld, persist=False, max_fetch=0, min_sample=3)
+
+    assert row.payload["status"] == ia.REASON_INSUFFICIENT
+    short = row.payload["insufficient_sample"]
+    assert short["state"] == ia.FLOOR_UNIVERSE_TOO_SMALL
+    assert short["structural"] is True and short["clears_with_warm_up"] is False
+    # Nothing was excluded — there is simply not enough of this industry
+    # in the universe, and the reasons list must not imply otherwise.
+    assert short["reasons"] == []
+    # The sample block carries the same verdict, with the arithmetic the
+    # payload's summary leaves out.
+    floor = row.sample["sample_floor"]
+    assert floor["state"] == ia.FLOOR_UNIVERSE_TOO_SMALL
+    assert floor["constituents_short_by"] == 1 and floor["priced_short_by"] == 1
+    assert floor["explanation"] == short["explanation"]
+
+
+def test_sample_floor_block_travels_on_every_row_including_a_healthy_one(codes):
+    """`met` is reported too: a page that only learns about the floor when
+    a group is short cannot tell the reader where a healthy group stands."""
+    code, _ = codes
+    ld = _loaders(groups={code: ["AAA", "BBB", "CCC", "DDD"]},
+                  prices={t: _step_series(10.0, 11.0) for t in ("AAA", "BBB", "CCC", "DDD")})
+    row = ia.compute_group_stats(code, as_of=AS_OF, loaders=ld, persist=False, max_fetch=0, min_sample=3)
+
+    assert row.payload["status"] == "ok"
+    assert "insufficient_sample" not in row.payload
+    floor = row.sample["sample_floor"]
+    assert floor["state"] == ia.FLOOR_MET
+    assert floor["structural"] is False and floor["clears_with_warm_up"] is False
+    assert floor["n_constituents"] == 4 and floor["n_with_prices"] == 4
+    # The block agrees with the counts beside it, always.
+    assert floor["n_constituents"] == row.sample["n_constituents"]
+    assert floor["n_with_prices"] == row.sample["n_with_prices"]
+    assert floor["min_sample"] == row.sample["min_sample"]
 
 
 # --- benchmarks -------------------------------------------------------------------
@@ -521,6 +610,101 @@ def test_metric_values_are_part_of_the_identity_even_when_the_timestamp_is_not(_
                                     loaders=_loaders(groups={code: sorted(prices)}, prices=prices, metrics=rich))
     assert second.inputs_hash != first.inputs_hash
     assert second.payload["valuation"]["ev_ebitda"]["median"] != first.payload["valuation"]["ev_ebitda"]["median"]
+
+
+# The producer identity a stored row carries, and the set of keys that
+# identity promises. `_persist` reuses any row whose (taxonomy version,
+# code, period key, inputs hash) already matches, and METHOD_VERSION is
+# the only part of that hash a writer-side change can move — so a new key
+# in `sample` that ships without a bump is invisible to every reader
+# until the period key rolls over.
+PREVIOUS_METHOD_VERSION = "industry-stats-v1"
+STORED_SAMPLE_KEYS: dict[str, set[str]] = {
+    "industry-stats-v2": {
+        "n_constituents", "n_with_prices", "sample_floor", "n_with_market_cap", "n_with_metrics",
+        "min_sample", "coverage", "excluded", "prices_max_date", "prices_min_date", "price_sources",
+        "fetches_this_run", "fetch_budget", "benchmark_cohort",
+    },
+}
+
+
+def test_the_stored_sample_block_is_pinned_to_the_method_version(codes):
+    """A change to what this module WRITES has to move METHOD_VERSION.
+
+    If it does not, `_persist` keeps serving the row the previous producer
+    stored for the current period and the new field never reaches a
+    reader — no forced regeneration can bring it forward, because the
+    regeneration recomputes the same hash. This test fails both ways: add
+    a key to `sample` without a bump and the key set will not match; bump
+    without recording the new shape here and the version is unknown.
+    """
+    code, _ = codes
+    ld = _loaders(groups={code: ["AAA", "BBB", "CCC"]},
+                  prices={t: _step_series(10.0, 11.0) for t in ("AAA", "BBB", "CCC")})
+    row = ia.compute_group_stats(code, as_of=AS_OF, loaders=ld, persist=False, max_fetch=0)
+    assert ia.METHOD_VERSION in STORED_SAMPLE_KEYS, (
+        f"the stored row's shape changed under an unrecorded method version {ia.METHOD_VERSION!r} — "
+        "record its key set here, and make sure the version was bumped in the same commit as the change"
+    )
+    assert set(row.sample) == STORED_SAMPLE_KEYS[ia.METHOD_VERSION], (
+        "the `sample` block changed shape without a METHOD_VERSION bump; every stored row for the "
+        "current period would keep being served without the new field"
+    )
+    assert row.method["version"] == ia.METHOD_VERSION
+
+
+def test_a_row_the_previous_producer_wrote_is_not_served_after_the_bump(_taxonomy, codes):
+    """The regression the bump exists for.
+
+    A deploy that adds `sample.sample_floor` without moving the method
+    version recomputes the SAME `inputs_hash`, `_persist` hands back the
+    pre-deploy row, and the page renders "this edition recorded no
+    sample-floor state" for every group until the period key rolls over.
+    """
+    _, code = codes
+    ld = _loaders(groups={code: ["AAA", "BBB", "CCC"]},
+                  prices={t: _step_series(10.0, 12.0) for t in ("AAA", "BBB", "CCC")})
+    kwargs = dict(as_of=AS_OF, period_key="2026-W35", loaders=ld, max_fetch=0)
+
+    previous = ia.METHOD_VERSION
+    ia.METHOD_VERSION = PREVIOUS_METHOD_VERSION
+    try:
+        old = ia.compute_group_stats(code, **kwargs)
+        # What that producer stored: a sample block with no floor state.
+        with SessionLocal() as db:
+            stored = db.get(IndustryStatSnapshot, old.id)
+            sample = dict(stored.sample)
+            sample.pop("sample_floor", None)
+            stored.sample = sample
+            db.commit()
+    finally:
+        ia.METHOD_VERSION = previous
+
+    again = ia.compute_group_stats(code, **kwargs)
+    assert again.id != old.id, (
+        "the pre-bump row was served again: METHOD_VERSION did not change with the stored shape, so "
+        "no regeneration can bring the new block forward within the period"
+    )
+    assert "sample_floor" in again.sample
+    assert again.sample["sample_floor"]["state"] in (
+        ia.FLOOR_MET, ia.FLOOR_PRICES_NOT_WARMED, ia.FLOOR_UNIVERSE_TOO_SMALL,
+    )
+
+
+def test_a_structurally_short_group_does_not_blame_the_company_count_alone():
+    """"Add companies" is one remedy and not the only one: a company
+    already in the universe whose row no group counts closes the same gap
+    when it is classified. The service knows the constituent count and
+    not the uncounted pool, so it must say `classified constituents` and
+    point at the response that does — never "the universe would have to
+    add N companies", which sends an operator the wrong way."""
+    text = ia.classify_sample_floor(n_constituents=2, n_with_prices=2, min_sample=3)["explanation"]
+    assert "more classified constituent" in text
+    assert "the universe would have to add" not in text
+    assert "companies already in it that no group counts" in text
+    # And it does not pretend to know how big that pool is: this row is
+    # computed from the group's membership alone.
+    assert "the taxonomy response counts it" in text
 
 
 def test_unknown_group_code_raises_before_any_read():

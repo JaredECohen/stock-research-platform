@@ -772,6 +772,58 @@ def constituents_by_group(
     return {code: sorted(tickers) for code, tickers in sorted(out.items())}
 
 
+def uncounted_rows(
+    *, version: VersionInfo | None = None, active_only: bool = True,
+    states: tuple[str, ...] = (STATE_MAPPED, STATE_CONFLICT),
+) -> dict[str, Any]:
+    """The companies in this universe that no group's constituent count
+    includes, and why — one SELECT over the same current rows.
+
+    ``constituents_by_group`` counts ``mapped`` and ``conflict`` rows only.
+    Everything else is a company that is IN the universe without being in
+    any group's count: a ``fallback`` row knows its sector and not its
+    group, a ``missing`` row carries a provider label the alias map does
+    not recognise, and a ``stale`` row has drifted and is awaiting
+    re-classification (it still names a group, so it can be attributed to
+    one). Without this number "the group is short of constituents" gets
+    reported as "the universe is short of companies", which is a different
+    claim with a different remedy: extending the alias map or
+    re-classifying can close the gap without a single company being added.
+
+    ``by_group_code`` counts only the uncounted rows that already name a
+    group; the rest cannot be attributed to one and are in
+    ``without_group_code``.
+    """
+    counted = set(states)
+    by_state: dict[str, int] = {}
+    by_group_code: dict[str, int] = {}
+    without_group = 0
+    q = _current_join(version).where(CompanyIndustryClassification.state.not_in(tuple(counted)))
+    if active_only:
+        q = q.join(Company, Company.ticker == CompanyIndustryClassification.ticker).where(
+            Company.is_active.is_(True),
+        )
+    with SessionLocal() as db:
+        for row in db.execute(q).scalars().all():
+            by_state[row.state] = by_state.get(row.state, 0) + 1
+            if row.industry_group_code:
+                by_group_code[row.industry_group_code] = by_group_code.get(row.industry_group_code, 0) + 1
+            else:
+                without_group += 1
+    return {
+        "total": sum(by_state.values()),
+        "by_state": dict(sorted(by_state.items())),
+        "by_group_code": dict(sorted(by_group_code.items())),
+        "without_group_code": without_group,
+        "counted_states": list(states),
+        "note": (
+            "companies with a current classification this taxonomy does not count as a constituent of "
+            "any group; classifying them is a route to a group's sample floor that does not widen the "
+            "universe"
+        ),
+    }
+
+
 def history(ticker: str, *, version: VersionInfo | None = None) -> list[dict[str, Any]]:
     """Every classification row for ``ticker`` under the active (or given)
     version, oldest first — the audit trail."""

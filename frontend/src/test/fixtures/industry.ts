@@ -19,6 +19,13 @@
 // column, its unpriced row and its "membership is not coverage" caption
 // all have real data behind them. Edition v1 is the honest
 // `insufficient_sample` week (no price history yet), v2 the priced one.
+//
+// The capture also carries all three sample-floor states, because the
+// page has to word them differently and a hand-built stand-in would
+// drift from the producer: `report` is above the floor, `warmingUpReport`
+// is the same group's first week (enough members, no prices yet — the
+// warm-up clears it) and `universeShortReport` is a group whose
+// membership is itself below the floor, which no warm-up can fix.
 import wire from "./industry.wire.json";
 import type {
   IndustryAccess,
@@ -26,6 +33,7 @@ import type {
   IndustryCompanies,
   IndustryHistory,
   IndustryReport,
+  IndustrySampleFloor,
   IndustryTaxonomy,
   NoReportDetail,
   TaxonomyNotImportedDetail,
@@ -36,7 +44,9 @@ interface Wire {
     generated_by: string;
     taxonomy_version: string;
     code: string;
+    short_code: string;
     empty_code: string;
+    min_sample: number;
     trimmed: Record<string, number>;
     trimmed_note: string;
     omitted_responses: string[];
@@ -44,7 +54,10 @@ interface Wire {
   };
   taxonomy: IndustryTaxonomy;
   report: IndustryReport;
+  report_warming_up: IndustryReport;
+  report_universe_short: IndustryReport;
   companies: IndustryCompanies;
+  companies_warming_up: IndustryCompanies;
   history: IndustryHistory;
   changes: IndustryChanges;
   report_missing: { detail: NoReportDetail };
@@ -58,15 +71,40 @@ export const WIRE_META = w.meta;
 export const CODE = w.meta.code;
 /** A real group in the same taxonomy that has no edition on file. */
 export const EMPTY_CODE = w.meta.empty_code;
+/** A real group this universe holds too few constituents to ever cover —
+ *  below the sample floor on MEMBERSHIP, so no warm-up will fix it. */
+export const SHORT_CODE = w.meta.short_code;
+/** The deployment's sample floor at capture time. */
+export const MIN_SAMPLE = w.meta.min_sample;
 export const TAXONOMY_VERSION = w.meta.taxonomy_version;
 
 export const taxonomy: IndustryTaxonomy = w.taxonomy;
 export const report: IndustryReport = w.report;
+/** The captured group's FIRST week: enough members, no prices yet. The
+ *  transient way to sit below the sample floor — the weekly warm-up
+ *  clears it, and the page has to say so in those words. */
+export const warmingUpReport: IndustryReport = w.report_warming_up;
+/** A thin group's priced week: every member priced and STILL below the
+ *  floor. The structural way to sit below it, which no warm-up fixes. */
+export const universeShortReport: IndustryReport = w.report_universe_short;
 export const companies: IndustryCompanies = w.companies;
+/** `/companies` as it answered BEFORE any price existed — the SAME
+ *  endpoint, read in the earlier week. `/companies` prices its rows from
+ *  the latest statistics row, so this body counts 0 priced while the
+ *  published edition counts its own. Served together they are the race
+ *  the page has to survive; each body is internally consistent, because
+ *  both are what the API said. */
+export const companiesWarmingUp: IndustryCompanies = w.companies_warming_up;
 export const history: IndustryHistory = w.history;
 export const changes: IndustryChanges = w.changes;
 /** The `404 no_report` body, as FastAPI serialises it. */
 export const noReportDetail: NoReportDetail = w.report_missing.detail;
+
+/** The three captured sample-floor blocks — met, warm-up short and
+ *  structurally short — as the API served them. */
+export const INDUSTRY_FLOOR_SAMPLES: IndustrySampleFloor[] = [report, warmingUpReport, universeShortReport].map(
+  (r) => (r.coverage as { sample_floor: IndustrySampleFloor }).sample_floor,
+);
 
 /** A deep clone, so a test that reshapes a fixture cannot leak into the
  *  next one through the shared import. */
@@ -120,19 +158,29 @@ export function degradedReport(): IndustryReport {
   return r;
 }
 
-/** The v1 edition as `?version=1` would serve it — the history row's own
- *  metadata folded onto the captured payload. */
+/** The v1 edition, exactly as `?version=1` served it. Captured rather
+ *  than folded together from the history row and the v2 payload, because
+ *  the two editions differ in more than their metadata — v1 is the week
+ *  with no prices, and its coverage block says so. */
 export function priorEdition(): IndustryReport {
-  const older = history.items.find((i) => !i.is_latest_good) ?? history.items[history.items.length - 1];
-  const r = clone(report);
-  r.version = older.version;
-  r.period_key = older.period_key;
-  r.as_of = older.as_of;
-  r.status = older.status;
-  r.is_latest_good = older.is_latest_good;
-  r.degraded = [...older.degraded];
-  r.generated_at = older.generated_at;
-  return r;
+  return clone(warmingUpReport);
+}
+
+/**
+ * The two reads whose priced counts disagree, for the page-level race
+ * test: the published edition and `/companies` as it answered in the
+ * earlier week.
+ *
+ * The disagreement lives BETWEEN the reads, which is where the real one
+ * lives — `/companies` prices from the latest statistics row, and an
+ * edition on screen may have counted a different week's. It is never
+ * grafted INTO one of them: an edition whose companies facts contradict
+ * its own coverage block and its own per-ticker rows is a body no
+ * producer can emit, and a page proved against one is proved against
+ * nothing.
+ */
+export function racedReads(): { report: IndustryReport; companies: IndustryCompanies } {
+  return { report: clone(report), companies: clone(companiesWarmingUp) };
 }
 
 /** The access block a deployment with the login wall ON serves: the tiers

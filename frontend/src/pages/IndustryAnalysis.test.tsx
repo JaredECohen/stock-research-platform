@@ -111,6 +111,48 @@ describe("IndustryAnalysis — index", () => {
     expectNoWrites(fetchMock);
   });
 
+  it("tells an operator how many groups this universe can never cover, in one place", async () => {
+    mountIndex();
+    await settle();
+
+    const limit = fx.taxonomy.universe_coverage;
+    expect(limit.not_coverable).toBeGreaterThan(0);
+    const card = screen.getByTestId("coverage-limit");
+    expect(card).toHaveTextContent(
+      `${limit.not_coverable} of ${limit.groups} groups cannot be covered by the current universe`,
+    );
+    // What it would take is the SERVER's sentence, printed verbatim. The
+    // page composing one here is how it came to tell an operator the only
+    // remedy was adding companies — which is wrong whenever the universe
+    // already holds companies no group counts, and only the server can
+    // tell. The wording is asserted against the response, never typed out.
+    expect(limit.explanation).toContain("classified constituents");
+    expect(screen.getByTestId("coverage-limit-why")).toHaveTextContent(limit.explanation);
+    expect(screen.getByTestId("taxonomy-counts")).not.toHaveTextContent(
+      "The weekly price warm-up cannot change that",
+    );
+  });
+
+  it("does not invent a remedy when the server sent the count without one", async () => {
+    const t = fx.clone(fx.taxonomy);
+    t.universe_coverage.explanation = "";
+    mountIndex([["/api/industries/taxonomy", () => okJson(t)]]);
+    await settle();
+    expect(screen.getByTestId("coverage-limit-why")).toHaveTextContent(
+      "n/a (this deployment did not say what the limit would take to lift)",
+    );
+  });
+
+  it("says a deployment that reported no coverage limit reported none, rather than showing 0", async () => {
+    const t = fx.clone(fx.taxonomy);
+    delete (t as { universe_coverage?: unknown }).universe_coverage;
+    mountIndex([["/api/industries/taxonomy", () => okJson(t)]]);
+    await settle();
+    expect(screen.getByTestId("coverage-limit")).toHaveTextContent(
+      "n/a (this deployment did not report a coverage limit)",
+    );
+  });
+
   it("picking a group puts it in the URL and fetches only reads", async () => {
     const { fetchMock } = mountIndex();
     await settle();
@@ -189,13 +231,65 @@ describe("IndustryAnalysis — one group", () => {
   });
 
   it("surfaces a disagreement between the edition's priced count and the membership read", async () => {
-    mount(`/app/industries/${fx.CODE}?tab=companies`);
+    // The race is between two READS, and that is how it is staged: the
+    // published edition, and `/companies` as the same endpoint answered
+    // in the earlier week (it prices from the latest statistics row, so
+    // it counted none). Both bodies are captures — neither is edited into
+    // disagreeing, because an edition whose companies facts contradict
+    // its own coverage block is one no producer can emit.
+    const raced = fx.racedReads();
+    const edition = raced.report.payload.sections.companies.facts;
+    expect(edition.n_priced).not.toBe(raced.companies.n_priced);
+    // Each body still agrees with itself.
+    expect(edition.n_priced).toBe(raced.report.coverage.n_with_prices);
+    expect(raced.companies.n_priced).toBe(raced.companies.items.filter((i) => i.priced).length);
+
+    mount(`/app/industries/${fx.CODE}?tab=companies`, [
+      ["/api/industries/taxonomy", () => okJson(fx.taxonomy)],
+      [/\/report/, () => okJson(raced.report)],
+      [/\/companies/, () => okJson(raced.companies)],
+      [/\/history/, () => okJson(fx.history)],
+    ]);
     await settle();
     // Two observed numbers for the same quantity, from two reads. The
     // page prints both and names the reconciled one instead of choosing.
     expect(screen.getByTestId("coverage-disagreement")).toHaveTextContent(
-      `this membership read counts ${fx.companies.n_priced} of ${fx.companies.count}`,
+      `the edition's own companies facts count ${edition.n_priced} priced`,
     );
+    expect(screen.getByTestId("coverage-disagreement")).toHaveTextContent(
+      `this membership read counts ${raced.companies.n_priced} of ${raced.companies.count}`,
+    );
+  });
+
+  it("words a structurally short group differently from a warm-up short one, end to end", async () => {
+    // Both editions are captures of the real weekly path. The reader must
+    // be able to tell "come back next week" from "this universe does not
+    // hold enough of this industry" without knowing any status enum.
+    const serve = (report: typeof fx.report) => [
+      ["/api/industries/taxonomy", () => okJson(fx.taxonomy)],
+      [/\/report/, () => okJson(report)],
+      [/\/companies/, () => okJson(fx.companies)],
+      [/\/history/, () => okJson(fx.history)],
+    ] as Array<[Matcher, Responder]>;
+
+    const { view } = mount(`/app/industries/${fx.SHORT_CODE}`, serve(fx.universeShortReport));
+    await settle();
+    const structural = screen.getByTestId("coverage-sample-floor").textContent ?? "";
+    expect(structural).toContain("This universe is too small to cover this industry");
+    expect(structural).toContain("more classified constituents");
+    // Not "the universe would have to add N companies": companies already
+    // in this universe that no group counts close the same gap, and the
+    // page must not send an operator to widen it on the server's behalf.
+    expect(structural).not.toContain("the universe would have to add");
+    expect(structural).not.toContain("insufficient_sample");
+    view.unmount();
+
+    mount(`/app/industries/${fx.CODE}`, serve(fx.warmingUpReport));
+    await settle();
+    const warming = screen.getByTestId("coverage-sample-floor").textContent ?? "";
+    expect(warming).toContain("Not enough prices yet this week");
+    expect(warming).toContain("without changing the universe");
+    expect(warming).not.toBe(structural);
   });
 
   it("shows a stale edition's content with the failed attempt named", async () => {

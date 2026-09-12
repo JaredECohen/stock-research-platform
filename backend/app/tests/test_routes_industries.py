@@ -35,6 +35,7 @@ from app.models import (
     IndustryStatSnapshot,
 )
 from app.services import gics_registry as reg
+from app.services import industry_analytics as ia
 from app.services import industry_report_store as store
 
 AS_OF = datetime(2026, 9, 4, 21, 0)
@@ -193,6 +194,212 @@ def test_taxonomy_sub_industry_counts_match_the_registry_per_group(client, taxon
         assert entry["sub_industry_count"] == len(reg.sub_industries_of(code, version=taxonomy)), code
 
 
+def test_taxonomy_names_the_groups_this_universe_can_never_cover(client, taxonomy, group):
+    """The structural count, in one place, and agreeing with every row.
+
+    A group whose membership is below the sample floor is short of
+    COMPANIES: it will report `insufficient_sample` every week no matter
+    how long the price warm-up runs, and an operator deciding whether to
+    widen the universe needs that number without reading 25 rows.
+    """
+    _seed_members(group, taxonomy)  # three constituents — at the floor
+    body = client.get("/api/industries/taxonomy").json()
+    floor = ia.sample_floor()
+    groups = {g["code"]: g for s in body["sectors"] for g in s["industry_groups"]}
+    summary = body["universe_coverage"]
+
+    assert summary["min_sample"] == floor
+    assert summary["setting"] == "INDUSTRY_STATS_MIN_SAMPLE"
+    assert summary["groups"] == len(groups)
+    assert summary["coverable"] + summary["not_coverable"] == summary["groups"]
+    assert summary["basis"]
+
+    # Every per-group verdict is the same arithmetic on the count beside
+    # it, and the summary is exactly the groups that failed it.
+    short = {c for c, g in groups.items() if not g["universe_coverage"]["coverable"]}
+    assert short == set(summary["not_coverable_codes"])
+    assert summary["not_coverable"] == len(short)
+    assert summary["constituents_needed"] == sum(
+        groups[c]["universe_coverage"]["constituents_short_by"] for c in short
+    )
+    for g in groups.values():
+        cov = g["universe_coverage"]
+        assert cov["min_sample"] == floor
+        assert cov["constituent_count"] == g["constituent_count"]
+        assert cov["coverable"] is (g["constituent_count"] >= floor)
+        assert cov["constituents_short_by"] == max(floor - g["constituent_count"], 0)
+        assert cov["explanation"], g["code"]
+
+    # The seeded group sits exactly at the floor: coverable, and nothing
+    # about it says "short".
+    assert groups[group.code]["universe_coverage"]["coverable"] is True
+    assert groups[group.code]["universe_coverage"]["constituents_short_by"] == 0
+
+    # And the point of the whole field: this universe leaves groups the
+    # weekly warm-up can never rescue, and they are named rather than
+    # left to render as "not ready yet".
+    assert short, "expected at least one group below the floor in this test universe"
+    thin = groups[sorted(short)[0]]["universe_coverage"]
+    assert "warm-up" in thin["explanation"] and str(floor) in thin["explanation"]
+
+
+UNCOUNTED_TICKERS = ("ZQUNC1", "ZQUNC2", "ZQUNC3", "ZQUNC4")
+
+
+def _a_group_with_no_constituents(client) -> str:
+    """A real group this database has classified nothing into — read off
+    the response, because the suite shares a database and another module's
+    fixtures may have populated any given group."""
+    body = client.get("/api/industries/taxonomy").json()
+    empty = [g["code"] for s in body["sectors"] for g in s["industry_groups"] if g["constituent_count"] == 0]
+    assert empty, "no empty group to seed into; this test needs one and the taxonomy is fully populated"
+    return sorted(empty)[0]
+
+
+def _seed_two_members(code: str, taxonomy) -> None:
+    """Two `mapped` constituents — one short of the sample floor of 3."""
+    with SessionLocal() as db:
+        for i, ticker in enumerate(TICKERS[:2]):
+            db.add(Company(
+                ticker=ticker, company_name=f"{ticker} Corp", sector="Technology",
+                industry="Semiconductors", is_active=True, market_cap=1e9 * (i + 1),
+            ))
+            db.add(CompanyIndustryClassification(
+                ticker=ticker, taxonomy_version_id=taxonomy.id,
+                sector_code=code[:2], industry_group_code=code,
+                state="mapped", source="research_map", method="security_reference",
+                author="test", source_as_of="2026-09-08", confidence=0.9,
+                source_sector="Technology", source_industry="Semiconductors",
+                is_current=True, classified_at=AS_OF,
+            ))
+        db.commit()
+
+
+@pytest.fixture()
+def uncounted_rows(taxonomy, group):
+    """Seeds four active companies that no group's constituent count
+    includes, into whichever group the test names.
+
+    Two `fallback` rows (the provider label is not in the alias map, so
+    the row knows the sector and not the group — the normal outcome of
+    `resolve()`) and two `stale` rows that still name the group.
+    `constituents_by_group` filters to mapped+conflict, so all four are
+    invisible to it. Yields the seeder; the fixture owns the cleanup.
+    """
+    def seed(code: str) -> None:
+        with SessionLocal() as db:
+            for i, ticker in enumerate(UNCOUNTED_TICKERS):
+                stale = i >= 2
+                db.add(Company(
+                    ticker=ticker, company_name=f"{ticker} Corp", sector="Technology",
+                    industry="Widget Fabrication", is_active=True, market_cap=1e9,
+                ))
+                db.add(CompanyIndustryClassification(
+                    ticker=ticker, taxonomy_version_id=taxonomy.id,
+                    sector_code=code[:2],
+                    industry_group_code=code if stale else None,
+                    state="stale" if stale else "fallback",
+                    source="provider_alias", method="provider_label", author="test",
+                    source_as_of="2026-09-08", confidence=0.5,
+                    source_sector="Technology", source_industry="Widget Fabrication",
+                    is_current=True, classified_at=AS_OF,
+                ))
+            db.commit()
+
+    yield seed
+    with SessionLocal() as db:
+        db.execute(delete(CompanyIndustryClassification).where(
+            CompanyIndustryClassification.ticker.in_(UNCOUNTED_TICKERS)))
+        db.execute(delete(Company).where(Company.ticker.in_(UNCOUNTED_TICKERS)))
+        db.commit()
+
+
+def test_a_group_short_of_constituents_is_not_reported_as_a_universe_short_of_companies(
+    client, taxonomy, group, uncounted_rows,
+):
+    """The conflation this endpoint exists to remove, one level up.
+
+    "The universe would have to add N more companies" is only true when
+    every company already here counts towards some group. A `fallback`
+    row knows its sector and not its group, and a `stale` row is waiting
+    to be re-classified — both are companies in this universe that a
+    single alias-map entry could put in the short group, and an operator
+    told to widen the universe would be solving the wrong problem.
+    """
+    code = _a_group_with_no_constituents(client)
+    _seed_two_members(code, taxonomy)
+    uncounted_rows(code)
+
+    body = client.get("/api/industries/taxonomy").json()
+    groups = {g["code"]: g for s in body["sectors"] for g in s["industry_groups"]}
+    cov = groups[code]["universe_coverage"]
+    floor = ia.sample_floor()
+
+    assert groups[code]["constituent_count"] == 2
+    assert cov["coverable"] is False and cov["constituents_short_by"] == floor - 2
+    # The four rows this universe holds and no group counts, two of which
+    # already name this very group.
+    assert cov["uncounted_in_universe"] >= len(UNCOUNTED_TICKERS)
+    assert cov["uncounted_for_group"] >= 2
+
+    text = cov["explanation"]
+    assert "the universe would have to add" not in text, (
+        "the response told the reader to add companies when companies already in this universe are "
+        "uncounted — the shortfall is of CLASSIFIED constituents, not of companies"
+    )
+    assert "more classified constituent" in text
+    assert "that no group counts" in text and "already name this group" in text
+    assert "stale" in text and "fallback" in text
+
+    summary = body["universe_coverage"]
+    assert summary["uncounted"]["by_state"]["fallback"] >= 2
+    assert summary["uncounted"]["by_state"]["stale"] >= 2
+    assert summary["uncounted"]["by_group_code"][code] >= 2
+    assert summary["uncounted"]["total"] == sum(summary["uncounted"]["by_state"].values())
+    assert summary["uncounted"]["note"]
+    # The one-place sentence an operator reads before deciding to widen
+    # the universe names the other remedy too.
+    assert "classifying those counts towards the gap without widening the universe" in summary["explanation"]
+    assert "CLASSIFIED CONSTITUENTS" in summary["basis"]
+
+
+def test_the_remedy_named_depends_on_whether_anything_is_uncounted():
+    """With nothing uncounted, "add companies" IS the whole remedy and the
+    response says so; with rows nobody counts, it must not. Checked on the
+    composers directly, so the sentence does not depend on what another
+    module happened to leave in the shared database."""
+    from app.api import routes_industries as ri
+
+    floor = ia.sample_floor()
+    nothing = {"total": 0, "by_state": {}, "by_group_code": {}, "without_group_code": 0}
+    pool = {"total": 4, "by_state": {"fallback": 2, "stale": 2}, "by_group_code": {"1010": 2},
+            "without_group_code": 2}
+
+    bare = ri._group_universe_coverage(floor - 1, floor, nothing, "1010")
+    assert bare["uncounted_in_universe"] == 0 and bare["uncounted_for_group"] == 0
+    assert "only adding companies can supply them" in bare["explanation"]
+
+    with_pool = ri._group_universe_coverage(floor - 1, floor, pool, "1010")
+    assert with_pool["uncounted_in_universe"] == 4 and with_pool["uncounted_for_group"] == 2
+    assert "only adding companies can supply them" not in with_pool["explanation"]
+    assert "2 fallback, 2 stale" in with_pool["explanation"]
+    assert "2 of them already name this group" in with_pool["explanation"]
+
+    # And the same split in the one-place summary.
+    assert "only adding companies can" in ri._universe_coverage_explanation(
+        groups=25, not_coverable=20, needed=43, floor=floor, uncounted=nothing,
+    )
+    assert "without widening the universe" in ri._universe_coverage_explanation(
+        groups=25, not_coverable=20, needed=43, floor=floor, uncounted=pool,
+    )
+    # Nothing short: the reader is told the floor is not the universe's
+    # problem, rather than being shown a zero.
+    healthy = ri._universe_coverage_explanation(
+        groups=25, not_coverable=0, needed=0, floor=floor, uncounted=nothing,
+    )
+    assert "waiting on prices, not on the universe" in healthy
+
+
 def test_taxonomy_carries_the_access_policy(client):
     access = client.get("/api/industries/taxonomy").json()["access"]
     assert access["surface"] == "latest"
@@ -271,6 +478,76 @@ def test_report_serves_the_edition_with_its_statistics_and_method(client, group,
     # Per-ticker rows belong to /companies, and the response says so.
     assert "per_ticker" not in body["stats"]
     assert "companies" in body["stats"]["per_ticker_note"]
+
+
+def _seed_floor_state(node, taxonomy, *, n_constituents: int, n_priced: int) -> str:
+    """A stats row and its edition for a group in one sample-floor state.
+
+    The `sample_floor` block is built by the producer
+    (`industry_analytics.classify_sample_floor`) rather than typed out
+    here: a hand-written copy would agree with this test and drift from
+    the service, which is exactly the failure this repo has had before.
+    `coverage` is composed the way the worker composes it — from the
+    stats row's own `sample`.
+    """
+    floor = ia.sample_floor()
+    sample = {
+        "n_constituents": n_constituents,
+        "n_with_prices": n_priced,
+        "min_sample": floor,
+        "excluded": [],
+        "sample_floor": ia.classify_sample_floor(
+            n_constituents=n_constituents, n_with_prices=n_priced, min_sample=floor,
+        ),
+    }
+    state = str(sample["sample_floor"]["state"])
+    with SessionLocal() as db:
+        row = IndustryStatSnapshot(
+            taxonomy_version_id=taxonomy.id, industry_group_code=node.code,
+            period_key="2026-W36", as_of=AS_OF, method={"weighting": ["equal"]},
+            sample=sample,
+            payload={"status": "ok" if state == ia.FLOOR_MET else ia.REASON_INSUFFICIENT},
+            per_ticker={},
+            inputs_hash=f"floor-{n_constituents}-{n_priced}",
+        )
+        db.add(row)
+        db.commit()
+        stats_id = row.id
+    _seed_report(node, taxonomy, period_key="2026-W36", stats_id=stats_id, coverage=sample)
+    return state
+
+
+@pytest.mark.parametrize(("n_constituents", "n_priced", "expected", "structural"), [
+    (9, 1, ia.FLOOR_PRICES_NOT_WARMED, False),
+    (2, 2, ia.FLOOR_UNIVERSE_TOO_SMALL, True),
+    (9, 5, ia.FLOOR_MET, False),
+])
+def test_report_says_which_kind_of_short_the_group_is(
+    client, group, taxonomy, n_constituents, n_priced, expected, structural,
+):
+    """`insufficient_sample` alone reads as "not ready yet". The response
+    has to distinguish a warm-up that will catch up from a universe that
+    never can — on both the statistics row and the coverage block the
+    header renders."""
+    assert _seed_floor_state(group, taxonomy, n_constituents=n_constituents, n_priced=n_priced) == expected
+    body = client.get(f"/api/industries/{group.code}/report").json()
+
+    for where in (body["stats"]["sample"]["sample_floor"], body["coverage"]["sample_floor"]):
+        assert where["state"] == expected
+        assert where["structural"] is structural
+        assert where["clears_with_warm_up"] is (expected == ia.FLOOR_PRICES_NOT_WARMED)
+        assert where["min_sample"] == ia.sample_floor()
+        assert where["n_constituents"] == n_constituents
+        assert where["n_with_prices"] == n_priced
+        assert where["explanation"]
+
+    # The words differ too, not just the enum: this is what the page
+    # prints, and "not ready yet" for a structural shortfall is the bug.
+    text = body["coverage"]["sample_floor"]["explanation"]
+    if structural:
+        assert "warm-up can cover it" in text
+    elif expected == ia.FLOOR_PRICES_NOT_WARMED:
+        assert "without changing the universe" in text
 
 
 def test_report_without_a_statistics_row_says_why(client, group, taxonomy):

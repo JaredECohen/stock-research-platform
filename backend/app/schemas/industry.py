@@ -13,7 +13,13 @@ them, and every field name is chosen to keep them visible:
 * **Membership is not coverage.** `constituent_count` / `membership` is
   what the classification says belongs to a group; `n_priced` is how many
   of those had a price series this period. They are different numbers and
-  are reported as different fields, never collapsed.
+  are reported as different fields, never collapsed. The same distinction
+  decides WHY a group sits below the sample floor: too few CLASSIFIED
+  constituents (`universe_coverage.coverable: false` — structural, and no
+  number of warm-up weeks fixes it; `universe_coverage.uncounted` says how
+  much of that gap is companies already here that no group counts) or too
+  few of them priced this period
+  (`stats.sample.sample_floor.state: prices_not_warmed` — transient).
 * **Missing is missing.** Absent values are `None` with a stated reason
   (`stale_reason`, `exclusion`, `reason`), never zero and never a bare
   `n/a`. A truncated list reports how many entries it dropped.
@@ -102,6 +108,62 @@ class LatestReportOut(BaseModel):
     stale_basis: str = "as_of age only; failed-refresh staleness is on the report endpoint"
 
 
+class GroupUniverseCoverageOut(BaseModel):
+    """Whether this universe can EVER put the sample floor's worth of
+    priced names in the group.
+
+    Structural only: this response knows the classified membership, not
+    which of it had a price series in any given week. A group with
+    `coverable: false` is short of CLASSIFIED CONSTITUENTS — the weekly
+    price warm-up cannot help it, and its statistics will read
+    `insufficient_sample` every week until more companies are classified
+    into it. That is deliberately not "short of companies":
+    `uncounted_in_universe` counts the companies already here that no
+    group counts (`fallback`, `missing`, `stale`), and classifying those
+    closes the same gap without a single company being added. The
+    per-period half of the story (a membership that clears the floor but
+    was not fully priced this week) is `stats.sample.sample_floor` on the
+    report endpoint.
+    """
+    min_sample: int
+    constituent_count: int
+    coverable: bool
+    constituents_short_by: int = 0
+    #: Uncounted rows that already name THIS group (a `stale` row does).
+    uncounted_for_group: int = 0
+    #: Uncounted rows anywhere in the universe — the pool a reclassification
+    #: could draw this group's shortfall from.
+    uncounted_in_universe: int = 0
+    explanation: str = ""
+
+
+class UniverseCoverageOut(BaseModel):
+    """The structural answer across the whole taxonomy, in one place: how
+    many of this version's industry groups the universe cannot cover at
+    the configured sample floor, and which ones. Counted from the registry
+    and the classification table on every call, never from a literal.
+
+    `constituents_needed` is a count of CLASSIFIED CONSTITUENTS, and
+    `uncounted` says how much of that could come from re-classification
+    rather than from new companies — the two remedies are different
+    decisions and the response must not collapse them.
+    """
+    min_sample: int
+    setting: str = "INDUSTRY_STATS_MIN_SAMPLE"
+    groups: int = 0
+    coverable: int = 0
+    not_coverable: int = 0
+    not_coverable_codes: list[str] = Field(default_factory=list)
+    constituents_needed: int = 0
+    #: `industry_classification.uncounted_rows()` — total, by state, by the
+    #: group code the row names (when it names one) and how many name none.
+    uncounted: dict[str, Any] = Field(default_factory=dict)
+    #: The sentence the index page prints. Composed here so the page never
+    #: writes a remedy the server did not state.
+    explanation: str = ""
+    basis: str = ""
+
+
 class IndustryGroupNodeOut(BaseModel):
     code: str
     name: str
@@ -112,6 +174,7 @@ class IndustryGroupNodeOut(BaseModel):
     industry_count: int
     sub_industry_count: int
     constituent_count: int
+    universe_coverage: GroupUniverseCoverageOut
     latest_report: LatestReportOut | None = None
 
 
@@ -128,6 +191,7 @@ class TaxonomyOut(BaseModel):
     sectors: list[SectorNodeOut] = Field(default_factory=list)
     node_counts: dict[str, int] = Field(default_factory=dict)
     constituents: dict[str, Any] = Field(default_factory=dict)
+    universe_coverage: UniverseCoverageOut
     reports: dict[str, int] = Field(default_factory=dict)
     access: IndustryAccessOut
     attribution: str = ""

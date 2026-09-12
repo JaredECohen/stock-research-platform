@@ -97,11 +97,12 @@ describe("CompaniesTable", () => {
   });
 
   it("says so when the edition's own priced count disagrees with this read", () => {
-    // The captured edition does disagree: its companies facts count every
-    // per-ticker row as priced, including the one the statistics row
-    // excluded. The page shows both numbers and names which one is
-    // reconciled with the excluded list, rather than picking silently.
-    const edition = fx.report.payload.sections.companies.facts.n_priced as number;
+    // Two reads of the same quantity that landed on different weeks: the
+    // priced count here is the one the group's OTHER captured edition
+    // recorded (the week before its prices warmed up), not an invented
+    // number. The page shows both and names which one is reconciled with
+    // the excluded list, rather than picking silently.
+    const edition = fx.warmingUpReport.payload.sections.companies.facts.n_priced as number;
     expect(edition).not.toBe(fx.companies.n_priced);
     render(<CompaniesTable companies={fx.companies} editionNPriced={edition} />);
     const note = screen.getByTestId("coverage-disagreement");

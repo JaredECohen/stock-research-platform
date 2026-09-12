@@ -85,6 +85,34 @@ export interface LatestReportPointer {
   stale_basis: string;
 }
 
+/**
+ * Whether this universe can EVER put the sample floor's worth of priced
+ * names in the group.
+ *
+ * Structural only — the taxonomy response knows the classified
+ * membership, not which of it had a price series in any given week. A
+ * group with `coverable: false` is short of CLASSIFIED CONSTITUENTS: its
+ * statistics will read `insufficient_sample` every week until more
+ * companies are classified into it, and the page must not word that like
+ * a warm-up in progress. Nor like a universe short of companies —
+ * `uncounted_in_universe` counts the companies already here that no group
+ * counts, and classifying those closes the same gap. The per-week half of
+ * the story is `IndustrySampleFloor`.
+ */
+export interface GroupUniverseCoverage {
+  min_sample: number;
+  constituent_count: number;
+  coverable: boolean;
+  constituents_short_by: number;
+  /** Uncounted rows that already name this group (a `stale` row does). */
+  uncounted_for_group: number;
+  /** Uncounted rows anywhere in this universe — the pool a
+   *  re-classification could draw the shortfall from. */
+  uncounted_in_universe: number;
+  /** The server's own sentence. The page prints it; it never writes one. */
+  explanation: string;
+}
+
 export interface IndustryGroupNode {
   code: string;
   name: string;
@@ -95,6 +123,7 @@ export interface IndustryGroupNode {
   industry_count: number;
   sub_industry_count: number;
   constituent_count: number;
+  universe_coverage: GroupUniverseCoverage;
   latest_report: LatestReportPointer | null;
 }
 
@@ -104,6 +133,29 @@ export interface SectorNode {
   industry_groups: IndustryGroupNode[];
 }
 
+/** The taxonomy-level structural count: `not_coverable` of `groups` hold
+ *  fewer classified constituents than `min_sample`, so no number of
+ *  warm-up weeks can produce statistics for them. */
+export interface UniverseCoverage {
+  min_sample: number;
+  setting: string;
+  groups: number;
+  coverable: number;
+  not_coverable: number;
+  not_coverable_codes: string[];
+  /** Classified CONSTITUENTS, not companies — see `uncounted`. */
+  constituents_needed: number;
+  /** `industry_classification.uncounted_rows()`: the companies in this
+   *  universe no group counts, by state and (where the row names one) by
+   *  group. How much of `constituents_needed` re-classification could
+   *  supply, rather than new companies. */
+  uncounted: Record<string, unknown>;
+  /** The sentence the index page prints verbatim. The page must not
+   *  compose a remedy the server did not state. */
+  explanation: string;
+  basis: string;
+}
+
 export interface IndustryTaxonomy {
   taxonomy_version: TaxonomyVersion;
   sectors: SectorNode[];
@@ -111,6 +163,10 @@ export interface IndustryTaxonomy {
    *  a number of sectors, groups, industries or sub-industries. */
   node_counts: Record<string, number>;
   constituents: Record<string, unknown>;
+  /** How much of this taxonomy the current universe can never report on,
+   *  in one place. Counted from the classification table on every call —
+   *  the page never derives it. */
+  universe_coverage: UniverseCoverage;
   reports: Record<string, number>;
   access: IndustryAccess;
   attribution: string;
@@ -200,6 +256,40 @@ export interface IndustryReportPayload {
   disclaimer?: string;
   attribution?: string;
   mapping_caveat?: string;
+}
+
+/**
+ * Where one edition stands against the sample floor — on
+ * `report.coverage.sample_floor` and `stats.sample.sample_floor`.
+ *
+ * Below the floor is two situations, not one, and the page must not print
+ * the same words for both:
+ *
+ *   * `prices_not_warmed` — enough members, too few priced THIS week. The
+ *     weekly warm-up fetches more series each run, so it clears on its
+ *     own;
+ *   * `universe_too_small` — fewer members than the floor. Price every
+ *     one and the group is still short; only a wider universe fixes it.
+ *
+ * `explanation` is the server's sentence and is what the page prints. The
+ * state is a key for choosing a badge, never text for a reader.
+ */
+export const INDUSTRY_SAMPLE_FLOOR_STATES = ["met", "prices_not_warmed", "universe_too_small"] as const;
+export type IndustrySampleFloorState = (typeof INDUSTRY_SAMPLE_FLOOR_STATES)[number];
+
+export interface IndustrySampleFloor {
+  state: IndustrySampleFloorState;
+  structural: boolean;
+  clears_with_warm_up: boolean;
+  /** The API always sends these; `null` is what the client's own reader
+   *  substitutes for a count an older edition did not carry, so nothing
+   *  downstream can mistake a missing count for a zero. */
+  min_sample: number | null;
+  n_constituents: number | null;
+  n_with_prices: number | null;
+  priced_short_by: number | null;
+  constituents_short_by: number | null;
+  explanation: string;
 }
 
 /** The refresh attempt behind a `stale` verdict. */

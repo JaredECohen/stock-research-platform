@@ -15,7 +15,12 @@ What the shapes are careful about:
 * **Membership is not price coverage.** `/companies` lists the classified
   membership of a group and marks which names the latest statistics row
   could price, with a reason for each one it could not. `n_priced` and
-  `count` are different fields on purpose.
+  `count` are different fields on purpose — and the same distinction says
+  why a group is below the sample floor: `/taxonomy`'s `universe_coverage`
+  names the groups this universe holds too few CLASSIFIED constituents to
+  ever cover, which is a different statement from a week whose prices have
+  not warmed up yet, and (via `uncounted`) a different statement again
+  from a universe short of companies.
 * **Numbers travel with their method.** The report response carries the
   statistics row's `method` and `sample` whenever it carries `payload`,
   because `benchmark_relative` without `method.benchmark_cohort_basis`
@@ -80,6 +85,124 @@ MEMBER_STATES = (industry_classification.STATE_MAPPED, industry_classification.S
 
 COMPANIES_LIMIT = 500
 HISTORY_LIMIT = 26
+
+# Why a group with too few constituents is a different statement from a
+# group whose prices have not warmed up yet. Stated once, on the
+# response, because the page must not compose this claim itself.
+UNIVERSE_COVERAGE_BASIS = (
+    "a group whose classified constituent count is below the sample floor cannot reach the floor "
+    "however many weeks the price warm-up runs — it is short of CLASSIFIED CONSTITUENTS, not of "
+    "prices, and its statistics will read insufficient_sample every week until more companies are "
+    "classified into it. That is not the same as being short of companies: `uncounted` counts the "
+    "companies already in this universe that no group counts (a `fallback` row knows its sector and "
+    "not its group, a `missing` row carries a label the alias map does not recognise, a `stale` row "
+    "awaits re-classification), and classifying those closes the same gap without widening the "
+    "universe. Groups counted here are every industry group in this taxonomy version; membership "
+    "comes from the classification table on every call."
+)
+
+
+def _plural(n: int, singular: str, plural: str | None = None) -> str:
+    """``1 company`` / ``4 companies`` — these strings are read by a
+    person, and "1 companies" reads as a fault in the number."""
+    return f"{n} {singular}" if n == 1 else f"{n} {plural or singular + 's'}"
+
+
+def _uncounted_phrase(by_state: dict[str, int]) -> str:
+    """``3 fallback, 1 stale`` — the states, so a reader knows which fix
+    each row needs rather than being told a bare total."""
+    return ", ".join(f"{n} {state}" for state, n in sorted(by_state.items()))
+
+
+def _group_universe_coverage(
+    constituent_count: int, floor: int, uncounted: dict[str, Any], group_code: str,
+) -> dict[str, Any]:
+    """The structural half of the sample-floor story for one group.
+
+    Deliberately NOT the three-state classifier the analytics row carries:
+    this endpoint knows the membership and not the week's price coverage,
+    and a response that guessed the other half would be inventing it.
+    `industry_analytics.universe_covers` is the shared definition of
+    structural, so the two layers cannot disagree.
+
+    The shortfall is counted in CLASSIFIED CONSTITUENTS, never in
+    companies: a universe can hold plenty of companies for a group and
+    still count none of them, and telling an operator to add companies
+    when the alias map is what is short sends them the wrong way.
+    """
+    short_by = max(floor - constituent_count, 0)
+    coverable = industry_analytics.universe_covers(constituent_count, floor)
+    classified = _plural(constituent_count, "classified constituent")
+    uncounted_total = int(uncounted.get("total") or 0)
+    for_group = int((uncounted.get("by_group_code") or {}).get(group_code) or 0)
+    if coverable:
+        explanation = (
+            f"{classified} in this universe, at or above the sample floor of {floor}; a week below the "
+            f"floor is about prices, not about the size of this universe."
+        )
+    else:
+        if uncounted_total:
+            names_group = f"; {for_group} of them already name this group" if for_group else ""
+            remedy = (
+                f"which can come from companies added to the universe, or from the "
+                f"{_plural(uncounted_total, 'company', 'companies')} already in this universe that no "
+                f"group counts ({_uncounted_phrase(uncounted.get('by_state') or {})}{names_group}) — "
+                f"classifying those adds no companies."
+            )
+        else:
+            remedy = (
+                "and every company in this universe already counts towards a group, so only adding "
+                "companies can supply them."
+            )
+        explanation = (
+            f"this universe holds {classified} for the group and the sample floor is {floor}. No amount of "
+            f"price warm-up can cover it — the group needs "
+            f"{_plural(short_by, 'more classified constituent', 'more classified constituents')}, {remedy}"
+        )
+    return {
+        "min_sample": floor,
+        "constituent_count": constituent_count,
+        "coverable": coverable,
+        "constituents_short_by": short_by,
+        # The two numbers that keep "short of constituents" from being
+        # read as "short of companies".
+        "uncounted_for_group": for_group,
+        "uncounted_in_universe": uncounted_total,
+        "explanation": explanation,
+    }
+
+
+def _universe_coverage_explanation(
+    *, groups: int, not_coverable: int, needed: int, floor: int, uncounted: dict[str, Any],
+) -> str:
+    """The taxonomy-level sentence the index page prints verbatim. Written
+    here for the same reason every per-group explanation is: a page that
+    composes it is making a claim the server never made."""
+    uncounted_total = int(uncounted.get("total") or 0)
+    if not not_coverable:
+        return (
+            f"Every one of the {_plural(groups, 'industry group')} in this taxonomy holds at least "
+            f"{floor} classified constituents, so a group below the floor in a given week is waiting on "
+            f"prices, not on the universe."
+        )
+    if uncounted_total:
+        tail = (
+            f"The weekly price warm-up cannot supply them. "
+            f"{_plural(uncounted_total, 'company', 'companies')} in this universe carry a classification "
+            f"no group counts ({_uncounted_phrase(uncounted.get('by_state') or {})}); classifying those "
+            f"counts towards the gap without widening the universe."
+        )
+    else:
+        tail = (
+            "The weekly price warm-up cannot supply them, and every company in this universe already "
+            "counts towards a group, so only adding companies can."
+        )
+    return (
+        f"{not_coverable} of {groups} industry groups hold fewer than {floor} classified constituents "
+        f"each and will report insufficient_sample every week until that changes — "
+        f"{_plural(needed, 'more classified constituent', 'more classified constituents')} in total. {tail}"
+    )
+
 
 _SOURCE_LABELS = {
     industry_classification.SOURCE_RESEARCH_MAP:
@@ -177,16 +300,35 @@ def get_industry_taxonomy(
     _rate: None = Depends(rate_scope("data")),
 ) -> TaxonomyOut:
     """The active structure: sectors → industry groups, with each group's
-    industry and sub-industry counts, its constituent count, and the
-    pointer to its latest published edition.
+    industry and sub-industry counts, its constituent count, whether this
+    universe can cover the group at the sample floor, and the pointer to
+    its latest published edition.
 
-    Four reads: the active version, the version's nodes (cached per
+    `universe_coverage` answers, in one place, "how much of this taxonomy
+    can the current universe never report on": a group whose membership is
+    below the floor is short of CLASSIFIED CONSTITUENTS, and no number of
+    price warm-up weeks changes that. It counts the rows no group counts
+    (`uncounted`) alongside it, because "add companies" and "classify the
+    companies already here" are different instructions and the shortfall
+    alone does not say which one an operator needs. It is the STRUCTURAL
+    half only — this endpoint reads no statistics row and so cannot know
+    which groups are merely un-warmed; that half is
+    `stats.sample.sample_floor` on the report.
+
+    Five reads: the active version, the version's nodes (cached per
     version id — they are immutable after import), one constituent count
-    query and one bulk latest-edition query. Never a query per group.
+    query, one uncounted-rows query and one bulk latest-edition query.
+    Never a query per group.
     """
     info = _taxonomy_or_503(access)
     nodes = gics_registry.nodes(version=info)
     by_group = industry_classification.constituents_by_group(version=info)
+    # The other half of the membership picture: companies in this universe
+    # that no group's constituent count includes. Without it a group short
+    # of CLASSIFIED constituents gets reported as a universe short of
+    # COMPANIES, and an operator widens the universe when the alias map is
+    # what needs extending.
+    uncounted = industry_classification.uncounted_rows(version=info)
 
     groups = [n for n in nodes if n.level == "industry_group"]
     latest = store.latest_good_many([g.code for g in groups], version=info)
@@ -200,6 +342,9 @@ def get_industry_taxonomy(
 
     now = _utcnow()
     stale_after = int(settings.industry_report_stale_after_days)
+    floor = industry_analytics.sample_floor()
+    not_coverable: list[str] = []
+    constituents_needed = 0
     groups_by_sector: dict[str, list[dict[str, Any]]] = {}
     for node in groups:
         edition = latest.get(node.code)
@@ -217,6 +362,11 @@ def get_industry_taxonomy(
                 "stale_by_age": _stale_by_age(age, stale_after),
                 "age_days": None if age is None else age.days,
             }
+        constituent_count = len(by_group.get(node.code, []))
+        coverage = _group_universe_coverage(constituent_count, floor, uncounted, node.code)
+        if not coverage["coverable"]:
+            not_coverable.append(node.code)
+            constituents_needed += coverage["constituents_short_by"]
         groups_by_sector.setdefault(node.code[:2], []).append({
             "code": node.code,
             "name": node.name,
@@ -226,7 +376,8 @@ def get_industry_taxonomy(
             "effective_to": node.effective_to.isoformat() if node.effective_to else None,
             "industry_count": industries_by_group.get(node.code, 0),
             "sub_industry_count": subs_by_group.get(node.code, 0),
-            "constituent_count": len(by_group.get(node.code, [])),
+            "constituent_count": constituent_count,
+            "universe_coverage": coverage,
             "latest_report": pointer,
         })
 
@@ -246,6 +397,21 @@ def get_industry_taxonomy(
                 "constituents are companies whose current classification maps to the group; "
                 "a `fallback` row knows only its sector and is not counted here"
             ),
+        },
+        universe_coverage={
+            "min_sample": floor,
+            "setting": "INDUSTRY_STATS_MIN_SAMPLE",
+            "groups": len(groups),
+            "coverable": len(groups) - len(not_coverable),
+            "not_coverable": len(not_coverable),
+            "not_coverable_codes": sorted(not_coverable),
+            "constituents_needed": constituents_needed,
+            "uncounted": uncounted,
+            "explanation": _universe_coverage_explanation(
+                groups=len(groups), not_coverable=len(not_coverable),
+                needed=constituents_needed, floor=floor, uncounted=uncounted,
+            ),
+            "basis": UNIVERSE_COVERAGE_BASIS,
         },
         reports={"groups_with_a_published_edition": len(latest), "groups": len(groups)},
         access=IndustryAccessOut(**access),
