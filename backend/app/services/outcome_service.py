@@ -45,6 +45,49 @@ REFLECTION_HORIZONS = {90, 365}
 DEFAULT_BENCHMARK = "SPY"
 
 
+# --- Price-window sizing ---------------------------------------------------
+#
+# `get_price_series(ticker, days)` asks the provider for the last `days`
+# bars *ending today* (FMP passes it as `limit=`, Polygon and Tiingo slice
+# `[-days:]`). The window therefore slides forward every night while a
+# memo's generation date stays put.
+#
+# The old sizing was `days = horizon_days + 30`, which is measured off the
+# horizon — a quantity that says nothing about how long ago the memo was
+# written. Once a memo aged past that many bars it fell out of the window
+# permanently, and (worse) a partially-covering window silently supplied a
+# baseline from weeks after the memo. Both failure modes are reproduced in
+# `app/tests/test_outcome_price_window.py`, which fails against the old
+# sizing in exactly the two ways production did.
+#
+# We size off memo age instead, and deliberately express the request in
+# *calendar* days: providers read the number as bars, so a calendar-day
+# count over-requests by ~40%. That is correct under either reading and
+# costs nothing but payload.
+#
+# The number is part of the provider cache key (`"{TICKER}:{days}"`), so an
+# exact per-memo value would rotate every night — it contains `today` — and
+# multiply nightly provider calls by the number of distinct memo dates.
+# Rounding up to a short ladder keeps the key stable across nights and
+# collapses all four horizons of a snapshot onto a single fetch, which is
+# strictly fewer provider calls than the four the old sizing made per
+# ticker. Slack costs nothing here: over-fetching is free, and correctness
+# is guaranteed by the proximity tolerance below, not by exact sizing.
+PRICE_WINDOW_RUNGS = (120, 260, 400, 800)
+
+# Slack on the memo side of the window so the rung is chosen from a date
+# that is comfortably before the memo rather than exactly on it.
+MEMO_WINDOW_BUFFER_DAYS = 7
+
+# How far a close may sit from the date it stands in for. Seven calendar
+# days clears every US market closure on record — the longest (Sept 2001)
+# left seven days between consecutive sessions — while being far tighter
+# than the weeks-to-months drift the unbounded fallback used to accept.
+# It is also the boundary of the grey band in the triage predicate used to
+# audit rows written before this fix, so the two agree.
+PRICE_DATE_TOLERANCE_DAYS = 7
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -54,34 +97,123 @@ def _ensure_table(db: Session) -> None:
     MemoOutcome.__table__.create(bind=bind, checkfirst=True)
 
 
-def _close_on_or_before(rows: list[dict[str, Any]], target: str) -> float | None:
+def _window_days_for_memo(generated_date: _date, today: _date) -> int | None:
+    """Smallest ladder rung whose fetch reaches back past `generated_date`.
+
+    ``None`` when the memo is older than the longest rung — a permanent
+    condition, since tomorrow's window starts a day later still.
+    """
+    span = (today - generated_date).days + MEMO_WINDOW_BUFFER_DAYS
+    for rung in PRICE_WINDOW_RUNGS:
+        if rung >= span:
+            return rung
+    return None
+
+
+def _dated_close(row: dict[str, Any]) -> tuple[str, float] | None:
+    """``(iso_date, close)`` for a price row, or None if either is unusable."""
+    d = str((row or {}).get("date") or "")
+    if not d:
+        return None
+    try:
+        return d, float(row.get("close") or row.get("adjusted_close"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _dated_close_on_or_before(
+    rows: list[dict[str, Any]], target: str,
+) -> tuple[str, float] | None:
     if not rows or not target:
         return None
-    chosen: float | None = None
+    chosen: tuple[str, float] | None = None
     for r in rows:
         d = str(r.get("date") or "")
         if not d:
             continue
         if d <= target:
-            try:
-                chosen = float(r.get("close") or r.get("adjusted_close"))
-            except (TypeError, ValueError):
-                continue
+            hit = _dated_close(r)
+            if hit is not None:
+                chosen = hit
         else:
             break
     return chosen
 
 
-def _close_on_or_after(rows: list[dict[str, Any]], target: str) -> float | None:
-    """First close on or after `target` — used for the price at memo
-    generation when we don't have an exact-day match."""
-    for r in rows or []:
+def _dated_close_on_or_after(
+    rows: list[dict[str, Any]], target: str,
+) -> tuple[str, float] | None:
+    if not rows or not target:
+        return None
+    for r in rows:
         d = str(r.get("date") or "")
         if d and d >= target:
-            try:
-                return float(r.get("close") or r.get("adjusted_close"))
-            except (TypeError, ValueError):
-                continue
+            hit = _dated_close(r)
+            if hit is not None:
+                return hit
+    return None
+
+
+def _close_on_or_before(rows: list[dict[str, Any]], target: str) -> float | None:
+    hit = _dated_close_on_or_before(rows, target)
+    return hit[1] if hit else None
+
+
+def _close_on_or_after(rows: list[dict[str, Any]], target: str) -> float | None:
+    """First close on or after `target`, with no proximity check.
+
+    Kept for callers that have already bounded the search. Scoring uses
+    `_baseline_close`/`_target_close` instead — an unbounded "on or after"
+    is what let a window beginning after the memo supply a baseline from
+    weeks later.
+    """
+    hit = _dated_close_on_or_after(rows, target)
+    return hit[1] if hit else None
+
+
+def _within_tolerance(iso_date: str, target: _date) -> bool:
+    try:
+        return abs((_date.fromisoformat(iso_date) - target).days) <= PRICE_DATE_TOLERANCE_DAYS
+    except ValueError:
+        return False
+
+
+def _baseline_close(
+    rows: list[dict[str, Any]], memo_date: _date,
+) -> tuple[str, float] | None:
+    """The close standing in for the memo date, or None if none is near it.
+
+    Preference order is unchanged (first close on or after the memo, then
+    the last one before it), but each candidate now has to actually sit
+    near the memo date. Without that check a window beginning after the
+    memo made *every* row satisfy "on or after", so the earliest row in the
+    window — a price from weeks or months later — was used as the memo's
+    baseline and the resulting return was written as a real evaluation.
+    """
+    memo_iso = memo_date.isoformat()
+    for hit in (
+        _dated_close_on_or_after(rows, memo_iso),
+        _dated_close_on_or_before(rows, memo_iso),
+    ):
+        if hit is not None and _within_tolerance(hit[0], memo_date):
+            return hit
+    return None
+
+
+def _target_close(
+    rows: list[dict[str, Any]], target_date: _date,
+) -> tuple[str, float] | None:
+    """The close standing in for the target date.
+
+    Strictly on or before the target — never peek past the horizon — and
+    near enough to it to be that day's price. The tolerance matters for a
+    series that stops early (a halted or delisted ticker): the last bar
+    before the halt would otherwise be scored as if it were the target
+    day's close, turning a 90-day return into a 20-day one.
+    """
+    hit = _dated_close_on_or_before(rows, target_date.isoformat())
+    if hit is not None and _within_tolerance(hit[0], target_date):
+        return hit
     return None
 
 
@@ -117,6 +249,17 @@ def _evaluate_one(
     to conflate harmless idempotency (future/already-recorded) with missing
     production price data.  The latter left hundreds of due outcomes
     unwritten while the cron job still reported success.
+
+    The three no-data statuses are deliberately distinct:
+
+    ``ticker_prices_unavailable``
+        the provider returned nothing for this ticker — an outage;
+    ``price_window_incomplete``
+        prices exist and reach the memo, but none sits near the target
+        date — a gap a later run may still fill;
+    ``memo_predates_price_window``
+        no price history we can obtain reaches the memo's own date, so the
+        pair can never be scored and never will be.
     """
     # Backtest snapshots have `as_of_date` set; outcome scoring is for live memos only.
     if snap.as_of_date is not None:
@@ -141,30 +284,45 @@ def _evaluate_one(
     if existing is not None:
         return None, "already_recorded"
 
+    # Size the window off the memo's age, not off the horizon: the fetch
+    # ends today, so what it has to span is memo date → today.
+    window_days = _window_days_for_memo(generated_date, today)
+    if window_days is None:
+        return None, "memo_predates_price_window"
+
     from .market_data_service import get_price_series
-    days = horizon_days + 30
-    ticker_rows = get_price_series(snap.ticker, days) or []
-    bench_rows = get_price_series(benchmark, days) or []
+    ticker_rows = get_price_series(snap.ticker, window_days) or []
     if not ticker_rows:
         return None, "ticker_prices_unavailable"
+    # Same rung for the benchmark: one cache key, and both legs of alpha
+    # measured over the same span.
+    bench_rows = get_price_series(benchmark, window_days) or []
 
-    g_iso = generated_date.isoformat()
-    t_iso = target_date.isoformat()
+    memo_hit = _baseline_close(ticker_rows, generated_date)
+    if memo_hit is None:
+        # The oldest price we can obtain postdates the memo. Refusing to
+        # score is the only honest answer, and it is terminal: tomorrow's
+        # window begins a day later still.
+        return None, "memo_predates_price_window"
+    baseline_date, price_at_memo = memo_hit
 
-    price_at_memo = _close_on_or_after(ticker_rows, g_iso) or _close_on_or_before(ticker_rows, g_iso)
-    price_at_target = _close_on_or_before(ticker_rows, t_iso)
-    if not (price_at_memo and price_at_target and price_at_memo > 0):
+    target_hit = _target_close(ticker_rows, target_date)
+    if target_hit is None or price_at_memo <= 0:
         return None, "price_window_incomplete"
+    price_at_target = target_hit[1]
 
     forward_return = (price_at_target - price_at_memo) / price_at_memo
 
-    # Benchmark-relative alpha (None if benchmark price unavailable).
-    bench_at_memo = _close_on_or_after(bench_rows, g_iso) or _close_on_or_before(bench_rows, g_iso)
-    bench_at_target = _close_on_or_before(bench_rows, t_iso)
+    # Benchmark-relative alpha (None if the benchmark's own baseline or
+    # target close isn't available at the same dates — a shifted benchmark
+    # baseline corrupts alpha exactly the way a shifted ticker baseline
+    # corrupts the return).
+    bench_memo_hit = _baseline_close(bench_rows, generated_date)
+    bench_target_hit = _target_close(bench_rows, target_date)
     bench_return: float | None = None
     alpha: float | None = None
-    if bench_at_memo and bench_at_target and bench_at_memo > 0:
-        bench_return = (bench_at_target - bench_at_memo) / bench_at_memo
+    if bench_memo_hit and bench_target_hit and bench_memo_hit[1] > 0:
+        bench_return = (bench_target_hit[1] - bench_memo_hit[1]) / bench_memo_hit[1]
         alpha = forward_return - bench_return
 
     memo_dict = snap.memo_json or {}
@@ -179,8 +337,12 @@ def _evaluate_one(
         or None
     )
 
+    # `baseline=` records which close the return was measured from, so a
+    # future audit can tell a genuine memo-date baseline from a drifted one
+    # without re-fetching prices.
     note_parts: list[str] = [
         f"horizon={horizon_days}d",
+        f"baseline={baseline_date}",
         f"return={forward_return:+.2%}",
     ]
     if alpha is not None:
@@ -267,7 +429,9 @@ def evaluate_all_due(
 
     ``evaluated`` retains its historical meaning (all snapshot/horizon pairs
     scanned).  ``due`` and ``data_unavailable`` distinguish work that should
-    have produced a row from harmless future/idempotent skips.
+    have produced a row from harmless future/idempotent skips, and
+    ``unevaluable`` separates the permanently unscoreable pairs from the
+    ones a later run can still fill in.
     """
     today = today or _date.today()
     horizons = list(horizons or DEFAULT_HORIZONS)
@@ -291,6 +455,7 @@ def evaluate_all_due(
             "already_recorded": 0,
             "ticker_prices_unavailable": 0,
             "price_window_incomplete": 0,
+            "memo_predates_price_window": 0,
         }
         for snap in snaps:
             for h in horizons:
@@ -321,13 +486,24 @@ def evaluate_all_due(
                                 reflections += 1
                         except Exception:  # pragma: no cover
                             pass
+        # `data_unavailable` is the *actionable* shortfall — work that
+        # should have produced a row and would produce one on a later run
+        # if the data arrived. It drives the loop's success flag.
         data_unavailable = (
             statuses["ticker_prices_unavailable"]
             + statuses["price_window_incomplete"]
         )
+        # `unevaluable` is the permanent shortfall: no price history we can
+        # obtain reaches this memo's generation date, and the window only
+        # moves further away from it each night. Folding it into
+        # `data_unavailable` would hold the loop red forever for a reason
+        # nobody can fix, which is how two earlier alarms in this codebase
+        # ended up ignored. It is counted and logged, not treated as a
+        # failure.
+        unevaluable = statuses["memo_predates_price_window"]
         due = (
             written + statuses["already_recorded"]
-            + data_unavailable + errors
+            + data_unavailable + unevaluable + errors
         )
         if data_unavailable:
             log.error(
@@ -336,6 +512,13 @@ def evaluate_all_due(
                 data_unavailable,
                 statuses["ticker_prices_unavailable"],
                 statuses["price_window_incomplete"],
+            )
+        if unevaluable:
+            log.warning(
+                "Outcome evaluation skipped %s permanently unevaluable pairs "
+                "(memo_predates_price_window): no obtainable price history "
+                "reaches the memo date.",
+                unevaluable,
             )
         return {
             "evaluated": evaluated, "written": written,
@@ -346,6 +529,8 @@ def evaluate_all_due(
             "data_unavailable": data_unavailable,
             "ticker_prices_unavailable": statuses["ticker_prices_unavailable"],
             "price_window_incomplete": statuses["price_window_incomplete"],
+            "unevaluable": unevaluable,
+            "memo_predates_price_window": statuses["memo_predates_price_window"],
         }
     finally:
         if own:
