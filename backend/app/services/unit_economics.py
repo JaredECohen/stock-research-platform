@@ -26,8 +26,14 @@ Three rules govern every number that leaves here:
    it would be multiplied by an allowance and priced against.
 3. **Nothing silently vanishes.** Calls that cannot be attributed to a unit,
    units whose model is missing from the price table, calls that came back
-   without token counts, and rows dropped by the scan cap are each counted
-   and named. A zero never stands in for an unknown.
+   without token counts, units whose calls reach back past the oldest row the
+   scan read, and rows dropped by the scan cap are each counted and named. A
+   zero never stands in for an unknown.
+4. **A total says what it does not cover.** `dcf`, `comps` and `portfolio`
+   spend real money on every call and have no monthly allowance to multiply,
+   so no plan total here can be complete. They ride into every plan block as
+   `unmeasured_terms`, the total goes null, and what *is* measured is
+   reported next to it as the lower bound it is.
 
 What one *unit* is differs per operation and is stated in the output
 (`basis`, `basis_note`): a `research_run` is a `run_id` (~26 calls), a
@@ -65,6 +71,14 @@ DEFAULT_WINDOW_DAYS = 30
 # the cap drops is counted and reported (`scan.rows_dropped_by_cap`) together
 # with the window the kept rows actually cover.
 MAX_ROWS_SCANNED = 20_000
+# How far below the oldest scanned row to look for calls of a run the sample
+# already has. A run-grouped unit is only a unit if every one of its calls was
+# read; these two bound the check that finds the ones that were not (see
+# `_straddling_units`). A day is orders of magnitude longer than a memo run,
+# and `boundary_check.exhaustive` reports whether it was enough rather than
+# assuming it.
+BOUNDARY_LOOKBACK = timedelta(days=1)
+BOUNDARY_LOOKBACK_ROWS = 5_000
 # A median over fewer than this many units is noise wearing a decimal point.
 MIN_UNITS_FOR_MEDIAN = 20
 # A p90 is a tail estimate and needs more than a median does: with 20 points
@@ -194,6 +208,11 @@ EXCLUSION_REASONS = {
         "a successful call reported 0 input and 0 output tokens, so its cost is unknown "
         "rather than zero (the provider response carried no usage block)"
     ),
+    "partial_unit": (
+        "at least one of the unit's calls is older than the oldest row read — the scan "
+        "cap cut the sample short, or the window start did — so the calls that were read "
+        "price only part of it. Excluded rather than reported as a cheap whole unit"
+    ),
 }
 
 
@@ -206,9 +225,14 @@ def _scan(db: Session, *, since: datetime, until: datetime, max_rows: int,
           log_features: Iterable[str]) -> tuple[list[Any], dict[str, Any]]:
     """The newest `max_rows` tagged rows in the window, plus what was dropped.
 
-    Two bounded, index-served statements: a COUNT over the window and a
-    LIMITed newest-first read. The COUNT is what lets the cap report the rows
-    it left behind instead of quietly under-reporting the sample.
+    Two statements. The read is bounded — newest-first off the `generated_at`
+    index, LIMIT `max_rows`. The COUNT is **not**: it is bounded by the
+    window, not by the cap, so its cost grows with the rows in the window
+    (and `llm_call_logs.feature` carries no index, so the feature filter is a
+    scan of them). That is a deliberate trade: the COUNT is the only way the
+    cap can report the rows it left behind instead of quietly under-reporting
+    the sample, and a report whose sample size is a guess is worth nothing.
+    `window_days` is capped at 90 by the route, which bounds it in practice.
     """
     wanted = sorted(set(log_features))
     where = (
@@ -251,8 +275,75 @@ def _scan(db: Session, *, since: datetime, until: datetime, max_rows: int,
     return rows, scan
 
 
-def _units_for(op: Operation, rows: Sequence[Any]) -> dict[str, Any]:
-    """Group one operation's rows into units and price each one."""
+def _straddling_units(db: Session, rows: Sequence[Any], *, floor: datetime,
+                      run_features: Sequence[str]) -> tuple[set[str], dict[str, Any]]:
+    """Run-grouped units of the sample that reach back past its oldest row.
+
+    A `run_id` unit is a unit only if every one of its calls was read. A run
+    that started before `floor` — because the cap cut the read short, or
+    because the window did — contributes its tail alone, and pricing that tail
+    as a whole run invents a cheap unit no run ever incurred. So the calls
+    immediately below `floor` are read (bounded by `BOUNDARY_LOOKBACK` in time
+    and `BOUNDARY_LOOKBACK_ROWS` in rows, newest first, on the `generated_at`
+    index) and every run of the sample found among them is named and returned
+    for exclusion.
+
+    The check is exhaustive when the period it looked at is at least as long
+    as the longest unit the sample itself shows. When it is not, the returned
+    block says so with the numbers instead of implying a guarantee.
+    """
+    first: dict[str, datetime] = {}
+    last: dict[str, datetime] = {}
+    for r in rows:
+        if r.feature in run_features and r.run_id:
+            first[r.run_id] = min(first.get(r.run_id, r.generated_at), r.generated_at)
+            last[r.run_id] = max(last.get(r.run_id, r.generated_at), r.generated_at)
+    longest = max((last[k] - first[k] for k in first), default=timedelta(0))
+
+    zone_start = floor - BOUNDARY_LOOKBACK
+    below = list(db.execute(
+        select(LLMCallLog.run_id, LLMCallLog.generated_at)
+        .where(
+            LLMCallLog.feature.in_(sorted(set(run_features))),
+            LLMCallLog.run_id.is_not(None),
+            LLMCallLog.generated_at < floor,
+            LLMCallLog.generated_at >= zone_start,
+        )
+        .order_by(LLMCallLog.generated_at.desc())
+        .limit(BOUNDARY_LOOKBACK_ROWS)
+    ).all())
+    # The lookback hit its own row cap: it saw back only as far as its oldest row.
+    capped = len(below) >= BOUNDARY_LOOKBACK_ROWS
+    checked_from = below[-1].generated_at if capped else zone_start
+    straddlers = {r.run_id for r in below if r.run_id} & set(first)
+    info: dict[str, Any] = {
+        "floor": floor.isoformat(),
+        "checked_from": checked_from.isoformat(),
+        "rows_checked": len(below),
+        "straddling_units": len(straddlers),
+        "longest_unit_span_seconds": round(longest.total_seconds(), 3),
+        "exhaustive": (floor - checked_from) >= longest,
+        "reason": None,
+    }
+    if not info["exhaustive"]:
+        info["reason"] = (
+            f"the check reached back only to {info['checked_from']} ({len(below)} rows, "
+            f"its own cap), which is less than the longest unit the sample shows "
+            f"({longest}). A unit that began before that point and was cut by the scan "
+            "cap would not have been caught — widen BOUNDARY_LOOKBACK_ROWS or narrow "
+            "the window"
+        )
+    return straddlers, info
+
+
+def _units_for(op: Operation, rows: Sequence[Any],
+               partial_runs: set[str]) -> dict[str, Any]:
+    """Group one operation's rows into units and price each one.
+
+    `partial_runs` are `run_id`s known to reach back past the oldest row read
+    (`_straddling_units`); their units are excluded rather than priced from
+    the fragment that was read.
+    """
     mine = [r for r in rows if r.feature == op.log_feature]
     units: dict[str, _Unit] = {}
     unattributed = 0
@@ -285,6 +376,8 @@ def _units_for(op: Operation, rows: Sequence[Any]) -> dict[str, Any]:
         n_calls += 1
         unit = units.setdefault(key, _Unit())
         unit.n_calls += 1
+        if op.basis == BASIS_RUN_ID and key in partial_runs:
+            unit.problems.add("partial_unit")
         unit.cost_usd += estimate_cost_usd(r.provider, r.model, r.tokens_in, r.tokens_out)
         if not priced:
             unit.problems.add("unpriced_model")
@@ -319,8 +412,15 @@ def _units_for(op: Operation, rows: Sequence[Any]) -> dict[str, Any]:
     }
 
 
-def _figures(op: Operation, grouped: dict[str, Any], *, window_days: int) -> dict[str, Any]:
-    """Turn one operation's usable units into the reported block."""
+def _figures(op: Operation, grouped: dict[str, Any], *, window_days: int,
+             rows_dropped: int) -> dict[str, Any]:
+    """Turn one operation's usable units into the reported block.
+
+    `rows_dropped` is `scan.rows_dropped_by_cap`: an unread row cannot be
+    attributed to an operation, so once the cap has bitten, the *volume* of
+    any one operation in the window is unknown — not the fraction of it that
+    was read.
+    """
     units: list[float] = grouped["units"]
     n = len(units)
     reasons: dict[str, str] = {}
@@ -350,6 +450,20 @@ def _figures(op: Operation, grouped: dict[str, Any], *, window_days: int) -> dic
             "the tail is one sample wide"
         )
 
+    # Volume, not cost: every unit the window actually shows, including the
+    # ones no cost could be put on. Unknown — never a smaller number stated
+    # as fact — once the cap has left rows unread.
+    if rows_dropped:
+        units_per_30d: float | None = None
+        reasons["units_per_30d"] = (
+            f"the scan cap left {rows_dropped} row(s) of the window unread, and an "
+            f"unread row cannot be attributed to an operation, so the number of "
+            f"{op.unit} in the window is unknown. Re-read with a larger max_rows or a "
+            "narrower window"
+        )
+    else:
+        units_per_30d = round(grouped["n_units_seen"] * 30.0 / window_days, 2)
+
     excluded = grouped["excluded_units"]
     out: dict[str, Any] = {
         "unit": op.unit,
@@ -364,7 +478,7 @@ def _figures(op: Operation, grouped: dict[str, Any], *, window_days: int) -> dic
         "n_calls_in_units": grouped["n_calls_in_units"],
         "cost_usd_per_unit": cost,
         "reasons": reasons,
-        "units_per_30d": (round(n * 30.0 / window_days, 2) if window_days else None),
+        "units_per_30d": units_per_30d,
         "models": grouped["models"],
         "failed_calls": grouped["failed_calls"],
         "thresholds": {"median": MIN_UNITS_FOR_MEDIAN, "p90": MIN_UNITS_FOR_P90},
@@ -454,20 +568,30 @@ def _plan_block(plan: str, operations: dict[str, dict[str, Any]]) -> dict[str, A
         if term.get("floor_only"):
             floors.append(op.key)
 
-    complete = not unpriced
+    # Cost-bearing features the plan allows that this report never measures
+    # at all (dcf, comps, portfolio: money leaves on every call and there is
+    # no monthly allowance to multiply). They are not "unpriced terms" — they
+    # are not terms here at all — but the total is not a total without them.
+    unmeasured = _unmeasured_terms(plan)
+    complete = not unpriced and not unmeasured
+    threshold = PLAN_THRESHOLD_USD[plan]
+    # What IS measured, even when the total cannot be — and `None`, not
+    # `0.0`, when nothing was: a subtotal of nothing is not free spend.
+    subtotal = round(total_median, 4) if priced else None
     block: dict[str, Any] = {
         "price_usd_per_month": PRO_PRICE_USD if plan == "pro" else 0.0,
         "terms": terms,
         "monthly_variable_cost_usd": {
             "median": round(total_median, 4) if complete else None,
             "p90": round(total_p90, 4) if complete and p90_complete else None,
+            "covers": priced,
+            "is_complete": complete,
         },
-        # What IS measured, even when the total cannot be — and `None`, not
-        # `0.0`, when nothing was: a subtotal of nothing is not free spend.
-        "measured_subtotal_usd_median": round(total_median, 4) if priced else None,
+        "measured_subtotal_usd_median": subtotal,
         "measured_terms": priced,
         "unpriced_terms": unpriced,
-        "threshold_usd": PLAN_THRESHOLD_USD[plan],
+        "unmeasured_terms": unmeasured,
+        "threshold_usd": threshold,
         "threshold_source": (
             "docs/economics/unit-costs-2026-09.md §3 — Pro variable cost under half the "
             "list price, Free under $1.50/user/month"
@@ -475,12 +599,20 @@ def _plan_block(plan: str, operations: dict[str, dict[str, Any]]) -> dict[str, A
         "verdict": None,
         "notes": [],
     }
-    if not complete:
+    if unpriced:
         block["notes"].append(
             "the monthly total is null because "
             + "; ".join(f"{u['operation']}: {u['reason']}" for u in unpriced)
             + ". The measured subtotal covers only "
             + (", ".join(priced) if priced else "nothing — no term has a measured cost")
+        )
+    if unmeasured:
+        block["notes"].append(
+            "the monthly total is null because the plan allows cost-bearing features "
+            "this report does not measure — "
+            + "; ".join(f"{u['feature']}: {u['reason']}" for u in unmeasured)
+            + ". The measured subtotal is the metered allowances only, so it is a lower "
+            "bound on the plan's variable cost, not the cost"
         )
     if floors:
         block["notes"].append(
@@ -488,49 +620,132 @@ def _plan_block(plan: str, operations: dict[str, dict[str, Any]]) -> dict[str, A
             + ", ".join(floors)
             + " is priced per LLM call because the log carries no per-unit identifier"
         )
-    if complete:
-        under = total_median < PLAN_THRESHOLD_USD[plan]
-        block["verdict"] = {
-            "under_threshold_at_median": under,
-            "basis": "median unit costs × the plan allowance, every allowance exhausted",
-            "is_a_floor": bool(floors),
-        }
-    if plan == "pro" and complete:
+
+    # The go/no-go answer, and — as importantly — when there is not one.
+    # A measured subtotal already over the threshold settles it whatever is
+    # missing, because a missing term can only add cost; a subtotal under it
+    # settles nothing while anything is missing.
+    missing = [u["operation"] for u in unpriced] + [u["feature"] for u in unmeasured]
+    verdict: dict[str, Any] = {
+        "under_threshold_at_median": None,
+        "decided": False,
+        "basis": (
+            "median unit costs × the plan allowance, every allowance exhausted"
+            if complete else
+            "the median unit cost × the plan allowance of the measured terms only — "
+            "not every cost-bearing feature the plan allows"
+        ),
+        "is_a_floor": bool(floors),
+        "reason": None,
+    }
+    if subtotal is None:
+        verdict["reason"] = (
+            "no term has a measured unit cost, so there is nothing to compare with the "
+            f"${threshold} threshold"
+        )
+    elif subtotal >= threshold:
+        verdict.update(under_threshold_at_median=False, decided=True)
+        if not complete:
+            verdict["reason"] = (
+                f"decided on the measured terms alone: they already total ${subtotal:,.2f} "
+                f"against a ${threshold} threshold, and the terms this report cannot "
+                "measure (" + ", ".join(missing) + ") can only add to that"
+            )
+    elif complete:
+        verdict.update(under_threshold_at_median=True, decided=True)
+    else:
+        verdict["reason"] = (
+            f"undecided: the measured terms total ${subtotal:,.2f}, under the ${threshold} "
+            "threshold, but " + ", ".join(missing) + " are not measured here, so the "
+            "plan's variable cost could still be over it"
+        )
+    block["verdict"] = verdict
+
+    if plan == "pro":
         block["gross_margin_pct_at_median"] = round(
             100.0 * (PRO_PRICE_USD - total_median) / PRO_PRICE_USD, 2,
-        )
-    elif plan == "pro":
-        block["gross_margin_pct_at_median"] = None
-        block["notes"].append(
-            "gross margin is null while any metered term is unmeasured — an unmeasured "
-            "term is not a free one"
-        )
+        ) if complete else None
+        if not complete:
+            block["notes"].append(
+                "gross margin is null while any cost-bearing term is unmeasured — an "
+                "unmeasured term is not a free one"
+            )
+        if subtotal is not None:
+            block["gross_margin_pct_at_median_ceiling"] = round(
+                100.0 * (PRO_PRICE_USD - subtotal) / PRO_PRICE_USD, 2,
+            )
+            if not complete:
+                block["notes"].append(
+                    "gross_margin_pct_at_median_ceiling is an upper bound and nothing "
+                    f"more: the measured terms alone leave that share of the "
+                    f"${PRO_PRICE_USD} price, and every term missing from the subtotal "
+                    "can only cut it further"
+                )
     return block
 
 
-def _terms_not_covered() -> list[dict[str, str]]:
-    """Plan features this report deliberately does not price, each with why.
-
-    Derived from `auth/features.py` rather than listed by hand, so a new
-    cost-bearing feature cannot quietly fall out of the picture.
-    """
+def _uncovered() -> dict[str, features.Feature]:
+    """Every entitlement-matrix feature no `Operation` measures."""
     covered = {op.plan_feature for op in OPERATIONS if op.plan_feature}
-    out: list[dict[str, str]] = []
-    for name, feat in sorted(features.FEATURES.items()):
-        if name in covered:
-            continue
-        if feat.cost_bearing and not feat.metered:
-            out.append({"feature": name, "reason": (
-                "cost-bearing but not metered per month, so there is no allowance to "
-                "multiply — see the U_* usage assumptions in "
-                "docs/economics/unit-costs-2026-09.md §3"
-            )})
-        elif feat.metered and not feat.cost_bearing:
-            out.append({"feature": name, "reason": (
-                "metered but not cost-bearing: it reads what a research_run already paid "
-                "for, and writes no llm_call_logs rows of its own"
-            )})
-    return out
+    return {name: feat for name, feat in sorted(features.FEATURES.items())
+            if name not in covered}
+
+
+def _uncovered_reason(feat: features.Feature) -> str:
+    """Why this report does not price `feat`. One branch per combination of
+    the two flags, so no shape can fall through unmentioned — least of all
+    the dangerous one (metered *and* cost-bearing), which is a feature that
+    both spends money and has an allowance to multiply, i.e. one this module
+    is supposed to be measuring."""
+    if feat.cost_bearing and feat.metered:
+        return (
+            "cost-bearing AND metered, but OPERATIONS has no entry for it: its "
+            "llm_call_logs rows are never read and its allowance is never priced, so no "
+            "plan total here includes it. Add an Operation for it — this is the drift "
+            "this list exists to catch"
+        )
+    if feat.cost_bearing:
+        return (
+            "cost-bearing but not metered per month, so there is no allowance to "
+            "multiply — see the U_* usage assumptions in "
+            "docs/economics/unit-costs-2026-09.md §3 and ASSUMED_UNMETERED in "
+            "scripts/audit_unit_costs.py"
+        )
+    if feat.metered:
+        return (
+            "metered but not cost-bearing: it reads what a research_run already paid "
+            "for, and writes no llm_call_logs rows of its own"
+        )
+    return (
+        "neither metered nor cost-bearing: no LLM spend to observe and no allowance to "
+        "multiply, so there is nothing here to price"
+    )
+
+
+def _terms_not_covered() -> list[dict[str, str]]:
+    """Plan features this report does not price, each with why.
+
+    Derived from `auth/features.py` rather than listed by hand, and covering
+    *every* uncovered feature rather than two of the four flag combinations,
+    so a new cost-bearing feature cannot quietly fall out of the picture.
+    """
+    return [{"feature": name, "reason": _uncovered_reason(feat)}
+            for name, feat in _uncovered().items()]
+
+
+def _unmeasured_terms(plan: str) -> list[dict[str, str]]:
+    """Cost-bearing features `plan` allows that this report never measures.
+
+    Real spend the plan totals cannot see: `dcf` and `comps` on every plan
+    (they follow a memo on Free), `portfolio` on Pro. Derived from the
+    entitlement matrix, so a feature added there arrives here rather than
+    silently widening the gap between the total and the invoice.
+    """
+    return [
+        {"feature": name, "reason": _uncovered_reason(feat)}
+        for name, feat in _uncovered().items()
+        if feat.cost_bearing and features.allowance(name, plan).allowed
+    ]
 
 
 # --- entry point ------------------------------------------------------------
@@ -558,12 +773,24 @@ def build_report(*, window_days: int = DEFAULT_WINDOW_DAYS, now: datetime | None
         LLMCallLog.__table__.create(bind=session.get_bind(), checkfirst=True)
         rows, scan = _scan(session, since=since, until=until, max_rows=max_rows,
                            log_features=[op.log_feature for op in OPERATIONS])
+        # The oldest point the sample can see: the cap's cut when it bit,
+        # otherwise the window start. A run-grouped unit reaching back past it
+        # is a fragment, not a unit.
+        floor = min((r.generated_at for r in rows), default=since) \
+            if scan["rows_dropped_by_cap"] else since
+        partial_runs, scan["boundary_check"] = _straddling_units(
+            session, rows, floor=floor,
+            run_features=[op.log_feature for op in OPERATIONS
+                          if op.basis == BASIS_RUN_ID],
+        )
     finally:
         if own:
             session.close()
 
     operations = {
-        op.key: _figures(op, _units_for(op, rows), window_days=window_days)
+        op.key: _figures(op, _units_for(op, rows, partial_runs),
+                         window_days=window_days,
+                         rows_dropped=scan["rows_dropped_by_cap"])
         for op in OPERATIONS
     }
     return {

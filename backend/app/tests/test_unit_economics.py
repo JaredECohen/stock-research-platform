@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from app.auth import features
 from app.config import settings
 from app.database import SessionLocal
 from app.main import app
@@ -49,7 +50,7 @@ def _seed(rows: list[dict[str, Any]]) -> None:
                 feature=row["feature"],
                 # Ordered backwards from the clock so "newest first" is
                 # well-defined for the scan-cap test.
-                generated_at=CLOCK - timedelta(minutes=i + 1),
+                generated_at=CLOCK - timedelta(minutes=row.get("minutes_ago", i + 1)),
             ))
         db.commit()
 
@@ -281,20 +282,26 @@ def test_plan_allowances_are_priced_from_the_observed_cost():
     free, pro = report["plans"]["free"], report["plans"]["pro"]
 
     # Free: 1 research_run + 10 pm_chat + 5 chart_commentary, all at 10¢.
+    # The metered allowances are the subtotal, not the total: dcf and comps
+    # are cost-bearing on Free too and nothing here measures them.
     assert free["terms"]["research_run"]["limit"] == 1
     assert free["terms"]["pm_chat"]["limit"] == 10
     assert free["terms"]["chart_commentary"]["limit"] == 5
-    assert free["monthly_variable_cost_usd"]["median"] == pytest.approx(1.6)
-    assert free["monthly_variable_cost_usd"]["p90"] == pytest.approx(1.6)
+    assert free["measured_subtotal_usd_median"] == pytest.approx(1.6)
+    assert free["monthly_variable_cost_usd"]["median"] is None
+    assert free["monthly_variable_cost_usd"]["is_complete"] is False
     assert free["price_usd_per_month"] == 0.0
     assert free["threshold_usd"] == 1.50
-    assert free["verdict"]["under_threshold_at_median"] is False   # $1.60 > $1.50
+    # $1.60 of metered allowance already clears $1.50, and the unmeasured
+    # terms can only add — so the answer holds despite the gap.
+    assert free["verdict"]["under_threshold_at_median"] is False
+    assert free["verdict"]["decided"] is True
 
     # Pro: 20 + 300 + 100 at 10¢ = $42.00 against a $29.99 price.
-    assert pro["monthly_variable_cost_usd"]["median"] == pytest.approx(42.0)
+    assert pro["measured_subtotal_usd_median"] == pytest.approx(42.0)
     assert pro["price_usd_per_month"] == ue.PRO_PRICE_USD
     assert pro["verdict"]["under_threshold_at_median"] is False
-    assert pro["gross_margin_pct_at_median"] < 0
+    assert pro["gross_margin_pct_at_median_ceiling"] < 0
     assert pro["unpriced_terms"] == []
 
 
@@ -363,8 +370,10 @@ def test_a_feature_a_plan_does_not_have_is_not_a_cost():
         assert term["allowed"] is False
         assert "not available" in term["reason"]
         assert term["monthly_usd_median"] is None
-        # Denied, not unmeasured: it does not block the plan total.
-        assert free["monthly_variable_cost_usd"]["median"] == pytest.approx(1.1)
+        # Denied, not unmeasured: it does not block the measured subtotal
+        # the way an allowed-but-unmeasured term does.
+        assert free["measured_subtotal_usd_median"] == pytest.approx(1.1)
+        assert free["measured_terms"] == ["research_run", "pm_chat"]
 
 
 def test_build_report_rejects_a_nonsense_window():
@@ -439,3 +448,178 @@ def test_route_returns_the_report(client, admin):
 def test_route_bounds_the_window(client, admin):
     assert client.get("/api/admin/unit-economics?window_days=0", headers=admin).status_code == 422
     assert client.get("/api/admin/unit-economics?window_days=91", headers=admin).status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Regressions: what the report is not allowed to leave out quietly
+# ---------------------------------------------------------------------------
+
+def test_a_metered_cost_bearing_feature_with_no_operation_is_named(monkeypatch):
+    """The drift `_terms_not_covered` exists to prevent.
+
+    A feature that both spends money and has an allowance to multiply, but
+    which `OPERATIONS` does not measure, is the one shape that must never
+    fall out of the report silently: its spend is real and its allowance is
+    real, so the plan totals below it would be wrong without a word.
+    """
+    monkeypatch.setitem(features.FEATURES, "deep_dive", features.Feature(
+        "deep_dive", "A cost-bearing, metered feature nothing measures yet",
+        free=0, pro=50, metered=True, cost_bearing=True,
+    ))
+    report = _report()
+    named = {t["feature"]: t["reason"] for t in report["terms_not_covered"]}
+    assert "deep_dive" in named, "a metered, cost-bearing feature vanished from the report"
+    assert "OPERATIONS" in named["deep_dive"]
+    # And it is not just named at the top: it blocks the plan total it belongs in.
+    pro = report["plans"]["pro"]
+    assert "deep_dive" in {t["feature"] for t in pro["unmeasured_terms"]}
+    assert pro["monthly_variable_cost_usd"]["median"] is None
+    # free=0 → not available on Free, so it is not a Free cost.
+    assert "deep_dive" not in {t["feature"] for t in report["plans"]["free"]["unmeasured_terms"]}
+
+
+def test_every_plan_feature_is_either_priced_or_named_with_a_reason():
+    """No feature in the entitlement matrix may be simply absent."""
+    covered = {op.plan_feature for op in ue.OPERATIONS if op.plan_feature}
+    named = {t["feature"] for t in _report()["terms_not_covered"]}
+    assert covered | named == set(features.FEATURES)
+
+
+def test_a_cost_bearing_term_this_report_cannot_measure_blocks_the_plan_total():
+    """dcf, comps and portfolio write real `llm_call_logs` rows that this
+    report does not read. The per-plan headline must not present itself as a
+    complete answer while that spend is outside it."""
+    _seed_every_metered_operation()
+    # Real spend under a feature tag the scan does not select
+    # (`routes_dcf.py` tags its call `feature="dcf"`).
+    _seed([{"feature": "dcf", **_cents(5)} for _ in range(40)])
+    report = _report()
+    # The dcf rows are not even counted — which is exactly why the total
+    # below them cannot claim to be one.
+    assert report["scan"]["rows_in_window"] == 90
+
+    pro = report["plans"]["pro"]
+    unmeasured = {t["feature"]: t["reason"] for t in pro["unmeasured_terms"]}
+    assert set(unmeasured) == {"dcf", "comps", "portfolio"}
+    for reason in unmeasured.values():
+        assert "not metered" in reason
+    assert pro["monthly_variable_cost_usd"]["median"] is None
+    assert pro["monthly_variable_cost_usd"]["p90"] is None
+    assert pro["gross_margin_pct_at_median"] is None
+    assert any("dcf" in note for note in pro["notes"])
+    # What IS measured is still reported, and here it already settles the
+    # question: $42.00 of metered allowance against a $14.995 threshold.
+    assert pro["measured_subtotal_usd_median"] == pytest.approx(42.0)
+    assert pro["verdict"]["under_threshold_at_median"] is False
+    assert pro["verdict"]["decided"] is True
+    assert pro["gross_margin_pct_at_median_ceiling"] < 0
+
+    # Free allows dcf and comps (they follow a memo); portfolio is Pro-only.
+    assert {t["feature"] for t in report["plans"]["free"]["unmeasured_terms"]} == {"dcf", "comps"}
+
+
+def test_an_under_threshold_verdict_is_withheld_while_a_term_is_unmeasured():
+    """The dangerous direction: a cheap metered sample must not read as
+    "Pro clears the bar" when unmeasured cost-bearing terms could clear it
+    away again."""
+    rows: list[dict[str, Any]] = []
+    for i in range(30):
+        rows.append({"feature": "research_run", "run_id": f"ue-run-{i}", **_cents(1)})
+        rows.append({"feature": "pm_chat", **_cents(1)})
+        rows.append({"feature": "chart_commentary", **_cents(1)})
+    _seed(rows)
+    pro = _report()["plans"]["pro"]
+    # 20 × 1¢ + 300 × 1¢ + 100 × 1¢ = $4.20, well under the $14.995 threshold.
+    assert pro["measured_subtotal_usd_median"] == pytest.approx(4.2)
+    assert pro["verdict"]["decided"] is False
+    assert pro["verdict"]["under_threshold_at_median"] is None
+    assert "dcf" in pro["verdict"]["reason"]
+
+
+def test_units_per_30d_counts_every_unit_seen_not_only_the_priceable_ones():
+    rows = [{"feature": "chart_commentary", **_cents(5)} for _ in range(40)]
+    # Traffic that happened but cannot be priced: still volume.
+    rows += [{"feature": "chart_commentary", "provider": "acme", "model": "acme-ultra-9",
+              "tokens_in": 500_000, "tokens_out": 1_000}]
+    _seed(rows)
+    block = _report()["operations"]["chart_commentary"]
+    assert block["n_units"] == 40          # usable for a cost figure
+    assert block["n_units_seen"] == 41     # actually happened
+    assert block["units_per_30d"] == pytest.approx(41.0)
+
+
+def test_units_per_30d_is_withheld_when_the_scan_cap_truncated_the_sample():
+    """25 units read out of 300 is not 25 units a month.
+
+    The rows the cap dropped cannot be attributed to an operation, so the
+    volume over the window is unknown — reported as unknown with the count,
+    not as the 12x understatement that normalising by the full window gives.
+    """
+    _seed([{"feature": "chart_commentary", **_cents(5)} for _ in range(300)])
+    report = _report(max_rows=25)
+    block = report["operations"]["chart_commentary"]
+    assert report["scan"]["rows_in_window"] == 300
+    assert report["scan"]["rows_dropped_by_cap"] == 275
+    assert block["units_per_30d"] is None
+    assert "275" in block["reasons"]["units_per_30d"]
+
+
+def test_a_run_straddling_the_scan_cap_is_excluded_not_priced_as_a_cheap_unit():
+    """A run whose older calls the cap dropped is priced from its tail alone.
+    Reporting that tail as a whole unit invents a cost no run incurred."""
+    rows: list[dict[str, Any]] = []
+    for i in range(30):
+        rows += [{"feature": "research_run", "run_id": f"ue-run-{i}", **_cents(10)}
+                 for _ in range(3)]                      # three 10¢ calls → a 30¢ run
+    _seed(rows)
+    # 88 of 90 rows: the two oldest calls of the oldest run fall off.
+    report = _report(max_rows=88)
+    block = report["operations"]["research_run"]
+    assert report["scan"]["rows_dropped_by_cap"] == 2
+    assert block["n_units"] == 29
+    assert block["n_units_excluded"] == 1
+    assert block["excluded_units"]["partial_unit"]["n"] == 1
+    assert "older than the oldest row read" in block["excluded_units"]["partial_unit"]["reason"]
+    # Every reported figure is a cost a whole run actually incurred.
+    assert block["cost_usd_per_unit"]["min"] == pytest.approx(0.30)
+
+
+def test_a_run_straddling_the_window_start_is_excluded():
+    """Same defect at the other edge, where no cap was involved at all."""
+    rows: list[dict[str, Any]] = []
+    for i in range(30):
+        rows += [{"feature": "research_run", "run_id": f"ue-run-{i}",
+                  "minutes_ago": 10 + 3 * i + k, **_cents(10)} for k in range(3)]
+    # A one-day window starts 1,439 minutes back: this run has two calls
+    # inside it and one outside.
+    rows += [{"feature": "research_run", "run_id": "ue-run-edge",
+              "minutes_ago": ago, **_cents(10)} for ago in (1_435, 1_437, 1_441)]
+    _seed(rows)
+    block = _report(window_days=1)["operations"]["research_run"]
+    assert block["n_units"] == 30
+    assert block["excluded_units"]["partial_unit"]["n"] == 1
+    # $0.20 — two thirds of a run — would otherwise be the reported minimum.
+    assert block["cost_usd_per_unit"]["min"] == pytest.approx(0.30)
+
+
+def test_the_route_does_not_claim_a_bound_the_count_does_not_have():
+    """`MAX_ROWS_SCANNED` caps the SELECT only. The COUNT reads every row
+    the window matches, and `llm_call_logs.feature` is unindexed, so the
+    endpoint's cost does grow with the log inside the window. The docstring
+    and the route-audit row have to say so — a reader sizing this endpoint
+    has nothing else to go on."""
+    import re
+    from pathlib import Path
+
+    from app.api import routes_unit_economics as route_mod
+
+    claim = "grows with the rows in the window"
+    doc = route_mod.__doc__ or ""
+    assert "COUNT" in doc and claim in doc
+    assert "does not grow with the log" not in doc
+
+    audit = (Path(__file__).resolve().parents[3]
+             / "docs" / "economics" / "route-audit-2026-09.md").read_text()
+    row = next(line for line in audit.splitlines()
+               if re.match(r"\|\s*GET\s*\|\s*`/api/admin/unit-economics`", line))
+    assert claim in row
