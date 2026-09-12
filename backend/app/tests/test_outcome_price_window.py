@@ -13,8 +13,10 @@ fix and both scoring the learning loop wrong:
    baseline fell back to "first close on or after the memo date", and when
    the window began after the memo every row satisfied that, so the
    earliest row in the window — a price from weeks later — was used as the
-   memo's baseline. A bullish call that lost 20% was persisted as +11%
-   with ``thesis_held=True``.
+   memo's baseline. A bullish call that lost 20% was persisted as +14.29%
+   with ``thesis_held=True`` (the ``TSTWSHIFT`` fixture below: the old
+   60-bar window opened on 2026-06-22 at 140.0, and 160.0 on the target
+   date scores +14.29% instead of the true -20%).
 
 Every price stub here honours ``days`` the way the real providers do — FMP
 passes it as ``limit=``, Polygon and Tiingo slice ``[-days:]`` — so the
@@ -298,9 +300,11 @@ def test_shifted_window_no_longer_scores_a_wrong_baseline():
 
 def test_history_that_starts_after_the_memo_is_refused_not_guessed():
     """Same hole, reached a different way: a window wide enough to cover
-    the memo, but a provider whose history simply doesn't go back that far.
+    the memo, but a provider whose answer simply doesn't go back that far.
 
     A refusal to score is correct here; a confidently wrong alpha is not.
+    The refusal is an *outage* status, not a permanent one — see
+    `test_short_provider_response_is_an_outage_not_a_permanent_refusal`.
     """
     memo_date = ANCHOR - timedelta(days=100)
     history_starts = memo_date + timedelta(days=40)
@@ -314,8 +318,105 @@ def test_history_that_starts_after_the_memo_is_refused_not_guessed():
         out, status = _evaluate(snap, 30)
 
     assert out is None
-    assert status == "memo_predates_price_window"
+    assert status == "price_history_too_short"
     assert outcome_service.get_outcomes_for_snapshot(snap.id) == []
+
+
+class _TruncatingProvider(_BarProvider):
+    """Answers every request with the last `cap` bars, whatever was asked.
+
+    This is not a hypothetical. `_live_chain("prices")` is
+    `[fmp, tiingo, polygon]` and `_try_chain` takes the first truthy
+    result, so when FMP misses, Tiingo answers — and
+    `TiingoProvider.get_price_history` GETs `/tiingo/daily/{t}/prices`
+    with no `startDate`, then slices `[-days:]`. The slice cannot lengthen
+    what the endpoint returned.
+    """
+
+    def __init__(self, tapes, *, cap: int) -> None:
+        super().__init__(tapes)
+        self.cap = cap
+
+    def __call__(self, ticker: str, days: int = 252) -> list[dict[str, Any]]:
+        rows = super().__call__(ticker, days)
+        return rows[-self.cap:]
+
+
+def test_short_provider_response_is_an_outage_not_a_permanent_refusal():
+    """A partial price outage must still turn the loop red.
+
+    The permanent bucket exists so an unfixable memo cannot hold the loop
+    red forever. Putting a truncated *response* in it inverts that: the
+    loop goes green while writing nothing, which is the exact failure this
+    whole module was written to remove. The provider here holds full
+    history and simply hands back five bars — tomorrow it may hand back
+    all of them, so nothing about this pair is permanent.
+    """
+    memo_date = ANCHOR - timedelta(days=40)   # 30d horizon, due 10 days ago
+    snap = _seed("TSTWTRUNC", memo_date=memo_date, rating="Bullish")
+    tapes = {
+        "TSTWTRUNC": _tape(_flat(100.0), start=ANCHOR - timedelta(days=700)),
+        BENCH: _tape(_flat(400.0), start=ANCHOR - timedelta(days=700)),
+    }
+
+    with _stub(_TruncatingProvider(tapes, cap=5)):
+        out, status = _evaluate(snap, 30)
+    assert out is None
+    assert status == "price_history_too_short"
+
+    with _stub(_TruncatingProvider(tapes, cap=5)):
+        res = outcome_service.evaluate_all_due(horizons=[30], today=ANCHOR)
+    assert res["written"] == 0
+    assert res["price_history_too_short"] >= 1
+    # Counted as an outage, so the loop's own condition reports failure.
+    # (`evaluate_all_due` scans every snapshot in the DB, so only `>=`
+    # assertions survive whatever other tests have seeded.)
+    assert res["data_unavailable"] >= res["price_history_too_short"]
+    assert (res["errors"] == 0 and res["data_unavailable"] == 0) is False
+
+    # The contrast that matters, taken per-pair so no other test's
+    # snapshots can colour it: the *same* truncating provider, and a memo
+    # old enough to fail on the dates alone, is the one genuinely
+    # permanent case.
+    ancient = _seed("TSTWTRUNCOLD", memo_date=ANCHOR - timedelta(days=1000))
+    truncating = _TruncatingProvider(tapes, cap=5)
+    with _stub(truncating):
+        out, status = _evaluate(ancient, 30)
+    assert out is None
+    assert status == "memo_predates_price_window"
+    assert truncating.requests == []   # settled before any provider call
+
+    # Same pair, same code, provider restored: it scores. Nothing about
+    # the memo was ever permanent.
+    with _stub(_BarProvider(tapes)):
+        out, status = _evaluate(snap, 30)
+    assert status == "written"
+    assert out is not None and out.price_at_memo == 100.0
+
+
+def test_a_full_length_response_always_reaches_the_memo():
+    """Why a short answer is the only way into `price_history_too_short`.
+
+    `window_days` is a calendar-day count and providers read it as bars,
+    so a full-length response spans ~40% more calendar days than asked
+    for; read as calendar days it spans exactly that many. Both are at
+    least `memo age + MEMO_WINDOW_BUFFER_DAYS`, so both reach past the
+    memo. That is what licenses classifying this branch as a provider
+    shortfall instead of adding a length heuristic on top of it.
+    """
+    for age in (1, 30, 100, 200, 364, 500, 700, 790):
+        memo_date = ANCHOR - timedelta(days=age)
+        window = outcome_service._window_days_for_memo(memo_date, ANCHOR)
+        assert window is not None
+
+        # Reading 1: `days` bars ending today.
+        as_bars = _tape(_flat(100.0), start=ANCHOR - timedelta(days=1200))[-window:]
+        assert len(as_bars) == window
+        assert outcome_service._baseline_close(as_bars, memo_date) is not None
+
+        # Reading 2: `days` calendar days ending today.
+        as_days = _tape(_flat(100.0), start=ANCHOR - timedelta(days=window - 1))
+        assert outcome_service._baseline_close(as_days, memo_date) is not None
 
 
 def test_baseline_tolerance_is_a_bounded_number_of_days():
@@ -414,6 +515,7 @@ def test_loop_stays_green_when_the_only_shortfall_is_permanent(monkeypatch):
     result = {
         "evaluated": 40, "due": 4, "written": 2, "already_recorded": 0,
         "data_unavailable": 0, "ticker_prices_unavailable": 0,
+        "price_history_too_short": 0,
         "price_window_incomplete": 0, "unevaluable": 2,
         "memo_predates_price_window": 2, "reflections": 0, "errors": 0,
     }
@@ -437,7 +539,8 @@ def test_loop_note_names_each_shortfall_separately(monkeypatch):
 
     result = {
         "evaluated": 40, "due": 6, "written": 0, "already_recorded": 0,
-        "data_unavailable": 4, "ticker_prices_unavailable": 3,
+        "data_unavailable": 5, "ticker_prices_unavailable": 3,
+        "price_history_too_short": 1,
         "price_window_incomplete": 1, "unevaluable": 2,
         "memo_predates_price_window": 2, "reflections": 0, "errors": 0,
     }
@@ -452,6 +555,7 @@ def test_loop_note_names_each_shortfall_separately(monkeypatch):
     (_, kwargs), = calls
     note = kwargs["note"]
     assert "no_prices=3" in note
+    assert "short_history=1" in note
     assert "window_gap=1" in note
     assert "unevaluable=2" in note
     # A real outage still turns the loop red.

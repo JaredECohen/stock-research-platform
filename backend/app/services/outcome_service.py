@@ -250,16 +250,25 @@ def _evaluate_one(
     production price data.  The latter left hundreds of due outcomes
     unwritten while the cron job still reported success.
 
-    The three no-data statuses are deliberately distinct:
+    The four no-data statuses are deliberately distinct:
 
     ``ticker_prices_unavailable``
-        the provider returned nothing for this ticker — an outage;
+        the provider returned nothing at all for this ticker — an outage;
+    ``price_history_too_short``
+        the provider answered, but with fewer bars than were asked for, so
+        the series begins after the memo — also an outage, just a partial
+        one (a fallback leg truncating the series looks like this);
     ``price_window_incomplete``
         prices exist and reach the memo, but none sits near the target
         date — a gap a later run may still fill;
     ``memo_predates_price_window``
-        no price history we can obtain reaches the memo's own date, so the
-        pair can never be scored and never will be.
+        the memo is older than the longest window we are willing to
+        request.  Decided from the dates alone, so the pair can never be
+        scored and never will be.
+
+    Only the last is permanent.  The other three describe what a provider
+    handed back on this particular run, and all three drive the loop's
+    failure flag.
     """
     # Backtest snapshots have `as_of_date` set; outcome scoring is for live memos only.
     if snap.as_of_date is not None:
@@ -300,10 +309,24 @@ def _evaluate_one(
 
     memo_hit = _baseline_close(ticker_rows, generated_date)
     if memo_hit is None:
-        # The oldest price we can obtain postdates the memo. Refusing to
-        # score is the only honest answer, and it is terminal: tomorrow's
-        # window begins a day later still.
-        return None, "memo_predates_price_window"
+        # The rows that came back begin after the memo, so refusing to
+        # score is the only honest answer — but that is a statement about
+        # the response, not about the memo, and it must not be filed under
+        # the permanent bucket that deliberately keeps the loop green.
+        #
+        # A full-length answer can never land here.  `window_days` is a
+        # *calendar*-day count and providers read it as bars, so a full
+        # response spans ~40% more calendar days than requested; under the
+        # other reading it spans exactly `window_days`.  Both are at least
+        # `memo age + MEMO_WINDOW_BUFFER_DAYS`, so both reach past the
+        # memo (`test_a_full_length_response_always_reaches_the_memo`
+        # pins this).  Reaching this line therefore means the provider
+        # returned *less* than was asked for.  That is usually transient —
+        # a fallback leg answering with a truncated series, e.g. Tiingo's
+        # history call, which sends no `startDate` — and where it is not,
+        # a symbol whose coverage genuinely starts later is still a
+        # provider gap an operator can act on.  Either way: an outage.
+        return None, "price_history_too_short"
     baseline_date, price_at_memo = memo_hit
 
     target_hit = _target_close(ticker_rows, target_date)
@@ -454,6 +477,7 @@ def evaluate_all_due(
             "not_due": 0,
             "already_recorded": 0,
             "ticker_prices_unavailable": 0,
+            "price_history_too_short": 0,
             "price_window_incomplete": 0,
             "memo_predates_price_window": 0,
         }
@@ -491,15 +515,19 @@ def evaluate_all_due(
         # if the data arrived. It drives the loop's success flag.
         data_unavailable = (
             statuses["ticker_prices_unavailable"]
+            + statuses["price_history_too_short"]
             + statuses["price_window_incomplete"]
         )
-        # `unevaluable` is the permanent shortfall: no price history we can
-        # obtain reaches this memo's generation date, and the window only
-        # moves further away from it each night. Folding it into
-        # `data_unavailable` would hold the loop red forever for a reason
-        # nobody can fix, which is how two earlier alarms in this codebase
-        # ended up ignored. It is counted and logged, not treated as a
-        # failure.
+        # `unevaluable` is the permanent shortfall, and it is settled from
+        # the dates alone: the memo is older than the longest window we are
+        # willing to request, and tomorrow's window begins a day later
+        # still. No provider behaviour can move a pair into or out of this
+        # bucket, which is precisely what makes it safe to exclude from the
+        # failure flag — folding it in would hold the loop red forever for
+        # a reason nobody can fix, which is how two earlier alarms in this
+        # codebase ended up ignored. A truncated provider response is NOT
+        # this: it looks the same at the call site but clears itself on the
+        # next run, so it is counted as an outage above.
         unevaluable = statuses["memo_predates_price_window"]
         due = (
             written + statuses["already_recorded"]
@@ -508,17 +536,19 @@ def evaluate_all_due(
         if data_unavailable:
             log.error(
                 "Outcome evaluation left %s due rows pending: "
-                "ticker_prices_unavailable=%s price_window_incomplete=%s",
+                "ticker_prices_unavailable=%s price_history_too_short=%s "
+                "price_window_incomplete=%s",
                 data_unavailable,
                 statuses["ticker_prices_unavailable"],
+                statuses["price_history_too_short"],
                 statuses["price_window_incomplete"],
             )
         if unevaluable:
             log.warning(
                 "Outcome evaluation skipped %s permanently unevaluable pairs "
-                "(memo_predates_price_window): no obtainable price history "
-                "reaches the memo date.",
-                unevaluable,
+                "(memo_predates_price_window): the memo is older than the "
+                "longest price window we request (%s days).",
+                unevaluable, PRICE_WINDOW_RUNGS[-1],
             )
         return {
             "evaluated": evaluated, "written": written,
@@ -528,6 +558,7 @@ def evaluate_all_due(
             "not_due": statuses["not_due"],
             "data_unavailable": data_unavailable,
             "ticker_prices_unavailable": statuses["ticker_prices_unavailable"],
+            "price_history_too_short": statuses["price_history_too_short"],
             "price_window_incomplete": statuses["price_window_incomplete"],
             "unevaluable": unevaluable,
             "memo_predates_price_window": statuses["memo_predates_price_window"],
