@@ -224,8 +224,20 @@ def _filing_word_count(sections: dict[str, Any], raw: str) -> int:
 
 
 def _ingest_filings(db: Session, ticker: str, filings: list[dict[str, Any]]) -> int:
-    """Idempotently store filings. Existing rows are updated; new rows are
-    inserted. Returns count of net writes.
+    """Idempotently store filings. Returns the count of rows that actually
+    changed — an insert, or an update whose content differs from what is
+    already stored. Re-ingesting an unchanged filing counts zero and writes
+    nothing, `_upsert_financial_period`'s contract.
+
+    That distinction is not cosmetic. This number is what `backfill_ticker`
+    reports and what the nightly `history_backfill` note shows, and while it
+    counted every UPDATE as a write the note read `filings=1660` every single
+    night — 166 tickers x the SEC provider's hard 10-filing cap — against a
+    pipeline that had not ingested a new filing since the deployment's first
+    day. The provider cache was frozen, the poller was diffing against a
+    frozen list, and the only telemetry anyone had said 1,660 writes a night.
+    A counter that cannot say "nothing happened" cannot report that anything
+    did.
 
     Wave 10 — after a NEW filing row is inserted (not on updates), we
     fire `filing_memory.post_pass` to (a) index its chunks into the
@@ -255,6 +267,20 @@ def _ingest_filings(db: Session, ticker: str, filings: list[dict[str, Any]]) -> 
             select(FilingDoc).where(FilingDoc.accession_number == accession)
         ).scalar_one_or_none()
         if existing is not None:
+            # Compare before writing, so an unchanged re-ingest is a true
+            # no-op rather than a refreshed `fetched_at` counted as a write.
+            unchanged = (
+                existing.ticker == ticker
+                and existing.filing_type == filing_type
+                and existing.filing_date == filing_date
+                and existing.period_end == period_end
+                and existing.raw_text == raw_text
+                and existing.sections == sections
+                and existing.word_count == wc
+                and existing.url == url
+            )
+            if unchanged:
+                continue
             existing.ticker = ticker
             existing.filing_type = filing_type
             existing.filing_date = filing_date
@@ -357,9 +383,14 @@ def _ingest_transcripts(
     """Persist transcripts → EarningsTranscript table. New rows are
     embedded into `doc_chunks` via `filing_memory.index_transcript`
     so the earnings analyst can retrieve speaker-attributed Q&A
-    without re-fetching the call. Re-ingest of existing periods
-    refreshes the row but skips re-indexing (idempotent — the same
-    period yields the same chunks).
+    without re-fetching the call. Re-ingest of an existing period that
+    has genuinely changed refreshes the row but skips re-indexing
+    (idempotent — the same period yields the same chunks); re-ingest of
+    an unchanged period writes nothing at all.
+
+    Returns the count of rows that actually changed, for the same reason
+    `_ingest_filings` does: the number is telemetry, and one that cannot
+    report zero reports nothing.
     """
     written = 0
     new_transcript_ids: list[int] = []
@@ -378,6 +409,16 @@ def _ingest_transcripts(
             )
         ).scalar_one_or_none()
         if existing is not None:
+            unchanged = (
+                existing.fiscal_year == fy
+                and existing.fiscal_quarter == fq
+                and existing.call_date == call_date
+                and existing.blocks == blocks
+                and existing.full_text == full_text
+                and existing.word_count == wc
+            )
+            if unchanged:
+                continue
             existing.fiscal_year = fy
             existing.fiscal_quarter = fq
             existing.call_date = call_date
@@ -408,18 +449,63 @@ def _ingest_transcripts(
     return written
 
 
-def backfill_ticker(ticker: str, *, db: Session | None = None) -> dict[str, int]:
+# The two reads in `backfill_ticker` that cost real money on a miss, and so
+# are worth a budget when something fans this function out over the whole
+# curated universe. `filings` pulls up to ten document bodies of a few MB
+# each and every filing it newly inserts fires `filing_memory.post_pass`
+# (embeddings plus an LLM diff); `transcripts` costs four AlphaVantage
+# requests. The third read, `get_financial_statements`, is deliberately NOT
+# in this list: it is one JSON response with no bodies and no LLM behind it,
+# and it is the only thing that ever refreshes fundamentals, so slowing it
+# down would trade a cost problem for a correctness one.
+_BUDGETED_BACKFILL_CAPABILITIES = ("filings", "transcripts")
+
+
+def backfill_hits_provider(ticker: str) -> bool:
+    """True when `backfill_ticker(ticker, prefer_cached=True)` would still
+    have to consult a live provider for one of its expensive reads.
+
+    A caller that sweeps the universe uses this to spend a bounded number of
+    cold reads per pass instead of discovering the cost after the fact — see
+    `monitoring/history_backfill.py`.
+    """
+    from .data_service import get_data_service
+    ds = get_data_service()
+    key = ticker.upper()
+    return not all(
+        ds.reads_from_cache(cap, key) for cap in _BUDGETED_BACKFILL_CAPABILITIES
+    )
+
+
+def backfill_ticker(
+    ticker: str, *, db: Session | None = None, prefer_cached: bool = False,
+) -> dict[str, int]:
     """Full backfill of one ticker against the data_service.
 
     Returns a `{financial_periods, filings, transcripts}` dict of net
-    write counts. Idempotent: re-running on unchanged data is a no-op.
+    write counts — rows inserted, plus rows whose stored content actually
+    differed from the provider's. Idempotent: re-running on unchanged data
+    writes nothing and returns zeros for all three, which is what makes the
+    nightly `history_backfill` note a usable signal rather than a constant.
+
+    `prefer_cached=True` reads filings and transcripts at whatever age they
+    are already cached at, reaching a provider only when there is no cached
+    row at all. That is for the nightly universe-wide sweep, which is a
+    reconciliation pass and not a freshness driver: filing bodies are
+    refreshed by `edgar_poller` invalidating the ticker it saw a new
+    accession for, and transcripts by `transcripts_poller`'s event, both of
+    which are capped per pass. Left at the default, every other caller —
+    a regen job, a user opening a ticker — still gets the capability's own
+    TTL applied.
     """
     from .data_service import get_data_service
     ticker = ticker.upper()
     ds = get_data_service()
     statements = ds.get_financial_statements(ticker) or {}
-    filings = ds.get_filings(ticker) or []
-    transcripts = ds.get_earnings_transcripts(ticker) or []
+    filings = ds.get_filings(ticker, prefer_cached=prefer_cached) or []
+    transcripts = ds.get_earnings_transcripts(
+        ticker, prefer_cached=prefer_cached,
+    ) or []
 
     own = db is None
     if own:

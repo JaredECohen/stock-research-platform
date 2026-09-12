@@ -16,10 +16,33 @@ from ..agents import news_agent
 from ..cache import cache_get, cache_put, invalidate
 from ..services.data_service import get_data_service
 from . import record_run
+from .research_focus import select_focus
 
 log = logging.getLogger(__name__)
 
 _THROTTLE_SECONDS = 60 * 60  # 1 hour per ticker
+
+# How often this loop runs. One constant for both the scheduler and
+# `select_focus`, because they have to agree: the rotation advances one
+# position per run, and it can only work out what "per run" means from the
+# interval it is told. `register` below hands this to APScheduler, so the
+# two cannot drift apart in a later edit.
+_RUN_INTERVAL_HOURS = 1
+
+# How many tickers one run may cover.
+#
+# Cost math: this loop runs hourly, and `news_agent.run(force_refresh=True)`
+# makes one Gemini call per ticker (`settings.gemini_news_model`). So the
+# steady-state spend is budget x 24 calls/day — at 10, that is 240 Gemini
+# calls a day. Raising it to ~25 (600/day) would cover every ticker that
+# carries any research signal at all today: the 10 pins plus the 17 that
+# have ever had a memo generated, minus the overlap.
+#
+# Deliberately left at 10, which is exactly what the old arbitrary
+# `list_tickers()[:10]` slice spent. This change is about WHICH ten, not
+# how many; raising it is a spend decision for the owner, not a side effect
+# of a relevance fix.
+NEWS_FOCUS_BUDGET = 10
 
 
 def _last_run_for(ticker: str) -> datetime | None:
@@ -47,9 +70,35 @@ def _record_run_for(ticker: str) -> None:
 
 def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     """Run the news agent for each (un-throttled) ticker. Returns triggered events."""
+    selection = None
     if tickers is None:
-        ds = get_data_service()
-        tickers = list(ds.list_tickers())[:10]  # demo universe sample
+        # Relevance-ranked rather than an arbitrary universe slice — see
+        # `research_focus` for why the old `list_tickers()[:10]` was wrong.
+        #
+        # On the rotation vs. `_THROTTLE_SECONDS`: the rotation window
+        # advances one position per run, so a ticker below the guaranteed
+        # prefix is selected on `research_focus.ROTATING_SLOTS` CONSECUTIVE
+        # hourly runs before it rotates out. That matters because the
+        # throttle and the interval are both exactly one hour: a run that
+        # fires a few seconds early finds `elapsed < 3600` and skips the
+        # ticker. With a window wider than one slot the next hour's run
+        # picks it up — a ticker that appeared for only a single hour could
+        # be throttled out of existence forever.
+        #
+        # `require_memo=True` because this loop's alerts feed exactly one
+        # action path, `update_orchestrator.on_news_alert`, and its second
+        # guard returns `no_prior_memo` when `memo_store.latest_memo` finds
+        # nothing. A slot spent on a ticker with no memo on file is
+        # therefore a guaranteed no-op — and five of the ten pins are in
+        # that state, so this frees half the budget for names someone is
+        # actually researching. The withheld tickers are named in the note,
+        # and re-enter selection by themselves once a memo lands.
+        selection = select_focus(
+            budget=NEWS_FOCUS_BUDGET,
+            require_memo=True,
+            rotation_period_hours=_RUN_INTERVAL_HOURS,
+        )
+        tickers = selection.tickers
 
     events: list[dict] = []
     assessment_failures = 0
@@ -94,9 +143,16 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     note = f"{len(events)} material events"
     if assessment_failures:
         note += f"; {assessment_failures} assessments failed"
+    if selection is not None:
+        # Folded in so cron-health shows what this run covered and, more
+        # importantly, which qualifying tickers the budget could not reach.
+        note += f"; {selection.note()}"
     record_run("news_loop", success=assessment_failures == 0, note=note)
     return events
 
 
 def register(scheduler) -> None:
-    scheduler.add_job(run_once, "interval", hours=1, id="news_loop", replace_existing=True)
+    scheduler.add_job(
+        run_once, "interval", hours=_RUN_INTERVAL_HOURS,
+        id="news_loop", replace_existing=True,
+    )

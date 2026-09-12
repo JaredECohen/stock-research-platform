@@ -12,19 +12,35 @@ building on data from months ago.
 Per-capability TTLs are tuned to how frequently the underlying data
 actually changes:
 
-    profile     7 days   (description, sector, FY-end, CIK — stable;
-                          market cap drifts but doesn't justify daily
-                          refetch on every research call)
-    prices      1 day    (full daily history; refresh after each close)
-    quote       60 s     (intraday last-trade price for valuation
-                          comparison; profile's last_price is stale
-                          for fast movers like NVDA)
-    ratios      1 day    (price-dependent metrics)
-    estimates   1 day    (sell-side updates frequently but not
-                          intra-day for most names)
-    earnings    1 day    (calendar / surprises)
-    news        1 hour   (time-sensitive)
-    macro       1 day    (mostly weekly / monthly publication)
+    profile        7 days   (description, sector, FY-end, CIK — stable;
+                             market cap drifts but doesn't justify daily
+                             refetch on every research call)
+    prices         1 day    (full daily history; refresh after each close)
+    quote          60 s     (intraday last-trade price for valuation
+                             comparison; profile's last_price is stale
+                             for fast movers like NVDA)
+    ratios         1 day    (price-dependent metrics)
+    key_metrics    1 day    (same derivation as ratios)
+    estimates      1 day    (sell-side updates frequently but not
+                             intra-day for most names)
+    earnings       1 day    (calendar / surprises)
+    financials     7 days   (passed as a `ttl_override` at the call site)
+    filings        7 days   (document bodies; immutable once filed)
+    filings_index  15 min   (accession list only; drives the 30-min poll)
+    transcripts    12 hours (half the transcript poller's daily cadence)
+    news           1 hour   (time-sensitive)
+    macro          1 day    (mostly weekly / monthly publication)
+
+A capability that is NOT in the table gets `DEFAULT_TTL_SECONDS`, not
+"cache forever". It used to get the latter, because `TTL_BY_CAPABILITY
+.get(capability)` returned None and `_is_fresh(fetched_at, None)` reads
+None as never-expire — so every capability someone forgot to list was
+cached permanently. `filings`, `transcripts` and `key_metrics` were all
+in that state, and the consequence was not a stale number: SEC EDGAR was
+read exactly once per ticker for the life of the deployment, the filing
+poller diffed against a frozen accession list, and no filing event ever
+fired. Never-expire is now something a caller has to *ask* for, by
+passing the `NEVER_EXPIRES` sentinel where the reader can see it.
 
 Every stale serve and every too-stale refusal is written to the
 `cache_cost_logs` ledger (subject `provider_cache`) so the web and
@@ -54,16 +70,49 @@ from ..models import ProviderCache
 log = logging.getLogger(__name__)
 
 
-# In-seconds. None = never expires (always reuse cache).
+# Explicit "this row never goes stale". Pass it as `ttl_seconds` at a
+# call site that genuinely means it; an *absent* table entry does not
+# mean this and must never be read as if it did. Negative because every
+# real TTL is a non-negative number of seconds, so no capability can
+# collide with it by accident.
+NEVER_EXPIRES = -1
+
+# TTL used when a capability is not in the table below. One hour: short
+# enough that a capability someone forgot to list re-reads its provider
+# within the hour instead of freezing until the next deploy, long enough
+# that a single memo run (which touches a capability several times) still
+# costs one provider call. It is a backstop, not a recommendation — every
+# capability `DataService` actually uses is listed, and
+# `test_cached_capabilities_have_explicit_ttls` fails the build when a new
+# one is added without an entry here or a `ttl_override` at the call site.
+DEFAULT_TTL_SECONDS = 3600
+
+# In seconds.
 TTL_BY_CAPABILITY: dict[str, int] = {
-    "profile":   7 * 86400,
-    "prices":         86400,
-    "quote":             60,
-    "ratios":         86400,
-    "estimates":      86400,
-    "earnings":       86400,
-    "news":            3600,
-    "macro":          86400,
+    "profile":       7 * 86400,
+    "prices":             86400,
+    "quote":                 60,
+    "ratios":             86400,
+    "key_metrics":        86400,
+    "estimates":          86400,
+    "earnings":           86400,
+    # Filing *bodies*. The text of a filing never changes once it is on
+    # EDGAR, so the only reason to refetch is that a new accession has
+    # appeared — which `filings_index` detects, and `edgar_poller`
+    # responds to by invalidating this row for that one ticker. A short
+    # TTL here would buy nothing and cost ~10 multi-megabyte document
+    # fetches per ticker per pass.
+    "filings":       7 * 86400,
+    # Accession numbers only (`fetch_text=False`): one submissions.json
+    # read, no document bodies. Deliberately half the poller's 30-minute
+    # interval so a row is always expired by the time the next pass asks
+    # — a TTL equal to the cadence leaves the poll racing its own cache
+    # and skipping every other cycle.
+    "filings_index":       900,
+    # Half the transcript poller's daily cadence, for the same reason.
+    "transcripts":       43200,
+    "news":                3600,
+    "macro":              86400,
 }
 
 # Oldest row `cached_call` will still serve when the provider misses.
@@ -71,14 +120,23 @@ TTL_BY_CAPABILITY: dict[str, int] = {
 # profile is still the right company, a week-old price series is a
 # usable backdrop, but an hour-old quote is not intraday anymore.
 MAX_STALE_BY_CAPABILITY: dict[str, int] = {
-    "profile":   30 * 86400,
-    "prices":     7 * 86400,
-    "quote":           3600,
-    "ratios":     7 * 86400,
-    "estimates": 14 * 86400,
-    "earnings":  14 * 86400,
-    "news":           86400,
-    "macro":     14 * 86400,
+    "profile":       30 * 86400,
+    "prices":         7 * 86400,
+    "quote":               3600,
+    "ratios":         7 * 86400,
+    "key_metrics":    7 * 86400,
+    "estimates":     14 * 86400,
+    "earnings":      14 * 86400,
+    # A filing body is immutable, so an old one is still the right
+    # document — the risk is only that a newer filing exists, which is
+    # the index's job to notice.
+    "filings":       30 * 86400,
+    # A stale index cannot detect anything new, but serving it keeps the
+    # poller's diff stable instead of re-firing the whole window.
+    "filings_index":  7 * 86400,
+    "transcripts":   30 * 86400,
+    "news":               86400,
+    "macro":         14 * 86400,
 }
 DEFAULT_MAX_STALE_SECONDS = 7 * 86400
 
@@ -142,9 +200,22 @@ def max_stale_seconds(capability: str) -> int:
     return MAX_STALE_BY_CAPABILITY.get(capability, DEFAULT_MAX_STALE_SECONDS)
 
 
+def ttl_seconds_for(capability: str) -> int:
+    """The TTL `cached_call` applies when the caller passes none.
+
+    Unlisted capabilities get `DEFAULT_TTL_SECONDS` rather than "no
+    expiry". This function is the whole fix for the never-expire class
+    of bug: a `dict.get` with no default returns None, and None means
+    "always fresh" one layer down.
+    """
+    return TTL_BY_CAPABILITY.get(capability, DEFAULT_TTL_SECONDS)
+
+
 def _is_fresh(fetched_at: datetime, ttl_seconds: int | None) -> bool:
-    if ttl_seconds is None:
-        return True  # never-expire mode
+    """Age check. `NEVER_EXPIRES` (or None, `get`'s "no TTL asked for"
+    default) means the row is fresh whatever its age."""
+    if ttl_seconds is None or ttl_seconds == NEVER_EXPIRES:
+        return True  # never-expire mode, asked for explicitly
     return _now() - fetched_at < timedelta(seconds=ttl_seconds)
 
 
@@ -197,6 +268,12 @@ def get(
     max_age_seconds: int | None = None,
 ) -> Any | None:
     """Read the cached payload for `(capability, key)`.
+
+    Unlike `cached_call`, this is a raw read: `ttl_seconds=None` here
+    means "no age constraint asked for", so any row is returned. It does
+    not consult `TTL_BY_CAPABILITY` — callers that want the capability's
+    policy applied should go through `cached_call`, or pass
+    `ttl_seconds=ttl_seconds_for(capability)`.
 
     Returns None when no row exists. When a row exists but is past
     `ttl_seconds`, returns None *unless* `serve_stale=True` (used as
@@ -308,11 +385,16 @@ def cached_call(
     return; provider miss → fall back to a stale cached row no older
     than `max_stale_seconds(capability)`, else None.
 
-    `ttl_seconds` defaults to `TTL_BY_CAPABILITY[capability]`. Pass an
-    explicit value (or `None` to never expire) to override.
+    `ttl_seconds` defaults to `ttl_seconds_for(capability)` — the table
+    entry, or `DEFAULT_TTL_SECONDS` when the capability is unlisted.
+    Pass an explicit number of seconds to override it, or the
+    `NEVER_EXPIRES` sentinel for a payload that genuinely never goes
+    stale. `None` means "decide for me", which is why it cannot also
+    mean "never expire": that overload is what made every unlisted
+    capability immortal.
     """
     if ttl_seconds is None and not force_refresh:
-        ttl_seconds = TTL_BY_CAPABILITY.get(capability)
+        ttl_seconds = ttl_seconds_for(capability)
 
     if not force_refresh:
         cached = get(capability, key, ttl_seconds=ttl_seconds)

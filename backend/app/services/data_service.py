@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import date as _date
 from functools import lru_cache
 from typing import Any
@@ -49,6 +49,27 @@ log = logging.getLogger(__name__)
 _AS_OF_CONTEXT: contextvars.ContextVar[_date | None] = contextvars.ContextVar(
     "as_of_date", default=None,
 )
+
+
+# ---------------------------------------------------------------------------
+# Which universe tiers the scheduled pullers are allowed to touch
+# ---------------------------------------------------------------------------
+# The automatic pollers make one provider call per ticker per pass — EDGAR
+# every 30 minutes, transcripts daily — so their standing cost is linear in
+# the size of the set they iterate. `auto_analysis` is the curated watch list,
+# and it is the only tier that earns that recurring spend.
+#
+# `analyzed_on_demand` and `data_only` are excluded from the *automatic* pull,
+# and it is worth being precise about what that does not mean: every company
+# in the table, at any tier, stays fully available to manual, user-initiated
+# research — search, on-demand memo generation, peer cohorts, chat ticker
+# resolution. Those callers ask for `list_tickers()` with no `tiers` argument
+# and see the whole table, which is why narrowing this must never be done at
+# the query's default. What the exclusion prevents is a ticker joining the
+# recurring poll forever merely because somebody once looked it up: each
+# on-demand search inserts an `analyzed_on_demand` row, so an unfiltered
+# poller's universe only ever grows.
+AUTO_PULL_TIERS: tuple[str, ...] = ("auto_analysis",)
 
 
 class as_of_context:
@@ -261,6 +282,12 @@ class DataService:
             "earnings": [self.fmp, self.alpha],
             "transcripts": [self.alpha],
             "filings": [self.sec],
+            # Same provider and same method as `filings`, different cost
+            # shape: `get_filings_index` calls it with `fetch_text=False`,
+            # so this capability is one submissions.json read instead of
+            # up to ten document-body fetches. It is a separate chain
+            # entry because it is a separate cache row with its own TTL.
+            "filings_index": [self.sec],
             "news": [self.alpha, self.polygon, self.gdelt],
             "estimates": [self.fmp],
             "macro": [self.fred, self.eia, self.bls, self.census, self.ken_french],
@@ -314,19 +341,36 @@ class DataService:
     # Endpoints
     # ------------------------------------------------------------------
 
-    def list_tickers(self) -> list[str]:
-        """Return every ticker the platform has ever touched.
+    def list_tickers(self, *, tiers: Collection[str] | None = None) -> list[str]:
+        """Return tickers from the `companies` table, ordered by ticker.
 
-        Reads the `companies` table directly — covers both the curated
-        universe from `data/sp500.json` (S&P 500 + extensions, tagged
-        `auto_analysis`) and any ticker the user has researched on
-        demand (`analyzed_on_demand`). Empty on cold start before the
-        seeder runs.
+        With no `tiers` — the default, and what every existing caller
+        uses — this is every ticker the platform has ever touched: the
+        curated universe from `data/sp500.json` (S&P 500 + extensions,
+        tagged `auto_analysis`), any ticker the user has researched on
+        demand (`analyzed_on_demand`), and the `data_only` long tail.
+        That unfiltered set is what manual research resolves against, so
+        it must stay unfiltered: narrow it and an on-demand name stops
+        being findable.
+
+        Pass `tiers=AUTO_PULL_TIERS` for the curated tier alone — the
+        scheduled pollers' universe. See that constant for why the other
+        two tiers are kept out of the automatic pull.
+
+        Ordered because the alternative is not "insertion order", it is
+        "whatever the engine finds convenient" — rowid order on SQLite,
+        genuinely arbitrary on Postgres. Any caller that slices or
+        compares the result is non-deterministic without this, which is
+        how `[:10]` in the news/social loops came to mean nothing in
+        particular. Empty on cold start before the seeder runs.
         """
         from ..database import SessionLocal
         from ..models import Company
         with SessionLocal() as db:
-            return [t for (t,) in db.query(Company.ticker).all()]
+            q = db.query(Company.ticker)
+            if tiers is not None:
+                q = q.filter(Company.universe_tier.in_(tuple(tiers)))
+            return [t for (t,) in q.order_by(Company.ticker).all()]
 
     # ------------------------------------------------------------------
     # Read-through cache (Wave 9b Phase 2b)
@@ -442,17 +486,46 @@ class DataService:
 
     def get_earnings_transcripts(
         self, ticker: str, *, force_refresh: bool = False,
+        prefer_cached: bool = False,
     ) -> list[dict[str, Any]] | None:
+        """Transcripts for `ticker`. Four AlphaVantage requests on a miss
+        (the provider iterates four quarters).
+
+        `prefer_cached=True` accepts a cached row at any age — see
+        `get_filings` for why a universe-wide loop asks for that.
+        """
+        from . import provider_cache
         rows = self._cached(
             "transcripts", ticker.upper(),
             lambda: self._try_chain("transcripts", "get_earnings_transcripts", ticker),
             force_refresh=force_refresh,
+            ttl_override=provider_cache.NEVER_EXPIRES if prefer_cached else None,
         )
         return _clip_dated_rows(rows, "date", fallback_key="period")
 
     def get_filings(
         self, ticker: str, *, force_refresh: bool = False,
+        prefer_cached: bool = False,
     ) -> list[dict[str, Any]] | None:
+        """Filings WITH document bodies. The expensive read: up to ten
+        multi-megabyte fetches per ticker, paced against SEC's ~10 req/s.
+
+        `prefer_cached=True` serves a cached row at whatever age it is and
+        only reaches the provider when there is no row at all. It exists for
+        the one caller that sweeps the whole curated universe on a schedule
+        (`history_service.backfill_ticker` under `history_backfill`), where
+        the seven-day TTL rolling over would otherwise mean ~1,700 document
+        downloads in a single nightly job.
+
+        That is safe rather than a reintroduction of the never-expire bug,
+        because nothing but a new accession changes a filed document, and
+        `edgar_poller` responds to a new accession by calling
+        `invalidate_filings_text` for that one ticker. Freshness is driven by
+        the event, which is capped; the TTL stays the backstop for every
+        other reader, whose cost is bounded by user activity rather than by
+        the size of the universe.
+        """
+        from . import provider_cache
         cik = self._lookup_cik(ticker)
         if not cik:
             return None
@@ -460,8 +533,72 @@ class DataService:
             "filings", ticker.upper(),
             lambda: self._try_chain("filings", "get_filings", ticker, cik=cik),
             force_refresh=force_refresh,
+            ttl_override=provider_cache.NEVER_EXPIRES if prefer_cached else None,
         )
         return _clip_dated_rows(rows, "filing_date", fallback_key="period_end")
+
+    def get_filings_index(
+        self, ticker: str, *, force_refresh: bool = False,
+    ) -> list[dict[str, Any]] | None:
+        """Filing metadata WITHOUT document bodies — the cheap read.
+
+        `get_filings` fetches the full text of every form it returns (up
+        to ten per ticker, a few MB each, paced against SEC's ~10 req/s
+        limit). Change detection does not need any of that: an accession
+        number that was not in the last response is a new filing. This
+        method asks the same provider with `fetch_text=False`, so a poll
+        across the curated universe costs one JSON read per ticker rather
+        than ~1,700 document downloads per pass.
+
+        Cached under its own capability (`filings_index`, 15-minute TTL)
+        so the short poll cadence cannot drag the expensive `filings`
+        bodies along with it.
+        """
+        cik = self._lookup_cik(ticker)
+        if not cik:
+            return None
+        rows = self._cached(
+            "filings_index", ticker.upper(),
+            lambda: self._try_chain(
+                "filings_index", "get_filings", ticker, cik=cik, fetch_text=False,
+            ),
+            force_refresh=force_refresh,
+        )
+        return _clip_dated_rows(rows, "filing_date", fallback_key="period_end")
+
+    def invalidate_filings_text(self, ticker: str) -> int:
+        """Drop the cached filing *bodies* for one ticker. Returns rows deleted.
+
+        Called by `edgar_poller` when the cheap index shows an accession
+        it has not seen. Without it, better detection would just mean
+        firing events about filings whose text is still the seven-day-old
+        cached response — the poller would notice the new 10-Q and every
+        downstream reader would keep reading the previous one.
+
+        The key convention (`capability="filings"`, key = upper-case
+        ticker) lives here, next to the code that writes those rows,
+        rather than being restated in the poller.
+        """
+        from . import provider_cache
+        return provider_cache.invalidate("filings", ticker.upper())
+
+    def reads_from_cache(self, capability: str, key: str) -> bool:
+        """True when a `prefer_cached` read of `(capability, key)` will be
+        answered without consulting a provider.
+
+        Lets a loop that fans out over the whole universe ask "does this
+        ticker cost me a live provider call?" *before* it spends one, which
+        is how `history_backfill` bounds its nightly cold reads.
+
+        Reports True in the two modes where `_cached` bypasses the cache
+        entirely — a registered test fixture, an active as-of context —
+        because neither reaches a provider either. The question being asked
+        is about cost, not about which row answered.
+        """
+        if self._test_provider is not None or current_as_of_date() is not None:
+            return True
+        from . import provider_cache
+        return provider_cache.get(capability, key) is not None
 
     def _lookup_cik(self, ticker: str) -> str | None:
         """Resolve a ticker's CIK.
@@ -554,3 +691,24 @@ class DataService:
 @lru_cache(maxsize=1)
 def get_data_service() -> DataService:
     return DataService()
+
+
+def curated_poll_universe() -> tuple[list[str], int]:
+    """Return `(tickers_to_poll, excluded)` for the scheduled pollers.
+
+    `tickers_to_poll` is the `AUTO_PULL_TIERS` slice of the universe;
+    `excluded` is how many companies the tier filter held back. Both
+    pollers need the same pair, so it lives here rather than being
+    copied into each — two copies of a constraint drift, and this one is
+    the thing the user asked for.
+
+    The count exists to be reported. A cap nobody can see is a cap that
+    gets rediscovered as a bug: `/api/admin/cron-health` should say the
+    poller skipped N companies, not quietly poll fewer than an operator
+    expects. Clamped at zero because a row inserted between the two
+    queries would otherwise show up as a negative skip count.
+    """
+    ds = get_data_service()
+    selected = ds.list_tickers(tiers=AUTO_PULL_TIERS)
+    total = len(ds.list_tickers())
+    return selected, max(total - len(selected), 0)

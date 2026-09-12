@@ -229,9 +229,12 @@ class SECEdgarProvider:
         SEC limits to ~10 req/sec per User-Agent, so we pace at
         RATE_LIMIT_SLEEP between document fetches. ~10 docs/ticker max.
 
-        Pass `fetch_text=False` to skip the slow per-document fetches
-        (used by `data_service._lookup_cik` which only needs the
-        accession list)."""
+        Pass `fetch_text=False` to skip the per-document fetches entirely
+        and return metadata only. That is how `data_service
+        .get_filings_index` reads this method: change detection needs the
+        accession numbers and nothing else, and the 30-minute filing poll
+        across the curated universe is only affordable at one
+        submissions.json read per ticker rather than ten document bodies."""
         if not cik:
             cik = self.lookup_cik(ticker)
         if not cik:

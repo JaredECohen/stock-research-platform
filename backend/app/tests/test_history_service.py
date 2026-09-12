@@ -79,10 +79,12 @@ def test_backfill_is_idempotent():
     _reset_tables()
     history_service.backfill_ticker("NVDA")
     second = history_service.backfill_ticker("NVDA")
-    # Second call should produce zero net writes — no value/period changes.
-    assert second["financial_periods"] == 0
-    # Filings + transcripts re-write metadata on every pass (re-fetched_at);
-    # what matters is the row count doesn't grow.
+    # Zero net writes across all three, which is what "idempotent" has to
+    # mean for a number that is also telemetry. Filings and transcripts used
+    # to count every re-ingest as a write — see
+    # `test_ingest_counters_are_truthful.py` for what that cost.
+    assert second == {"financial_periods": 0, "filings": 0, "transcripts": 0}
+    # And the row counts don't grow either.
     with SessionLocal() as db:
         fd_count = db.query(FilingDoc).filter(FilingDoc.ticker == "NVDA").count()
         tx_count = db.query(EarningsTranscript).filter(

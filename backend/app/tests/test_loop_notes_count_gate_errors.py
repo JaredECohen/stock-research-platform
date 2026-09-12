@@ -68,7 +68,7 @@ def test_news_loop_is_healthy_when_assessments_succeed(monkeypatch):
 def test_edgar_poller_counts_gate_errors(monkeypatch):
     calls = _capture(monkeypatch, edgar_poller)
     monkeypatch.setattr(
-        edgar_poller, "get_filings",
+        edgar_poller, "get_filings_index",
         lambda t: [
             {"type": "10-K", "accession_number": "0001"},
             {"type": "10-Q", "accession_number": "0002"},
@@ -77,6 +77,7 @@ def test_edgar_poller_counts_gate_errors(monkeypatch):
     monkeypatch.setattr(edgar_poller, "_seen_accessions", lambda t: {"0001"})
     monkeypatch.setattr(edgar_poller, "_save_seen_accessions", lambda t, acc: None)
     monkeypatch.setattr(edgar_poller, "invalidate", lambda *a, **k: None)
+    monkeypatch.setattr(edgar_poller, "invalidate_filings_text", lambda t: 0)
     import app.services.update_orchestrator as uo
     monkeypatch.setattr(uo, "on_filing_event", lambda t, **k: {"ticker": t, "kind": "gate_error"})
 
