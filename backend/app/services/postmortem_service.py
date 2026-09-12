@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select
 
@@ -54,7 +54,7 @@ def _rating_of(snap: MemoSnapshot) -> str:
     return str(memo.get("rating_label") or "").strip()
 
 
-def _prior_snapshot(db, ticker: str, version: int) -> Optional[MemoSnapshot]:
+def _prior_snapshot(db, ticker: str, version: int) -> MemoSnapshot | None:
     """The most recent prior version for this ticker (version < current)."""
     return db.execute(
         select(MemoSnapshot)
@@ -66,7 +66,7 @@ def _prior_snapshot(db, ticker: str, version: int) -> Optional[MemoSnapshot]:
 
 def _recent_postmortem_within(
     db, ticker: str, horizon_days: int, window_days: int,
-) -> Optional[MemoPostmortem]:
+) -> MemoPostmortem | None:
     """Most recent postmortem for (ticker, horizon) within `window_days`."""
     cutoff = datetime.utcnow() - timedelta(days=window_days)
     return db.execute(
@@ -112,11 +112,11 @@ def _should_postmortem(
     return True, "ok"
 
 
-def _due_memos(horizon_days: int, *, limit: int = 50) -> List[Dict[str, Any]]:
+def _due_memos(horizon_days: int, *, limit: int = 50) -> list[dict[str, Any]]:
     """Memos with an outcome at this horizon and no postmortem yet, after
     dedupe (rating-change + 14d rate-limit) is applied."""
-    out: List[Dict[str, Any]] = []
-    skipped: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     with SessionLocal() as db:
         stmt = (
             select(MemoOutcome, MemoSnapshot)
@@ -153,7 +153,7 @@ _BULL_RATINGS = {"Very Bullish", "Bullish"}
 _BEAR_RATINGS = {"Bearish", "Very Bearish"}
 
 
-def _classify_verdict(rating: str, alpha: Optional[float]) -> str:
+def _classify_verdict(rating: str, alpha: float | None) -> str:
     """Right / wrong / mixed / pending. Mirrors `_thesis_held` from
     outcome_service but exposes a richer set of buckets."""
     if alpha is None:
@@ -167,14 +167,18 @@ def _classify_verdict(rating: str, alpha: Optional[float]) -> str:
 
 
 def _llm_postmortem(
-    memo: Dict[str, Any], outcome: MemoOutcome, horizon_days: int,
-) -> Optional[Dict[str, Any]]:
+    memo: dict[str, Any], outcome: MemoOutcome, horizon_days: int,
+) -> dict[str, Any] | None:
     """Ask the LLM for a structured retrospective.
 
     Returns dict with: `lesson` (markdown body), `agent_attribution`
     (per-specialist credit/blame dict), and `regime_at_memo`.
     """
-    if not getattr(settings, "openai_api_key", None):
+    # Gate on any configured LLM, not OpenAI specifically: `llm.chat_json`
+    # picks the active provider itself, and the old OpenAI-only check made
+    # every postmortem on an Anthropic-only deployment fall back to the
+    # deterministic lesson without ever trying.
+    if not settings.has_llm:
         return None
     payload = {
         "memo": {
@@ -228,7 +232,7 @@ def _llm_postmortem(
 
 
 def _deterministic_lesson(
-    memo: Dict[str, Any], outcome: MemoOutcome, verdict: str, horizon_days: int,
+    memo: dict[str, Any], outcome: MemoOutcome, verdict: str, horizon_days: int,
 ) -> str:
     rating = memo.get("rating_label", "")
     alpha = outcome.alpha if outcome.alpha is not None else 0.0
@@ -245,7 +249,7 @@ def _deterministic_lesson(
 # ---------------------------------------------------------------------------
 
 def _write_lesson_to_memory(
-    ticker: str, sector: Optional[str], lesson: str, sector_lesson: str,
+    ticker: str, sector: str | None, lesson: str, sector_lesson: str,
 ) -> None:
     if lesson.strip():
         try:
@@ -278,7 +282,7 @@ def _write_lesson_to_memory(
 # Top-level driver
 # ---------------------------------------------------------------------------
 
-def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> Dict[str, Any]:
+def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any]:
     """Process up to `limit` memos due for a postmortem at this horizon.
 
     Returns a small report dict for cron logs / observability.
@@ -290,7 +294,10 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> Dict[str, Any
         outcome: MemoOutcome = item["outcome"]
         snap: MemoSnapshot = item["snapshot"]
         try:
-            memo = snap.memo or {}
+            # MemoSnapshot stores the report in ``memo_json``.  ``snap.memo``
+            # never existed; the AttributeError was swallowed here and made
+            # every due postmortem count as skipped forever.
+            memo = snap.memo_json or {}
             if not isinstance(memo, dict):
                 memo = json.loads(memo)
         except Exception:

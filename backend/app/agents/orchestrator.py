@@ -6,14 +6,15 @@ appropriate sub-graph, and synthesizes the final response.
 from __future__ import annotations
 
 import json
+import logging
 import re
+from typing import Any
 
 from sqlalchemy import select
-from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import settings
+from ..finance.dcf import fmt_price, fmt_upside
 from ..schemas import (
-    AgentTrace,
     ChatMessage,
     ChatResponse,
     DCFResult,
@@ -21,7 +22,6 @@ from ..schemas import (
     MacroScenarioResult,
     ModelPortfolio,
     PortfolioRequest,
-    ScreenerRequest,
     ScreenerResult,
     StockMemoOut,
 )
@@ -32,7 +32,10 @@ from ..services.screener_service import compute_universe_scores
 from ..services.valuation_service import build_comps, build_dcf
 from . import llm, prompts
 from .graph import default_agent_trace, run_stock_memo
+from .log_safety import log_safely
 from .macro_agent import run_macro_scenario
+
+log = logging.getLogger(__name__)
 
 
 KNOWN_THEMES = {
@@ -55,7 +58,7 @@ def _ticker_re() -> re.Pattern:
     return re.compile(r"\$?\b([A-Z]{1,5})\b")
 
 
-def _extract_tickers(text: str) -> List[str]:
+def _extract_tickers(text: str) -> list[str]:
     universe = set(get_data_service().list_tickers())
     found = []
     for tok in _ticker_re().findall(text):
@@ -80,7 +83,7 @@ def _extract_tickers(text: str) -> List[str]:
     return found
 
 
-def _extract_theme(text: str) -> Optional[str]:
+def _extract_theme(text: str) -> str | None:
     low = text.lower()
     for k, v in KNOWN_THEMES.items():
         if k in low:
@@ -88,7 +91,7 @@ def _extract_theme(text: str) -> Optional[str]:
     return None
 
 
-def classify_intent(message: str) -> Tuple[IntentType, List[str], Optional[str]]:
+def classify_intent(message: str) -> tuple[IntentType, list[str], str | None]:
     """Classify intent. Tries LLM first, falls back to deterministic rules."""
     llm_out = llm.chat_json(
         prompts.INTENT_CLASSIFIER_PROMPT + "\n\nMessage:\n" + message,
@@ -174,7 +177,7 @@ def _render_memo_answer(memo: StockMemoOut) -> str:
     return "\n".join(bullets)
 
 
-def _render_comparison_answer(memos: List[StockMemoOut]) -> str:
+def _render_comparison_answer(memos: list[StockMemoOut]) -> str:
     parts = ["**Cross-comparison from a PM's perspective:**\n"]
     for m in memos:
         parts.append(f"### {m.ticker} — {m.rating_label} (confidence {int(m.confidence_score)})")
@@ -249,9 +252,15 @@ def _render_dcf_answer(d: DCFResult) -> str:
     lines = [f"**DCF for {d.ticker}**", ""]
     lines.append(f"WACC: {d.base.assumptions.wacc:.2%} · Terminal growth: {d.base.assumptions.terminal_growth:.1%}")
     lines.append("")
-    lines.append(f"- Base implied price: ${d.base.implied_share_price:,.2f} ({d.base.upside_pct:+.1%})")
-    lines.append(f"- Bull implied price: ${d.bull.implied_share_price:,.2f} ({d.bull.upside_pct:+.1%})")
-    lines.append(f"- Bear implied price: ${d.bear.implied_share_price:,.2f} ({d.bear.upside_pct:+.1%})")
+    for s in (d.base, d.bull, d.bear):
+        # "n/a" rather than a crash or "$0.00" when the share count or
+        # quote never reached the model — see `finance.dcf.fmt_price`.
+        lines.append(
+            f"- {s.name.capitalize()} implied price: "
+            f"{fmt_price(s.implied_share_price)} ({fmt_upside(s.upside_pct)})"
+        )
+    if any(s.tv_clamped for s in (d.base, d.bull, d.bear)):
+        lines.append("- ⚠ Terminal value clamped (WACC − terminal growth ≤ 0.5%) — implied prices are not trustworthy")
     lines.append("")
     lines.append(d.summary)
     return "\n".join(lines)
@@ -270,7 +279,7 @@ _FOLLOWUP_HINTS = (
 )
 
 
-def _is_conceptual_followup(message: str, history: List[ChatMessage]) -> bool:
+def _is_conceptual_followup(message: str, history: list[ChatMessage]) -> bool:
     """Heuristic — should we route this through the SDK chat agent
     instead of a workflow handler?
 
@@ -291,7 +300,7 @@ def _is_conceptual_followup(message: str, history: List[ChatMessage]) -> bool:
     return False
 
 
-def _try_sdk_chat(message: str, history: Optional[List[ChatMessage]]) -> Optional[str]:
+def _try_sdk_chat(message: str, history: list[ChatMessage] | None) -> str | None:
     """Try the OpenAI Agents SDK chat agent (8 tools); return None on
     any failure so callers can fall back to legacy handlers."""
     if not settings.use_agents_sdk:
@@ -303,8 +312,54 @@ def _try_sdk_chat(message: str, history: Optional[List[ChatMessage]]) -> Optiona
         return None
 
 
+def _stored_memo(ticker: str) -> StockMemoOut | None:
+    """The latest persisted memo for `ticker`, or None. Reads only; the
+    lazy import mirrors `_answer_with_memo_context` (memo_store imports
+    the graph's schemas, and this module is imported early)."""
+    from ..services import memo_store
+    snap = memo_store.latest_memo(ticker)
+    if snap is None:
+        return None
+    try:
+        return memo_store.memo_to_pydantic(snap)
+    except Exception as exc:
+        log_safely(log, f"stored memo for {ticker} could not be hydrated for chat", exc)
+        return None
+
+
+def _render_needs_analysis(tickers: list[str]) -> str:
+    names = ", ".join(tickers)
+    plural = "s" if len(tickers) != 1 else ""
+    return (
+        f"There is no stored research memo for {names} yet, and the committee does not run "
+        f"inside a chat turn. Run research on the ticker{plural} from the Research page "
+        "(a research run is charged against your plan's allowance) and ask again once the "
+        "memo is ready."
+    )
+
+
 class Orchestrator:
-    def chat(self, message: str, history: Optional[List[ChatMessage]] = None) -> ChatResponse:
+    def chat(
+        self,
+        message: str,
+        history: list[ChatMessage] | None = None,
+        *,
+        allow_inline_memo: bool = True,
+    ) -> ChatResponse:
+        """One chat turn.
+
+        `allow_inline_memo` (FEAT-002) says whether this turn may start a
+        full memo run in-process for `single_stock_analysis` /
+        `stock_comparison`. True is the historical behaviour and the
+        default, so nothing changes for a caller that never heard of the
+        flag. False — what `routes_chat` passes while the login wall is on
+        — answers from `memo_store.latest_memo` and names the tickers
+        without a memo in `ChatResponse.needs_analysis` so the UI can offer
+        a (charged, worker-side) research run instead. Both inline entry
+        points are behind the flag: the legacy `run_stock_memo` and the
+        SDK runtime's `run_stock_memo_via_sdk`, which is resolved at call
+        time and would otherwise run a full memo under its own run_id.
+        """
         intent, tickers, theme = classify_intent(message)
         trace = default_agent_trace(intent)
 
@@ -328,10 +383,17 @@ class Orchestrator:
 
         if intent == "single_stock_analysis" and tickers:
             ticker = tickers[0]
+            if not allow_inline_memo:
+                memo = _stored_memo(ticker)
+                if memo is None:
+                    return ChatResponse(
+                        intent=intent, answer=_render_needs_analysis([ticker]),
+                        agent_trace=trace, needs_analysis=[ticker],
+                    )
             # Phase 3: route through the Agents SDK runtime when enabled. The
             # runtime ultimately returns the same StockMemoOut shape, so the
             # downstream rendering / tracing is identical.
-            if settings.use_agents_sdk:
+            elif settings.use_agents_sdk:
                 from .sdk_runtime import run_stock_memo_via_sdk
                 memo = run_stock_memo_via_sdk(ticker)
             else:
@@ -347,21 +409,47 @@ class Orchestrator:
             # safe-runner-protected internally, so errors here would only come
             # from the unrecoverable "unknown ticker" case.
             memos = []
+            # (c) RP-001 / D8: a dropped ticker used to vanish from the
+            # comparison with no trace — the user asked about four names
+            # and silently read about three. The note rides on `sources`
+            # (appended after the cap so it is never truncated away).
+            unavailable: list[str] = []
+            # FEAT-002: tickers with no stored memo when generation is not
+            # allowed in-request; reported separately so the UI can offer
+            # a research run rather than an error.
+            missing: list[str] = []
             for t in tickers[:4]:
+                if not allow_inline_memo:
+                    stored = _stored_memo(t)
+                    if stored is None:
+                        missing.append(t)
+                    else:
+                        memos.append(stored)
+                    continue
                 try:
                     memos.append(run_stock_memo(t))
-                except Exception:
-                    continue
+                except Exception as exc:
+                    log_safely(log, f"comparison memo unavailable for {t}", exc)
+                    unavailable.append(t)
+            unavailable_notes = [f"memo unavailable: {t}" for t in unavailable]
+            unavailable_notes += [f"memo not yet generated: {t}" for t in missing]
             if not memos:
-                return ChatResponse(
-                    intent=intent,
-                    answer="Could not generate any memos for the requested tickers.",
-                    agent_trace=trace,
+                answer = (
+                    _render_needs_analysis(missing) if missing
+                    else "Could not generate any memos for the requested tickers."
                 )
+                return ChatResponse(
+                    intent=intent, answer=answer,
+                    agent_trace=trace, sources=unavailable_notes, needs_analysis=missing,
+                )
+            answer = _render_comparison_answer(memos)
+            if missing:
+                answer += "\n\n_" + _render_needs_analysis(missing) + "_"
             return ChatResponse(
-                intent=intent, answer=_render_comparison_answer(memos),
+                intent=intent, answer=answer,
                 agent_trace=trace, memo=memos[0],
-                sources=[s for m in memos for s in m.sources_used][:20],
+                sources=[s for m in memos for s in m.sources_used][:20] + unavailable_notes,
+                needs_analysis=missing,
             )
 
         if intent == "dcf_analysis" and tickers:
@@ -442,8 +530,8 @@ class Orchestrator:
         return ChatResponse(intent=intent, answer=ans, agent_trace=trace)
 
     def _answer_with_memo_context(
-        self, message: str, history: List[ChatMessage],
-    ) -> Optional[str]:
+        self, message: str, history: list[ChatMessage],
+    ) -> str | None:
         """Wave 8S — answer a free-form follow-up question using the
         memos already produced in this conversation.
 
@@ -474,13 +562,13 @@ class Orchestrator:
         # Pull the latest snapshot memos for each candidate. memo_store
         # serves cached snapshots cheaply — no re-running of the graph.
         from ..services.memo_store import latest_memo, memo_to_pydantic
-        memos: List[Dict[str, Any]] = []
+        memos: list[dict[str, Any]] = []
         # Tickers without a memo still get a "lite" company snapshot
         # (sector, industry, business_description + screener_metrics) so
         # the LLM can answer comparative follow-ups like "which has the
         # strongest moat?" without us having to pre-run a full memo for
         # every ticker the user mentions.
-        company_lites: List[Dict[str, Any]] = []
+        company_lites: list[dict[str, Any]] = []
         seen: set[str] = set()
         for t in candidate_tickers:
             if t in seen:
@@ -494,8 +582,16 @@ class Orchestrator:
                     if len(memos) >= 4:
                         break
                     continue
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # (a) the chat falls back to the lite company snapshot;
+                    # a stored memo that no longer validates is worth a
+                    # log line because the row is otherwise unreachable.
+                    log_safely(
+                        log,
+                        f"cached memo snapshot for {t} v{getattr(snap, 'version', '?')} "
+                        "could not be hydrated for chat context",
+                        exc,
+                    )
             lite = _company_lite_snapshot(t)
             if lite is not None:
                 company_lites.append(lite)
@@ -553,7 +649,7 @@ class Orchestrator:
         prompt = (
             ((pm_ctx + "\n\n") if pm_ctx else "")
             + "\n\n".join(context_blocks)
-            + f"\n\nConversation history (last few turns):\n"
+            + "\n\nConversation history (last few turns):\n"
             + "\n".join(f"- {h.role}: {(h.content or '')[:300]}" for h in history[-6:])
             + f"\n\nUser's new question:\n{message}"
         )
@@ -577,7 +673,7 @@ class Orchestrator:
         return body
 
 
-def _company_lite_snapshot(ticker: str) -> Optional[Dict[str, Any]]:
+def _company_lite_snapshot(ticker: str) -> dict[str, Any] | None:
     """Compact dossier when no memo exists — sector / industry / market
     cap from the `companies` table, plus screener-tier metrics (P/E,
     margins, ROIC, growth) so the chat LLM can answer comparative
@@ -599,14 +695,15 @@ def _company_lite_snapshot(ticker: str) -> Optional[Dict[str, Any]]:
         # Wave 10 — overlay the live intraday quote so the chat
         # agent's company-lite carries an honest current price, not
         # the 7-day-cached `companies.last_price`.
-        live_price: Optional[float] = c.last_price
+        live_price: float | None = c.last_price
         try:
             from ..services.market_data_service import get_current_price
             live = get_current_price(c.ticker)
             if live is not None:
                 live_price = live
-        except Exception:  # pragma: no cover — best-effort overlay
-            pass
+        except Exception as exc:  # pragma: no cover — best-effort overlay
+            log_safely(log, f"live price overlay failed for {c.ticker}", exc,
+                       level=logging.DEBUG)
         return {
             "ticker": c.ticker,
             "name": c.company_name,
@@ -636,7 +733,7 @@ def _company_lite_snapshot(ticker: str) -> Optional[Dict[str, Any]]:
         }
 
 
-def _memo_for_chat_context(m: StockMemoOut) -> Dict[str, Any]:
+def _memo_for_chat_context(m: StockMemoOut) -> dict[str, Any]:
     """Compact memo projection for the free-form chat prompt. Includes
     the dimensions a PM would actually cite when answering 'which is
     the better investment' — rating, stock score, DCF deltas, key

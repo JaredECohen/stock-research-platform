@@ -162,8 +162,8 @@ def test_a_loop_that_never_ran_is_reported_as_stale_not_omitted():
     endpoint listed only loops with rows, making a dead loop
     indistinguishable from a healthy one.
     """
-    from app.monitoring import KNOWN_LOOPS
     from app.api.routes_admin import cron_health_endpoint
+    from app.monitoring import KNOWN_LOOPS
 
     with SessionLocal() as db:
         db.query(CronLoopRun).filter(
@@ -183,3 +183,46 @@ def test_a_loop_that_never_ran_is_reported_as_stale_not_omitted():
     assert row["last_run_at"] is None
     assert row["stale"] is True, "a loop that never ran must not read as healthy"
     assert out["stale_count"] >= 1
+
+
+def test_postmortem_loop_records_failure_before_reraising(monkeypatch):
+    """An exception inside run_postmortems must reach both health surfaces."""
+    from app.monitoring import postmortem_loop
+
+    calls = []
+
+    def fail(**kwargs):
+        raise RuntimeError("synthetic postmortem failure")
+
+    monkeypatch.setattr(postmortem_loop, "run_postmortems", fail)
+    monkeypatch.setattr(
+        postmortem_loop, "record_run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic postmortem failure"):
+        postmortem_loop.run_once()
+    assert calls[0][0] == ("postmortem_loop",)
+    assert calls[0][1]["success"] is False
+    assert "RuntimeError" in calls[0][1]["note"]
+
+
+def test_postmortem_loop_marks_skipped_work_as_failed(monkeypatch):
+    from app.monitoring import postmortem_loop
+
+    reports = iter([
+        {"due": 1, "written": 0, "skipped": 1},
+        {"due": 0, "written": 0, "skipped": 0},
+    ])
+    calls = []
+    monkeypatch.setattr(
+        postmortem_loop, "run_postmortems", lambda **kwargs: next(reports),
+    )
+    monkeypatch.setattr(
+        postmortem_loop, "record_run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    postmortem_loop.run_once()
+    assert calls[0][1]["success"] is False
+    assert "skipped=1" in calls[0][1]["note"]

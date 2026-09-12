@@ -59,6 +59,13 @@ def _heartbeat() -> None:
     up in `/api/admin/cron-health` alongside them and inherits the same
     never-raises guarantee. `rss` in the note makes the worker's memory
     curve visible through the API too, not only in Render's log viewer.
+
+    FEAT-003: the Industry Analysis drainer gets its own row on the same
+    tick. It is scheduled by nothing — a thread that sits idle six days a
+    week and drains on Sundays — so without a heartbeat of its own the
+    only evidence it is alive arrives once a week, and a drainer that died
+    on Monday would look healthy until the reports silently failed to
+    appear. Its row carries queue depth, not just liveness.
     """
     try:
         from .monitoring import record_run
@@ -71,6 +78,22 @@ def _heartbeat() -> None:
         )
     except Exception:  # pragma: no cover — liveness must not kill the worker
         log.warning("worker heartbeat failed", exc_info=True)
+    try:
+        from .config import settings
+        if settings.enable_industry_reports:
+            from .monitoring import record_run
+            from .services import industry_report_worker
+            # The drainer writes its own row on its own tick, so this
+            # process speaks for it only when the thread is NOT there —
+            # a dead drainer must not be masked by a healthy main loop.
+            if not industry_report_worker.is_running():
+                record_run(
+                    industry_report_worker.HEARTBEAT_NAME, success=False,
+                    note="drainer thread not running (ENABLE_INDUSTRY_REPORTS=true) — "
+                         "no weekly Industry Analysis report will be generated",
+                )
+    except Exception:  # pragma: no cover — liveness must not kill the worker
+        log.warning("industry report drainer heartbeat failed", exc_info=True)
 
 
 def main() -> int:
@@ -137,12 +160,25 @@ def main() -> int:
         except Exception as exc:
             log.warning("worker pgvector backfill failed (continuing): %s", exc)
 
+        # Phase 6: register the in-code scorecard methodology so the web
+        # process can serve `/api/scorecard/spec` from the registry (it
+        # falls back to the in-code spec until then). Queue recovery is
+        # deliberately NOT here — `scorecard_loop.run_once` recovers at
+        # the start of every tick, so a stale `running` row can never be
+        # observed before recovery has had its turn.
+        try:
+            from .services import scorecard_service
+            log.info("worker scorecard registry: %s", scorecard_service.ensure_version_registered())
+        except Exception as exc:
+            log.warning("worker scorecard registry failed (continuing): %s", type(exc).__name__)
+
     threading.Thread(target=_seed, name="worker-seed", daemon=True).start()
 
     scheduler = None
     if settings.enable_monitoring:
         try:
             from apscheduler.schedulers.background import BackgroundScheduler  # type: ignore
+
             from .monitoring import register_all
             scheduler = BackgroundScheduler(daemon=True)
             register_all(scheduler)
@@ -172,6 +208,26 @@ def main() -> int:
             settings.enable_regen_worker,
         )
 
+    # FEAT-003 — the Industry Analysis drainer. A second durable queue with
+    # its own thread rather than work inside the weekly loop: report
+    # generation is minutes of stats + LLM per group, and running it on the
+    # scheduler's thread would block every other loop behind it. Gated on
+    # ENABLE_INDUSTRY_REPORTS, which render.yaml sets true on this service
+    # only — a page view on web must never generate a report.
+    from .services.industry_report_worker import start_worker as start_industry_worker
+    from .services.industry_report_worker import stop_worker as stop_industry_worker
+    if settings.enable_industry_reports:
+        if start_industry_worker():
+            log.info("industry report drainer started")
+        else:
+            log.error(
+                "industry report drainer did not start with "
+                "ENABLE_INDUSTRY_REPORTS=true — weekly reports will be "
+                "enqueued and never drained",
+            )
+    else:
+        log.info("industry reports disabled (ENABLE_INDUSTRY_REPORTS=false)")
+
     # Heartbeat immediately, then every 5 minutes. Without this, nothing
     # outside the container can tell a healthy worker from a crash-looping
     # one until a loop happens to fire — and the earliest, edgar_poller, is
@@ -191,6 +247,7 @@ def main() -> int:
         _heartbeat()
 
     stop_worker()
+    stop_industry_worker()
     if scheduler is not None:
         try:
             scheduler.shutdown(wait=False)

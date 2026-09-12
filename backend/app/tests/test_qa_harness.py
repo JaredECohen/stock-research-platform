@@ -4,9 +4,7 @@ from __future__ import annotations
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict
-
-import pytest
+from typing import Any
 
 # The harness lives outside `app/` (in `backend/qa/`) to make it clear
 # it's a sibling tool, not application code. Add backend/ to sys.path
@@ -16,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from qa import run_matrix  # noqa: E402
 
 
-def _good_memo() -> Dict[str, Any]:
+def _good_memo() -> dict[str, Any]:
     """A reasonably-shaped memo that should pass every rubric."""
     return {
         "rating_label": "Bullish",
@@ -79,7 +77,7 @@ def _good_memo() -> Dict[str, Any]:
     }
 
 
-def _broken_memo() -> Dict[str, Any]:
+def _broken_memo() -> dict[str, Any]:
     """A memo where most expectations should fail."""
     return {
         "rating_label": "BOGUS",

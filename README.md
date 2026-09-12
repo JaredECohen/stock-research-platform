@@ -12,32 +12,77 @@
 > legal / tax advice. Model portfolios and stock analyses are illustrative and
 > scenario-based. Conduct your own diligence or consult a qualified advisor before acting.
 
+The harness-neutral, durable investment-research methodology lives in
+[`docs/research/`](docs/research/). Start every substantive research session with
+[`docs/research/Research_State.md`](docs/research/Research_State.md), then load the 163-sub-industry
+handbook and structured map it names. Those files are the canonical local copies; matching
+copies in the ChatGPT **Investment Research** project Sources provide app access.
+
 ---
 
 ## What it does
 
 | Workflow | Page | Backed by |
 |---|---|---|
-| Single-stock memo (any ticker, with typeahead picker) | `/research` | `agents/graph.py::run_stock_memo` |
-| Three screener views — AI rank · factor rank · custom rule builder | `/screener` | `services/screener_service.py` + `services/screener_metrics_service.py` |
-| Editable DCF lab + sensitivity tables | `/dcf` | `finance/dcf.py` + `services/dcf_store.py` |
-| Comps with self-historical lens | `/comps` | `finance/comps.py` + `finance/comps_history.py` |
-| Macro scenario analysis | `/macro` | `agents/macro_agent.py` |
-| Conversational PM (8 tools — memo / DCF / comps / macro / universe / screener / custom screen) | `/chat` | `agents/orchestrator.py` + `agents/chat_sdk.py` |
-| Scenario-based portfolio builder | `/portfolio` | `finance/portfolio_construction.py` |
+| Single-stock memo (any ticker, with typeahead picker) | `/app/research` | `agents/graph.py::run_stock_memo` |
+| Three screener views — AI rank · factor rank · custom rule builder | `/app/screener` | `services/screener_service.py` + `services/screener_metrics_service.py` |
+| Editable DCF lab + sensitivity tables | `/app/dcf` | `finance/dcf.py` + `services/dcf_store.py` |
+| Comps with self-historical lens | `/app/comps` | `finance/comps.py` + `finance/comps_history.py` |
+| Historical fundamentals charts with memo-aware commentary | `/app/fundamentals` | `services/fundamentals_series_service.py` + `services/chart_commentary.py` |
+| Point-in-time fundamental factor scorecard + frozen CSV/JSON export | `/app/scorecard` | `services/scorecard_service.py` + `finance/scorecard_*.py` |
+| Weekly GICS Industry Group analysis — 25 groups, versioned editions | `/app/industries` | `services/industry_analytics.py` + `agents/industry_report_writer.py` |
+| Macro scenario analysis | `/app/macro` | `agents/macro_agent.py` |
+| Conversational PM (memo / DCF / comps / macro / universe / screener / custom screen / industry context) | `/app/chat` | `agents/orchestrator.py` + `agents/chat_sdk.py` |
+| Scenario-based portfolio builder | `/app/portfolio` | `finance/portfolio_construction.py` |
 
-The **curated screener universe** is the S&P 100, pre-analyzed nightly. Any ticker outside
-it is researchable on demand: typing it into `/research` triggers a profile lookup, a
+Pages live under `/app/*`. The bare paths (`/research`, `/dcf`, …) still work — see
+`LEGACY_APP_PATHS` in `frontend/src/App.tsx` — but they redirect, preserving query and
+hash, and are not the canonical URLs.
+
+The **curated screener universe** is the S&P 500 plus curated extensions (foreign-listed
+ADRs, sub-industry semis), pre-analyzed nightly. Any ticker outside it is researchable on
+demand: typing it into `/research` triggers a profile lookup, a
 5-year financial backfill (including 10-K + 10-Q + 8-K body text from SEC EDGAR and four
 quarters of transcripts from Alpha Vantage), and a full agent run. Subsequent reads are
 served from cache until a new filing or earnings transcript invalidates the memo.
 
 The **PM chat** routes follow-up turns and conceptual questions ("which has the strongest
 moat?", "show me cheap software with margins above 70%") through an OpenAI Agents SDK
-agent with eight tools — `get_memo`, `get_dcf_summary`, `get_comps`, `get_macro_snapshot`,
-`get_company_lite`, `list_universe`, `screener_query`, `custom_screen`. Workflow handlers
+agent with nine tools — `get_memo`, `get_dcf_summary`, `get_comps`, `get_macro_snapshot`,
+`get_company_lite`, `list_universe`, `screener_query`, `custom_screen`, `get_industry_context`
+(the last reads stored industry artifacts only; it never computes or generates). Workflow handlers
 still fire for unambiguous first-message asks ("Analyze NVDA", "Build a 10-stock
 portfolio") so the heavy memo path runs only when the user wants it.
+
+The **fundamental factor scorecard** scores the universe from stored filings at a
+versioned, point-in-time `available_at` — a row is only fed features that were knowable on
+its as-of date — and normalises them sector-neutrally into family and composite scores. It
+is evaluated, not asserted: the worker writes a quintile long/short spread, a
+Fama-French 5 + momentum regression and a double-selection LASSO, each with its own
+caveats and an explicit `insufficient_data` verdict when the sample cannot support one.
+The scorecard never moves a memo's rating; where it disagrees with the memo it raises a
+flagged disagreement instead.
+
+The **Industry Analysis** surface publishes one versioned edition per GICS industry
+group per week. The taxonomy is imported from a single knowledge base — 11 sectors, 25
+groups, 74 industries and 163 sub-industries — and no count is ever hardcoded: the registry
+is asked. Companies are classified through a research map first and the provider's own
+labels second, with every row carrying which source decided it.
+
+An edition separates what was observed from what was interpreted, and the separation is
+enforced rather than encouraged: a validator rejects a number that is not in the facts
+payload, a causal claim with no falsifier, and advice phrasing. Membership and price
+coverage are reported as different numbers, because a company that lost its price series
+has not left the industry. Where the weekly generation fails, the previous edition stays
+published and is flagged with what the failed attempt was, rather than the page going
+blank.
+
+**Accounts, plans and billing** (FEAT-002) ship behind flags and are **off by default**:
+with `AUTH_ENABLED=false` every route is open and plans resolve to `unrestricted`. Turned
+on, Clerk owns identity and Stripe is the only authority on what a customer has paid for —
+a checkout redirect is never treated as proof of payment, and no entitlement is ever
+decided in the frontend. `ADMIN_API_TOKEN` remains a separate, unrelated credential for
+`/api/admin/*`.
 
 ---
 
@@ -63,7 +108,7 @@ flowchart TB
 
     subgraph DB["Persistent store (SQLite or Postgres)"]
         direction TB
-        COMP[("companies<br/>S&amp;P 100 + analyzed_on_demand")]
+        COMP[("companies<br/>S&amp;P 500 + extensions + analyzed_on_demand")]
         FP[("financial_periods<br/>append-only · idempotent")]
         FD[("filing_docs<br/>10-K/Q text + sections")]
         ET[("earnings_transcripts<br/>speaker-segmented")]
@@ -191,17 +236,31 @@ Three tiers in the `companies.universe_tier` column. Dual-class names (Alphabet 
 GOOGL, Berkshire BRK.A / BRK.B) are listed once — FMP returns inconsistent per-class
 market caps for the two classes, which would distort every price-derived metric. Picked
 GOOGL (Class A, voting) and BRK.B (lower-priced, more retail-tradeable) as the canonical
-tickers. See [`backend/app/data/sp100.json`](backend/app/data/sp100.json)
+tickers. See [`backend/app/data/sp500.json`](backend/app/data/sp500.json)
 `_dual_class_policy` for the rationale.
 
 | Tier | Population | How it's used |
 |---|---|---|
-| `auto_analysis` | S&P 100 (curated, [`backend/app/data/sp100.json`](backend/app/data/sp100.json)) | Pre-scored nightly. Drives the screener. |
+| `auto_analysis` | S&P 500 + curated extensions ([`backend/app/data/sp500.json`](backend/app/data/sp500.json)) | Pre-scored nightly. Drives the screener. |
 | `analyzed_on_demand` | Anything the user has researched | Lazy-introduced via FMP profile lookup. Has a memo + DCF; not in the screener. |
 | `data_only` | Legacy / demoted | Has metadata but no memo. Not eligible for auto-analysis. |
 
-The S&P 100 list is a static snapshot — review and refresh it periodically (S&P revises
-constituents a few times a year).
+The universe file is a **hand-reviewed static snapshot** — it is never modified
+automatically from an external feed. It stamps its own review date
+(`_last_reviewed`, `_review_cadence_days`), and the platform tells you when that is due:
+
+```bash
+# Read-only: review date, staleness, drift vs the companies table
+python -m app.scripts.universe_review            # or GET /api/admin/universe-review
+# Also diff against FMP's live S&P 500 constituent list (still read-only)
+python -m app.scripts.universe_review --compare-feed
+# Explicit operator step: rewrite data/sp500.json from FMP (Premium), then re-seed
+python -m app.scripts.refresh_universe_lists && curl -X POST 'localhost:8000/api/seed-universe'
+```
+
+`GET /api/admin/cron-health` carries the same `universe_review` staleness flag so ops sees it
+where they already look. `sp100.json` is the legacy list the seeder falls back to only when
+`sp500.json` is missing.
 
 ---
 
@@ -225,15 +284,43 @@ cd ../backend
 python -m pytest -q
 ```
 
-First boot runs the lightweight S&P 100 seed (~100 FMP `/profile` calls, ~30s). Trigger the
-heavy financial backfill explicitly when you want full coverage:
+First boot runs the lightweight universe seed (one FMP `/profile` call per ticker in
+`data/sp500.json`; ~1 min for the 170-name starter list). Trigger the heavy financial
+backfill explicitly when you want full coverage:
 
 ```bash
-# Re-seed the S&P 100 universe (admin endpoint)
+# Re-seed the curated universe (admin endpoint; does not change the ticker list)
 curl -X POST 'localhost:8000/api/seed-universe?refresh=true'
 
-# Pull 5y financials + filings + transcripts for all 100 tickers (~600 calls, 3-5 min)
+# Pull 5y financials + filings + transcripts for the whole universe (~6 calls/ticker, minutes)
 python -c "from app.monitoring.history_backfill import run_once; print(run_once())"
+```
+
+### Dependencies and lint
+
+`backend/pyproject.toml` `[project.dependencies]` is the only place a dependency is
+declared. `backend/requirements.txt` is a **generated, fully pinned, universal lock**
+of it — the file Docker, CI and the quickstart above install — and CI fails when the
+two disagree. Never edit the lock by hand:
+
+```bash
+cd backend
+# bump a floor in pyproject.toml, then:
+make lock          # uv pip compile pyproject.toml --universal --python-version 3.12
+make lock-check    # what CI runs: re-lock and fail on any diff
+```
+
+The lock is compiled for the Docker image's Python 3.12; CI runs 3.12 too, and a
+separate `py311-floor` job only byte-compiles the package on the 3.11 floor. Because
+every version is pinned at lock time, **re-locking is a deploy-visible change**: review
+the diff and canary the redeploy.
+
+Lint runs as a blocking CI step; mypy is scoped and non-blocking until its count hits zero:
+
+```bash
+cd backend
+ruff check app     # config in pyproject.toml [tool.ruff]
+python -m mypy     # scoped via [tool.mypy].files
 ```
 
 ---
@@ -282,12 +369,15 @@ curl localhost:8000/api/providers/status | jq .
 |---|---|
 | `GET /health` | Liveness probe |
 | `GET /api/providers/status` | Per-provider configured/healthy state + active LLM provider |
-| `POST /api/seed-universe?refresh=…` | Re-seed S&P 100 from FMP profile |
+| `POST /api/seed-universe?refresh=…` | Re-seed the curated universe (S&P 500 + extensions) from FMP profiles; ticker list unchanged |
+| `GET /api/admin/universe-review?compare_feed=…` | Read-only universe review: review date, staleness, drift vs DB, optional FMP constituent diff |
 | `GET /api/admin/monitoring/status` | Last-run snapshot for every scheduler loop |
 | `GET /api/admin/llm-metrics` | Aggregate token / cost trail (last N days) |
 | `GET /api/admin/sdk-traces` | OpenAI Agents SDK exchange traces (when SDK runtime is on) |
 | `GET /api/admin/track-record` | Memo rating accuracy vs. realized forward returns |
 | `POST /api/screener/custom` | Rule-based screen against `screener_metrics` |
+| `POST /api/admin/scorecard/refresh` \| `/evaluate` \| `/backfill` | Enqueue a scorecard run; the worker drains it (202, enqueue-only) |
+| `GET /api/admin/scorecard/disagreements` | Open memo-vs-scorecard disagreements; `/{id}/dismiss` closes one |
 
 ---
 
@@ -304,11 +394,12 @@ curl localhost:8000/api/providers/status | jq .
 ├── Dockerfile / docker-compose.yml
 ├── backend/app/
 │   ├── main.py                     # FastAPI factory + startup seed
-│   ├── seed_universe.py            # S&P 100 seeder (idempotent)
+│   ├── seed_universe.py            # Curated-universe seeder (idempotent)
 │   ├── agents/                     # PM, specialists, critic, reflection, deep-research
 │   ├── api/                        # Route modules
 │   ├── data/
-│   │   ├── sp100.json
+│   │   ├── sp500.json              # S&P 500 + curated extensions (hand-reviewed)
+│   │   ├── sp100.json              # legacy fallback only
 │   │   ├── sector_configs.json
 │   │   └── peer_groups.json
 │   ├── finance/                    # DCF · comps · ratios · risk · portfolio · technicals

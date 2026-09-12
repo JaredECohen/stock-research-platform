@@ -214,6 +214,36 @@ def test_graph_falls_back_to_template_when_no_sector_block():
     assert any("Tailwind:" in p for p in bull.key_points)
 
 
+def _unpriced_dcf():
+    """A real DCF whose shares could not be priced — implied price and
+    upside are None on every scenario (no share count / no quote)."""
+    from app.schemas import DCFResult
+    from app.services.valuation_service import build_dcf
+    data = build_dcf("NVDA").model_dump()
+    for k in ("base", "bull", "bear"):
+        data[k]["implied_share_price"] = None
+        data[k]["upside_pct"] = None
+    data["current_price"] = None
+    return DCFResult(**data)
+
+
+def test_graph_bull_bear_lines_render_na_when_dcf_unpriced():
+    """The DCF price line on both sides must say n/a — never "$0.00
+    (+0%)" — when the model could not price the shares. Covered on the
+    sector-block path AND the template path since each formats the line."""
+    dcf = _unpriced_dcf()
+    v = AgentFinding(agent="v", headline="", summary="")
+    for sector in (_sector_finding_with_bb(), AgentFinding(agent="Sector Analyst", headline="h", summary="s", data={})):
+        bull = graph_module._bull_case(_profile(), v, dcf, sector)
+        bear = graph_module._bear_case(_profile(), dcf, sector)
+        bull_line = next(p for p in bull.key_points if p.startswith("DCF bull case implies"))
+        bear_line = next(p for p in bear.key_points if p.startswith("DCF bear case implies"))
+        assert bull_line == "DCF bull case implies n/a (n/a)."
+        assert bear_line == "DCF bear case implies n/a (n/a)."
+        for line in bull.key_points + bear.key_points:
+            assert "$0.00" not in line and "+0%" not in line
+
+
 def test_run_stock_memo_surfaces_sector_lean_in_verdict():
     # Full memo path — verifies the verdict picks up sector lean / disagreement.
     memo = graph_module.run_stock_memo("NVDA")

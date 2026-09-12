@@ -66,7 +66,8 @@ def main() -> int:
     init_db()
 
     # Seed before timing so seed cost doesn't pollute the measurement.
-    # Wave 9b — production seeder is the S&P 100 path; this measurement
+    # Wave 9b — production seeder is the curated-universe path (S&P 500 +
+    # extensions from data/sp500.json); this measurement
     # script always runs against the demo dataset so cost numbers stay
     # comparable across runs.
     from app.tests.fixtures.seed_demo_data import run_full_seed

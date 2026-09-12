@@ -1,0 +1,7 @@
+as_of,ticker,status,base_value,quote,unresolved_question,source_ids
+2026-09-07,NSSC,Conditional watch: closest to base value,32.2414551636119,37.01,"Gross activations, disconnects, carrier cost and dealer economics; exact fiscal consensus bridge.",NSSC_K; NSSC_MW
+2026-09-07,MOD,Conditional inflection: execution / deal gates,152.3297081017624,194.66,"Cost-by-cost margin recovery, investment returns and final transaction perimeter / matched estimates.",MOD_Q; MOD_R; MOD_DEAL; MOD_MW
+2026-09-07,POWL,Quality watch: growth already expected,113.27075768364315,181.17,"Delivery timing, cancellations, sustainable margins/capacity costs, fiscal-year bridge versus consensus.",POWL_Q; POWL_MW
+2026-09-07,LMAT,Downgraded: regulatory gate and valuation,57.23603220540669,80.67,"Regulatory closure, product availability and incremental remediation/working-capital burden.",LMAT_Q; LMAT_FDA; LMAT_MW
+2026-09-07,APPF,Price watch: after-SBC / service mix,136.80198873682158,214.28,Gross profit by subscription/payment/service cohort; retention and sustainable compensation cost.,APPF_Q; APPF_MW
+2026-09-07,WINA,Price watch: franchise ROIC and duration,166.98044443773028,318.17,Actual owner-adjusted store returns and new unit investment/payback after fees.,WINA_Q; WINA_FEES; WINA_STORE

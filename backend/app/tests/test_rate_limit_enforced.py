@@ -1,22 +1,23 @@
 """The per-IP limiter must actually refuse traffic.
 
-Every other rate-limit assertion in this suite is about *configuration* —
-that a route carries a decorator, that a limit string is registered. All of
-that stayed true on 2026-09-11 while the limiter enforced nothing at all.
+Every other rate-limit test in this suite asserts *configuration* — that a
+route carries a decorator, that a limit string is registered, that the
+exempt list holds the webhook. All of that stayed true on 2026-09-11 while
+the limiter enforced nothing at all.
 
 The cause was a library seam. slowapi's middleware resolves the endpoint by
-scanning `app.routes` one level deep and testing `hasattr(route, "endpoint")`.
-Under the pinned FastAPI an `include_router` call leaves a nested router
-object there instead of the flattened `APIRoute`s. That object matches the
-request but exposes no `endpoint`, so slowapi resolved `None` — and it treats
-an unresolved handler as **exempt**. Every route in this app arrives through
-`include_router`, so every request was exempt. Nothing raised, nothing
-logged, and it reproduced only against the versions `requirements.txt` pins,
-which are the ones CI and Render install.
+scanning `app.routes` one level deep; under the pinned FastAPI an
+`include_router` call leaves a nested router object there instead of the
+flattened `APIRoute`s (22 entries where the older FastAPI had 106). That
+object matches the request but exposes no `endpoint`, so slowapi resolved
+`None` — and it treats an unresolved handler as **exempt**. Nothing raised,
+nothing logged: every request simply skipped the limiter. It reproduced only
+against the pinned versions, which are what CI and Render install, so a
+developer box on the older FastAPI passed the whole suite.
 
-So these tests send real traffic and demand a real 429. They deliberately
-avoid slowapi and Starlette internals, because a suite written against the
-internals is what missed this.
+So these tests are deliberately behavioural: send real traffic, demand a
+real 429. They must not reference a slowapi or Starlette internal, because a
+test written against the internals is exactly what failed to notice.
 """
 from __future__ import annotations
 
@@ -24,17 +25,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.rate_limit import limiter
-
-# The global `default_limits` ceiling applied to any route without its own
-# decorator. Read from the limiter rather than retyped.
-DEFAULT_PER_MINUTE = 60
+from app.rate_limit import LIMITS, limiter
 
 
 @pytest.fixture()
 def limiting():
-    """Turn the limiter on for one test. It is disabled for the rest of the
-    suite so the tests are not throttled by their own traffic."""
+    """Turn the limiter on for one test. `conftest` disables it globally so
+    the rest of the suite is not throttled by its own traffic."""
     previous = limiter.enabled
     limiter.enabled = True
     limiter.reset()
@@ -50,43 +47,57 @@ def client():
     return TestClient(app)
 
 
-def test_the_limiter_refuses_traffic_past_the_global_ceiling(client, limiting):
-    """`/health` carries no decorator, so it takes the global default. This
-    is the assertion that was silently false in production."""
-    statuses = [client.get("/health").status_code for _ in range(DEFAULT_PER_MINUTE + 5)]
+def _limit_count(name: str) -> int:
+    """The numerator of a configured limit, e.g. '60/minute' -> 60."""
+    return int(LIMITS[name].split("/")[0])
+
+
+def test_a_decorated_route_refuses_traffic_past_its_limit(client, limiting):
+    """`/api/public/config` carries the `public_get` ceiling. Past it, the
+    limiter must answer 429 — this is the assertion that was silently false
+    in production."""
+    ceiling = _limit_count("public_get")
+    statuses = [client.get("/api/public/config").status_code for _ in range(ceiling + 5)]
 
     assert statuses[0] == 200, "the route itself must work"
     assert 429 in statuses, (
-        "the per-IP limiter refused nothing past its ceiling — every route is "
-        "unthrottled when slowapi cannot resolve the endpoint; see "
-        "rate_limit._find_route_handler"
+        "the per-IP limiter did not refuse anything past its ceiling. Every "
+        "route is unthrottled when slowapi cannot resolve the endpoint — see "
+        "rate_limit._find_route_handler."
     )
-    assert statuses.index(429) == DEFAULT_PER_MINUTE, (
-        f"expected the refusal on request {DEFAULT_PER_MINUTE + 1}, "
-        f"got it on {statuses.index(429) + 1}"
+    assert statuses.index(429) == ceiling, (
+        f"expected the refusal on request {ceiling + 1}, got it on {statuses.index(429) + 1}"
     )
 
 
 def test_the_limiter_reports_the_ceiling_it_is_applying(client, limiting):
-    """Headers are how a caller learns its budget, and their absence was the
-    first visible sign that nothing was being enforced."""
-    resp = client.get("/health")
-    assert resp.headers.get("x-ratelimit-limit") == str(DEFAULT_PER_MINUTE)
+    """Headers are how a caller learns the budget. Their absence was the
+    first visible symptom that nothing was being enforced."""
+    resp = client.get("/api/public/config")
+    assert resp.headers.get("x-ratelimit-limit") == str(_limit_count("public_get"))
     assert "x-ratelimit-remaining" in resp.headers
 
 
-def test_the_limiter_resolves_a_route_behind_an_included_router():
-    """The seam itself, asserted against OUR resolver rather than slowapi's.
+def test_an_undecorated_route_still_takes_the_global_default(client, limiting):
+    """`/health` carries no decorator, so it inherits `default_limits` via
+    the middleware. That path resolves the endpoint the same way, and broke
+    the same way."""
+    statuses = [client.get("/health").status_code for _ in range(65)]
+    assert 429 in statuses, "the global default limit is not being applied"
 
-    Every route in this app is added with `include_router`, so a resolver
-    that cannot see through that wrapper exempts the whole surface. Worth
-    asserting directly because the failure is silent: the app keeps serving,
-    it just stops enforcing.
+
+def test_the_limiter_resolves_routes_behind_an_included_router():
+    """The specific seam, asserted on OUR resolver rather than on slowapi's.
+
+    Every API route in this app arrives through `include_router`, so a
+    resolver that cannot see through that wrapper exempts the entire
+    surface. Checked directly because the failure mode is silent: the app
+    keeps serving, it simply stops enforcing.
     """
     from app.rate_limit import _find_route_handler
 
     scope = {
-        "type": "http", "method": "GET", "path": "/health",
+        "type": "http", "method": "GET", "path": "/api/public/config",
         "headers": [], "root_path": "", "query_string": b"",
     }
     handler = _find_route_handler(list(app.routes), scope)
@@ -94,4 +105,4 @@ def test_the_limiter_resolves_a_route_behind_an_included_router():
         "no endpoint resolved for an included route — slowapi would treat "
         "this request, and every other one, as exempt"
     )
-    assert handler.__name__ == "health"
+    assert handler.__name__ == "public_config"

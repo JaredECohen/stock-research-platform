@@ -14,9 +14,6 @@ Cover:
 """
 from __future__ import annotations
 
-from datetime import date
-from pathlib import Path
-
 import pytest
 
 from app.config import settings
@@ -179,8 +176,8 @@ def test_reflection_agent_writes_on_new_filing_only(tmp_memory):
 
 
 def test_reflection_agent_writes_cross_company_pattern_on_first_run(tmp_memory):
-    from app.agents.graph import run_stock_memo
     from app.agents import reflection_agent
+    from app.agents.graph import run_stock_memo
 
     memo = run_stock_memo("NVDA")
     triggers, _ = reflection_agent.run(memo)
@@ -198,8 +195,8 @@ def test_reflection_agent_writes_cross_company_pattern_on_first_run(tmp_memory):
 
 def test_reflection_disabled_writes_nothing(tmp_memory, monkeypatch):
     monkeypatch.setattr(settings, "enable_long_term_memory", False)
-    from app.agents.graph import run_stock_memo
     from app.agents import reflection_agent
+    from app.agents.graph import run_stock_memo
 
     memo = run_stock_memo("NVDA")
     triggers, written = reflection_agent.run(memo)

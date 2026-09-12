@@ -1,0 +1,5 @@
+{
+ "0": {"cik_str": 123456, "ticker": "ACME", "title": "Acme Industrial Corp"},
+ "1": {"cik_str": 7890, "ticker": "BRK-B", "title": "Dash Class B Holdings"},
+ "2": {"cik_str": 55555, "ticker": "zeta", "title": "Lowercase Ticker Labs"}
+}

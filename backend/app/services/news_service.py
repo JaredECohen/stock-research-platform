@@ -15,12 +15,12 @@ Two surfaces:
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .data_service import get_data_service
 
 
-def get_news(ticker: str) -> List[Dict[str, Any]]:
+def get_news(ticker: str) -> list[dict[str, Any]]:
     return get_data_service().get_news(ticker) or []
 
 
@@ -29,7 +29,7 @@ def get_news_combined(
     *,
     include_gdelt: bool = True,
     max_results: int = 30,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return news from every configured source, deduplicated + ranked.
 
     Each article carries `_sources: [provider_name, ...]` so the caller
@@ -37,7 +37,7 @@ def get_news_combined(
     to title-alpha when timestamps are missing.
     """
     ds = get_data_service()
-    streams: List[List[Dict[str, Any]]] = []
+    streams: list[list[dict[str, Any]]] = []
 
     primary = ds.get_news(ticker) or []
     if primary:
@@ -54,7 +54,7 @@ def get_news_combined(
         except Exception:
             pass
 
-    merged: List[Dict[str, Any]] = []
+    merged: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
     for stream in streams:
@@ -78,9 +78,9 @@ def get_news_combined(
 def search_news_broad(
     query: str,
     *,
-    tickers: Optional[List[str]] = None,
+    tickers: list[str] | None = None,
     limit: int = 25,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Free-form GDELT search, no ticker resolution."""
     try:
         return get_data_service().gdelt.search_news(
@@ -104,7 +104,7 @@ def _title_key(title: str) -> str:
     return " ".join(s.split()[:12])
 
 
-def _article_sort_key(article: Dict[str, Any]) -> tuple:
+def _article_sort_key(article: dict[str, Any]) -> tuple:
     """Sort articles newest-first, falling back to title."""
     ts = article.get("published_at") or article.get("publishedAt") or ""
     return (str(ts), str(article.get("title", "")))

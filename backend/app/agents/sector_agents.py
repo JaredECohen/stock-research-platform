@@ -13,7 +13,8 @@ Workflow:
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+import logging
+from typing import Any
 
 from ..cache import cache_get
 from ..config import settings
@@ -26,10 +27,13 @@ from ..schemas import (
 )
 from ..services.data_service import get_data_service
 from ..services.sector_research_service import run_sector_research
-from . import llm, prompts, sector_tools
+from . import industry_analysts, llm, prompts, sector_tools
+from .log_safety import log_safely
+
+log = logging.getLogger(__name__)
 
 
-def _format_kpi_summary(placements: Dict) -> List[str]:
+def _format_kpi_summary(placements: dict) -> list[str]:
     """Compact bullet list of the most informative KPI placements."""
     if not placements:
         return []
@@ -38,7 +42,7 @@ def _format_kpi_summary(placements: Dict) -> List[str]:
                       "EV_EBITDA", "FCF_yield", "PFCF", "gross_margin",
                       "capex_pct_revenue"]
     seen = set()
-    bullets: List[str] = []
+    bullets: list[str] = []
     for kpi in priority_order:
         if kpi not in placements or kpi in seen:
             continue
@@ -51,8 +55,11 @@ def _format_kpi_summary(placements: Dict) -> List[str]:
         is_ratio = abs(target_v) < 5
         target_s = f"{target_v:.1%}" if is_ratio else f"{target_v:.1f}x"
         med_s = f"{med_v:.1%}" if is_ratio else f"{med_v:.1f}x"
+        # Python 3.11 (the declared floor) rejects a nested f-string that
+        # reuses the enclosing quote character; resolve the fallback first.
+        interpretation = p.get("interpretation") or f"Q{p['quartile']}"
         bullets.append(
-            f"{kpi}: {target_s} vs cohort median {med_s} — {p.get('interpretation', f'Q{p['quartile']}')}"
+            f"{kpi}: {target_s} vs cohort median {med_s} — {interpretation}"
         )
         seen.add(kpi)
         if len(bullets) >= 5:
@@ -60,8 +67,8 @@ def _format_kpi_summary(placements: Dict) -> List[str]:
     return bullets
 
 
-def _format_trends(trends: Dict) -> List[str]:
-    out: List[str] = []
+def _format_trends(trends: dict) -> list[str]:
+    out: list[str] = []
     g = trends.get("cohort_revenue_growth_recent")
     if g is not None:
         out.append(f"Cohort revenue growth (recent): {g:+.1%}")
@@ -76,20 +83,20 @@ def _format_trends(trends: Dict) -> List[str]:
     return out
 
 
-def _macro_broadcast_payload() -> Dict:
+def _macro_broadcast_payload() -> dict:
     """Subscribe to the latest MacroBroadcast (Phase 6) — empty if none yet."""
     snap = cache_get("macro:global", "macro_broadcast")
     return snap.payload if snap and isinstance(snap.payload, dict) else {}
 
 
-def _pending_news_alerts(ticker: str) -> List[Dict]:
+def _pending_news_alerts(ticker: str) -> list[dict]:
     snap = cache_get(f"news_hot:{ticker}", "news_hot")
     if not snap or not isinstance(snap.payload, dict):
         return []
     return list(snap.payload.get("alerts") or [])[:5]
 
 
-def _cross_sector_relevance_heuristic(ticker: str, sector: str) -> List[str]:
+def _cross_sector_relevance_heuristic(ticker: str, sector: str) -> list[str]:
     """Demo-mode fallback for cross-sector relevance.
 
     A real model would inspect the value chain and pull through, e.g.,
@@ -97,7 +104,7 @@ def _cross_sector_relevance_heuristic(ticker: str, sector: str) -> List[str]:
     sector→adjacent-tickers map seeded from the demo universe.
     """
     ds = get_data_service()
-    adjacency: Dict[str, List[str]] = {
+    adjacency: dict[str, list[str]] = {
         # AI infra → grid: NEE (utility) and CAT (industrials power gen).
         "Technology": ["NEE", "CAT"],
         # Banks → tech (digital exposure).
@@ -119,7 +126,7 @@ def _cross_sector_relevance_heuristic(ticker: str, sector: str) -> List[str]:
     return [c for c in candidates if c in universe and c != ticker]
 
 
-def _coerce_bull_bear_analysis(raw: Any) -> Optional[BullBearAnalysis]:
+def _coerce_bull_bear_analysis(raw: Any) -> BullBearAnalysis | None:
     """Best-effort parse of an LLM-emitted bull_bear_analysis block.
 
     Returns None when the payload is missing required fields or malformed.
@@ -135,7 +142,7 @@ def _coerce_bull_bear_analysis(raw: Any) -> Optional[BullBearAnalysis]:
     if not (bull.get("headline") and bear.get("headline")):
         return None
     tests_raw = raw.get("falsifiable_tests") or []
-    falsifiable: List[FalsifiableTest] = []
+    falsifiable: list[FalsifiableTest] = []
     for t in tests_raw:
         if not isinstance(t, dict):
             continue
@@ -164,12 +171,17 @@ def _coerce_bull_bear_analysis(raw: Any) -> Optional[BullBearAnalysis]:
             sector_synthesis=str(raw.get("sector_synthesis", "")).strip(),
             sector_lean=lean,
         )
-    except Exception:
+    except Exception as exc:
+        # The caller logs the reader-visible outcome (structured bull/bear
+        # replaced by the deterministic builder) at WARNING; the validation
+        # detail only matters when debugging the prompt, so it stays at DEBUG.
+        log_safely(log, "sector bull/bear block failed validation", exc,
+                   level=logging.DEBUG)
         return None
 
 
 def _deterministic_bull_bear_analysis(
-    profile: Dict, research: Dict,
+    profile: dict, research: dict,
 ) -> BullBearAnalysis:
     """Cohort-grounded fallback when the LLM is offline or output is malformed.
 
@@ -187,7 +199,7 @@ def _deterministic_bull_bear_analysis(
     regime = research.get("regime") or "mixed"
 
     # Bear case — written first.
-    bear_points: List[str] = []
+    bear_points: list[str] = []
     if risks:
         bear_points.extend(f"Headwind: {r}" for r in risks[:3])
     om_d = trends.get("cohort_op_margin_delta")
@@ -210,7 +222,7 @@ def _deterministic_bull_bear_analysis(
     bear = BullBearCase(headline=bear_headline, key_points=bear_points)
 
     # Bull case — written second so any leftover slack lands here.
-    bull_points: List[str] = []
+    bull_points: list[str] = []
     if drivers:
         bull_points.extend(f"Tailwind: {d}" for d in drivers[:3])
     growth = placements.get("revenue_growth")
@@ -236,8 +248,8 @@ def _deterministic_bull_bear_analysis(
     falsifiable = [
         FalsifiableTest(
             statement=(
-                f"Cohort revenue growth turns negative for two consecutive quarters "
-                f"AND target margin compresses with it."
+                "Cohort revenue growth turns negative for two consecutive quarters "
+                "AND target margin compresses with it."
             ),
             invalidates_side="bull",
         ),
@@ -267,8 +279,8 @@ def _deterministic_bull_bear_analysis(
         f"Sector lean is {lean} based on cohort placement; PM should weigh other findings."
     )
     key_disagreement = (
-        f"Bears price in cohort margin compression flowing through to this name; "
-        f"bulls price in this name continuing to outpace cohort on the dominant driver."
+        "Bears price in cohort margin compression flowing through to this name; "
+        "bulls price in this name continuing to outpace cohort on the dominant driver."
     )
 
     return BullBearAnalysis(
@@ -281,15 +293,39 @@ def _deterministic_bull_bear_analysis(
     )
 
 
+def _industry_group_context(
+    profile: dict, industry_group: dict | None,
+) -> tuple[str, dict | None, Any]:
+    """FEAT-003 — `(prompt block, finding summary, analyst)` for the
+    company's industry group. Empty/None unless routing is on and the gather
+    stage handed us a row; a failure here degrades to the sector-only prompt
+    and says so on the summary rather than failing the sector read."""
+    if not (settings.enable_industry_analyst_routing and industry_group):
+        return "", None, None
+    try:
+        return industry_analysts.sector_prompt_block(profile, industry_group)
+    except Exception as exc:
+        log_safely(log, f"industry group block unavailable for {profile.get('ticker')}", exc)
+        summary = industry_analysts.industry_group_summary(industry_group, None)
+        summary["error"] = "industry group block unavailable"
+        return "", summary, None
+
+
 def run_sector_agent(
-    profile: Dict, ratios: Dict, *,
-    prior_round_critique: Optional[str] = None,
+    profile: dict, ratios: dict, *,
+    prior_round_critique: str | None = None,
+    industry_group: dict | None = None,
 ) -> AgentFinding:
     """Produce a deeply researched sector view.
 
     Phase 6: subscribes to the latest MacroBroadcast and pending NewsAlerts,
     and populates `cross_sector_relevance` so PM can pull through related
     names from other sectors.
+
+    FEAT-003: `industry_group` is the company's classification row (passed
+    by the roster only when ENABLE_INDUSTRY_ANALYST_ROUTING is on). It adds
+    the industry-group mandate to the prompt and a provenance block to
+    `data["industry_group"]`; absent, nothing about the sector read changes.
     """
     ticker = profile.get("ticker")
     if not ticker:
@@ -316,6 +352,9 @@ def run_sector_agent(
         ticker, profile=profile,
     )
     sector_context_block = sector_tools.render_prompt_block(sector_context)
+    industry_group_block, industry_summary, industry_analyst = _industry_group_context(
+        profile, industry_group,
+    )
 
     # Long-term agent memory (gated by ENABLE_LONG_TERM_MEMORY). Read both
     # files: the company-specific notebook and the sector-wide self-reflection
@@ -327,7 +366,11 @@ def run_sector_agent(
             sm = SectorMemory.for_sector(profile.get("sector") or "unknown")
             company_block = cm.as_prompt_context(max_chars=2500)
             sector_block = sm.as_prompt_context_for(ticker, max_chars=2500)
-            chunks = [b for b in (company_block, sector_block) if b]
+            group_block = (
+                industry_analyst.memory().as_prompt_context_for(ticker, max_chars=1500)
+                if industry_analyst is not None else ""
+            )
+            chunks = [b for b in (company_block, sector_block, group_block) if b]
             if chunks:
                 memory_context = "\n\n".join(chunks)
         except Exception:  # pragma: no cover — memory should never block a memo
@@ -404,6 +447,9 @@ def run_sector_agent(
             kpis=", ".join(kpi_names) if kpi_names else "-",
             valuation_lens=research.get("valuation_lens", ""),
             macro_sensitivities=", ".join(research.get("macro_sensitivities", [])),
+            # Always passed: `str.format` has no defaults, and '' leaves the
+            # template byte-identical to the pre-FEAT-003 prompt.
+            industry_group_block=industry_group_block,
             macro_broadcast=json.dumps(macro_broadcast, default=str)[:600] or "{}",
             news_alerts=json.dumps(news_alerts, default=str)[:600] or "[]",
         )
@@ -422,10 +468,11 @@ def run_sector_agent(
         + json.dumps(research_for_prompt, default=str)[:4500]
     )
 
-    # Sector agents share OPENAI_SECTOR_MODEL (gpt-5.4 by default).
+    # Sector agents share OPENAI_SECTOR_MODEL (gpt-5.4 by default); an
+    # unset env resolves to the active provider's cheap-route default.
     llm_out = llm.chat_json(
         user_prompt, system=prompts.PM_SYSTEM, route="cheap",
-        model=settings.openai_sector_model,
+        model=llm.resolve_role_model("sector"),
     )
 
     if llm_out:
@@ -440,17 +487,30 @@ def run_sector_agent(
         finding_data["macro_broadcast"] = macro_broadcast
         finding_data["pending_news_alerts"] = news_alerts
         finding_data["sector_data_context"] = sector_context
+        if industry_summary is not None:
+            finding_data["industry_group"] = industry_summary
         # Wave 3A: pull through the structured bull/bear analysis. If the
         # LLM didn't produce a parseable block, fall back to the
         # cohort-grounded deterministic builder so this contract is
         # always satisfied.
         bb = _coerce_bull_bear_analysis(llm_out.get("bull_bear_analysis"))
         if bb is None:
+            # (b) RP-001: the reader gets a cohort-templated bull/bear in
+            # place of the analyst's, presented identically. Flag it on the
+            # finding so the drop is visible instead of silent.
+            log.warning(
+                "Sector Analyst bull/bear block for %s missing or malformed; "
+                "deterministic bull/bear used", ticker,
+            )
+            finding_data["bull_bear_parse_failed"] = (
+                "LLM bull_bear_analysis block missing or malformed; "
+                "cohort-grounded deterministic bull/bear shipped instead"
+            )
             bb = _deterministic_bull_bear_analysis(profile, research)
         finding_data["bull_bear_analysis"] = bb.model_dump()
         # Wave 10 — typed citations for cohort peers + sector regime.
         from ..schemas import Citation
-        evidence: List[Citation] = []
+        evidence: list[Citation] = []
         for peer in cohort.get("peers", [])[:6]:
             evidence.append(Citation(
                 kind="peer", ref=str(peer),
@@ -478,12 +538,12 @@ def run_sector_agent(
         return finding
 
     # ---------- Deterministic fallback grounded in research payload ----------
-    headline_bits: List[str] = [f"{sub_industry} cohort, regime: {regime}"]
+    headline_bits: list[str] = [f"{sub_industry} cohort, regime: {regime}"]
     if structure.get("concentration_label"):
         headline_bits.append(f"{structure['concentration_label']} (HHI {structure.get('hhi_revenue', 0):.2f})")
     headline = " · ".join(headline_bits)
 
-    summary_lines: List[str] = []
+    summary_lines: list[str] = []
     summary_lines.append(
         f"{sector} / {sub_industry} regime read: {regime}. "
         f"Cohort of {cohort['size']} peers selected on {cohort['selection_basis']} basis."
@@ -505,7 +565,7 @@ def run_sector_agent(
     if sub_watch:
         summary_lines.append(f"Watch: {sub_watch}.")
 
-    key_points: List[str] = []
+    key_points: list[str] = []
     key_points.extend(_format_kpi_summary(placements))
     key_points.extend(_format_trends(trends))
     if filing_themes:
@@ -528,16 +588,28 @@ def run_sector_agent(
     finding_data["macro_broadcast"] = macro_broadcast
     finding_data["pending_news_alerts"] = news_alerts
     finding_data["sector_data_context"] = sector_context
+    if industry_summary is not None:
+        finding_data["industry_group"] = industry_summary
     # Wave 3A: contract-satisfying bull/bear analysis even on the no-LLM path.
     finding_data["bull_bear_analysis"] = (
         _deterministic_bull_bear_analysis(profile, research).model_dump()
     )
+    if settings.has_llm:
+        # (b) RP-001: an LLM was configured and produced nothing usable, so
+        # the cohort-templated prose below stands in for an analyst view.
+        # The graph promotes this flag into `degraded_agents`; in
+        # deterministic mode (no keys) this path IS the design and is not
+        # flagged.
+        finding_data["deterministic_fallback"] = (
+            "Sector LLM returned no usable output; cohort-grounded "
+            "deterministic summary shipped instead."
+        )
 
     # Pull a handful of overlay narrative hints into key_points so even
     # the no-LLM path surfaces concrete numbers (footprint-weighted HPI,
     # WTI, retail YoY, etc) rather than only cohort-quartile text.
     overlay_bundles = (sector_context.get("overlays") or {}).get("bundles") or {}
-    overlay_hints: List[str] = []
+    overlay_hints: list[str] = []
     for bundle in overlay_bundles.values():
         if not bundle.get("available"):
             continue

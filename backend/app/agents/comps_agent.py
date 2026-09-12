@@ -9,14 +9,18 @@ Two valuation lenses, both surfaced when available (Wave 3E):
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import logging
+from typing import Any
 
 from ..schemas import AgentFinding, CompsHistoryStats, CompsResult
+from .log_safety import log_safely, safe_exc
+
+log = logging.getLogger(__name__)
 
 
-def _peer_relative_points(comps: CompsResult) -> List[str]:
+def _peer_relative_points(comps: CompsResult) -> list[str]:
     target, median = comps.target, comps.median
-    pts: List[str] = []
+    pts: list[str] = []
     if target.ev_ebitda is not None and median.ev_ebitda is not None:
         pts.append(
             f"EV/EBITDA: target {target.ev_ebitda:.1f}x vs peer median "
@@ -41,10 +45,10 @@ def _peer_relative_points(comps: CompsResult) -> List[str]:
 
 
 def _self_history_points(
-    history: CompsHistoryStats, target_ev_ebitda: Optional[float],
-    target_op_margin: Optional[float], target_revenue_growth: Optional[float],
-) -> List[str]:
-    pts: List[str] = []
+    history: CompsHistoryStats, target_ev_ebitda: float | None,
+    target_op_margin: float | None, target_revenue_growth: float | None,
+) -> list[str]:
+    pts: list[str] = []
     label = history.lookback_label
     own_med = history.own_median
     pct = history.current_percentile
@@ -73,7 +77,7 @@ def _self_history_points(
     return pts
 
 
-def _premium_signal(comps: CompsResult, metric: str) -> Optional[str]:
+def _premium_signal(comps: CompsResult, metric: str) -> str | None:
     """For a given metric, return 'premium', 'discount', or None for in-line."""
     val = comps.premium_discount.get(metric)
     if val is None:
@@ -85,7 +89,7 @@ def _premium_signal(comps: CompsResult, metric: str) -> Optional[str]:
     return None
 
 
-def _own_history_signal(history: CompsHistoryStats, metric: str) -> Optional[str]:
+def _own_history_signal(history: CompsHistoryStats, metric: str) -> str | None:
     delta = history.current_vs_own_median.get(metric)
     if delta is None:
         return None
@@ -96,7 +100,7 @@ def _own_history_signal(history: CompsHistoryStats, metric: str) -> Optional[str
     return None
 
 
-def _strongest_fact_headline(ticker: str, comps: CompsResult) -> Optional[str]:
+def _strongest_fact_headline(ticker: str, comps: CompsResult) -> str | None:
     """Lead the headline with the comps read's strongest fact (B5).
 
     The old default — "Peer-relative read for {ticker}" — said nothing,
@@ -125,8 +129,8 @@ def _strongest_fact_headline(ticker: str, comps: CompsResult) -> Optional[str]:
 
 
 def run_comps_agent(
-    profile: Dict, comps: Optional[CompsResult],
-    *, prior_round_critique: Optional[str] = None,
+    profile: dict, comps: CompsResult | None,
+    *, prior_round_critique: str | None = None,
 ) -> AgentFinding:
     if comps is None:
         return AgentFinding(
@@ -140,11 +144,11 @@ def run_comps_agent(
 
     ticker = profile.get("ticker", "")
     history = comps.history
-    key_points: List[str] = _peer_relative_points(comps)
+    key_points: list[str] = _peer_relative_points(comps)
 
     # Wave 3E: when self-historical context is present, combine both lenses.
     confidence = 0.7
-    summary_parts: List[str] = [
+    summary_parts: list[str] = [
         f"Peer set: {', '.join(p.ticker for p in comps.peers)}. {comps.interpretation}"
     ]
     headline = (
@@ -193,7 +197,7 @@ def run_comps_agent(
     notes_block = build_notes_block_for_agent(
         "comps", profile, extra_query="EV EBITDA multiple cohort peer premium discount",
     )
-    finding_data: Dict[str, Any] = {}
+    finding_data: dict[str, Any] = {}
     if history is not None:
         finding_data["history"] = history.model_dump()
     if notes_block:
@@ -209,8 +213,9 @@ def run_comps_agent(
     from ..config import settings
     if settings.has_llm:
         try:
-            from . import llm
             import json as _json
+
+            from . import llm
             narr_payload = {
                 "ticker": ticker,
                 "peer_set": [p.ticker for p in comps.peers],
@@ -237,12 +242,16 @@ def run_comps_agent(
             )
             if isinstance(narr, dict) and narr.get("narrative"):
                 finding_data["narrative"] = str(narr["narrative"]).strip()
-        except Exception:  # pragma: no cover — narrative is best-effort
-            pass
+        except Exception as exc:  # pragma: no cover — narrative is best-effort
+            # (b) RP-001: the prose summary above the comps tile is gone
+            # for this run. Round 0 is deterministic by design, so this is
+            # not a degraded-agent entry — but it is no longer silent.
+            log_safely(log, f"Comps Analyst narrative failed for {ticker}", exc)
+            finding_data["narrative_failed"] = safe_exc(exc)
 
     # Wave 10 — typed citations for peer rows + own-history.
     from ..schemas import Citation
-    evidence: List[Citation] = []
+    evidence: list[Citation] = []
     for p in comps.peers[:8]:
         evidence.append(Citation(
             kind="peer", ref=p.ticker,
@@ -281,8 +290,9 @@ def run_comps_agent(
         from ..config import settings
         if settings.has_llm:
             try:
-                from . import llm, prompts
                 import json as _json
+
+                from . import llm, prompts
                 payload = {
                     "ticker": ticker,
                     "peer_set": [p.ticker for p in comps.peers],
@@ -317,7 +327,30 @@ def run_comps_agent(
                         sources=finding.sources,
                         data=finding_data,
                     )
-            except Exception:  # pragma: no cover — defensive
-                pass
+                else:
+                    _refire_fell_through(finding, ticker, None)
+            except Exception as exc:  # pragma: no cover — defensive
+                _refire_fell_through(finding, ticker, exc)
 
     return finding
+
+
+def _refire_fell_through(
+    finding: AgentFinding, ticker: str, exc: BaseException | None,
+) -> None:
+    """(b) RP-001: the PM asked a follow-up and got the round-0 text back.
+
+    On the deep-research re-fire path an LLM answer *was* expected, so
+    shipping the unchanged deterministic finding is a degradation the
+    graph must promote into `degraded_agents` — unlike round 0, where the
+    deterministic comps read is the design and is never flagged.
+    `finding.data` is mutated in place: pydantic copied `finding_data` at
+    construction, so writing to the local dict would not reach the memo.
+    """
+    if exc is not None:
+        log_safely(log, f"Comps Analyst re-fire failed for {ticker}", exc)
+        reason = f"deep-research re-fire failed ({safe_exc(exc)}); round-0 comps read kept"
+    else:
+        log.warning("Comps Analyst re-fire for %s returned no usable output", ticker)
+        reason = "deep-research re-fire returned no usable output; round-0 comps read kept"
+    finding.data["deterministic_fallback"] = reason

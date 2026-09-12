@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Send, Sparkles } from "lucide-react";
-import { api } from "@/api/client";
+import { api, isApiError } from "@/api/client";
 import { Markdown } from "@/components/Markdown";
 import { AgentTrace } from "@/components/AgentTrace";
 import MemoCard from "@/components/MemoCard";
-import type { ChatResponse } from "@/types";
+import RateLimitNotice from "@/components/RateLimitNotice";
+import UpgradePrompt from "@/components/UpgradePrompt";
+import type { ChatResponse, EntitlementRefusal, RateLimitRefusal } from "@/types";
 
 const STARTERS = [
   "Analyze NVDA as a long-term investment.",
@@ -22,6 +24,10 @@ interface Turn {
   response?: ChatResponse;
   loading?: boolean;
   error?: string;
+  // 402 / 429: the turn stays in the transcript with a specific prompt and
+  // the message goes back into the input box — nothing typed is lost.
+  refusal?: EntitlementRefusal;
+  rateLimit?: RateLimitRefusal;
 }
 
 export default function Chat() {
@@ -49,12 +55,30 @@ export default function Chat() {
         return copy;
       });
     } catch (e) {
+      const refusal = isApiError(e) ? e.entitlement : undefined;
+      const rateLimit = isApiError(e) ? e.rateLimit : undefined;
+      if (refusal || rateLimit) setInput((cur) => cur || msg);
       setTurns((prev) => {
         const copy = [...prev];
-        copy[copy.length - 1] = { user: msg, loading: false, error: String(e) };
+        copy[copy.length - 1] = {
+          user: msg,
+          loading: false,
+          refusal,
+          rateLimit,
+          error: refusal || rateLimit ? undefined : String(e),
+        };
         return copy;
       });
     }
+  };
+
+  /** Retry a refused turn in place: drop it, then send the same text. */
+  const retryTurn = (index: number) => {
+    const msg = turns[index]?.user;
+    if (!msg) return;
+    setTurns((prev) => prev.filter((_, i) => i !== index));
+    setInput((cur) => (cur === msg ? "" : cur));
+    void send(msg);
   };
 
   return (
@@ -93,6 +117,28 @@ export default function Chat() {
             )}
             {t.error && (
               <div className="card-tight border-danger-500/40 text-sm text-danger-500">{t.error}</div>
+            )}
+            {t.refusal && <UpgradePrompt refusal={t.refusal} compact />}
+            {t.rateLimit && (
+              <RateLimitNotice
+                refusal={t.rateLimit}
+                onRetry={() => retryTurn(i)}
+                preservedNote="Your message is kept in the box below."
+              />
+            )}
+            {t.response && t.response.needs_analysis && t.response.needs_analysis.length > 0 && (
+              <div className="card-tight border-accent-600/30 bg-accent-600/[0.04] text-sm text-slate-200" role="status">
+                No memo is stored yet for{" "}
+                {t.response.needs_analysis.map((tk, j) => (
+                  <React.Fragment key={tk}>
+                    {j > 0 && ", "}
+                    <Link to={`/app/research?ticker=${encodeURIComponent(tk)}`} className="font-mono text-accent-500 underline underline-offset-2">
+                      {tk}
+                    </Link>
+                  </React.Fragment>
+                ))}
+                . Run research on it from the Stock Research page; the PM answers from stored memos only.
+              </div>
             )}
             {t.response && (
               <div className="grid lg:grid-cols-[1fr_280px] gap-4">

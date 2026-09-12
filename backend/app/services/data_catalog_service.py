@@ -24,15 +24,18 @@ from __future__ import annotations
 import logging
 import math
 import statistics
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
+from ..config import settings
 from ..data_catalog import (
     SERIES_REGISTRY,
-    SeriesSpec,
     by_id,
     by_sector_tag,
     by_sub_industry_tag,
+)
+from ..data_catalog import (
     search as catalog_search,
 )
 from . import provider_cache
@@ -51,27 +54,27 @@ class SeriesSnapshot:
     frequency: str
     region: str
     description: str
-    latest: Optional[Dict[str, Any]] = None
-    prior: Optional[Dict[str, Any]] = None
-    change_1m: Optional[float] = None
-    change_3m: Optional[float] = None
-    change_12m: Optional[float] = None
-    yoy_pct: Optional[float] = None
-    z_score_5y: Optional[float] = None
-    sample_points: List[Dict[str, Any]] = field(default_factory=list)
-    error: Optional[str] = None
+    latest: dict[str, Any] | None = None
+    prior: dict[str, Any] | None = None
+    change_1m: float | None = None
+    change_3m: float | None = None
+    change_12m: float | None = None
+    yoy_pct: float | None = None
+    z_score_5y: float | None = None
+    sample_points: list[dict[str, Any]] = field(default_factory=list)
+    error: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 def discover_for_ticker(
     ticker: str,
     *,
-    profile: Optional[Dict[str, Any]] = None,
-    extra_categories: Optional[Iterable[str]] = None,
+    profile: dict[str, Any] | None = None,
+    extra_categories: Iterable[str] | None = None,
     max_per_axis: int = 8,
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> dict[str, list[dict[str, Any]]]:
     """Suggest catalog entries for a ticker.
 
     Routes by:
@@ -86,7 +89,7 @@ def discover_for_ticker(
     """
     sector = (profile or {}).get("sector") or ""
     sub_industry = (profile or {}).get("sub_industry") or ""
-    groups: Dict[str, List[Dict[str, Any]]] = {
+    groups: dict[str, list[dict[str, Any]]] = {
         "sector_relevant": [],
         "sub_industry_relevant": [],
         "geography_relevant": [],
@@ -135,14 +138,14 @@ def discover_for_ticker(
     return groups
 
 
-def discover_by_query(**kwargs: Any) -> List[Dict[str, Any]]:
+def discover_by_query(**kwargs: Any) -> list[dict[str, Any]]:
     """Thin passthrough to `data_catalog.search`."""
     return [s.to_dict() for s in catalog_search(**kwargs)]
 
 
 def fetch_series(
     series_id: str, *, force_refresh: bool = False,
-) -> Optional[SeriesSnapshot]:
+) -> SeriesSnapshot | None:
     """Read-through cached snapshot for a single series.
 
     Resolves the provider chain by the spec's `source` field, fetches
@@ -153,11 +156,11 @@ def fetch_series(
     if spec is None:
         return None
 
-    def _fetcher() -> Optional[Dict[str, Any]]:
+    def _fetcher() -> dict[str, Any] | None:
         # Try the named provider first; on miss fall through every other
         # provider on the macro chain (a test fixture, FRED, EIA, BLS,
         # Census all expose `get_macro_series`). First non-empty wins.
-        candidates: List[Any] = []
+        candidates: list[Any] = []
         named = _resolve_provider(spec.source)
         if named is not None:
             candidates.append(named)
@@ -215,7 +218,7 @@ def fetch_series(
 
 def fetch_snapshots(
     series_ids: Iterable[str], *, force_refresh: bool = False,
-) -> List[SeriesSnapshot]:
+) -> list[SeriesSnapshot]:
     return [
         snap for sid in series_ids
         if (snap := fetch_series(sid, force_refresh=force_refresh)) is not None
@@ -226,7 +229,7 @@ def fetch_snapshots(
 # Internals
 # ---------------------------------------------------------------------------
 
-def _resolve_provider(source: str) -> Optional[Any]:
+def _resolve_provider(source: str) -> Any | None:
     """Return the singleton provider matching `source`, if any.
 
     Walks data_service's live chain so registered providers (including
@@ -243,7 +246,11 @@ def _resolve_provider(source: str) -> Optional[Any]:
         for provider in chain:
             if str(getattr(provider, "name", "")).upper() == source_u:
                 return provider
-    # Direct attribute lookups for the static-attached providers.
+    # Direct attribute lookups for the static-attached providers — never
+    # under demo-only mode, where the chain above is deliberately empty
+    # and reaching past it would be the one provider call the suite makes.
+    if settings.use_demo_data_only:
+        return None
     if source_u == "FRED":
         return getattr(ds, "fred", None)
     if source_u == "EIA":
@@ -255,7 +262,7 @@ def _resolve_provider(source: str) -> Optional[Any]:
     return None
 
 
-def _macro_chain_providers() -> List[Any]:
+def _macro_chain_providers() -> list[Any]:
     """Every provider on data_service's macro/energy/inflation/labor chains.
 
     Used as the fallback fan-out when the named provider for a series
@@ -268,7 +275,7 @@ def _macro_chain_providers() -> List[Any]:
     except Exception:  # pragma: no cover
         return []
     seen: set[int] = set()
-    out: List[Any] = []
+    out: list[Any] = []
     for cap in ("macro", "energy", "inflation", "labor", "retail", "construction"):
         chain = ds._live_chain(cap) if hasattr(ds, "_live_chain") else []
         for p in chain:
@@ -279,7 +286,7 @@ def _macro_chain_providers() -> List[Any]:
     return out
 
 
-def _delta(points: List[Dict[str, Any]], *, lag: int) -> Optional[float]:
+def _delta(points: list[dict[str, Any]], *, lag: int) -> float | None:
     if len(points) <= lag:
         return None
     a = points[-1].get("value")
@@ -292,7 +299,7 @@ def _delta(points: List[Dict[str, Any]], *, lag: int) -> Optional[float]:
         return None
 
 
-def _yoy_pct(points: List[Dict[str, Any]]) -> Optional[float]:
+def _yoy_pct(points: list[dict[str, Any]]) -> float | None:
     if len(points) < 13:
         return None
     a = points[-1].get("value")
@@ -308,7 +315,7 @@ def _yoy_pct(points: List[Dict[str, Any]]) -> Optional[float]:
         return None
 
 
-def _z_score(points: List[Dict[str, Any]]) -> Optional[float]:
+def _z_score(points: list[dict[str, Any]]) -> float | None:
     """Z-score of the latest reading vs the trailing 5 years (60 monthly /
     260 daily). Best-effort; returns None when sample is too small."""
     values = [p.get("value") for p in points if p.get("value") is not None]

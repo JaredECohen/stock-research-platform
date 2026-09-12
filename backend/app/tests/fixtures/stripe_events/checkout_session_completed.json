@@ -1,0 +1,23 @@
+{
+  "id": "evt_TEST",
+  "object": "event",
+  "api_version": "2024-06-20",
+  "created": 1757400000,
+  "livemode": false,
+  "type": "checkout.session.completed",
+  "data": {
+    "object": {
+      "id": "cs_test_TEST",
+      "object": "checkout.session",
+      "mode": "subscription",
+      "status": "complete",
+      "payment_status": "paid",
+      "client_reference_id": "USER_TEST",
+      "customer": "cus_TEST",
+      "subscription": "sub_TEST",
+      "metadata": {"user_id": "USER_TEST", "external_id": "user_TEST"},
+      "success_url": "https://app.marketmosaic.test/app/billing/success?session_id={CHECKOUT_SESSION_ID}",
+      "cancel_url": "https://app.marketmosaic.test/app/billing/canceled"
+    }
+  }
+}

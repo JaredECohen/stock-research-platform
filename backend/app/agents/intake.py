@@ -2,8 +2,8 @@
 
 Before the parallel fan-out, the PM looks at the company profile +
 recent news alerts + macro regime and decides which specialists matter
-most for *this* memo. Default = run all 8. PM can deprioritize up to
-3 specialists per run, with a logged rationale.
+most for *this* memo. Default = run the whole roster. PM can deprioritize
+up to 3 specialists per run, with a logged rationale.
 
 Why this matters:
 - A regulated bank doesn't need a deep technical read.
@@ -22,18 +22,22 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from ..config import settings
 from . import llm
+from .roster import AGENTS
 
 log = logging.getLogger(__name__)
 
-ALL_SPECIALISTS: List[str] = [
-    "sector", "earnings", "filing", "valuation", "comps",
-    "macro", "risk", "technical",
-]
+# Derived from the roster so a new analyst is skippable (and stubbable)
+# without a second hand-maintained list here — the prompt below is
+# generated from the same list, so the model is never offered a roster
+# that has drifted from the code.
+ALL_SPECIALISTS: list[str] = [spec.key for spec in AGENTS]
+_DISPLAY_NAMES: dict[str, str] = {spec.key: spec.display_name for spec in AGENTS}
 
 # Hard-cap: PM may skip at most this many specialists per memo.
 # Forces the model to keep the rating defensible against the others.
@@ -42,13 +46,13 @@ _MAX_SKIPS = 3
 
 @dataclass
 class IntakeDecision:
-    skipped: Set[str] = field(default_factory=set)
+    skipped: set[str] = field(default_factory=set)
     rationale: str = ""
 
     def runs(self, specialist: str) -> bool:
         return specialist not in self.skipped
 
-    def model_dump(self) -> Dict[str, Any]:
+    def model_dump(self) -> dict[str, Any]:
         return {
             "skipped": sorted(self.skipped),
             "rationale": self.rationale,
@@ -56,16 +60,29 @@ class IntakeDecision:
 
 
 def run_intake(
-    profile: Dict[str, Any],
-    news_alerts: Optional[List[Dict[str, Any]]] = None,
+    profile: dict[str, Any],
+    news_alerts: list[dict[str, Any]] | None = None,
     *,
-    macro_regime: Optional[str] = None,
+    macro_regime: str | None = None,
+    specialists: Sequence[str] | None = None,
 ) -> IntakeDecision:
     """Decide which specialists to run for this memo.
 
-    Default: run all 8. LLM may deprioritize up to `_MAX_SKIPS` with a
-    one-line rationale per skip. Returns the decision (caller threads
-    it through the fan-out)."""
+    Default: run the whole roster. LLM may deprioritize up to `_MAX_SKIPS`
+    with a one-line rationale per skip. Returns the decision (caller
+    threads it through the fan-out).
+
+    `specialists` is THIS run's roster — the keys `roster.applicable`
+    returned. A spec whose `applies_to` said no is not on the run at all,
+    so it must not be offered to the PM: offering it lets one of the three
+    skips be spent on an analyst that was never going to run (a real
+    specialist the PM wanted deprioritized then runs anyway) and writes an
+    `intake_decision` audit line naming an absent agent.
+    """
+    available = [s for s in (ALL_SPECIALISTS if specialists is None else specialists)
+                 if s in _DISPLAY_NAMES]
+    if not available:
+        return IntakeDecision()
     if not getattr(settings, "openai_api_key", None):
         return IntakeDecision()
     payload = {
@@ -83,9 +100,9 @@ def run_intake(
         ],
     }
     out = llm.chat_json(
-        "You are the PM doing intake on a memo run. Eight specialists "
-        "are available — sector, earnings, filing, valuation, comps, "
-        "macro, risk, technical. Default: run them all. You may "
+        f"You are the PM doing intake on a memo run. {len(available)} "
+        "specialists are available — " + ", ".join(available) + ". "
+        "Default: run them all. You may "
         f"DEPRIORITIZE up to {_MAX_SKIPS} specialists for this memo "
         "ONLY when running them adds little to the thesis (e.g., a "
         "regulated bank rarely needs a technical read; a name with "
@@ -106,7 +123,7 @@ def run_intake(
         return IntakeDecision()
     cleaned = {
         str(s).strip().lower() for s in raw_skip
-        if isinstance(s, str) and s.strip().lower() in ALL_SPECIALISTS
+        if isinstance(s, str) and s.strip().lower() in available
     }
     if len(cleaned) > _MAX_SKIPS:
         cleaned = set(list(cleaned)[:_MAX_SKIPS])
@@ -119,17 +136,12 @@ def run_intake(
     return decision
 
 
-def stub_finding(specialist: str, rationale: str) -> Dict[str, Any]:
+def stub_finding(specialist: str, rationale: str) -> dict[str, Any]:
     """Build the placeholder AgentFinding payload for a skipped agent.
 
     Returns a dict so callers can `AgentFinding(**stub_finding(...))`.
     """
-    pretty = {
-        "sector": "Sector Analyst", "earnings": "Earnings Analyst",
-        "filing": "Filing Analyst", "valuation": "Valuation Analyst",
-        "comps": "Comps Analyst", "macro": "Macro Analyst",
-        "risk": "Risk Analyst", "technical": "Technical Analyst",
-    }.get(specialist, specialist.title())
+    pretty = _DISPLAY_NAMES.get(specialist, specialist.title())
     return {
         "agent": pretty,
         "headline": f"{pretty} — skipped per PM intake.",

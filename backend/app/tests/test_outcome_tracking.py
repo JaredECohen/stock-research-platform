@@ -15,22 +15,22 @@ Covers:
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, List
+from datetime import datetime, timedelta
+from typing import Any
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.database import SessionLocal
 from app.main import app
-from app.models import MemoOutcome, MemoSnapshot
+from app.models import MemoOutcome, MemoPostmortem, MemoSnapshot
 from app.services import outcome_service
 
 
 def _seed_snapshot(
     ticker: str = "TSTONE", *, version: int = 1,
     rating: str = "Bullish", confidence: float = 70.0,
-    days_ago: int = 120, as_of_date=None,
+    days_ago: int = 120, as_of_date=None, regime: str = "",
 ) -> MemoSnapshot:
     """Insert a memo snapshot N days ago for outcome testing."""
     with SessionLocal() as db:
@@ -46,6 +46,8 @@ def _seed_snapshot(
             memo_json={
                 "ticker": ticker, "rating_label": rating,
                 "confidence_score": confidence, "sector": "Technology",
+                "macro_regime_at_memo": regime,
+                "agent_influence": {"valuation": 0.5},
             },
             revision_log=[], generated_at=datetime.utcnow() - timedelta(days=days_ago),
             as_of_date=as_of_date,
@@ -57,7 +59,7 @@ def _seed_snapshot(
         return snap
 
 
-def _stub_prices(rows_by_ticker: Dict[str, List[Dict[str, Any]]]):
+def _stub_prices(rows_by_ticker: dict[str, list[dict[str, Any]]]):
     """Patch market_data_service.get_price_series to return stub data."""
     from app.services import market_data_service
     def fake(ticker: str, days: int = 252):
@@ -103,7 +105,9 @@ def test_close_on_or_after_picks_earliest_in_window():
 # ---------------------------------------------------------------------------
 
 def test_evaluate_all_due_writes_outcomes_for_due_horizons():
-    snap = _seed_snapshot("TSTONE", days_ago=120, rating="Bullish")
+    snap = _seed_snapshot(
+        "TSTONE", days_ago=120, rating="Bullish", regime="soft_landing",
+    )
     today = (snap.generated_at + timedelta(days=120)).date()
     g_iso = snap.generated_at.date().isoformat()
     target_30 = (snap.generated_at.date() + timedelta(days=30)).isoformat()
@@ -134,6 +138,7 @@ def test_evaluate_all_due_writes_outcomes_for_due_horizons():
     assert by_h[30]["forward_return"] == 0.10
     assert by_h[30]["thesis_held"] is True
     assert by_h[90]["forward_return"] == 0.20
+    assert by_h[30]["regime_at_memo"] == "soft_landing"
     # Alpha = ticker − benchmark.
     assert abs(by_h[30]["alpha"] - (0.10 - 0.02)) < 1e-9
 
@@ -161,6 +166,96 @@ def test_evaluate_all_due_idempotent_on_second_run():
     assert second["written"] == 0  # idempotent
 
 
+def test_due_outcome_without_prices_is_reported_as_unavailable():
+    """Missing provider config is failed work, not a successful no-op.
+
+    Production reproduced this with hundreds of due pairs and no price
+    provider configured on the worker: ``written=0 errors=0`` used to hide
+    the outage indefinitely.
+    """
+    snap = _seed_snapshot("TSTNOPX", days_ago=40, rating="Bullish")
+    today = (snap.generated_at + timedelta(days=40)).date()
+    with _stub_prices({}):
+        res = outcome_service.evaluate_all_due(horizons=[30], today=today)
+    assert res["written"] == 0
+    assert res["data_unavailable"] >= 1
+    assert res["ticker_prices_unavailable"] >= 1
+    assert res["due"] >= res["data_unavailable"]
+
+
+def test_outcome_loop_marks_missing_due_data_as_failed(monkeypatch):
+    from app.monitoring import outcome_loop
+
+    result = {
+        "evaluated": 12,
+        "due": 3,
+        "written": 0,
+        "already_recorded": 0,
+        "data_unavailable": 3,
+        "reflections": 0,
+        "errors": 0,
+    }
+    calls = []
+    monkeypatch.setattr(outcome_loop, "evaluate_all_due", lambda: result)
+    monkeypatch.setattr(
+        outcome_loop, "record_run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    assert outcome_loop.run_once() == result
+    assert calls[0][0] == ("outcome_loop",)
+    assert calls[0][1]["success"] is False
+    assert "unavailable=3" in calls[0][1]["note"]
+
+
+def test_postmortem_feedback_is_persisted_from_memo_json(monkeypatch):
+    """A scored outcome must become durable feedback for future PM prompts."""
+    from app.services import postmortem_service
+
+    snap = _seed_snapshot(
+        "TSTFEED", days_ago=120, rating="Bullish", regime="soft_landing",
+    )
+    g_iso = snap.generated_at.date().isoformat()
+    target_iso = (snap.generated_at.date() + timedelta(days=90)).isoformat()
+    today = (snap.generated_at + timedelta(days=120)).date()
+    prices = {
+        "TSTFEED": [
+            {"date": g_iso, "close": 100.0},
+            {"date": target_iso, "close": 120.0},
+        ],
+        "SPY": [
+            {"date": g_iso, "close": 500.0},
+            {"date": target_iso, "close": 530.0},
+        ],
+    }
+    with _stub_prices(prices):
+        result = outcome_service.evaluate_all_due(horizons=[90], today=today)
+    assert result["written"] >= 1
+
+    # Keep the test deterministic and zero-cost.  The production service
+    # intentionally has a deterministic lesson fallback when no LLM answer
+    # is available; the DB row is what influence_feedback reads later.
+    monkeypatch.setattr(postmortem_service, "_llm_postmortem", lambda *a, **k: None)
+    monkeypatch.setattr(postmortem_service, "_write_lesson_to_memory", lambda *a, **k: None)
+    report = postmortem_service.run_postmortems(horizon_days=90, limit=200)
+    assert report["written"] >= 1
+
+    with SessionLocal() as db:
+        row = db.query(MemoPostmortem).filter(
+            MemoPostmortem.memo_snapshot_id == snap.id,
+            MemoPostmortem.horizon_days == 90,
+        ).one()
+    assert row.ticker == "TSTFEED"
+    assert row.regime_at_memo == "soft_landing"
+    assert row.lesson
+    assert row.verdict in {"right", "wrong", "mixed", "pending"}
+
+    from app.services.influence_feedback import specialist_reliability
+    feedback = specialist_reliability(lookback=30)
+    assert feedback["n"] >= 1
+    assert "valuation" in feedback["per_agent"]
+
+
 def test_backtest_snapshots_are_skipped():
     bt_date = datetime.utcnow() - timedelta(days=200)
     snap = _seed_snapshot(
@@ -172,7 +267,7 @@ def test_backtest_snapshots_are_skipped():
         "SPY": [{"date": "2099-01-01", "close": 500.0}],
     }
     with _stub_prices(prices):
-        res = outcome_service.evaluate_all_due(today=today)
+        outcome_service.evaluate_all_due(today=today)
     rows = outcome_service.get_outcomes_for_snapshot(snap.id)
     assert rows == []  # backtest → no outcomes
 
@@ -282,7 +377,8 @@ def test_long_horizons_write_reflection_to_memory(tmp_path, monkeypatch):
         ],
     }
     with _stub_prices(prices):
-        outcome_service.evaluate_all_due(today=today)
+        result = outcome_service.evaluate_all_due(today=today)
+    assert result["reflections"] >= 1
     path = company_memory_path("TSTRFL")
     assert path.exists()
     text = path.read_text()

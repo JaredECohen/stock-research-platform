@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import random
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
 
@@ -11,13 +11,12 @@ from app.providers.base import ProviderStatus
 from app.services import factor_analytics
 from app.services.data_service import get_data_service
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _trading_days(n: int, start: date = date(2023, 1, 2)) -> List[date]:
-    out: List[date] = []
+def _trading_days(n: int, start: date = date(2023, 1, 2)) -> list[date]:
+    out: list[date] = []
     d = start
     while len(out) < n:
         if d.weekday() < 5:  # mon-fri
@@ -26,11 +25,11 @@ def _trading_days(n: int, start: date = date(2023, 1, 2)) -> List[date]:
     return out
 
 
-def _build_synthetic_factor_returns(n: int) -> Dict[str, List[Dict[str, Any]]]:
+def _build_synthetic_factor_returns(n: int) -> dict[str, list[dict[str, Any]]]:
     """Generate a deterministic FF+momentum factor return panel for n days."""
     rng = random.Random(0)
     dates = _trading_days(n)
-    payload: Dict[str, List[Dict[str, Any]]] = {}
+    payload: dict[str, list[dict[str, Any]]] = {}
     for sid, mu, sigma in [
         ("KFR.MKT_RF.D", 0.0003, 0.010),
         ("KFR.SMB.D",    0.0001, 0.005),
@@ -49,13 +48,13 @@ def _build_synthetic_factor_returns(n: int) -> Dict[str, List[Dict[str, Any]]]:
 
 
 def _prices_from_returns(
-    factor_payload: Dict[str, List[Dict[str, Any]]],
+    factor_payload: dict[str, list[dict[str, Any]]],
     *,
     market_beta: float,
     value_beta: float,
     seed: int = 42,
     alpha_daily: float = 0.0002,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Synthesize a price series whose true betas match the inputs.
 
     asset_excess[t] = alpha + market_beta * MKT_RF[t] + value_beta * HML[t] + noise[t]
@@ -68,7 +67,7 @@ def _prices_from_returns(
     rf = {p["date"]: p["value"] for p in factor_payload["KFR.RF.D"]}
     dates = sorted(mkt.keys())
     price = 100.0
-    prices: List[Dict[str, Any]] = [{"date": dates[0], "close": price}]
+    prices: list[dict[str, Any]] = [{"date": dates[0], "close": price}]
     for d in dates[1:]:
         excess = (alpha_daily + market_beta * mkt[d] + value_beta * hml[d]
                   + rng.gauss(0.0, 0.002))
@@ -87,15 +86,15 @@ class _StubFactorProvider:
     """
     name = "stub-factor"
 
-    def __init__(self, factor_payload: Dict[str, List[Dict[str, Any]]],
-                 prices: Optional[List[Dict[str, Any]]] = None) -> None:
+    def __init__(self, factor_payload: dict[str, list[dict[str, Any]]],
+                 prices: list[dict[str, Any]] | None = None) -> None:
         self._factors = factor_payload
         self._prices = prices or []
 
     def status(self) -> ProviderStatus:
         return ProviderStatus(name=self.name, configured=True, healthy=True)
 
-    def get_macro_series(self, series_id: str) -> Optional[Dict[str, Any]]:
+    def get_macro_series(self, series_id: str) -> dict[str, Any] | None:
         rows = self._factors.get(series_id)
         if not rows:
             return None
@@ -119,8 +118,8 @@ class _StubFactorProvider:
     def get_filings(self, *_a, **_k): return None
     def get_news(self, *_a, **_k): return None
     def get_estimates(self, *_a, **_k): return None
-    def list_tickers(self) -> List[str]: return []
-    def list_macro_series(self) -> List[Dict[str, Any]]: return []
+    def list_tickers(self) -> list[str]: return []
+    def list_macro_series(self) -> list[dict[str, Any]]: return []
 
 
 @pytest.fixture

@@ -19,7 +19,6 @@ Scheduled at 03:00 UTC, after `outcome_loop` (02:30) but before
 from __future__ import annotations
 
 import logging
-from typing import Dict
 
 from ..services.postmortem_service import run_postmortems
 from . import record_run
@@ -27,16 +26,25 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def run_once(*, limit_per_horizon: int = 25) -> Dict[str, int]:
-    early = run_postmortems(horizon_days=30, limit=limit_per_horizon)
-    full = run_postmortems(horizon_days=90, limit=limit_per_horizon)
+def run_once(*, limit_per_horizon: int = 25) -> dict[str, int]:
+    try:
+        early = run_postmortems(horizon_days=30, limit=limit_per_horizon)
+        full = run_postmortems(horizon_days=90, limit=limit_per_horizon)
+    except Exception as exc:
+        # Record before re-raising so cron-health and APScheduler both see
+        # the failure.  Previously an exception inside run_postmortems
+        # bypassed record_run entirely and made a dead loop look absent.
+        record_run(
+            "postmortem_loop",
+            success=False,
+            note=f"failed: {type(exc).__name__}: {exc}"[:1000],
+        )
+        raise
     note = (
         f"30d due={early['due']} written={early['written']} skipped={early['skipped']}; "
         f"90d due={full['due']} written={full['written']} skipped={full['skipped']}"
     )
-    success = early.get("skipped", 0) + full.get("skipped", 0) <= (
-        early.get("due", 0) + full.get("due", 0)
-    )
+    success = early.get("skipped", 0) + full.get("skipped", 0) == 0
     record_run("postmortem_loop", success=success, note=note)
     return {
         "early_due": early["due"], "early_written": early["written"],

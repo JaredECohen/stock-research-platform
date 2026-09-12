@@ -8,12 +8,71 @@ solver needed for a self-contained demo.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, Iterable, List, Optional
+from collections.abc import Mapping
+from typing import Any
 
 from ..schemas import ModelPortfolio, PortfolioHolding, PortfolioRequest
 
+# FEAT-003 — classification states that place a holding in an industry
+# group. A `fallback` row knows only its sector, so it is reported as
+# unmapped here rather than inflating a group's weight.
+_GROUP_STATES = frozenset({"mapped", "conflict"})
 
-SCENARIO_KEYWORDS: Dict[str, Dict[str, float]] = {
+
+def industry_group_exposure(
+    holdings: list[PortfolioHolding],
+    classifications: Mapping[str, Mapping[str, Any]],
+    group_names: Mapping[str, str],
+) -> dict[str, Any]:
+    """Portfolio weight by GICS industry group, from stored classifications.
+
+    Pure arithmetic: ``classifications`` is ``{ticker: row_dict}`` from
+    ``industry_classification.current_for`` and ``group_names`` maps a
+    4-digit code to its name. A holding without a group-level mapping is
+    listed under ``unmapped`` with its state and weight — the mapped
+    weight and the unmapped weight always add up to the portfolio's
+    total, so nothing is silently dropped or booked to a neutral bucket.
+    """
+    by_group: dict[str, dict[str, Any]] = {}
+    unmapped: list[dict[str, Any]] = []
+    mapped_weight = 0.0
+    unmapped_weight = 0.0
+    for h in holdings:
+        ticker = (h.ticker or "").upper()
+        row = classifications.get(ticker)
+        code = row.get("industry_group_code") if row else None
+        state = str(row.get("state")) if row else "unclassified"
+        weight = float(h.weight or 0.0)
+        if code and state in _GROUP_STATES:
+            entry = by_group.setdefault(str(code), {
+                "code": str(code),
+                "name": group_names.get(str(code)),
+                "sector_code": str(code)[:2],
+                "weight": 0.0,
+                "tickers": [],
+            })
+            entry["weight"] += weight
+            entry["tickers"].append(ticker)
+            mapped_weight += weight
+        else:
+            unmapped.append({"ticker": ticker, "weight": round(weight, 4), "state": state})
+            unmapped_weight += weight
+    groups = sorted(by_group.values(), key=lambda g: (-g["weight"], g["code"]))
+    for g in groups:
+        g["weight"] = round(g["weight"], 4)
+        g["tickers"] = sorted(g["tickers"])
+    largest = groups[0] if groups else None
+    return {
+        "by_group": groups,
+        "unmapped": sorted(unmapped, key=lambda u: (-u["weight"], u["ticker"])),
+        "n_groups": len(groups),
+        "mapped_weight": round(mapped_weight, 4),
+        "unmapped_weight": round(unmapped_weight, 4),
+        "largest": {"code": largest["code"], "name": largest["name"], "weight": largest["weight"]} if largest else None,
+        "weighting": "portfolio weight summed per group; equal to the holdings' weights, not market-cap weighted",
+    }
+
+SCENARIO_KEYWORDS: dict[str, dict[str, float]] = {
     "soft_landing": {
         "tech": 1.15, "consumer": 1.10, "financials": 1.05,
         "healthcare": 1.0, "energy": 0.95, "industrials": 1.05,
@@ -77,7 +136,7 @@ def detect_scenario(market_view: str) -> str:
     return "soft_landing"
 
 
-def blended_sector_weights(market_view: str) -> Dict[str, float]:
+def blended_sector_weights(market_view: str) -> dict[str, float]:
     """Wave 10 — sector multipliers blended across the regime mixture.
 
     Real macro states are mixtures (e.g. 0.55 soft / 0.30 sticky /
@@ -99,9 +158,9 @@ def blended_sector_weights(market_view: str) -> Dict[str, float]:
         key = detect_scenario(market_view)
         return dict(SCENARIO_KEYWORDS.get(key, {}))
     # Weighted average across regimes for each sector bucket.
-    blended: Dict[str, float] = {}
+    blended: dict[str, float] = {}
     seen_buckets: set[str] = set()
-    for regime, weight in probs.items():
+    for regime, _weight in probs.items():
         for bucket in SCENARIO_KEYWORDS.get(regime, {}):
             seen_buckets.add(bucket)
     for bucket in seen_buckets:
@@ -115,7 +174,7 @@ def blended_sector_weights(market_view: str) -> Dict[str, float]:
 
 def build_portfolio(
     request: PortfolioRequest,
-    candidates: List[dict],
+    candidates: list[dict],
     *,
     name: str = "Scenario Portfolio",
 ) -> ModelPortfolio:
@@ -180,9 +239,9 @@ def build_portfolio(
     # Sector cap: at most 35% in a single sector for balanced; tighter for conservative
     sector_cap = {"conservative": 0.30, "balanced": 0.40, "aggressive": 0.55}[request.risk_level]
 
-    selected: List[dict] = []
-    sector_used: Dict[str, float] = defaultdict(float)
-    raw_weights: Dict[str, float] = {}
+    selected: list[dict] = []
+    sector_used: dict[str, float] = defaultdict(float)
+    raw_weights: dict[str, float] = {}
     for c in eligible:
         if len(selected) >= n:
             break
@@ -223,8 +282,8 @@ def build_portfolio(
     total = sum(weights.values()) or 1.0
     weights = {t: round(w / total, 4) for t, w in weights.items()}
 
-    holdings: List[PortfolioHolding] = []
-    sector_allocation: Dict[str, float] = defaultdict(float)
+    holdings: list[PortfolioHolding] = []
+    sector_allocation: dict[str, float] = defaultdict(float)
     for c in selected:
         w = weights.get(c["ticker"], 0.0)
         if w <= 0:
@@ -248,13 +307,13 @@ def build_portfolio(
     weight_map = {h.ticker: h.weight for h in holdings}
     concentration = {k: round(v, 4) for k, v in concentration_metrics(weight_map).items()}
 
-    risk_notes: List[str] = []
+    risk_notes: list[str] = []
     if concentration.get("hhi", 0) > 0.18:
         risk_notes.append("Portfolio is concentrated; HHI above 0.18.")
     if concentration.get("top_3", 0) > 0.40:
         risk_notes.append("Top 3 holdings exceed 40% — single-name event risk is elevated.")
     if max(sector_allocation.values(), default=0) > 0.40:
-        biggest = max(sector_allocation, key=sector_allocation.get)
+        biggest = max(sector_allocation, key=lambda k: sector_allocation[k])
         risk_notes.append(
             f"{biggest} is the largest sector exposure at {sector_allocation[biggest]:.0%}; "
             "monitor sector-specific drawdowns."
@@ -264,16 +323,16 @@ def build_portfolio(
     if not risk_notes:
         risk_notes.append("Diversification looks reasonable; revisit positions on material thesis change.")
 
-    top_drivers: List[str] = []
+    top_drivers: list[str] = []
     for h in holdings[:3]:
         top_drivers.append(f"{h.ticker}: {h.rationale}")
 
-    invalidators: List[str] = [
+    invalidators: list[str] = [
         f"A reversal of the '{request.market_view}' thesis would unwind the sector tilt.",
         "Significant rerating in one of the top three positions would dominate portfolio P&L.",
         "Sustained credit-spread widening could compress the multiples this construction assumes.",
     ]
-    watch_items: List[str] = [
+    watch_items: list[str] = [
         "Update the screener weekly — refresh PM scores after major macro prints or earnings.",
         "Re-run the risk committee if sector allocation drifts >5% from target.",
         "Add a defensive sleeve if drawdown tolerance is tighter than risk_level suggests.",

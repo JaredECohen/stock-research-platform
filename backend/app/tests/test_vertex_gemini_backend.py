@@ -19,6 +19,15 @@ from app.agents.llm import _gemini_client, _resolve_gemini_model
 from app.config import settings
 
 
+@pytest.fixture(autouse=True)
+def _live_pair(monkeypatch):
+    """Backend selection is only reachable outside demo-only mode (the
+    factories refuse to build a client there — see `llm._demo_only`);
+    the SDK is patched in every test below, so nothing leaves the process."""
+    monkeypatch.setattr(settings, "enable_live_data", True)
+    monkeypatch.setattr(settings, "use_demo_data", False)
+
+
 # ---------------------------------------------------------------------------
 # Backend selection
 # ---------------------------------------------------------------------------

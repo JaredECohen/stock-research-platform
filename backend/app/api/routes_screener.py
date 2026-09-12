@@ -1,12 +1,13 @@
 """Screener endpoints — AI-first, factor-rank, and rule-based custom screen."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from ..agents.llm import llm_call_context
+from ..auth.entitlements import Grant, require_feature
+from ..auth.principal import current_principal
 from ..database import SessionLocal
 from ..models import Company, ScreenerMetric, ScreenerScore
 from ..rate_limit import LIMITS, limiter
@@ -18,6 +19,7 @@ from ..schemas import (
     ScreenerResult,
 )
 from ..services.screener_service import compute_universe_scores
+from .gating import rate_scope
 
 router = APIRouter()
 
@@ -30,7 +32,7 @@ _AI_SORT_COLUMNS = {
 }
 
 
-def _apply_sort(rows, sort_by: Optional[str], order: str = "desc"):
+def _apply_sort(rows, sort_by: str | None, order: str = "desc"):
     if not sort_by or sort_by not in _AI_SORT_COLUMNS:
         sort_by = "pm_score"
     rev = order != "asc"
@@ -41,11 +43,12 @@ def _apply_sort(rows, sort_by: Optional[str], order: str = "desc"):
 
 @router.get("/api/screener", response_model=ScreenerResult)
 def get_screener(
-    theme: Optional[str] = None,
-    sector: Optional[str] = None,
-    sort_by: Optional[str] = "pm_score",
+    theme: str | None = None,
+    sector: str | None = None,
+    sort_by: str | None = "pm_score",
     order: str = "desc",
     limit: int = 50,
+    _rate: None = Depends(rate_scope("data")),
 ) -> ScreenerResult:
     """AI-first screen + factor-rank.
 
@@ -64,7 +67,7 @@ def get_screener(
 
 
 @router.post("/api/screener/run", response_model=ScreenerResult)
-def run_screener(req: ScreenerRequest) -> ScreenerResult:
+def run_screener(req: ScreenerRequest, _rate: None = Depends(rate_scope("data"))) -> ScreenerResult:
     result = compute_universe_scores(theme=req.theme)
     if req.sectors:
         wanted = {s.lower() for s in req.sectors}
@@ -92,7 +95,7 @@ def _execute_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
     """Pure business logic for the custom screen — used by both the
     HTTP route (which adds rate limiting) and the chat-SDK tool (which
     invokes it directly without a Request object)."""
-    metric_names: List[str] = list({r.metric for r in req.rules})
+    metric_names: list[str] = list({r.metric for r in req.rules})
     metric_names.append(req.sort_by)
 
     with SessionLocal() as db:
@@ -145,7 +148,7 @@ def _execute_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
         # Pull AI scores in one query so we can render PM conviction
         # alongside the raw metrics.
         tickers = [m.ticker for m, _, _ in results]
-        score_lookup: Dict[str, ScreenerScore] = {}
+        score_lookup: dict[str, ScreenerScore] = {}
         if tickers:
             score_rows = db.execute(
                 select(ScreenerScore).where(
@@ -155,12 +158,12 @@ def _execute_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
             ).scalars().all()
             score_lookup = {s.ticker: s for s in score_rows}
 
-    rows: List[CustomScreenRow] = []
+    rows: list[CustomScreenRow] = []
     for m, company_name, sector in results:
         score = score_lookup.get(m.ticker)
         # Surface every metric the user filtered on plus the sort column;
         # frontend renders these as columns in the result grid.
-        metrics: Dict[str, Optional[float]] = {}
+        metrics: dict[str, float | None] = {}
         for name in metric_names:
             metrics[name] = getattr(m, name, None)
         rows.append(CustomScreenRow(
@@ -183,8 +186,9 @@ def _execute_custom_screen(req: CustomScreenRequest) -> CustomScreenResult:
 @limiter.limit(LIMITS["custom_screen"])
 def run_custom_screen(
     request: Request, response: Response, req: CustomScreenRequest,
+    _rate: None = Depends(rate_scope("data")),
 ) -> CustomScreenResult:
-    """Filter the curated S&P 100 against a user-defined rule set.
+    """Filter the curated universe (S&P 500 + extensions) against a user-defined rule set.
 
     Each rule is `{metric, op, value}` (or `{op: "between", value, value2}`).
     Rules are AND-combined. Tickers are restricted to the curated
@@ -206,8 +210,10 @@ class NLScreenerRequest(BaseModel):
 @router.post("/api/screener/nl")
 @limiter.limit(LIMITS["custom_screen"])
 def run_nl_screener(
-    request: Request, response: Response, req: "NLScreenerRequest",
-) -> Dict:
+    request: Request, response: Response, req: NLScreenerRequest,
+    _rate: None = Depends(rate_scope("llm_light")),
+    _grant: Grant = Depends(require_feature("pm_chat", resource_param=None)),
+) -> dict:
     """Wave 10 — natural-language screener.
 
     User types free-form prose ("show me profitable AI-exposed semis
@@ -216,8 +222,13 @@ def run_nl_screener(
     `theme_exposure`. Returns the inferred request alongside the
     matching rows so the user can audit / refine the translation
     before re-running.
+
+    FEAT-002: Pro only, and the translation is one LLM call — so it is
+    metered as an Ask-the-PM turn (`pm_chat`), same as macro analysis.
     """
     if not (req.query or "").strip():
         raise HTTPException(status_code=400, detail="query is required")
     from ..services import nl_screener
-    return nl_screener.run(req.query)
+    principal = current_principal(request)
+    with llm_call_context(user_id=principal.user_id, feature="pm_chat"):
+        return nl_screener.run(req.query)

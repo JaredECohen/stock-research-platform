@@ -1,7 +1,11 @@
 import React, { useEffect, useRef } from "react";
-import type { AgentFinding, RiskItem, StockMemoOut } from "@/types";
-import { fmtPct, ratingBadgeClass } from "@/lib/format";
+import type { AgentFinding, RiskItem, ScorecardContribution, ScorecardSummary, StockMemoOut } from "@/types";
+import { SCORECARD_FAMILIES } from "@/types/scorecard";
+import { fmtPct, fmtPrice, fmtUpside, ratingBadgeClass } from "@/lib/format";
+import { profileText } from "./scorecard/ScorecardPanel";
+import { familyLabel, fmtCoverage, fmtPercentile, fmtScore, fmtZ, humanize, isNum, na } from "./scorecard/format";
 import { Markdown } from "./Markdown";
+import TerminalClampBadge from "./TerminalClampBadge";
 
 /**
  * Professional investment-memo layout (sell-side / buy-side IC style):
@@ -13,6 +17,7 @@ import { Markdown } from "./Markdown";
  *   Earnings      — most recent print + guidance changes
  *   Filings       — 10-K / 10-Q risk + MD&A highlights
  *   Valuation     — DCF summary, comps, sensitivity
+ *   Scorecard     — observed inputs vs the fs-v1 model read (Phase 6)
  *   Macro & risk  — macro overlay, key risks, thesis breakers, critic
  *   Catalysts     — calendar / timeline
  *   Appendix      — sources, disclaimer
@@ -55,10 +60,16 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
   );
   const degraded = memo.degraded_agents || [];
   const dcf = memo.dcf_summary || {};
-  const dcfFair = pickNumber(dcf, ["target_price", "fair_value", "implied_per_share", "fair_value_per_share"]);
-  const dcfImpliedUpside = pickNumber(dcf, ["implied_upside", "upside", "upside_pct"]);
+  // `hasDcf` separates "the model ran" (numbers may still be null → "n/a")
+  // from "no DCF on this memo" (the section shows "—").
+  const hasDcf = Object.keys(dcf).length > 0;
+  // `base_implied_price` / `base_upside` are what the graph writes; the
+  // older aliases are kept for memos that pre-date that summary shape.
+  const dcfFair = pickNumber(dcf, ["base_implied_price", "target_price", "fair_value", "implied_per_share", "fair_value_per_share"]);
+  const dcfImpliedUpside = pickNumber(dcf, ["base_upside", "implied_upside", "upside", "upside_pct"]);
   const dcfWacc = pickNumber(dcf, ["wacc", "discount_rate"]);
   const dcfGrowth = pickNumber(dcf, ["terminal_growth", "g_terminal"]);
+  const tvClamped = dcf.tv_clamped === true;
 
   return (
     <div
@@ -118,10 +129,9 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                 <div className="mt-2 text-xs text-slate-400 print:text-slate-600">
                   Conviction: {Math.round(memo.confidence_score)}/100
                 </div>
-                {dcfFair !== null && (
+                {hasDcf && (
                   <div className="mt-1 text-xs text-slate-400 print:text-slate-600">
-                    Fair value: ${dcfFair.toFixed(2)}
-                    {dcfImpliedUpside !== null && ` (${fmtPctLoose(dcfImpliedUpside)})`}
+                    Fair value: {fmtPrice(dcfFair)} ({fmtUpside(dcfImpliedUpside)})
                   </div>
                 )}
               </div>
@@ -237,12 +247,13 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                 {memo.valuation_verdict.summary}
               </p>
             )}
+            {tvClamped && <TerminalClampBadge className="mb-3" />}
             <div className="grid md:grid-cols-2 gap-4 mb-4">
               <KvTable
                 title="DCF Summary"
                 rows={[
-                  ["Fair value / share", dcfFair !== null ? `$${dcfFair.toFixed(2)}` : "—"],
-                  ["Implied upside", dcfImpliedUpside !== null ? fmtPctLoose(dcfImpliedUpside) : "—"],
+                  ["Fair value / share", hasDcf ? fmtPrice(dcfFair) : "—"],
+                  ["Implied upside", hasDcf ? fmtUpside(dcfImpliedUpside) : "—"],
                   ["WACC", dcfWacc !== null ? fmtPctLoose(dcfWacc) : "—"],
                   ["Terminal growth", dcfGrowth !== null ? fmtPctLoose(dcfGrowth) : "—"],
                 ]}
@@ -263,6 +274,15 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
               </div>
             )}
           </Section>
+
+          {/* SCORECARD — hidden on memos that pre-date the field (undefined)
+              and on runs with no row for the ticker (null). Informs the
+              memo; the rating blend does not read it. */}
+          {memo.scorecard && (
+            <Section title="Fundamental Factor Scorecard">
+              <ScorecardMemoSection scorecard={memo.scorecard} />
+            </Section>
+          )}
 
           {/* MACRO + RISK */}
           {(memo.macro_sensitivity || memo.technical_agent_view) && (
@@ -462,6 +482,144 @@ function AgentBlock({ finding, subhead }: { finding: AgentFinding; subhead?: str
           </div>
         </details>
       )}
+    </div>
+  );
+}
+
+// Phase 6 — the memo's Scorecard section. Two explicitly labelled blocks:
+// **Observed** (the reported inputs: fiscal period, availability date,
+// coverage, the as-of date) and **Model read** (spec version, 0–100
+// score, z, percentiles, family composites, contributors). The two never
+// share a table so a reader cannot mistake a model number for a reported
+// one. Anything the run could not compute prints as "n/a (reason)" —
+// never 0, never "neutral". Print-safe like the other sections.
+const SCORECARD_OVERALL_REASON = "insufficient coverage: fewer than 5 families scored";
+
+function directionText(d: NonNullable<ScorecardSummary["disagreement"]>["direction"]): string {
+  return d === "narrative_above_quant" ? "the memo is more positive than the quant read" : "the memo is more negative than the quant read";
+}
+
+function ContribList({ label, items, emptyReason, testId }: { label: string; items: ScorecardContribution[]; emptyReason: string; testId: string }) {
+  return (
+    <div data-testid={testId}>
+      <div className="text-xs uppercase tracking-widest text-slate-400 print:text-slate-600 font-semibold">{label}</div>
+      {items.length === 0 ? (
+        <p className="mt-1 text-sm text-slate-400 print:text-slate-600">{na(emptyReason)}</p>
+      ) : (
+        <ul className="mt-1 list-disc pl-4 space-y-0.5 text-sm text-slate-200 print:text-slate-800">
+          {items.map((c) => (
+            <li key={c.feature}>
+              {humanize(c.feature)} <span className="text-slate-400 print:text-slate-600">({familyLabel(c.family)})</span>{" "}
+              <span className="font-mono">z {fmtZ(c.z)}</span>
+              <span className="text-slate-400 print:text-slate-600 font-mono"> · {c.contribution > 0 ? "+" : ""}{c.contribution.toFixed(3)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ScorecardMemoSection({ scorecard }: { scorecard: ScorecardSummary }) {
+  const known = SCORECARD_FAMILIES as readonly string[];
+  // Canonical order first, then any family the backend added that the
+  // client does not know yet — shown rather than dropped.
+  const extra = Object.keys(scorecard.categories ?? {}).filter((k) => !known.includes(k) && !k.startsWith("_"));
+  const families = [...known, ...extra];
+  const overallMissing = !isNum(scorecard.overall_score);
+  const disagreement = scorecard.disagreement ?? null;
+  const contributorEmpty = overallMissing ? "overall not scored" : "none listed";
+
+  return (
+    <div data-testid="memo-scorecard">
+      <p className="text-xs text-slate-400 print:text-slate-600 mb-3">
+        Spec {scorecard.version_key} · scored as of {scorecard.as_of}
+        {scorecard.stale ? " · stale (the latest run is older than 45 days)" : ""}. Observed inputs and the model&apos;s read are kept apart below. The
+        scorecard informed this memo; it did not move the rating.
+      </p>
+      <div className="grid md:grid-cols-2 gap-4 print:grid-cols-2">
+        <div data-testid="memo-scorecard-observed">
+          <KvTable
+            title="Observed — reported inputs"
+            rows={[
+              ["Latest fiscal period", scorecard.latest_period || na("period unknown")],
+              ["Data available", scorecard.data_available_at || na("availability unknown")],
+              ["Input coverage", fmtCoverage(scorecard.coverage)],
+              ["Scored as of", scorecard.as_of],
+            ]}
+          />
+        </div>
+        <div data-testid="memo-scorecard-model">
+          <KvTable
+            title={`Model read — ${scorecard.version_key}`}
+            rows={[
+              ["Overall score (0–100, 50 = z of 0)", fmtScore(scorecard.overall_score, SCORECARD_OVERALL_REASON)],
+              ["Overall z", fmtZ(scorecard.overall_z, SCORECARD_OVERALL_REASON)],
+              ["Universe percentile", fmtPercentile(scorecard.universe_percentile, overallMissing ? "unranked" : "not ranked")],
+              ["Sector percentile", fmtPercentile(scorecard.sector_percentile, overallMissing ? "unranked" : "sector too small")],
+            ]}
+          />
+        </div>
+      </div>
+
+      <p className="mt-3 text-sm text-slate-200 print:text-slate-800" data-testid="memo-scorecard-profile">
+        <span className="text-xs uppercase tracking-widest text-slate-400 print:text-slate-600 mr-2">Model read</span>
+        {profileText(scorecard.profiles)}
+        <span className="text-slate-400 print:text-slate-600"> — a scenario label from the sub-composites, not a recommendation.</span>
+      </p>
+
+      <table className="w-full text-sm mt-3" data-testid="memo-scorecard-categories">
+        <thead>
+          <tr className="text-xs uppercase tracking-wider text-slate-400 print:text-slate-600">
+            <th scope="col" className="text-left px-3 py-1.5 font-normal">Family</th>
+            <th scope="col" className="text-right px-3 py-1.5 font-normal">Score</th>
+            <th scope="col" className="text-right px-3 py-1.5 font-normal">z</th>
+            <th scope="col" className="text-right px-3 py-1.5 font-normal">Percentile</th>
+            <th scope="col" className="text-right px-3 py-1.5 font-normal">Inputs</th>
+          </tr>
+        </thead>
+        <tbody>
+          {families.map((fam) => {
+            const cat = scorecard.categories?.[fam];
+            const reason = !cat ? "not scored" : cat.n_available === 0 ? "no applicable inputs" : `${cat.n_available} of ${cat.n_features} inputs`;
+            return (
+              <tr key={fam} className="border-b border-slate-800 print:border-slate-200 last:border-0" data-testid={`memo-category-${fam}`} data-missing={cat && isNum(cat.score) ? undefined : "true"}>
+                <td className="px-3 py-1.5 text-slate-300 print:text-slate-700">{familyLabel(fam)}</td>
+                <td className="px-3 py-1.5 text-right font-mono">{fmtScore(cat?.score, reason)}</td>
+                <td className="px-3 py-1.5 text-right font-mono">{fmtZ(cat?.z, reason)}</td>
+                <td className="px-3 py-1.5 text-right font-mono">{fmtPercentile(cat?.percentile, reason)}</td>
+                <td className="px-3 py-1.5 text-right font-mono text-slate-400 print:text-slate-600">{cat ? `${cat.n_available}/${cat.n_features}` : na("not scored")}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <div className="grid md:grid-cols-2 gap-4 mt-3 print:grid-cols-2">
+        <ContribList label="Top positive contributors" items={scorecard.top_positive ?? []} emptyReason={contributorEmpty} testId="memo-scorecard-top-positive" />
+        <ContribList label="Top negative contributors" items={scorecard.top_negative ?? []} emptyReason={contributorEmpty} testId="memo-scorecard-top-negative" />
+      </div>
+
+      {disagreement && (
+        <div role="note" className="mt-4 border border-amber-500/50 print:border-amber-700 rounded p-3 text-sm" data-testid="memo-scorecard-disagreement">
+          <div className="font-semibold text-amber-400 print:text-amber-800">
+            Memo / scorecard disagreement · {disagreement.severity} · {humanize(disagreement.dimension).toLowerCase()}
+          </div>
+          <p className="mt-1 text-slate-200 print:text-slate-800">
+            {disagreement.note} ({directionText(disagreement.direction)}; gap {disagreement.gap > 0 ? "+" : ""}
+            {disagreement.gap.toFixed(0)} points.)
+          </p>
+          <p className="mt-1 text-slate-300 print:text-slate-700">
+            <span className="font-semibold">PM reconciliation:</span> {scorecard.reconciliation || na("not yet written")}
+          </p>
+        </div>
+      )}
+
+      <p className="mt-3 text-[10px] leading-relaxed text-slate-500 print:text-slate-600">
+        Observed figures come from reported statements (latest period {scorecard.latest_period || na("unknown")}, available {scorecard.data_available_at || na("unknown")}).
+        The model read is spec {scorecard.version_key} scored against the universe on {scorecard.as_of}: sector-neutral z-scores, equal family weights,
+        contributions summing to the overall z. A scenario output for research and education, not a recommendation.
+      </p>
     </div>
   );
 }

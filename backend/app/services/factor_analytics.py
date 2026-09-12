@@ -19,13 +19,13 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 log = logging.getLogger(__name__)
 
 # Factor IDs the regression uses (in this order). Each maps to a Ken
 # French daily series via the catalog.
-_FACTOR_IDS_DAILY: List[str] = [
+_FACTOR_IDS_DAILY: list[str] = [
     "KFR.MKT_RF.D",  # MKT_RF
     "KFR.SMB.D",     # SMB
     "KFR.HML.D",     # HML
@@ -34,7 +34,7 @@ _FACTOR_IDS_DAILY: List[str] = [
     "KFR.MOM.D",     # MOM
 ]
 _RF_ID_DAILY = "KFR.RF.D"
-_FACTOR_LABELS: Dict[str, str] = {
+_FACTOR_LABELS: dict[str, str] = {
     "KFR.MKT_RF.D": "Market",
     "KFR.SMB.D": "Size (SMB)",
     "KFR.HML.D": "Value (HML)",
@@ -48,27 +48,27 @@ _FACTOR_LABELS: Dict[str, str] = {
 class FactorProfile:
     ticker: str
     observations: int
-    start_date: Optional[str]
-    end_date: Optional[str]
+    start_date: str | None
+    end_date: str | None
     alpha_daily: float
     alpha_annualized: float
     r_squared: float
-    betas: Dict[str, float]
-    attributed_excess_return: Dict[str, float]
+    betas: dict[str, float]
+    attributed_excess_return: dict[str, float]
     total_excess_return: float
-    primary_factor: Optional[str]
-    narrative_hints: List[str] = field(default_factory=list)
+    primary_factor: str | None
+    narrative_hints: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 def estimate_factor_profile(
     ticker: str,
-    price_history: Optional[List[Dict[str, Any]]],
+    price_history: list[dict[str, Any]] | None,
     *,
     min_observations: int = 60,
-) -> Optional[FactorProfile]:
+) -> FactorProfile | None:
     """Run a 6-factor regression of `ticker`'s daily excess returns.
 
     `price_history` is a list of `{date, close}` (or `{date, adj_close}`)
@@ -89,7 +89,7 @@ def estimate_factor_profile(
         return None
 
     # Fetch all factor series + RF.
-    factor_points: Dict[str, List[Dict[str, Any]]] = {}
+    factor_points: dict[str, list[dict[str, Any]]] = {}
     for sid in _FACTOR_IDS_DAILY + [_RF_ID_DAILY]:
         snap = data_catalog_service.fetch_series(sid)
         if snap is None or snap.error or not snap.sample_points:
@@ -132,8 +132,8 @@ def estimate_factor_profile(
     r_squared = 1.0 - (float(np.sum(residual ** 2)) / total_ss) if total_ss else 0.0
 
     alpha_daily = float(coefficients[0])
-    betas: Dict[str, float] = {}
-    attributed: Dict[str, float] = {}
+    betas: dict[str, float] = {}
+    attributed: dict[str, float] = {}
     for i, sid in enumerate(_FACTOR_IDS_DAILY):
         beta = float(coefficients[i + 1])
         # Total attributed excess return = beta * sum(factor returns)
@@ -171,8 +171,8 @@ def estimate_factor_profile(
 # ---------------------------------------------------------------------------
 
 def _daily_returns_from_prices(
-    price_history: Optional[List[Dict[str, Any]]],
-) -> List[Dict[str, Any]]:
+    price_history: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
     if not price_history:
         return []
     # Accept either {date, close} or {date, adj_close}. Sort ascending.
@@ -180,8 +180,8 @@ def _daily_returns_from_prices(
         [r for r in price_history if r.get("date")],
         key=lambda r: r["date"],
     )
-    out: List[Dict[str, Any]] = []
-    prev: Optional[float] = None
+    out: list[dict[str, Any]] = []
+    prev: float | None = None
     for row in rows:
         price = row.get("adj_close") or row.get("close") or row.get("price")
         if price is None:
@@ -196,11 +196,10 @@ def _daily_returns_from_prices(
     return out
 
 
-def _full_series_points(series_id: str) -> Optional[List[Dict[str, Any]]]:
+def _full_series_points(series_id: str) -> list[dict[str, Any]] | None:
     """Fetch the full point history for a series (not just the last 24)."""
     try:
-        from . import data_catalog_service
-        from . import provider_cache
+        from . import data_catalog_service, provider_cache
     except Exception:  # pragma: no cover
         return None
     cached = provider_cache.get("macro", f"catalog:{series_id}", ttl_seconds=None)
@@ -217,16 +216,16 @@ def _full_series_points(series_id: str) -> Optional[List[Dict[str, Any]]]:
 
 
 def _align_returns(
-    asset_returns: List[Dict[str, Any]],
-    factor_points: Dict[str, List[Dict[str, Any]]],
-) -> List[Dict[str, Any]]:
+    asset_returns: list[dict[str, Any]],
+    factor_points: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
     """Inner-join by date across the asset returns + every factor series."""
-    by_date: Dict[str, Dict[str, Any]] = {
+    by_date: dict[str, dict[str, Any]] = {
         row["date"]: {"date": row["date"], "asset": row["ret"]} for row in asset_returns
     }
     for sid, points in factor_points.items():
         per_date = {str(p["date"])[:10]: p.get("value") for p in points if p.get("date") is not None}
-        keep: Dict[str, Dict[str, Any]] = {}
+        keep: dict[str, dict[str, Any]] = {}
         for d, row in by_date.items():
             v = per_date.get(d)
             if v is None or not isinstance(v, (int, float)) or math.isnan(v):
@@ -245,10 +244,10 @@ def _align_key(series_id: str) -> str:
 
 
 def _build_narrative_hints(
-    *, ticker: str, betas: Dict[str, float], attributed: Dict[str, float],
+    *, ticker: str, betas: dict[str, float], attributed: dict[str, float],
     total_excess: float, r_squared: float, alpha_daily: float, obs: int,
-) -> List[str]:
-    hints: List[str] = []
+) -> list[str]:
+    hints: list[str] = []
     hints.append(
         f"FF5+momentum regression explains {r_squared * 100:.0f}% of {ticker}'s "
         f"excess return variance over the last {obs} trading days."
@@ -301,7 +300,7 @@ def _factor_signal_label(*, sid: str, beta: float) -> str:
     return ""
 
 
-def compute_for_ticker(ticker: str) -> Optional[Dict[str, Any]]:
+def compute_for_ticker(ticker: str) -> dict[str, Any] | None:
     """Convenience: fetch price history for a ticker, then run the regression.
 
     Returns the FactorProfile as a dict, or None if data unavailable.

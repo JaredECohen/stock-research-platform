@@ -43,6 +43,7 @@ def test_regen_queue_end_to_end(live_settings):
         pytest.skip("no LLM key configured (OPENAI_API_KEY / ANTHROPIC_API_KEY)")
 
     from fastapi.testclient import TestClient
+
     from app.database import init_db
     from app.main import app
     from app.services import regen_worker

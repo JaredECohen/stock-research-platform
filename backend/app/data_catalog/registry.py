@@ -26,8 +26,8 @@ Conventions:
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ class SeriesSpec:
     sector_tags: tuple[str, ...] = field(default_factory=tuple)
     sub_industry_tags: tuple[str, ...] = field(default_factory=tuple)
     region: str = "US"
-    documentation_url: Optional[str] = None
+    documentation_url: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -552,16 +552,16 @@ SERIES_REGISTRY: tuple[SeriesSpec, ...] = (
 _BY_ID: dict[str, SeriesSpec] = {s.series_id: s for s in SERIES_REGISTRY}
 
 
-def by_id(series_id: str) -> Optional[SeriesSpec]:
+def by_id(series_id: str) -> SeriesSpec | None:
     return _BY_ID.get(series_id)
 
 
-def by_category(category: str) -> List[SeriesSpec]:
+def by_category(category: str) -> list[SeriesSpec]:
     cat = category.lower()
     return [s for s in SERIES_REGISTRY if s.category == cat]
 
 
-def by_sector_tag(sector: str) -> List[SeriesSpec]:
+def by_sector_tag(sector: str) -> list[SeriesSpec]:
     """Return series whose `sector_tags` include the given GICS sector."""
     if not sector:
         return []
@@ -569,7 +569,7 @@ def by_sector_tag(sector: str) -> List[SeriesSpec]:
     return [s for s in SERIES_REGISTRY if target in s.sector_tags]
 
 
-def by_sub_industry_tag(sub_industry: str) -> List[SeriesSpec]:
+def by_sub_industry_tag(sub_industry: str) -> list[SeriesSpec]:
     """Return series tagged for a specific sub-industry."""
     if not sub_industry:
         return []
@@ -577,15 +577,15 @@ def by_sub_industry_tag(sub_industry: str) -> List[SeriesSpec]:
     return [s for s in SERIES_REGISTRY if target in s.sub_industry_tags]
 
 
-def list_categories() -> List[str]:
+def list_categories() -> list[str]:
     return sorted({s.category for s in SERIES_REGISTRY})
 
 
-def list_regions() -> List[str]:
+def list_regions() -> list[str]:
     return sorted({s.region for s in SERIES_REGISTRY})
 
 
-def list_sector_tags() -> List[str]:
+def list_sector_tags() -> list[str]:
     tags: set[str] = set()
     for s in SERIES_REGISTRY:
         tags.update(s.sector_tags)
@@ -594,13 +594,13 @@ def list_sector_tags() -> List[str]:
 
 def search(
     *,
-    sector: Optional[str] = None,
-    sub_industry: Optional[str] = None,
-    categories: Optional[Iterable[str]] = None,
-    region: Optional[str] = None,
-    sources: Optional[Iterable[str]] = None,
-    keywords: Optional[Iterable[str]] = None,
-) -> List[SeriesSpec]:
+    sector: str | None = None,
+    sub_industry: str | None = None,
+    categories: Iterable[str] | None = None,
+    region: str | None = None,
+    sources: Iterable[str] | None = None,
+    keywords: Iterable[str] | None = None,
+) -> list[SeriesSpec]:
     """Filter the registry by any combination of axes.
 
     All filters are AND-combined. Keyword match is case-insensitive and
@@ -609,7 +609,7 @@ def search(
     cats = {c.lower() for c in categories} if categories else None
     srcs = {s.upper() for s in sources} if sources else None
     kws = [k.lower() for k in keywords] if keywords else None
-    results: List[SeriesSpec] = []
+    results: list[SeriesSpec] = []
     for spec in SERIES_REGISTRY:
         if sector and sector not in spec.sector_tags:
             continue

@@ -33,8 +33,8 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict, deque
-from datetime import date as _date, datetime
-from typing import Any, Deque, Dict, List, Optional
+from datetime import datetime
+from typing import Any
 
 from ..schemas import NewsAlert, StockMemoOut
 
@@ -55,7 +55,7 @@ AUTO_REGEN_RECENCY_DAYS = 30
 # full_reanalysis by the durable `regen_jobs` queue — kept because the
 # /api/admin/update-queue inspector reads it and future in-process
 # event types may still want it.
-_QUEUES: Dict[str, Deque[Dict[str, Any]]] = defaultdict(deque)
+_QUEUES: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
 
 
 def _patch_count_today(ticker: str) -> int:
@@ -86,7 +86,7 @@ def _patch_count_today(ticker: str) -> int:
 
 def should_auto_regen(
     ticker: str, *, window_days: int = AUTO_REGEN_RECENCY_DAYS,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Decide whether a polling event should trigger memo regeneration.
 
     Two conditions, OR'd together:
@@ -102,9 +102,9 @@ def should_auto_regen(
     """
     ticker = ticker.upper()
     try:
-        from . import memo_store
         from ..database import SessionLocal
         from ..models import Company
+        from . import memo_store
         with SessionLocal() as db:
             company = db.get(Company, ticker)
             if company is not None and company.auto_update_memo:
@@ -127,11 +127,23 @@ def should_auto_regen(
             "reason": f"stale_memo_{int(age_days)}d_old",
         }
     except Exception as exc:  # pragma: no cover — fail-safe to no-regen
-        log.warning("should_auto_regen failed for %s: %s", ticker, exc)
+        from ..agents.log_safety import log_safely  # lazy: agents imports services
+        log_safely(log, f"should_auto_regen failed for {ticker}", exc)
         return {"should": False, "reason": "db_error"}
 
 
-def _persist_raw_data_only(ticker: str) -> Dict[str, int]:
+# `reason` values from `should_auto_regen` that mean the gate *crashed*
+# rather than decided. The event handlers report these as `kind="gate_error"`
+# instead of `kind="skipped"`, so a poller summarising its run cannot fold a
+# dead database into "nothing was due" (RP-001 class (c), kept fail-safe).
+GATE_ERROR_REASONS = frozenset({"db_error"})
+
+
+def _skip_kind(decision: dict[str, Any]) -> str:
+    return "gate_error" if decision.get("reason") in GATE_ERROR_REASONS else "skipped"
+
+
+def _persist_raw_data_only(ticker: str) -> dict[str, int]:
     """Ingest fresh filings + transcripts into FilingDoc / EarningsTranscript
     + the vector store, WITHOUT running the LLM memo synthesis.
 
@@ -144,8 +156,8 @@ def _persist_raw_data_only(ticker: str) -> Dict[str, int]:
     counts = {"filings": 0, "transcripts": 0}
     try:
         from ..database import SessionLocal
-        from .data_service import get_data_service
         from . import history_service
+        from .data_service import get_data_service
         ds = get_data_service()
         filings = ds.get_filings(ticker) or []
         transcripts = ds.get_earnings_transcripts(ticker) or []
@@ -161,7 +173,7 @@ def _persist_raw_data_only(ticker: str) -> Dict[str, int]:
     return counts
 
 
-def on_transcript_event(ticker: str, *, period: str = "") -> Dict[str, Any]:
+def on_transcript_event(ticker: str, *, period: str = "") -> dict[str, Any]:
     """A new earnings transcript landed → maybe regenerate the memo.
 
     Two-phase:
@@ -177,7 +189,7 @@ def on_transcript_event(ticker: str, *, period: str = "") -> Dict[str, Any]:
     decision = should_auto_regen(ticker)
     if not decision["should"]:
         return {
-            "ticker": ticker, "period": period, "kind": "skipped",
+            "ticker": ticker, "period": period, "kind": _skip_kind(decision),
             "reason": decision["reason"],
             "persisted": persist_counts,
         }
@@ -197,7 +209,7 @@ def on_transcript_event(ticker: str, *, period: str = "") -> Dict[str, Any]:
     }
 
 
-def on_filing_event(ticker: str, *, source: str = "filing_event") -> Dict[str, Any]:
+def on_filing_event(ticker: str, *, source: str = "filing_event") -> dict[str, Any]:
     """A new filing was observed → persist + index, then maybe memo regen.
 
     Two-phase:
@@ -219,7 +231,7 @@ def on_filing_event(ticker: str, *, source: str = "filing_event") -> Dict[str, A
     decision = should_auto_regen(ticker)
     if not decision["should"]:
         return {
-            "ticker": ticker, "kind": "skipped",
+            "ticker": ticker, "kind": _skip_kind(decision),
             "reason": decision["reason"],
             "persisted": persist_counts,
         }
@@ -238,7 +250,7 @@ def on_filing_event(ticker: str, *, source: str = "filing_event") -> Dict[str, A
     }
 
 
-def on_news_alert(ticker: str, alert: NewsAlert) -> Dict[str, Any]:
+def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
     """A material/breaking news alert came in → run news_impact_agent
     against the latest memo, persist a patch if material.
 
@@ -258,6 +270,18 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> Dict[str, Any]:
 
     from ..agents.news_impact_agent import apply_patch, assess
     assessment = assess(prior_memo, alert)
+    if assessment.get("error"):
+        # (b) RP-001: the agent crashed or got nothing back, so the alert
+        # was never judged — reporting it as "not material" would read as a
+        # verdict. The memo is left alone either way (safe side).
+        log.warning(
+            "news impact assessment failed for %s (%s); alert %r left unassessed",
+            ticker, assessment["error"], alert.title[:80],
+        )
+        return {
+            "patched": False, "ticker": ticker, "reason": "assessment_error",
+            "error": assessment["error"],
+        }
     if not assessment.get("material"):
         return {"patched": False, "ticker": ticker, "reason": "not_material"}
 
@@ -293,7 +317,118 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> Dict[str, Any]:
     }
 
 
-def queue_depth(ticker: Optional[str] = None) -> Dict[str, int]:
+def _utcnow() -> datetime:
+    """Clock seam for the scorecard review cap (tests pin the UTC day)."""
+    return datetime.utcnow()
+
+
+def _scorecard_regens_today(db: Any, *, now: datetime) -> int:
+    """Regen jobs this feature enqueued since 00:00 UTC today.
+
+    Counted from the durable queue's enqueue waypoint (`progress[0].source
+    == "scorecard_disagreement"`) rather than from a module counter, so the
+    cap holds across worker restarts and is visible to both processes.
+    The day's rows are a handful at most, so the JSON filter runs in
+    Python instead of a dialect-specific JSON query.
+    """
+    from ..models import RegenJob
+    start = datetime.combine(now.date(), datetime.min.time())
+    rows = db.query(RegenJob.progress).filter(RegenJob.enqueued_at >= start).all()
+    n = 0
+    for (progress,) in rows:
+        first = (progress or [{}])[0] if isinstance(progress, list) and progress else {}
+        if isinstance(first, dict) and first.get("source") == "scorecard_disagreement":
+            n += 1
+    return n
+
+
+def handle_scorecard_disagreements(cap: int | None = None) -> dict[str, Any]:
+    """Phase 6 — queue a deep-research review regen for open MATERIAL
+    scorecard disagreements, behind `ENABLE_SCORECARD_DISAGREEMENT_REGEN`.
+
+    This is the ONLY path by which the scorecard can spend LLM money, so:
+    the flag defaults off; at most `cap` (default
+    `scorecard_disagreement_regen_daily_cap`, 3) regens per UTC day,
+    counted from the durable queue; each ticker must pass
+    `should_auto_regen` (pinned or recently viewed); and a (ticker,
+    version, as_of) that already has a review — queued or written — is
+    never re-queued, so a memo that still disagrees after answering its
+    seed question does not loop. A queued row flips to `queued_review`
+    and the regen (`source="scorecard_disagreement"`) picks up its seed
+    question through `scorecard_context.pending_seed_questions`.
+
+    Called from the worker's scorecard loop after scoring; never from a
+    page request. Returns counts for the loop note; never raises.
+    """
+    from ..config import settings
+    out: dict[str, Any] = {
+        "enabled": bool(settings.enable_scorecard_disagreement_regen),
+        "cap": int(cap if cap is not None else settings.scorecard_disagreement_regen_daily_cap),
+        "used_today": 0, "queued": 0, "skipped_gate": 0, "skipped_reviewed": 0, "open_material": 0,
+    }
+    if not out["enabled"]:
+        return out
+    try:
+        from ..agents import scorecard_context
+        from ..database import SessionLocal
+        from ..models import ScorecardDisagreement
+        from . import regen_worker
+        now = _utcnow()
+        with SessionLocal() as db:
+            ScorecardDisagreement.__table__.create(bind=db.get_bind(), checkfirst=True)
+            regen_worker._ensure_table(db)
+            out["used_today"] = _scorecard_regens_today(db, now=now)
+            budget = max(0, out["cap"] - out["used_today"])
+            open_rows = (
+                db.query(ScorecardDisagreement)
+                .filter(
+                    ScorecardDisagreement.status == scorecard_context.STATUS_OPEN,
+                    ScorecardDisagreement.severity == "material",
+                )
+                .order_by(ScorecardDisagreement.created_at.asc(), ScorecardDisagreement.id.asc())
+                .all()
+            )
+            out["open_material"] = len(open_rows)
+            reviewed_keys = {
+                (r.ticker, r.version_key, r.as_of)
+                for r in db.query(ScorecardDisagreement)
+                .filter(ScorecardDisagreement.status.in_(
+                    (scorecard_context.STATUS_QUEUED_REVIEW, scorecard_context.STATUS_REVIEWED),
+                ))
+                .all()
+            }
+            queued_tickers: set[str] = set()
+            for row in open_rows:
+                if budget <= 0:
+                    break
+                key = (row.ticker, row.version_key, row.as_of)
+                if key in reviewed_keys or row.ticker in queued_tickers:
+                    out["skipped_reviewed"] += 1
+                    continue
+                decision = should_auto_regen(row.ticker)
+                if not decision.get("should"):
+                    out["skipped_gate"] += 1
+                    row.note = f"{row.note} | regen skipped: {decision.get('reason', 'gate')}" if row.note else \
+                        f"regen skipped: {decision.get('reason', 'gate')}"
+                    continue
+                job, created = regen_worker.enqueue(row.ticker, source=scorecard_context.REGEN_SOURCE)
+                row.status = scorecard_context.STATUS_QUEUED_REVIEW
+                suffix = f"review regen job {job['id']} ({'created' if created else 'coalesced'}) at {now.isoformat()}"
+                row.note = f"{row.note} | {suffix}" if row.note else suffix
+                queued_tickers.add(row.ticker)
+                reviewed_keys.add(key)
+                out["queued"] += 1
+                if created:
+                    budget -= 1
+            db.commit()
+    except Exception as exc:  # pragma: no cover — the loop note carries it
+        from ..agents.log_safety import log_safely
+        log_safely(log, "handle_scorecard_disagreements failed", exc)
+        out["error"] = type(exc).__name__
+    return out
+
+
+def queue_depth(ticker: str | None = None) -> dict[str, int]:
     """Inspect the in-process FIFO queue (for /api/admin).
 
     Note: `full_reanalysis` no longer flows through this queue — it
@@ -317,7 +452,7 @@ MAX_TICKERS_PER_REGIME_SHIFT = 10
 
 def _affected_tickers_for_regime_shift(
     prior_regime: str, new_regime: str,
-) -> List[str]:
+) -> list[str]:
     """Pick tickers most likely to need a memo refresh after the
     regime flipped from `prior_regime` → `new_regime`.
 
@@ -341,7 +476,7 @@ def _affected_tickers_for_regime_shift(
     new_set = set(_REGIME_FAVORED.get(new_regime, []) + _REGIME_PRESSURED.get(new_regime, []))
     affected_sectors = (prior_set - new_set) | (new_set - prior_set)
 
-    candidates: List[str] = []
+    candidates: list[str] = []
 
     # 1) Long-rates-sensitive names — the first to feel a regime change.
     try:
@@ -357,6 +492,7 @@ def _affected_tickers_for_regime_shift(
     if affected_sectors:
         try:
             from sqlalchemy import select
+
             from ..database import SessionLocal
             from ..models import Company
             with SessionLocal() as db:
@@ -375,7 +511,7 @@ def _affected_tickers_for_regime_shift(
     return candidates[:MAX_TICKERS_PER_REGIME_SHIFT]
 
 
-def on_regime_shift(prior_regime: str, new_regime: str) -> Dict[str, Any]:
+def on_regime_shift(prior_regime: str, new_regime: str) -> dict[str, Any]:
     """Wave 10 — fire when macro_loop detects the regime classification
     changed. Re-runs memos for the most affected names.
 
@@ -387,22 +523,32 @@ def on_regime_shift(prior_regime: str, new_regime: str) -> Dict[str, Any]:
     thread — a 10-ticker shift queues instantly instead of holding the
     scheduler thread for 10 sequential memo runs.
 
-    Returns {prior, new, refreshed: List[str]} for cron logging
-    (refreshed = enqueued; outcomes land in `regen_jobs`).
+    Returns {prior, new, refreshed: List[str], gate_errors: List[str]} for
+    cron logging (refreshed = handed to the gate; outcomes land in
+    `regen_jobs`; gate_errors = tickers whose auto-regen gate crashed, so
+    "refreshed" must not be read as "regenerated" for those).
     """
     if prior_regime == new_regime:
-        return {"prior": prior_regime, "new": new_regime, "refreshed": []}
+        return {"prior": prior_regime, "new": new_regime, "refreshed": [], "gate_errors": []}
     affected = _affected_tickers_for_regime_shift(prior_regime, new_regime)
-    refreshed: List[str] = []
+    refreshed: list[str] = []
+    gate_errors: list[str] = []
     for ticker in affected:
         try:
             # Reuses the full_reanalysis path (gating + enqueue).
-            on_filing_event(ticker, source="regime_shift")
+            res = on_filing_event(ticker, source="regime_shift")
             refreshed.append(ticker)
+            if res.get("kind") == "gate_error":
+                gate_errors.append(ticker)
         except Exception as exc:  # pragma: no cover
-            log.warning("regime-shift refresh failed for %s: %s", ticker, exc)
+            from ..agents.log_safety import log_safely  # lazy: agents imports services
+            log_safely(log, f"regime-shift refresh failed for {ticker}", exc)
     log.info(
-        "regime shift %s → %s: enqueued regen for %d ticker(s) — %s",
+        "regime shift %s → %s: enqueued regen for %d ticker(s) — %s%s",
         prior_regime, new_regime, len(refreshed), refreshed,
+        f"; gate errors on {gate_errors}" if gate_errors else "",
     )
-    return {"prior": prior_regime, "new": new_regime, "refreshed": refreshed}
+    return {
+        "prior": prior_regime, "new": new_regime,
+        "refreshed": refreshed, "gate_errors": gate_errors,
+    }

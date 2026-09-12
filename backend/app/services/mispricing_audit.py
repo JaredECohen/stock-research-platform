@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select
 
@@ -63,10 +63,10 @@ Return JSON:
 """
 
 
-def _gather_memos(*, limit: int = 25) -> List[Dict[str, Any]]:
+def _gather_memos(*, limit: int = 25) -> list[dict[str, Any]]:
     """Pull the most recent memos that have a non-empty mispricing
     thesis to audit. Skips memos that pre-date the field."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     with SessionLocal() as db:
         rows = db.execute(
             select(MemoSnapshot)
@@ -94,7 +94,7 @@ def _gather_memos(*, limit: int = 25) -> List[Dict[str, Any]]:
     return out
 
 
-def run_audit(*, limit: int = 20) -> Dict[str, Any]:
+def run_audit(*, limit: int = 20) -> dict[str, Any]:
     """Audit up to `limit` recent memos. Returns the LLM scoring +
     pattern observation. Defensive: empty audit when no memos qualify
     or the LLM is unavailable.
@@ -102,7 +102,9 @@ def run_audit(*, limit: int = 20) -> Dict[str, Any]:
     memos = _gather_memos(limit=limit)
     if not memos:
         return {"audited": 0, "per_memo": [], "pattern_observation": ""}
-    if not getattr(settings, "openai_api_key", None):
+    # Any configured provider will do — `llm.chat_json` picks it. An
+    # OpenAI-only gate here skipped the audit on Anthropic deployments.
+    if not settings.has_llm:
         return {
             "audited": len(memos),
             "per_memo": [],
@@ -142,7 +144,7 @@ def run_audit(*, limit: int = 20) -> Dict[str, Any]:
     }
 
 
-def _clamp_int(v: Any, lo: int, hi: int) -> Optional[int]:
+def _clamp_int(v: Any, lo: int, hi: int) -> int | None:
     try:
         n = int(v)
         return max(lo, min(hi, n))
@@ -150,13 +152,14 @@ def _clamp_int(v: Any, lo: int, hi: int) -> Optional[int]:
         return None
 
 
-def persist_audit(audit: Dict[str, Any], aggregate: Dict[str, Any]) -> Optional[int]:
+def persist_audit(audit: dict[str, Any], aggregate: dict[str, Any]) -> int | None:
     """Wave 10 — write an audit run to `mispricing_audits` so the PM can
     later read the most-recent `pattern_observation` from its prompt
     context. Returns the new row id, or None on failure (the audit is
     still useful for the API response in that case)."""
     try:
         from datetime import datetime
+
         from ..database import SessionLocal
         from ..models import MispricingAudit
         with SessionLocal() as db:
@@ -176,7 +179,7 @@ def persist_audit(audit: Dict[str, Any], aggregate: Dict[str, Any]) -> Optional[
         return None
 
 
-def latest_aggregate(*, max_age_days: int = 14) -> Optional[Dict[str, Any]]:
+def latest_aggregate(*, max_age_days: int = 14) -> dict[str, Any] | None:
     """Fetch the most-recent persisted audit's aggregate stats.
 
     Returns the dict written via `persist_audit` (mean specificity /
@@ -185,7 +188,9 @@ def latest_aggregate(*, max_age_days: int = 14) -> Optional[Dict[str, Any]]:
     """
     try:
         from datetime import datetime, timedelta
+
         from sqlalchemy import select
+
         from ..database import SessionLocal
         from ..models import MispricingAudit
         cutoff = datetime.utcnow() - timedelta(days=max_age_days)
@@ -251,7 +256,9 @@ def latest_pattern_observation(*, max_age_days: int = 14) -> str:
     """
     try:
         from datetime import datetime, timedelta
+
         from sqlalchemy import select
+
         from ..database import SessionLocal
         from ..models import MispricingAudit
         cutoff = datetime.utcnow() - timedelta(days=max_age_days)
@@ -268,7 +275,7 @@ def latest_pattern_observation(*, max_age_days: int = 14) -> str:
         return ""
 
 
-def aggregate_scores(audit: Dict[str, Any]) -> Dict[str, Any]:
+def aggregate_scores(audit: dict[str, Any]) -> dict[str, Any]:
     """Summary stats across an audit run — mean specificity /
     differentiation / falsifiability, count of "weak" memos
     (any score <=2)."""

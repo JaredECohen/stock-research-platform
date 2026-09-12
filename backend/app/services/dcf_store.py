@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -54,10 +54,10 @@ def _next_version(db: Session, ticker: str) -> int:
 
 def save_version(
     ticker: str, *, assumptions: DCFAssumptions,
-    dcf_result: Optional[DCFResult] = None, trigger: str = "initial",
-    parent_version: Optional[int] = None,
-    assumption_changes: Optional[List[Dict[str, Any]]] = None,
-    db: Optional[Session] = None,
+    dcf_result: DCFResult | None = None, trigger: str = "initial",
+    parent_version: int | None = None,
+    assumption_changes: list[dict[str, Any]] | None = None,
+    db: Session | None = None,
 ) -> DCFModel:
     """Persist a new DCF version. Returns the inserted row.
 
@@ -102,8 +102,8 @@ def save_version(
 
 
 def latest_version(
-    ticker: str, *, db: Optional[Session] = None,
-) -> Optional[DCFModel]:
+    ticker: str, *, db: Session | None = None,
+) -> DCFModel | None:
     own = db is None
     if own:
         db = SessionLocal()
@@ -125,8 +125,8 @@ def latest_version(
 
 
 def version_history(
-    ticker: str, *, limit: int = 25, db: Optional[Session] = None,
-) -> List[DCFModel]:
+    ticker: str, *, limit: int = 25, db: Session | None = None,
+) -> list[DCFModel]:
     own = db is None
     if own:
         db = SessionLocal()
@@ -152,16 +152,30 @@ def assumptions_to_pydantic(row: DCFModel) -> DCFAssumptions:
     return DCFAssumptions.model_validate(row.assumptions)
 
 
-def result_to_pydantic(row: DCFModel) -> Optional[DCFResult]:
+def result_to_pydantic(row: DCFModel) -> DCFResult | None:
+    """Rehydrate the stored DCFResult payload, or None when the row has
+    none / the payload no longer validates.
+
+    The payload is stored as JSON, so `implied_share_price` / `upside_pct`
+    round-trip as `null` ↔ None with no migration; rows saved before those
+    fields became optional still carry `0.0` and load unchanged.
+    """
     if not row.dcf_result:
         return None
     try:
         return DCFResult.model_validate(row.dcf_result)
-    except Exception:
+    except Exception as exc:
+        # Schema drift between the stored payload and today's DCFResult.
+        # Returning None is what callers expect (they rebuild), but a
+        # silent None hides exactly the drift that would need a migration.
+        log.warning(
+            "dcf_store: stored DCF result for %s v%s no longer validates: %s",
+            row.ticker, row.version, exc,
+        )
         return None
 
 
-def update_on_earnings_close(ticker: str) -> Optional[DCFModel]:
+def update_on_earnings_close(ticker: str) -> DCFModel | None:
     """High-level entry point for the post-earnings DCF roll-forward.
 
     Orchestrates: load latest version → ask LLM updater for adjustments →
@@ -182,7 +196,7 @@ def update_on_earnings_close(ticker: str) -> Optional[DCFModel]:
         ticker, prior_assumptions, actuals,
     )
 
-    new_result: Optional[DCFResult] = None
+    new_result: DCFResult | None = None
     try:
         new_result = dcf_engine.build_full_dcf(ticker, new_assumptions)
     except Exception as exc:  # pragma: no cover — defensive

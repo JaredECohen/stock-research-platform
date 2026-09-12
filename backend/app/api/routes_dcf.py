@@ -1,19 +1,32 @@
 """DCF endpoints."""
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from ..agents.llm import llm_call_context
+from ..auth.entitlements import Grant, require_feature
+from ..auth.principal import current_principal
 from ..schemas import DCFAssumptions, DCFResult
 from ..services import dcf_store
 from ..services.valuation_service import build_dcf, default_dcf_assumptions
+from .gating import rate_scope
 
 router = APIRouter()
 
+# FEAT-002: every DCF route carries the `dcf` feature — on Free it follows
+# the memo (available for a ticker whose memo was opened this month), on
+# Pro it is unrestricted. The reads sit in the `data` scope; the POST,
+# which makes a small LLM call per request, in the tighter `series` one.
+
 
 @router.get("/api/dcf/{ticker}/default-assumptions", response_model=DCFAssumptions)
-def get_default_assumptions(ticker: str) -> DCFAssumptions:
+def get_default_assumptions(
+    ticker: str,
+    _rate: None = Depends(rate_scope("data")),
+    _grant: Grant = Depends(require_feature("dcf")),
+) -> DCFAssumptions:
     """Engine-derived defaults. Wave 8I: when analyst consensus
     estimates are available the 5-year revenue-growth path starts from
     consensus rather than historical-trend extrapolation. Wave 8Q
@@ -26,7 +39,11 @@ def get_default_assumptions(ticker: str) -> DCFAssumptions:
 
 
 @router.get("/api/dcf/{ticker}/consensus")
-def get_consensus_baseline(ticker: str) -> Dict[str, Any]:
+def get_consensus_baseline(
+    ticker: str,
+    _rate: None = Depends(rate_scope("data")),
+    _grant: Grant = Depends(require_feature("dcf")),
+) -> dict[str, Any]:
     """Wave 8Q — return the analyst-consensus 5-year growth path that
     the engine uses as a starting point, plus the trailing 3-year op
     margin (which is held flat by default). The DCF Lab renders this
@@ -64,7 +81,11 @@ def get_consensus_baseline(ticker: str) -> Dict[str, Any]:
 
 
 @router.get("/api/dcf/{ticker}/saved")
-def get_saved_assumptions(ticker: str) -> Dict[str, Any]:
+def get_saved_assumptions(
+    ticker: str,
+    _rate: None = Depends(rate_scope("data")),
+    _grant: Grant = Depends(require_feature("dcf")),
+) -> dict[str, Any]:
     """Wave 8J — return the latest persisted DCF version's assumptions.
 
     Used by the DCF Lab to pre-populate the editor with what the
@@ -93,13 +114,21 @@ def get_saved_assumptions(ticker: str) -> Dict[str, Any]:
 
 
 @router.post("/api/dcf/{ticker}", response_model=DCFResult)
-def run_dcf(ticker: str, assumptions: Optional[DCFAssumptions] = None) -> DCFResult:
+def run_dcf(
+    request: Request,
+    ticker: str,
+    assumptions: DCFAssumptions | None = None,
+    _rate: None = Depends(rate_scope("series")),
+    _grant: Grant = Depends(require_feature("dcf")),
+) -> DCFResult:
     """Compute a DCF result from `assumptions`. Wave 8J: edits made in
     the DCF Lab are explicitly **non-persistent** when the supplied
     assumptions diverge from the engine defaults — `valuation_service.build_dcf`
     only writes a `DCFModel` row when the inputs match the default-derived
     set. So the lab is safe for ad-hoc what-if exploration."""
-    res = build_dcf(ticker.upper(), assumptions)
+    principal = current_principal(request)
+    with llm_call_context(user_id=principal.user_id, feature="dcf"):
+        res = build_dcf(ticker.upper(), assumptions)
     if res is None:
         raise HTTPException(status_code=404, detail=f"Cannot build DCF for {ticker}")
     return res

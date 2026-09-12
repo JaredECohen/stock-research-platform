@@ -12,9 +12,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
+from .log_safety import log_safely, redact
 
 log = logging.getLogger(__name__)
 
@@ -41,14 +42,14 @@ except Exception:  # pragma: no cover
 # that provider short-circuit to a typed empty/None response and we log a
 # `provider_failure` row to CacheCostLog so the issue is visible.
 
-_FAILURE_COUNTERS: Dict[str, int] = {"openai": 0, "anthropic": 0, "gemini": 0}
+_FAILURE_COUNTERS: dict[str, int] = {"openai": 0, "anthropic": 0, "gemini": 0}
 # Wall-clock timestamp of last failure per provider — used by the
 # self-healing breaker to auto-reset after _BREAKER_COOLDOWN_SECONDS
 # without a fresh failure. Without auto-reset the breaker pins open
 # until process restart; transient blips from one bad call (e.g.,
 # the PM DCF Adjuster's forced-OpenAI override before that was fixed)
 # would cascade-block every other call's provider lookup forever.
-_FAILURE_LAST_AT: Dict[str, float] = {}
+_FAILURE_LAST_AT: dict[str, float] = {}
 _BREAKER_THRESHOLD = 3
 _BREAKER_COOLDOWN_SECONDS = 120.0  # 2 min idle = self-heal
 
@@ -94,7 +95,7 @@ def _breaker_open(provider: str) -> bool:
     return True
 
 
-def reset_circuit_breaker(provider: Optional[str] = None) -> None:
+def reset_circuit_breaker(provider: str | None = None) -> None:
     """Test helper / ops surface — clear the breaker for a provider (or all)."""
     if provider is None:
         for k in list(_FAILURE_COUNTERS.keys()):
@@ -105,11 +106,19 @@ def reset_circuit_breaker(provider: Optional[str] = None) -> None:
         _FAILURE_LAST_AT.pop(provider, None)
 
 
-def get_breaker_state() -> Dict[str, Dict[str, Any]]:
-    """Snapshot of circuit-breaker state for the admin endpoint."""
+def get_breaker_state(include_failover: bool = True) -> dict[str, dict[str, Any]]:
+    """Snapshot of circuit-breaker state for the admin endpoint.
+
+    Carries a `failover` key (see `get_failover_state`) beside the three
+    provider rows so the admin breaker view shows a hop when one happened;
+    a breaker that never opened tells only half the story once failover
+    exists. `include_failover=False` is for consumers that already expose
+    failover elsewhere and need strictly one row per provider (the
+    `/api/providers/status` contract).
+    """
     import time as _time
     now = _time.time()
-    out: Dict[str, Dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}
     for provider in ("openai", "anthropic", "gemini"):
         last_at = _FAILURE_LAST_AT.get(provider)
         count = _FAILURE_COUNTERS.get(provider, 0)
@@ -124,7 +133,168 @@ def get_breaker_state() -> Dict[str, Dict[str, Any]]:
             ),
             "cooldown_seconds": _BREAKER_COOLDOWN_SECONDS,
         }
+    if include_failover:
+        out["failover"] = get_failover_state()
     return out
+
+
+# ---------------------------------------------------------------------------
+# Bounded provider failover (openai <-> anthropic)
+# ---------------------------------------------------------------------------
+# One hop, once per call, never a loop. The module-level dict is the ops
+# view (per-process, same scope caveat as the breaker); the contextvar is
+# the per-run view the memo pipeline drains into its DegradationLog so a
+# memo produced on the backup vendor says so.
+
+_FAILOVER_STATE: dict[str, Any] = {
+    "count": 0,
+    "last_from": None,
+    "last_to": None,
+    "last_at": None,
+    "last_reason": None,
+}
+_FAILOVER_PARTNER = {"openai": "anthropic", "anthropic": "openai"}
+
+
+def _failover_partner(provider: str) -> str | None:
+    """The provider we may fail over to from `provider`, or None.
+
+    None when failover is disabled, when `provider` has no partner (gemini
+    stays a specialist path), or when the partner has no key — a failover
+    to an unconfigured provider would just be a second failure.
+    """
+    if not settings.llm_failover_enabled:
+        return None
+    partner = _FAILOVER_PARTNER.get(provider)
+    if partner == "openai" and settings.has_openai:
+        return partner
+    if partner == "anthropic" and settings.has_anthropic:
+        return partner
+    return None
+
+
+def _record_failover(src: str, dst: str, reason: str) -> None:
+    import time as _time
+    _FAILOVER_STATE["count"] += 1
+    _FAILOVER_STATE["last_from"] = src
+    _FAILOVER_STATE["last_to"] = dst
+    _FAILOVER_STATE["last_at"] = _time.time()
+    _FAILOVER_STATE["last_reason"] = reason
+    events = _FAILOVER_EVENTS.get()
+    if events is None:
+        events = []
+        _FAILOVER_EVENTS.set(events)
+    events.append({"from": src, "to": dst, "reason": reason})
+    # No exception to hand over — the wrappers already turned it into
+    # None — but the line still goes through the redacting path so a
+    # future reason string can never carry key material.
+    log_safely(log, f"LLM failover from {src} to {dst} ({reason})", None)
+
+
+def get_failover_state() -> dict[str, Any]:
+    """Copy of the per-process failover counters. No secrets: `last_reason`
+    is a short category ("breaker_open" / "call_failed"), never an
+    exception body."""
+    return dict(_FAILOVER_STATE)
+
+
+def consume_failover_events() -> list[dict[str, str]]:
+    """Drain the failover events recorded in the current context.
+
+    Context-local (like `llm_call_context`) so a regen-worker memo run
+    and a concurrent web chat call do not read each other's events.
+    """
+    events = _FAILOVER_EVENTS.get()
+    if not events:
+        return []
+    out = list(events)
+    events.clear()
+    return out
+
+
+def reset_failover_state() -> None:
+    """Test helper — clear the ops counters and the current context's events."""
+    _FAILOVER_STATE.update(
+        count=0, last_from=None, last_to=None, last_at=None, last_reason=None,
+    )
+    events = _FAILOVER_EVENTS.get()
+    if events:
+        events.clear()
+
+
+# ---------------------------------------------------------------------------
+# Per-role model resolution
+# ---------------------------------------------------------------------------
+# Each agent role has an env knob (OPENAI_PM_MODEL, OPENAI_SECTOR_MODEL, …).
+# An unset env resolves to "" — and "" reached the Agents SDK verbatim,
+# which the SDK rejects. The route default is what an empty knob means.
+
+_ROLE_SETTINGS = {
+    # role: (settings attribute, route the role runs on)
+    "pm": ("openai_pm_model", "strong"),
+    "sector": ("openai_sector_model", "cheap"),
+    "tool": ("openai_tool_model", "cheap"),
+    "macro": ("openai_macro_model", "cheap"),
+    "critic": ("anthropic_critic_model", "strong"),
+    "strong": (None, "strong"),
+    "cheap": (None, "cheap"),
+}
+
+
+def _provider_for_role(role: str) -> str:
+    """The provider `role` actually runs on when no explicit one is given.
+
+    Every role follows the active provider except the critic, which
+    `critic_agent` force-routes to Anthropic whenever a key is present
+    (Phase 4: the reviewer should not share the author's vendor). The
+    role table has to say the same thing, or the ops page answers
+    "which model reviewed this memo" with a model that never ran.
+    """
+    if role == "critic" and settings.has_anthropic:
+        return "anthropic"
+    return settings.active_llm_provider
+
+
+def resolve_role_model(role: str, provider: str | None = None) -> str:
+    """Model name to run `role` on, never blank and never provider-foreign.
+
+    Returns the configured per-role model when it is non-blank AND named
+    for `provider`'s family; otherwise that provider's route default. The
+    provider defaults to the one the role really runs on (see
+    `_provider_for_role`); the Agents SDK runtime passes `provider="openai"`
+    explicitly because that SDK only speaks OpenAI regardless of which
+    provider `chat_json` would pick.
+    """
+    try:
+        attr, route = _ROLE_SETTINGS[role]
+    except KeyError:
+        raise ValueError(f"unknown LLM role: {role!r}") from None
+    prov = (provider or _provider_for_role(role)).lower()
+    if prov not in _FAILOVER_PARTNER:
+        # "none" (no keys) still has to yield a usable name for the SDK
+        # shim's Agent objects; OpenAI is the shape every default carries.
+        prov = "openai"
+    configured = (getattr(settings, attr, "") or "").strip() if attr else ""
+    if configured and _model_matches_provider(configured, prov):
+        return configured
+    return _model_for(prov, route)
+
+
+def model_summary() -> dict[str, Any]:
+    """Routing snapshot for the startup log and the status endpoint.
+
+    Contains model names and booleans only — never key material.
+    """
+    return {
+        "active_provider": settings.active_llm_provider,
+        "provider_choice": settings.llm_provider,
+        "role_models": {role: resolve_role_model(role) for role in _ROLE_SETTINGS},
+        "configured": {
+            "openai": settings.has_openai,
+            "anthropic": settings.has_anthropic,
+            "gemini": settings.has_gemini,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -149,8 +319,14 @@ _USAGE_STATE = threading.local()
 # attributed to a specific memo run. Default values when no context is set
 # keep older callers working unchanged.
 
-_CALL_CONTEXT: contextvars.ContextVar[Dict[str, Any]] = contextvars.ContextVar(
-    "llm_call_context", default={"agent_name": "unknown", "run_id": None, "route": ""}
+_CALL_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "llm_call_context",
+    default={"agent_name": "unknown", "run_id": None, "route": "", "user_id": None, "feature": None},
+)
+# Failover events for the current context; `None` default (not `[]`) so a
+# shared mutable default can't leak events across contexts.
+_FAILOVER_EVENTS: contextvars.ContextVar[list[dict[str, str]] | None] = (
+    contextvars.ContextVar("llm_failover_events", default=None)
 )
 
 
@@ -162,12 +338,19 @@ class llm_call_context:
             llm.chat_json(...)
     """
 
-    def __init__(self, *, agent_name: str = "unknown", run_id: Optional[str] = None,
-                 route: str = "") -> None:
-        self._values = {"agent_name": agent_name, "run_id": run_id, "route": route}
-        self._token: Optional[contextvars.Token] = None
+    def __init__(self, *, agent_name: str = "unknown", run_id: str | None = None,
+                 route: str = "", user_id: int | None = None,
+                 feature: str | None = None) -> None:
+        # `user_id` / `feature` (FEAT-002) attribute spend to the customer
+        # and product feature that caused it; the worker sets them from
+        # the RegenJob row, the chat route from the request principal.
+        self._values = {
+            "agent_name": agent_name, "run_id": run_id, "route": route,
+            "user_id": user_id, "feature": feature,
+        }
+        self._token: contextvars.Token | None = None
 
-    def __enter__(self) -> "llm_call_context":
+    def __enter__(self) -> llm_call_context:
         # Layer on top of any existing context — fields the caller didn't set
         # carry over. Lets nested calls override only what they need.
         prev = _CALL_CONTEXT.get()
@@ -180,7 +363,7 @@ class llm_call_context:
             _CALL_CONTEXT.reset(self._token)
 
 
-def current_call_context() -> Dict[str, Any]:
+def current_call_context() -> dict[str, Any]:
     """Return the active llm_call_context dict (agent_name / run_id / route).
 
     Used by Wave 6A's checkpoint decorator to read the active `run_id`
@@ -211,8 +394,8 @@ def _record_usage(
     # an import-time cycle (models → cache → ... ). DB failures must NEVER
     # break the LLM call path — wrap and swallow.
     try:
-        from ..models import LLMCallLog
         from ..database import SessionLocal
+        from ..models import LLMCallLog
         ctx = _CALL_CONTEXT.get()
         with SessionLocal() as db:
             # Lazy create so direct-import callers don't need init_db().
@@ -228,13 +411,15 @@ def _record_usage(
                 duration_ms=int(duration_ms or 0),
                 success=bool(success),
                 error=str(error or "")[:500],
+                user_id=ctx.get("user_id"),
+                feature=ctx.get("feature"),
             ))
             db.commit()
     except Exception as exc:  # pragma: no cover - defense in depth
-        log.warning("LLMCallLog persist failed: %s", exc)
+        log_safely(log, "LLMCallLog persist failed", exc)
 
 
-def last_usage() -> Optional[Dict[str, Any]]:
+def last_usage() -> dict[str, Any] | None:
     """Return the usage dict from the most recent provider call on this thread.
 
     Calling this *consumes* the value: subsequent calls return None until the
@@ -276,27 +461,44 @@ def _usage_from_gemini(resp: Any) -> tuple[int, int]:
 # Client factories
 # ---------------------------------------------------------------------------
 
-def _openai_client() -> Optional[Any]:
-    if not settings.openai_api_key or OpenAI is None:
+_demo_only_noted = False
+
+
+def _demo_only() -> bool:
+    """USE_DEMO_DATA=true with ENABLE_LIVE_DATA=false (every test run) means
+    no LLM traffic either: a developer .env carrying live keys must not turn
+    the suite into paid calls. Callers see "no client", the same path as a
+    missing key, so breaker and failover bookkeeping are untouched."""
+    global _demo_only_noted
+    if not settings.use_demo_data_only:
+        return False
+    if not _demo_only_noted:
+        _demo_only_noted = True
+        log.debug("demo-only mode: LLM clients are not constructed")
+    return True
+
+
+def _openai_client() -> Any | None:
+    if _demo_only() or not settings.openai_api_key or OpenAI is None:
         return None
     try:
         return OpenAI(api_key=settings.openai_api_key)
     except Exception as exc:  # pragma: no cover
-        log.warning("OpenAI client init failed: %s", exc)
+        log_safely(log, "OpenAI client init failed", exc)
         return None
 
 
-def _anthropic_client() -> Optional[Any]:
-    if not settings.anthropic_api_key or Anthropic is None:
+def _anthropic_client() -> Any | None:
+    if _demo_only() or not settings.anthropic_api_key or Anthropic is None:
         return None
     try:
         return Anthropic(api_key=settings.anthropic_api_key)
     except Exception as exc:  # pragma: no cover
-        log.warning("Anthropic client init failed: %s", exc)
+        log_safely(log, "Anthropic client init failed", exc)
         return None
 
 
-def _gemini_client() -> Optional[Any]:
+def _gemini_client() -> Any | None:
     """Construct a Gemini client.
 
     Backend selection precedence (Vertex wins when both are set):
@@ -305,7 +507,7 @@ def _gemini_client() -> Optional[Any]:
       2. Direct API:   `GEMINI_API_KEY` set → `Client(api_key=…)`.
       3. Otherwise:    None (caller falls back to deterministic stub).
     """
-    if _genai is None:
+    if _genai is None or _demo_only():
         return None
     try:
         if settings.has_vertex:
@@ -318,11 +520,11 @@ def _gemini_client() -> Optional[Any]:
             return _genai.Client(api_key=settings.gemini_api_key)
         return None
     except Exception as exc:  # pragma: no cover
-        log.warning("Gemini client init failed: %s", exc)
+        log_safely(log, "Gemini client init failed", exc)
         return None
 
 
-def _resolve_gemini_model(caller_model: Optional[str], default: str) -> str:
+def _resolve_gemini_model(caller_model: str | None, default: str) -> str:
     """Pick the Gemini model for a call.
 
     Order of precedence:
@@ -341,10 +543,10 @@ def gemini_chat_text(
     prompt: str,
     *,
     system: str = "",
-    model: Optional[str] = None,
+    model: str | None = None,
     enable_search_grounding: bool = False,
     max_tokens: int = 800,
-) -> Optional[str]:
+) -> str | None:
     """Lightweight Gemini text-completion wrapper.
 
     Search grounding is enabled by passing the `google_search` tool to the
@@ -363,13 +565,14 @@ def gemini_chat_text(
     try:
         # Build config dynamically — different google-genai versions accept
         # slightly different shapes. We err on the side of being permissive.
-        config: Dict[str, Any] = {"temperature": 0.3, "max_output_tokens": max_tokens}
+        config: dict[str, Any] = {"temperature": 0.3, "max_output_tokens": max_tokens}
         if enable_search_grounding:
             try:
                 from google.genai import types  # type: ignore
                 config["tools"] = [types.Tool(google_search=types.GoogleSearch())]
             except Exception:
                 # Older versions: tools accept a dict
+                log.debug("google-genai types.Tool unavailable; using the dict tool config")
                 config["tools"] = [{"google_search": {}}]
         resp = client.models.generate_content(
             model=chosen_model,
@@ -391,9 +594,9 @@ def gemini_chat_text(
         return None
     except Exception as exc:  # pragma: no cover
         dur = int((_time.perf_counter() - t0) * 1000)
-        log.warning("Gemini call failed: %s", exc)
+        log_safely(log, "Gemini call failed", exc)
         _record_usage("gemini", chosen_model, 0, 0,
-                      duration_ms=dur, success=False, error=str(exc))
+                      duration_ms=dur, success=False, error=redact(exc))
         _record_failure("gemini")
         return None
 
@@ -402,10 +605,10 @@ def gemini_chat_json(
     prompt: str,
     *,
     system: str = "",
-    model: Optional[str] = None,
+    model: str | None = None,
     enable_search_grounding: bool = False,
     max_tokens: int = 800,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """JSON-mode wrapper around `gemini_chat_text` — appends a 'JSON only'
     instruction and parses the result with the same `_extract_json` helper as
     the Anthropic branch.
@@ -435,7 +638,7 @@ def _model_for(provider: str, route: str) -> str:
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
-def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+def _extract_json(text: str) -> dict[str, Any] | None:
     """Best-effort JSON extraction from a model response.
 
     Handles three failure modes seen in the wild:
@@ -464,7 +667,7 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     # this handles both Gemini's grounded duplicate-prefix artifact
     # (later copy is more complete) and outright truncation. We pick
     # whichever pass yields the most items.
-    best: Optional[List[Dict[str, Any]]] = None
+    best: list[dict[str, Any]] | None = None
     for items_match in re.finditer(r'"items"\s*:\s*\[', text):
         complete = _walk_array_objects(text, items_match.end())
         if not complete:
@@ -484,15 +687,18 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         try:
             return json.loads(text[start : end + 1])
         except Exception:
+            # Length only — the body may carry prompt or provider text.
+            log.debug("LLM output was not parseable JSON after every recovery (len=%d)", len(text))
             return None
+    log.debug("LLM output held no JSON object to recover (len=%d)", len(text))
     return None
 
 
-def _walk_array_objects(text: str, start_idx: int) -> List[str]:
+def _walk_array_objects(text: str, start_idx: int) -> list[str]:
     """Return raw text of every top-level `{...}` inside the array beginning
     at `start_idx` (which should point just past the opening `[`). Stops at
     the array's closing `]` or end-of-string."""
-    out: List[str] = []
+    out: list[str] = []
     depth = 0
     in_str = False
     esc = False
@@ -540,11 +746,11 @@ def _anthropic_supports_custom_temp(model: str) -> bool:
     return True
 
 
-def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[str]:
+def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> str | None:
     import time as _time
     t0 = _time.perf_counter()
     try:
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
             "system": system or "You are a helpful assistant.",
@@ -571,9 +777,9 @@ def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_toke
         return out
     except Exception as exc:  # pragma: no cover
         dur = int((_time.perf_counter() - t0) * 1000)
-        log.warning("Anthropic call failed: %s", exc)
+        log_safely(log, "Anthropic call failed", exc)
         _record_usage("anthropic", model, 0, 0,
-                      duration_ms=dur, success=False, error=str(exc))
+                      duration_ms=dur, success=False, error=redact(exc))
         return None
 
 
@@ -581,7 +787,7 @@ def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_toke
 # OpenAI helpers
 # ---------------------------------------------------------------------------
 
-def _openai_token_kwarg(model: str, n: int) -> Dict[str, int]:
+def _openai_token_kwarg(model: str, n: int) -> dict[str, int]:
     """Return the correct max-output-tokens kwarg for the OpenAI model family.
 
     GPT-5.x and the o-series reasoning models (o1, o3, o4, …) reject
@@ -607,7 +813,7 @@ def _openai_supports_custom_temp(model: str) -> bool:
     return True
 
 
-def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[Dict[str, Any]]:
+def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> dict[str, Any] | None:
     import time as _time
     messages = []
     if system:
@@ -633,13 +839,13 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
         return out
     except Exception as exc:  # pragma: no cover
         dur = int((_time.perf_counter() - t0) * 1000)
-        log.warning("OpenAI JSON call failed: %s", exc)
+        log_safely(log, "OpenAI JSON call failed", exc)
         _record_usage("openai", model, 0, 0,
-                      duration_ms=dur, success=False, error=str(exc))
+                      duration_ms=dur, success=False, error=redact(exc))
         return None
 
 
-def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> Optional[str]:
+def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> str | None:
     import time as _time
     messages = []
     if system:
@@ -663,9 +869,9 @@ def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_to
         return out
     except Exception as exc:  # pragma: no cover
         dur = int((_time.perf_counter() - t0) * 1000)
-        log.warning("OpenAI text call failed: %s", exc)
+        log_safely(log, "OpenAI text call failed", exc)
         _record_usage("openai", model, 0, 0,
-                      duration_ms=dur, success=False, error=str(exc))
+                      duration_ms=dur, success=False, error=redact(exc))
         return None
 
 
@@ -673,7 +879,7 @@ def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_to
 # Public surface
 # ---------------------------------------------------------------------------
 
-def _model_matches_provider(model: Optional[str], provider: str) -> bool:
+def _model_matches_provider(model: str | None, provider: str) -> bool:
     """True iff `model` is named for the given provider's family.
 
     Wave 9b — agents pass per-role model envs that were originally
@@ -697,45 +903,17 @@ def _model_matches_provider(model: Optional[str], provider: str) -> bool:
     return True  # unknown provider — pass through unchanged
 
 
-def chat_json(
-    prompt: str,
-    *,
-    system: str = "",
-    route: str = "cheap",
-    # Wave 9b — bumped from 800 → 1600. Specialist agents routinely
-    # emit 4-6KB of JSON (headline + multi-paragraph summary + 8-12
-    # key_points). 800 tokens was truncating responses mid-string,
-    # which `_extract_json` couldn't parse → caller fell through to
-    # deterministic stub. Per-call overrides still apply.
-    max_tokens: int = 1600,
-    provider_override: Optional[str] = None,
-    model: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    """Single-shot JSON-mode chat call. Returns parsed dict or None.
+def _call_json(
+    provider: str, *, prompt: str, system: str, route: str,
+    max_tokens: int, model: str | None,
+) -> dict[str, Any] | None:
+    """One JSON-mode call against `provider`, feeding its breaker counters.
 
-    `provider_override` lets a caller force a specific provider regardless of
-    `settings.active_llm_provider`. Used by the Phase 4 critic agent which
-    intentionally crosses the provider family boundary.
-
-    `model` is an explicit per-call model override. When set (and non-empty),
-    it bypasses the `route="strong"|"cheap"` default. Per-agent envs
-    (`OPENAI_PM_MODEL`, `OPENAI_SECTOR_MODEL`, `ANTHROPIC_CRITIC_MODEL`, …)
-    flow through this knob: the call site reads `settings.openai_pm_model`
-    (or whichever role applies) and passes it here, so changing the env
-    reroutes that one agent without code changes. Empty string is treated
-    as "use the route default" for ergonomic env handling.
+    Returns None when the provider is unconfigured (no counter change) or
+    the call failed (failure recorded). `model` must already be vetted by
+    `_model_matches_provider` for this provider — the failover hop passes
+    None so it lands on the partner's own route default.
     """
-    provider = (provider_override or settings.active_llm_provider).lower()
-    if provider == "none":
-        return None
-    if _breaker_open(provider):
-        return None
-
-    # Drop any provider-foreign model override so the route default
-    # for the active provider is used.
-    if not _model_matches_provider(model, provider):
-        model = None
-
     if provider == "anthropic":
         client = _anthropic_client()
         if client is None:
@@ -749,10 +927,6 @@ def chat_json(
         _record_success("anthropic")
         return _extract_json(text)
 
-    if provider == "gemini":
-        return gemini_chat_json(prompt, system=system, model=model, max_tokens=max_tokens)
-
-    # OpenAI
     client = _openai_client()
     if client is None:
         return None
@@ -765,26 +939,11 @@ def chat_json(
     return out
 
 
-def chat_text(
-    prompt: str,
-    *,
-    system: str = "",
-    route: str = "cheap",
-    max_tokens: int = 600,
-    provider_override: Optional[str] = None,
-    model: Optional[str] = None,
-) -> Optional[str]:
-    """Same `model` semantics as `chat_json`. Returns plain text or None."""
-    provider = (provider_override or settings.active_llm_provider).lower()
-    if provider == "none":
-        return None
-    if _breaker_open(provider):
-        return None
-
-    # Drop any provider-foreign model override (see chat_json comment).
-    if not _model_matches_provider(model, provider):
-        model = None
-
+def _call_text(
+    provider: str, *, prompt: str, system: str, route: str,
+    max_tokens: int, model: str | None,
+) -> str | None:
+    """Text twin of `_call_json`; same contract."""
     if provider == "anthropic":
         client = _anthropic_client()
         if client is None:
@@ -797,9 +956,6 @@ def chat_text(
             _record_success("anthropic")
         return text
 
-    if provider == "gemini":
-        return gemini_chat_text(prompt, system=system, model=model, max_tokens=max_tokens)
-
     client = _openai_client()
     if client is None:
         return None
@@ -810,3 +966,111 @@ def chat_text(
     else:
         _record_success("openai")
     return text
+
+
+def _with_failover(provider: str, call: Any, **kwargs: Any) -> Any:
+    """Run `call(provider, **kwargs)`, hopping to the partner provider once.
+
+    The hop happens when `provider`'s breaker is already open or the call
+    returns None (the wrappers convert exceptions to None). It is skipped
+    — returning None exactly as before failover existed — when failover
+    is disabled, no partner is configured, or the partner's breaker is
+    open too. The partner runs on its *own* route default (`model=None`)
+    because the caller's model name belongs to the failed provider.
+    """
+    if _breaker_open(provider):
+        reason = "breaker_open"
+    else:
+        out = call(provider, **kwargs)
+        if out is not None:
+            return out
+        reason = "call_failed"
+
+    partner = _failover_partner(provider)
+    if partner is None:
+        return None
+    if _breaker_open(partner):
+        log.debug("LLM failover from %s to %s skipped: partner breaker open", provider, partner)
+        return None
+    _record_failover(provider, partner, reason)
+    return call(partner, **{**kwargs, "model": None})
+
+
+def chat_json(
+    prompt: str,
+    *,
+    system: str = "",
+    route: str = "cheap",
+    # Wave 9b — bumped from 800 → 1600. Specialist agents routinely
+    # emit 4-6KB of JSON (headline + multi-paragraph summary + 8-12
+    # key_points). 800 tokens was truncating responses mid-string,
+    # which `_extract_json` couldn't parse → caller fell through to
+    # deterministic stub. Per-call overrides still apply.
+    max_tokens: int = 1600,
+    provider_override: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any] | None:
+    """Single-shot JSON-mode chat call. Returns parsed dict or None.
+
+    `provider_override` lets a caller force a specific provider regardless of
+    `settings.active_llm_provider`. Used by the Phase 4 critic agent which
+    intentionally crosses the provider family boundary.
+
+    `model` is an explicit per-call model override. When set (and non-empty),
+    it bypasses the `route="strong"|"cheap"` default. Per-agent envs
+    (`OPENAI_PM_MODEL`, `OPENAI_SECTOR_MODEL`, `ANTHROPIC_CRITIC_MODEL`, …)
+    flow through this knob: the call site reads `settings.openai_pm_model`
+    (or whichever role applies) and passes it here, so changing the env
+    reroutes that one agent without code changes. Empty string is treated
+    as "use the route default" for ergonomic env handling.
+
+    OpenAI and Anthropic fail over to each other once per call when the
+    other is configured — see `_with_failover`. Gemini does not.
+    """
+    provider = (provider_override or settings.active_llm_provider).lower()
+    if provider == "none":
+        return None
+
+    if provider == "gemini":
+        if _breaker_open("gemini"):
+            return None
+        return gemini_chat_json(prompt, system=system, model=model, max_tokens=max_tokens)
+
+    # Drop any provider-foreign model override so the route default
+    # for the active provider is used.
+    if not _model_matches_provider(model, provider):
+        model = None
+
+    return _with_failover(
+        provider, _call_json,
+        prompt=prompt, system=system, route=route, max_tokens=max_tokens, model=model,
+    )
+
+
+def chat_text(
+    prompt: str,
+    *,
+    system: str = "",
+    route: str = "cheap",
+    max_tokens: int = 600,
+    provider_override: str | None = None,
+    model: str | None = None,
+) -> str | None:
+    """Same `model` and failover semantics as `chat_json`. Returns plain text or None."""
+    provider = (provider_override or settings.active_llm_provider).lower()
+    if provider == "none":
+        return None
+
+    if provider == "gemini":
+        if _breaker_open("gemini"):
+            return None
+        return gemini_chat_text(prompt, system=system, model=model, max_tokens=max_tokens)
+
+    # Drop any provider-foreign model override (see chat_json comment).
+    if not _model_matches_provider(model, provider):
+        model = None
+
+    return _with_failover(
+        provider, _call_text,
+        prompt=prompt, system=system, route=route, max_tokens=max_tokens, model=model,
+    )

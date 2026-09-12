@@ -1,0 +1,254 @@
+[
+  {
+    "test": "LMAT Bear value",
+    "actual": 37.584588391309495,
+    "expected": 37.58458839130948,
+    "pass": true
+  },
+  {
+    "test": "LMAT Bear value12",
+    "actual": 30.764421440928484,
+    "expected": 30.764421440928476,
+    "pass": true
+  },
+  {
+    "test": "LMAT Base value",
+    "actual": 57.23603220540669,
+    "expected": 57.23603220540669,
+    "pass": true
+  },
+  {
+    "test": "LMAT Base value12",
+    "actual": 45.7493042616829,
+    "expected": 45.7493042616829,
+    "pass": true
+  },
+  {
+    "test": "LMAT Bull value",
+    "actual": 73.39957580953447,
+    "expected": 73.39957580953444,
+    "pass": true
+  },
+  {
+    "test": "LMAT Bull value12",
+    "actual": 57.729314098560145,
+    "expected": 57.72931409856013,
+    "pass": true
+  },
+  {
+    "test": "WINA Bear value",
+    "actual": 122.00298975403777,
+    "expected": 122.00298975403774,
+    "pass": true
+  },
+  {
+    "test": "WINA Bear value12",
+    "actual": 94.10979816905609,
+    "expected": 94.10979816905606,
+    "pass": true
+  },
+  {
+    "test": "WINA Base value",
+    "actual": 166.98044443773034,
+    "expected": 166.98044443773028,
+    "pass": true
+  },
+  {
+    "test": "WINA Base value12",
+    "actual": 128.47880669564876,
+    "expected": 128.4788066956487,
+    "pass": true
+  },
+  {
+    "test": "WINA Bull value",
+    "actual": 206.64477516536695,
+    "expected": 206.64477516536695,
+    "pass": true
+  },
+  {
+    "test": "WINA Bull value12",
+    "actual": 158.68591374055117,
+    "expected": 158.68591374055114,
+    "pass": true
+  },
+  {
+    "test": "NSSC Bear value",
+    "actual": 18.101999141246505,
+    "expected": 18.101999141246502,
+    "pass": true
+  },
+  {
+    "test": "NSSC Bear value12",
+    "actual": 14.810303202880464,
+    "expected": 14.810303202880464,
+    "pass": true
+  },
+  {
+    "test": "NSSC Base value",
+    "actual": 32.24145516361192,
+    "expected": 32.2414551636119,
+    "pass": true
+  },
+  {
+    "test": "NSSC Base value12",
+    "actual": 25.512995995955492,
+    "expected": 25.512995995955485,
+    "pass": true
+  },
+  {
+    "test": "NSSC Bull value",
+    "actual": 44.826124379124174,
+    "expected": 44.82612437912417,
+    "pass": true
+  },
+  {
+    "test": "NSSC Bull value12",
+    "actual": 34.89191570238678,
+    "expected": 34.891915702386775,
+    "pass": true
+  },
+  {
+    "test": "APPF Bear value",
+    "actual": 80.55873285699073,
+    "expected": 80.55873285699073,
+    "pass": true
+  },
+  {
+    "test": "APPF Bear value12",
+    "actual": 63.498629800926125,
+    "expected": 63.498629800926125,
+    "pass": true
+  },
+  {
+    "test": "APPF Base value",
+    "actual": 136.8019887368216,
+    "expected": 136.80198873682158,
+    "pass": true
+  },
+  {
+    "test": "APPF Base value12",
+    "actual": 105.46753860752783,
+    "expected": 105.46753860752781,
+    "pass": true
+  },
+  {
+    "test": "APPF Bull value",
+    "actual": 206.98909397845978,
+    "expected": 206.98909397845975,
+    "pass": true
+  },
+  {
+    "test": "APPF Bull value12",
+    "actual": 157.10818582998712,
+    "expected": 157.1081858299871,
+    "pass": true
+  },
+  {
+    "test": "MOD Bear value",
+    "actual": 47.399543847404416,
+    "expected": 47.399543847404416,
+    "pass": true
+  },
+  {
+    "test": "MOD Bear value12",
+    "actual": 39.15711690020561,
+    "expected": 39.15711690020561,
+    "pass": true
+  },
+  {
+    "test": "MOD Base value",
+    "actual": 152.32970810176235,
+    "expected": 152.3297081017624,
+    "pass": true
+  },
+  {
+    "test": "MOD Base value12",
+    "actual": 124.52024263348886,
+    "expected": 124.52024263348883,
+    "pass": true
+  },
+  {
+    "test": "MOD Bull value",
+    "actual": 256.0187728384658,
+    "expected": 256.01877283846585,
+    "pass": true
+  },
+  {
+    "test": "MOD Bull value12",
+    "actual": 207.65825853700622,
+    "expected": 207.65825853700613,
+    "pass": true
+  },
+  {
+    "test": "POWL Bear value",
+    "actual": 59.99397376410106,
+    "expected": 59.99397376410107,
+    "pass": true
+  },
+  {
+    "test": "POWL Bear value12",
+    "actual": 51.08555227380451,
+    "expected": 51.085552273804495,
+    "pass": true
+  },
+  {
+    "test": "POWL Base value",
+    "actual": 113.27075768364311,
+    "expected": 113.27075768364315,
+    "pass": true
+  },
+  {
+    "test": "POWL Base value12",
+    "actual": 94.35500993528812,
+    "expected": 94.3550099352881,
+    "pass": true
+  },
+  {
+    "test": "POWL Bull value",
+    "actual": 179.8068787382816,
+    "expected": 179.8068787382816,
+    "pass": true
+  },
+  {
+    "test": "POWL Bull value12",
+    "actual": 149.14661397165952,
+    "expected": 149.1466139716595,
+    "pass": true
+  },
+  {
+    "test": "LMAT reverse growth",
+    "actual": 0.15845412391804453,
+    "expected": 0.1584862419954201,
+    "pass": true
+  },
+  {
+    "test": "WINA reverse growth",
+    "actual": 0.17352103076636052,
+    "expected": 0.17357724154644555,
+    "pass": true
+  },
+  {
+    "test": "NSSC reverse growth",
+    "actual": 0.132285349573647,
+    "expected": 0.1323300113519752,
+    "pass": true
+  },
+  {
+    "test": "APPF reverse growth",
+    "actual": 0.21305254267389012,
+    "expected": 0.2131039081561652,
+    "pass": true
+  },
+  {
+    "test": "MOD reverse growth",
+    "actual": 0.28964501886822697,
+    "expected": 0.28965290355777595,
+    "pass": true
+  },
+  {
+    "test": "POWL reverse growth",
+    "actual": 0.21743505897847162,
+    "expected": 0.21747329064327225,
+    "pass": true
+  }
+]

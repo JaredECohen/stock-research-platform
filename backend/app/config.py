@@ -6,12 +6,9 @@ the application boots even with a completely empty environment.
 """
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
-from typing import List
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -89,6 +86,16 @@ class Settings(BaseSettings):
     # calls (news / social / longdoc) on the Vertex backend. Leave empty to
     # let each agent use its own GEMINI_*_MODEL.
     vertex_model: str = ""
+    # Bounded provider failover (openai <-> anthropic). When the active
+    # provider's breaker is open or a call fails, `llm.chat_json` /
+    # `chat_text` try the *other* configured provider exactly once, on
+    # that provider's own route default. One hop, no retry loop — the
+    # point is to keep a memo run alive through a single-vendor outage,
+    # not to hide a misconfiguration. Gemini is a specialist path and
+    # never participates. `cooldown_seconds` is how long a failover keeps
+    # `/api/providers/status` reporting `degraded`.
+    llm_failover_enabled: bool = True
+    llm_failover_cooldown_seconds: float = 600.0
 
     # Database
     database_url: str = "sqlite:///./marketmosaic.db"
@@ -104,6 +111,9 @@ class Settings(BaseSettings):
     use_agents_sdk: bool = False
     # Phase 5: always-on monitoring loops (EDGAR, news, social, macro). Default
     # off in dev/test; flip on in prod via env.
+    # Render injects RENDER_GIT_COMMIT into every service; surfacing it on
+    # /health makes a deploy verifiable from outside (the deploy-visible canary).
+    render_git_commit: str = ""
     enable_monitoring: bool = False
     # Theme 5: DB-backed memo-regen queue. The worker thread that drains
     # `regen_jobs` starts with the app; disable to run an API-only
@@ -160,6 +170,13 @@ class Settings(BaseSettings):
     bls_api_key: str = ""
     census_api_key: str = ""
     sec_user_agent: str = "MarketMosaic contact@example.com"
+    # How old a stale `provider_cache` row may be and still be served when
+    # the live provider misses, per capability, overriding the defaults in
+    # `services.provider_cache.MAX_STALE_BY_CAPABILITY` without a deploy.
+    # Format: "capability=seconds,capability=seconds" (a d/h/m suffix is
+    # accepted, e.g. "quote=900,news=12h"). Bad entries are logged and
+    # skipped rather than failing startup.
+    provider_cache_max_stale: str = ""
 
     # App / server
     app_env: str = "development"
@@ -202,8 +219,245 @@ class Settings(BaseSettings):
     max_stocks_in_portfolio: int = 25
     default_stock_universe: str = "large_cap_demo"
 
+    # ------------------------------------------------------------------
+    # FEAT-002 — customer accounts, freemium trial, Pro subscriptions.
+    # ------------------------------------------------------------------
+    # Every flag defaults OFF so a deployment that sets nothing behaves
+    # exactly as before this feature existed: no login wall, no meters,
+    # no billing routes doing anything. The three flags are independent
+    # and are meant to flip in this order (see docs/ops): AUTH_ENABLED
+    # first with internal accounts, then USAGE_LIMITS_ENABLED, then
+    # BILLING_ENABLED once Stripe test-mode has been exercised.
+    #
+    # Fail-closed rule: `auth_enabled` with no Clerk issuer/JWKS configured
+    # makes `customer_auth_middleware` answer 503 `auth_unavailable` on every
+    # non-public route rather than letting anyone through. Marketing/public
+    # routes stay up. A half-configured login wall is not a login wall.
+    auth_enabled: bool = False
+    billing_enabled: bool = False
+    usage_limits_enabled: bool = False
+    # Clerk. The JWT template named "marketmosaic" carries `email` and
+    # `email_verified` claims so the backend never calls Clerk's API per
+    # request. RS256 only; keys come from `<frontend-api>/.well-known/
+    # jwks.json`. `clerk_authorized_parties` is a comma-separated list of
+    # origins the token's `azp` must match (PUBLIC_BASE_URL in prod).
+    clerk_issuer: str = ""
+    clerk_jwks_url: str = ""
+    clerk_publishable_key: str = ""
+    clerk_authorized_parties: str = ""
+    # Stripe. No SDK — `services/stripe_client.py` is a thin httpx client.
+    # Secrets are read only there and in the webhook verifier; never log.
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_pro_monthly: str = ""
+    stripe_price_pro_annual: str = ""
+    stripe_portal_configuration_id: str = ""
+    # Checkout return URLs + Clerk allowed origin. Empty means "not set",
+    # which billing treats as unconfigured.
+    public_base_url: str = ""
+    # Curated public samples shown to logged-out visitors (S3 builds them
+    # in the worker; the public routes only read). Comma-separated.
+    sample_tickers: str = "NVDA,COST,JPM"
+    # Card-less Pro trial length, started once per verified email.
+    trial_days: int = 7
+    # How long a `past_due` subscription keeps Pro while the card is fixed.
+    grace_days: int = 7
+    # Per-environment overrides for `auth/features.py` allowances and
+    # `auth/ratelimit.py` scopes, so a number can change without a deploy.
+    # JSON objects; bad JSON is logged and ignored (defaults apply).
+    #   ENTITLEMENT_OVERRIDES_JSON='{"pm_chat": {"free": 5, "pro": 500}}'
+    #   RATE_LIMIT_OVERRIDES_JSON='{"research": "5/hour"}'
+    entitlement_overrides_json: str = "{}"
+    rate_limit_overrides_json: str = "{}"
+    # Whether GET /api/stocks/{t}/memo may run the agent graph inside the
+    # request. None (the default) resolves to `not auth_enabled`: today's
+    # behaviour with the login wall off, worker-only generation with it
+    # on. Not symmetric: `false` forces worker-only generation even with
+    # the wall off, but `true` under the wall is deliberately ignored by
+    # GET /memo and POST /chat (it would skip memo_view metering and run
+    # LLM work inside a customer request). Set explicitly only to force
+    # worker-only mode for an experiment.
+    memo_inline_generation: bool | None = None
+    # Legal pages ship as clearly labelled drafts until the owner records
+    # the review date here (any non-empty value flips the banner off).
+    legal_reviewed_at: str = ""
+    # Salt for the bootstrap IP / user-agent hashes on `users`. Those
+    # hashes exist so repeated trial creation from one source is visible
+    # later; salting keeps them from being a rainbow-table lookup of the
+    # visitor's IP. Rotate to invalidate. Empty salt still hashes (dev).
+    abuse_hash_salt: str = ""
+    # How many proxies sit between the internet and uvicorn — i.e. how
+    # many trailing `X-Forwarded-For` entries were written by infrastructure
+    # we trust. Render is exactly one hop, so the caller is the LAST entry
+    # (the one Render appended); anything left of it came from the client
+    # and proves nothing. Read by `rate_limit.client_ip`, which keys every
+    # per-IP ceiling and the bootstrap IP hash. 0 ignores the header and
+    # uses the socket peer: right for a directly exposed dev server, wrong
+    # behind any proxy (every caller then looks like the proxy).
+    trusted_proxy_hops: int = 1
+
+    # ------------------------------------------------------------------
+    # FEAT-001 — Fundamentals Explorer.
+    # ------------------------------------------------------------------
+    # `enable_fundamentals_explorer` is the rollback switch: off, and
+    # `main.create_app` mounts neither fundamentals router, so the page
+    # sees 404s and nothing else changes. `fundamentals_anon_commentary`
+    # governs the commentary endpoint while the login wall is OFF: the
+    # default (False) answers an anonymous visitor with the deterministic
+    # degraded shape — no LLM call, nothing charged — because DEVPLAN's
+    # logged-out surface has no commentary generation and a spoofable
+    # session header is not a meter. Under AUTH_ENABLED the flag is moot:
+    # the `chart_commentary` feature meters signed-in users.
+    # `fundamentals_commentary_model` pins the commentary model; empty
+    # means the cheap route's provider default.
+    enable_fundamentals_explorer: bool = True
+    fundamentals_anon_commentary: bool = False
+    fundamentals_commentary_model: str = ""
+
+    # ------------------------------------------------------------------
+    # Phase 6 — Fundamental Factor Scorecard (versioned, point-in-time).
+    # ------------------------------------------------------------------
+    # Three independent kill switches. `enable_scorecard` governs reads and
+    # the memo/PM integration; `enable_scorecard_loop` governs the worker's
+    # daily scoring loop (rows stay readable when it is off);
+    # `enable_scorecard_disagreement_regen` is the ONLY path by which the
+    # feature can spend LLM money, so it defaults off and is capped per day.
+    enable_scorecard: bool = True
+    enable_scorecard_loop: bool = True
+    enable_scorecard_disagreement_regen: bool = False
+    scorecard_disagreement_regen_daily_cap: int = 3
+    # Point-in-time lag rule, used when neither the provider nor a stored
+    # filing supplies the filing date: a figure for a period ending on D is
+    # treated as knowable on D + lag. 75 days for annual rows is
+    # deliberately conservative — large accelerated filers have 60 days for
+    # a 10-K, everyone else 75/90 — so the scorecard errs toward "not yet
+    # known" rather than toward lookahead. 45 days for quarterly rows is
+    # the widest 10-Q deadline (no quarterly ingestion in fs-v1, kept so
+    # the rule is complete for rows that carry `fiscal_quarter`).
+    scorecard_pit_lag_annual_days: int = 75
+    scorecard_pit_lag_quarter_days: int = 45
+    # Cross-sectional normalisation. The curated universe is ~170 names
+    # (sp500.json starter list), so thresholds are sized for 100–600 names
+    # and nothing below hardcodes the count: sector-neutral z needs at
+    # least `scorecard_min_sector_n` names in a sector (else universe z
+    # with a note); evaluation legs are quintiles with at least
+    # `scorecard_min_leg_n` names each (else the month is skipped and
+    # reported).
+    scorecard_min_sector_n: int = 5
+    scorecard_min_leg_n: int = 15
+    scorecard_winsor_pct: float = 0.025
+    scorecard_min_coverage: float = 0.6
+    # Retention: daily rows are a convenience and age out; month-end rows
+    # are the evaluation's sample and are kept forever.
+    scorecard_daily_retention_days: int = 45
+    scorecard_backfill_months: int = 60
+    # Disagreement thresholds, in percentile points between the memo's
+    # rating bucket centre and the scorecard percentile.
+    scorecard_disagreement_material: float = 40.0
+    scorecard_disagreement_watch: float = 25.0
+    # Bearer token for `GET /api/scorecard/export`. Separate from
+    # `admin_api_token` so the export can be handed to a downstream system
+    # without granting the ops surface. Empty (default) means the export
+    # follows the same policy as the other scorecard reads.
+    scorecard_export_token: str = ""
+
+    # ------------------------------------------------------------------
+    # FEAT-003 — GICS Industry Group analysts and weekly Industry Analysis.
+    # ------------------------------------------------------------------
+    # Every setting for the feature lives here (slice 1 owns the file) so the
+    # parallel slices — knowledge/analysts, analytics, jobs, API, frontend —
+    # read one block instead of each adding its own. Defaults keep the
+    # feature dark: no memo routing change, no worker loops enqueueing
+    # reports. `enable_industry_reports` follows the web/worker split in
+    # render.yaml (false on web, true on the worker); the taxonomy registry
+    # and the daily classification audit are DB-only and always available.
+    #
+    # `gics_taxonomy_version` names the taxonomy the deployment expects. It
+    # is the key the importer uses for the bundled knowledge JSON and what
+    # `gics_registry.ensure_taxonomy` activates on a fresh database; the
+    # ACTIVE version is always read from the database (two processes share
+    # nothing else), never from this value.
+    gics_taxonomy_version: str = "gics-2026-04"
+    # Display policy. Only `codes_and_names` is built; `internal_labels` is
+    # reserved for the licensing decision (owner decision 5) and is not
+    # implemented — the value is validated by the registry, not acted on.
+    gics_display_mode: str = "codes_and_names"
+    # Memo pipeline: when on, a mapped company's memo runs the Industry
+    # Group Analyst (one per memo) alongside the sector analyst. Off until a
+    # production A/B is read; the sector analyst stays primary either way.
+    enable_industry_analyst_routing: bool = False
+    # Worker: the weekly report loop + the report-job drainer. Web keeps it
+    # off (reads only); page views never generate.
+    enable_industry_reports: bool = False
+    # Report generation caps. Two bounded LLM calls per report; the third
+    # job attempt runs deterministic so a week never ends blank.
+    industry_report_max_llm_calls: int = 2
+    industry_report_max_attempts: int = 3
+    industry_reports_max_jobs_per_run: int = 40
+    # Publication: Sunday 06:30 UTC (after sector_digest_loop 05:30) with the
+    # as-of set to the prior Friday's close; period_key is that Friday's
+    # ISO week. Owner decision 3 — defaults recorded in the setup doc.
+    industry_reports_cron_dow: str = "sun"
+    industry_reports_cron_hour: int = 6
+    industry_reports_cron_minute: int = 30
+    industry_reports_as_of_weekday: int = 4  # Monday=0 … Friday=4
+    # Analytics: sample floor below which a group reports
+    # `insufficient_sample` (a labelled state, not an error); the weekly
+    # price warm-up budget (provider fetches per run, lowest-coverage groups
+    # first) so first-run coverage is honest rather than mostly `no_prices`;
+    # the benchmark set (owner decision 2 — no ETF/index-vendor series).
+    industry_stats_min_sample: int = 3
+    industry_price_warmup_budget: int = 150
+    industry_benchmarks: str = "universe_ew,sector_ew,KFR.MKT_RF.D"
+    # PM context: the company's own group plus at most this many groups
+    # linked by dependency edges; the cross-industry block is capped at
+    # 2,000 characters by the renderer.
+    industry_pm_max_linked_groups: int = 2
+    # Access (owner decision 1): `public` for the latest report; history,
+    # changes-since-prior and PM chat integration are `pro` when
+    # AUTH_ENABLED. The taxonomy endpoint always answers with the policy.
+    industry_analysis_access: str = "public"
+    # A report older than this (by as-of) is flagged stale on the read API,
+    # as is one whose latest refresh attempt failed.
+    industry_report_stale_after_days: int = 10
+    # Owner decision 4: auto-publish after validation. The review-queue
+    # status (`pending_review`) exists; no publish endpoint is built while
+    # this stays False.
+    industry_reports_require_review: bool = False
+
     @property
-    def cors_origins_list(self) -> List[str]:
+    def industry_benchmarks_list(self) -> list[str]:
+        return [b.strip() for b in self.industry_benchmarks.split(",") if b.strip()]
+
+    @property
+    def auth_configured(self) -> bool:
+        """Enough Clerk config to verify a token at all."""
+        return bool(self.clerk_issuer) and bool(self.clerk_jwks_url)
+
+    @property
+    def billing_configured(self) -> bool:
+        return bool(self.stripe_secret_key) and bool(self.stripe_webhook_secret)
+
+    @property
+    def clerk_authorized_parties_list(self) -> list[str]:
+        return [p.strip() for p in self.clerk_authorized_parties.split(",") if p.strip()]
+
+    @property
+    def sample_tickers_list(self) -> list[str]:
+        return [t.strip().upper() for t in self.sample_tickers.split(",") if t.strip()]
+
+    @property
+    def legal_reviewed(self) -> bool:
+        return bool(self.legal_reviewed_at.strip())
+
+    @property
+    def memo_inline_generation_effective(self) -> bool:
+        if self.memo_inline_generation is None:
+            return not self.auth_enabled
+        return bool(self.memo_inline_generation)
+
+    @property
+    def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property

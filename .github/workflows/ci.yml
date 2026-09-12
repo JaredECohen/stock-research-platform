@@ -17,12 +17,48 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          # Matches the Dockerfile's python:3.12-slim. requirements.txt is a
+          # universal lock compiled for 3.12, so this job installs exactly
+          # what the image installs; a different interpreter here would
+          # test a different resolution than the one that ships.
+          python-version: "3.12"
       - name: Install backend dependencies
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      - name: Check the dependency lock is fresh
+        working-directory: backend
+        # `make lock-check` re-runs `uv pip compile pyproject.toml --universal
+        # --python-version 3.12 -o requirements.txt` and fails on any diff:
+        # someone edited pyproject.toml (or the lock by hand) without
+        # re-locking. uv is pinned because a uv upgrade can change the lock's
+        # formatting; bump this pin together with the dev box.
+        run: |
+          pip install "uv==0.9.27"
+          make lock-check
+      - name: Lint (ruff)
+        working-directory: backend
+        # Blocking. The select/ignore list lives in pyproject.toml
+        # [tool.ruff]; every remaining ignore there carries its reason inline.
+        run: |
+          pip install "ruff==0.12.0"
+          ruff check app
+      - name: Type check (mypy, non-blocking)
+        working-directory: backend
+        # Scoped to pyproject.toml [tool.mypy].files. Non-blocking until the
+        # scoped error count reaches zero; the count is echoed so the trend
+        # is visible on every run. Flip continue-on-error off at zero.
+        continue-on-error: true
+        run: |
+          pip install "mypy==1.17.1"
+          status=0
+          python -m mypy > mypy.txt || status=$?
+          cat mypy.txt
+          errors=$(grep -c ' error: ' mypy.txt || true)
+          echo "mypy scoped error count: ${errors}"
+          echo "::notice title=mypy (non-blocking)::${errors} errors in the scoped paths"
+          exit "${status}"
       - name: Run pytest (demo mode)
         working-directory: backend
         env:
@@ -39,6 +75,22 @@ jobs:
         run: |
           rm -f marketmosaic.db
           python -m scripts.smoke_test
+
+  # requires-python is >=3.11 but the image and the suite run on 3.12+, so a
+  # 3.12-only construct (e.g. PEP 695 syntax) passes every other job and
+  # fails only on the floor. That class of bug has shipped before. This job
+  # installs nothing: byte-compiling the package is enough to catch it and
+  # takes seconds.
+  py311-floor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Byte-compile backend/app on the 3.11 floor
+        run: python -m compileall -q backend/app
 
   frontend-build:
     runs-on: ubuntu-latest

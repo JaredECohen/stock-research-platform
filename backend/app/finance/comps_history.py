@@ -18,9 +18,8 @@ No new LLM calls — pure deterministic plumbing on top of existing data.
 from __future__ import annotations
 
 import logging
-from datetime import date as _date
 from statistics import median
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..schemas import CompsHistoryStats, CompsRow
 from . import ratios as R
@@ -54,8 +53,8 @@ _MARKET_CAP_METRICS = ("pe", "ev_revenue", "ev_ebitda", "p_fcf", "fcf_yield")
 
 
 def _pivot_long_to_per_period(
-    history: Dict[str, List[Dict[str, Any]]]
-) -> List[Dict[str, Any]]:
+    history: dict[str, list[dict[str, Any]]]
+) -> list[dict[str, Any]]:
     """Pivot the long-format `get_financial_history` output back to a list
     of per-period dicts keyed by `period_end`.
 
@@ -63,7 +62,7 @@ def _pivot_long_to_per_period(
     period label / period_end / fiscal_year / fiscal_quarter. Periods
     without a `period_end` are dropped (we need a date to pair with prices).
     """
-    by_period: Dict[str, Dict[str, Any]] = {}
+    by_period: dict[str, dict[str, Any]] = {}
     for line, rows in history.items():
         for r in rows or []:
             pe = r.get("period_end")
@@ -82,8 +81,8 @@ def _pivot_long_to_per_period(
 
 
 def _closing_price_for(
-    rows: List[Dict[str, Any]], target_date: str,
-) -> Optional[float]:
+    rows: list[dict[str, Any]], target_date: str,
+) -> float | None:
     """Pick the closing price on or just before `target_date`.
 
     `rows` is the chronologically-ordered output of
@@ -92,14 +91,17 @@ def _closing_price_for(
     """
     if not rows or not target_date:
         return None
-    chosen: Optional[float] = None
+    chosen: float | None = None
     for r in rows:
         d = str(r.get("date") or "")
         if not d:
             continue
         if d <= target_date:
+            close_raw = r.get("close")
+            if close_raw is None:
+                continue
             try:
-                chosen = float(r.get("close"))
+                chosen = float(close_raw)
             except (TypeError, ValueError):
                 continue
         else:
@@ -108,8 +110,8 @@ def _closing_price_for(
 
 
 def _recompute_per_period_row(
-    period_row: Dict[str, Any], market_cap: Optional[float],
-) -> Dict[str, Optional[float]]:
+    period_row: dict[str, Any], market_cap: float | None,
+) -> dict[str, float | None]:
     """Apply `ratios.py` definitions to a single per-period dict, returning
     a flat dict of every `_METRICS` value (None when inputs are missing)."""
     income = period_row
@@ -117,7 +119,7 @@ def _recompute_per_period_row(
     cash_flow = period_row
 
     rg = None
-    out: Dict[str, Optional[float]] = {}
+    out: dict[str, float | None] = {}
     out["gross_margin"] = R.gross_margin(income)
     out["operating_margin"] = R.operating_margin(income)
     out["ebitda_margin"] = R.ebitda_margin(income, cash_flow)
@@ -135,7 +137,7 @@ def _recompute_per_period_row(
     return out
 
 
-def _percentile_in(values: List[float], target: float) -> float:
+def _percentile_in(values: list[float], target: float) -> float:
     """Where `target` sits within `values`, 0 (lowest) → 1 (highest).
 
     Equal-or-below convention so a current value at the cohort max → 1.0.
@@ -147,14 +149,14 @@ def _percentile_in(values: List[float], target: float) -> float:
 
 
 def _interpretation_lines(
-    own_median: Dict[str, Optional[float]],
-    own_p25: Dict[str, Optional[float]],
-    own_p75: Dict[str, Optional[float]],
-    current_percentile: Dict[str, float],
-    current_vs_own_median: Dict[str, float],
+    own_median: dict[str, float | None],
+    own_p25: dict[str, float | None],
+    own_p75: dict[str, float | None],
+    current_percentile: dict[str, float],
+    current_vs_own_median: dict[str, float],
     lookback_label: str,
 ) -> str:
-    out: List[str] = []
+    out: list[str] = []
     pct = current_percentile.get("ev_ebitda")
     delta = current_vs_own_median.get("ev_ebitda")
     if pct is not None and delta is not None:
@@ -197,7 +199,7 @@ def build_history_stats(
     ticker: str, target_row: CompsRow, *,
     lookback_quarters: int = 20,
     min_periods: int = 8,
-) -> Optional[CompsHistoryStats]:
+) -> CompsHistoryStats | None:
     """Compute the target's own historical valuation/quality distribution.
 
     Returns None when fewer than `min_periods` usable periods are
@@ -225,7 +227,7 @@ def build_history_stats(
 
     # Pull a price series long enough to cover the oldest period_end.
     days = max(lookback_quarters * 95, 252)
-    price_rows: List[Dict[str, Any]] = []
+    price_rows: list[dict[str, Any]] = []
     try:
         price_rows = get_price_series(ticker, days) or []
     except Exception as exc:  # pragma: no cover — diagnostic only
@@ -234,7 +236,7 @@ def build_history_stats(
     # Estimate diluted shares from the live target_row when we don't have
     # period-level shares (demo annuals don't always carry shares_outstanding
     # at balance level). market_cap_now / price_now ≈ shares; safe approximation.
-    fallback_shares: Optional[float] = None
+    fallback_shares: float | None = None
     if target_row.market_cap and price_rows:
         try:
             last_price = float(price_rows[-1].get("close") or 0)
@@ -244,15 +246,14 @@ def build_history_stats(
             fallback_shares = None
 
     # Recompute every period's metrics.
-    per_period_metrics: List[Dict[str, Optional[float]]] = []
-    last_revenue: Optional[float] = None
-    last_period_end: Optional[str] = None
+    per_period_metrics: list[dict[str, float | None]] = []
+    last_revenue: float | None = None
     for row in period_rows:
         period_end = row["period_end"]
         # Market cap for this period.
         price = _closing_price_for(price_rows, period_end)
         shares = row.get("weighted_avg_shares_diluted") or fallback_shares
-        market_cap: Optional[float] = None
+        market_cap: float | None = None
         if price and shares:
             market_cap = price * shares
 
@@ -262,19 +263,18 @@ def build_history_stats(
         if last_revenue is not None and cur_rev is not None and last_revenue != 0:
             recomputed["revenue_growth"] = (cur_rev - last_revenue) / abs(last_revenue)
         last_revenue = cur_rev
-        last_period_end = period_end
         per_period_metrics.append(recomputed)
 
     # Aggregate distribution stats per metric.
-    own_median: Dict[str, Optional[float]] = {}
-    own_p25: Dict[str, Optional[float]] = {}
-    own_p75: Dict[str, Optional[float]] = {}
-    current_percentile: Dict[str, float] = {}
-    current_vs_own_median: Dict[str, float] = {}
+    own_median: dict[str, float | None] = {}
+    own_p25: dict[str, float | None] = {}
+    own_p75: dict[str, float | None] = {}
+    current_percentile: dict[str, float] = {}
+    current_vs_own_median: dict[str, float] = {}
     for metric in _METRICS:
         series = [
-            m.get(metric) for m in per_period_metrics
-            if m.get(metric) is not None
+            v for m in per_period_metrics
+            if (v := m.get(metric)) is not None
         ]
         # `pe` should drop sign-flip periods (negative net income makes P/E
         # meaningless) — `safe_div` already returned None for divide-by-zero,

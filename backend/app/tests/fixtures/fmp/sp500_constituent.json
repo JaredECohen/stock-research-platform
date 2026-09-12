@@ -1,0 +1,27 @@
+[
+ {
+  "symbol": "ACME",
+  "name": "Acme Industrial Corp",
+  "sector": "Industrials",
+  "subSector": "Machinery",
+  "headQuarter": "Testville, OH",
+  "dateFirstAdded": "2019-03-18",
+  "cik": "0000123456",
+  "founded": "1962"
+ },
+ {
+  "symbol": "brkb",
+  "name": "Lowercase Symbol Co",
+  "sector": "Financials",
+  "subSector": "Insurance"
+ },
+ {
+  "ticker": "ZETA",
+  "name": "Ticker-keyed row",
+  "sector": "Health Care"
+ },
+ {
+  "name": "Row with no symbol at all"
+ },
+ "PLAIN"
+]

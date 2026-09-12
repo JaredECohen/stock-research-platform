@@ -16,14 +16,14 @@ first; the helper `_extract_closes` handles both shapes.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
-
+from collections.abc import Sequence
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Series helpers
 # ---------------------------------------------------------------------------
 
-def _extract(rows_or_floats: Sequence[Any], key: str) -> List[float]:
+def _extract(rows_or_floats: Sequence[Any], key: str) -> list[float]:
     """Pull a price column out of either a list of dicts or a list of floats.
 
     Accepts the shape returned by `market_data_service.get_price_series`
@@ -31,7 +31,7 @@ def _extract(rows_or_floats: Sequence[Any], key: str) -> List[float]:
     raw list of floats (for tests). Returns floats, dropping rows where
     the value is missing or non-numeric.
     """
-    out: List[float] = []
+    out: list[float] = []
     for r in rows_or_floats:
         if isinstance(r, dict):
             v = r.get(key)
@@ -46,7 +46,7 @@ def _extract(rows_or_floats: Sequence[Any], key: str) -> List[float]:
     return out
 
 
-def _last_date(rows: Sequence[Any]) -> Optional[str]:
+def _last_date(rows: Sequence[Any]) -> str | None:
     if not rows:
         return None
     last = rows[-1]
@@ -59,7 +59,7 @@ def _last_date(rows: Sequence[Any]) -> Optional[str]:
 # Moving averages
 # ---------------------------------------------------------------------------
 
-def sma(values: Sequence[float], window: int) -> Optional[float]:
+def sma(values: Sequence[float], window: int) -> float | None:
     """Simple moving average over the LAST `window` observations."""
     if window <= 0 or len(values) < window:
         return None
@@ -67,7 +67,7 @@ def sma(values: Sequence[float], window: int) -> Optional[float]:
     return sum(chunk) / len(chunk)
 
 
-def ema(values: Sequence[float], window: int) -> Optional[float]:
+def ema(values: Sequence[float], window: int) -> float | None:
     """Exponential moving average. Seeded with the SMA of the first `window`
     points so the first emitted EMA equals SMA — matches conventional charting
     libraries (TradingView, TA-Lib) within rounding."""
@@ -81,7 +81,7 @@ def ema(values: Sequence[float], window: int) -> Optional[float]:
     return out
 
 
-def vwma(rows: Sequence[Dict[str, Any]], window: int) -> Optional[float]:
+def vwma(rows: Sequence[dict[str, Any]], window: int) -> float | None:
     """Volume-weighted moving average. Requires dict rows with `close` + `volume`."""
     if window <= 0 or len(rows) < window:
         return None
@@ -89,12 +89,19 @@ def vwma(rows: Sequence[Dict[str, Any]], window: int) -> Optional[float]:
     num = 0.0
     den = 0.0
     for r in chunk:
-        try:
-            c = float(r.get("close")) if isinstance(r, dict) else float(r)
-        except (TypeError, ValueError):
+        # A missing close used to reach `float(None)` and be caught as a
+        # TypeError; testing for None first is the same skip, spelled so the
+        # type-checker can see it.
+        close_raw = r.get("close") if isinstance(r, dict) else r
+        if close_raw is None:
             continue
         try:
-            v = float(r.get("volume")) if isinstance(r, dict) else 0.0
+            c = float(close_raw)
+        except (TypeError, ValueError):
+            continue
+        volume_raw = r.get("volume") if isinstance(r, dict) else None
+        try:
+            v = float(volume_raw) if volume_raw is not None else 0.0
         except (TypeError, ValueError):
             v = 0.0
         num += c * v
@@ -109,12 +116,12 @@ def vwma(rows: Sequence[Dict[str, Any]], window: int) -> Optional[float]:
 # Oscillators
 # ---------------------------------------------------------------------------
 
-def rsi(values: Sequence[float], window: int = 14) -> Optional[float]:
+def rsi(values: Sequence[float], window: int = 14) -> float | None:
     """Wilder's RSI. Bounded [0, 100]. Requires len(values) >= window + 1."""
     if window <= 0 or len(values) < window + 1:
         return None
-    gains: List[float] = []
-    losses: List[float] = []
+    gains: list[float] = []
+    losses: list[float] = []
     for i in range(1, len(values)):
         diff = values[i] - values[i - 1]
         if diff >= 0:
@@ -137,7 +144,7 @@ def rsi(values: Sequence[float], window: int = 14) -> Optional[float]:
 
 
 def macd(values: Sequence[float], fast: int = 12, slow: int = 26,
-         signal: int = 9) -> Optional[Dict[str, float]]:
+         signal: int = 9) -> dict[str, float] | None:
     """Standard MACD: 12/26 EMAs, 9-period signal line.
 
     Returns `{macd_line, signal_line, histogram}` or None if insufficient data.
@@ -166,13 +173,13 @@ def macd(values: Sequence[float], fast: int = 12, slow: int = 26,
     }
 
 
-def _ema_series(values: Sequence[float], window: int) -> List[float]:
+def _ema_series(values: Sequence[float], window: int) -> list[float]:
     """All EMA values from index `window-1` onward — used for MACD lines."""
     if window <= 0 or len(values) < window:
         return []
     alpha = 2.0 / (window + 1.0)
     seed = sum(values[:window]) / window
-    out: List[float] = [seed]
+    out: list[float] = [seed]
     for v in values[window:]:
         out.append(alpha * v + (1.0 - alpha) * out[-1])
     return out
@@ -183,7 +190,7 @@ def _ema_series(values: Sequence[float], window: int) -> List[float]:
 # ---------------------------------------------------------------------------
 
 def bollinger(values: Sequence[float], window: int = 20,
-              num_stdev: float = 2.0) -> Optional[Dict[str, float]]:
+              num_stdev: float = 2.0) -> dict[str, float] | None:
     """Bollinger Bands. Returns `{upper, lower, middle, bandwidth, position}`.
 
     `position` is the latest price's relative location within the band:
@@ -216,7 +223,7 @@ def bollinger(values: Sequence[float], window: int = 20,
 # 52-week + trend / momentum classification
 # ---------------------------------------------------------------------------
 
-def fifty_two_week(values: Sequence[float]) -> Optional[Dict[str, float]]:
+def fifty_two_week(values: Sequence[float]) -> dict[str, float] | None:
     if not values:
         return None
     window = values[-252:] if len(values) > 252 else list(values)
@@ -231,8 +238,8 @@ def fifty_two_week(values: Sequence[float]) -> Optional[Dict[str, float]]:
     }
 
 
-def classify_trend(sma_50: Optional[float], sma_200: Optional[float],
-                   last: Optional[float]) -> str:
+def classify_trend(sma_50: float | None, sma_200: float | None,
+                   last: float | None) -> str:
     """Crude trend label using the golden-cross / death-cross convention."""
     if sma_50 is None or sma_200 is None or last is None:
         return "sideways"
@@ -243,8 +250,8 @@ def classify_trend(sma_50: Optional[float], sma_200: Optional[float],
     return "sideways"
 
 
-def classify_momentum(rsi_value: Optional[float],
-                      macd_hist: Optional[float]) -> str:
+def classify_momentum(rsi_value: float | None,
+                      macd_hist: float | None) -> str:
     """Momentum bucket from RSI extremes + MACD histogram sign."""
     if rsi_value is None and macd_hist is None:
         return "neutral"
@@ -271,7 +278,7 @@ def classify_momentum(rsi_value: Optional[float],
 # Full bundle
 # ---------------------------------------------------------------------------
 
-def compute_technical_signals(rows: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def compute_technical_signals(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
     """One-shot computation of every indicator the Technical Analyst uses.
 
     Returns None if the price series is too short for the slowest indicator
@@ -291,7 +298,7 @@ def compute_technical_signals(rows: Sequence[Dict[str, Any]]) -> Optional[Dict[s
     vwma_20 = vwma(rows, 20)
     fw = fifty_two_week(closes)
 
-    notes: List[str] = []
+    notes: list[str] = []
     if sma_50 is not None and sma_200 is not None:
         if sma_50 > sma_200:
             notes.append("Golden-cross alignment (SMA50 above SMA200).")

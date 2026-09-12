@@ -26,16 +26,21 @@ _LAST_RUNS: dict = {}
 # endpoint showed nothing wrong. `test_cron_health_cross_process`
 # asserts this list matches what `register_all` actually registers.
 KNOWN_LOOPS: tuple[str, ...] = (
+    "billing_loop",
     "catalyst_loop",
     "checkpoint_gc",
     "edgar_poller",
     "history_backfill",
+    "industry_classification_loop",
+    "industry_weekly_loop",
     "llm_log_gc",
     "macro_loop",
     "mispricing_audit_loop",
     "news_loop",
     "outcome_loop",
     "postmortem_loop",
+    "sample_build_loop",
+    "scorecard_loop",
     "sector_digest_loop",
     "snapshot_gc",
     "social_loop",
@@ -122,16 +127,35 @@ def status_snapshot() -> dict:
 
 
 from . import (  # noqa: E402,F401
-    catalyst_loop, checkpoint_gc, edgar_poller, history_backfill, llm_log_gc,
-    macro_loop, mispricing_audit_loop, news_loop, outcome_loop,
-    postmortem_loop, sector_digest_loop, snapshot_gc, social_loop,
-    theme_exposure_loop, transcripts_poller, weekly_digest_loop,
+    billing_loop,
+    catalyst_loop,
+    checkpoint_gc,
+    edgar_poller,
+    history_backfill,
+    industry_classification_loop,
+    industry_weekly_loop,
+    llm_log_gc,
+    macro_loop,
+    mispricing_audit_loop,
+    news_loop,
+    outcome_loop,
+    postmortem_loop,
+    sample_build_loop,
+    scorecard_loop,
+    sector_digest_loop,
+    snapshot_gc,
+    social_loop,
+    theme_exposure_loop,
+    transcripts_poller,
+    weekly_digest_loop,
 )
 
 __all__ = [
-    "catalyst_loop", "checkpoint_gc", "edgar_poller", "history_backfill",
+    "billing_loop", "catalyst_loop", "checkpoint_gc", "edgar_poller", "history_backfill",
+    "industry_classification_loop", "industry_weekly_loop",
     "llm_log_gc", "macro_loop", "mispricing_audit_loop", "news_loop",
-    "outcome_loop", "postmortem_loop", "sector_digest_loop", "snapshot_gc", "social_loop",
+    "outcome_loop", "postmortem_loop", "sample_build_loop", "scorecard_loop",
+    "sector_digest_loop", "snapshot_gc", "social_loop",
     "theme_exposure_loop", "transcripts_poller", "weekly_digest_loop",
     "register_all", "record_run", "status_snapshot", "KNOWN_LOOPS",
 ]
@@ -157,3 +181,21 @@ def register_all(scheduler) -> None:
     weekly_digest_loop.register(scheduler)
     sector_digest_loop.register(scheduler)
     mispricing_audit_loop.register(scheduler)
+    # FEAT-002 — curated public samples for the logged-out site. Polls for
+    # admin rebuild requests and builds weekly; see the module docstring.
+    sample_build_loop.register(scheduler)
+    # FEAT-002 — hourly billing housekeeping: trial-expiry / downgrade
+    # funnel events, limiter + analytics GC, stale-reservation settlement.
+    # Plan changes never happen here (`plans.resolve_plan` is read-time).
+    billing_loop.register(scheduler)
+    # Phase 6 — the fundamental scorecard's single daily loop (03:45 UTC):
+    # queue recovery, the scheduled scoring run, the monthly evaluation
+    # enqueue, the drain and retention GC all happen inside one tick.
+    scorecard_loop.register(scheduler)
+    # FEAT-003 — daily company → GICS industry-group classification audit
+    # (03:40 UTC, DB-only) and the Sunday 06:30 UTC Industry Analysis
+    # enqueue. Both registered from day one so cron-health lists them as
+    # "never run" rather than not at all; the weekly loop records a
+    # `disabled` note until ENABLE_INDUSTRY_REPORTS is on for the worker.
+    industry_classification_loop.register(scheduler)
+    industry_weekly_loop.register(scheduler)

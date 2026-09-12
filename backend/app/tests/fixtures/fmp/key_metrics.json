@@ -1,0 +1,22 @@
+[
+ {
+  "symbol": "ACME",
+  "date": "2025-06-30",
+  "fiscalYear": "2025",
+  "period": "FY",
+  "reportedCurrency": "USD",
+  "marketCap": 48200000000,
+  "enterpriseValue": 49090000000,
+  "evToSales": 7.92,
+  "evToEBITDA": 33.6,
+  "evToOperatingCashFlow": 42.7,
+  "evToFreeCashFlow": 58.4,
+  "earningsYield": 0.0184,
+  "freeCashFlowYield": 0.0174,
+  "netDebtToEBITDA": 0.71,
+  "returnOnEquity": 0.254,
+  "returnOnInvestedCapital": 0.163,
+  "returnOnAssets": 0.12,
+  "workingCapital": 1400000000
+ }
+]

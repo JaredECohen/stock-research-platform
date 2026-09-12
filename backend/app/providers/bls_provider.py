@@ -18,12 +18,12 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 
@@ -47,12 +47,12 @@ class BLSProvider:
             capabilities=["macro", "inflation", "labor"],
         )
 
-    def get_macro_series(self, series_id: str) -> Optional[Dict[str, Any]]:
+    def get_macro_series(self, series_id: str) -> dict[str, Any] | None:
         if not series_id:
             return None
         end_year = date.today().year
         start_year = end_year - 6
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "seriesid": [series_id],
             "startyear": str(start_year),
             "endyear": str(end_year),
@@ -71,7 +71,8 @@ class BLSProvider:
                     return None
                 data = r.json()
         except Exception as exc:  # pragma: no cover
-            log.warning("BLS fetch failed for %s: %s", series_id, exc)
+            # The request body carries `registrationkey`.
+            log_safely(log, f"BLS fetch failed for {series_id}", exc)
             return None
 
         status = (data or {}).get("status")
@@ -85,7 +86,7 @@ class BLSProvider:
 
         series = results[0]
         raw_points = series.get("data") or []
-        points: List[Dict[str, Any]] = []
+        points: list[dict[str, Any]] = []
         for row in raw_points:
             iso = _period_to_iso(row.get("year"), row.get("period"))
             if iso is None:
@@ -116,8 +117,8 @@ class BLSProvider:
     def get_filings(self, ticker: str): return None
     def get_news(self, ticker: str): return None
     def get_estimates(self, ticker: str): return None
-    def list_tickers(self) -> List[str]: return []
-    def list_macro_series(self) -> List[Dict[str, Any]]:
+    def list_tickers(self) -> list[str]: return []
+    def list_macro_series(self) -> list[dict[str, Any]]:
         from ..data_catalog import SERIES_REGISTRY
         return [
             {"series_id": s.series_id, "name": s.name, "units": s.units, "points": []}
@@ -125,7 +126,7 @@ class BLSProvider:
         ]
 
 
-def _period_to_iso(year: Any, period: Any) -> Optional[str]:
+def _period_to_iso(year: Any, period: Any) -> str | None:
     """Convert BLS (year, period) tuples to ISO month-end dates.
 
     BLS periods: M01..M12 (monthly), Q01..Q04 (quarterly), A01 (annual),
@@ -170,7 +171,7 @@ def _end_of_month(year: int, month: int) -> str:
     return (first_next - timedelta(days=1)).isoformat()
 
 
-def _coerce_float(value: Any) -> Optional[float]:
+def _coerce_float(value: Any) -> float | None:
     if value in (None, "", ".", "-"):
         return None
     try:

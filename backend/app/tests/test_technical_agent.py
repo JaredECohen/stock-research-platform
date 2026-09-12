@@ -30,7 +30,6 @@ from app.agents.technical_agent import _deterministic_summary, run_technical_age
 from app.finance import technicals as ti
 from app.schemas import AgentFinding, TechnicalSignals
 
-
 # ---------------------------------------------------------------------------
 # Pure math
 # ---------------------------------------------------------------------------

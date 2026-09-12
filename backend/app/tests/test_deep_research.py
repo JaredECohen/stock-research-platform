@@ -15,10 +15,6 @@ dispatchers — nothing else.
 """
 from __future__ import annotations
 
-from typing import List
-
-import pytest
-
 from app.agents import deep_research as dr
 from app.schemas import AgentFinding, CritiqueOutput, CritiqueQuestion
 
@@ -62,7 +58,7 @@ def test_round_zero_persisted_as_audit_anchor(monkeypatch):
 
 
 def test_pm_no_further_questions_stops_loop_after_one_round(monkeypatch):
-    calls: List[str] = []
+    calls: list[str] = []
 
     def fake_critique(**kwargs):
         calls.append("called")
@@ -174,7 +170,7 @@ def test_unknown_target_agent_skipped_safely(monkeypatch):
             ],
         ),
     )
-    fired: List[str] = []
+    fired: list[str] = []
 
     def refire(q: str) -> AgentFinding:
         fired.append(q)
@@ -201,3 +197,98 @@ def test_pm_critique_failure_short_circuits():
     # critique — either is correct as long as we don't loop).
     assert len(rounds) <= 2
     assert all(not r.findings or r.round == 0 for r in rounds)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — `seed_questions` force a round-1 re-fire
+# ---------------------------------------------------------------------------
+
+def _seed(text: str = "Which observed figures justify the rating?") -> CritiqueQuestion:
+    return CritiqueQuestion(target_agent="valuation", question=text, why_it_matters="scorecard review")
+
+
+def test_seed_questions_force_round_one_even_when_the_pm_has_none(monkeypatch):
+    """The contract the scorecard review regen relies on: with the critique
+    unavailable (no keys → `no_further_questions=True`) a seeded question is
+    still asked on round 1, and the round is not an early exit."""
+    monkeypatch.setattr(
+        dr, "pm_critique",
+        lambda **kw: CritiqueOutput(no_further_questions=True, rationale="PM critique unavailable"),
+    )
+    fired: list[str] = []
+
+    def refire(q: str) -> AgentFinding:
+        fired.append(q)
+        return _finding("Valuation Analyst", summary="re-fired on the seed")
+
+    final, rounds = dr.run_dialog_loop(
+        run_id="s1", initial_findings=_initial_findings(),
+        re_fire={"valuation": refire}, max_rounds=1,
+        seed_questions=[_seed()],
+    )
+    assert fired == ["Which observed figures justify the rating?"]
+    assert final["valuation"].summary == "re-fired on the seed"
+    assert len(rounds) == 2
+    r1 = rounds[1]
+    assert r1.round == 1 and r1.early_exit is False
+    assert [q.question for q in r1.pm_questions] == ["Which observed figures justify the rating?"]
+    assert "seeded 1 review question" in r1.pm_rationale
+    assert "PM critique unavailable" in r1.pm_rationale
+
+
+def test_seed_questions_are_prepended_to_the_pm_questions(monkeypatch):
+    monkeypatch.setattr(
+        dr, "pm_critique",
+        lambda **kw: CritiqueOutput(
+            questions=[CritiqueQuestion(target_agent="sector", question="cohort math?", why_it_matters="x")],
+            no_further_questions=False, rationale="more depth",
+        ),
+    )
+    order: list[str] = []
+
+    def refire_for(name: str):
+        def _f(q: str) -> AgentFinding:
+            order.append(f"{name}:{q}")
+            return _finding(f"{name.title()} Analyst", summary="refired")
+        return _f
+
+    _, rounds = dr.run_dialog_loop(
+        run_id="s2", initial_findings=_initial_findings(),
+        re_fire={"valuation": refire_for("valuation"), "sector": refire_for("sector")},
+        max_rounds=1, seed_questions=[_seed("seed first")],
+    )
+    assert order == ["valuation:seed first", "sector:cohort math?"]
+    assert [q.question for q in rounds[1].pm_questions] == ["seed first", "cohort math?"]
+
+
+def test_seed_questions_only_touch_round_one(monkeypatch):
+    """Rounds 2+ keep the original exit rules: a PM with nothing to ask ends
+    the dialog on round 2 even though round 1 was seeded."""
+    calls = {"n": 0}
+
+    def critique(**kw):
+        calls["n"] += 1
+        return CritiqueOutput(no_further_questions=True, rationale="done")
+
+    monkeypatch.setattr(dr, "pm_critique", critique)
+    _, rounds = dr.run_dialog_loop(
+        run_id="s3", initial_findings=_initial_findings(),
+        re_fire={"valuation": lambda q: _finding("Valuation Analyst", summary="refired")},
+        max_rounds=3, seed_questions=[_seed()],
+    )
+    assert calls["n"] == 2
+    assert [r.round for r in rounds] == [0, 1, 2]
+    assert rounds[1].early_exit is False and rounds[2].early_exit is True
+
+
+def test_no_seed_questions_is_the_original_behavior(monkeypatch):
+    monkeypatch.setattr(
+        dr, "pm_critique",
+        lambda **kw: CritiqueOutput(no_further_questions=True, rationale="all clear"),
+    )
+    for seeds in (None, []):
+        _, rounds = dr.run_dialog_loop(
+            run_id="s4", initial_findings=_initial_findings(), re_fire={}, max_rounds=3,
+            seed_questions=seeds,
+        )
+        assert len(rounds) == 2 and rounds[1].early_exit is True

@@ -18,19 +18,20 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select
 
 from ..database import session_scope
+from ..finance import ratios as R
 from ..models import Company, FinancialPeriod, ScreenerMetric
 
 log = logging.getLogger(__name__)
 
 
 def _latest_period_value(
-    rows: List[FinancialPeriod], line_item: str,
-) -> Optional[float]:
+    rows: list[FinancialPeriod], line_item: str,
+) -> float | None:
     """Most-recent non-null value for `line_item` from a sorted (desc) list."""
     for r in rows:
         if r.line_item == line_item and r.value is not None:
@@ -39,20 +40,20 @@ def _latest_period_value(
 
 
 def _yoy_growth(
-    rows: List[FinancialPeriod], line_item: str,
-) -> Optional[float]:
+    rows: list[FinancialPeriod], line_item: str,
+) -> float | None:
     values = [float(r.value) for r in rows if r.line_item == line_item and r.value is not None]
     if len(values) < 2 or values[1] == 0:
         return None
     return (values[0] - values[1]) / abs(values[1])
 
 
-def compute_metrics(ticker: str) -> Optional[Dict[str, Any]]:
+def compute_metrics(ticker: str) -> dict[str, Any] | None:
     """Compute the 15-metric snapshot for one ticker. Returns None when
     insufficient data — caller skips the upsert."""
     ticker = ticker.upper()
     with session_scope() as db:
-        company: Optional[Company] = db.get(Company, ticker)
+        company: Company | None = db.get(Company, ticker)
         if company is None:
             return None
         company_kwargs = dict(
@@ -109,7 +110,7 @@ def compute_metrics(ticker: str) -> Optional[Dict[str, Any]]:
     if market_cap is not None:
         enterprise_value = market_cap + (total_debt or 0) - (cash_balance + short_inv)
 
-    def _safe_div(a: Optional[float], b: Optional[float]) -> Optional[float]:
+    def _safe_div(a: float | None, b: float | None) -> float | None:
         if a is None or b is None or b == 0:
             return None
         return a / b
@@ -133,18 +134,28 @@ def compute_metrics(ticker: str) -> Optional[Dict[str, Any]]:
         beta=company_kwargs["beta"],
     )
 
-    # ROIC = NOPAT / (debt + equity); approximate NOPAT from operating income.
-    if op_income is not None and pretax and pretax != 0:
-        tax_rate = (tax or 0) / pretax if pretax > 0 else 0.21
-        nopat = op_income * (1 - max(0.0, min(0.5, tax_rate)))
-        invested = (total_debt or 0) + (equity or 0)
-        if invested > 0:
-            metrics["roic"] = nopat / invested
+    # ROIC comes from the shared definition in `finance/ratios.py` so the
+    # screener, comps and history views agree. Its tax-rate resolution
+    # (effective rate → 21% statutory for profitable names → None for a
+    # loss-maker with no credible rate) is the reason `roic` may stay
+    # NULL for a ticker that has operating income: an unknown rate must
+    # not be manufactured into a number a screen rule can rank on.
+    roic_value, roic_source = R.roic_with_provenance(
+        {
+            "operating_income": op_income,
+            "pretax_income": pretax,
+            "tax_expense": tax,
+        },
+        {"total_debt": total_debt, "shareholders_equity": equity},
+    )
+    metrics["roic"] = roic_value
+    if roic_value is None and op_income is not None:
+        log.info("screener_metrics %s: roic unavailable (%s)", ticker, roic_source)
 
     return metrics
 
 
-def snapshot_universe() -> Dict[str, int]:
+def snapshot_universe() -> dict[str, int]:
     """Recompute + upsert metrics for every `auto_analysis` ticker.
 
     Returns counts: `{written, skipped, missing_data}`.

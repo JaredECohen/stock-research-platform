@@ -13,16 +13,32 @@ its own rows; one timeline I can query.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+import logging
+from calendar import monthrange
+from datetime import date, datetime, timedelta
+from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from ..config import settings
+from ..database import get_db
 from ..monitoring import KNOWN_LOOPS, _process_role, status_snapshot
 from ..rate_limit import LIMITS, limiter
+from ..schemas.scorecard import (
+    ScorecardBackfillOut,
+    ScorecardBackfillRequest,
+    ScorecardEnqueueOut,
+    ScorecardEvaluateRequest,
+    ScorecardRefreshRequest,
+    ScorecardRunOut,
+)
 from ..seed_universe import run_full_seed
 from ..services import dcf_store, llm_metrics, memo_store, outcome_service, update_orchestrator
+from .gating import enforce_global
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -31,12 +47,19 @@ router = APIRouter()
 @limiter.limit(LIMITS["seed_universe"])
 def seed_universe_endpoint(
     request: Request, response: Response, refresh: bool = False,
-) -> Dict:
-    """Re-seed the S&P 100 screener universe from FMP.
+) -> dict:
+    """Re-seed the curated screener universe (S&P 500 + curated extensions) from FMP.
 
-    `refresh=true` re-fetches every profile (slower; use after FMP data
-    corrections). `refresh=false` (default) only inserts missing rows
-    and is cheap to call.
+    Upserts a `companies` row per ticker in `data/sp500.json` and tags it
+    `auto_analysis`; any ticker outside the file is still researchable
+    on demand. `refresh=true` re-fetches every profile (slower; use after
+    FMP data corrections). `refresh=false` (default) only inserts missing
+    rows and is cheap to call.
+
+    This does NOT change which tickers are in the universe. Refreshing
+    the constituent list is a separate, manual step —
+    `python -m app.scripts.refresh_universe_lists` — and
+    `GET /api/admin/universe-review` shows whether that is due.
     """
     return run_full_seed(refresh=refresh)
 
@@ -46,13 +69,14 @@ def seed_universe_endpoint(
 def run_backfill_endpoint(
     request: Request,
     response: Response,
-    ticker: Optional[str] = Query(None, description="Single ticker; omit for full universe"),
-) -> Dict:
+    ticker: str | None = Query(None, description="Single ticker; omit for full universe"),
+) -> dict:
     """Trigger the heavy history backfill on demand.
 
-    Synchronous — for the curated S&P 100 this is ~3-5 minutes (~600
-    provider calls). For a single ticker (`?ticker=NVDA`) it's ~5
-    seconds. Idempotent.
+    Synchronous — for the curated universe (S&P 500 + extensions) budget
+    ~6 provider calls per ticker, so minutes at the 170-name starter
+    list and longer at full 500. For a single ticker (`?ticker=NVDA`)
+    it's ~5 seconds. Idempotent.
 
     Use this after a fresh deploy when the database is empty (Postgres
     on first boot has 0 financial_periods rows; the `seed_universe`
@@ -64,16 +88,33 @@ def run_backfill_endpoint(
 
 
 @router.get("/api/admin/monitoring/status")
-def monitoring_status() -> Dict:
+def monitoring_status() -> dict:
     """Last-run timestamps + notes per registered monitoring loop."""
     return {"loops": status_snapshot()}
 
 
+@router.get("/api/admin/abuse-telemetry")
+def abuse_telemetry_endpoint() -> dict[str, Any]:
+    """FEAT-002 phase 6 — the numbers behind "is the login wall being
+    abused, and is it refusing real customers": 429s by scope / plan /
+    route, trial creations per bootstrap IP hash, and the share of
+    non-public API requests that were refused with 429, over the trailing
+    24h. Admin-token protected by prefix (`admin_auth`); the customer
+    middleware never consults a JWT for this path. Cross-process by
+    construction — every input is a database row, so it reads the same
+    from the web and the worker.
+    """
+    from ..auth.analytics import abuse_report
+    from ..database import SessionLocal
+    with SessionLocal() as db:
+        return abuse_report(db, hours=24)
+
+
 @router.get("/api/admin/llm-metrics")
 def llm_metrics_endpoint(
-    run_id: Optional[str] = None,
+    run_id: str | None = None,
     since_days: int = Query(7, ge=1, le=365),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """LLM call audit endpoint (Wave 1A).
 
     With `run_id`: detailed per-call trace for one memo run.
@@ -92,10 +133,10 @@ def llm_metrics_endpoint(
 
 @router.get("/api/admin/sdk-traces")
 def list_sdk_traces(
-    ticker: Optional[str] = None,
-    surface: Optional[str] = Query(None, description="memo|chat"),
+    ticker: str | None = None,
+    surface: str | None = Query(None, description="memo|chat"),
     limit: int = Query(20, ge=1, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — list recent SDK exchange traces.
 
     Use this to spot-check whether the SDK is firing as expected and
@@ -130,7 +171,7 @@ def list_sdk_traces(
 
 
 @router.get("/api/admin/sdk-traces/{run_id}")
-def get_sdk_trace(run_id: str) -> Dict[str, Any]:
+def get_sdk_trace(run_id: str) -> dict[str, Any]:
     """Wave 10 — joined view: SDK exchange trace + the legacy graph's
     LLMCallLog rows for the same `run_id`.
 
@@ -175,9 +216,9 @@ def get_sdk_trace(run_id: str) -> Dict[str, Any]:
 @router.get("/api/admin/track-record")
 def track_record_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
-    ticker: Optional[str] = None,
-    sector: Optional[str] = None,
-) -> Dict[str, Any]:
+    ticker: str | None = None,
+    sector: str | None = None,
+) -> dict[str, Any]:
     """Wave 4A: aggregate realized-outcome stats over evaluated memos.
 
     Filters: `ticker` (single name), `sector`, `horizon_days` (which forward
@@ -189,10 +230,20 @@ def track_record_endpoint(
 
 
 @router.post("/api/admin/evaluate-outcomes")
-def evaluate_outcomes_now() -> Dict[str, Any]:
+def evaluate_outcomes_now(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     """Manual trigger for the daily outcome loop. Useful in dev / for
     backfilling the table after deploys; production runs the scheduled
-    job via APScheduler."""
+    job via APScheduler.
+
+    Browser-called (`TrackRecord.tsx`), so it is exempt from the admin
+    token and Pro under the customer policy. The work is platform-wide
+    and identical whoever asks, so behind the login wall it also sits in
+    one GLOBAL window (`evaluate_outcomes`, 1 per 10 minutes, shared by
+    every caller) rather than a per-user one — a per-user limit would let
+    N accounts run the loop N times. With the wall off the route is
+    unchanged.
+    """
+    enforce_global(request, db, "evaluate_outcomes")
     return outcome_service.evaluate_all_due()
 
 
@@ -203,7 +254,7 @@ def evaluate_outcomes_now() -> Dict[str, Any]:
 @router.get("/api/admin/calibration")
 def calibration_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — calibration plot data: per-rating realized excess
     return distribution. A well-calibrated PM has Strong-Buy realizations
     clearly higher than Buy realizations. Powers the upcoming
@@ -215,7 +266,7 @@ def calibration_endpoint(
 @router.get("/api/admin/per-agent-attribution")
 def per_agent_attribution_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — per-specialist attribution stats from `memo_postmortems`.
     Surfaces systematic strengths and weaknesses ('our valuation analyst
     consistently picks the right names; our macro is pulling the wrong
@@ -227,7 +278,7 @@ def per_agent_attribution_endpoint(
 @router.get("/api/admin/regime-accuracy")
 def regime_accuracy_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — accuracy bucketed by macro regime at memo creation.
     Catches regime-specific blind spots ('we're great in soft-landing
     regimes, terrible in recessions')."""
@@ -238,7 +289,7 @@ def regime_accuracy_endpoint(
 @router.get("/api/admin/calibration-summary")
 def calibration_summary_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — one-call aggregator returning calibration + per-agent
     + regime stats. Powers the upcoming track-record dashboard with a
     single fetch."""
@@ -250,7 +301,7 @@ def calibration_summary_endpoint(
 def run_postmortems_endpoint(
     horizon_days: int = Query(90, ge=1, le=365),
     limit: int = Query(25, ge=1, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — manual trigger for postmortem_loop; equivalent to
     running `python -m scripts.postmortem_backfill`. Useful for
     seeding the system or recovering after a cron outage."""
@@ -259,7 +310,7 @@ def run_postmortems_endpoint(
 
 
 @router.get("/api/admin/cron-health")
-def cron_health_endpoint() -> Dict[str, Any]:
+def cron_health_endpoint() -> dict[str, Any]:
     """Wave 10 — aggregated cron health.
 
     Returns each registered loop's last-run timestamp + freshness flag.
@@ -278,10 +329,23 @@ def cron_health_endpoint() -> Dict[str, Any]:
     # loops it has heard nothing from.
     for name in KNOWN_LOOPS:
         snap.setdefault(name, {"last_run_at": None, "success": None, "note": "never run"})
-    out_loops: List[Dict[str, Any]] = []
+    out_loops: list[dict[str, Any]] = []
     now = datetime.utcnow()
-    weekly_loops = {"weekly_digest_loop", "sector_digest_loop"}
+    weekly_loops = {
+        "weekly_digest_loop", "sector_digest_loop", "sample_build_loop",
+        # FEAT-003: enqueues the Industry Analysis period every Sunday
+        # 06:30 UTC. Without it here it would read stale six days out of
+        # seven and bury the daily loops that are genuinely late.
+        "industry_weekly_loop",
+    }
     monthly_loops = {"theme_exposure_loop"}
+    # FEAT-003: `industry_report_worker` is not a scheduled loop — it is the
+    # report-queue drainer thread (app/services/industry_report_worker.py),
+    # which reports every 5 minutes for as long as it lives. The 26h daily
+    # window would call a drainer that died this morning "fresh" all day,
+    # so it gets an hour. (`worker_heartbeat` keeps the daily window it has
+    # always had; widening or narrowing that is a separate decision.)
+    heartbeat_loops = {"industry_report_worker"}
     for loop_name, info in snap.items():
         last_run_str = info.get("last_run_at") if isinstance(info, dict) else None
         stale = True
@@ -290,7 +354,9 @@ def cron_health_endpoint() -> Dict[str, Any]:
             try:
                 last_run = datetime.fromisoformat(last_run_str)
                 age_seconds = (now - last_run).total_seconds()
-                if loop_name in monthly_loops:
+                if loop_name in heartbeat_loops:
+                    stale = age_seconds > 3600
+                elif loop_name in monthly_loops:
                     stale = age_seconds > 32 * 24 * 3600
                 elif loop_name in weekly_loops:
                     stale = age_seconds > 8 * 24 * 3600
@@ -308,15 +374,52 @@ def cron_health_endpoint() -> Dict[str, Any]:
         })
     out_loops.sort(key=lambda r: r["loop"])
     n_stale = sum(1 for r in out_loops if r["stale"])
-    return {"loops": out_loops, "stale_count": n_stale}
+    # The universe file is not a loop — nothing refreshes it on a
+    # schedule, by design — but "the snapshot is past its review date" is
+    # exactly the kind of quiet rot this endpoint exists to surface, and
+    # ops already looks here. Kept out of `stale_count`, which counts
+    # loops; a stale file is a review task, not a cron failure.
+    from ..services.universe_review import file_status
+    uf = file_status()
+    return {
+        "loops": out_loops,
+        "stale_count": n_stale,
+        "universe_review": {
+            "last_reviewed": uf["last_reviewed"],
+            "days_since_review": uf["days_since_review"],
+            "stale": uf["stale"],
+        },
+    }
+
+
+@router.get("/api/admin/universe-review")
+def universe_review_endpoint(
+    compare_feed: bool = Query(
+        False,
+        description="Also diff data/sp500.json against the live FMP constituent "
+                    "list. Read-only; needs FMP_API_KEY and ENABLE_LIVE_DATA.",
+    ),
+) -> dict[str, Any]:
+    """Read-only review of the curated screener universe.
+
+    Reports the universe file's review timestamp and staleness, its
+    drift against the `companies` table, and — only with
+    `compare_feed=true` — the added/removed diff against FMP's S&P 500
+    constituent feed. Nothing is written: the universe is a hand-reviewed
+    snapshot, and changing it stays a deliberate operator step
+    (`python -m app.scripts.refresh_universe_lists`, then
+    `POST /api/seed-universe`).
+    """
+    from ..services.universe_review import review_universe
+    return review_universe(compare_feed=compare_feed)
 
 
 @router.post("/api/admin/run-weekly-digest")
 def run_weekly_digest_endpoint(
-    ticker: Optional[str] = Query(None),
-    sector: Optional[str] = Query(None),
+    ticker: str | None = Query(None),
+    sector: str | None = Query(None),
     days_back: int = Query(7, ge=1, le=30),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — manual trigger for the weekly digest pipeline.
     `ticker` runs the per-name digest; `sector` runs the sector
     cohort digest. Both blank runs the full universe."""
@@ -334,7 +437,7 @@ def run_weekly_digest_endpoint(
 @router.get("/api/admin/specialist-reliability")
 def specialist_reliability_endpoint(
     lookback: int = Query(30, ge=5, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — per-specialist reliability over the last N
     postmortemmed memos. Identifies specialists whose pulls have
     correlated with WRONG calls. Surfaces the same data the PM's
@@ -344,12 +447,13 @@ def specialist_reliability_endpoint(
 
 
 @router.get("/api/admin/postmortems/{ticker}")
-def latest_postmortems_endpoint(ticker: str, limit: int = Query(5, ge=1, le=50)) -> Dict[str, Any]:
+def latest_postmortems_endpoint(ticker: str, limit: int = Query(5, ge=1, le=50)) -> dict[str, Any]:
     """Wave 10 — latest postmortems for a ticker. Powers the memo page's
     "we got this {right/wrong} last time" callout. Returns most recent
     first.
     """
     from sqlalchemy import select
+
     from ..database import SessionLocal
     from ..models import MemoPostmortem
     with SessionLocal() as db:
@@ -379,7 +483,7 @@ def latest_postmortems_endpoint(ticker: str, limit: int = Query(5, ge=1, le=50))
 
 
 @router.post("/api/admin/rerun-memos")
-def rerun_memos_endpoint(tickers: List[str]) -> Dict[str, Any]:
+def rerun_memos_endpoint(tickers: list[str]) -> dict[str, Any]:
     """Wave 10 — admin bulk rerun. Useful when a Wave shipped that
     materially changes memo outputs (new schema field, prompt update,
     DCF default change) and you want to refresh a curated subset
@@ -398,7 +502,7 @@ def rerun_memos_endpoint(tickers: List[str]) -> Dict[str, Any]:
         raise HTTPException(
             status_code=400, detail="cap of 50 tickers per request",
         )
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for raw in tickers:
         ticker = (raw or "").strip().upper()
         if not ticker:
@@ -414,7 +518,7 @@ def rerun_memos_endpoint(tickers: List[str]) -> Dict[str, Any]:
 def mispricing_audit_endpoint(
     limit: int = Query(20, ge=1, le=50),
     persist: bool = Query(True),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 10 — audit the quality of the PM's mispricing theses
     across recent memos. Returns per-memo scores (specificity /
     differentiation / falsifiability) + a corpus-wide failure-
@@ -425,7 +529,9 @@ def mispricing_audit_endpoint(
     `pattern_observation` from its self-improvement context block.
     """
     from ..services.mispricing_audit import (
-        aggregate_scores, persist_audit, run_audit,
+        aggregate_scores,
+        persist_audit,
+        run_audit,
     )
     audit = run_audit(limit=limit)
     audit["aggregate"] = aggregate_scores(audit)
@@ -442,7 +548,7 @@ def mispricing_audit_endpoint(
 @router.get("/api/admin/dcf-versions/{ticker}")
 def dcf_version_history(
     ticker: str, limit: int = Query(25, ge=1, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 5A — DCF assumption drift over time.
 
     Returns the version chain newest-first with `assumption_changes`
@@ -476,8 +582,8 @@ def dcf_version_history(
 
 @router.get("/api/admin/update-queue")
 def update_queue_status(
-    ticker: Optional[str] = None,
-) -> Dict[str, Any]:
+    ticker: str | None = None,
+) -> dict[str, Any]:
     """Wave 5B — in-process FIFO queue for the update orchestrator.
 
     Useful for diagnosing "is the loop wedged?" without shell access.
@@ -494,7 +600,7 @@ def update_queue_status(
 # ---------------------------------------------------------------------------
 
 @router.post("/api/admin/news-domains/reload")
-def reload_news_domains() -> Dict[str, Any]:
+def reload_news_domains() -> dict[str, Any]:
     """Wave 6C — reload `news_domains.json` without bouncing the server.
 
     The agent caches the lists via `lru_cache`; this clears it so a
@@ -526,21 +632,21 @@ class UILogEvent(BaseModel):
     without bumping the schema.
     """
     kind: str
-    path: Optional[str] = None
-    method: Optional[str] = None
-    status_code: Optional[int] = None
-    duration_ms: Optional[int] = None
-    session_id: Optional[str] = None
-    ts: Optional[str] = None  # client wall-clock; not authoritative
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    path: str | None = None
+    method: str | None = None
+    status_code: int | None = None
+    duration_ms: int | None = None
+    session_id: str | None = None
+    ts: str | None = None  # client wall-clock; not authoritative
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class UILogBatch(BaseModel):
-    events: List[UILogEvent]
+    events: list[UILogEvent]
 
 
 @router.post("/api/admin/ui-log")
-def post_ui_log(batch: UILogBatch) -> Dict[str, Any]:
+def post_ui_log(batch: UILogBatch) -> dict[str, Any]:
     """Ingest a batch of UI trace events. Always returns 200 — logging
     must never block the user."""
     from ..database import SessionLocal
@@ -564,6 +670,13 @@ def post_ui_log(batch: UILogBatch) -> Dict[str, Any]:
                 written += 1
             db.commit()
     except Exception:
+        # RP-001 class (c), deliberately NOT made to raise: this is a
+        # browser-called telemetry sink (exempt from admin auth) whose
+        # contract is "always 200, never block the user". Raising would
+        # turn a logging hiccup into a 500 on every page the UI traces
+        # from. Log with the traceback and keep returning ok=False so the
+        # failure is visible in the server log instead of nowhere.
+        log.exception("ui-log ingest failed after %d event(s)", written)
         return {"written": written, "ok": False}
     return {"written": written, "ok": True}
 
@@ -572,16 +685,17 @@ def post_ui_log(batch: UILogBatch) -> Dict[str, Any]:
 def get_ui_log(
     limit: int = Query(200, ge=1, le=2000),
     since_minutes: int = Query(60, ge=1, le=1440),
-    source: Optional[str] = None,
-    kind: Optional[str] = None,
-    path_contains: Optional[str] = None,
-    session_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    source: str | None = None,
+    kind: str | None = None,
+    path_contains: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
     """Read recent UI trace events newest-first. Use this to see what a
     user was doing in the UI."""
+    from sqlalchemy import select
+
     from ..database import SessionLocal
     from ..models import UILog
-    from sqlalchemy import select
     cutoff = datetime.utcnow() - timedelta(minutes=since_minutes)
     with SessionLocal() as db:
         UILog.__table__.create(bind=db.get_bind(), checkfirst=True)
@@ -618,7 +732,7 @@ def get_ui_log(
 
 
 @router.delete("/api/admin/ui-log")
-def clear_ui_log() -> Dict[str, Any]:
+def clear_ui_log() -> dict[str, Any]:
     """Wipe the trace table. Useful before starting a fresh test session."""
     from ..database import SessionLocal
     from ..models import UILog
@@ -632,7 +746,7 @@ def clear_ui_log() -> Dict[str, Any]:
 @router.get("/api/admin/lopsidedness-audit")
 def lopsidedness_audit(
     n: int = Query(10, ge=1, le=100),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Wave 3A risk-register mitigation: telemetry on whether the
     sector-integrated bull/bear is actually balanced.
 
@@ -642,7 +756,7 @@ def lopsidedness_audit(
     to revisit the prompt structure or add a devil's-advocate amplifier
     (deferred per locked decision until lopsidedness shows up in practice).
     """
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     bull_kp_total = 0
     bear_kp_total = 0
     lean_counts = {"bull": 0, "bear": 0, "balanced": 0}
@@ -651,9 +765,10 @@ def lopsidedness_audit(
 
     history_seen: set[str] = set()
     # Pull latest memo per ticker (skip duplicates) up to n unique tickers.
+    from sqlalchemy import select
+
     from ..database import SessionLocal
     from ..models import MemoSnapshot
-    from sqlalchemy import select
     with SessionLocal() as db:
         memo_store._ensure_table(db)
         all_rows = db.execute(
@@ -722,7 +837,7 @@ class AutoUpdateToggle(BaseModel):
 
 
 @router.get("/api/admin/auto-update")
-def list_auto_update_tickers() -> Dict[str, Any]:
+def list_auto_update_tickers() -> dict[str, Any]:
     """List tickers eligible for automatic memo regeneration.
 
     A ticker is eligible when its `Company.auto_update_memo` is True
@@ -750,7 +865,7 @@ def list_auto_update_tickers() -> Dict[str, Any]:
 
 
 @router.put("/api/admin/auto-update/{ticker}")
-def set_auto_update_memo(ticker: str, payload: AutoUpdateToggle) -> Dict[str, Any]:
+def set_auto_update_memo(ticker: str, payload: AutoUpdateToggle) -> dict[str, Any]:
     """Pin or unpin a ticker for automatic memo regeneration.
 
     Returns 404 when the ticker isn't in the companies table. Idempotent.
@@ -770,7 +885,7 @@ def set_auto_update_memo(ticker: str, payload: AutoUpdateToggle) -> Dict[str, An
 
 
 @router.post("/api/admin/auto-update/check/{ticker}")
-def check_auto_regen_decision(ticker: str) -> Dict[str, Any]:
+def check_auto_regen_decision(ticker: str) -> dict[str, Any]:
     """Dry-run the gating logic for a specific ticker — useful for
     debugging when a filing landed but no memo regenerated."""
     return update_orchestrator.should_auto_regen(ticker)
@@ -781,7 +896,7 @@ def check_auto_regen_decision(ticker: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @router.get("/api/admin/llm-breakers")
-def get_llm_breakers() -> Dict[str, Any]:
+def get_llm_breakers() -> dict[str, Any]:
     """Inspect the current circuit-breaker state for each LLM provider.
 
     Three failures in a row open the breaker — subsequent calls return
@@ -817,11 +932,11 @@ def get_llm_breakers() -> Dict[str, Any]:
 
 
 @router.post("/api/admin/llm-breakers/reset")
-def reset_llm_breakers(provider: Optional[str] = Query(None)) -> Dict[str, Any]:
+def reset_llm_breakers(provider: str | None = Query(None)) -> dict[str, Any]:
     """Manually reset LLM circuit breakers. Pass `?provider=openai|anthropic|
     gemini` to reset one; omit for all. Useful after fixing a transient
     issue (auth, model swap, etc.) to skip the auto-reset cooldown."""
-    from ..agents.llm import reset_circuit_breaker, get_breaker_state
+    from ..agents.llm import get_breaker_state, reset_circuit_breaker
     reset_circuit_breaker(provider)
     return {
         "reset": provider or "all",
@@ -842,7 +957,7 @@ def reset_llm_breakers(provider: Optional[str] = Query(None)) -> Dict[str, Any]:
 @router.get("/api/admin/llm-recent-failures")
 def get_recent_llm_failures(
     limit: int = Query(20, ge=1, le=200),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return the most recent LLM call failures from LLMCallLog.
 
     Surfaces the actual provider error message — needed to diagnose
@@ -851,9 +966,10 @@ def get_recent_llm_failures(
     never sees the underlying reason (e.g., bad model name, auth
     rejection, rate limit).
     """
+    from sqlalchemy import desc
+
     from ..database import SessionLocal
     from ..models import LLMCallLog
-    from sqlalchemy import desc
     with SessionLocal() as db:
         LLMCallLog.__table__.create(bind=db.get_bind(), checkfirst=True)
         rows = (
@@ -879,9 +995,9 @@ def get_recent_llm_failures(
 
 @router.get("/api/admin/regen-jobs")
 def list_regen_jobs(
-    ticker: Optional[str] = Query(None),
+    ticker: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Theme 5 — memo-regen queue telemetry.
 
     Newest-first `RegenJob` rows: status, attempt count, timings, the
@@ -895,7 +1011,7 @@ def list_regen_jobs(
     """
     from ..services import regen_worker
     jobs = regen_worker.recent_jobs(ticker=ticker, limit=limit)
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for j in jobs:
         counts[j["status"]] = counts.get(j["status"], 0) + 1
     return {"count": len(jobs), "status_counts": counts, "jobs": jobs}
@@ -906,7 +1022,7 @@ def list_regen_jobs(
 # ---------------------------------------------------------------------------
 
 @router.post("/api/admin/fix-sequences")
-def fix_postgres_sequences() -> Dict[str, Any]:
+def fix_postgres_sequences() -> dict[str, Any]:
     """Reset Postgres autoincrement sequences to MAX(id)+1 for every
     table that has an `id` primary key.
 
@@ -926,13 +1042,14 @@ def fix_postgres_sequences() -> Dict[str, Any]:
     a `_pkey` constraint.
     """
     from sqlalchemy import inspect, text
+
     from ..database import engine
 
     if engine.dialect.name != "postgresql":
         return {"fixed": [], "note": f"no-op on {engine.dialect.name} (sequences are Postgres-only)"}
 
-    fixed: List[Dict[str, Any]] = []
-    skipped: List[Dict[str, Any]] = []
+    fixed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     inspector = inspect(engine)
     with engine.begin() as conn:
         for table_name in inspector.get_table_names():
@@ -964,7 +1081,7 @@ def fix_postgres_sequences() -> Dict[str, Any]:
                 # value=max_id.
                 new_val = max_id + 1
                 conn.execute(text(
-                    f"SELECT setval(:seq, :val, false)"
+                    "SELECT setval(:seq, :val, false)"
                 ), {"seq": seq_name, "val": new_val})
                 fixed.append({
                     "table": table_name,
@@ -977,3 +1094,161 @@ def fix_postgres_sequences() -> Dict[str, Any]:
                 skipped.append({"table": table_name, "reason": str(exc)[:200]})
     return {"fixed": fixed, "skipped": skipped}
 
+
+# ---------------------------------------------------------------------------
+# Phase 6 — Fundamental Factor Scorecard: enqueue-only ops surface
+# ---------------------------------------------------------------------------
+#
+# Every endpoint here inserts a `scorecard_runs` row and returns 202. The
+# web process never scores: the worker's `scorecard_loop` claims the row
+# at its next interval tick (every few minutes; the daily scoring itself
+# is gated to 03:45 UTC inside the loop). Protected by the admin token
+# through the `/api/admin` prefix; none of these is browser-called.
+
+def _scorecard_version_for(version_key: str | None) -> str:
+    from ..services import scorecard_service
+    try:
+        return scorecard_service.resolve_version(version_key)["version_key"]
+    except scorecard_service.UnknownVersion as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+@router.post("/api/admin/scorecard/refresh", status_code=202)
+def scorecard_refresh_endpoint(payload: ScorecardRefreshRequest | None = None) -> ScorecardEnqueueOut:
+    """Queue one scoring run.
+
+    `as_of` defaults to yesterday UTC (the last complete close);
+    `tickers` restricts the run to a subset (still normalised only
+    against that subset — use it for diagnostics, not for the product
+    cross-section). Coalesces on `(version_key, as_of, kind)`, so a repeat
+    request returns the pending row with `created=false`.
+    """
+    from ..monitoring.scorecard_loop import scheduled_as_of
+    from ..services import scorecard_queue
+    payload = payload or ScorecardRefreshRequest()
+    vk = _scorecard_version_for(payload.version_key)
+    as_of = payload.as_of or scheduled_as_of(datetime.utcnow())
+    params: dict[str, Any] = {}
+    if payload.tickers is not None:
+        params["tickers"] = sorted({t.strip().upper() for t in payload.tickers if t.strip()})
+    run, created = scorecard_queue.enqueue_run(
+        version_key=vk, as_of=as_of, kind=payload.kind, params=params, requested_by="admin",
+    )
+    return ScorecardEnqueueOut(
+        run=ScorecardRunOut(**run), created=created,
+        note="queued; the worker's scorecard_loop drains the queue at its next interval tick (minutes)",
+    )
+
+
+@router.post("/api/admin/scorecard/evaluate", status_code=202)
+def scorecard_evaluate_endpoint(payload: ScorecardEvaluateRequest | None = None) -> ScorecardEnqueueOut:
+    """Queue the evaluation job (quintile long/short, FF5+MOM regression,
+    double-selection LASSO) over every month-end row on file. `as_of` is
+    only the run's label (default: the last completed month end)."""
+    from ..monitoring.scorecard_loop import last_completed_month_end
+    from ..services import scorecard_queue
+    payload = payload or ScorecardEvaluateRequest()
+    vk = _scorecard_version_for(payload.version_key)
+    as_of = payload.as_of or last_completed_month_end(datetime.utcnow().date())
+    run, created = scorecard_queue.enqueue_run(
+        version_key=vk, as_of=as_of, kind=scorecard_queue.KIND_EVALUATE, requested_by="admin",
+    )
+    return ScorecardEnqueueOut(
+        run=ScorecardRunOut(**run), created=created,
+        note="queued; results land in scorecard_evaluations and GET /api/scorecard/evaluation",
+    )
+
+
+@router.post("/api/admin/scorecard/backfill", status_code=202)
+def scorecard_backfill_endpoint(payload: ScorecardBackfillRequest | None = None) -> ScorecardBackfillOut:
+    """Queue the month-end history: one `pit_prepare` run (availability
+    backfill + month-end price sync for the universe) followed by one
+    `backfill` run per month end, oldest first, for `months` months ending
+    at `end` (default: the last completed month end, `SCORECARD_BACKFILL_MONTHS`
+    months). Month ends that already have a succeeded run are skipped.
+
+    Honest limit: the price store is fed from the app's 252-day cached
+    series, so month ends older than ~12 months score without a price —
+    every valuation feature there is n/a (`missing:price`) and coverage is
+    lower. The rows are still written so the fundamentals-only families
+    have history; the run note reports `no_price=`.
+    """
+    from ..monitoring.scorecard_loop import last_completed_month_end
+    from ..services import scorecard_queue
+    payload = payload or ScorecardBackfillRequest()
+    vk = _scorecard_version_for(payload.version_key)
+    months = int(payload.months or settings.scorecard_backfill_months)
+    end = payload.end or last_completed_month_end(datetime.utcnow().date())
+    end = date(end.year, end.month, monthrange(end.year, end.month)[1])
+    month_ends: list[date] = []
+    y, m = end.year, end.month
+    for _ in range(months):
+        month_ends.append(date(y, m, monthrange(y, m)[1]))
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    month_ends.reverse()
+
+    prep, _prep_created = scorecard_queue.enqueue_run(
+        version_key=vk, as_of=end, kind=scorecard_queue.KIND_PIT_PREPARE, requested_by="admin",
+    )
+    enqueued: list[ScorecardRunOut] = []
+    skipped: list[date] = []
+    for me in month_ends:
+        if scorecard_queue.succeeded_run_exists(vk, me):
+            skipped.append(me)
+            continue
+        run, created = scorecard_queue.enqueue_run(
+            version_key=vk, as_of=me, kind=scorecard_queue.KIND_BACKFILL, requested_by="admin",
+        )
+        if created:
+            enqueued.append(ScorecardRunOut(**run))
+    return ScorecardBackfillOut(
+        pit_prepare=ScorecardRunOut(**prep), enqueued=enqueued, skipped_existing=skipped,
+        note=(f"{len(enqueued)} month-end runs queued behind pit_prepare; {len(skipped)} already scored. "
+              "Month ends older than the cached 252-day price window score without a price (valuation n/a)."),
+    )
+
+
+
+
+@router.get("/api/admin/scorecard/disagreements")
+def scorecard_disagreements_endpoint(
+    status: str = Query("open", pattern="^(open|queued_review|reviewed|dismissed|all)$"),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict[str, Any]:
+    """Open (by default) memo-vs-scorecard disagreements, newest first.
+    Read-only; the rows are written by the memo pipeline
+    (`agents/scorecard_context.persist_disagreement`)."""
+    from ..agents import scorecard_context
+    from ..database import SessionLocal
+    from ..models import ScorecardDisagreement
+    with SessionLocal() as db:
+        ScorecardDisagreement.__table__.create(bind=db.get_bind(), checkfirst=True)
+        q = db.query(ScorecardDisagreement)
+        if status != "all":
+            q = q.filter(ScorecardDisagreement.status == status)
+        rows = q.order_by(ScorecardDisagreement.created_at.desc(), ScorecardDisagreement.id.desc()).limit(limit).all()
+        items = [scorecard_context._disagreement_dict(r) for r in rows]
+    return {"status": status, "count": len(items), "items": items}
+
+
+@router.post("/api/admin/scorecard/disagreements/{disagreement_id}/dismiss")
+def scorecard_disagreement_dismiss_endpoint(disagreement_id: int) -> dict[str, Any]:
+    """Close a disagreement without a review regen. Idempotent: a row that
+    is already dismissed comes back unchanged; a row a review already
+    closed (`reviewed`) is left as it is and reported as such."""
+    from ..agents import scorecard_context
+    from ..database import SessionLocal
+    from ..models import ScorecardDisagreement
+    with SessionLocal() as db:
+        ScorecardDisagreement.__table__.create(bind=db.get_bind(), checkfirst=True)
+        row = db.get(ScorecardDisagreement, disagreement_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"no scorecard disagreement #{disagreement_id}")
+        changed = False
+        if row.status in (scorecard_context.STATUS_OPEN, scorecard_context.STATUS_QUEUED_REVIEW):
+            row.status = scorecard_context.STATUS_DISMISSED
+            row.resolved_at = scorecard_context._utcnow()
+            db.commit()
+            db.refresh(row)
+            changed = True
+        return {"changed": changed, "item": scorecard_context._disagreement_dict(row)}

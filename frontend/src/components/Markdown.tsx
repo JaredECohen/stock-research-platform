@@ -16,7 +16,10 @@ function escapeHtml(s: string): string {
 function renderInline(line: string): string {
   let s = escapeHtml(line);
   s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/_(.+?)_/g, "<em>$1</em>");
+  // Word-bounded so identifiers with underscores (cookie names such as
+  // __client_uat, snake_case fields in memo text) are not mangled into
+  // italics; only a standalone _phrase_ is emphasis.
+  s = s.replace(/(^|[\s(])_([^_\n]+?)_(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>");
   s = s.replace(/`(.+?)`/g, '<code class="bg-ink-900 px-1 rounded">$1</code>');
   return s;
 }

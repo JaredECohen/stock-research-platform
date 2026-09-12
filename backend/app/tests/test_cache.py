@@ -13,8 +13,6 @@ from __future__ import annotations
 import time
 from datetime import datetime, timedelta
 
-import pytest
-
 from app.cache import (
     cache_get,
     cache_put,
@@ -129,7 +127,7 @@ def test_mark_stale_descendants_directly():
 def test_schema_version_forward_compat():
     """Payload with an older schema_version still deserializes; column wins."""
     subject = _unique("FFF")
-    snap = cache_put(
+    cache_put(
         subject, "weird", payload={"x": 1}, sources_used=["s"],
         schema_version=3,
     )

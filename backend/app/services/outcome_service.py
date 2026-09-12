@@ -19,8 +19,9 @@ sense for live recommendations.
 from __future__ import annotations
 
 import logging
-from datetime import date as _date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import date as _date
+from datetime import datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -53,10 +54,10 @@ def _ensure_table(db: Session) -> None:
     MemoOutcome.__table__.create(bind=bind, checkfirst=True)
 
 
-def _close_on_or_before(rows: List[Dict[str, Any]], target: str) -> Optional[float]:
+def _close_on_or_before(rows: list[dict[str, Any]], target: str) -> float | None:
     if not rows or not target:
         return None
-    chosen: Optional[float] = None
+    chosen: float | None = None
     for r in rows:
         d = str(r.get("date") or "")
         if not d:
@@ -71,7 +72,7 @@ def _close_on_or_before(rows: List[Dict[str, Any]], target: str) -> Optional[flo
     return chosen
 
 
-def _close_on_or_after(rows: List[Dict[str, Any]], target: str) -> Optional[float]:
+def _close_on_or_after(rows: list[dict[str, Any]], target: str) -> float | None:
     """First close on or after `target` — used for the price at memo
     generation when we don't have an exact-day match."""
     for r in rows or []:
@@ -84,7 +85,7 @@ def _close_on_or_after(rows: List[Dict[str, Any]], target: str) -> Optional[floa
     return None
 
 
-def _thesis_held(rating: str, return_signed: float) -> Optional[bool]:
+def _thesis_held(rating: str, return_signed: float) -> bool | None:
     """Did the recommendation pay off?
 
     - Very Bullish / Bullish expect positive return → held if ≥ 0.
@@ -109,12 +110,17 @@ def _evaluate_one(
     snap: MemoSnapshot, horizon_days: int,
     *, today: _date, benchmark: str,
     db: Session,
-) -> Optional[MemoOutcome]:
-    """Score a single (snapshot, horizon). Skips when the horizon hasn't
-    come of age, the snapshot is a backtest, or the price series is missing."""
+) -> tuple[MemoOutcome | None, str]:
+    """Score a single ``(snapshot, horizon)`` and name every no-write path.
+
+    The status is load-bearing observability.  Returning only ``None`` used
+    to conflate harmless idempotency (future/already-recorded) with missing
+    production price data.  The latter left hundreds of due outcomes
+    unwritten while the cron job still reported success.
+    """
     # Backtest snapshots have `as_of_date` set; outcome scoring is for live memos only.
     if snap.as_of_date is not None:
-        return None
+        return None, "backtest"
 
     generated = snap.generated_at
     if isinstance(generated, datetime):
@@ -123,7 +129,7 @@ def _evaluate_one(
         generated_date = generated  # assume date-like
     target_date = generated_date + timedelta(days=horizon_days)
     if target_date > today:
-        return None  # not due yet
+        return None, "not_due"
 
     # Skip if we've already evaluated this (snapshot, horizon).
     existing = db.execute(
@@ -133,14 +139,14 @@ def _evaluate_one(
         )
     ).scalar_one_or_none()
     if existing is not None:
-        return None
+        return None, "already_recorded"
 
     from .market_data_service import get_price_series
     days = horizon_days + 30
     ticker_rows = get_price_series(snap.ticker, days) or []
     bench_rows = get_price_series(benchmark, days) or []
     if not ticker_rows:
-        return None
+        return None, "ticker_prices_unavailable"
 
     g_iso = generated_date.isoformat()
     t_iso = target_date.isoformat()
@@ -148,15 +154,15 @@ def _evaluate_one(
     price_at_memo = _close_on_or_after(ticker_rows, g_iso) or _close_on_or_before(ticker_rows, g_iso)
     price_at_target = _close_on_or_before(ticker_rows, t_iso)
     if not (price_at_memo and price_at_target and price_at_memo > 0):
-        return None
+        return None, "price_window_incomplete"
 
     forward_return = (price_at_target - price_at_memo) / price_at_memo
 
     # Benchmark-relative alpha (None if benchmark price unavailable).
     bench_at_memo = _close_on_or_after(bench_rows, g_iso) or _close_on_or_before(bench_rows, g_iso)
     bench_at_target = _close_on_or_before(bench_rows, t_iso)
-    bench_return: Optional[float] = None
-    alpha: Optional[float] = None
+    bench_return: float | None = None
+    alpha: float | None = None
     if bench_at_memo and bench_at_target and bench_at_memo > 0:
         bench_return = (bench_at_target - bench_at_memo) / bench_at_memo
         alpha = forward_return - bench_return
@@ -173,7 +179,7 @@ def _evaluate_one(
         or None
     )
 
-    note_parts: List[str] = [
+    note_parts: list[str] = [
         f"horizon={horizon_days}d",
         f"return={forward_return:+.2%}",
     ]
@@ -199,22 +205,22 @@ def _evaluate_one(
         regime_at_memo=regime_at_memo,
     )
     db.add(row)
-    return row
+    return row, "written"
 
 
 def _maybe_write_reflection(
     snap: MemoSnapshot, outcome: MemoOutcome,
-) -> None:
+) -> bool:
     """For long horizons, append an outcome entry to the company memory file."""
     if outcome.horizon_days not in REFLECTION_HORIZONS:
-        return
+        return False
     try:
         from ..config import settings
         from ..memory import CompanyMemory, MemoryEntry
         if not settings.enable_long_term_memory:
-            return
+            return False
         cm = CompanyMemory.for_ticker(snap.ticker)
-        body_parts: List[str] = []
+        body_parts: list[str] = []
         body_parts.append(
             f"**At memo time (v{snap.version}):** rating={outcome.rating_at_memo}, "
             f"confidence={int(outcome.confidence_at_memo)}, "
@@ -238,9 +244,11 @@ def _maybe_write_reflection(
             body="\n\n".join(p for p in body_parts if p),
         ))
         cm.save()
+        return True
     except Exception as exc:  # pragma: no cover — diagnostic only
         log.warning("Outcome reflection write failed for %s/%sd: %s",
                     snap.ticker, outcome.horizon_days, exc)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -248,16 +256,18 @@ def _maybe_write_reflection(
 # ---------------------------------------------------------------------------
 
 def evaluate_all_due(
-    *, horizons: Optional[List[int]] = None,
+    *, horizons: list[int] | None = None,
     benchmark: str = DEFAULT_BENCHMARK,
-    today: Optional[_date] = None,
-    db: Optional[Session] = None,
-) -> Dict[str, int]:
+    today: _date | None = None,
+    db: Session | None = None,
+) -> dict[str, int]:
     """Score every (snapshot, horizon) that has come of age and isn't
     already in `memo_outcomes`. Idempotent: re-running on the same day
     yields zero new rows once everything's been scored.
 
-    Returns `{evaluated, written, reflections, errors}`.
+    ``evaluated`` retains its historical meaning (all snapshot/horizon pairs
+    scanned).  ``due`` and ``data_unavailable`` distinguish work that should
+    have produced a row from harmless future/idempotent skips.
     """
     today = today or _date.today()
     horizons = list(horizons or DEFAULT_HORIZONS)
@@ -275,32 +285,67 @@ def evaluate_all_due(
         written = 0
         reflections = 0
         errors = 0
+        statuses: dict[str, int] = {
+            "backtest": 0,
+            "not_due": 0,
+            "already_recorded": 0,
+            "ticker_prices_unavailable": 0,
+            "price_window_incomplete": 0,
+        }
         for snap in snaps:
             for h in horizons:
                 evaluated += 1
                 try:
-                    out = _evaluate_one(
+                    out, status = _evaluate_one(
                         snap, h, today=today, benchmark=benchmark, db=db,
                     )
                 except Exception as exc:  # pragma: no cover — defensive
                     errors += 1
+                    # A database exception (for example schema drift) leaves
+                    # PostgreSQL's transaction aborted.  Roll it back so one
+                    # bad pair does not turn every later pair into a cascade.
+                    db.rollback()
                     log.warning(
                         "Outcome evaluation failed for snap=%s h=%sd: %s",
                         snap.id, h, exc,
                     )
                     continue
+                if status != "written":
+                    statuses[status] = statuses.get(status, 0) + 1
                 if out is not None:
                     written += 1
                     db.commit()
                     if h in REFLECTION_HORIZONS:
                         try:
-                            _maybe_write_reflection(snap, out)
-                            reflections += 1
+                            if _maybe_write_reflection(snap, out):
+                                reflections += 1
                         except Exception:  # pragma: no cover
                             pass
+        data_unavailable = (
+            statuses["ticker_prices_unavailable"]
+            + statuses["price_window_incomplete"]
+        )
+        due = (
+            written + statuses["already_recorded"]
+            + data_unavailable + errors
+        )
+        if data_unavailable:
+            log.error(
+                "Outcome evaluation left %s due rows pending: "
+                "ticker_prices_unavailable=%s price_window_incomplete=%s",
+                data_unavailable,
+                statuses["ticker_prices_unavailable"],
+                statuses["price_window_incomplete"],
+            )
         return {
             "evaluated": evaluated, "written": written,
             "reflections": reflections, "errors": errors,
+            "due": due,
+            "already_recorded": statuses["already_recorded"],
+            "not_due": statuses["not_due"],
+            "data_unavailable": data_unavailable,
+            "ticker_prices_unavailable": statuses["ticker_prices_unavailable"],
+            "price_window_incomplete": statuses["price_window_incomplete"],
         }
     finally:
         if own:
@@ -308,8 +353,8 @@ def evaluate_all_due(
 
 
 def get_outcomes_for_snapshot(
-    memo_snapshot_id: int, *, db: Optional[Session] = None,
-) -> List[Dict[str, Any]]:
+    memo_snapshot_id: int, *, db: Session | None = None,
+) -> list[dict[str, Any]]:
     own = db is None
     if own:
         db = SessionLocal()
@@ -334,6 +379,7 @@ def get_outcomes_for_snapshot(
                 "thesis_held": r.thesis_held,
                 "evaluated_at": r.evaluated_at.isoformat(),
                 "note": r.note,
+                "regime_at_memo": r.regime_at_memo,
             }
             for r in rows
         ]
@@ -343,9 +389,9 @@ def get_outcomes_for_snapshot(
 
 
 def track_record(
-    *, ticker: Optional[str] = None, sector: Optional[str] = None,
-    horizon_days: int = 90, db: Optional[Session] = None,
-) -> Dict[str, Any]:
+    *, ticker: str | None = None, sector: str | None = None,
+    horizon_days: int = 90, db: Session | None = None,
+) -> dict[str, Any]:
     """Aggregate track-record stats over evaluated outcomes.
 
     Filters: `ticker` (single name), `sector` (joined via memo_snapshots),

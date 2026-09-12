@@ -24,7 +24,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..config import settings
 from ..schemas import DCFAssumptions, ScenarioDriver
@@ -48,7 +48,7 @@ def _clamp_bp(value: int, key: str) -> int:
 
 # Sector-aware deterministic fallback bumps. Used when no LLM is
 # available. Tuned per the Wave 10i sector primer.
-_SECTOR_FALLBACK_BUMPS: Dict[str, Dict[str, Dict[str, float]]] = {
+_SECTOR_FALLBACK_BUMPS: dict[str, dict[str, dict[str, float]]] = {
     # Software / compounders → smaller bumps (margins are stickier).
     "software": {
         "bull": {"growth_bp": +300, "margin_bp": +150, "tg_bp": +50, "wacc_bp": -50},
@@ -120,8 +120,8 @@ def _apply_bumps(
 
 
 def _deterministic_fallback(
-    profile: Dict[str, Any], base: DCFAssumptions,
-) -> Tuple[DCFAssumptions, List[ScenarioDriver], DCFAssumptions, List[ScenarioDriver]]:
+    profile: dict[str, Any], base: DCFAssumptions,
+) -> tuple[DCFAssumptions, list[ScenarioDriver], DCFAssumptions, list[ScenarioDriver]]:
     """Sector-aware deterministic builder. No LLM cost. Better than
     the prior one-size-fits-all symmetric bumps."""
     bucket = _classify_for_fallback(
@@ -204,15 +204,45 @@ Output EXACT JSON:
 """
 
 
+def _fell_back_to_deterministic(profile: dict[str, Any], exc: BaseException | None) -> None:
+    """(b) RP-001: the LLM was configured and asked, and the bull/bear
+    scenarios shipped the sector-templated bumps anyway.
+
+    The memo's bull/bear key points then cite templated drivers as if an
+    analyst had named them, so it lands on the memo banner (`note_soft`
+    no-ops outside a memo run). `build_bull_bear` returns before the LLM
+    call when `settings.has_llm` is false, so this is never reached in
+    deterministic mode, where the templated bumps ARE the design. Lazy
+    imports: `app.agents` imports the DCF engine, which imports this
+    module, at load.
+    """
+    from ..agents.log_safety import log_safely, redact
+    from ..agents.safe_runner import note_soft
+    ticker = profile.get("ticker")
+    if exc is not None:
+        log_safely(log, f"scenario assumptions LLM call failed for {ticker}", exc)
+        note_soft(
+            "DCF Scenarios",
+            f"bull/bear driver LLM call failed; sector-templated bumps used: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
+    else:
+        log.warning("scenario assumptions LLM returned no usable output for %s", ticker)
+        note_soft(
+            "DCF Scenarios",
+            "bull/bear driver LLM returned no usable output; sector-templated bumps used",
+        )
+
+
 def build_bull_bear(
-    profile: Dict[str, Any], base: DCFAssumptions,
-) -> Tuple[DCFAssumptions, List[ScenarioDriver], DCFAssumptions, List[ScenarioDriver]]:
+    profile: dict[str, Any], base: DCFAssumptions,
+) -> tuple[DCFAssumptions, list[ScenarioDriver], DCFAssumptions, list[ScenarioDriver]]:
     """Build bull and bear assumption sets + driver lists.
 
-    LLM-driven when an OpenAI key is configured; sector-aware
-    deterministic fallback otherwise.
+    LLM-driven when any provider is configured (`llm.chat_json` picks
+    it); sector-aware deterministic fallback otherwise.
     """
-    if not getattr(settings, "openai_api_key", None):
+    if not settings.has_llm:
         return _deterministic_fallback(profile, base)
 
     payload = {
@@ -246,13 +276,14 @@ def build_bull_bear(
             max_tokens=1200,
         )
     except Exception as exc:  # pragma: no cover — never block DCF
-        log.warning("scenario assumptions LLM call failed: %s", exc)
+        _fell_back_to_deterministic(profile, exc)
         return _deterministic_fallback(profile, base)
 
     if not isinstance(out, dict):
+        _fell_back_to_deterministic(profile, None)
         return _deterministic_fallback(profile, base)
 
-    def _parse_side(side: Dict[str, Any]) -> Tuple[DCFAssumptions, List[ScenarioDriver]]:
+    def _parse_side(side: dict[str, Any]) -> tuple[DCFAssumptions, list[ScenarioDriver]]:
         if not isinstance(side, dict):
             return base, []
         growth_bp = _clamp_bp(side.get("growth_bp", 0), "revenue_growth_bp")
@@ -260,7 +291,7 @@ def build_bull_bear(
         tg_bp = _clamp_bp(side.get("terminal_growth_bp", 0), "terminal_growth_bp")
         wacc_bp = _clamp_bp(side.get("wacc_bp", 0), "wacc_bp")
         bumped = _apply_bumps(base, growth_bp, margin_bp, tg_bp, wacc_bp)
-        drivers: List[ScenarioDriver] = []
+        drivers: list[ScenarioDriver] = []
         for d in (side.get("drivers") or [])[:3]:
             if not isinstance(d, dict):
                 continue

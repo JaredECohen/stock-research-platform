@@ -1,0 +1,71 @@
+{
+ "degradation_events": [
+  {
+   "agent": "Fundamental Scorecard",
+   "error_type": "DataUnavailable",
+   "message": "no scorecard row on file for MSFT; section renders n/a"
+  }
+ ],
+ "degraded_agents": [
+  "Fundamental Scorecard"
+ ],
+ "extra_agent_views": [],
+ "rating_label": "Bullish",
+ "sector_agent_view": {
+  "agent": "Sector Analyst",
+  "data_keys": [
+   "bull_bear_analysis",
+   "cohort",
+   "cohort_filing_themes",
+   "common_sector_risks",
+   "cross_sector_relevance",
+   "industry",
+   "industry_structure",
+   "kpi_placements",
+   "macro_alignment",
+   "macro_broadcast",
+   "macro_sensitivities",
+   "outliers",
+   "pending_news_alerts",
+   "regime",
+   "sector",
+   "sector_data_context",
+   "sector_drivers",
+   "sector_secular_trends",
+   "sub_industry",
+   "subindustry_themes",
+   "subindustry_watch",
+   "target_ticker",
+   "trends",
+   "valuation_lens"
+  ],
+  "headline": "Diversified Software cohort, regime: Operating leverage cycle \u00b7 highly concentrated (HHI 0.25)",
+  "key_points": [
+   "revenue_growth: 16.0% vs cohort median 14.0% \u2014 above median",
+   "operating_margin: 45.0% vs cohort median 24.0% \u2014 top quartile",
+   "ROIC: 51.1% vs cohort median 21.3% \u2014 top quartile",
+   "fcf_margin: 30.0% vs cohort median 27.5% \u2014 above median",
+   "EV_EBITDA: 26.0x vs cohort median 30.8x \u2014 below-median multiple",
+   "Cohort revenue growth (recent): +20.3%",
+   "Cohort op margin expanding (+2.9% multi-year)",
+   "Cohort capex intensity steady (+0.0% multi-year)",
+   "Cohort-wide filing themes: Liquidity risk (8), Competitive intensity (4), Cyclical demand risk (3).",
+   "High-yield credit spread at 3.40%, -0.07pp over 3 months.",
+   "Sticky core CPI at 3.6% YoY.",
+   "PCE inflation -0.5% YoY."
+  ],
+  "sources": [
+   "sector_config:Technology",
+   "peer:AAPL",
+   "peer:AMD",
+   "peer:AVGO",
+   "peer:CRM",
+   "peer:INTC",
+   "peer:NVDA",
+   "filing:AAPL",
+   "filing:AMD",
+   "filing:AVGO"
+  ],
+  "summary": "Technology / Diversified Software regime read: Operating leverage cycle. Cohort of 8 peers selected on sub_industry basis. Sub-industry dynamics: Platform consolidation; AI is both a moat and a margin tailwind for incumbents. Cohort outliers: growth leader NVDA, margin leader NVDA, valuation cheapest QCOM. Secular trends: AI workload share of compute spend rising; Hyperscaler capex re-rating from cycle to secular. Watch: Seat-based saturation, AI agent disruption, RPO growth."
+ }
+}

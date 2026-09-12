@@ -26,9 +26,10 @@ A monthly cron refreshes the universe.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 from sqlalchemy import select
 
@@ -42,7 +43,7 @@ log = logging.getLogger(__name__)
 # Curated theme vocabulary — start with the high-conviction ones.
 # Add to this list as the screener evolves; per the design review,
 # this should grow to ~30 investable themes over time.
-THEME_KEYWORDS: Dict[str, List[str]] = {
+THEME_KEYWORDS: dict[str, list[str]] = {
     "ai_infrastructure": [
         "ai", "artificial intelligence", "machine learning", "data center",
         "gpu", "accelerator", "training", "inference", "foundation model",
@@ -83,14 +84,14 @@ THEME_KEYWORDS: Dict[str, List[str]] = {
 }
 
 
-def _keyword_score(text: str, keywords: List[str]) -> Tuple[float, List[str]]:
+def _keyword_score(text: str, keywords: list[str]) -> tuple[float, list[str]]:
     """Naive weighted hit count, normalized to 0-100. Caps at one hit
     per keyword to avoid runaway scores from one mention spammed across
     a transcript."""
     if not text:
         return 0.0, []
     low = text.lower()
-    hits: List[str] = []
+    hits: list[str] = []
     for kw in keywords:
         if kw in low:
             hits.append(kw)
@@ -101,7 +102,7 @@ def _keyword_score(text: str, keywords: List[str]) -> Tuple[float, List[str]]:
 def _gather_text(ticker: str, char_cap: int = 30000) -> str:
     """Concatenate the highest-signal text for a ticker: business
     description + last 4 transcripts."""
-    pieces: List[str] = []
+    pieces: list[str] = []
     with SessionLocal() as db:
         c = db.get(Company, ticker.upper())
         if c is not None and c.business_description:
@@ -120,12 +121,13 @@ def _gather_text(ticker: str, char_cap: int = 30000) -> str:
 
 def _llm_theme_scores(
     ticker: str, text: str,
-) -> Optional[Dict[str, Dict[str, Any]]]:
+) -> dict[str, dict[str, Any]] | None:
     """Score the ticker against the full theme vocabulary in one
     LLM call. Returns `{theme: {"score": float, "evidence": str}}`
     or None on any failure."""
-    from ..config import settings
-    if not getattr(settings, "openai_api_key", None) or not text.strip():
+    # Any configured provider counts — `llm.chat_json` routes the call; the
+    # old OpenAI-only gate silently disabled this on Anthropic deployments.
+    if not settings.has_llm or not text.strip():
         return None
     schema_hint = {
         theme: {
@@ -170,7 +172,7 @@ def _llm_theme_scores(
         return None
     if not isinstance(out, dict):
         return None
-    cleaned: Dict[str, Dict[str, Any]] = {}
+    cleaned: dict[str, dict[str, Any]] = {}
     for theme in THEME_KEYWORDS.keys():
         raw = out.get(theme)
         if not isinstance(raw, dict):
@@ -185,7 +187,7 @@ def _llm_theme_scores(
     return cleaned or None
 
 
-def compute_for_ticker(ticker: str) -> Dict[str, Any]:
+def compute_for_ticker(ticker: str) -> dict[str, Any]:
     """Compute exposure scores across the theme vocabulary for one
     ticker. Persists to `theme_exposure`. Returns a summary dict.
 
@@ -239,7 +241,7 @@ def compute_for_ticker(ticker: str) -> Dict[str, Any]:
     }
 
 
-def refresh_universe(*, limit: Optional[int] = None) -> Dict[str, int]:
+def refresh_universe(*, limit: int | None = None) -> dict[str, int]:
     """Recompute exposure for the curated screener universe."""
     with SessionLocal() as db:
         q = db.query(Company.ticker).filter(Company.universe_tier == "auto_analysis")
@@ -258,7 +260,7 @@ def refresh_universe(*, limit: Optional[int] = None) -> Dict[str, int]:
 
 def top_for_theme(
     theme: str, *, min_score: float = 25.0, limit: int = 25,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Companies most exposed to a theme — drives the natural-language
     screener filter."""
     with SessionLocal() as db:

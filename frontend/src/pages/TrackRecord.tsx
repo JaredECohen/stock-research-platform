@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { api } from "@/api/client";
+import { api, isApiError } from "@/api/client";
+import RateLimitNotice from "@/components/RateLimitNotice";
+import UpgradePrompt from "@/components/UpgradePrompt";
+import type { EntitlementRefusal, RateLimitRefusal } from "@/types";
 
 type TR = {
   horizon_days: number;
@@ -27,10 +30,25 @@ export default function TrackRecord() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
+  // 402 / 429 from the backend render a specific prompt instead of the
+  // generic error line; the track record is a Pro feature under the wall.
+  const [refusal, setRefusal] = useState<EntitlementRefusal | null>(null);
+  const [rateLimit, setRateLimit] = useState<RateLimitRefusal | null>(null);
+
+  const handleFailure = (e: unknown) => {
+    if (isApiError(e) && e.entitlement) {
+      setRefusal(e.entitlement);
+    } else if (isApiError(e) && e.rateLimit) {
+      setRateLimit(e.rateLimit);
+    } else {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const refresh = React.useCallback(() => {
     setLoading(true);
     setError(null);
+    setRefusal(null);
     api
       .trackRecord({
         horizon_days: horizon,
@@ -38,7 +56,7 @@ export default function TrackRecord() {
         sector: sector.trim() || undefined,
       })
       .then(setData)
-      .catch((e: Error) => setError(e.message))
+      .catch(handleFailure)
       .finally(() => setLoading(false));
   }, [horizon, ticker, sector]);
 
@@ -46,13 +64,18 @@ export default function TrackRecord() {
     refresh();
   }, [refresh]);
 
+  // Goes through the api client (not a bare fetch) so the bearer token and
+  // structured-error handling apply — the endpoint is Pro-gated and
+  // globally rate-limited (1 per 10 min) under the login wall.
   const triggerEvaluator = async () => {
     setEvaluating(true);
+    setError(null);
+    setRateLimit(null);
     try {
-      await fetch("/api/admin/evaluate-outcomes", { method: "POST" });
+      await api.evaluateOutcomes();
       refresh();
     } catch (e) {
-      setError(String(e));
+      handleFailure(e);
     } finally {
       setEvaluating(false);
     }
@@ -125,6 +148,16 @@ export default function TrackRecord() {
           </button>
         </div>
       </div>
+
+      {refusal && <UpgradePrompt refusal={refusal} onDismiss={() => setRefusal(null)} />}
+      {rateLimit && (
+        <RateLimitNotice
+          refusal={rateLimit}
+          onRetry={() => void triggerEvaluator()}
+          onDismiss={() => setRateLimit(null)}
+          preservedNote="The scorer runs at most once every 10 minutes for everyone; nothing to re-enter."
+        />
+      )}
 
       {error && (
         <div className="card-tight border-danger-500/40 bg-danger-500/5 text-danger-500 text-sm">

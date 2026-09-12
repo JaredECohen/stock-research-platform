@@ -1,0 +1,24 @@
+[
+ {
+  "symbol": "ACME",
+  "date": "2025-06-30",
+  "fiscalYear": "2025",
+  "period": "FY",
+  "reportedCurrency": "USD",
+  "grossProfitMargin": 0.4,
+  "ebitMargin": 0.1968,
+  "ebitdaMargin": 0.2355,
+  "operatingProfitMargin": 0.1968,
+  "pretaxProfitMargin": 0.1815,
+  "netProfitMargin": 0.1434,
+  "currentRatio": 1.93,
+  "quickRatio": 1.41,
+  "priceToEarningsRatio": 54.2,
+  "priceToBookRatio": 13.8,
+  "priceToSalesRatio": 7.77,
+  "priceToFreeCashFlowRatio": 57.4,
+  "dividendYield": 0.0125,
+  "debtToEquityRatio": 0.53,
+  "interestCoverageRatio": 12.8
+ }
+]

@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
@@ -16,7 +16,7 @@ TIMEOUT = 10.0
 # Curated macro catalog. Editable here without touching consumers.
 # Each entry: (series_id, display_name, units). Points are fetched
 # on demand via `get_macro_series(series_id)`.
-_MACRO_CATALOG: List[Dict[str, str]] = [
+_MACRO_CATALOG: list[dict[str, str]] = [
     {"series_id": "FEDFUNDS", "name": "Federal Funds Rate", "units": "%"},
     {"series_id": "DGS2", "name": "2-Year Treasury", "units": "%"},
     {"series_id": "DGS10", "name": "10-Year Treasury", "units": "%"},
@@ -48,7 +48,7 @@ class FREDProvider:
             capabilities=["macro"],
         )
 
-    def get_macro_series(self, series_id: str) -> Optional[Dict[str, Any]]:
+    def get_macro_series(self, series_id: str) -> dict[str, Any] | None:
         if not self.api_key:
             return None
         try:
@@ -69,10 +69,10 @@ class FREDProvider:
                 ],
             )
         except Exception as exc:  # pragma: no cover
-            log.warning("FRED fetch failed: %s", exc)
+            log_safely(log, "FRED fetch failed", exc)
             return None
 
-    def list_macro_series(self) -> List[Dict[str, Any]]:
+    def list_macro_series(self) -> list[dict[str, Any]]:
         """Return the curated catalog metadata. Points fetched per series.
 
         Pulls both the legacy `_MACRO_CATALOG` entries (which power the
@@ -103,4 +103,4 @@ class FREDProvider:
     def get_filings(self, ticker: str): return None
     def get_news(self, ticker: str): return None
     def get_estimates(self, ticker: str): return None
-    def list_tickers(self) -> List[str]: return []
+    def list_tickers(self) -> list[str]: return []

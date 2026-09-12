@@ -9,11 +9,7 @@ fail the whole memo. The memo is returned with:
 """
 from __future__ import annotations
 
-from unittest.mock import patch
-
-import pytest
-
-from app.agents import graph
+from app.agents import graph, roster
 from app.agents.safe_runner import (
     DegradationLog,
     safe_call,
@@ -75,10 +71,20 @@ def test_safe_critic_passes_through_none_when_critic_disabled():
 # End-to-end: run_stock_memo survives every specialist failing in turn
 # ---------------------------------------------------------------------------
 
+def _patch_target(agent_attr: str):
+    """Where a runner is looked up at call time.
+
+    RP-003 moved the eight analyst runners behind `roster.AGENTS`; graph.py
+    no longer imports them, so patching `graph.run_sector_agent` would be a
+    silent no-op (D5). The critic is not on the roster and stays on graph.
+    """
+    return graph if agent_attr == "run_critic" else roster
+
+
 def _run_with(monkeypatch, agent_attr: str):
     """Run the NVDA memo with `agent_attr` patched to raise. Assert the memo
     still comes back and `degraded_agents` includes the failed agent."""
-    monkeypatch.setattr(graph, agent_attr, _boom)
+    monkeypatch.setattr(_patch_target(agent_attr), agent_attr, _boom)
     memo = graph.run_stock_memo("NVDA")
     return memo
 
@@ -138,8 +144,8 @@ def test_memo_survives_critic_failure(monkeypatch):
 def test_memo_survives_three_simultaneous_failures(monkeypatch):
     """Worst case: sector + valuation + critic all blow up. The memo must
     still come back populated, with all three names in `degraded_agents`."""
-    monkeypatch.setattr(graph, "run_sector_agent", _boom)
-    monkeypatch.setattr(graph, "run_valuation_agent", _boom)
+    monkeypatch.setattr(roster, "run_sector_agent", _boom)
+    monkeypatch.setattr(roster, "run_valuation_agent", _boom)
     monkeypatch.setattr(graph, "run_critic", _boom)
     memo = graph.run_stock_memo("NVDA")
     assert memo.ticker == "NVDA"
@@ -151,5 +157,36 @@ def test_memo_survives_three_simultaneous_failures(monkeypatch):
 
 
 def test_memo_with_no_failures_has_empty_degraded_agents():
+    # A deployment with no scorecard rows (CI, a dev box without the
+    # worker) carries the spec-mandated soft 'Fundamental Scorecard'
+    # DataUnavailable entry on every memo; nothing else may degrade.
+    from app.agents.scorecard_context import AGENT_NAME
     memo = graph.run_stock_memo("MSFT")
-    assert memo.degraded_agents == []
+    assert [a for a in memo.degraded_agents if a != AGENT_NAME] == []
+    assert [e for e in memo.degradation_events if e["agent"] != AGENT_NAME] == []
+    assert all(e["error_type"] == "DataUnavailable" for e in memo.degradation_events)
+    assert memo.extra_agent_views == {}
+
+
+# ---------------------------------------------------------------------------
+# RP-001 — the reason travels with the name
+# ---------------------------------------------------------------------------
+
+def test_degradation_events_mirror_degraded_agents(monkeypatch):
+    """`degradation_events` is the same accumulator as `degraded_agents`,
+    with the error type and redacted message attached. Both are refreshed
+    at every point the graph syncs the log, so they can never disagree."""
+    memo = _run_with(monkeypatch, "run_sector_agent")
+    assert [e["agent"] for e in memo.degradation_events] == memo.degraded_agents
+    event = next(e for e in memo.degradation_events if e["agent"] == "Sector Analyst")
+    assert event["error_type"] == "RuntimeError"
+    assert "simulated agent failure" in event["message"]
+    assert set(event) == {"agent", "error_type", "message"}
+
+
+def test_critic_failure_is_reflected_in_degradation_events(monkeypatch):
+    """The critic records *after* the memo object is built, so this is the
+    refresh point most likely to drift if only one field were reassigned."""
+    memo = _run_with(monkeypatch, "run_critic")
+    assert "Risk Committee" in memo.degraded_agents
+    assert "Risk Committee" in [e["agent"] for e in memo.degradation_events]

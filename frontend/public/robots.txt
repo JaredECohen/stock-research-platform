@@ -1,0 +1,15 @@
+# MarketMosaic — marketing pages are indexable; the app, the API and the
+# sign-in flows are not (they are per-user or token-gated and have no
+# public content to index).
+User-agent: *
+Allow: /
+Disallow: /app
+Disallow: /app/
+Disallow: /api/
+Disallow: /sign-in
+Disallow: /sign-up
+Disallow: /docs
+Disallow: /redoc
+Disallow: /openapi.json
+
+Sitemap: https://marketmosaic.ai/sitemap.xml

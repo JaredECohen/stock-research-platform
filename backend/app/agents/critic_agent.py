@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Optional
 
 from ..config import settings
 from ..schemas import CriticReview
@@ -19,6 +18,7 @@ def _prior_memo_context(ticker: str) -> str:
         return ""
     try:
         from sqlalchemy import select
+
         from ..database import SessionLocal
         from ..models import MemoSnapshot
         with SessionLocal() as db:
@@ -83,7 +83,7 @@ def _company_memory_context(ticker: str) -> str:
         return ""
 
 
-def run_critic(memo_dict: Dict) -> Optional[CriticReview]:
+def run_critic(memo_dict: dict) -> CriticReview | None:
     if not settings.enable_agent_critic:
         return None
 
@@ -128,7 +128,7 @@ def run_critic(memo_dict: Dict) -> Optional[CriticReview]:
         )
     else:
         # Deterministic fallback
-        challenges: List[str] = []
+        challenges: list[str] = []
         rating = memo_dict.get("rating_label", "")
         if rating in ("Bullish", "Bearish"):
             challenges.append(f"Rating ({rating}) is one-sided — list explicit thesis-breakers and the cost of being wrong.")

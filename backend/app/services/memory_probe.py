@@ -34,7 +34,6 @@ import logging
 import os
 import platform
 import resource
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +43,7 @@ log = logging.getLogger(__name__)
 _RU_MAXRSS_DIVISOR = 1024 * 1024 if platform.system() == "Darwin" else 1024
 
 
-def rss_mb() -> Optional[float]:
+def rss_mb() -> float | None:
     """Current process RSS in MB, or None when unavailable.
 
     Prefers `/proc/self/statm` on Linux — that is the *live* RSS, which
@@ -64,7 +63,7 @@ def rss_mb() -> Optional[float]:
         return None
 
 
-def peak_rss_mb() -> Optional[float]:
+def peak_rss_mb() -> float | None:
     """High-water-mark RSS in MB, or None when unavailable."""
     try:
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / _RU_MAXRSS_DIVISOR
@@ -72,7 +71,7 @@ def peak_rss_mb() -> Optional[float]:
         return None
 
 
-def log_rss(label: str, **context: object) -> Optional[float]:
+def log_rss(label: str, **context: object) -> float | None:
     """Log current + peak RSS against `label`. Returns current RSS in MB.
 
     Emitted at INFO so it survives production log levels — these lines
@@ -92,7 +91,7 @@ def log_rss(label: str, **context: object) -> Optional[float]:
     return cur
 
 
-def trim_memory(label: str = "") -> Optional[float]:
+def trim_memory(label: str = "") -> float | None:
     """`gc.collect()` + glibc `malloc_trim(0)`. Returns MB released.
 
     No-ops safely off glibc (macOS, musl/Alpine): `malloc_trim` simply

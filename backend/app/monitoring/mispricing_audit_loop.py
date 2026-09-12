@@ -16,7 +16,7 @@ when no API key is configured.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from ..services.mispricing_audit import (
     aggregate_scores,
@@ -28,7 +28,7 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def run_once(*, limit: int = 20) -> Dict[str, Any]:
+def run_once(*, limit: int = 20) -> dict[str, Any]:
     audit = run_audit(limit=limit)
     aggregate = aggregate_scores(audit)
     audit_id = persist_audit(audit, aggregate)

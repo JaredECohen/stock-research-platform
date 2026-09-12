@@ -87,3 +87,45 @@ def test_weight_clamp_out_of_range(monkeypatch):
         monkeypatch.setattr(_config.settings, "llm_rating_weight", raw)
         w = max(0.0, min(1.0, float(_config.settings.llm_rating_weight)))
         assert w == expected
+
+
+def test_deterministic_pm_synthesis_treats_none_dcf_upside_as_absent(monkeypatch):
+    """The LLM-disabled PM synthesis scores the DCF as +1 / -1 / 0 by
+    upside sign. A DCF that could not price the shares (`upside_pct`
+    None) must contribute NOTHING — the same rating as no DCF at all —
+    rather than crash on the comparison or be read as a 0% neutral."""
+    from app.agents import graph
+    from app.schemas import AgentFinding, DCFResult
+    from app.services.valuation_service import build_dcf
+
+    monkeypatch.setattr(graph.llm, "chat_json", lambda *a, **k: None)
+    profile = {"ticker": "NVDA", "sector": "Technology", "drivers": ["AI demand"], "risks": ["Capex cycle"]}
+    findings = {
+        "sector": AgentFinding(agent="Sector Analyst", headline="constructive cohort", summary="", confidence=0.6),
+        # One positive + one negative keyword → score 0 (Neutral) with no
+        # DCF, leaving headroom for a real upside to move the rating up.
+        "earnings": AgentFinding(agent="Earnings Analyst", headline="margins pressured", summary="", confidence=0.6),
+    }
+
+    real = build_dcf("NVDA")
+    data = real.model_dump()
+    for k in ("base", "bull", "bear"):
+        data[k]["implied_share_price"] = None
+        data[k]["upside_pct"] = None
+    data["current_price"] = None
+    unpriced = DCFResult(**data)
+
+    without_dcf = graph._pm_synthesis(profile, findings, None)
+    with_unpriced = graph._pm_synthesis(profile, findings, unpriced)
+    assert with_unpriced["rating_label"] == without_dcf["rating_label"]
+    assert with_unpriced["confidence_score"] == without_dcf["confidence_score"]
+
+    # And a real, strongly positive upside still moves the score — the
+    # signal is absent for None, not disabled.
+    data["base"]["upside_pct"] = 0.50
+    priced = DCFResult(**data)
+    from app.schemas import score_from_rating_label
+    assert (
+        score_from_rating_label(graph._pm_synthesis(profile, findings, priced)["rating_label"])
+        > score_from_rating_label(with_unpriced["rating_label"])
+    )

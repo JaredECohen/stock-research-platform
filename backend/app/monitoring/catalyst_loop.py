@@ -12,7 +12,6 @@ investor-day events for the Phase F follow-up.
 from __future__ import annotations
 
 import logging
-from typing import Dict
 
 from ..services.catalyst_service import refresh_universe
 from . import record_run
@@ -20,7 +19,7 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def run_once(*, limit: int | None = None) -> Dict[str, int]:
+def run_once(*, limit: int | None = None) -> dict[str, int]:
     res = refresh_universe(limit=limit)
     note = (
         f"tickers={res['tickers_checked']} rows_written={res['rows_written']}"

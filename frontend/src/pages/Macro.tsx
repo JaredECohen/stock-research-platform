@@ -18,13 +18,28 @@ export default function Macro() {
   const [scenario, setScenario] = useState("soft landing");
   const [result, setResult] = useState<MacroScenarioResult | null>(null);
   const [series, setSeries] = useState<MacroSeries[]>([]);
+  // Under the login wall /api/macro/* answers 402 plan_required for Free;
+  // an unhandled rejection here would surface as a console error and a
+  // blank page rather than a message the reader can act on.
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.macroAnalyze(scenario).then(setResult);
+    let cancelled = false;
+    setError(null);
+    api
+      .macroAnalyze(scenario)
+      .then((r) => { if (!cancelled) setResult(r); })
+      .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : "Macro analysis unavailable."); });
+    return () => { cancelled = true; };
   }, [scenario]);
 
   useEffect(() => {
-    api.macroSeries().then((s) => setSeries(s as MacroSeries[]));
+    let cancelled = false;
+    api
+      .macroSeries()
+      .then((s) => { if (!cancelled) setSeries(s as MacroSeries[]); })
+      .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : "Macro series unavailable."); });
+    return () => { cancelled = true; };
   }, []);
 
   return (
@@ -33,6 +48,12 @@ export default function Macro() {
         <h1 className="text-2xl font-semibold">Macro</h1>
         <p className="text-slate-400 text-sm mt-1">Scenario analysis and macro snapshot from FRED-compatible series.</p>
       </div>
+
+      {error && (
+        <div role="alert" className="card-tight border border-amber-600/40 text-amber-200 text-sm">
+          {error}
+        </div>
+      )}
 
       <div className="card-tight flex gap-2 flex-wrap">
         {SCENARIOS.map((s) => (

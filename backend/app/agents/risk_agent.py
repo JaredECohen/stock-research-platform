@@ -2,19 +2,23 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+import logging
+from typing import Any
 
 from ..config import settings
 from ..schemas import AgentFinding, RiskItem, RiskRecommendation
+from .log_safety import log_safely, safe_exc
+
+log = logging.getLogger(__name__)
 
 
 def _build_recommendations(
-    profile: Dict, ratios: Dict, dcf_summary: Optional[Dict],
-) -> List[RiskRecommendation]:
+    profile: dict, ratios: dict, dcf_summary: str | None,
+) -> list[RiskRecommendation]:
     """Wave 8H — concrete, actionable recs the graph deterministically
     applies. Each rec ties an observable signal to a specific change in
     the final memo."""
-    recs: List[RiskRecommendation] = []
+    recs: list[RiskRecommendation] = []
     risks = profile.get("risks") or []
     debt_to_eb = ratios.get("debt_to_ebitda")
     ev_ebitda = ratios.get("EV_EBITDA") or 0
@@ -73,7 +77,10 @@ def _build_recommendations(
             ))
 
     # DCF bear well below current → rating-level signal.
-    if dcf_summary and isinstance(dcf_summary, dict):
+    # `dcf_summary` is the DCF agent's prose summary (str), so the former
+    # `isinstance(dcf_summary, dict)` guard never held and this signal
+    # never fired.
+    if dcf_summary:
         bear_text = str(dcf_summary).lower()
         if "downside" in bear_text or "bear" in bear_text:
             recs.append(RiskRecommendation(
@@ -89,11 +96,11 @@ def _build_recommendations(
 
 
 def run_risk_agent(
-    profile: Dict, ratios: Dict, dcf_summary: Optional[Dict] = None,
-    *, prior_round_critique: Optional[str] = None,
+    profile: dict, ratios: dict, dcf_summary: str | None = None,
+    *, prior_round_critique: str | None = None,
 ) -> AgentFinding:
-    risks: List[str] = profile.get("risks") or []
-    summary_lines: List[str] = []
+    risks: list[str] = profile.get("risks") or []
+    summary_lines: list[str] = []
 
     debt_to_eb = ratios.get("debt_to_ebitda")
     if debt_to_eb and debt_to_eb > 3.5:
@@ -126,7 +133,7 @@ def run_risk_agent(
     notes_block = build_notes_block_for_agent(
         "risk", profile, extra_query="thesis breakers downside survivable",
     )
-    finding_data: Dict[str, Any] = {
+    finding_data: dict[str, Any] = {
         "recommendations": [r.model_dump() for r in recommendations],
     }
     if notes_block:
@@ -176,13 +183,17 @@ def run_risk_agent(
                         "thesis_breaker": tb,
                         "watch_for": wf,
                     }
-        except Exception:  # pragma: no cover — narrative is best-effort
-            pass
+        except Exception as exc:  # pragma: no cover — narrative is best-effort
+            # (b) RP-001: the thesis-breaker callout is gone for this run.
+            # Round 0 is deterministic by design, so this is not a
+            # degraded-agent entry — but it is no longer silent.
+            log_safely(log, f"Risk Analyst narrative failed for {profile.get('ticker')}", exc)
+            finding_data["narrative_failed"] = safe_exc(exc)
 
     # Wave 10 — typed citations for the structural risks + ratio
     # signals the agent is grounding its read on.
     from ..schemas import Citation
-    evidence: List[Citation] = []
+    evidence: list[Citation] = []
     for r in (profile.get("risks") or [])[:4]:
         evidence.append(Citation(
             kind="other", ref="profile.risks", excerpt=str(r)[:300],
@@ -246,10 +257,33 @@ def run_risk_agent(
                     sources=finding.sources,
                     data=finding_data,
                 )
-        except Exception:  # pragma: no cover — defensive; fall through to deterministic
-            pass
+            else:
+                _refire_fell_through(finding, profile.get("ticker", ""), None)
+        except Exception as exc:  # pragma: no cover — defensive; fall through to deterministic
+            _refire_fell_through(finding, profile.get("ticker", ""), exc)
 
     return finding
+
+
+def _refire_fell_through(
+    finding: AgentFinding, ticker: str, exc: BaseException | None,
+) -> None:
+    """(b) RP-001: the PM asked a follow-up and got the round-0 text back.
+
+    On the deep-research re-fire path an LLM answer *was* expected, so
+    shipping the unchanged deterministic finding is a degradation the
+    graph must promote into `degraded_agents` — unlike round 0, where the
+    deterministic risk read is the design and is never flagged.
+    `finding.data` is mutated in place: pydantic copied `finding_data` at
+    construction, so writing to the local dict would not reach the memo.
+    """
+    if exc is not None:
+        log_safely(log, f"Risk Analyst re-fire failed for {ticker}", exc)
+        reason = f"deep-research re-fire failed ({safe_exc(exc)}); round-0 risk read kept"
+    else:
+        log.warning("Risk Analyst re-fire for %s returned no usable output", ticker)
+        reason = "deep-research re-fire returned no usable output; round-0 risk read kept"
+    finding.data["deterministic_fallback"] = reason
 
 
 def risk_item_from_text(text: str) -> RiskItem:
@@ -271,6 +305,6 @@ def risk_item_from_text(text: str) -> RiskItem:
     return RiskItem(title=text[:80], detail=text, severity=sev, type=type_)
 
 
-def derive_risk_items(profile: Dict) -> List[RiskItem]:
+def derive_risk_items(profile: dict) -> list[RiskItem]:
     risks = profile.get("risks") or []
     return [risk_item_from_text(r) for r in risks[:6]]

@@ -30,6 +30,43 @@ export function fmtMultiple(v?: number | null): string {
   return `${v.toFixed(1)}x`;
 }
 
+// DCF-specific formatters. The engine emits `null` for an implied price it
+// could not compute (no diluted share count) and for an upside it could not
+// compute (no implied price, or no positive quote). These render the same
+// "n/a" the backend prints into memo prose, so a reader sees one spelling
+// everywhere. Distinct from the "—" the generic helpers use for "field
+// absent": n/a means "we ran the model and there is no number".
+export const NA = "n/a";
+
+// Coerce a loosely typed `dcf_summary` value into a number or null. The
+// summary is a JSON bag on the memo, so a value may be a number, `null`
+// (unavailable), or a string on very old memos. `Number(null)` is 0 — the
+// exact lie this replaces — so never fall through to `Number()`.
+export function numOrNull(v: unknown): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+export function fmtPrice(v?: number | null): string {
+  if (v == null || Number.isNaN(v)) return NA;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(v);
+}
+
+export function fmtUpside(v?: number | null, fractionDigits = 1): string {
+  if (v == null || Number.isNaN(v)) return NA;
+  const pct = (v * 100).toFixed(fractionDigits);
+  return v > 0 ? `+${pct}%` : `${pct}%`;
+}
+
 export function ratingBadgeClass(rating: string): string {
   // Wave 8P — five-label rating ladder driven by the quant Stock Score.
   switch (rating) {

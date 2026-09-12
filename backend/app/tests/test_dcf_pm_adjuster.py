@@ -15,7 +15,7 @@ DCF compute layer.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 
@@ -80,7 +80,7 @@ def _stub_dcf() -> DCFResult:
     )
 
 
-def _stub_findings() -> Dict[str, AgentFinding]:
+def _stub_findings() -> dict[str, AgentFinding]:
     return {
         "sector": _stub_finding("Sector Analyst", "cohort growth re-accelerating"),
         "earnings": _stub_finding("Earnings Analyst", "tone constructive"),
@@ -127,7 +127,7 @@ def test_llm_proposal_with_rationale_rebuilds_dcf(monkeypatch):
     rebuilt_dcf = _stub_dcf()
     rebuilt_dcf = rebuilt_dcf.model_copy(update={"summary": "rebuilt DCF"})
 
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     def fake_build_dcf(ticker, *, assumptions=None, force_refresh=False):
         captured["ticker"] = ticker
@@ -230,3 +230,40 @@ def test_rebuild_failure_returns_no_op(monkeypatch):
         findings=_stub_findings(), run_id="r7",
     )
     assert out == (None, [], "")
+
+
+def test_unpriceable_dcf_passes_through_adjuster_unchanged(monkeypatch):
+    """A DCF whose shares could not be priced (implied / upside None) is
+    still a valid input to the adjuster — the PM adjusts assumptions,
+    not prices — and the rebuilt result comes back with its None intact
+    rather than coerced to 0.0 or rejected."""
+    monkeypatch.setattr(type(adj.settings), "has_llm", property(lambda self: True))
+    monkeypatch.setattr(adj, "_propose_adjustments", lambda **kw: {
+        "updates": {"wacc": 0.090},
+        "rationales": {"wacc": "macro tilt"},
+        "headline": "raised WACC",
+    })
+
+    def _unpriced(d: DCFResult) -> DCFResult:
+        data = d.model_dump()
+        for k in ("base", "bull", "bear"):
+            data[k]["implied_share_price"] = None
+            data[k]["upside_pct"] = None
+        data["current_price"] = None
+        return DCFResult(**data)
+
+    initial = _unpriced(_stub_dcf())
+    rebuilt = _unpriced(_stub_dcf()).model_copy(update={"summary": "rebuilt, still unpriced"})
+
+    import app.services.valuation_service as vs
+    monkeypatch.setattr(vs, "build_dcf", lambda ticker, **kw: rebuilt)
+
+    out_dcf, audit, headline = adj.adjust_dcf_for_pm_view(
+        ticker="TEST", initial_dcf=initial,
+        findings=_stub_findings(), run_id="r8",
+    )
+    assert out_dcf is rebuilt
+    assert out_dcf.base.upside_pct is None
+    assert out_dcf.base.implied_share_price is None
+    assert [r["field"] for r in audit] == ["wacc"]
+    assert headline == "raised WACC"

@@ -11,7 +11,7 @@ when computing memo `evidence_quality`. They are referenced by
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Mapping, Optional, Set
+from typing import Any
 
 from ..services import (
     fundamentals_service,
@@ -24,13 +24,12 @@ from ..services import (
 from ..services.data_service import get_data_service
 from ..services.market_data_service import get_basic_stats
 
-
 # ---------------------------------------------------------------------------
 # Source-weight registry — weights memo evidence quality.
 # Higher = more trustworthy as primary investment evidence.
 # ---------------------------------------------------------------------------
 
-SOURCE_WEIGHTS: Dict[str, float] = {
+SOURCE_WEIGHTS: dict[str, float] = {
     "filing": 1.0,         # 10-K / 10-Q / 8-K — primary, audited
     "financials": 1.0,     # IS / BS / CF rows from a fundamentals provider
     "transcript": 0.95,    # Earnings call prepared remarks + Q&A
@@ -62,7 +61,7 @@ def source_weight(source_id: str) -> float:
     return SOURCE_WEIGHTS.get(head, SOURCE_WEIGHTS["default"])
 
 
-def evidence_quality(sources: List[str]) -> float:
+def evidence_quality(sources: list[str]) -> float:
     """Average source weight across a list of source pointers (0..1)."""
     if not sources:
         return 0.5
@@ -77,7 +76,7 @@ def evidence_quality(sources: List[str]) -> float:
 # Map agent role → set of tool names it is allowed to call.
 # Filing / valuation / comps / earnings / sector agents get NO news or social
 # tools. The news + risk + macro agents get bounded access.
-AGENT_TOOL_SCOPE: Dict[str, Set[str]] = {
+AGENT_TOOL_SCOPE: dict[str, set[str]] = {
     "sector":    {"profile", "fundamentals", "price_stats", "retrieve"},
     "earnings":  {"profile", "fundamentals", "transcript", "retrieve"},
     "filing":    {"profile", "fundamentals", "filings", "retrieve"},
@@ -103,37 +102,37 @@ def is_tool_allowed(agent_role: str, tool_name: str) -> bool:
 # Universal tools (low-cost data lookups; used by most agents)
 # ---------------------------------------------------------------------------
 
-def get_company_profile(ticker: str) -> Optional[Dict[str, Any]]:
+def get_company_profile(ticker: str) -> dict[str, Any] | None:
     return get_data_service().get_company_profile(ticker)
 
 
-def get_fundamentals(ticker: str) -> Dict[str, Any]:
+def get_fundamentals(ticker: str) -> dict[str, Any]:
     return fundamentals_service.get_full_financials(ticker)
 
 
-def get_price_stats(ticker: str) -> Dict[str, Any]:
+def get_price_stats(ticker: str) -> dict[str, Any]:
     return get_basic_stats(ticker)
 
 
-def get_dcf(ticker: str) -> Optional[Dict[str, Any]]:
+def get_dcf(ticker: str) -> dict[str, Any] | None:
     res = valuation_service.build_dcf(ticker)
     return res.model_dump() if res else None
 
 
-def get_comps(ticker: str) -> Optional[Dict[str, Any]]:
+def get_comps(ticker: str) -> dict[str, Any] | None:
     res = valuation_service.build_comps(ticker)
     return res.model_dump() if res else None
 
 
-def get_transcript(ticker: str) -> Optional[Dict[str, Any]]:
+def get_transcript(ticker: str) -> dict[str, Any] | None:
     return transcripts_service.latest_transcript(ticker)
 
 
-def macro_snapshot() -> Dict[str, float]:
+def macro_snapshot() -> dict[str, float]:
     return macro_service.macro_snapshot()
 
 
-def retrieve(ticker: str, query: str, *, limit: int = 4) -> List[Dict[str, Any]]:
+def retrieve(ticker: str, query: str, *, limit: int = 4) -> list[dict[str, Any]]:
     return retrieval_service.search(ticker, query, limit=limit)
 
 
@@ -151,9 +150,9 @@ CONSUMER_FACING_SECTORS = {
 }
 
 
-def _latest_filing_date(ticker: str) -> Optional[date]:
+def _latest_filing_date(ticker: str) -> date | None:
     filings = get_data_service().get_filings(ticker) or []
-    dates: List[date] = []
+    dates: list[date] = []
     for f in filings:
         d = f.get("filing_date") or f.get("period_end")
         if not d:
@@ -165,7 +164,7 @@ def _latest_filing_date(ticker: str) -> Optional[date]:
     return max(dates) if dates else None
 
 
-def get_news_recent(ticker: str, *, since_last_filing: bool = True) -> List[Dict[str, Any]]:
+def get_news_recent(ticker: str, *, since_last_filing: bool = True) -> list[dict[str, Any]]:
     """News bounded to (latest filing date, today). Older news is already in the filing."""
     items = news_service.get_news(ticker) or []
     if not since_last_filing:
@@ -176,7 +175,7 @@ def get_news_recent(ticker: str, *, since_last_filing: bool = True) -> List[Dict
         cutoff = date.today() - timedelta(days=60)
     else:
         cutoff = last_filing
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for n in items:
         pub = n.get("published_at")
         if not pub:
@@ -192,7 +191,7 @@ def get_news_recent(ticker: str, *, since_last_filing: bool = True) -> List[Dict
     return out
 
 
-def get_search_trend(ticker: str) -> Optional[Dict[str, Any]]:
+def get_search_trend(ticker: str) -> dict[str, Any] | None:
     """Google-Trends-style alt-data. Wired only for consumer-facing tickers.
 
     Returns None for B2B / financials / energy / industrials — search-trend
@@ -212,7 +211,7 @@ def get_search_trend(ticker: str) -> Optional[Dict[str, Any]]:
     )
 
 
-def get_social_sentiment(ticker: str) -> Dict[str, Any]:
+def get_social_sentiment(ticker: str) -> dict[str, Any]:
     """Aggregate social into a single contrarian-flag scalar.
 
     Per the discipline rule, we never quote individual tweets/posts. We return
@@ -236,7 +235,7 @@ def get_social_sentiment(ticker: str) -> Dict[str, Any]:
     )
 
 
-def get_short_reports(ticker: str) -> List[Dict[str, Any]]:
+def get_short_reports(ticker: str) -> list[dict[str, Any]]:
     """Curated short-report feed (Hindenburg, Muddy Waters, Citron, etc.).
 
     In demo mode, returns an empty list. Wire a real feed here in production.
@@ -249,7 +248,7 @@ def get_short_reports(ticker: str) -> List[Dict[str, Any]]:
 # low-quality sources for thesis-bearing claims.
 # ---------------------------------------------------------------------------
 
-def lint_citations(sources: List[str], *, min_quality: float = 0.7) -> Dict[str, Any]:
+def lint_citations(sources: list[str], *, min_quality: float = 0.7) -> dict[str, Any]:
     """Score the trust profile of a memo's sources.
 
     Returns a dict with overall quality, primary-source ratio, and a flag

@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
 from ..config import settings
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 BASE_URL = "https://www.alphavantage.co/query"
@@ -29,7 +29,7 @@ class AlphaVantageProvider:
             capabilities=["transcripts", "news", "fundamentals_fallback"],
         )
 
-    def _get(self, **params: Any) -> Optional[Any]:
+    def _get(self, **params: Any) -> Any | None:
         if not self.api_key:
             return None
         try:
@@ -37,14 +37,15 @@ class AlphaVantageProvider:
             with httpx.Client(timeout=TIMEOUT) as client:
                 r = client.get(BASE_URL, params=params)
                 if r.status_code != 200:
-                    log.warning("AlphaVantage %s -> %s", params, r.status_code)
+                    # `params` carries `apikey` — log the function only.
+                    log.warning("AlphaVantage %s -> %s", params.get("function"), r.status_code)
                     return None
                 return r.json()
         except Exception as exc:  # pragma: no cover
-            log.warning("AlphaVantage request failed: %s", exc)
+            log_safely(log, f"AlphaVantage request failed for {params.get('function')}", exc)
             return None
 
-    def get_company_profile(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_company_profile(self, ticker: str) -> dict[str, Any] | None:
         data = self._get(function="OVERVIEW", symbol=ticker)
         if not data or "Symbol" not in data:
             return None
@@ -63,7 +64,7 @@ class AlphaVantageProvider:
             last_price=None,
         )
 
-    def get_price_history(self, ticker: str, days: int = 252) -> Optional[List[Dict[str, Any]]]:
+    def get_price_history(self, ticker: str, days: int = 252) -> list[dict[str, Any]] | None:
         return None
 
     # ------------------------------------------------------------------
@@ -75,7 +76,7 @@ class AlphaVantageProvider:
     # `history_service` expects (`revenue`, `gross_profit`, …).
 
     @staticmethod
-    def _to_float(v: Any) -> Optional[float]:
+    def _to_float(v: Any) -> float | None:
         if v in (None, "None", "", "-"):
             return None
         try:
@@ -84,7 +85,7 @@ class AlphaVantageProvider:
             return None
 
     @classmethod
-    def _income_row(cls, r: Dict[str, Any]) -> Dict[str, Any]:
+    def _income_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         date_str = r.get("fiscalDateEnding") or ""
         period_label = date_str
         if date_str:
@@ -122,7 +123,7 @@ class AlphaVantageProvider:
         )
 
     @classmethod
-    def _balance_row(cls, r: Dict[str, Any]) -> Dict[str, Any]:
+    def _balance_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         return dict(
             period=r.get("fiscalDateEnding") or "",
             period_end=r.get("fiscalDateEnding") or "",
@@ -141,7 +142,7 @@ class AlphaVantageProvider:
         )
 
     @classmethod
-    def _cash_row(cls, r: Dict[str, Any]) -> Dict[str, Any]:
+    def _cash_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         ops = cls._to_float(r.get("operatingCashflow"))
         capex = cls._to_float(r.get("capitalExpenditures"))
         fcf = None
@@ -160,7 +161,7 @@ class AlphaVantageProvider:
             stock_based_compensation=cls._to_float(r.get("stockBasedCompensation")),
         )
 
-    def get_financial_statements(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_financial_statements(self, ticker: str) -> dict[str, Any] | None:
         income_raw = self._get(function="INCOME_STATEMENT", symbol=ticker) or {}
         balance_raw = self._get(function="BALANCE_SHEET", symbol=ticker) or {}
         cash_raw = self._get(function="CASH_FLOW", symbol=ticker) or {}
@@ -171,20 +172,20 @@ class AlphaVantageProvider:
             return None
         return dict(income=income, balance=balance, cash=cash)
 
-    def get_ratios(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_ratios(self, ticker: str) -> dict[str, Any] | None:
         return None
 
-    def get_key_metrics(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_key_metrics(self, ticker: str) -> dict[str, Any] | None:
         return None
 
-    def get_earnings(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_earnings(self, ticker: str) -> dict[str, Any] | None:
         data = self._get(function="EARNINGS", symbol=ticker)
         if not data:
             return None
         quarterly = data.get("quarterlyEarnings") or []
         if not quarterly:
             return None
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for q in quarterly[:8]:
             rows.append(dict(
                 period=q.get("fiscalDateEnding") or "",
@@ -196,7 +197,7 @@ class AlphaVantageProvider:
         return dict(quarters=rows)
 
     @staticmethod
-    def _recent_quarters(n: int = 4) -> List[str]:
+    def _recent_quarters(n: int = 4) -> list[str]:
         """Return the last `n` fiscal quarters as `YYYYQM` strings,
         most-recent first. AV's `EARNINGS_CALL_TRANSCRIPT` requires a
         specific quarter; without one it 200s with no transcript."""
@@ -210,7 +211,7 @@ class AlphaVantageProvider:
         q -= 1
         if q == 0:
             q, year = 4, year - 1
-        out: List[str] = []
+        out: list[str] = []
         for _ in range(n):
             out.append(f"{year}Q{q}")
             q -= 1
@@ -218,13 +219,13 @@ class AlphaVantageProvider:
                 q, year = 4, year - 1
         return out
 
-    def get_earnings_transcripts(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
+    def get_earnings_transcripts(self, ticker: str) -> list[dict[str, Any]] | None:
         """Pull up to 4 recent quarterly transcripts. AV requires the
         `quarter=YYYYQN` param; without it the endpoint returns 200 with
         an empty body, which is why our backfill was getting nothing.
         Iterate the last 4 fiscal quarters and stitch together what
         comes back."""
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for quarter in self._recent_quarters(4):
             data = self._get(
                 function="EARNINGS_CALL_TRANSCRIPT",
@@ -263,10 +264,10 @@ class AlphaVantageProvider:
             ))
         return out or None
 
-    def get_filings(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
+    def get_filings(self, ticker: str) -> list[dict[str, Any]] | None:
         return None
 
-    def get_news(self, ticker: str) -> Optional[List[Dict[str, Any]]]:
+    def get_news(self, ticker: str) -> list[dict[str, Any]] | None:
         data = self._get(function="NEWS_SENTIMENT", tickers=ticker, limit=20)
         if not data or "feed" not in data:
             return None
@@ -285,11 +286,11 @@ class AlphaVantageProvider:
             for n in data.get("feed", [])
         ]
 
-    def get_estimates(self, ticker: str) -> Optional[Dict[str, Any]]:
+    def get_estimates(self, ticker: str) -> dict[str, Any] | None:
         return None
 
-    def get_macro_series(self, series_id: str) -> Optional[Dict[str, Any]]:
+    def get_macro_series(self, series_id: str) -> dict[str, Any] | None:
         return None
 
-    def list_tickers(self) -> List[str]:
+    def list_tickers(self) -> list[str]:
         return []

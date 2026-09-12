@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from ..schemas import NewsAlert, StockMemoOut
 from . import llm
+from .log_safety import log_safely
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ _PROMPT = (
 MAX_CONFIDENCE_DELTA = 15
 
 
-def _clamp_patch(memo: StockMemoOut, patch: Dict[str, Any]) -> Dict[str, Any]:
+def _clamp_patch(memo: StockMemoOut, patch: dict[str, Any]) -> dict[str, Any]:
     """Apply hard rules to the LLM-proposed patch:
     - confidence_score change capped to ±MAX_CONFIDENCE_DELTA.
     - rating_label must be one of the allowed labels.
@@ -78,7 +79,7 @@ def _clamp_patch(memo: StockMemoOut, patch: Dict[str, Any]) -> Dict[str, Any]:
     allowed_ratings = {
         "Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish",
     }
-    cleaned: Dict[str, Any] = {}
+    cleaned: dict[str, Any] = {}
     for k, v in (patch or {}).items():
         if k not in allowed_fields:
             continue
@@ -104,13 +105,18 @@ def _clamp_patch(memo: StockMemoOut, patch: Dict[str, Any]) -> Dict[str, Any]:
 
 def assess(
     memo: StockMemoOut, alert: NewsAlert,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run the news-impact agent. Returns a structured assessment dict
     with `material` (bool), `patch` (dict), `rationales` (dict),
     `delta_summary` (str).
 
     No LLM available → returns `{material: false}` deterministically:
     on the safe side, we don't push an unverified patch into a live memo.
+
+    An LLM that was configured but crashed or returned nothing also
+    yields `material=False` (same safe side), but with an `error` key
+    carrying the exception type — the update path must not report a
+    crashed assessment as "the news was not material" (RP-001 class (b)).
     """
     if not settings.has_llm:
         return {"material": False, "patch": {}, "rationales": {}, "delta_summary": ""}
@@ -141,11 +147,20 @@ def assess(
             route="cheap", model=settings.anthropic_cheap_model,
         )
     except Exception as exc:  # pragma: no cover — defensive
-        log.warning("news_impact_agent LLM call failed for %s: %s", memo.ticker, exc)
-        return {"material": False, "patch": {}, "rationales": {}, "delta_summary": ""}
+        log_safely(log, f"news_impact_agent LLM call failed for {memo.ticker}", exc)
+        return {
+            "material": False, "patch": {}, "rationales": {}, "delta_summary": "",
+            "error": type(exc).__name__,
+        }
 
     if not isinstance(out, dict):
-        return {"material": False, "patch": {}, "rationales": {}, "delta_summary": ""}
+        # `chat_json` absorbs provider failures into None (breaker open,
+        # unparseable response); the alert was never actually assessed.
+        log.warning("news_impact_agent got no usable LLM output for %s", memo.ticker)
+        return {
+            "material": False, "patch": {}, "rationales": {}, "delta_summary": "",
+            "error": "LLMNoOutput",
+        }
 
     material = bool(out.get("material"))
     if not material:
@@ -166,7 +181,7 @@ def assess(
 
 
 def apply_patch(
-    memo: StockMemoOut, patch: Dict[str, Any],
+    memo: StockMemoOut, patch: dict[str, Any],
 ) -> StockMemoOut:
     """Return a new memo with `patch` applied.
 

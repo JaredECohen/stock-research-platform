@@ -16,6 +16,7 @@ const TARGET_LABEL: Record<string, string> = {
   macro: "Macro Analyst",
   risk: "Risk Analyst",
   technical: "Technical Analyst",
+  industry_group: "Industry Group Analyst",
 };
 
 export default function DiligenceDialog({

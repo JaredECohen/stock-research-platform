@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..config import settings
 from ..schemas import AgentFinding, DCFAssumptions, DCFResult
 from . import llm
 from .dcf_updater import _apply_updates  # share the clamp + rationale gate
+from .safe_runner import note_soft
 
 log = logging.getLogger(__name__)
 
@@ -96,8 +97,8 @@ def _format_finding_for_pm(name: str, f: AgentFinding) -> str:
 
 def _propose_adjustments(
     *, ticker: str, prior: DCFAssumptions,
-    findings: Dict[str, AgentFinding], run_id: str,
-) -> Optional[Dict[str, Any]]:
+    findings: dict[str, AgentFinding], run_id: str,
+) -> dict[str, Any] | None:
     """Single LLM call that returns proposed updates + rationales + headline.
 
     Returns None on LLM failure — caller leaves the DCF untouched.
@@ -122,16 +123,31 @@ def _propose_adjustments(
             )
     except Exception as exc:  # pragma: no cover — defensive
         log.warning("PM DCF adjuster LLM call failed for %s: %s", ticker, exc)
+        # (b) RP-001: the caller turns None into "no adjustments", which is
+        # the same outcome as "the PM agreed with consensus" — the reader
+        # could not tell a dead adjuster from a deliberate no-op. Record it
+        # on the active memo run; `note_soft` no-ops outside one.
+        note_soft(
+            "PM DCF Adjuster", f"adjuster LLM call failed: {type(exc).__name__}",
+            kind=type(exc).__name__,
+        )
         return None
     if not isinstance(out, dict):
+        # Same reader-visible outcome as the except branch above: the LLM
+        # ran (or the provider returned nothing parseable) and the DCF
+        # keeps its consensus anchor with no trace of why.
+        note_soft(
+            "PM DCF Adjuster",
+            "LLM returned no usable proposal; DCF kept consensus assumptions",
+        )
         return None
     return out
 
 
 def adjust_dcf_for_pm_view(
     *, ticker: str, initial_dcf: DCFResult,
-    findings: Dict[str, AgentFinding], run_id: str,
-) -> Tuple[Optional[DCFResult], List[Dict[str, Any]], str]:
+    findings: dict[str, AgentFinding], run_id: str,
+) -> tuple[DCFResult | None, list[dict[str, Any]], str]:
     """Re-build the DCF using PM-adjusted assumptions.
 
     Returns `(adjusted_dcf_or_None, adjustments_audit, headline)`.
@@ -177,6 +193,12 @@ def adjust_dcf_for_pm_view(
         )
     except Exception as exc:  # pragma: no cover — defensive
         log.warning("PM-adjusted DCF rebuild failed for %s: %s", ticker, exc)
+        # (b) the PM *did* propose changes and they were lost — the memo
+        # ships the consensus DCF as if the team had agreed with it.
+        note_soft(
+            "PM DCF Adjuster", f"PM-adjusted DCF rebuild failed: {type(exc).__name__}",
+            kind=type(exc).__name__,
+        )
         return None, [], ""
 
     if adjusted is None:
@@ -185,7 +207,7 @@ def adjust_dcf_for_pm_view(
     # Audit trail: one row per changed field, with PM's rationale + the
     # before/after values. The frontend uses this to show "Why did the
     # PM change this assumption?" in the DCF Lab.
-    audit: List[Dict[str, Any]] = []
+    audit: list[dict[str, Any]] = []
     prior_d = prior.model_dump()
     new_d = new_assumptions.model_dump()
     for field, rationale in accepted.items():

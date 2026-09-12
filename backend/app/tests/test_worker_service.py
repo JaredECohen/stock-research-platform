@@ -28,13 +28,13 @@ def test_monitoring_registers_every_loop():
 
     sched = FakeScheduler()
     register_all(sched)
-    # Counted against KNOWN_LOOPS rather than a literal: the literal went
-    # stale every time a loop was added, and the list is already the single
-    # source of truth that `test_cron_health_cross_process` pins to
-    # `register_all`.
+    # `KNOWN_LOOPS` is what cron-health expects to see reporting, so the
+    # two lists must be the same length — a literal count here went stale
+    # the first time a loop was added (sample_build_loop, FEAT-002).
     assert len(sched.jobs) == len(KNOWN_LOOPS)
-    assert set(sched.jobs) == set(KNOWN_LOOPS)
+    assert sorted(sched.jobs) == sorted(KNOWN_LOOPS)
     assert "edgar_poller" in sched.jobs
+    assert "sample_build_loop" in sched.jobs
     assert "history_backfill" in sched.jobs
 
 
@@ -48,6 +48,7 @@ def test_worker_main_exits_promptly_when_shutdown_is_already_set(monkeypatch):
     reaches its shutdown check without waiting for it.
     """
     import time
+
     import app.worker as worker
 
     def _slow_seed(*a, **k):

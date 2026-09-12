@@ -16,34 +16,36 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import settings
 from ..finance.technicals import compute_technical_signals
 from ..schemas import AgentFinding, TechnicalSignals
 from ..services.market_data_service import get_price_series
 from . import llm, prompts
+from .log_safety import log_safely, redact, safe_exc
+from .safe_runner import note_soft
 
 log = logging.getLogger(__name__)
 
 
-def _format_value(v: Optional[float], fmt: str = "{:,.2f}") -> str:
+def _format_value(v: float | None, fmt: str = "{:,.2f}") -> str:
     return "n/a" if v is None else fmt.format(v)
 
 
-def _deterministic_summary(profile: Dict[str, Any], sig: TechnicalSignals) -> Dict[str, Any]:
+def _deterministic_summary(profile: dict[str, Any], sig: TechnicalSignals) -> dict[str, Any]:
     """LLM-free fallback. Reads the structured signals into a sober narrative
     that explicitly frames technicals as positioning context, not a
     rating-driver."""
     ticker = profile.get("ticker") or ""
-    headline_bits: List[str] = []
+    headline_bits: list[str] = []
     headline_bits.append(f"{sig.trend} trend")
     headline_bits.append(f"{sig.momentum} momentum")
     if sig.position_52w is not None:
         headline_bits.append(f"{sig.position_52w * 100:.0f}% of 52w range")
     headline = f"{ticker}: " + " · ".join(headline_bits)
 
-    summary_lines: List[str] = []
+    summary_lines: list[str] = []
     if sig.sma_50 is not None and sig.sma_200 is not None:
         rel = "above" if sig.sma_50_above_200 else "below"
         summary_lines.append(
@@ -66,7 +68,7 @@ def _deterministic_summary(profile: Dict[str, Any], sig: TechnicalSignals) -> Di
         "not a standalone trade signal."
     )
 
-    key_points: List[str] = list(sig.notes)
+    key_points: list[str] = list(sig.notes)
     if not key_points:
         key_points.append(
             f"No actionable technical setup; {sig.trend}/{sig.momentum} is the regime."
@@ -81,8 +83,8 @@ def _deterministic_summary(profile: Dict[str, Any], sig: TechnicalSignals) -> Di
 
 
 def run_technical_agent(
-    profile: Dict[str, Any], days: int = 300,
-    *, prior_round_critique: Optional[str] = None,
+    profile: dict[str, Any], days: int = 300,
+    *, prior_round_critique: str | None = None,
 ) -> AgentFinding:
     """Produce the Technical Analyst finding for `profile`.
 
@@ -99,12 +101,42 @@ def run_technical_agent(
             confidence=0.3,
         )
 
+    # (b) RP-001: a dead or empty price feed means every indicator below
+    # is unavailable. The finding still ships (technicals are positioning
+    # context, never a rating driver — the memo is complete without them)
+    # but it must say so: `data["degraded"]` for the UI, a confidence no
+    # reader can mistake for a real read, and a banner entry via
+    # `note_soft` (a no-op outside a memo run). A short-but-present series
+    # is an honest data limit, not a failure, and keeps the plain
+    # "insufficient history" stub below.
+    degraded_reason: str | None = None
     try:
         rows = get_price_series(ticker, days)
     except Exception as exc:  # pragma: no cover — defensive
-        log.warning("Technical analyst price fetch failed for %s: %s", ticker, exc)
+        log_safely(log, f"Technical analyst price fetch failed for {ticker}", exc)
+        note_soft(
+            "Technical Analyst", f"price series unavailable: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
+        degraded_reason = safe_exc(exc)
         rows = []
-    raw = compute_technical_signals(rows or [])
+    if not rows:
+        if degraded_reason is None:
+            log.warning("Technical analyst got no price rows for %s", ticker)
+            note_soft("Technical Analyst", "price series empty")
+            degraded_reason = "price series empty"
+        return AgentFinding(
+            agent="Technical Analyst",
+            headline=f"{ticker}: price series unavailable for technical read.",
+            summary=(
+                "No daily bars reached the technical analyst on this run, so no "
+                "indicators were computed. Treat this run as fundamentals-only."
+            ),
+            confidence=0.3,
+            sources=[f"prices:{ticker}"],
+            data={"degraded": True, "error": degraded_reason},
+        )
+    raw = compute_technical_signals(rows)
     if not raw:
         return AgentFinding(
             agent="Technical Analyst",
@@ -138,7 +170,20 @@ def run_technical_agent(
         model=settings.openai_tool_model,
     )
 
-    narrative = llm_out if llm_out else _deterministic_summary(profile, signals)
+    data: dict[str, Any] = {"signals": signals.model_dump()}
+    if llm_out:
+        narrative = llm_out
+    else:
+        narrative = _deterministic_summary(profile, signals)
+        if settings.has_llm:
+            # (b) RP-001: an LLM was configured and returned nothing usable,
+            # so the indicator read-out stands in for the analyst's
+            # narrative. The graph promotes the flag into `degraded_agents`;
+            # without keys the read-out IS the design and is not flagged.
+            data["deterministic_fallback"] = (
+                "Technical LLM returned no usable output; deterministic "
+                "indicator read-out shipped instead."
+            )
 
     return AgentFinding(
         agent="Technical Analyst",
@@ -147,5 +192,5 @@ def run_technical_agent(
         key_points=[str(p) for p in (narrative.get("key_points") or [])][:8],
         confidence=float(narrative.get("confidence", 0.6)),
         sources=[f"prices:{ticker}"],
-        data={"signals": signals.model_dump()},
+        data=data,
     )

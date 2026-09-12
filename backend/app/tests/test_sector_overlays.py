@@ -1,7 +1,7 @@
 """Tests for the dynamic sector data tools + overlay computations."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
 
@@ -19,13 +19,13 @@ class _StubMacroProvider:
     """
     name = "stub-macro"
 
-    def __init__(self, responses: Dict[str, Dict[str, Any]]) -> None:
+    def __init__(self, responses: dict[str, dict[str, Any]]) -> None:
         self._responses = responses
 
     def status(self) -> ProviderStatus:
         return ProviderStatus(name=self.name, configured=True, healthy=True)
 
-    def get_macro_series(self, series_id: str) -> Optional[Dict[str, Any]]:
+    def get_macro_series(self, series_id: str) -> dict[str, Any] | None:
         return self._responses.get(series_id)
 
     # The data_catalog_service walks _live_chain('macro') looking for any
@@ -41,13 +41,13 @@ class _StubMacroProvider:
     def get_filings(self, *_a, **_k): return None
     def get_news(self, *_a, **_k): return None
     def get_estimates(self, *_a, **_k): return None
-    def list_tickers(self) -> List[str]: return []
-    def list_macro_series(self) -> List[Dict[str, Any]]: return []
+    def list_tickers(self) -> list[str]: return []
+    def list_macro_series(self) -> list[dict[str, Any]]: return []
 
 
-def _monthly_points(start: float, deltas: List[float]) -> List[Dict[str, Any]]:
+def _monthly_points(start: float, deltas: list[float]) -> list[dict[str, Any]]:
     """Build a list of monthly {date, value} points starting from `start`."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     value = start
     year, month = 2021, 1
     for d in deltas:
@@ -64,7 +64,7 @@ def _monthly_points(start: float, deltas: List[float]) -> List[Dict[str, Any]]:
 
 
 @pytest.fixture
-def stub_provider_responses() -> Dict[str, Dict[str, Any]]:
+def stub_provider_responses() -> dict[str, dict[str, Any]]:
     """Hand-rolled responses for a representative slice of the catalog."""
     return {
         "CSUSHPISA": {

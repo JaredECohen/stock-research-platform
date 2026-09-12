@@ -24,7 +24,7 @@ export default function CrossSectorChips({
       {tickers.map((t) => (
         <Link
           key={t}
-          to={`/research?ticker=${encodeURIComponent(t)}`}
+          to={`/app/research?ticker=${encodeURIComponent(t)}`}
           className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-mono font-medium border border-accent-600/40 bg-accent-700/10 text-accent-500 hover:bg-accent-700/25 transition-colors"
         >
           {t}

@@ -12,17 +12,18 @@ import json
 from collections import Counter
 from pathlib import Path
 from statistics import mean, median, pstdev
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
+from ..finance.scorecard_spec import normalize_sector
 from .data_service import get_data_service
 from .filings_service import get_filings
 from .fundamentals_service import get_full_financials
 
+_SECTOR_CONFIG_CACHE: dict[str, dict] | None = None
+_CANONICAL_INDEX_CACHE: dict[str, str] | None = None
 
-_SECTOR_CONFIG_CACHE: Optional[Dict[str, Dict]] = None
 
-
-def _sector_config() -> Dict[str, Dict]:
+def _sector_config() -> dict[str, dict]:
     global _SECTOR_CONFIG_CACHE
     if _SECTOR_CONFIG_CACHE is None:
         path = Path(__file__).resolve().parent.parent / "data" / "sector_configs.json"
@@ -31,17 +32,132 @@ def _sector_config() -> Dict[str, Dict]:
     return _SECTOR_CONFIG_CACHE
 
 
-def _resolve_sector_block(sector: str) -> Dict:
+def _canonical_index() -> dict[str, str]:
+    """Canonical GICS sector name -> the `sector_configs.json` key serving it.
+
+    The config file spells sectors its own way ("Technology", "Healthcare")
+    and FMP spells them another ("Financial Services", "Consumer Cyclical",
+    "Health Care", "Basic Materials"). `normalize_sector` already owns that
+    crosswalk for the scorecard, so the index is built by running every
+    config key through it rather than by retyping the alias table here: one
+    place to fix a provider label, not two. Each of the eleven config keys
+    normalises to a distinct canonical sector, so the map is 1:1.
+    """
+    global _CANONICAL_INDEX_CACHE
+    if _CANONICAL_INDEX_CACHE is None:
+        index: dict[str, str] = {}
+        for key in _sector_config():
+            canonical = normalize_sector(key)
+            if canonical:
+                index.setdefault(canonical, key)
+        _CANONICAL_INDEX_CACHE = index
+    return _CANONICAL_INDEX_CACHE
+
+
+# The KPI groups a company has regardless of what sector it is in: the
+# groups and metrics EVERY config in `sector_configs.json` agrees on.
+# Derived rather than hand-picked, and derived at import from the configs
+# themselves, so it cannot drift into being one sector's list again.
+def _neutral_kpi_groups() -> dict[str, list[str]]:
     cfg = _sector_config()
+    groups = [c.get("kpi_groups") or {} for c in cfg.values()]
+    if not groups:
+        return {}
+    shared_names = set(groups[0])
+    for g in groups[1:]:
+        shared_names &= set(g)
+    out: dict[str, list[str]] = {}
+    for name in sorted(shared_names):
+        common = set(groups[0][name])
+        for g in groups[1:]:
+            common &= set(g[name])
+        if common:
+            out[name] = sorted(common)
+    return out
+
+
+def _neutral_sector_block(sector: str) -> dict:
+    """The block for a sector label no config matches.
+
+    The fallback before this was `next(iter(cfg.values()))` — the FIRST
+    config, which is Technology — so an unmatched company was researched
+    against Technology's drivers, KPIs and valuation lens and nothing said
+    so. Copying Technology's `kpi_groups` and relabelling them "generic"
+    was the same defect wearing a different name: a bank placed against
+    `rd_pct_revenue` and `EV_EBITDA` is not being measured neutrally, it is
+    being measured as a software company.
+
+    So the KPI groups here are the ones every config agrees on
+    (`_neutral_kpi_groups`) — revenue growth and operating margin, which
+    mean the same thing in any sector. The groups that could not be filled
+    are named in `kpi_groups_omitted` with the reason, because a KPI group
+    that silently vanished reads as "this sector has no valuation lens"
+    rather than "we do not know which one applies".
+    """
+    kpi_groups = _neutral_kpi_groups()
+    configs = list(_sector_config().values())
+    any_group: set[str] = set()
+    all_groups: set[str] | None = None
+    for c in configs:
+        names = set(c.get("kpi_groups") or {})
+        any_group |= names
+        all_groups = names if all_groups is None else (all_groups & names)
+    omitted = {}
+    for name in sorted(any_group - set(kpi_groups)):
+        omitted[name] = (
+            "no metric common to every sector config; which one applies is sector-specific"
+            if name in (all_groups or set()) else
+            "not a group every sector config carries; it is sector-specific"
+        )
+    return {
+        "key_drivers": [],
+        "kpi_groups": kpi_groups,
+        "kpi_groups_omitted": omitted,
+        "valuation_lens": (
+            f"n/a: no sector config matches {sector!r}, and the valuation lens is sector-specific "
+            "— none is asserted rather than borrowing another sector's."
+        ),
+        "macro_sensitivities": [],
+        "common_risks": [],
+        "secular_trends": [],
+        "subindustry_overrides": {},
+        "neutral_default": True,
+        "reason": f"no sector config matches {sector!r}",
+    }
+
+
+def _resolve_sector_block(sector: str) -> dict:
+    """The config a sector label researches against, or a neutral block.
+
+    Three passes, most certain first. The alias pass is the one that
+    matters: FMP labels its banks, insurers and payment networks
+    "Financial Services", which is neither an exact key nor a substring of
+    "Financials" either way round — so every one of them fell through to
+    the neutral block while the correct config sat in the file. The same
+    was true of "Consumer Cyclical", "Consumer Defensive", "Health Care"
+    and "Telecom".
+
+    The substring pass is kept for labels no alias table knows ("Technology
+    Hardware"), but only when exactly ONE config matches: an ambiguous
+    substring is a guess, and a guess is what put Technology's KPIs in
+    front of a bank in the first place.
+    """
+    cfg = _sector_config()
+    sector = (sector or "").strip()
     if sector in cfg:
         return cfg[sector]
-    for k, v in cfg.items():
-        if k.lower() in sector.lower() or sector.lower() in k.lower():
-            return v
-    return next(iter(cfg.values()))
+    canonical = normalize_sector(sector)
+    if canonical and canonical in _canonical_index():
+        return cfg[_canonical_index()[canonical]]
+    if sector:
+        low = sector.lower()
+        hits = [v for k, v in cfg.items() if k.lower() in low or low in k.lower()]
+        if len(hits) == 1:
+            return hits[0]
+    return _neutral_sector_block(sector)
 
 
-def _resolve_subindustry_overrides(sector_block: Dict, industry: str) -> Dict:
+def _resolve_subindustry_overrides(sector_block: dict, industry: str) -> dict:
     overrides = sector_block.get("subindustry_overrides", {}) or {}
     if industry in overrides:
         return overrides[industry]
@@ -55,7 +171,7 @@ def _resolve_subindustry_overrides(sector_block: Dict, industry: str) -> Dict:
 # Cohort construction
 # ---------------------------------------------------------------------------
 
-def build_cohort(target_ticker: str) -> List[str]:
+def build_cohort(target_ticker: str) -> list[str]:
     """Return peers in the same sector + (preferably) sub-industry as the target.
 
     Sub-industry is preferred so semis aren't lumped with software when both
@@ -71,9 +187,9 @@ def build_cohort(target_ticker: str) -> List[str]:
     sub_ind = target.get("sub_industry")
 
     universe = ds.list_tickers()
-    same_sub: List[str] = []
-    same_industry: List[str] = []
-    same_sector: List[str] = []
+    same_sub: list[str] = []
+    same_industry: list[str] = []
+    same_sector: list[str] = []
     for t in universe:
         if t == target_ticker:
             continue
@@ -98,7 +214,7 @@ def build_cohort(target_ticker: str) -> List[str]:
 # Distributional placement
 # ---------------------------------------------------------------------------
 
-def _quartile(values: List[float], target: float) -> int:
+def _quartile(values: list[float], target: float) -> int:
     """Return 1..4 quartile of `target` within `values`. 4 = top quartile."""
     clean = sorted(v for v in values if v is not None)
     if not clean:
@@ -114,7 +230,7 @@ def _quartile(values: List[float], target: float) -> int:
     return 4
 
 
-def _distribution(values: List[float]) -> Dict[str, float]:
+def _distribution(values: list[float]) -> dict[str, float]:
     clean = [v for v in values if v is not None]
     if not clean:
         return {}
@@ -133,12 +249,12 @@ def _distribution(values: List[float]) -> Dict[str, float]:
 
 
 def compute_kpi_placements(
-    target_ratios: Dict, cohort_ratios: List[Dict], kpi_groups: Dict[str, List[str]]
-) -> Dict[str, Dict]:
+    target_ratios: dict, cohort_ratios: list[dict], kpi_groups: dict[str, list[str]]
+) -> dict[str, dict]:
     """For each KPI in the sector framework, compute cohort distribution and
     target's quartile placement.
     """
-    placements: Dict[str, Dict] = {}
+    placements: dict[str, dict] = {}
     for group_name, kpis in kpi_groups.items():
         for kpi in kpis:
             target_val = target_ratios.get(kpi)
@@ -178,17 +294,17 @@ def compute_kpi_placements(
 # Cohort outliers
 # ---------------------------------------------------------------------------
 
-def _argmax(rows: List[Tuple[str, Optional[float]]]) -> Optional[str]:
+def _argmax(rows: list[tuple[str, float | None]]) -> str | None:
     clean = [(t, v) for t, v in rows if v is not None]
     return max(clean, key=lambda r: r[1])[0] if clean else None
 
 
-def _argmin(rows: List[Tuple[str, Optional[float]]]) -> Optional[str]:
+def _argmin(rows: list[tuple[str, float | None]]) -> str | None:
     clean = [(t, v) for t, v in rows if v is not None]
     return min(clean, key=lambda r: r[1])[0] if clean else None
 
 
-def detect_outliers(cohort_with_target: List[Dict]) -> Dict[str, Optional[str]]:
+def detect_outliers(cohort_with_target: list[dict]) -> dict[str, str | None]:
     """Return tickers leading the cohort on growth, margin, ROIC, and valuation."""
     if not cohort_with_target:
         return {}
@@ -210,13 +326,13 @@ def detect_outliers(cohort_with_target: List[Dict]) -> Dict[str, Optional[str]]:
 # Multi-year sector trends
 # ---------------------------------------------------------------------------
 
-def _trend_pct(prev: Optional[float], cur: Optional[float]) -> Optional[float]:
+def _trend_pct(prev: float | None, cur: float | None) -> float | None:
     if not prev or prev == 0 or cur is None:
         return None
     return (cur - prev) / abs(prev)
 
 
-def compute_sector_trends(cohort_fins: List[Dict]) -> Dict[str, Any]:
+def compute_sector_trends(cohort_fins: list[dict]) -> dict[str, Any]:
     """Multi-year cohort-aggregated trends.
 
     Aggregates across (latest, latest-2) to detect whether margins are expanding
@@ -224,11 +340,11 @@ def compute_sector_trends(cohort_fins: List[Dict]) -> Dict[str, Any]:
     """
     if not cohort_fins:
         return {}
-    op_margins_now: List[float] = []
-    op_margins_then: List[float] = []
-    capex_now: List[float] = []
-    capex_then: List[float] = []
-    growth_recent: List[float] = []
+    op_margins_now: list[float] = []
+    op_margins_then: list[float] = []
+    capex_now: list[float] = []
+    capex_then: list[float] = []
+    growth_recent: list[float] = []
 
     for fin in cohort_fins:
         income = sorted(fin.get("income", []), key=lambda r: r.get("period", ""))
@@ -248,7 +364,7 @@ def compute_sector_trends(cohort_fins: List[Dict]) -> Dict[str, Any]:
         if prev_rev:
             growth_recent.append(_trend_pct(prev_rev, latest.get("revenue")) or 0.0)
 
-    def _safe_mean(xs: List[float]) -> Optional[float]:
+    def _safe_mean(xs: list[float]) -> float | None:
         return mean(xs) if xs else None
 
     op_now = _safe_mean(op_margins_now)
@@ -288,7 +404,7 @@ _RISK_KEYWORDS = [
 ]
 
 
-def aggregate_cohort_filing_themes(cohort_tickers: List[str]) -> List[Dict[str, Any]]:
+def aggregate_cohort_filing_themes(cohort_tickers: list[str]) -> list[dict[str, Any]]:
     """Cluster risk-factor language across the cohort into named themes."""
     counter: Counter = Counter()
     n_filings = 0
@@ -313,9 +429,8 @@ def aggregate_cohort_filing_themes(cohort_tickers: List[str]) -> List[Dict[str, 
 # Industry structure (light-weight; enhances with HHI when revenue available)
 # ---------------------------------------------------------------------------
 
-def industry_structure(cohort_with_target: List[Dict]) -> Dict[str, Any]:
+def industry_structure(cohort_with_target: list[dict]) -> dict[str, Any]:
     """Approximate concentration via revenue-share Herfindahl on the cohort."""
-    revs = [(r["ticker"], r.get("ratios", {}).get("PS") and (r.get("market_cap") or 0)) for r in cohort_with_target]
     revenues = []
     for r in cohort_with_target:
         income = sorted(r.get("financials", {}).get("income", []) or [], key=lambda x: x.get("period", ""))
@@ -344,7 +459,7 @@ def industry_structure(cohort_with_target: List[Dict]) -> Dict[str, Any]:
 # Sector regime detection (heuristic; opinionated)
 # ---------------------------------------------------------------------------
 
-def _kpi_fingerprint_inputs(entry: Dict[str, Any]) -> Optional[str]:
+def _kpi_fingerprint_inputs(entry: dict[str, Any]) -> str | None:
     """Wave 6B: build a stable, KPI-only fingerprint string for a cohort member.
 
     Returns a compact `kpi:<ticker>:<rounded values>` token that goes into
@@ -384,7 +499,7 @@ def _kpi_fingerprint_inputs(entry: Dict[str, Any]) -> Optional[str]:
     return f"kpi:{ticker}:rev={rev}:op={op_inc}:cx={capex}:sh={shares}"
 
 
-def detect_sector_regime(sector: str, trends: Dict[str, Any], industry: str) -> str:
+def detect_sector_regime(sector: str, trends: dict[str, Any], industry: str) -> str:
     growth = trends.get("cohort_revenue_growth_recent") or 0.0
     capex_delta = trends.get("cohort_capex_delta") or 0.0
     margin_delta = trends.get("cohort_op_margin_delta") or 0.0
@@ -406,7 +521,7 @@ def detect_sector_regime(sector: str, trends: Dict[str, Any], industry: str) -> 
 # Top-level entry point
 # ---------------------------------------------------------------------------
 
-def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> Dict[str, Any]:
+def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> dict[str, Any]:
     """Build the deep sector research payload consumed by the sector agent.
 
     Cache-aware. When `force_refresh=False` (default) the function consults the
@@ -443,9 +558,9 @@ def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> D
         }
 
     cohort_tickers = build_cohort(target_ticker)
-    cohort_with_target: List[Dict] = []
-    cohort_ratios: List[Dict] = []
-    cohort_fins: List[Dict] = []
+    cohort_with_target: list[dict] = []
+    cohort_ratios: list[dict] = []
+    cohort_fins: list[dict] = []
     for t in cohort_tickers:
         fin = get_full_financials(t)
         if not fin or not fin.get("ratios"):
@@ -508,7 +623,7 @@ def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> D
     # legal disclosures, shelf registration) leaves the fingerprint
     # untouched and the warm snapshot stays fresh — saving a bunch of
     # spurious recomputes.
-    sources_used: List[Any] = [f"cohort:{','.join(sorted(cohort_tickers))}"]
+    sources_used: list[Any] = [f"cohort:{','.join(sorted(cohort_tickers))}"]
     for entry in cohort_with_target:
         kpis = _kpi_fingerprint_inputs(entry)
         if kpis is not None:
@@ -518,7 +633,7 @@ def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> D
     # snapshot. Lineage cascades remain useful for cohort-membership
     # changes (a name dropped from the universe, replaced by another),
     # which the per-KPI fingerprint above wouldn't catch.
-    parent_ids: List[int] = []
+    parent_ids: list[int] = []
     for t in cohort_tickers + [target_ticker]:
         cold = cache_get(t, "company_cold")
         if cold:

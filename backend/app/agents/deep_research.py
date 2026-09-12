@@ -20,9 +20,8 @@ Design points (locked in `docs/DEEP_RESEARCH_DESIGN.md`):
 """
 from __future__ import annotations
 
-import json
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
 
 from ..config import settings
 from ..schemas import (
@@ -30,9 +29,9 @@ from ..schemas import (
     CritiqueOutput,
     CritiqueQuestion,
     RoundFindings,
-    StockMemoOut,
 )
 from . import llm
+from .intake import ALL_SPECIALISTS
 from .llm import llm_call_context
 
 log = logging.getLogger(__name__)
@@ -62,7 +61,7 @@ _PM_CRITIQUE_PROMPT_TEMPLATE = (
     "Decide: are there any specific dig-deeper questions that would "
     "MATERIALLY change the rating, the confidence, or the key risks?\n\n"
     "If yes, emit up to {max_questions} questions targeting one of: "
-    "sector, earnings, filing, valuation, comps, macro, risk, technical. "
+    "{specialists}. "
     "Each question must be specific (NOT 'tell me more about X' — but "
     "'why does the cohort op margin show compression while the target's "
     "is expanding — what's the cohort outlier driving the median?'). "
@@ -93,10 +92,10 @@ def _format_finding_for_critique(name: str, f: AgentFinding) -> str:
     )
 
 
-def _format_prior_rounds(rounds: List[RoundFindings]) -> str:
+def _format_prior_rounds(rounds: list[RoundFindings]) -> str:
     if not rounds or all(r.round == 0 for r in rounds):
         return "(no prior critique rounds — this is round 1)"
-    lines: List[str] = []
+    lines: list[str] = []
     for r in rounds:
         if r.round == 0:
             continue
@@ -105,9 +104,29 @@ def _format_prior_rounds(rounds: List[RoundFindings]) -> str:
     return "\n".join(lines) if lines else "(no prior critique rounds)"
 
 
+def _addressable(current_findings: dict[str, AgentFinding]) -> tuple[str, ...]:
+    """The specialist keys the PM may target this round, in roster order.
+
+    Derived from the roster (via `intake.ALL_SPECIALISTS`), never spelled
+    out here: a literal list is how a new analyst becomes unreachable, and
+    it already had — the Industry Group Analyst joined the roster and every
+    critique aimed at `industry_group` was dropped by this filter, leaving
+    `run_industry_group_agent`'s `prior_round_critique` path unreachable
+    from a memo run.
+
+    Narrowed to the specialists whose findings are actually in front of the
+    PM, so the prompt never offers a target that did not run — the industry
+    analyst is gated on routing AND on the company having a mapping. An
+    empty round falls back to the full roster rather than offering nothing.
+    """
+    present = set(current_findings)
+    targets = tuple(k for k in ALL_SPECIALISTS if k in present)
+    return targets or tuple(ALL_SPECIALISTS)
+
+
 def pm_critique(
-    *, round_num: int, current_findings: Dict[str, AgentFinding],
-    rounds_so_far: List[RoundFindings], run_id: str,
+    *, round_num: int, current_findings: dict[str, AgentFinding],
+    rounds_so_far: list[RoundFindings], run_id: str,
 ) -> CritiqueOutput:
     """Single PM critique step. Inspects current findings + dialog
     history, returns a structured `CritiqueOutput` with 0-N questions.
@@ -120,11 +139,13 @@ def pm_critique(
         _format_finding_for_critique(k, v)
         for k, v in current_findings.items()
     )
+    targets = _addressable(current_findings)
     prompt = _PM_CRITIQUE_PROMPT_TEMPLATE.format(
         round_num=round_num,
         findings_block=findings_block[:5000],
         prior_rounds_block=_format_prior_rounds(rounds_so_far),
         max_questions=settings.deep_research_max_questions_per_round,
+        specialists=", ".join(targets),
     )
     # Use whatever provider is active — forcing OpenAI here meant the
     # dialog hard-failed on deployments configured with only an
@@ -147,16 +168,13 @@ def pm_critique(
             ),
         )
 
-    questions: List[CritiqueQuestion] = []
+    questions: list[CritiqueQuestion] = []
     for raw in (out.get("questions") or [])[: settings.deep_research_max_questions_per_round]:
         if not isinstance(raw, dict):
             continue
         target = raw.get("target_agent")
         question = (raw.get("question") or "").strip()
-        if not question or target not in {
-            "sector", "earnings", "valuation", "comps",
-            "risk", "filing", "macro", "technical",
-        }:
+        if not question or target not in targets:
             continue
         questions.append(CritiqueQuestion(
             target_agent=target,
@@ -172,10 +190,11 @@ def pm_critique(
 
 def run_dialog_loop(
     *, run_id: str,
-    initial_findings: Dict[str, AgentFinding],
-    re_fire: Dict[str, AgentDispatcher],
-    max_rounds: Optional[int] = None,
-) -> Tuple[Dict[str, AgentFinding], List[RoundFindings]]:
+    initial_findings: dict[str, AgentFinding],
+    re_fire: dict[str, AgentDispatcher],
+    max_rounds: int | None = None,
+    seed_questions: list[CritiqueQuestion] | None = None,
+) -> tuple[dict[str, AgentFinding], list[RoundFindings]]:
     """Run the PM↔specialist dialog. Returns the final-round findings
     + the full round_findings list for persistence.
 
@@ -185,18 +204,29 @@ def run_dialog_loop(
     specialist gets the right inputs (profile / ratios / dcf / etc.)
     without leaking through the loop's signature.
 
+    `seed_questions` (Phase 6) are questions a caller wants asked on
+    ROUND 1 regardless of the PM critique — today the scorecard
+    disagreement review seeds. Contract: when non-empty, round 1 always
+    re-fires (the seeds are prepended to whatever the critique adds, and
+    the "no further questions" early exit is bypassed for that round
+    only), so a review regen asks its question even where the critique's
+    LLM call is unavailable and would otherwise end the dialog before any
+    re-fire. Rounds 2+ are unchanged. None / empty is the pre-Phase-6
+    behavior exactly.
+
     Loop exits when ANY of:
-    - PM returns `no_further_questions=True`.
-    - PM returns 0 questions (functionally the same).
+    - PM returns `no_further_questions=True` (round 1: only without seeds).
+    - PM returns 0 questions (functionally the same; same round-1 caveat).
     - Round count hits `max_rounds`.
     - A round's re-fires all fail (we don't burn budget on a stuck loop).
     """
     if max_rounds is None:
         max_rounds = settings.deep_research_max_rounds
+    seeds: list[CritiqueQuestion] = list(seed_questions or [])
 
     # Round 0 — the existing parallel fan-out. Persist it as round 0 with
     # no PM questions so the audit log is complete.
-    rounds: List[RoundFindings] = [
+    rounds: list[RoundFindings] = [
         RoundFindings(round=0, pm_questions=[], findings=dict(initial_findings)),
     ]
     current = dict(initial_findings)
@@ -206,7 +236,17 @@ def run_dialog_loop(
             round_num=r - 1, current_findings=current,
             rounds_so_far=rounds, run_id=run_id,
         )
-        if critique.no_further_questions or not critique.questions:
+        # Round 1 carries the seeds first (a seeded question must be asked
+        # before the PM's own follow-ups, and must be asked at all).
+        questions: list[CritiqueQuestion] = list(critique.questions)
+        rationale = critique.rationale
+        if r == 1 and seeds:
+            questions = seeds + questions
+            rationale = (
+                f"seeded {len(seeds)} review question(s) from the scorecard "
+                f"disagreement queue; PM critique: {critique.rationale or 'n/a'}"
+            )[:240]
+        elif critique.no_further_questions or not critique.questions:
             # Persist the no-questions exit so reviewers see why the loop
             # ended. early_exit=True signals "PM was satisfied", not "we
             # ran out of budget".
@@ -219,9 +259,9 @@ def run_dialog_loop(
 
         # Re-fire each targeted specialist. Skip questions for agents we
         # don't have a re-fire dispatcher for (defensive).
-        new_findings: Dict[str, AgentFinding] = {}
+        new_findings: dict[str, AgentFinding] = {}
         any_success = False
-        for q in critique.questions:
+        for q in questions:
             disp = re_fire.get(q.target_agent)
             if disp is None:
                 continue
@@ -239,9 +279,9 @@ def run_dialog_loop(
                 )
 
         rounds.append(RoundFindings(
-            round=r, pm_questions=critique.questions,
+            round=r, pm_questions=questions,
             findings=new_findings, early_exit=False,
-            pm_rationale=critique.rationale,
+            pm_rationale=rationale,
         ))
 
         # Update `current` with the latest findings — the next round's

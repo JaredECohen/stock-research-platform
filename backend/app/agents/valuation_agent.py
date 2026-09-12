@@ -2,25 +2,34 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, Optional
 
 from ..config import settings
+from ..finance.dcf import fmt_price, fmt_upside
 from ..schemas import AgentFinding, DCFResult
 from ..services.market_data_service import get_current_price
-from ..services.valuation_service import build_dcf
 from . import llm, prompts
 
 
 def run_valuation_agent(
-    profile: Dict, ratios: Dict, dcf: Optional[DCFResult],
-    *, prior_round_critique: Optional[str] = None,
+    profile: dict, ratios: dict, dcf: DCFResult | None,
+    *, prior_round_critique: str | None = None,
+    scorecard_block: str | None = None,
 ) -> AgentFinding:
+    """Valuation analyst: DCF + multiples, optionally against the scorecard.
+
+    `scorecard_block` is the <= 600-char Fundamental Factor Scorecard read
+    from `scorecard_context.prompt_block` (the valuation family is the
+    "what is already priced in" leg). It is an EXPLICIT kwarg because this
+    agent builds its own payload from named ratio keys — a value stuffed
+    into `ratios` would be silently dropped. None / empty leaves the
+    payload and the prompt exactly as they were before Phase 6.
+    """
     # Pull a fresh intraday quote rather than the 7-day-cached
     # `profile.last_price`. Falls back to last close if the quote
     # chain is unavailable (e.g., backtest as-of context).
     ticker = profile.get("ticker")
     live_price = get_current_price(ticker) if ticker else None
-    payload = {
+    payload: dict = {
         "ticker": ticker,
         "current_price": live_price if live_price is not None else profile.get("last_price"),
         "PE": ratios.get("PE"),
@@ -35,6 +44,10 @@ def run_valuation_agent(
         "dcf_bear_implied": dcf.bear.implied_share_price if dcf else None,
         "dcf_base_upside": dcf.base.upside_pct if dcf else None,
     }
+    if scorecard_block:
+        # Observed rank + model read under a named version; the prompt
+        # tells the analyst to reconcile, not defer, to it.
+        payload["fundamental_scorecard"] = scorecard_block
     # Wave 7C: discretionary notes tagged for the valuation agent.
     from ..services.research_notes import build_notes_block_for_agent
     notes_block = build_notes_block_for_agent(
@@ -90,13 +103,21 @@ def run_valuation_agent(
     if fcf_y is not None:
         summary_parts.append(f"FCF yield {fcf_y:.1%}")
     if base_up is not None:
-        summary_parts.append(f"DCF base implies {base_up:+.0%} vs current")
+        summary_parts.append(f"DCF base implies {fmt_upside(base_up, decimals=0)} vs current")
+    elif dcf is not None:
+        # The DCF ran but has no upside to report (no share count or no
+        # quote). Say so in the headline rather than silently dropping it —
+        # a reader would otherwise assume the DCF was never run.
+        summary_parts.append("DCF upside n/a")
 
     headline = "; ".join(summary_parts) if summary_parts else "Valuation snapshot"
     key_points = []
     if dcf:
-        key_points.append(f"Base case implied price: ${dcf.base.implied_share_price:,.2f}")
-        key_points.append(f"Bull case: ${dcf.bull.implied_share_price:,.2f} | Bear case: ${dcf.bear.implied_share_price:,.2f}")
+        key_points.append(f"Base case implied price: {fmt_price(dcf.base.implied_share_price)}")
+        key_points.append(
+            f"Bull case: {fmt_price(dcf.bull.implied_share_price)} | "
+            f"Bear case: {fmt_price(dcf.bear.implied_share_price)}"
+        )
     if ev_eb and ev_eb > 25:
         key_points.append("Valuation is elevated on EV/EBITDA — rate-sensitive.")
     elif ev_eb and ev_eb < 10:

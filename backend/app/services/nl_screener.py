@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, get_args
 
 from ..config import settings
 from ..schemas import (
     CustomScreenRequest,
     CustomScreenResult,
     ScreenerMetricName,
-    ScreenerOp,
     ScreenerRule,
 )
 
@@ -29,12 +28,12 @@ log = logging.getLogger(__name__)
 # Subset of metrics + ops the LLM is allowed to emit. Keep the
 # vocabulary tight so the rule chain hits the existing custom-screen
 # evaluator without surprises.
-_ALLOWED_METRICS: List[str] = [
-    "pe_ttm", "ev_ebitda", "ev_revenue", "gross_margin",
-    "op_margin", "fcf_margin", "roic", "roe", "debt_to_ebitda",
-    "revenue_growth_yoy", "market_cap", "beta", "fcf_yield",
-]
-_ALLOWED_OPS: List[str] = [">", "<", ">=", "<=", "=", "between"]
+# Derived from the schema's `ScreenerMetricName` literal rather than kept
+# by hand: the two drifted (this list carried `fcf_yield`, which the schema
+# rejects), so an LLM translation using it raised a pydantic ValidationError
+# out of `translate()` instead of the rule simply being dropped.
+_ALLOWED_METRICS: list[str] = list(get_args(ScreenerMetricName))
+_ALLOWED_OPS: list[str] = [">", "<", ">=", "<=", "=", "between"]
 _SUPPORTED_THEMES = [
     "ai_infrastructure", "ai_applications", "energy_transition", "glp1",
     "china_consumer", "data_center_buildout", "cybersecurity",
@@ -42,10 +41,13 @@ _SUPPORTED_THEMES = [
 ]
 
 
-def _llm_translate(query: str) -> Optional[Dict[str, Any]]:
+def _llm_translate(query: str) -> dict[str, Any] | None:
     """Returns a dict with: rules (list), themes (list), sectors
     (list), sort_by, order, rationale. Returns None on any failure."""
-    if not getattr(settings, "openai_api_key", None):
+    # `has_llm`, not the OpenAI key: `llm.chat_json` routes to whichever
+    # provider is configured, and gating on one vendor's key silently
+    # disabled this on Anthropic-only deployments.
+    if not settings.has_llm:
         return None
     schema = {
         "rules": "list of {metric, op, value, value2?} — metrics/ops below",
@@ -87,7 +89,7 @@ def _llm_translate(query: str) -> Optional[Dict[str, Any]]:
     return out if isinstance(out, dict) else None
 
 
-def translate(query: str) -> Tuple[CustomScreenRequest, List[str], str]:
+def translate(query: str) -> tuple[CustomScreenRequest, list[str], str]:
     """Returns (request, themes, rationale).
 
     Themes are returned alongside because the rule-based evaluator
@@ -95,7 +97,7 @@ def translate(query: str) -> Tuple[CustomScreenRequest, List[str], str]:
     theme filtering on top.
     """
     out = _llm_translate(query) or {}
-    rules: List[ScreenerRule] = []
+    rules: list[ScreenerRule] = []
     for raw in (out.get("rules") or []):
         if not isinstance(raw, dict):
             continue
@@ -107,7 +109,7 @@ def translate(query: str) -> Tuple[CustomScreenRequest, List[str], str]:
             value = float(raw.get("value") or 0.0)
         except (TypeError, ValueError):
             value = 0.0
-        value2: Optional[float] = None
+        value2: float | None = None
         if op == "between":
             try:
                 value2 = float(raw["value2"])
@@ -133,13 +135,13 @@ def translate(query: str) -> Tuple[CustomScreenRequest, List[str], str]:
     return req, themes, rationale
 
 
-def run(query: str) -> Dict[str, Any]:
+def run(query: str) -> dict[str, Any]:
     """Translate + execute. Returns a payload the chat agent or the
     frontend can render: the inferred request (so the user sees what
     we read), the rationale, and the matching rows.
     """
     req, themes, rationale = translate(query)
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     matched = 0
     try:
         from ..api.routes_screener import _execute_custom_screen

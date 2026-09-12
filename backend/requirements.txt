@@ -1,70 +1,263 @@
-# Pins are floors, not ceilings, on most packages so the
-# OpenAI Agents SDK ecosystem (which moves quickly) stays installable
-# without manual unpinning. Hard caps are reserved for packages where a
-# major-version bump would break our test surface.
-
-# --- Web framework -----------------------------------------------------------
-# FastAPI 0.118+ allows starlette 1.x, which is required by the openai-agents
-# / mcp / sse-starlette transitive chain.
-fastapi>=0.118.0
-uvicorn[standard]>=0.30.6
-
-# --- Data + persistence ------------------------------------------------------
-pydantic>=2.12.2
-pydantic-settings>=2.5.2
-sqlalchemy>=2.0.35
-psycopg2-binary>=2.9.9
-python-dotenv>=1.0.1
-httpx>=0.27.2
-# numpy backs the factor regression (services/factor_analytics.py) and the
-# batched cosine scoring in services/vector_store.py. Imported lazily in
-# the vector path — it costs ~28MB RSS, which is worth paying only once a
-# process actually runs a streaming search.
-numpy>=1.26.4
-# `pandas` was removed 2026-08-12: nothing in the repo imported it, and it
-# is not a hard requirement of any dependency (only of the optional
-# `openai[datalib]` extra, which we don't install). It was ~48MB of image
-# weight for zero call sites. If a future analytics module wants it, add
-# it back with the import kept lazy so it stays off the idle footprint.
-
-# --- LLM SDKs ----------------------------------------------------------------
-# openai 2.26+ is required by openai-agents.
-openai>=2.26.0
-# anthropic >=0.40 needed for httpx 0.28+ compatibility (the 0.39 client
-# init passed a `proxies` kwarg that httpx 0.28 dropped, which silently
-# nuked every Anthropic-routed agent call).
-anthropic>=0.42,<1
-# google-genai is optional — without it the Gemini branch in agents/llm.py
-# disables itself gracefully and demo mode remains fully functional.
-google-genai>=0.7.0; python_version >= "3.10"
-
-# OpenAI Agents SDK — official multi-agent runtime (Phase 3 production path).
-# When OPENAI_API_KEY is set + USE_AGENTS_SDK=true, sdk_runtime.py uses this
-# to drive real LLM handoffs / tool calls. Otherwise the in-process shim
-# defined in the same file handles the topology deterministically.
-openai-agents>=0.14.6
-
-# --- Misc --------------------------------------------------------------------
-python-multipart>=0.0.12
-tenacity>=9.0.0
-pytest>=8.3.3
-pytest-asyncio>=0.24.0
-# APScheduler powers the Phase 5 monitoring loops in production. Dev/test
-# run with ENABLE_MONITORING=false so this dependency is not exercised
-# unless the runtime explicitly opts in.
-apscheduler>=3.10.4
-
-# Per-IP rate limiting on the expensive endpoints (memo / chat / analyze).
-# Default backend is in-memory, which is fine for a single-replica deploy.
-# Set `RATE_LIMIT_STORAGE_URL=redis://...` to share state across replicas.
-slowapi>=0.1.9
-
-# Vector store for filing / transcript chunk retrieval. pgvector is the
-# Postgres extension; the python package wraps it for SQLAlchemy. The
-# `EmbeddingChunk` model uses pgvector's `Vector` column type when
-# Postgres is the backend, falling back to JSON storage on SQLite for
-# local dev parity.
-pgvector>=0.3.0
-# tiktoken powers token-aware chunking of long filings / transcripts so
-# embed calls stay within OpenAI's 8K-token input limit per chunk.
-tiktoken>=0.7.0
+# GENERATED FILE — do not edit by hand.
+# Source of truth: pyproject.toml [project.dependencies]. Edit the floor
+# there, then run `make lock` from backend/ and commit both files.
+# CI (lock-check) fails when this file is stale.
+#
+# Produced by: uv pip compile pyproject.toml --universal --python-version 3.12
+annotated-doc==0.0.5
+    # via fastapi
+annotated-types==0.8.0
+    # via pydantic
+anthropic==0.125.0
+    # via alphacouncil-backend (pyproject.toml)
+anyio==4.15.1
+    # via
+    #   anthropic
+    #   google-genai
+    #   httpx
+    #   httpx2
+    #   mcp
+    #   openai
+    #   sse-starlette
+    #   starlette
+    #   watchfiles
+apscheduler==3.11.3
+    # via alphacouncil-backend (pyproject.toml)
+attrs==26.1.0
+    # via
+    #   jsonschema
+    #   referencing
+certifi==2026.7.22
+    # via
+    #   httpcore
+    #   httpx
+    #   requests
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
+    # via cryptography
+charset-normalizer==3.5.1
+    # via requests
+click==8.5.0
+    # via uvicorn
+colorama==0.4.6 ; sys_platform == 'win32'
+    # via pytest
+cryptography==50.0.1
+    # via
+    #   google-auth
+    #   pyjwt
+deprecated==1.3.1
+    # via limits
+distro==1.9.0
+    # via
+    #   anthropic
+    #   google-genai
+docstring-parser==0.18.0
+    # via anthropic
+fastapi==0.141.1
+    # via alphacouncil-backend (pyproject.toml)
+google-auth==2.57.1
+    # via google-genai
+google-genai==2.22.0
+    # via alphacouncil-backend (pyproject.toml)
+greenlet==3.5.5 ; platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64'
+    # via sqlalchemy
+griffelib==2.3.0
+    # via openai-agents
+h11==0.16.0
+    # via
+    #   httpcore
+    #   httpcore2
+    #   uvicorn
+httpcore==1.0.9
+    # via httpx
+httpcore2==2.12.0 ; sys_platform != 'emscripten'
+    # via httpx2
+httptools==0.8.0
+    # via uvicorn
+httpx==0.28.1
+    # via
+    #   alphacouncil-backend (pyproject.toml)
+    #   anthropic
+    #   google-genai
+httpx2==2.12.0
+    # via
+    #   mcp
+    #   openai
+httpx2-jsfetch==1.0 ; sys_platform == 'emscripten'
+    # via httpx2
+idna==3.19
+    # via
+    #   anyio
+    #   httpx
+    #   httpx2
+    #   requests
+iniconfig==2.3.0
+    # via pytest
+jiter==0.16.0
+    # via
+    #   anthropic
+    #   openai
+jsonschema==4.26.0
+    # via mcp
+jsonschema-specifications==2025.9.1
+    # via jsonschema
+limits==5.8.0
+    # via slowapi
+mcp==2.2.0
+    # via openai-agents
+mcp-types==2.2.0
+    # via mcp
+numpy==2.5.3
+    # via alphacouncil-backend (pyproject.toml)
+openai==3.8.0
+    # via
+    #   alphacouncil-backend (pyproject.toml)
+    #   openai-agents
+openai-agents==0.22.0
+    # via alphacouncil-backend (pyproject.toml)
+opentelemetry-api==1.44.0
+    # via mcp
+packaging==26.3
+    # via
+    #   limits
+    #   pytest
+pgvector==0.5.0
+    # via alphacouncil-backend (pyproject.toml)
+pluggy==1.6.0
+    # via pytest
+psycopg2-binary==2.9.12
+    # via alphacouncil-backend (pyproject.toml)
+pyasn1==0.6.4
+    # via pyasn1-modules
+pyasn1-modules==0.4.2
+    # via google-auth
+pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+    # via cffi
+pydantic==2.13.5
+    # via
+    #   alphacouncil-backend (pyproject.toml)
+    #   anthropic
+    #   fastapi
+    #   google-genai
+    #   mcp
+    #   mcp-types
+    #   openai
+    #   openai-agents
+    #   pydantic-settings
+pydantic-core==2.46.5
+    # via pydantic
+pydantic-settings==2.15.0
+    # via alphacouncil-backend (pyproject.toml)
+pygments==2.21.0
+    # via pytest
+pyjwt==2.13.0
+    # via
+    #   alphacouncil-backend (pyproject.toml)
+    #   mcp
+pytest==9.1.1
+    # via
+    #   alphacouncil-backend (pyproject.toml)
+    #   pytest-asyncio
+pytest-asyncio==1.4.0
+    # via alphacouncil-backend (pyproject.toml)
+python-dotenv==1.2.3
+    # via
+    #   alphacouncil-backend (pyproject.toml)
+    #   pydantic-settings
+    #   uvicorn
+python-multipart==0.0.32
+    # via
+    #   alphacouncil-backend (pyproject.toml)
+    #   mcp
+pywin32==312 ; sys_platform == 'win32'
+    # via mcp
+pyyaml==6.0.3
+    # via uvicorn
+referencing==0.37.0
+    # via
+    #   jsonschema
+    #   jsonschema-specifications
+regex==2026.9.3
+    # via tiktoken
+requests==2.34.2
+    # via
+    #   google-auth
+    #   google-genai
+    #   openai-agents
+    #   tiktoken
+rpds-py==2026.6.3
+    # via
+    #   jsonschema
+    #   referencing
+slowapi==0.1.10
+    # via alphacouncil-backend (pyproject.toml)
+sniffio==1.3.1
+    # via
+    #   anthropic
+    #   google-genai
+    #   openai
+sqlalchemy==2.0.52
+    # via alphacouncil-backend (pyproject.toml)
+sse-starlette==3.4.11
+    # via mcp
+starlette==1.6.0
+    # via
+    #   fastapi
+    #   mcp
+    #   sse-starlette
+tenacity==9.1.4
+    # via
+    #   alphacouncil-backend (pyproject.toml)
+    #   google-genai
+tiktoken==0.14.0
+    # via alphacouncil-backend (pyproject.toml)
+truststore==0.10.4 ; sys_platform != 'emscripten'
+    # via
+    #   httpcore2
+    #   httpx2
+typing-extensions==4.16.0
+    # via
+    #   anthropic
+    #   anyio
+    #   fastapi
+    #   google-genai
+    #   httpx2
+    #   limits
+    #   mcp
+    #   mcp-types
+    #   openai
+    #   openai-agents
+    #   opentelemetry-api
+    #   pydantic
+    #   pydantic-core
+    #   pytest-asyncio
+    #   referencing
+    #   sqlalchemy
+    #   starlette
+    #   typing-inspection
+typing-inspection==0.4.4
+    # via
+    #   fastapi
+    #   mcp
+    #   pydantic
+    #   pydantic-settings
+tzdata==2026.3 ; sys_platform == 'win32'
+    # via tzlocal
+tzlocal==5.4.4
+    # via apscheduler
+urllib3==2.7.0
+    # via requests
+uvicorn==0.52.4
+    # via
+    #   alphacouncil-backend (pyproject.toml)
+    #   mcp
+uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
+    # via uvicorn
+watchfiles==1.2.0
+    # via uvicorn
+websockets==16.1.1
+    # via
+    #   google-genai
+    #   openai-agents
+    #   uvicorn
+wrapt==2.4.0
+    # via deprecated

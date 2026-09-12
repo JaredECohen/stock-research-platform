@@ -32,12 +32,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-
-log = logging.getLogger(__name__)
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from ..config import settings
+from ..finance.dcf import fmt_price, fmt_upside
 from ..schemas import (
     AgentFinding,
     AgentTrace,
@@ -45,34 +45,40 @@ from ..schemas import (
     CatalystItem,
     CompsResult,
     CriticReview,
+    CritiqueQuestion,
     DCFResult,
     MispricingThesis,
     RiskItem,
+    RoundFindings,
+    ScorecardSummary,
     StockMemoOut,
     ValuationVerdict,
 )  # CriticReview imported for the safe-runner fallback path  # noqa: F401
-from ..services.fundamentals_service import get_full_financials
-from ..services.market_data_service import get_basic_stats
-from ..services.transcripts_service import latest_transcript
+from ..services.checkpoint_store import checkpointed
 from ..services.filings_service import get_filings
+from ..services.fundamentals_service import get_full_financials
+from ..services.transcripts_service import latest_transcript
 from ..services.valuation_service import build_comps, build_dcf
-from . import llm, prompts
-from .comps_agent import run_comps_agent
+from . import llm, prompts, roster, scorecard_context
 from .critic_agent import run_critic
-from .earnings_agent import run_earnings_agent
-from .filing_agent import run_filing_agent
-from .macro_agent import run_macro_agent
-from .risk_agent import derive_risk_items, risk_item_from_text, run_risk_agent
+from .log_safety import redact
+from .memo_context import AnalystRound, DCFStage, DegradationNote, MemoInputs, VerdictOutcome
+from .risk_agent import derive_risk_items, risk_item_from_text
 from .safe_runner import (
     DegradationLog,
+    note_soft,
     safe_call,
     safe_critic,
     safe_finding,
 )
-from .sector_agents import run_sector_agent
-from .technical_agent import run_technical_agent
 from .tools import evidence_quality
-from .valuation_agent import run_valuation_agent
+
+if TYPE_CHECKING:  # the ORM stays a lazy import at runtime (see _persist_memo_snapshot)
+    from ..models import MemoSnapshot
+
+log = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +112,7 @@ def _looks_like_anti_pattern_thesis(text: str) -> bool:
     return bool(_THESIS_ANTI_PATTERN.match(text.strip()))
 
 
-def _verdict_word(rating: Optional[str], upside: Optional[float]) -> str:
+def _verdict_word(rating: str | None, upside: float | None) -> str:
     """Map the memo's headline rating to the thesis verdict word so the
     one-liner can never contradict the rating badge the reader sees.
 
@@ -132,9 +138,9 @@ def _verdict_word(rating: Optional[str], upside: Optional[float]) -> str:
 
 
 def _refresh_dcf_references(
-    finding: Optional[AgentFinding],
-    old: Optional[DCFResult],
-    new: Optional[DCFResult],
+    finding: AgentFinding | None,
+    old: DCFResult | None,
+    new: DCFResult | None,
 ) -> None:
     """Rewrite stale DCF numbers baked into an agent finding's prose (B2).
 
@@ -149,21 +155,30 @@ def _refresh_dcf_references(
     if finding is None or old is None or new is None or old is new:
         return
 
-    def _pct_strs(x: float) -> tuple:
+    def _pct_strs(x: float | None) -> tuple:
         # Signed forms first (what the deterministic path emits), then the
         # one-decimal unsigned form LLM prose tends to use. The unsigned
         # integer form ("49%") is deliberately excluded — too collision-
         # prone with margins/percentages that aren't DCF upside.
+        # An unavailable number has no formatted variants: "n/a" is far
+        # too common a token to substitute, and we cannot invent a
+        # replacement for a figure that was never printed.
+        if x is None:
+            return ()
         return (f"{x:+.0%}", f"{x:+.1%}", f"{x * 100:+.0f}%",
                 f"{x * 100:+.1f}%", f"{x * 100:.1f}%")
 
-    def _usd_strs(x: float) -> tuple:
+    def _usd_strs(x: float | None) -> tuple:
+        if x is None:
+            return ()
         return (f"${x:,.2f}", f"${x:,.0f}")
 
-    pairs: List[tuple] = []
+    pairs: list[tuple] = []
     for o_s, n_s in ((old.base, new.base), (old.bull, new.bull), (old.bear, new.bear)):
         if o_s is None or n_s is None:
             continue
+        # zip() stops at the shorter tuple, so a None on either side yields
+        # no pairs for that field rather than a half-substituted memo.
         for o_str, n_str in zip(_pct_strs(o_s.upside_pct), _pct_strs(n_s.upside_pct)):
             if o_str != n_str:
                 pairs.append((o_str, n_str))
@@ -185,17 +200,19 @@ def _refresh_dcf_references(
     for ev in (getattr(finding, "evidence", None) or []):
         try:
             ev.excerpt = _sub(ev.excerpt or "")
-        except Exception:  # pragma: no cover — citations are best-effort
-            pass
+        except Exception as exc:  # pragma: no cover — citations are best-effort
+            # (a) the citation keeps its pre-adjustment number; the finding
+            # prose above already carries the corrected figures.
+            log.debug("citation excerpt substitution skipped: %s", type(exc).__name__)
     note = (
         f"DCF figures reflect PM-adjusted assumptions "
-        f"(base case {new.base.upside_pct:+.0%} vs current)."
+        f"(base case {fmt_upside(new.base.upside_pct, decimals=0)} vs current)."
     )
     if note not in finding.key_points:
         finding.key_points = list(finding.key_points) + [note]
 
 
-def _risk_items_from_bear_case(bear: Optional[BullBearCase]) -> List[RiskItem]:
+def _risk_items_from_bear_case(bear: BullBearCase | None) -> list[RiskItem]:
     """Backfill `key_risks` from the bear case when profile-driven risk
     extraction returned nothing (B4).
 
@@ -208,7 +225,7 @@ def _risk_items_from_bear_case(bear: Optional[BullBearCase]) -> List[RiskItem]:
     """
     if bear is None:
         return []
-    items: List[RiskItem] = []
+    items: list[RiskItem] = []
     seen: set = set()
     for point in bear.key_points or []:
         text = (point or "").strip()
@@ -225,7 +242,7 @@ def _risk_items_from_bear_case(bear: Optional[BullBearCase]) -> List[RiskItem]:
 
 
 def _build_valuation_verdict(
-    memo: StockMemoOut, comps: Optional[CompsResult],
+    memo: StockMemoOut, comps: CompsResult | None,
 ) -> ValuationVerdict:
     """Theme 1 — compute the memo's single reconciled valuation call.
 
@@ -244,9 +261,15 @@ def _build_valuation_verdict(
         word, "fairly_priced",
     )
 
-    parts: List[str] = []
+    parts: list[str] = []
     if dcf_up is not None:
         parts.append(f"DCF base case {dcf_up:+.0%} to fair value")
+    else:
+        # No DCF upside — either the model never ran or it could not price
+        # the shares (no share count / no quote). Say so explicitly: an
+        # unavailable DCF is NOT a 0% neutral signal, and `_verdict_word`
+        # already falls through to the rating / other signals.
+        parts.append("DCF unavailable")
     if prem is not None:
         parts.append(
             f"EV/EBITDA {abs(prem):.0%} "
@@ -292,7 +315,7 @@ def _build_mispricing_fallback(memo: StockMemoOut) -> MispricingThesis:
     vv = memo.valuation_verdict
     ticker = memo.ticker
 
-    consensus_bits: List[str] = []
+    consensus_bits: list[str] = []
     if vv.comps_ev_ebitda_premium is not None:
         d = "premium" if vv.comps_ev_ebitda_premium > 0 else "discount"
         consensus_bits.append(
@@ -333,9 +356,9 @@ def _build_mispricing_fallback(memo: StockMemoOut) -> MispricingThesis:
 
 def _mispricing_lever_clause(
     verdict_word: str,
-    upside: Optional[float],
-    drivers: List[str],
-    risks: List[str],
+    upside: float | None,
+    drivers: list[str],
+    risks: list[str],
 ) -> str:
     """Sentence-2 lever clause for a mispriced name.
 
@@ -383,11 +406,11 @@ def _gap_clause_agrees(gap_clause: str, verdict_word: str) -> bool:
 
 
 def _build_thesis_from_findings(
-    profile: Dict,
-    findings: Dict[str, "AgentFinding"],
-    dcf: Optional[DCFResult],
+    profile: dict,
+    findings: dict[str, AgentFinding],
+    dcf: DCFResult | None,
     ticker: str,
-    rating: Optional[str] = None,
+    rating: str | None = None,
 ) -> str:
     """Compose a short-form thesis (2-3 sentences) from the specialists'
     findings. Mirrors the structure required by PM_SYNTHESIS_PROMPT so
@@ -407,7 +430,7 @@ def _build_thesis_from_findings(
     risks = profile.get("risks") or []
     ticker_sym = (profile.get("ticker") or ticker or "").upper()
 
-    def _claim_from_finding(f: "Optional[AgentFinding]") -> Optional[str]:
+    def _claim_from_finding(f: AgentFinding | None) -> str | None:
         if f is None:
             return None
         head = (getattr(f, "headline", "") or "").strip().rstrip(".,;:")
@@ -427,7 +450,7 @@ def _build_thesis_from_findings(
         return head
 
     sector_finding = findings.get("sector")
-    bull_headline: Optional[str] = None
+    bull_headline: str | None = None
     if sector_finding is not None and isinstance(sector_finding.data, dict):
         bb = sector_finding.data.get("bull_bear_analysis") or {}
         if isinstance(bb, dict):
@@ -486,7 +509,17 @@ def _build_thesis_from_findings(
     sentence_2 = ""
     try:
         gap_clause = _market_gap_clause(profile, dcf, ticker_sym)
-    except Exception:  # pragma: no cover
+    except Exception as exc:  # pragma: no cover
+        # (b) sentence 2 of the thesis silently loses the consensus-gap
+        # framing and falls back to the generic lever clause. That changes
+        # what the reader sees, so it belongs on the memo banner, not only
+        # in a debug log. `note_soft` no-ops outside a memo run.
+        log.warning("market-gap clause failed for %s: %s", ticker_sym, type(exc).__name__)
+        note_soft(
+            "Thesis Builder",
+            f"consensus-gap clause unavailable: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
         gap_clause = ""
 
     if verdict_word in ("undervalued", "overvalued"):
@@ -516,7 +549,7 @@ def _build_thesis_from_findings(
 
 
 def _market_gap_clause(
-    profile: Dict, dcf: Optional[DCFResult], ticker: str,
+    profile: dict, dcf: DCFResult | None, ticker: str,
 ) -> str:
     """Wave 8R — write the "what the market is missing" sentence.
 
@@ -532,7 +565,9 @@ def _market_gap_clause(
         if not model_growths:
             return ""
         model_avg = sum(model_growths) / len(model_growths)
-    except Exception:
+    except Exception as exc:
+        # (a) no growth path on the DCF means there is no gap to describe.
+        log.debug("market-gap clause: no model growth path for %s: %s", ticker, type(exc).__name__)
         return ""
 
     # Pull consensus from the data service via the same helper the engine uses.
@@ -544,7 +579,10 @@ def _market_gap_clause(
         consensus = _consensus_growth_path(estimates)
         if consensus:
             consensus_avg = sum(consensus) / len(consensus)
-    except Exception:
+    except Exception as exc:
+        # (a) the clause degrades to its "vs. trend" framing below, which is
+        # the same output as "no consensus published" — not a memo change.
+        log.debug("market-gap clause: consensus unavailable for %s: %s", ticker, type(exc).__name__)
         consensus_avg = None
 
     drivers = profile.get("drivers") or []
@@ -578,9 +616,9 @@ def _market_gap_clause(
 def _build_scores_dict(
     *, blended_confidence: float, raw_confidence: float, ev_q: float,
     sector_finding: AgentFinding, valuation_finding: AgentFinding,
-    risk_finding: AgentFinding, earnings_finding: Optional[AgentFinding] = None,
-    profile: Dict, ratios: Dict, earnings: Dict,
-) -> Dict[str, float]:
+    risk_finding: AgentFinding, earnings_finding: AgentFinding | None = None,
+    profile: dict, ratios: dict, earnings: dict,
+) -> dict[str, float]:
     """Wave 8M — assemble `memo.scores` so the UI can render every
     category score next to the headline confidence number.
 
@@ -611,7 +649,7 @@ def _build_scores_dict(
     # Pull the LLM-extracted latest guidance changes so beat-AND-raise
     # registers as a momentum bonus. Falls back to surprise-only when
     # the earnings analyst didn't emit structured output.
-    latest_guidance: List[Dict[str, Any]] = []
+    latest_guidance: list[dict[str, Any]] = []
     if earnings_finding is not None and isinstance(earnings_finding.data, dict):
         structured = earnings_finding.data.get("structured")
         if isinstance(structured, dict):
@@ -664,7 +702,7 @@ def _build_scores_dict(
 
 def _apply_risk_recommendations(
     memo: StockMemoOut, risk_finding: AgentFinding,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Wave 8H — deterministic enforcement of risk-agent recommendations.
 
     The PM synthesis prompt is one channel for the risk lens to influence
@@ -689,7 +727,7 @@ def _apply_risk_recommendations(
     raw = risk_finding.data.get("recommendations") or []
     if not isinstance(raw, list):
         return []
-    applied: List[Dict[str, Any]] = []
+    applied: list[dict[str, Any]] = []
 
     rating_ladder = [
         "Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish",
@@ -764,7 +802,7 @@ def _apply_risk_recommendations(
     return applied
 
 
-def _bull_bear_from_sector(sector_finding: AgentFinding) -> Optional[Dict[str, Any]]:
+def _bull_bear_from_sector(sector_finding: AgentFinding) -> dict[str, Any] | None:
     """Wave 3A: pluck the structured bull_bear_analysis out of the sector
     finding's data payload, if present. Returns the dict (not the Pydantic
     model) so the caller can pull out the raw `bull_case`/`bear_case`
@@ -776,9 +814,9 @@ def _bull_bear_from_sector(sector_finding: AgentFinding) -> Optional[Dict[str, A
 
 
 def _findings_signal_lines(
-    finding: Optional[AgentFinding], *, polarity: str,
+    finding: AgentFinding | None, *, polarity: str,
     max_items: int = 3, prefix: str = "",
-) -> List[str]:
+) -> list[str]:
     """Pull the most signal-bearing key_points / signals from an agent
     finding, scoped by polarity.
 
@@ -804,7 +842,7 @@ def _findings_signal_lines(
         "elevated", "fragile", "slip", "underperform", "regulator",
         "antitrust", "litigation", "competit",
     )
-    out: List[str] = []
+    out: list[str] = []
     candidates = list(finding.key_points or [])
     # Also consider sentence fragments from the summary as a fallback
     # source — lots of value lives there for short-key_points findings.
@@ -828,9 +866,9 @@ def _findings_signal_lines(
     return out
 
 
-def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
-               sector_finding: Optional[AgentFinding] = None,
-               findings: Optional[Dict[str, AgentFinding]] = None) -> BullBearCase:
+def _bull_case(profile: dict, valuation: AgentFinding, dcf: DCFResult | None,
+               sector_finding: AgentFinding | None = None,
+               findings: dict[str, AgentFinding] | None = None) -> BullBearCase:
     """Build the memo's bull case.
 
     Preference order:
@@ -842,7 +880,7 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
     sector_bb = _bull_bear_from_sector(sector_finding) if sector_finding else None
     # Wave 10k — pull DCF scenario drivers (LLM-named) so the prose
     # tile cites the same drivers the assumption changes baked in.
-    dcf_drivers: List[str] = []
+    dcf_drivers: list[str] = []
     if dcf and dcf.bull and dcf.bull.drivers:
         dcf_drivers = [
             f"DCF driver — {d.name}: {d.rationale}".rstrip(": ")
@@ -850,19 +888,19 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
         ][:3]
     if sector_bb and isinstance(sector_bb.get("bull_case"), dict):
         bull = sector_bb["bull_case"]
-        points = list(bull.get("key_points") or [])
+        points: list[str] = list(bull.get("key_points") or [])
         points.extend(dcf_drivers)
         if dcf:
             points.append(
-                f"DCF bull case implies ${dcf.bull.implied_share_price:,.2f} "
-                f"({dcf.bull.upside_pct:+.0%})."
+                f"DCF bull case implies {fmt_price(dcf.bull.implied_share_price)} "
+                f"({fmt_upside(dcf.bull.upside_pct, decimals=0)})."
             )
         return BullBearCase(
             headline=str(bull.get("headline") or "Bull case from sector synthesis."),
             key_points=points,
         )
 
-    points: List[str] = []
+    points = []
     findings = findings or {}
     points.extend(_findings_signal_lines(findings.get("sector"), polarity="bull", max_items=3))
     points.extend(_findings_signal_lines(findings.get("valuation"), polarity="bull", max_items=2))
@@ -871,8 +909,8 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
     points.extend(dcf_drivers)
     if dcf:
         points.append(
-            f"DCF bull case implies ${dcf.bull.implied_share_price:,.2f} "
-            f"({dcf.bull.upside_pct:+.0%})."
+            f"DCF bull case implies {fmt_price(dcf.bull.implied_share_price)} "
+            f"({fmt_upside(dcf.bull.upside_pct, decimals=0)})."
         )
     if not points:
         # Template fallback: cite the profile's own thesis drivers as
@@ -893,15 +931,15 @@ def _bull_case(profile: Dict, valuation: AgentFinding, dcf: Optional[DCFResult],
     return BullBearCase(headline=headline, key_points=points[:6])
 
 
-def _bear_case(profile: Dict, dcf: Optional[DCFResult],
-               sector_finding: Optional[AgentFinding] = None,
-               findings: Optional[Dict[str, AgentFinding]] = None) -> BullBearCase:
+def _bear_case(profile: dict, dcf: DCFResult | None,
+               sector_finding: AgentFinding | None = None,
+               findings: dict[str, AgentFinding] | None = None) -> BullBearCase:
     """Build the memo's bear case. Mirror of `_bull_case` — prefers the
     sector LLM's bear, otherwise lifts bear-polarity signals from
     sector / risk / filing findings + DCF downside."""
     sector_bb = _bull_bear_from_sector(sector_finding) if sector_finding else None
     # Wave 10k — DCF bear-case drivers from the scenario builder.
-    dcf_drivers: List[str] = []
+    dcf_drivers: list[str] = []
     if dcf and dcf.bear and dcf.bear.drivers:
         dcf_drivers = [
             f"DCF driver — {d.name}: {d.rationale}".rstrip(": ")
@@ -909,19 +947,19 @@ def _bear_case(profile: Dict, dcf: Optional[DCFResult],
         ][:3]
     if sector_bb and isinstance(sector_bb.get("bear_case"), dict):
         bear = sector_bb["bear_case"]
-        points = list(bear.get("key_points") or [])
+        points: list[str] = list(bear.get("key_points") or [])
         points.extend(dcf_drivers)
         if dcf:
             points.append(
-                f"DCF bear case implies ${dcf.bear.implied_share_price:,.2f} "
-                f"({dcf.bear.upside_pct:+.0%})."
+                f"DCF bear case implies {fmt_price(dcf.bear.implied_share_price)} "
+                f"({fmt_upside(dcf.bear.upside_pct, decimals=0)})."
             )
         return BullBearCase(
             headline=str(bear.get("headline") or "Bear case from sector synthesis."),
             key_points=points,
         )
 
-    points: List[str] = []
+    points = []
     findings = findings or {}
     points.extend(_findings_signal_lines(findings.get("risk"), polarity="bear", max_items=3))
     points.extend(_findings_signal_lines(findings.get("filing"), polarity="bear", max_items=2, prefix="Filing: "))
@@ -930,8 +968,8 @@ def _bear_case(profile: Dict, dcf: Optional[DCFResult],
     points.extend(dcf_drivers)
     if dcf:
         points.append(
-            f"DCF bear case implies ${dcf.bear.implied_share_price:,.2f} "
-            f"({dcf.bear.upside_pct:+.0%})."
+            f"DCF bear case implies {fmt_price(dcf.bear.implied_share_price)} "
+            f"({fmt_upside(dcf.bear.upside_pct, decimals=0)})."
         )
     if not points:
         points.append("Cohort positioning leaves modest downside if execution slips.")
@@ -945,10 +983,10 @@ def _bear_case(profile: Dict, dcf: Optional[DCFResult],
 
 
 def _catalysts(
-    profile: Dict, transcript: Optional[Dict],
-    findings: Optional[Dict[str, AgentFinding]] = None,
-    earnings: Optional[Dict] = None,
-) -> List[CatalystItem]:
+    profile: dict, transcript: dict | None,
+    findings: dict[str, AgentFinding] | None = None,
+    earnings: dict | None = None,
+) -> list[CatalystItem]:
     """Surface near-term + medium-term catalysts.
 
     Wave 9b — derives catalysts from findings (earnings tone, sector
@@ -956,7 +994,7 @@ def _catalysts(
     the next earnings date as a concrete near-term watch item when
     we have it (FMP earnings endpoint or AV).
     """
-    items: List[CatalystItem] = []
+    items: list[CatalystItem] = []
     findings = findings or {}
 
     # Sector / news positive catalysts.
@@ -1004,18 +1042,24 @@ def _catalysts(
     return items[:6]
 
 
-def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optional[DCFResult]) -> Dict:
+def _pm_synthesis(
+    profile: dict, findings: dict[str, AgentFinding], dcf: DCFResult | None,
+    *, scorecard: Any | None = None,
+) -> dict:
     # PM uses its dedicated model (OPENAI_PM_MODEL — gpt-5.5-pro by default).
     # Wave 10 — read PM brain + company / sector memory + research_notes.
+    # Phase 6 — plus the scorecard block (<= 600 chars; "" when no row), so
+    # the synthesis prompt can ask for `scorecard_reconciliation`.
     from .pm_context import build_pm_context
     pm_ctx = build_pm_context(
         ticker=profile.get("ticker"),
         sector=profile.get("sector"),
         profile=profile,
+        scorecard_block=scorecard_context.prompt_block(scorecard),
     )
     llm_out = llm.chat_json(
         prompts.PM_SYNTHESIS_PROMPT
-        + ((("\n\n" + pm_ctx) if pm_ctx else ""))
+        + (("\n\n" + pm_ctx) if pm_ctx else "")
         + "\n\nFindings:\n"
         + json.dumps({k: v.model_dump() for k, v in findings.items()}, default=str)[: settings.max_agent_context_chars],
         system=prompts.PM_SYSTEM, route="strong",
@@ -1024,13 +1068,29 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
     if llm_out and "rating_label" in llm_out:
         return llm_out
 
+    if settings.has_llm:
+        # (b) The PM view is the memo's headline. Templated prose standing in
+        # for it while an LLM was configured is a degradation the reader must
+        # see; in deterministic mode (no keys) this path IS the design, so it
+        # is not flagged there. `_pm_synthesis` has no log handle — the
+        # contextvar set by `run_stock_memo` carries it.
+        note_soft(
+            "PM Synthesis",
+            "LLM returned no usable synthesis; deterministic PM view shipped",
+        )
+
     # Deterministic synthesis
-    upside = dcf.base.upside_pct if dcf else 0.0
+    # None (no DCF, or a DCF that could not price the shares) contributes
+    # nothing to the score — it is an absent signal, not a neutral one.
+    upside = dcf.base.upside_pct if dcf else None
     pos_signals = sum(1 for f in findings.values() if any(k in (f.headline + f.summary).lower()
                                                           for k in ("constructive", "premium", "outperform", "tailwind")))
     neg_signals = sum(1 for f in findings.values() if any(k in (f.headline + f.summary).lower()
                                                           for k in ("pressured", "underperform", "elevated", "compress")))
-    score = pos_signals - neg_signals + (1 if upside > 0.10 else (-1 if upside < -0.10 else 0))
+    dcf_signal = 0
+    if upside is not None:
+        dcf_signal = 1 if upside > 0.10 else (-1 if upside < -0.10 else 0)
+    score = pos_signals - neg_signals + dcf_signal
     # Wave 8P — five-label scheme tied to the deterministic Stock-Score
     # mapping. The actual rating gets *overridden* later by
     # `rating_from_stock_score` once the factor blend is computed; this
@@ -1067,7 +1127,7 @@ def _pm_synthesis(profile: Dict, findings: Dict[str, AgentFinding], dcf: Optiona
     )
 
 
-def _portfolio_fit(profile: Dict, rating: str) -> str:
+def _portfolio_fit(profile: dict, rating: str) -> str:
     sector = profile.get("sector", "")
     return (
         f"In a balanced model portfolio, {profile.get('ticker', '')} fits the '{sector}' sleeve. "
@@ -1078,76 +1138,42 @@ def _portfolio_fit(profile: Dict, rating: str) -> str:
 # ---------------------------------------------------------------------------
 # Wave 8A: per-step checkpointing
 # ---------------------------------------------------------------------------
-# Each specialist gets a thin checkpointed wrapper that the safe-runner calls.
+# Each step the memo run can resume from gets a thin checkpointed wrapper.
 # When `run_id` is in scope (always, since `run_stock_memo` sets it), the
-# decorator caches each step's `AgentFinding` under `(run_id, step_name)` so
-# a retried run with the same `run_id` skips the underlying work.
+# decorator caches the step's result under `(run_id, step_name)` so a
+# retried run with the same `run_id` skips the underlying work.
 #
-# Why thin wrappers vs. decorating each agent at definition: keeping the
-# specialist functions un-decorated lets other callers (tests, ad-hoc
+# The eight analysts' wrappers live on the roster (`roster.checkpointed_runner`)
+# and are built from `AgentSpec.checkpoint`; only the four steps whose
+# return types differ from `AgentFinding` stay hand-written here. Their
+# step names are the `roster.GATHER_STEPS` / `roster.CRITIC_STEP` literals —
+# frozen, because resume and the status endpoint key on them.
+#
+# Why thin wrappers vs. decorating each function at definition: keeping the
+# underlying functions un-decorated lets other callers (tests, ad-hoc
 # scripts, future workers) use them without checkpoint side effects. The
 # checkpoint behavior is deliberately scoped to the graph entry path.
 
-from ..services.checkpoint_store import checkpointed
-
 
 @checkpointed("graph.fundamentals", return_type=None)
-def _checkpointed_fundamentals(ticker: str, *, force_refresh: bool):
+def _checkpointed_fundamentals(ticker: str, *, force_refresh: bool) -> dict[str, Any]:
     return get_full_financials(ticker, force_refresh=force_refresh)
 
 
 @checkpointed("graph.dcf", return_type=DCFResult)
-def _checkpointed_dcf(ticker: str, *, force_refresh: bool):
+def _checkpointed_dcf(ticker: str, *, force_refresh: bool) -> DCFResult | None:
     return build_dcf(ticker, force_refresh=force_refresh)
 
 
 @checkpointed("graph.comps", return_type=CompsResult)
-def _checkpointed_comps(ticker: str, *, force_refresh: bool):
+def _checkpointed_comps(ticker: str, *, force_refresh: bool) -> CompsResult | None:
     return build_comps(ticker, force_refresh=force_refresh)
 
 
-@checkpointed("graph.sector_finding", return_type=AgentFinding)
-def _checkpointed_sector(profile: Dict, ratios: Dict) -> AgentFinding:
-    return run_sector_agent(profile, ratios)
-
-
-@checkpointed("graph.earnings_finding", return_type=AgentFinding)
-def _checkpointed_earnings(profile, transcript, earnings) -> AgentFinding:
-    return run_earnings_agent(profile, transcript, earnings)
-
-
-@checkpointed("graph.filing_finding", return_type=AgentFinding)
-def _checkpointed_filing(profile, filings) -> AgentFinding:
-    return run_filing_agent(profile, filings)
-
-
-@checkpointed("graph.valuation_finding", return_type=AgentFinding)
-def _checkpointed_valuation(profile, ratios, dcf) -> AgentFinding:
-    return run_valuation_agent(profile, ratios, dcf)
-
-
-@checkpointed("graph.comps_finding", return_type=AgentFinding)
-def _checkpointed_comps_agent(profile, comps) -> AgentFinding:
-    return run_comps_agent(profile, comps)
-
-
-@checkpointed("graph.macro_finding", return_type=AgentFinding)
-def _checkpointed_macro(profile, scenario: str) -> AgentFinding:
-    return run_macro_agent(profile, scenario)
-
-
-@checkpointed("graph.risk_finding", return_type=AgentFinding)
-def _checkpointed_risk(profile, ratios, dcf_summary) -> AgentFinding:
-    return run_risk_agent(profile, ratios, dcf_summary)
-
-
-@checkpointed("graph.technical_finding", return_type=AgentFinding)
-def _checkpointed_technical(profile) -> AgentFinding:
-    return run_technical_agent(profile)
-
-
 @checkpointed("graph.critic", return_type=CriticReview)
-def _checkpointed_critic(memo_dict: Dict) -> CriticReview:
+def _checkpointed_critic(memo_dict: dict[str, Any]) -> CriticReview | None:
+    # None is a legitimate outcome (ENABLE_AGENT_CRITIC=false); `safe_critic`
+    # passes it through rather than treating it as a failure.
     return run_critic(memo_dict)
 
 
@@ -1164,8 +1190,8 @@ def _run_reflection_step(memo: StockMemoOut):
 
 def run_stock_memo(
     ticker: str, *, scenario: str = "soft_landing", force_refresh: bool = False,
-    run_id: Optional[str] = None,
-    as_of_date: Optional[Any] = None,
+    run_id: str | None = None,
+    as_of_date: Any | None = None,
 ) -> StockMemoOut:
     """Generate a stock memo. When `force_refresh=True`, every cached snapshot
     in the dependency tree is bypassed; otherwise, fundamentals/sector/comps/DCF
@@ -1182,7 +1208,8 @@ def run_stock_memo(
     service so backtests truly see only past data.
     """
     import uuid
-    from datetime import date as _date_cls, datetime as _dt_cls
+    from datetime import date as _date_cls
+    from datetime import datetime as _dt_cls
     if run_id is None:
         run_id = str(uuid.uuid4())
     # Coerce datetime → date if a caller hands us a datetime.
@@ -1191,22 +1218,31 @@ def run_stock_memo(
     if as_of_date is not None and as_of_date > _date_cls.today():
         raise ValueError(f"as_of_date {as_of_date} is in the future")
 
-    from .llm import llm_call_context
-    from ..services.data_service import as_of_context
     from ..services import memory_probe
+    from ..services.data_service import as_of_context
+    from .llm import llm_call_context
     # RSS breadcrumbs around the most memory-hungry operation in the
     # process. A Render OOM-kill is a SIGKILL, so Python never gets to log
     # anything on the way down — these two lines are what turns the next
     # one from "the instance restarted" into "it restarted during TICKER's
     # memo, having already grown N MB".
     memory_probe.log_rss("memo_start", ticker=ticker, run_id=run_id)
+    # The degradation log is created here and *activated* for the whole run
+    # (RP-001): service code and helpers with no handle on it — the thesis
+    # builder, PM synthesis, the PM DCF adjuster, the valuation service —
+    # report soft failures through `safe_runner.note_soft`, which writes to
+    # whichever log is active in this context. Activating in the outermost
+    # `with` keeps the guarantee identical to the other two contexts: every
+    # line of the memo run is covered, and the token is reset in `finally`
+    # so the regen worker's next memo in the same thread starts empty.
+    degradation = DegradationLog()
     try:
         with as_of_context(as_of_date), llm_call_context(
             agent_name="run_stock_memo", run_id=run_id,
-        ):
+        ), degradation.activate():
             return _run_stock_memo_inner(
                 ticker, scenario=scenario, force_refresh=force_refresh,
-                run_id=run_id, as_of_date=as_of_date,
+                run_id=run_id, as_of_date=as_of_date, degradation=degradation,
             )
     finally:
         memory_probe.log_rss("memo_end", ticker=ticker, run_id=run_id)
@@ -1214,16 +1250,85 @@ def run_stock_memo(
 
 def _run_stock_memo_inner(
     ticker: str, *, scenario: str, force_refresh: bool, run_id: str,
-    as_of_date: Optional[Any] = None,
+    as_of_date: Any | None = None,
+    degradation: DegradationLog | None = None,
 ) -> StockMemoOut:
-    """Indirection so `run_stock_memo` can wrap the entire body in a single
-    `llm_call_context` + `as_of_context`. Splitting keeps the public signature clean.
+    """The memo pipeline as a sequence of stage calls (RP-002).
 
-    Wave 8A: each major step (fundamentals, dcf, comps, every specialist,
-    critic) runs through a `@checkpointed` wrapper. When `run_id` is reused
-    across calls (e.g., a retry after a transient failure), each completed
-    step's result is loaded from `MemoRunCheckpoint` instead of re-fired.
-    First-time runs see no behavior change; the cache writes are cheap."""
+    Indirection so `run_stock_memo` can wrap the entire body in a single
+    `llm_call_context` + `as_of_context` + `DegradationLog.activate()`;
+    every stage below runs under that one activated log.
+
+    Stage boundaries and the objects that cross them are the dataclasses
+    in `memo_context` — read its mutation contract: `inputs.profile` and
+    `analysts.findings` are shared and edited in place by stages 2-5, and
+    the memo holds the same finding objects. The verdict stage is the one
+    pure step: it returns a `VerdictOutcome` that is applied here, after
+    review, because it reads the post-blend rating.
+
+    Wave 8A: each resumable step (fundamentals, dcf, comps, every
+    specialist, critic) runs through a `@checkpointed` wrapper. When
+    `run_id` is reused across calls (a retry after a transient failure),
+    each completed step's result is loaded from `MemoRunCheckpoint`
+    instead of re-fired. First-time runs see no behavior change.
+    """
+    # Everything after fundamentals goes through the safe-runner: a failure
+    # in any single specialist becomes a typed fallback rather than killing
+    # the memo. Failures accumulate on `degradation` and surface on the
+    # memo's `degraded_agents` / `degradation_events`. `run_stock_memo` — the
+    # only production caller — passes the log it activated; a direct caller
+    # without one gets a private log, and `note_soft` is then a no-op.
+    if degradation is None:
+        degradation = DegradationLog()
+    inputs = _gather_inputs(
+        ticker, scenario=scenario, force_refresh=force_refresh, run_id=run_id,
+        as_of_date=as_of_date, degradation=degradation,
+    )
+    analysts = _run_analyst_round(inputs)
+    dcf_stage = _adjust_dcf(inputs, analysts)
+    memo = _compose_memo(inputs, analysts, dcf_stage)
+    memo = _review_memo(memo, inputs, analysts)
+    verdict = _build_verdict(
+        memo, comps=inputs.comps, dcf=dcf_stage.dcf, profile=inputs.profile,
+        findings=analysts.findings, ticker=ticker,
+    )
+    verdict.apply(memo, degradation)
+    _attach_scorecard_disagreement(memo)
+    return _persist(memo, inputs)
+
+
+def _attach_scorecard_disagreement(memo: StockMemoOut) -> None:
+    """Phase 6 — fill `memo.scorecard.disagreement` from the FINAL memo.
+
+    Runs after the verdict is applied because the detector reads the
+    post-blend rating and the reconciled valuation verdict; a flag computed
+    off the compose-stage draft could name a rating the reader never sees.
+    A finding, not an outage: no degradation entry, and on a detector crash
+    the summary is kept without a flag (the memo is still whole).
+    """
+    summary = memo.scorecard
+    if summary is None:
+        return
+
+    def _with_flag() -> ScorecardSummary:
+        return scorecard_context.summarize(summary, memo) or summary
+
+    memo.scorecard = safe_call(_with_flag, fallback=summary, name="Scorecard Summary", log_to=None)
+
+
+# ---------------------------------------------------------------------------
+# Stage 1 — gather
+# ---------------------------------------------------------------------------
+
+def _gather_inputs(
+    ticker: str, *, scenario: str, force_refresh: bool, run_id: str,
+    as_of_date: Any | None, degradation: DegradationLog,
+) -> MemoInputs:
+    """Fundamentals, transcript, filings, DCF and comps for one ticker.
+
+    Owns the `graph.fundamentals` / `graph.dcf` / `graph.comps` checkpoints.
+    Raises `ValueError` on an unknown ticker; everything else degrades.
+    """
     # Fundamentals MUST succeed — without a profile we can't even identify
     # the company, so this is an unrecoverable error and we re-raise.
     fin = _checkpointed_fundamentals(ticker, force_refresh=force_refresh)
@@ -1232,16 +1337,16 @@ def _run_stock_memo_inner(
         raise ValueError(f"Unknown ticker: {ticker}")
     ratios = fin.get("ratios", {}) or {}
 
-    # Everything below this point goes through the safe-runner: a failure in
-    # any single specialist becomes a typed fallback rather than killing the
-    # memo. Failures are accumulated into `degradation` and surfaced on the
-    # memo's `degraded_agents` field.
-    degradation = DegradationLog()
+    # Failover events are context-local and the regen worker runs memos
+    # back to back in one long-lived thread, so whatever the previous run
+    # left undrained would otherwise be pinned on this memo. Discard it.
+    llm.consume_failover_events()
 
     transcript = safe_call(latest_transcript, ticker, fallback=None,
                            name="Transcript Service", log_to=degradation)
-    filings = safe_call(get_filings, ticker, fallback=[],
-                        name="Filings Service", log_to=degradation)
+    filings: list[dict[str, Any]] = safe_call(
+        get_filings, ticker, fallback=[], name="Filings Service", log_to=degradation,
+    )
     earnings = fin.get("earnings", {})
 
     dcf = safe_call(_checkpointed_dcf, ticker, force_refresh=force_refresh, fallback=None,
@@ -1249,144 +1354,124 @@ def _run_stock_memo_inner(
     comps = safe_call(_checkpointed_comps, ticker, force_refresh=force_refresh, fallback=None,
                       name="Comps Engine", log_to=degradation)
 
+    # Phase 6 — the scorecard read, point-in-time at `as_of_date`. A crash
+    # here is a hard "Fundamental Scorecard" degradation (the read failed);
+    # a clean None is the soft one, recorded in the compose stage where the
+    # memo's degradation fields are assembled. With the kill switch off
+    # `load_for_memo` returns None without touching the DB and nothing
+    # downstream records anything — the memo is what it was before.
+    scorecard = None
+    seeds: list[CritiqueQuestion] = []
+    if settings.enable_scorecard:
+        scorecard = safe_call(
+            scorecard_context.load_for_memo, ticker, as_of_date, fallback=None,
+            name=scorecard_context.AGENT_NAME, log_to=degradation,
+        )
+        # Review seeds are only meaningful where the dialog will run (live
+        # memo, deep research on) — the same gate `_run_analyst_round` uses.
+        if settings.enable_deep_research and as_of_date is None:
+            seeds = safe_call(
+                scorecard_context.pending_seed_questions, ticker, fallback=[],
+                name="Scorecard Review Seeds", log_to=None,
+            )
+
+    # FEAT-003 — the company's industry-group classification, read once
+    # (one SELECT, or the on-demand hook for a symbol no loop has seen).
+    # Only with routing on: off, nothing downstream reads it.
+    industry_group = None
+    if settings.enable_industry_analyst_routing:
+        from .industry_analysts import AGENT_NAME as _IG_NAME
+        from .industry_analysts import lookup_classification
+        industry_group = safe_call(lookup_classification, ticker, fallback=None,
+                                   name=_IG_NAME, log_to=degradation)
+
+    # `profile` is shared with every later stage and mutated in place — see
+    # the mutation contract in `memo_context`.
+    return MemoInputs(
+        ticker=ticker, run_id=run_id, scenario=scenario, force_refresh=force_refresh,
+        as_of_date=as_of_date, fin=fin, profile=profile, ratios=ratios,
+        earnings=earnings, transcript=transcript, filings=filings,
+        dcf=dcf, comps=comps, degradation=degradation,
+        scorecard=scorecard, scorecard_seeds=seeds, industry_group=industry_group,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 — analyst round (fan-out, deep research, long-form)
+# ---------------------------------------------------------------------------
+
+def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
+    """Round 0 fan-out over the roster, the PM deep-research dialog, the
+    deterministic-fallback promotion and the long-form pass.
+
+    Owns the `graph.<key>_finding` checkpoints. The returned `findings`
+    dict is in roster order and is the object every later stage mutates.
+    """
+    degradation = inputs.degradation
+    profile = inputs.profile
+    run_id = inputs.run_id
+
     # Wave 10 — PM intake step. Lets the PM deprioritize up to 3
     # specialists for this memo (e.g., skip technicals on a regulated
     # bank, skip filings re-pass when nothing material has changed).
-    # Default = run all 8. Decision is logged on the memo for audit.
+    # Default = run the whole applicable roster. Decision is logged on
+    # the memo for audit.
     from .intake import run_intake, stub_finding
-    intake = run_intake(profile)
+    specs = roster.applicable(inputs)  # each spec's `applies_to`, once per run
+    # The PM chooses among THIS run's roster: a spec whose predicate said no
+    # is not on the run, so offering it would waste one of the three skips
+    # and put an absent agent in the memo's intake audit line.
+    intake = run_intake(profile, specialists=[spec.key for spec in specs])
 
-    # Each specialist runs with its own llm_call_context so any LLM calls it
-    # makes get tagged with the right agent_name in LLMCallLog (Wave 1A).
+    # Round 0 fan-out, in roster order. Each specialist runs with its own
+    # llm_call_context so any LLM calls it makes get tagged with the right
+    # agent_name in LLMCallLog (Wave 1A). (Technicals, by design, do NOT
+    # influence the rating — positioning context only.)
     from .llm import llm_call_context
-    if intake.runs("sector"):
-        with llm_call_context(agent_name="Sector Analyst", run_id=run_id):
-            sector_finding = safe_finding("Sector Analyst", _checkpointed_sector,
-                                          profile, ratios, log_to=degradation)
-    else:
-        sector_finding = AgentFinding(**stub_finding("sector", intake.rationale))
-    if intake.runs("earnings"):
-        with llm_call_context(agent_name="Earnings Analyst", run_id=run_id):
-            earnings_finding = safe_finding("Earnings Analyst", _checkpointed_earnings,
-                                            profile, transcript, earnings, log_to=degradation)
-    else:
-        earnings_finding = AgentFinding(**stub_finding("earnings", intake.rationale))
-    if intake.runs("filing"):
-        with llm_call_context(agent_name="Filing Analyst", run_id=run_id):
-            filing_finding = safe_finding("Filing Analyst", _checkpointed_filing,
-                                          profile, filings, log_to=degradation)
-    else:
-        filing_finding = AgentFinding(**stub_finding("filing", intake.rationale))
-    if intake.runs("valuation"):
-        with llm_call_context(agent_name="Valuation Analyst", run_id=run_id):
-            valuation_finding = safe_finding("Valuation Analyst", _checkpointed_valuation,
-                                             profile, ratios, dcf, log_to=degradation)
-    else:
-        valuation_finding = AgentFinding(**stub_finding("valuation", intake.rationale))
-    if intake.runs("comps"):
-        with llm_call_context(agent_name="Comps Analyst", run_id=run_id):
-            comps_finding = safe_finding("Comps Analyst", _checkpointed_comps_agent,
-                                         profile, comps, log_to=degradation)
-    else:
-        comps_finding = AgentFinding(**stub_finding("comps", intake.rationale))
-    if intake.runs("macro"):
-        with llm_call_context(agent_name="Macro Analyst", run_id=run_id):
-            macro_finding = safe_finding("Macro Analyst", _checkpointed_macro,
-                                         profile, scenario, log_to=degradation)
-    else:
-        macro_finding = AgentFinding(**stub_finding("macro", intake.rationale))
-    if intake.runs("risk"):
-        with llm_call_context(agent_name="Risk Analyst", run_id=run_id):
-            risk_finding = safe_finding(
-                "Risk Analyst", _checkpointed_risk,
-                profile, ratios, (dcf.summary if dcf else None), log_to=degradation,
-            )
-    else:
-        risk_finding = AgentFinding(**stub_finding("risk", intake.rationale))
-    # Wave 3B — Technical Analyst. By design technicals do NOT influence
-    # the rating; they're positioning context only. The agent gets its own
-    # llm_call_context so the LLM narrative pass is attributed correctly.
-    if intake.runs("technical"):
-        with llm_call_context(agent_name="Technical Analyst", run_id=run_id):
-            technical_finding = safe_finding(
-                "Technical Analyst", _checkpointed_technical, profile,
+    findings: dict[str, AgentFinding] = {}
+    for spec in specs:
+        if not intake.runs(spec.key):
+            findings[spec.key] = AgentFinding(**stub_finding(spec.key, intake.rationale))
+            continue
+        with llm_call_context(agent_name=spec.display_name, run_id=run_id):
+            findings[spec.key] = safe_finding(
+                spec.display_name, roster.checkpointed_runner(spec), inputs,
                 log_to=degradation,
             )
-    else:
-        technical_finding = AgentFinding(**stub_finding("technical", intake.rationale))
-
-    findings = {
-        "sector": sector_finding,
-        "earnings": earnings_finding,
-        "filing": filing_finding,
-        "valuation": valuation_finding,
-        "comps": comps_finding,
-        "macro": macro_finding,
-        "risk": risk_finding,
-        "technical": technical_finding,
-    }
 
     # Wave 9 — PM↔specialist deep-research dialog. Round 0 is the fan-out
     # above; rounds 1+ critique + re-fire targeted specialists with the
     # PM's question prepended to their prompt. Skipped on backtests
     # (`as_of_date` set) so we don't burn LLM budget retroactively.
-    round_findings: List[Any] = []
-    if settings.enable_deep_research and as_of_date is None:
+    round_findings: list[RoundFindings] = []
+    if settings.enable_deep_research and inputs.as_of_date is None:
         from .deep_research import run_dialog_loop
 
-        def _refire_sector(q: str) -> AgentFinding:
-            return run_sector_agent(profile, ratios, prior_round_critique=q)
+        # Same runner as round 0, with the PM's question threaded through.
+        def _refire_for(spec: roster.AgentSpec) -> Callable[[str], AgentFinding]:
+            return lambda q: spec.run(inputs, q)
 
-        def _refire_earnings(q: str) -> AgentFinding:
-            return run_earnings_agent(
-                profile, transcript, earnings, prior_round_critique=q,
-            )
-
-        def _refire_filing(q: str) -> AgentFinding:
-            return run_filing_agent(profile, filings, prior_round_critique=q)
-
-        def _refire_valuation(q: str) -> AgentFinding:
-            return run_valuation_agent(profile, ratios, dcf, prior_round_critique=q)
-
-        def _refire_comps(q: str) -> AgentFinding:
-            return run_comps_agent(profile, comps, prior_round_critique=q)
-
-        def _refire_macro(q: str) -> AgentFinding:
-            return run_macro_agent(profile, scenario, prior_round_critique=q)
-
-        def _refire_risk(q: str) -> AgentFinding:
-            return run_risk_agent(
-                profile, ratios, (dcf.summary if dcf else None),
-                prior_round_critique=q,
-            )
-
-        def _refire_technical(q: str) -> AgentFinding:
-            return run_technical_agent(profile, prior_round_critique=q)
-
-        re_fire = {
-            "sector": _refire_sector,
-            "earnings": _refire_earnings,
-            "filing": _refire_filing,
-            "valuation": _refire_valuation,
-            "comps": _refire_comps,
-            "macro": _refire_macro,
-            "risk": _refire_risk,
-            "technical": _refire_technical,
-        }
+        re_fire = {spec.key: _refire_for(spec) for spec in specs}
 
         # Loop reads `findings` keyed by short agent name — same as the
         # `re_fire` map. Returns the latest-per-agent findings dict + the
         # full round-by-round audit trail for persistence.
-        def _run_loop():
+        # Phase 6 — scorecard review seeds force a round-1 re-fire (see
+        # `run_dialog_loop`); None keeps the loop's original behavior.
+        seeds = list(inputs.scorecard_seeds) or None
+
+        def _run_loop() -> tuple[dict[str, AgentFinding], list[RoundFindings]]:
             return run_dialog_loop(
                 run_id=run_id,
                 initial_findings=findings,
                 re_fire=re_fire,
+                seed_questions=seeds,
             )
 
+        no_rounds: list[RoundFindings] = []
         loop_out = safe_call(
             _run_loop,
-            fallback=(findings, []),
+            fallback=(findings, no_rounds),
             name="Deep Research Loop", log_to=degradation,
         )
         if loop_out:
@@ -1396,64 +1481,80 @@ def _run_stock_memo_inner(
             # downstream synthesis (PM, critic) sees the freshest read.
             for name, finding in current.items():
                 findings[name] = finding
-            sector_finding = findings["sector"]
-            earnings_finding = findings["earnings"]
-            filing_finding = findings["filing"]
-            valuation_finding = findings["valuation"]
-            comps_finding = findings["comps"]
-            macro_finding = findings["macro"]
-            risk_finding = findings["risk"]
-            technical_finding = findings["technical"]
+            # The seeds were asked only if round 1 actually re-fired (the
+            # loop's fallback above returns no rounds); the persist stage
+            # closes the queued review rows on that flag.
+            if seeds and any(r.round == 1 and not r.early_exit for r in rounds):
+                inputs.scorecard_seeds_consumed = True
 
     # B3 / Theme 2 — promote silent deterministic fallbacks into the
     # degradation log. An agent whose LLM call returned nothing usable
     # ships boilerplate while presenting as a real analyst view; that is
     # a degradation event the UI must surface, same as a crash. Only when
     # an LLM was supposed to run — in deterministic mode (no keys) the
-    # fallback IS the expected path, not a degradation.
+    # fallback IS the expected path, not a degradation — and only for an
+    # analyst an LLM was expected of: comps and risk are deterministic at
+    # round 0 by design (`uses_llm_round0=False`), so their flag counts
+    # only once the PM re-fired them in a deep-research round.
     if settings.has_llm:
-        for _f in findings.values():
+        refired = {
+            key for r in round_findings if r.round > 0 for key in r.findings
+        }
+        for spec in specs:
+            _f = findings[spec.key]
+            if not (spec.uses_llm_round0 or spec.key in refired):
+                continue
             if isinstance(_f.data, dict) and _f.data.get("deterministic_fallback"):
                 degradation.record_soft(_f.agent, str(_f.data["deterministic_fallback"]))
+
+    # A specialist that ran on the backup vendor after a failover produced
+    # a real view, but not the one the routing config asked for — surface
+    # it on the same banner. Drained here after the round and again just
+    # before persistence, because PM synthesis, the critic, reflection and
+    # the long-form/DCF enrichment all make LLM calls after this point.
+    _absorb_failover_events(degradation)
 
     # Wave 3C: drill-down long-form reports. The deterministic build is
     # cheap and always populates the field; LLM enrichment runs only when
     # ENABLE_LONG_FORM_REPORTS=true. safe_call wraps so a failure never
-    # blocks the memo.
+    # blocks the memo. Mutates each finding's `long_form_report` in place.
     from .long_form import attach_long_form
-    _t = profile.get("ticker", ticker)
-    safe_call(attach_long_form, sector_finding, ticker=_t, agent_name="Sector Analyst",
-              profile=profile, fallback=None, name="Long-form (Sector)", log_to=degradation)
-    safe_call(attach_long_form, earnings_finding, ticker=_t, agent_name="Earnings Analyst",
-              profile=profile, fallback=None, name="Long-form (Earnings)", log_to=degradation)
-    safe_call(attach_long_form, filing_finding, ticker=_t, agent_name="Filing Analyst",
-              profile=profile, fallback=None, name="Long-form (Filing)", log_to=degradation)
-    safe_call(attach_long_form, valuation_finding, ticker=_t, agent_name="Valuation Analyst",
-              profile=profile, fallback=None, name="Long-form (Valuation)", log_to=degradation)
-    safe_call(attach_long_form, comps_finding, ticker=_t, agent_name="Comps Analyst",
-              profile=profile, fallback=None, name="Long-form (Comps)", log_to=degradation)
-    safe_call(attach_long_form, macro_finding, ticker=_t, agent_name="Macro Analyst",
-              profile=profile, fallback=None, name="Long-form (Macro)", log_to=degradation)
-    safe_call(attach_long_form, risk_finding, ticker=_t, agent_name="Risk Analyst",
-              profile=profile, fallback=None, name="Long-form (Risk)", log_to=degradation)
-    safe_call(attach_long_form, technical_finding, ticker=_t, agent_name="Technical Analyst",
-              profile=profile, fallback=None, name="Long-form (Technical)", log_to=degradation)
+    _t = profile.get("ticker", inputs.ticker)
+    for spec in specs:
+        safe_call(attach_long_form, findings[spec.key], ticker=_t,
+                  agent_name=spec.display_name, profile=profile, fallback=None,
+                  name=spec.long_form_name, log_to=degradation)
 
-    # Wave 10 — PM-driven DCF assumption adjustment. The PM has the team's
-    # full read at this point (round 0 + Wave 9 dialog rounds). Now is when
-    # the model should reflect the team's view, not just consensus defaults.
-    # Skipped on backtests so retroactive runs use period-appropriate DCF.
+    # From here on no entry of `findings` is replaced, only mutated in place.
+    return AnalystRound(findings=findings, intake=intake, round_findings=round_findings)
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — PM DCF adjustment
+# ---------------------------------------------------------------------------
+
+def _adjust_dcf(inputs: MemoInputs, analysts: AnalystRound) -> DCFStage:
+    """Wave 10 — PM-driven DCF assumption adjustment.
+
+    The PM has the team's full read at this point (round 0 + Wave 9 dialog
+    rounds). Now is when the model should reflect the team's view, not
+    just consensus defaults. Skipped on backtests so retroactive runs use
+    period-appropriate DCF, and without an LLM (nothing to adjust with).
+    Mutates `findings["valuation"]` in place when the DCF changed (B2).
+    """
+    dcf = inputs.dcf
     initial_dcf = dcf
-    pm_dcf_adjustments: List[Dict[str, Any]] = []
+    pm_dcf_adjustments: list[dict[str, Any]] = []
     pm_dcf_headline = ""
-    if dcf is not None and as_of_date is None and settings.has_llm:
+    if dcf is not None and inputs.as_of_date is None and settings.has_llm:
         from .dcf_pm_adjuster import adjust_dcf_for_pm_view
+        no_adjustment: tuple[DCFResult | None, list[dict[str, Any]], str] = (None, [], "")
         adj_out = safe_call(
             adjust_dcf_for_pm_view,
-            ticker=_t, initial_dcf=dcf,
-            findings=findings, run_id=run_id,
-            fallback=(None, [], ""),
-            name="PM DCF Adjuster", log_to=degradation,
+            ticker=inputs.profile.get("ticker", inputs.ticker), initial_dcf=dcf,
+            findings=analysts.findings, run_id=inputs.run_id,
+            fallback=no_adjustment,
+            name="PM DCF Adjuster", log_to=inputs.degradation,
         )
         if adj_out:
             adjusted_dcf, pm_dcf_adjustments, pm_dcf_headline = adj_out
@@ -1464,7 +1565,54 @@ def _run_stock_memo_inner(
                 # B2 — the valuation agent already ran on the pre-adjustment
                 # DCF and baked those numbers into its prose. Rewrite the
                 # stale references so ONE DCF appears everywhere in the memo.
-                _refresh_dcf_references(valuation_finding, initial_dcf, dcf)
+                _refresh_dcf_references(analysts.findings["valuation"], initial_dcf, dcf)
+    return DCFStage(
+        dcf=dcf, initial_dcf=initial_dcf,
+        pm_adjustments=pm_dcf_adjustments, pm_headline=pm_dcf_headline,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 — compose
+# ---------------------------------------------------------------------------
+
+def _summarize_dcf(d: DCFResult | None) -> dict[str, Any]:
+    if d is None:
+        return {}
+    return dict(
+        current_price=d.current_price,
+        base_implied_price=d.base.implied_share_price,
+        bull_implied_price=d.bull.implied_share_price,
+        bear_implied_price=d.bear.implied_share_price,
+        base_upside=d.base.upside_pct,
+        bull_upside=d.bull.upside_pct,
+        bear_upside=d.bear.upside_pct,
+        wacc=d.base.assumptions.wacc,
+        terminal_growth=d.base.assumptions.terminal_growth,
+        # Any scenario whose Gordon denominator hit the floor taints
+        # the three prices the memo prints side by side, so the UI
+        # badge keys off "any", not just the base case.
+        tv_clamped=any(s.tv_clamped for s in (d.base, d.bull, d.bear)),
+        summary=d.summary,
+    )
+
+
+def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStage) -> StockMemoOut:
+    """Bull/bear/catalysts/risks, PM synthesis, enrichments, then the memo.
+
+    Mutates `inputs.profile["risks"]` when the profile carries none (B4) —
+    the verdict stage's thesis builder reads it. The memo holds the same
+    finding objects as `analysts.findings`.
+    """
+    degradation = inputs.degradation
+    profile = inputs.profile
+    findings = analysts.findings
+    ticker = inputs.ticker
+    dcf = dcf_stage.dcf
+    sector_finding = findings["sector"]
+    earnings_finding = findings["earnings"]
+    valuation_finding = findings["valuation"]
+    risk_finding = findings["risk"]
 
     bull = safe_call(_bull_case, profile, valuation_finding, dcf, sector_finding, findings,
                      fallback=BullBearCase(headline="Bull case unavailable.", key_points=[]),
@@ -1472,11 +1620,13 @@ def _run_stock_memo_inner(
     bear = safe_call(_bear_case, profile, dcf, sector_finding, findings,
                      fallback=BullBearCase(headline="Bear case unavailable.", key_points=[]),
                      name="Bear Case Builder", log_to=degradation)
-    catalysts = safe_call(_catalysts, profile, transcript, findings, earnings,
-                          fallback=[],
-                          name="Catalyst Builder", log_to=degradation)
-    risks = safe_call(derive_risk_items, profile, fallback=[],
-                      name="Risk Item Builder", log_to=degradation)
+    catalysts: list[CatalystItem] = safe_call(
+        _catalysts, profile, inputs.transcript, findings, inputs.earnings,
+        fallback=[], name="Catalyst Builder", log_to=degradation,
+    )
+    risks: list[RiskItem] = safe_call(
+        derive_risk_items, profile, fallback=[], name="Risk Item Builder", log_to=degradation,
+    )
     # B4 — live profiles carry no `risks` field, so the profile-driven
     # extraction routinely returns nothing. The bear case is built from
     # real bear-polarity findings; backfill from it so the memo never
@@ -1490,34 +1640,36 @@ def _run_stock_memo_inner(
             profile["risks"] = [r.detail for r in risks]
     thesis_breakers = [r for r in risks if r.severity == "high"][:3]
 
-    with llm_call_context(agent_name="PM Synthesis", run_id=run_id, route="strong"):
-        synth = safe_call(
-            _pm_synthesis, profile, findings, dcf,
-            fallback={
-                "final_pm_view": "PM synthesis unavailable; relying on specialist findings only.",
-                "one_sentence_thesis": f"Research draft for {profile.get('ticker', ticker)}.",
-                "rating_label": "Neutral",
-                "confidence_score": 50,
-            },
-            name="PM Synthesis", log_to=degradation,
+    from .llm import llm_call_context
+    synth_fallback: dict[str, Any] = {
+        "final_pm_view": "PM synthesis unavailable; relying on specialist findings only.",
+        "one_sentence_thesis": f"Research draft for {profile.get('ticker', ticker)}.",
+        "rating_label": "Neutral",
+        "confidence_score": 50,
+    }
+    with llm_call_context(agent_name="PM Synthesis", run_id=inputs.run_id, route="strong"):
+        synth: dict[str, Any] = safe_call(
+            _pm_synthesis, profile, findings, dcf, scorecard=inputs.scorecard,
+            fallback=synth_fallback, name="PM Synthesis", log_to=degradation,
         )
     rating = synth.get("rating_label", "Neutral")
     raw_confidence = float(synth.get("confidence_score", 60))
 
-    def _summarize_dcf(d: Optional[DCFResult]) -> Dict[str, Any]:
-        if d is None:
-            return {}
-        return dict(
-            current_price=d.current_price,
-            base_implied_price=d.base.implied_share_price,
-            bull_implied_price=d.bull.implied_share_price,
-            bear_implied_price=d.bear.implied_share_price,
-            base_upside=d.base.upside_pct,
-            bull_upside=d.bull.upside_pct,
-            bear_upside=d.bear.upside_pct,
-            wacc=d.base.assumptions.wacc,
-            terminal_growth=d.base.assumptions.terminal_growth,
-            summary=d.summary,
+    # Phase 6 — the scorecard summary the memo carries. No row on file is a
+    # SOFT degradation the reader must see (the section says n/a and why),
+    # recorded before the memo's degradation fields are assembled below;
+    # with the kill switch off nothing is recorded and the field stays
+    # None. `record_soft` dedupes against a hard entry from a failed read.
+    memo_scorecard = safe_call(
+        scorecard_context.for_memo, inputs.scorecard,
+        reconciliation=synth.get("scorecard_reconciliation"),
+        fallback=None, name="Scorecard Summary", log_to=None,
+    )
+    if memo_scorecard is None and settings.enable_scorecard:
+        degradation.record_soft(
+            scorecard_context.AGENT_NAME,
+            f"no scorecard row on file for {profile.get('ticker', ticker)}; section renders n/a",
+            kind="DataUnavailable",
         )
 
     dcf_summary = _summarize_dcf(dcf)
@@ -1525,19 +1677,20 @@ def _run_stock_memo_inner(
     # alongside the PM-adjusted version, when they differ. Empty when no
     # PM adjustments fired.
     initial_dcf_summary = (
-        _summarize_dcf(initial_dcf) if pm_dcf_adjustments and initial_dcf is not dcf else {}
+        _summarize_dcf(dcf_stage.initial_dcf)
+        if dcf_stage.pm_adjustments and dcf_stage.initial_dcf is not dcf else {}
     )
 
     sources = [
         f"profile:{profile.get('ticker')}",
         f"financials:{profile.get('ticker')}",
     ]
-    if transcript:
-        sources.append(f"transcript:{transcript.get('period', '')}")
-    for f in filings or []:
+    if inputs.transcript:
+        sources.append(f"transcript:{inputs.transcript.get('period', '')}")
+    for f in inputs.filings or []:
         sources.append(f"filing:{f.get('accession_number', f.get('type', ''))}")
-    if comps:
-        for p in comps.peers:
+    if inputs.comps:
+        for p in inputs.comps.peers:
             sources.append(f"peer:{p.ticker}")
     if dcf:
         sources.append("dcf:base")
@@ -1551,7 +1704,6 @@ def _run_stock_memo_inner(
     # Wave 10 — pull the mispricing thesis off the PM's structured
     # output (PM_SYNTHESIS_PROMPT now requires it). Empty fallback when
     # the deterministic path ran (no LLM) or the PM declined.
-    from ..schemas import MispricingThesis
     raw_misp = synth.get("mispricing_thesis") or {}
     if not isinstance(raw_misp, dict):
         raw_misp = {}
@@ -1566,7 +1718,7 @@ def _run_stock_memo_inner(
     # the live quote and show drift. Best-effort: null when the quote
     # chain misses (the live-overlay path then has nothing to compare
     # against, which is fine).
-    price_at_memo: Optional[float] = None
+    price_at_memo: float | None = None
     try:
         from ..services.market_data_service import get_current_price
         price_at_memo = get_current_price(profile.get("ticker", ticker))
@@ -1575,17 +1727,20 @@ def _run_stock_memo_inner(
 
     # Wave 10 — forward catalyst calendar (next 90d). Best-effort —
     # the table may be empty until the cron has run at least once.
-    forward_catalysts: List[Dict[str, Any]] = []
+    forward_catalysts: list[dict[str, Any]] = []
     try:
         from ..services.catalyst_service import get_upcoming
         forward_catalysts = get_upcoming(profile.get("ticker", ticker), days_ahead=90)
     except Exception as exc:  # pragma: no cover
-        log.debug("forward_catalysts fetch failed: %s", exc)
+        # (a) the catalyst tile is legitimately empty before the calendar
+        # cron has run, so an empty tile is not a memo degradation — but a
+        # *failed* read should be visible in the log, not a debug line.
+        log.warning("forward_catalysts fetch failed for %s: %s", ticker, type(exc).__name__)
 
     # Wave 10 — earnings quarter-over-quarter delta. Reads the
     # earnings agent's structured payload and walks back through the
     # memo history for prior-quarter context. None when no prior data.
-    earnings_qoq: Optional[AgentFinding] = None
+    earnings_qoq: AgentFinding | None = None
     try:
         from .earnings_qoq import run_earnings_qoq_delta
         earnings_struct = (earnings_finding.data or {}).get("structured") if earnings_finding else None
@@ -1593,13 +1748,20 @@ def _run_stock_memo_inner(
             profile.get("ticker", ticker), earnings_struct,
         )
     except Exception as exc:  # pragma: no cover
-        log.debug("earnings QoQ delta failed: %s", exc)
+        # (b) the QoQ tile silently vanishes from the memo — the reader
+        # cannot tell "no prior quarter" from "the delta crashed". Record
+        # it so the banner says which.
+        log.warning("earnings QoQ delta failed for %s: %s", ticker, type(exc).__name__)
+        degradation.record_soft(
+            "Earnings QoQ", f"quarter-over-quarter delta unavailable: {redact(exc)}",
+            kind=type(exc).__name__,
+        )
 
     # Wave 10 — per-agent influence on the rating. Computed from each
     # finding's confidence + tone; deterministic, no extra LLM cost.
     # Powers per-agent attribution dashboards + the PM's eventual
     # "discount this specialist" feedback loop.
-    agent_influence: Dict[str, float] = {}
+    agent_influence: dict[str, float] = {}
     try:
         from .influence import compute_influence
         agent_influence = compute_influence(findings)
@@ -1609,7 +1771,7 @@ def _run_stock_memo_inner(
     # Wave 10 — freeze the macro context that produced this rating.
     # Lets postmortem regime-conditional bucketing work even after
     # the macro broadcast cache rolls over.
-    macro_snapshot_at_memo: Dict[str, float] = {}
+    macro_snapshot_at_memo: dict[str, float] = {}
     macro_regime_at_memo: str = ""
     try:
         from ..cache import cache_get
@@ -1624,6 +1786,18 @@ def _run_stock_memo_inner(
                 }
     except Exception as exc:  # pragma: no cover
         log.debug("macro snapshot freeze failed: %s", exc)
+
+    # Each analyst lands on the memo field its spec names; an analyst with
+    # no dedicated field rides in `extra_agent_views` (none today — the risk
+    # read is deliberately unsurfaced, see `roster.NO_MEMO_VIEW`).
+    views: dict[str, Any] = {
+        spec.memo_field: findings[spec.key] for spec in roster.AGENTS
+        if spec.memo_field and spec.key in findings
+    }
+    extra_views: dict[str, AgentFinding] = {
+        spec.key: findings[spec.key] for spec in roster.AGENTS
+        if spec.memo_field is None and spec.key not in roster.NO_MEMO_VIEW and spec.key in findings
+    }
     memo = StockMemoOut(
         ticker=profile.get("ticker"),
         company_name=profile.get("company_name", ticker),
@@ -1636,13 +1810,8 @@ def _run_stock_memo_inner(
         price_at_memo=price_at_memo,
         price_at_memo_at=(datetime.utcnow() if price_at_memo is not None else None),
         business_summary=profile.get("business_description", ""),
-        sector_agent_view=sector_finding,
-        earnings_agent_view=earnings_finding,
-        filing_agent_view=filing_finding,
-        valuation_agent_view=valuation_finding,
-        comps_agent_view=comps_finding,
-        macro_sensitivity=macro_finding,
-        technical_agent_view=technical_finding,
+        **views,
+        extra_agent_views=extra_views,
         bull_case=bull,
         bear_case=bear,
         catalysts=catalysts,
@@ -1650,11 +1819,12 @@ def _run_stock_memo_inner(
         thesis_breakers=thesis_breakers,
         dcf_summary=dcf_summary,
         dcf_initial_summary=initial_dcf_summary,
-        dcf_pm_adjustments=pm_dcf_adjustments,
-        dcf_pm_adjustment_headline=pm_dcf_headline,
+        dcf_pm_adjustments=dcf_stage.pm_adjustments,
+        dcf_pm_adjustment_headline=dcf_stage.pm_headline,
         portfolio_fit=_portfolio_fit(profile, rating),
-        # Stub critic seeded here, then replaced by the real critic call below.
-        # safe_critic guarantees a typed CriticReview even if the stub raises.
+        # Stub critic seeded here, then replaced by the real critic in the
+        # review stage. safe_critic guarantees a typed CriticReview even if
+        # the stub raises.
         risk_committee_challenge=safe_critic(run_critic, {}, log_to=None) or CriticReview(
             overall_assessment="Pending critic review.",
         ),
@@ -1667,7 +1837,7 @@ def _run_stock_memo_inner(
             valuation_finding=valuation_finding,
             risk_finding=risk_finding,
             earnings_finding=earnings_finding,
-            profile=profile, ratios=ratios, earnings=earnings,
+            profile=profile, ratios=inputs.ratios, earnings=inputs.earnings,
         ),
         sources_used=sources,
         generated_at=datetime.utcnow(),
@@ -1677,19 +1847,22 @@ def _run_stock_memo_inner(
         # old check label genuinely live-data memos as "demo" (Theme 3).
         generation_mode="live" if settings.has_llm and not settings.use_demo_data_only else "demo",
         degraded_agents=degradation.degraded_agents(),
-        round_findings=round_findings,
+        degradation_events=degradation.events(),
+        round_findings=analysts.round_findings,
         forward_catalysts=forward_catalysts,
         earnings_qoq_delta=earnings_qoq,
-        intake_decision=intake.model_dump() if intake.skipped else {},
+        intake_decision=analysts.intake.model_dump() if analysts.intake.skipped else {},
         agent_influence=agent_influence,
         macro_snapshot_at_memo=macro_snapshot_at_memo,
         macro_regime_at_memo=macro_regime_at_memo,
+        scorecard=memo_scorecard,
     )
 
     # Wave 9 — surface deep-research counters on `memo.scores` so the
     # admin dashboard can chart how often the dialog converges vs. caps
     # out. Round 0 is the fan-out and is always present when the loop
     # ran; rounds 1+ are the PM critique passes.
+    round_findings = analysts.round_findings
     if round_findings and isinstance(memo.scores, dict):
         memo.scores = {
             **memo.scores,
@@ -1700,17 +1873,35 @@ def _run_stock_memo_inner(
                 len(r.pm_questions) for r in round_findings
             )),
         }
+    return memo
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 — review (critic, reflection, risk recs, rating blend)
+# ---------------------------------------------------------------------------
+
+def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound) -> StockMemoOut:
+    """Critic, long-term-memory reflection, risk recommendations, rating blend.
+
+    Owns the `graph.critic` checkpoint. Mutates `memo` in place (and
+    `findings["risk"].data["applied_recommendations"]`) and refreshes the
+    memo's degradation fields after the critic and after reflection —
+    both make LLM calls that can record failures.
+    """
+    degradation = inputs.degradation
+    risk_finding = analysts.findings["risk"]
 
     # Run critic on a draft of the memo (pass dict to avoid recursion).
     # safe_critic upgrades exceptions into a typed "critic unavailable" review
     # so a flaky Anthropic call doesn't kill the memo.
+    from .llm import llm_call_context
     draft_for_critic = memo.model_dump()
-    with llm_call_context(agent_name="Risk Committee", run_id=run_id, route="strong"):
+    with llm_call_context(agent_name="Risk Committee", run_id=inputs.run_id, route="strong"):
         critic = safe_critic(_checkpointed_critic, draft_for_critic, log_to=degradation)
     if critic:
         memo.risk_committee_challenge = critic
     # Refresh degraded_agents in case the critic recorded a failure.
-    memo.degraded_agents = degradation.degraded_agents()
+    _sync_degradation(memo, degradation)
 
     # Long-term memory: appends a structured entry to the company + sector
     # memory files iff a delta event fired this run (new earnings / new
@@ -1720,13 +1911,13 @@ def _run_stock_memo_inner(
     # Wave 1C: skip memory writes when running as a backtest (`as_of_date`
     # set). Backtests are diagnostic — we don't want the agent's notebook
     # polluted with retroactive entries.
-    if as_of_date is None:
+    if inputs.as_of_date is None:
         safe_call(
             _run_reflection_step, memo,
             fallback=([], []),
             name="Reflection (long-term memory)", log_to=degradation,
         )
-        memo.degraded_agents = degradation.degraded_agents()
+        _sync_degradation(memo, degradation)
 
     # Wave 8H — apply the risk analyst's structured recommendations.
     # Runs AFTER the memo body is assembled but BEFORE final_verdict +
@@ -1746,17 +1937,27 @@ def _run_stock_memo_inner(
     if isinstance(risk_finding.data, dict):
         risk_finding.data["applied_recommendations"] = applied_risk_recs
 
-    # Rating blend (Option A) — mix the PM LLM's directional call with
-    # the quant factor_pm_score. Weight is `LLM_RATING_WEIGHT` in
-    # config.env (default 0.4). At weight=0 this collapses to the
-    # prior Wave 8P behavior (factor score is dispositive); at
-    # weight=1 the LLM call wins outright. The LLM rating read here
-    # is post-risk-rec, so risk_agent downgrades flow into the blend.
+    _blend_rating(memo)
+    return memo
+
+
+def _blend_rating(memo: StockMemoOut) -> None:
+    """Rating blend (Option A) — mix the PM LLM's directional call with
+    the quant factor_pm_score. Weight is `LLM_RATING_WEIGHT` in
+    config.env (default 0.4). At weight=0 this collapses to the
+    prior Wave 8P behavior (factor score is dispositive); at
+    weight=1 the LLM call wins outright. The LLM rating read here
+    is post-risk-rec, so risk_agent downgrades flow into the blend.
+
+    Reads `rating_label` and `scores["factor_pm_score"]` and nothing else
+    — in particular not `memo.scorecard`. The Phase 6 scorecard informs
+    the memo (context, section, disagreement flag) but does not move the
+    rating in this phase; `test_memo_consistency` pins that.
+    """
     from ..schemas import rating_from_stock_score, score_from_rating_label
-    from ..config import settings as _settings
     factor_pm = (memo.scores or {}).get("factor_pm_score")
     if factor_pm is not None:
-        w = max(0.0, min(1.0, float(_settings.llm_rating_weight)))
+        w = max(0.0, min(1.0, float(settings.llm_rating_weight)))
         llm_score = score_from_rating_label(memo.rating_label)
         blended = w * llm_score + (1.0 - w) * float(factor_pm)
         memo.rating_label = rating_from_stock_score(blended)  # type: ignore[assignment]
@@ -1768,12 +1969,53 @@ def _run_stock_memo_inner(
                 "blended_pm_score": round(float(blended), 1),
             }
 
+
+# ---------------------------------------------------------------------------
+# Stage 6 — verdict (pure)
+# ---------------------------------------------------------------------------
+
+def _build_verdict(
+    memo: StockMemoOut, *,
+    comps: CompsResult | None, dcf: DCFResult | None,
+    profile: dict[str, Any], findings: dict[str, AgentFinding], ticker: str,
+) -> VerdictOutcome:
+    """Reconcile the memo's valuation call, thesis, mispricing card and
+    final verdict from the post-review memo.
+
+    Pure: reads `memo` / the inputs and writes nothing — the caller applies
+    the returned `VerdictOutcome` (`VerdictOutcome.apply`). Failures the
+    stage swallows on the reader's behalf ride on `outcome.degradations`
+    in the order they occurred, so a fixture memo can exercise every
+    branch without a pipeline run or an activated log. The one side
+    channel is `_build_thesis_from_findings`, whose consensus-gap clause
+    reports through `note_soft` on the run's active log (a no-op outside
+    a memo run).
+    """
+    notes: list[DegradationNote] = []
+
+    def _guarded(name: str, fn: Callable[..., T], *args: Any, fallback: T) -> T:
+        # `safe_call` without a log: the same warning + redacted record shape
+        # as `DegradationLog.record`, but collected on `notes` so the stage
+        # constructs no log of its own (the run has exactly one — the
+        # failover-attribution test pins that) and stays pure.
+        try:
+            return fn(*args)
+        except Exception as exc:
+            log.warning("Safe call %s failed: %s", name, type(exc).__name__)
+            log.debug("Safe call %s failed — traceback follows", name, exc_info=True)
+            notes.append(DegradationNote(name, type(exc).__name__, redact(exc), soft=False))
+            return fallback
+
+    def _note_soft(agent: str, reason: str, exc: BaseException) -> None:
+        notes.append(DegradationNote(agent, type(exc).__name__, reason[:300], soft=True))
+
     # Theme 1 — compute the memo's single reconciled valuation call now
     # that the rating blend is final. Everything downstream (thesis
     # consistency guard, mispricing fallback, UI valuation card) reads it.
-    memo.valuation_verdict = safe_call(
-        _build_valuation_verdict, memo, comps,
-        fallback=ValuationVerdict(), name="Valuation Verdict", log_to=None,
+    # An exception here used to ship an empty valuation card with no banner
+    # entry — a memo-visible silent failure (RP-001).
+    valuation_verdict = _guarded(
+        "Valuation Verdict", _build_valuation_verdict, memo, comps, fallback=ValuationVerdict(),
     )
 
     # Anti-pattern guard + verdict-consistency guard. The PM prompt forbids
@@ -1784,32 +2026,36 @@ def _run_stock_memo_inner(
     # a risk-rec downgrade may have moved the rating since, leaving the
     # verdict word contradicting the badge. Both cases trigger a rewrite
     # from the specialist findings using the final rating.
-    _is_anti_pattern = _looks_like_anti_pattern_thesis(memo.one_sentence_thesis)
-    _expected_word = _verdict_word(
-        memo.rating_label, dcf.base.upside_pct if dcf and dcf.base else None,
-    )
-    _stated_word = next(
+    thesis = memo.one_sentence_thesis
+    dcf_upside = dcf.base.upside_pct if dcf and dcf.base else None
+    is_anti_pattern = _looks_like_anti_pattern_thesis(thesis)
+    expected_word = _verdict_word(memo.rating_label, dcf_upside)
+    stated_word = next(
         (w for w in ("undervalued", "overvalued", "fairly priced")
-         if w in (memo.one_sentence_thesis or "").lower()),
+         if w in (thesis or "").lower()),
         None,
     )
-    if _is_anti_pattern or (_stated_word is not None and _stated_word != _expected_word):
+    rewrite_fired = is_anti_pattern or (stated_word is not None and stated_word != expected_word)
+    if rewrite_fired:
         # B7 — log every rewrite with the original thesis so the
         # false-positive rate of this guard is measurable in prod logs.
         log.info(
             "thesis rewrite fired for %s (anti_pattern=%s, stated=%r, "
             "expected=%r); original=%r",
-            ticker, _is_anti_pattern, _stated_word, _expected_word,
-            memo.one_sentence_thesis,
+            ticker, is_anti_pattern, stated_word, expected_word, thesis,
         )
         try:
             rewritten = _build_thesis_from_findings(
                 profile, findings, dcf, ticker, rating=memo.rating_label,
             )
             if rewritten and not _looks_like_anti_pattern_thesis(rewritten):
-                memo.one_sentence_thesis = rewritten
-        except Exception:  # pragma: no cover — never break the memo
-            pass
+                thesis = rewritten
+        except Exception as exc:  # pragma: no cover — never break the memo
+            # (b) the thesis the reader sees keeps the anti-pattern form or
+            # the wrong verdict word — exactly what this guard exists to
+            # prevent. Surface it instead of swallowing it.
+            log.warning("thesis rewrite failed for %s: %s", ticker, type(exc).__name__)
+            _note_soft("Thesis Builder", f"thesis rewrite failed: {redact(exc)}", exc)
 
     # Wave 8R — thesis augmentation. Surface where the model diverges
     # from analyst consensus (the actual *what is the market missing*
@@ -1823,43 +2069,41 @@ def _run_stock_memo_inner(
         # Only append when it agrees with the verdict word implied by the
         # headline rating — an "upside the market is missing" clause behind
         # an overvalued call would contradict the thesis.
-        _verdict = _verdict_word(memo.rating_label, dcf.base.upside_pct if dcf and dcf.base else None)
         if (
             delta_clause
-            and delta_clause not in memo.one_sentence_thesis
-            and _gap_clause_agrees(delta_clause, _verdict)
+            and delta_clause not in thesis
+            and _gap_clause_agrees(delta_clause, expected_word)
         ):
-            memo.one_sentence_thesis = (
-                memo.one_sentence_thesis.rstrip(".")
-                + ". " + delta_clause
-            )
-    except Exception:  # pragma: no cover — never break a memo on thesis polish
-        pass
+            thesis = thesis.rstrip(".") + ". " + delta_clause
+    except Exception as exc:  # pragma: no cover — never break a memo on thesis polish
+        # (b) the "what is the market missing" clause is the part of the
+        # thesis a reader pays for; losing it silently is a memo change.
+        # Soft notes dedupe per agent on apply, so an earlier "Thesis
+        # Builder" entry from the rewrite guard above is not doubled.
+        log.warning("thesis gap-clause polish failed for %s: %s", ticker, type(exc).__name__)
+        _note_soft("Thesis Builder", f"consensus-gap clause polish failed: {redact(exc)}", exc)
 
     # B6 — never ship an empty mispricing card. When the PM declined (or
     # the deterministic path ran), build the consensus-vs-us structure
     # from the reconciled verdict + final thesis + risk list. Runs after
-    # the thesis guards so `our_view` quotes the final thesis.
-    if not (
-        memo.mispricing_thesis.consensus_view
-        or memo.mispricing_thesis.our_view
-        or memo.mispricing_thesis.gap
-    ):
-        memo.mispricing_thesis = safe_call(
-            _build_mispricing_fallback, memo,
-            fallback=memo.mispricing_thesis,
-            name="Mispricing Fallback", log_to=None,
+    # the thesis guards so `our_view` quotes the final thesis — hence the
+    # draft carrying the fields decided above; `memo` itself is untouched.
+    mispricing = memo.mispricing_thesis
+    if not (mispricing.consensus_view or mispricing.our_view or mispricing.gap):
+        draft = memo.model_copy(
+            update={"valuation_verdict": valuation_verdict, "one_sentence_thesis": thesis},
         )
-
-    # Refresh the rating/confidence-derived locals after enforcement.
-    rating = memo.rating_label
-    # thesis_breakers may have grown; rebuild the local view used below.
-    thesis_breakers = list(memo.thesis_breakers)
+        # A crash here used to ship an empty mispricing card — the field B6
+        # exists to never leave empty — with no banner entry (RP-001).
+        mispricing = _guarded(
+            "Mispricing Fallback", _build_mispricing_fallback, draft, fallback=mispricing,
+        )
 
     # Phase 6: pull through cross-sector relevance from the sector agent's
     # finding into the PM memo so users see related-name implications without
     # a second model call. Cohort placement is already in the sector view.
-    cross_relevance = []
+    sector_finding = findings["sector"]
+    cross_relevance: list[str] = []
     if isinstance(sector_finding.data, dict):
         cross_relevance = sector_finding.data.get("cross_sector_relevance") or []
     cross_relevance_blurb = (
@@ -1886,51 +2130,127 @@ def _run_stock_memo_inner(
         if disagreement:
             sector_lean_blurb += f" Key disagreement: {disagreement}"
 
-    # Final verdict ties together rating, confidence, and PM view succinctly
-    memo.final_verdict = (
-        f"PM final view: {rating} (confidence {int(memo.confidence_score)}). "
-        f"{memo.one_sentence_thesis}"
+    # Final verdict ties together rating, confidence, and PM view succinctly.
+    # Rating and thesis_breakers are read post-review (risk recs may have
+    # moved the rating and grown the breaker list).
+    final_verdict = (
+        f"PM final view: {memo.rating_label} (confidence {int(memo.confidence_score)}). "
+        f"{thesis}"
         f"{cohort_blurb}{cross_relevance_blurb}{sector_lean_blurb} "
-        f"Watch items: {', '.join(r.title for r in thesis_breakers) or 'none flagged.'}"
+        f"Watch items: {', '.join(r.title for r in memo.thesis_breakers) or 'none flagged.'}"
     )
-    if cross_relevance and isinstance(memo.scores, dict):
-        memo.scores = {**memo.scores, "cross_sector_relevance_count": float(len(cross_relevance))}
+    extra_scores: dict[str, float] = (
+        {"cross_sector_relevance_count": float(len(cross_relevance))} if cross_relevance else {}
+    )
+    return VerdictOutcome(
+        valuation_verdict=valuation_verdict,
+        one_sentence_thesis=thesis,
+        mispricing_thesis=mispricing,
+        final_verdict=final_verdict,
+        extra_scores=extra_scores,
+        thesis_rewrite_fired=rewrite_fired,
+        degradations=notes,
+    )
 
-    # Phase F: persist a versioned snapshot. `first_run` only fires when no
-    # prior version exists for this ticker; otherwise this is a
-    # `full_reanalysis` (the news-driven `incremental_patch` path is owned
-    # by the future update-orchestrator, not this code path).
-    #
-    # Persistence used to be wrapped in safe_call so a DB hiccup wouldn't
-    # block the in-memory return value — but for the async regen path
-    # that's a silent disaster: the regen looks "successful" while the
-    # memo never reaches the database. The user clicks Refresh, sees
-    # spinning, then the old memo. Now we let persistence errors raise.
-    # The regen worker (services/regen_worker.py) catches BaseException
-    # and records the traceback on the RegenJob row, surfaced via
-    # /analyze/status and /api/admin/regen-jobs.
+
+# ---------------------------------------------------------------------------
+# Stage 7 — persist
+# ---------------------------------------------------------------------------
+
+def _persist(memo: StockMemoOut, inputs: MemoInputs) -> StockMemoOut:
+    """Persist a versioned snapshot and return the memo.
+
+    `first_run` only fires when no prior version exists for this ticker;
+    otherwise this is a `full_reanalysis` (the news-driven
+    `incremental_patch` path is owned by the update-orchestrator, not this
+    code path).
+
+    Persistence used to be wrapped in safe_call so a DB hiccup wouldn't
+    block the in-memory return value — but for the async regen path
+    that's a silent disaster: the regen looks "successful" while the
+    memo never reaches the database. The user clicks Refresh, sees
+    spinning, then the old memo. Now we let persistence errors raise.
+    The regen worker (services/regen_worker.py) catches BaseException
+    and records the traceback on the RegenJob row, surfaced via
+    /analyze/status and /api/admin/regen-jobs.
+    """
+    degradation = inputs.degradation
+    # Last LLM call is behind us: pick up any failover the later stages
+    # recorded so the persisted memo says which vendor actually wrote it.
+    _absorb_failover_events(degradation)
+    _sync_degradation(memo, degradation)
     try:
-        _persist_memo_snapshot(memo, as_of_date)
+        snapshot = _persist_memo_snapshot(memo, inputs.as_of_date)
     except Exception as exc:
         log.error(
             "memo persistence FAILED for %s: %s: %s",
-            ticker, type(exc).__name__, exc,
+            inputs.ticker, type(exc).__name__, exc,
         )
         # Record on the degradation log so synchronous callers (sync=true
         # path) can still see what happened via memo.degraded_agents.
         degradation.record("Memo store", exc)
-        memo.degraded_agents = degradation.degraded_agents()
+        _sync_degradation(memo, degradation)
         raise
-    memo.degraded_agents = degradation.degraded_agents()
+    _sync_degradation(memo, degradation)
+
+    # Phase 6 — the disagreement row keyed on the snapshot just written,
+    # and the review rows this run answered. Finding records, not memo
+    # content: a failure is logged, never raised and never a degradation
+    # (the memo is already saved and whole).
+    snapshot_id = getattr(snapshot, "id", None)
+    # Live memos only: a backtest (`as_of_date` set) still carries the
+    # flag on `memo.scorecard.disagreement` — that is memo content — but
+    # writes no finding row, because an `open` row is what
+    # `handle_scorecard_disagreements` turns into a present-day review
+    # regen, and a reproduced historical disagreement must not spend one
+    # of the day's regen slots.
+    if memo.scorecard is not None and inputs.as_of_date is None:
+        safe_call(
+            scorecard_context.persist_disagreement, memo, snapshot_id,
+            fallback=None, name="Scorecard Disagreement", log_to=None,
+        )
+    # Independent of whether the summary survived: the seeds were asked in
+    # round 1 whatever the later read returned (a GC'd row, a DB hiccup),
+    # and a queued_review row left open re-fires on every later memo run.
+    if inputs.scorecard_seeds_consumed:
+        safe_call(
+            scorecard_context.mark_reviewed, inputs.ticker, snapshot_id,
+            fallback=0, name="Scorecard Review", log_to=None,
+        )
     return memo
 
 
-def _persist_memo_snapshot(memo: StockMemoOut, as_of_date: Optional[Any] = None) -> None:
+def _sync_degradation(memo: StockMemoOut, degradation: DegradationLog) -> None:
+    """Copy the log onto the memo — both the names and the reasons.
+
+    `degraded_agents` and `degradation_events` are two views of the same
+    accumulator and must never disagree, so every refresh point goes
+    through here rather than assigning one field and forgetting the other.
+    """
+    memo.degraded_agents = degradation.degraded_agents()
+    memo.degradation_events = degradation.events()
+
+
+def _absorb_failover_events(degradation: DegradationLog) -> None:
+    """Move this context's LLM failover events onto the memo's degradation log."""
+    for _ev in llm.consume_failover_events():
+        degradation.record_soft(
+            "LLM provider",
+            f"failed over from {_ev['from']} to {_ev['to']}: {_ev['reason']}",
+            kind="ProviderFailover",
+        )
+
+
+def _persist_memo_snapshot(memo: StockMemoOut, as_of_date: Any | None = None) -> MemoSnapshot:
     """Indirection so safe_call wraps DB I/O. Lazy-import keeps graph.py from
     pulling the ORM at module import time (it's already loaded via models).
 
     Wave 1C: backtest snapshots are persisted with `as_of_date` set so the
     default `latest_memo` lookup excludes them.
+
+    Returns the saved `MemoSnapshot` (Phase 6) so the persist stage can key
+    the `scorecard_disagreements` row on its id instead of re-querying
+    `latest_memo` and hoping nothing landed in between.
     """
     from ..services import memo_store
     # latest_memo defaults to live snapshots only. For backtests we ask
@@ -1939,15 +2259,15 @@ def _persist_memo_snapshot(memo: StockMemoOut, as_of_date: Optional[Any] = None)
     prior = memo_store.latest_memo(memo.ticker, include_backtests=as_of_date is not None)
     trigger = "first_run" if prior is None else "full_reanalysis"
     parent_version = prior.version if prior is not None else None
-    memo_store.save_memo(memo, trigger=trigger, parent_version=parent_version,
-                         as_of_date=as_of_date)
+    return memo_store.save_memo(memo, trigger=trigger, parent_version=parent_version,
+                                as_of_date=as_of_date)
 
 
 # ---------------------------------------------------------------------------
 # Agent trace helper
 # ---------------------------------------------------------------------------
 
-def default_agent_trace(intent: str) -> List[AgentTrace]:
+def default_agent_trace(intent: str) -> list[AgentTrace]:
     base = [
         AgentTrace(agent="PM Orchestrator", status="done", detail=f"Intent classified as {intent}."),
     ]

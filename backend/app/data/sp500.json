@@ -1,8 +1,11 @@
 {
-  "_doc": "S&P 500 constituents — the curated screener universe (expanded from SP100). Refresh via `python -m app.scripts.refresh_universe_lists` to pull the live FMP list. This starter file ships the SP100 + a strategic peer extension (foreign-listed ADRs + sub-industry semis) so the screener / comps work immediately without an FMP Premium key. Last refreshed: 2026-05-30.",
+  "_doc": "S&P 500 + curated extensions — the curated screener universe (superseded sp100.json on 2026-05-30). Every ticker here is seeded as `auto_analysis` and pre-analyzed nightly; any other ticker is researchable on demand (`analyzed_on_demand`) and stays off the screener. This file is a static, hand-reviewed snapshot: nothing modifies it automatically. Check drift with `python -m app.scripts.universe_review [--compare-feed]` or `GET /api/admin/universe-review`; pull the live FMP constituent list with `python -m app.scripts.refresh_universe_lists` (explicit operator action, requires FMP Premium).",
   "_dual_class_policy": "When a company has multiple share classes in the index (Alphabet GOOG/GOOGL, Berkshire BRK.A/BRK.B), we list only one ticker per company. Picked GOOGL (Class A, voting) and BRK.B (lower-priced, more retail-tradeable) as the canonical tickers.",
-  "_starter_note": "This is a 163-ticker starter list (SP100 + 63 strategic extensions: foreign-listed ADRs + sub-industry semis + high-conviction large caps), NOT the full SP500. Run `python -m app.scripts.refresh_universe_lists` with FMP Premium to populate the remaining ~340 names. Until then, screener + comps work over this subset; lazy `analyzed_on_demand` loading covers any ticker the user researches directly.",
+  "_starter_note": "This is a 170-ticker starter list (SP100 + 63 strategic extensions: foreign-listed ADRs + sub-industry semis + high-conviction large caps), NOT the full SP500. Run `python -m app.scripts.refresh_universe_lists` with FMP Premium to populate the remaining ~340 names. Until then, screener + comps work over this subset; lazy `analyzed_on_demand` loading covers any ticker the user researches directly.",
   "as_of": "2026-05-30",
+  "_last_reviewed": "2026-09-07",
+  "_review_source": "manual review of the shipped starter list; live FMP constituent pull remains an explicit operator action",
+  "_review_cadence_days": 120,
   "tickers": [
     "AAPL", "ABBV", "ABT", "ACN", "ADBE", "AIG", "AMD", "AMGN", "AMT", "AMZN",
     "AVGO", "AXP", "BA", "BAC", "BK", "BKNG", "BLK", "BMY", "BRK.B", "C",

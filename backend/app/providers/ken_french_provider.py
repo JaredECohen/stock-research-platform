@@ -29,30 +29,29 @@ been divided by 100 from the raw CSV's percent values.
 """
 from __future__ import annotations
 
-import csv
 import io
 import logging
 import zipfile
 from datetime import date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import httpx
 
-from .base import ProviderStatus
+from .base import ProviderStatus, log_safely
 
 log = logging.getLogger(__name__)
 
 TIMEOUT = 25.0
 
 # Map our synthetic series_ids to (bundle_id, csv_column).
-_BUNDLE_URLS: Dict[str, str] = {
+_BUNDLE_URLS: dict[str, str] = {
     "FF5_DAILY":   "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_5_Factors_2x3_daily_CSV.zip",
     "FF5_MONTHLY": "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_5_Factors_2x3_CSV.zip",
     "MOM_DAILY":   "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Momentum_Factor_daily_CSV.zip",
     "MOM_MONTHLY": "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Momentum_Factor_CSV.zip",
 }
 
-_SERIES_TO_BUNDLE: Dict[str, Tuple[str, str]] = {
+_SERIES_TO_BUNDLE: dict[str, tuple[str, str]] = {
     # FF5 columns: Mkt-RF, SMB, HML, RMW, CMA, RF
     "KFR.MKT_RF.D": ("FF5_DAILY",   "Mkt-RF"),
     "KFR.SMB.D":    ("FF5_DAILY",   "SMB"),
@@ -74,7 +73,7 @@ _SERIES_TO_BUNDLE: Dict[str, Tuple[str, str]] = {
 # In-process cache of parsed bundles. The bundle CSV stays small (~ a few
 # hundred KB even for daily) so caching the parsed dict per bundle ID
 # avoids re-downloading + re-parsing on every series fetch.
-_BUNDLE_CACHE: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+_BUNDLE_CACHE: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
 
 class KenFrenchProvider:
@@ -89,7 +88,7 @@ class KenFrenchProvider:
             capabilities=["factor_returns"],
         )
 
-    def get_macro_series(self, series_id: str) -> Optional[Dict[str, Any]]:
+    def get_macro_series(self, series_id: str) -> dict[str, Any] | None:
         """Return the FF5/momentum series in the standard provider shape.
 
         Routes through `_load_bundle` which downloads + parses the
@@ -126,8 +125,8 @@ class KenFrenchProvider:
     def get_filings(self, ticker: str): return None
     def get_news(self, ticker: str): return None
     def get_estimates(self, ticker: str): return None
-    def list_tickers(self) -> List[str]: return []
-    def list_macro_series(self) -> List[Dict[str, Any]]:
+    def list_tickers(self) -> list[str]: return []
+    def list_macro_series(self) -> list[dict[str, Any]]:
         return [
             {"series_id": sid, "name": f"Ken French {col}", "units": "decimal_return", "points": []}
             for sid, (_, col) in _SERIES_TO_BUNDLE.items()
@@ -137,7 +136,7 @@ class KenFrenchProvider:
     # Bundle loader
     # ------------------------------------------------------------------
 
-    def _load_bundle(self, bundle_id: str) -> Optional[Dict[str, List[Dict[str, Any]]]]:
+    def _load_bundle(self, bundle_id: str) -> dict[str, list[dict[str, Any]]] | None:
         cached = _BUNDLE_CACHE.get(bundle_id)
         if cached is not None:
             return cached
@@ -163,7 +162,7 @@ class KenFrenchProvider:
             pass
         return parsed
 
-    def _download_and_parse(self, bundle_id: str) -> Optional[Dict[str, List[Dict[str, Any]]]]:
+    def _download_and_parse(self, bundle_id: str) -> dict[str, list[dict[str, Any]]] | None:
         url = _BUNDLE_URLS.get(bundle_id)
         if not url:
             return None
@@ -175,7 +174,7 @@ class KenFrenchProvider:
                     return None
                 payload = resp.content
         except Exception as exc:
-            log.warning("Ken French download error (%s): %s", url, exc)
+            log_safely(log, f"Ken French download error ({url})", exc)
             return None
         try:
             with zipfile.ZipFile(io.BytesIO(payload)) as zf:
@@ -188,7 +187,7 @@ class KenFrenchProvider:
                 with zf.open(inner_name) as fh:
                     text = fh.read().decode("latin-1", errors="ignore")
         except (zipfile.BadZipFile, KeyError) as exc:
-            log.warning("Ken French zip parse failed (%s): %s", bundle_id, exc)
+            log_safely(log, f"Ken French zip parse failed ({bundle_id})", exc)
             return None
         return _parse_ken_french_csv(text, monthly="MONTHLY" in bundle_id)
 
@@ -197,7 +196,7 @@ class KenFrenchProvider:
 # CSV parser
 # ---------------------------------------------------------------------------
 
-def _parse_ken_french_csv(text: str, *, monthly: bool) -> Dict[str, List[Dict[str, Any]]]:
+def _parse_ken_french_csv(text: str, *, monthly: bool) -> dict[str, list[dict[str, Any]]]:
     """Parse a Ken French CSV into {column_name: [{date, value}, ...]}.
 
     Layout: a few free-text intro lines, then the header row whose first
@@ -223,14 +222,14 @@ def _parse_ken_french_csv(text: str, *, monthly: bool) -> Dict[str, List[Dict[st
 
     header_cells = [c.strip() for c in lines[header_idx].split(",")]
     # Date column is the unlabeled first column. Factor columns start at index 1.
-    columns: List[str] = []
+    columns: list[str] = []
     for cell in header_cells[1:]:
         if cell:
             columns.append(cell)
         else:
             break
 
-    out: Dict[str, List[Dict[str, Any]]] = {col: [] for col in columns}
+    out: dict[str, list[dict[str, Any]]] = {col: [] for col in columns}
 
     for line in lines[header_idx + 1:]:
         if not line.strip():
@@ -259,14 +258,15 @@ def _parse_ken_french_csv(text: str, *, monthly: bool) -> Dict[str, List[Dict[st
     return out
 
 
-def _coerce_date(token: str, *, monthly: bool) -> Optional[str]:
+def _coerce_date(token: str, *, monthly: bool) -> str | None:
     """Ken French daily dates are YYYYMMDD; monthly are YYYYMM."""
     s = token.strip()
     if not s:
         return None
     if monthly and len(s) == 6:
         try:
-            year = int(s[:4]); month = int(s[4:6])
+            year = int(s[:4])
+            month = int(s[4:6])
             if not 1 <= month <= 12:
                 return None
             # End-of-month so sort order matches the rest of our monthly series.
@@ -280,14 +280,16 @@ def _coerce_date(token: str, *, monthly: bool) -> Optional[str]:
             return None
     if (not monthly) and len(s) == 8:
         try:
-            year = int(s[:4]); month = int(s[4:6]); day = int(s[6:8])
+            year = int(s[:4])
+            month = int(s[4:6])
+            day = int(s[6:8])
             return date(year, month, day).isoformat()
         except (TypeError, ValueError):
             return None
     return None
 
 
-def _coerce_pct_to_decimal(token: str) -> Optional[float]:
+def _coerce_pct_to_decimal(token: str) -> float | None:
     s = token.strip()
     if not s or s in {"-99.99", "-999"}:
         return None

@@ -7,13 +7,12 @@ contents — those are tested in their respective wave's PR.
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.database import SessionLocal
 from app.main import app
-from app.models import DCFModel, MemoRunCheckpoint, MemoSnapshot
+from app.models import DCFModel, MemoSnapshot
 from app.schemas import DCFAssumptions
 from app.services import dcf_store, update_orchestrator
 
@@ -179,3 +178,37 @@ def test_lopsidedness_audit_caps_at_n():
     body = r.json()
     assert body["inspected"] <= 2
     assert len(body["rows"]) <= 2
+
+
+# ---------------------------------------------------------------------------
+# Universe review (read-only) — shape only; behaviour lives in
+# test_universe_review.py
+# ---------------------------------------------------------------------------
+
+def test_universe_review_endpoint_reports_without_touching_the_feed(monkeypatch):
+    from app.providers.fmp_provider import FMPProvider
+
+    def _boom(self):  # pragma: no cover — reaching this is the failure
+        raise AssertionError("universe-review must not query FMP by default")
+    monkeypatch.setattr(FMPProvider, "get_sp500_constituents", _boom)
+
+    c = TestClient(app)
+    r = c.get("/api/admin/universe-review")
+    assert r.status_code == 200
+    body = r.json()
+    for key in ("file", "last_reviewed", "review_cadence_days", "days_since_review",
+                "stale", "ticker_count", "auto_update_count"):
+        assert key in body, key
+    assert set(body["db"]) == {"auto_analysis_count", "on_demand_count"}
+    assert set(body["diff_vs_db"]) == {"missing_in_db", "auto_analysis_not_in_file"}
+    assert body["feed"] is None
+    assert body["ticker_count"] > 0
+
+
+def test_cron_health_includes_universe_review_block():
+    c = TestClient(app)
+    r = c.get("/api/admin/cron-health")
+    assert r.status_code == 200
+    block = r.json()["universe_review"]
+    assert set(block) == {"last_reviewed", "days_since_review", "stale"}
+    assert isinstance(block["stale"], bool)

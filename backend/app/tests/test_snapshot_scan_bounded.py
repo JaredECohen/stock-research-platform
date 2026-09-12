@@ -16,14 +16,13 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
-from typing import List
 
 import pytest
 from sqlalchemy import event
 
 from app.cache import cache_put, invalidate, mark_stale_descendants
-from app.database import SessionLocal, engine
 from app.cache.snapshots import ResearchSnapshot
+from app.database import SessionLocal, engine
 
 
 def _unique(label: str) -> str:
@@ -34,7 +33,7 @@ class _Capture:
     """Record every SQL statement issued against `research_snapshots`."""
 
     def __init__(self) -> None:
-        self.statements: List[str] = []
+        self.statements: list[str] = []
 
     def __enter__(self):
         def before(conn, cursor, statement, params, context, executemany):
@@ -49,7 +48,7 @@ class _Capture:
         return False
 
     @property
-    def lineage_scans(self) -> List[str]:
+    def lineage_scans(self) -> list[str]:
         """SELECTs that read the whole live table (the cascade's own scan)."""
         return [
             s for s in self.statements
@@ -57,7 +56,7 @@ class _Capture:
         ]
 
 
-def _chain(depth: int) -> List[int]:
+def _chain(depth: int) -> list[int]:
     """A parent with `depth` descendants, each the child of the previous."""
     subject = _unique("chain")
     root = cache_put(subject, "company_cold", payload={"n": 0}, generated_by="test")

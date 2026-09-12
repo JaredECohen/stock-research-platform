@@ -273,7 +273,7 @@ function AIScreenerView({ themed = false }: { themed?: boolean }) {
               <tr key={r.ticker} className="border-b border-ink-800 table-row-hover">
                 <td className="py-2 text-slate-500">{r.rank}</td>
                 <td className="font-mono">
-                  <Link to={`/research?ticker=${r.ticker}`} className="text-accent-500 hover:underline">
+                  <Link to={`/app/research?ticker=${r.ticker}`} className="text-accent-500 hover:underline">
                     {r.ticker}
                   </Link>
                 </td>
@@ -387,8 +387,9 @@ function CustomScreenView() {
     <>
       <div className="card-tight space-y-3">
         <div className="text-xs text-slate-500">
-          Rules are AND-combined. Tickers are limited to the curated S&amp;P 100. Rows with missing
-          metrics fail the rule (rather than being dropped silently).
+          Rules are AND-combined. Tickers are limited to the curated universe (S&amp;P 500 plus
+          curated extensions); research any other ticker on demand from the Research page. Rows
+          with missing metrics fail the rule (rather than being dropped silently).
         </div>
         <div className="space-y-2">
           {state.rules.map((rule, idx) => (
@@ -501,7 +502,7 @@ function CustomScreenView() {
                 <tr key={r.ticker} className="border-b border-ink-800 table-row-hover">
                   <td className="py-2 font-mono">
                     <Link
-                      to={`/research?ticker=${r.ticker}`}
+                      to={`/app/research?ticker=${r.ticker}`}
                       className="text-accent-500 hover:underline"
                     >
                       {r.ticker}

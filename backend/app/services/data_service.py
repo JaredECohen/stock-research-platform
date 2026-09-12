@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import contextvars
 import logging
+from collections.abc import Callable
 from datetime import date as _date
 from functools import lru_cache
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
+from ..config import settings
 from ..providers.alpha_vantage_provider import AlphaVantageProvider
 from ..providers.base import ProviderStatus
 from ..providers.bls_provider import BLSProvider
@@ -44,7 +46,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Wave 1C — As-of-date context
 # ---------------------------------------------------------------------------
-_AS_OF_CONTEXT: contextvars.ContextVar[Optional[_date]] = contextvars.ContextVar(
+_AS_OF_CONTEXT: contextvars.ContextVar[_date | None] = contextvars.ContextVar(
     "as_of_date", default=None,
 )
 
@@ -59,11 +61,11 @@ class as_of_context:
     `current_as_of_date()` and clip their results accordingly.
     """
 
-    def __init__(self, as_of: Optional[_date]) -> None:
+    def __init__(self, as_of: _date | None) -> None:
         self._as_of = as_of
-        self._token: Optional[contextvars.Token] = None
+        self._token: contextvars.Token | None = None
 
-    def __enter__(self) -> "as_of_context":
+    def __enter__(self) -> as_of_context:
         self._token = _AS_OF_CONTEXT.set(self._as_of)
         return self
 
@@ -72,7 +74,7 @@ class as_of_context:
             _AS_OF_CONTEXT.reset(self._token)
 
 
-def current_as_of_date() -> Optional[_date]:
+def current_as_of_date() -> _date | None:
     """Read the active as_of date, if any. Returns None for live mode."""
     return _AS_OF_CONTEXT.get()
 
@@ -86,7 +88,7 @@ def current_as_of_date() -> Optional[_date]:
 # the data_service facade. Live mode is a pure no-op (the if-guard short-
 # circuits before any list iteration).
 
-def _coerce_iso_date(value: Any) -> Optional[_date]:
+def _coerce_iso_date(value: Any) -> _date | None:
     """Best-effort parse of a date-ish value into a `date`. Returns None on
     unparseable input. Accepts `date` / `datetime` / ISO string / `2024Q4`
     style period labels (treated as quarter end).
@@ -121,9 +123,9 @@ def _coerce_iso_date(value: Any) -> Optional[_date]:
 
 
 def _clip_dated_rows(
-    rows: Optional[List[Dict[str, Any]]], primary_key: str,
-    *, fallback_key: Optional[str] = None,
-) -> Optional[List[Dict[str, Any]]]:
+    rows: list[dict[str, Any]] | None, primary_key: str,
+    *, fallback_key: str | None = None,
+) -> list[dict[str, Any]] | None:
     """Drop rows from `rows` whose `primary_key` (or `fallback_key`) date
     exceeds `current_as_of_date()`. Returns `rows` unchanged when no
     as_of is active or `rows` is None.
@@ -136,7 +138,7 @@ def _clip_dated_rows(
     as_of = current_as_of_date()
     if as_of is None or not rows:
         return rows
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for r in rows:
         if not isinstance(r, dict):
             out.append(r)
@@ -150,8 +152,8 @@ def _clip_dated_rows(
 
 
 def _clip_statements(
-    statements: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+    statements: dict[str, Any] | None,
+) -> dict[str, Any] | None:
     """Clip the income/balance/cash period rows inside a statements dict.
 
     When `current_as_of_date()` is set, drop any row whose `period_end` /
@@ -170,8 +172,8 @@ def _clip_statements(
 
 
 def _ratios_from_clipped_statements(
-    statements: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+    statements: dict[str, Any] | None,
+) -> dict[str, Any] | None:
     """Compute ratios from clipped statements so the historical view's
     ratios reflect data observable at `current_as_of_date()` rather than
     today's snapshot."""
@@ -230,13 +232,13 @@ class DataService:
         # GDELT — broad international news coverage, no key.
         self.gdelt = GDELTProvider()
         # Optional test override (wired by `tests/conftest.py`).
-        self._test_provider: Optional[Any] = None
+        self._test_provider: Any | None = None
 
     # ------------------------------------------------------------------
     # Provider selection
     # ------------------------------------------------------------------
 
-    def register_test_provider(self, provider: Optional[Any]) -> None:
+    def register_test_provider(self, provider: Any | None) -> None:
         """Inject a fixture provider for tests. Pass None to clear.
 
         When set, the fixture sits at the **head** of every capability
@@ -245,8 +247,8 @@ class DataService:
         """
         self._test_provider = provider
 
-    def _live_chain(self, capability: str) -> List[Any]:
-        chains: Dict[str, List[Any]] = {
+    def _live_chain(self, capability: str) -> list[Any]:
+        chains: dict[str, list[Any]] = {
             "profile": [self.fmp, self.alpha],
             "prices": [self.fmp, self.tiingo, self.polygon],
             "quote": [self.fmp, self.tiingo, self.polygon],
@@ -270,11 +272,17 @@ class DataService:
             "factor_returns": [self.ken_french],
         }
         chain = chains.get(capability, [])
+        if settings.use_demo_data_only:
+            # USE_DEMO_DATA=true with ENABLE_LIVE_DATA=false (every test run)
+            # means "no provider calls": a developer .env carrying provider
+            # keys must not turn the suite into paid traffic. The injected
+            # test provider is the whole chain then.
+            return [self._test_provider] if self._test_provider is not None else []
         if self._test_provider is not None:
             return [self._test_provider, *chain]
         return chain
 
-    def _try_chain(self, capability: str, fn_name: str, *args, **kwargs) -> Optional[Any]:
+    def _try_chain(self, capability: str, fn_name: str, *args, **kwargs) -> Any | None:
         for provider in self._live_chain(capability):
             try:
                 fn: Callable = getattr(provider, fn_name, None)
@@ -291,7 +299,7 @@ class DataService:
     # Provider status
     # ------------------------------------------------------------------
 
-    def status(self) -> Dict[str, ProviderStatus]:
+    def status(self) -> dict[str, ProviderStatus]:
         return {
             p.name: p.status() for p in (
                 self.fmp, self.alpha, self.fred, self.polygon, self.tiingo, self.sec,
@@ -306,12 +314,13 @@ class DataService:
     # Endpoints
     # ------------------------------------------------------------------
 
-    def list_tickers(self) -> List[str]:
+    def list_tickers(self) -> list[str]:
         """Return every ticker the platform has ever touched.
 
         Reads the `companies` table directly — covers both the curated
-        S&P 100 (`auto_analysis`) and any ticker the user has researched
-        on demand (`analyzed_on_demand`). Empty on cold start before the
+        universe from `data/sp500.json` (S&P 500 + extensions, tagged
+        `auto_analysis`) and any ticker the user has researched on
+        demand (`analyzed_on_demand`). Empty on cold start before the
         seeder runs.
         """
         from ..database import SessionLocal
@@ -332,8 +341,8 @@ class DataService:
         self, capability: str, key: str,
         fetcher: Callable[[], Any],
         *, force_refresh: bool = False,
-        ttl_override: Optional[int] = None,
-    ) -> Optional[Any]:
+        ttl_override: int | None = None,
+    ) -> Any | None:
         # Skip cache when a test fixture is registered or an as-of
         # context is active — both want deterministic, point-in-time
         # responses, not yesterday's snapshot.
@@ -348,7 +357,7 @@ class DataService:
 
     def get_company_profile(
         self, ticker: str, *, force_refresh: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         return self._cached(
             "profile", ticker.upper(),
             lambda: self._try_chain("profile", "get_company_profile", ticker),
@@ -357,7 +366,7 @@ class DataService:
 
     def get_price_history(
         self, ticker: str, days: int = 252, *, force_refresh: bool = False,
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         rows = self._cached(
             "prices", f"{ticker.upper()}:{days}",
             lambda: self._try_chain("prices", "get_price_history", ticker, days),
@@ -367,7 +376,7 @@ class DataService:
 
     def get_quote(
         self, ticker: str, *, force_refresh: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Intraday last-trade quote with a 60s TTL.
 
         Bypassed during as-of backtests — historical runs read closes
@@ -385,7 +394,7 @@ class DataService:
 
     def get_financial_statements(
         self, ticker: str, *, force_refresh: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         # Financials roll over only when a new 10-Q/K lands. Long TTL
         # is fine; force_refresh covers manual recomputes.
         statements = self._cached(
@@ -398,7 +407,7 @@ class DataService:
 
     def get_ratios(
         self, ticker: str, *, force_refresh: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         # Ratios are derived from latest statements; if a clip drops the
         # latest period, the ratio is no longer "as of" the historical
         # date. Trigger a recompute from the clipped statements when an
@@ -415,7 +424,7 @@ class DataService:
 
     def get_key_metrics(
         self, ticker: str, *, force_refresh: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         return self._cached(
             "key_metrics", ticker.upper(),
             lambda: self._try_chain("key_metrics", "get_key_metrics", ticker),
@@ -424,7 +433,7 @@ class DataService:
 
     def get_earnings(
         self, ticker: str, *, force_refresh: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         return self._cached(
             "earnings", ticker.upper(),
             lambda: self._try_chain("earnings", "get_earnings", ticker),
@@ -433,7 +442,7 @@ class DataService:
 
     def get_earnings_transcripts(
         self, ticker: str, *, force_refresh: bool = False,
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         rows = self._cached(
             "transcripts", ticker.upper(),
             lambda: self._try_chain("transcripts", "get_earnings_transcripts", ticker),
@@ -443,7 +452,7 @@ class DataService:
 
     def get_filings(
         self, ticker: str, *, force_refresh: bool = False,
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         cik = self._lookup_cik(ticker)
         if not cik:
             return None
@@ -454,7 +463,7 @@ class DataService:
         )
         return _clip_dated_rows(rows, "filing_date", fallback_key="period_end")
 
-    def _lookup_cik(self, ticker: str) -> Optional[str]:
+    def _lookup_cik(self, ticker: str) -> str | None:
         """Resolve a ticker's CIK.
 
         Order:
@@ -478,7 +487,8 @@ class DataService:
         if cik:
             return cik
         # SEC fallback. Persist back to `companies` so the next call is free.
-        cik = self.sec.lookup_cik(ticker_up)
+        # Silent under demo-only mode like every other provider read.
+        cik = None if settings.use_demo_data_only else self.sec.lookup_cik(ticker_up)
         if cik:
             try:
                 with SessionLocal() as db:
@@ -492,7 +502,7 @@ class DataService:
 
     def get_news(
         self, ticker: str, *, force_refresh: bool = False,
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         rows = self._cached(
             "news", ticker.upper(),
             lambda: self._try_chain("news", "get_news", ticker),
@@ -502,7 +512,7 @@ class DataService:
 
     def get_estimates(
         self, ticker: str, *, force_refresh: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         return self._cached(
             "estimates", ticker.upper(),
             lambda: self._try_chain("estimates", "get_estimates", ticker),
@@ -511,14 +521,14 @@ class DataService:
 
     def get_macro_series(
         self, series_id: str, *, force_refresh: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         return self._cached(
             "macro", series_id,
             lambda: self._try_chain("macro", "get_macro_series", series_id),
             force_refresh=force_refresh,
         )
 
-    def list_macro_series(self) -> List[Dict[str, Any]]:
+    def list_macro_series(self) -> list[dict[str, Any]]:
         """Catalog metadata across every macro-shaped provider.
 
         Returns the union of FRED + EIA + BLS + Census catalog rows,
@@ -526,7 +536,7 @@ class DataService:
         any caller that wants to browse what's available before fetching.
         """
         seen: set[str] = set()
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for provider in (self.fred, self.eia, self.bls, self.census, self.ken_french):
             try:
                 rows = provider.list_macro_series() or []
