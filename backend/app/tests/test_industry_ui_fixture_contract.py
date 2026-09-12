@@ -47,6 +47,8 @@ FIXTURE = (
 BODIES: tuple[tuple[str, type[BaseModel]], ...] = (
     ("taxonomy", TaxonomyOut),
     ("report", IndustryReportOut),
+    ("report_warming_up", IndustryReportOut),
+    ("report_universe_short", IndustryReportOut),
     ("companies", IndustryCompaniesOut),
     ("history", IndustryHistoryOut),
     ("changes", IndustryChangesOut),
@@ -126,6 +128,33 @@ def test_nested_row_shapes_match_their_models(wire):
     assert set(editions[0]) == _serialised_keys(IndustryReportHistoryItemOut)
 
 
+def test_the_capture_carries_all_three_sample_floor_states(wire):
+    """The UI has to word "the warm-up has not reached this group yet" and
+    "this universe cannot cover this group" differently, so the fixture it
+    is tested against must contain both — captured, not hand-written."""
+    from app.services import industry_analytics as ia
+
+    states = {
+        name: wire[name]["coverage"]["sample_floor"]
+        for name in ("report", "report_warming_up", "report_universe_short")
+    }
+    assert states["report"]["state"] == ia.FLOOR_MET
+    assert states["report_warming_up"]["state"] == ia.FLOOR_PRICES_NOT_WARMED
+    assert states["report_universe_short"]["state"] == ia.FLOOR_UNIVERSE_TOO_SMALL
+    # Different words, not just a different enum — the enum never reaches
+    # the page.
+    assert len({s["explanation"] for s in states.values()}) == 3
+    assert states["report_warming_up"]["structural"] is False
+    assert states["report_universe_short"]["structural"] is True
+    assert states["report_universe_short"]["clears_with_warm_up"] is False
+
+    # And the taxonomy's own structural count agrees about the thin group.
+    groups = {g["code"]: g for s in wire["taxonomy"]["sectors"] for g in s["industry_groups"]}
+    short_code = wire["meta"]["short_code"]
+    assert groups[short_code]["universe_coverage"]["coverable"] is False
+    assert short_code in wire["taxonomy"]["universe_coverage"]["not_coverable_codes"]
+
+
 def test_the_recapture_instruction_names_something_that_exists():
     """The failure messages above tell a reader to re-capture. That is only
     useful while the thing they name is in the repo — the first version of
@@ -151,14 +180,21 @@ def test_the_fixture_declares_what_was_edited_after_capture(wire):
     assert meta["trimmed_note"]
     assert meta["omitted_responses"] and meta["omitted_reason"]
 
-    per_ticker = wire["report"]["payload"]["sections"]["companies"]["facts"]["per_ticker"]
-    dropped = sum(int(row.get("weekly_closes_dropped", 0)) for row in per_ticker)
-    assert dropped == sum(meta["trimmed"].values()), (
-        "the per-row drop counts do not add up to meta.trimmed — a truncated artifact must count what it dropped"
-    )
-    for row in per_ticker:
-        if row.get("weekly_closes_dropped"):
-            assert row["weekly_closes"] == [], "a row that reports dropped closes still carries some"
+    # `meta.trimmed` is keyed `<response>.<path within it>`: the capture
+    # now stores three report bodies (the published edition and the two
+    # below-the-floor ones) and each carries its own count.
+    for key, declared in meta["trimmed"].items():
+        body, path = key.split(".", 1)
+        assert path == "payload.sections.companies.facts.per_ticker[].weekly_closes", key
+        per_ticker = wire[body]["payload"]["sections"]["companies"]["facts"]["per_ticker"]
+        dropped = sum(int(row.get("weekly_closes_dropped", 0)) for row in per_ticker)
+        assert dropped == declared, (
+            f"the per-row drop counts in `{body}` do not add up to meta.trimmed[{key!r}] — "
+            "a truncated artifact must count what it dropped"
+        )
+        for row in per_ticker:
+            if row.get("weekly_closes_dropped"):
+                assert row["weekly_closes"] == [], "a row that reports dropped closes still carries some"
 
 
 def test_the_captured_edition_is_the_shape_the_ui_renders(wire):

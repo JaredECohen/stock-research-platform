@@ -124,6 +124,35 @@ describe("SectorGroupPicker — narrow", () => {
   });
 });
 
+describe("SectorGroupPicker — groups this universe cannot cover", () => {
+  it("marks a structurally short group where the reader chooses what to open", () => {
+    const short = fx.allGroups.find((g) => !g.universe_coverage.coverable)!;
+    expect(short.universe_coverage.constituents_short_by).toBeGreaterThan(0);
+    // The floor the verdict was taken against is the deployment's, and it
+    // travels with the response rather than being assumed here.
+    expect(short.universe_coverage.min_sample).toBe(fx.MIN_SAMPLE);
+    mountWide();
+    const note = screen.getByTestId(`not-coverable-${short.code}`);
+    expect(note).toHaveTextContent("Too few companies in this universe to report on");
+    // The server's sentence, verbatim — the picker composes none of it.
+    expect(note).toHaveTextContent(short.universe_coverage.explanation);
+  });
+
+  it("leaves a coverable group unmarked, so the mark means something", () => {
+    const ok = fx.allGroups.find((g) => g.universe_coverage.coverable)!;
+    mountWide();
+    expect(screen.queryByTestId(`not-coverable-${ok.code}`)).not.toBeInTheDocument();
+  });
+
+  it("carries the same mark into the phone rendering", () => {
+    stubMatchMedia(true);
+    const short = fx.allGroups.find((g) => !g.universe_coverage.coverable)!;
+    render(<SectorGroupPicker taxonomy={fx.taxonomy} value={null} onSelect={() => {}} />);
+    const option = screen.getByTestId("industry-picker-select").querySelector(`option[value="${short.code}"]`);
+    expect(option?.textContent).toContain("too few to report on");
+  });
+});
+
 describe("SectorGroupPicker — empty taxonomy", () => {
   it("says the taxonomy has no groups rather than rendering an empty box", () => {
     const empty = fx.clone(fx.taxonomy);

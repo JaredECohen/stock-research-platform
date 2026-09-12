@@ -11,6 +11,8 @@ import {
   fmtShare,
   humanize,
   na,
+  sampleFloorHeadline,
+  sampleFloorOf,
   unitFor,
 } from "@/components/industries/format";
 import * as fx from "@/test/fixtures/industry";
@@ -230,5 +232,31 @@ describe("format helpers", () => {
 
   it("requires a reason for every n/a", () => {
     expect(na("no prices")).toBe("n/a (no prices)");
+  });
+
+  it("reads the sample-floor block off a real coverage block, and refuses a shape it does not recognise", () => {
+    const real = sampleFloorOf(fx.universeShortReport.coverage);
+    expect(real?.state).toBe("universe_too_small");
+    expect(real?.structural).toBe(true);
+    expect(real?.explanation).toBe(
+      (fx.universeShortReport.coverage as { sample_floor: { explanation: string } }).sample_floor.explanation,
+    );
+
+    expect(sampleFloorOf(undefined)).toBeNull();
+    expect(sampleFloorOf({})).toBeNull();
+    // A state this build does not know must fall through to "not
+    // recorded" rather than pick one of the three badges at random.
+    expect(sampleFloorOf({ sample_floor: { state: "something_new", explanation: "x" } })).toBeNull();
+    // …and a state with no sentence is not renderable either.
+    expect(sampleFloorOf({ sample_floor: { state: "met", explanation: "" } })).toBeNull();
+  });
+
+  it("gives each sample-floor state its own headline, and never prints the enum", () => {
+    const headlines = fx.INDUSTRY_FLOOR_SAMPLES.map((f) => sampleFloorHeadline(f));
+    expect(new Set(headlines).size).toBe(headlines.length);
+    for (const [i, text] of headlines.entries()) {
+      expect(text).not.toContain(fx.INDUSTRY_FLOOR_SAMPLES[i].state);
+      expect(text).not.toContain("_");
+    }
   });
 });

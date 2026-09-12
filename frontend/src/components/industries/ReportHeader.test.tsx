@@ -169,4 +169,66 @@ describe("ReportHeader", () => {
     expect(screen.getByTestId("report-coverage")).toHaveTextContent("n/a (membership not recorded)");
     expect(screen.getByTestId("coverage-priced")).toHaveTextContent("n/a (price coverage not recorded)");
   });
+
+  // --- below the sample floor, and WHICH kind of below -------------------
+  //
+  // All three editions below are captures, not hand-built states: the
+  // healthy week, the same group's first week (enough members, no prices
+  // yet) and a group whose membership is itself under the floor.
+
+  it("says a healthy group is above the floor rather than staying silent about it", () => {
+    render(<ReportHeader report={fx.report} />);
+    expect(screen.queryByTestId("badge-sample-floor")).not.toBeInTheDocument();
+    const line = screen.getByTestId("coverage-sample-floor");
+    expect(line).toHaveTextContent("Enough priced companies to report");
+    expect(line).toHaveTextContent(
+      (fx.report.coverage as { sample_floor: { explanation: string } }).sample_floor.explanation,
+    );
+  });
+
+  it("calls a week short of prices a warm-up, not a limit of the universe", () => {
+    render(<ReportHeader report={fx.warmingUpReport} />);
+    const floor = (fx.warmingUpReport.coverage as { sample_floor: Record<string, unknown> }).sample_floor;
+    expect(floor.state).toBe("prices_not_warmed");
+    expect(screen.getByTestId("badge-sample-floor")).toHaveTextContent("Not enough prices yet this week");
+    const line = screen.getByTestId("coverage-sample-floor");
+    expect(line).toHaveTextContent(String(floor.explanation));
+    expect(line).toHaveTextContent("without changing the universe");
+    // The enum is never what the reader sees.
+    expect(line).not.toHaveTextContent("prices_not_warmed");
+    expect(line).not.toHaveTextContent("insufficient_sample");
+  });
+
+  it("calls a group the universe cannot cover exactly that, not 'not ready yet'", () => {
+    render(<ReportHeader report={fx.universeShortReport} />);
+    const floor = (fx.universeShortReport.coverage as { sample_floor: Record<string, unknown> }).sample_floor;
+    expect(floor.state).toBe("universe_too_small");
+    expect(screen.getByTestId("badge-sample-floor")).toHaveTextContent(
+      "This universe is too small to cover this industry",
+    );
+    const line = screen.getByTestId("coverage-sample-floor");
+    expect(line).toHaveTextContent(String(floor.explanation));
+    expect(line).toHaveTextContent("no amount of price warm-up can cover it");
+    expect(line).not.toHaveTextContent("universe_too_small");
+  });
+
+  it("gives the two short states different words, not one label with a different colour", () => {
+    const { unmount } = render(<ReportHeader report={fx.warmingUpReport} />);
+    const warming = screen.getByTestId("coverage-sample-floor").textContent ?? "";
+    unmount();
+    render(<ReportHeader report={fx.universeShortReport} />);
+    const structural = screen.getByTestId("coverage-sample-floor").textContent ?? "";
+    expect(warming).not.toBe("");
+    expect(structural).not.toBe(warming);
+  });
+
+  it("says an edition with no sample-floor state has none, rather than assuming it is fine", () => {
+    const r = fx.clone(fx.report);
+    r.coverage = { n_constituents: 5, n_with_prices: 4 };
+    render(<ReportHeader report={r} />);
+    expect(screen.getByTestId("coverage-sample-floor")).toHaveTextContent(
+      "n/a (this edition recorded no sample-floor state)",
+    );
+    expect(screen.queryByTestId("badge-sample-floor")).not.toBeInTheDocument();
+  });
 });

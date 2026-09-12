@@ -30,13 +30,20 @@ real data exercises:
 * two adjacent editions: the first week has no price history at all (the
   honest ``insufficient_sample`` edition), the second has closes, so the
   diff carries facts that are missing on one side and must never be
-  differenced to zero.
+  differenced to zero;
+* **both ways a group can sit below the sample floor**, because the page
+  has to word them differently. ``report_warming_up`` is the big group's
+  first week — enough members, no prices yet, a state the weekly warm-up
+  clears. ``report_universe_short`` is a group whose membership is itself
+  below the floor: every member priced and still short, which no warm-up
+  can fix. A hand-written stand-in for either would drift from the
+  producer, so both are captured.
 
 Two edits are made after the capture, and both are declared in ``meta``:
 per-ticker ``weekly_closes`` arrays are emptied (each row keeps a
 ``weekly_closes_dropped`` count and ``meta.trimmed`` the total — a
-truncated artifact has to count what it dropped), and two responses the
-UI does not read are not stored at all (``meta.omitted_responses``).
+truncated artifact has to count what it dropped), and one response the
+UI does not read is not stored at all (``meta.omitted_responses``).
 
 Nothing else is edited. If a value in the fixture looks wrong, it is what
 the API said.
@@ -89,11 +96,8 @@ UNPRICED = "INTC"
 
 OMITTED = [
     "GET /api/industries/snapshot",
-    "GET /api/industries/{code}/report?version=1",
 ]
-OMITTED_REASON = (
-    "this slice's UI reads neither; the version-1 edition is derived in the fixture module"
-)
+OMITTED_REASON = "this slice's UI does not read it"
 TRIMMED_NOTE = (
     "weekly close points were dropped to keep the fixture readable; each row records how "
     "many it lost in `weekly_closes_dropped`. Nothing else was edited: every other value "
@@ -165,7 +169,7 @@ def trim_weekly_closes(report: dict[str, Any]) -> dict[str, int]:
         total += len(closes)
     if not total:
         return {}
-    return {"report.payload.sections.companies.facts.per_ticker[].weekly_closes": total}
+    return {"payload.sections.companies.facts.per_ticker[].weekly_closes": total}
 
 
 def capture() -> dict[str, Any]:
@@ -176,6 +180,7 @@ def capture() -> dict[str, Any]:
     from app.main import app
     from app.models import IndustryReport, IndustryReportJob, IndustryStatSnapshot
     from app.services import gics_registry as reg
+    from app.services import industry_analytics as ia
     from app.services import industry_classification as ic
     from app.services import industry_report_store as rs
     from app.services import industry_report_worker as jobs
@@ -195,11 +200,29 @@ def capture() -> dict[str, Any]:
     # same universe choose the same group.
     ranked = sorted(by_group.items(), key=lambda kv: (-len(kv[1]), kv[0]))
     code = ranked[0][0]
+    # A group this universe CANNOT cover: fewer classified constituents
+    # than the sample floor, so every week is `insufficient_sample` however
+    # long the price warm-up runs. The page has to say that in different
+    # words from a group whose prices simply have not warmed up yet, and
+    # only a real edition for a real thin group proves it does.
+    floor = ia.sample_floor()
+    thin = [c for c, members in ranked if c != code and len(members) < floor]
+    if not thin:
+        raise SystemExit(
+            f"every group in this universe holds at least {floor} constituents, so the capture "
+            "cannot contain a structurally-short edition — the fixture the UI needs for that "
+            "state would have to be hand-written, which this repo does not do"
+        )
+    short_code = thin[-1]
     # A group with members but no edition — the "the analysis has not been
     # written yet" state the page renders beside the membership table. A
     # group with NO members would exercise a different, emptier path.
-    empty_code = ranked[-1][0] if ranked[-1][0] != code else ranked[-2][0]
-    print("group", code, f"({len(by_group[code])} members)", "· empty group", empty_code)
+    empty_code = next(c for c, _ in reversed(ranked) if c not in (code, short_code))
+    print(
+        "group", code, f"({len(by_group[code])} members)",
+        "· structurally short", short_code, f"({len(by_group[short_code])} of {floor} needed)",
+        "· empty group", empty_code,
+    )
 
     universe = sorted({t for tickers in by_group.values() for t in tickers})
 
@@ -213,7 +236,8 @@ def capture() -> dict[str, Any]:
     for period in (PRIOR_PERIOD, PERIOD):
         if period == PERIOD:
             print("seeded prices for", seed_prices(universe, skip=UNPRICED), "tickers")
-        res = jobs.enqueue_period(period, codes=[code], version=info, source="fixture")
+        codes = [code] if period == PRIOR_PERIOD else [code, short_code]
+        res = jobs.enqueue_period(period, codes=codes, version=info, source="fixture")
         print("enqueued", period, res["enqueued"], res["cross_snapshot"])
         for drained in jobs.drain(limit=20):
             print(
@@ -237,6 +261,13 @@ def capture() -> dict[str, Any]:
         ("companies", f"/api/industries/{code}/companies"),
         ("history", f"/api/industries/{code}/history"),
         ("changes", f"/api/industries/{code}/changes"),
+        # The two below-the-floor editions, so the UI can be tested against
+        # the real shapes rather than a hand-edited copy of them: the first
+        # week of the big group (membership clears the floor, no prices
+        # yet — transient) and the thin group's priced week (every member
+        # priced and still short — structural).
+        ("report_warming_up", f"/api/industries/{code}/report?version=1"),
+        ("report_universe_short", f"/api/industries/{short_code}/report"),
         ("report_missing", f"/api/industries/{empty_code}/report"),
     ]:
         r = client.get(path)
@@ -246,12 +277,17 @@ def capture() -> dict[str, Any]:
         print(name, r.status_code, path)
         out[name] = r.json()
 
-    trimmed = trim_weekly_closes(out["report"])
+    trimmed: dict[str, int] = {}
+    for name in ("report", "report_warming_up", "report_universe_short"):
+        for path, n in trim_weekly_closes(out[name]).items():
+            trimmed[f"{name}.{path}"] = n
     meta = {
         "generated_by": GENERATED_BY,
         "taxonomy_version": info.version_key,
         "code": code,
+        "short_code": short_code,
         "empty_code": empty_code,
+        "min_sample": floor,
         "trimmed": trimmed,
         "trimmed_note": TRIMMED_NOTE,
         "omitted_responses": OMITTED,

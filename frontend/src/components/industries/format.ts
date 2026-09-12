@@ -7,7 +7,13 @@
 // signal that the wrong field is being read.
 
 import { NA } from "@/lib/format";
-import type { IndustryAccess, IndustrySurface } from "@/types/industries";
+import {
+  INDUSTRY_SAMPLE_FLOOR_STATES,
+  type IndustryAccess,
+  type IndustrySampleFloor,
+  type IndustrySampleFloorState,
+  type IndustrySurface,
+} from "@/types/industries";
 
 export { NA };
 
@@ -256,6 +262,62 @@ export function degradationText(label: string): string {
     return first === first.toUpperCase() && first.length > 1 ? text : text.charAt(0).toLowerCase() + text.slice(1);
   };
   return `${head}: ${rest.map(clause).join(" — ")}`;
+}
+
+// ---------------------------------------------------------------------------
+// The sample floor
+// ---------------------------------------------------------------------------
+
+/**
+ * `coverage.sample_floor` off a report, or null when the edition predates
+ * the field (a stats row written before it existed keeps its old sample
+ * block, and a page that invented a state for one would be claiming
+ * something the server never said).
+ *
+ * Validated rather than cast: the state drives which badge is shown, and
+ * an unrecognised one must fall through to "not recorded" rather than
+ * render as a third, silently wrong colour.
+ */
+export function sampleFloorOf(coverage: unknown): IndustrySampleFloor | null {
+  if (typeof coverage !== "object" || coverage === null) return null;
+  const raw = (coverage as Record<string, unknown>).sample_floor;
+  if (typeof raw !== "object" || raw === null) return null;
+  const v = raw as Record<string, unknown>;
+  const state = v.state;
+  if (typeof state !== "string" || !(INDUSTRY_SAMPLE_FLOOR_STATES as readonly string[]).includes(state)) {
+    return null;
+  }
+  if (typeof v.explanation !== "string" || v.explanation === "") return null;
+  return {
+    state: state as IndustrySampleFloorState,
+    structural: v.structural === true,
+    clears_with_warm_up: v.clears_with_warm_up === true,
+    // A count the response did not carry is null, never 0 — a renderer
+    // that printed "0 of 0" would be inventing a coverage figure.
+    min_sample: isNum(v.min_sample) ? v.min_sample : null,
+    n_constituents: isNum(v.n_constituents) ? v.n_constituents : null,
+    n_with_prices: isNum(v.n_with_prices) ? v.n_with_prices : null,
+    priced_short_by: isNum(v.priced_short_by) ? v.priced_short_by : null,
+    constituents_short_by: isNum(v.constituents_short_by) ? v.constituents_short_by : null,
+    explanation: v.explanation,
+  };
+}
+
+/**
+ * The short line above the server's explanation — in the reader's words,
+ * never the enum. The two short states get DIFFERENT headlines because
+ * that is the whole point: one is a week that will catch up, the other is
+ * a group this universe cannot report on at all.
+ */
+export function sampleFloorHeadline(floor: IndustrySampleFloor): string {
+  switch (floor.state) {
+    case "universe_too_small":
+      return "This universe is too small to cover this industry";
+    case "prices_not_warmed":
+      return "Not enough prices yet this week";
+    default:
+      return "Enough priced companies to report";
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -292,6 +292,7 @@ export default function IndustryAnalysis() {
   if (!code) {
     const counts = taxonomyRes.data.node_counts ?? {};
     const reports = taxonomyRes.data.reports ?? {};
+    const limit = taxonomyRes.data.universe_coverage ?? null;
     return (
       <div className="space-y-4" data-testid="industry-index">
         <div>
@@ -301,7 +302,7 @@ export default function IndustryAnalysis() {
             latest published edition.
           </p>
         </div>
-        <dl className="grid gap-3 sm:grid-cols-3 text-xs" data-testid="taxonomy-counts">
+        <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs" data-testid="taxonomy-counts">
           <div className="card-tight">
             <dt className="text-slate-500 uppercase tracking-widest text-[10px]">Taxonomy</dt>
             <dd className="text-slate-200">
@@ -322,6 +323,29 @@ export default function IndustryAnalysis() {
             <dd className="text-slate-200">
               {reports.groups_with_a_published_edition ?? 0} of {reports.groups ?? 0} groups
             </dd>
+          </div>
+          {/* The structural limit of this universe, in one place. Without
+              it the groups it can never cover render as "not ready yet"
+              on every page, week after week, and nobody learns that the
+              universe is the thing that has to change. */}
+          <div className="card-tight">
+            <dt className="text-slate-500 uppercase tracking-widest text-[10px]">Coverage limit</dt>
+            {limit ? (
+              <>
+                <dd className={limit.not_coverable > 0 ? "text-warn-500" : "text-slate-200"} data-testid="coverage-limit">
+                  {limit.not_coverable} of {limit.groups} groups cannot be covered by the current universe
+                </dd>
+                <dd className="text-slate-500 mt-1">
+                  {limit.not_coverable > 0
+                    ? `They hold fewer than ${limit.min_sample} classified companies each — ${limit.constituents_needed} more would be needed in total. The weekly price warm-up cannot change that.`
+                    : `Every group holds at least ${limit.min_sample} classified companies, so a group below the floor is waiting on prices, not on the universe.`}
+                </dd>
+              </>
+            ) : (
+              <dd className="text-slate-400" data-testid="coverage-limit">
+                {na("this deployment did not report a coverage limit")}
+              </dd>
+            )}
           </div>
         </dl>
         {latestGate && <AccessGate gate={latestGate} what="industry reports" />}
