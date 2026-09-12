@@ -16,10 +16,26 @@ from ..agents import news_agent
 from ..cache import cache_get, cache_put, invalidate
 from ..services.data_service import get_data_service
 from . import record_run
+from .research_focus import select_focus
 
 log = logging.getLogger(__name__)
 
 _THROTTLE_SECONDS = 60 * 60  # 1 hour per ticker
+
+# How many tickers one run may cover.
+#
+# Cost math: this loop runs hourly, and `news_agent.run(force_refresh=True)`
+# makes one Gemini call per ticker (`settings.gemini_news_model`). So the
+# steady-state spend is budget x 24 calls/day — at 10, that is 240 Gemini
+# calls a day. Raising it to ~25 (600/day) would cover every ticker that
+# carries any research signal at all today: the 10 pins plus the 17 that
+# have ever had a memo generated, minus the overlap.
+#
+# Deliberately left at 10, which is exactly what the old arbitrary
+# `list_tickers()[:10]` slice spent. This change is about WHICH ten, not
+# how many; raising it is a spend decision for the owner, not a side effect
+# of a relevance fix.
+NEWS_FOCUS_BUDGET = 10
 
 
 def _last_run_for(ticker: str) -> datetime | None:
@@ -47,9 +63,22 @@ def _record_run_for(ticker: str) -> None:
 
 def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     """Run the news agent for each (un-throttled) ticker. Returns triggered events."""
+    selection = None
     if tickers is None:
-        ds = get_data_service()
-        tickers = list(ds.list_tickers())[:10]  # demo universe sample
+        # Relevance-ranked rather than an arbitrary universe slice — see
+        # `research_focus` for why the old `list_tickers()[:10]` was wrong.
+        #
+        # On the rotation vs. `_THROTTLE_SECONDS`: the band-3 tail window
+        # advances one position per hour while the loop also runs hourly,
+        # so a stale ticker is selected on `budget - len(head)` CONSECUTIVE
+        # hourly runs before it rotates out. That matters because the
+        # throttle and the interval are both exactly one hour: a run that
+        # fires a few seconds early finds `elapsed < 3600` and skips the
+        # ticker. With a window wider than one slot, the next hour's run
+        # picks it up — a ticker that appears for only a single hour could
+        # be throttled out of existence forever.
+        selection = select_focus(budget=NEWS_FOCUS_BUDGET)
+        tickers = selection.tickers
 
     events: list[dict] = []
     assessment_failures = 0
@@ -94,6 +123,10 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     note = f"{len(events)} material events"
     if assessment_failures:
         note += f"; {assessment_failures} assessments failed"
+    if selection is not None:
+        # Folded in so cron-health shows what this run covered and, more
+        # importantly, which qualifying tickers the budget could not reach.
+        note += f"; {selection.note()}"
     record_run("news_loop", success=assessment_failures == 0, note=note)
     return events
 
