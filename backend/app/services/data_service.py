@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import date as _date
 from functools import lru_cache
 from typing import Any
@@ -49,6 +49,27 @@ log = logging.getLogger(__name__)
 _AS_OF_CONTEXT: contextvars.ContextVar[_date | None] = contextvars.ContextVar(
     "as_of_date", default=None,
 )
+
+
+# ---------------------------------------------------------------------------
+# Which universe tiers the scheduled pullers are allowed to touch
+# ---------------------------------------------------------------------------
+# The automatic pollers make one provider call per ticker per pass — EDGAR
+# every 30 minutes, transcripts daily — so their standing cost is linear in
+# the size of the set they iterate. `auto_analysis` is the curated watch list,
+# and it is the only tier that earns that recurring spend.
+#
+# `analyzed_on_demand` and `data_only` are excluded from the *automatic* pull,
+# and it is worth being precise about what that does not mean: every company
+# in the table, at any tier, stays fully available to manual, user-initiated
+# research — search, on-demand memo generation, peer cohorts, chat ticker
+# resolution. Those callers ask for `list_tickers()` with no `tiers` argument
+# and see the whole table, which is why narrowing this must never be done at
+# the query's default. What the exclusion prevents is a ticker joining the
+# recurring poll forever merely because somebody once looked it up: each
+# on-demand search inserts an `analyzed_on_demand` row, so an unfiltered
+# poller's universe only ever grows.
+AUTO_PULL_TIERS: tuple[str, ...] = ("auto_analysis",)
 
 
 class as_of_context:
@@ -314,19 +335,36 @@ class DataService:
     # Endpoints
     # ------------------------------------------------------------------
 
-    def list_tickers(self) -> list[str]:
-        """Return every ticker the platform has ever touched.
+    def list_tickers(self, *, tiers: Collection[str] | None = None) -> list[str]:
+        """Return tickers from the `companies` table, ordered by ticker.
 
-        Reads the `companies` table directly — covers both the curated
-        universe from `data/sp500.json` (S&P 500 + extensions, tagged
-        `auto_analysis`) and any ticker the user has researched on
-        demand (`analyzed_on_demand`). Empty on cold start before the
-        seeder runs.
+        With no `tiers` — the default, and what every existing caller
+        uses — this is every ticker the platform has ever touched: the
+        curated universe from `data/sp500.json` (S&P 500 + extensions,
+        tagged `auto_analysis`), any ticker the user has researched on
+        demand (`analyzed_on_demand`), and the `data_only` long tail.
+        That unfiltered set is what manual research resolves against, so
+        it must stay unfiltered: narrow it and an on-demand name stops
+        being findable.
+
+        Pass `tiers=AUTO_PULL_TIERS` for the curated tier alone — the
+        scheduled pollers' universe. See that constant for why the other
+        two tiers are kept out of the automatic pull.
+
+        Ordered because the alternative is not "insertion order", it is
+        "whatever the engine finds convenient" — rowid order on SQLite,
+        genuinely arbitrary on Postgres. Any caller that slices or
+        compares the result is non-deterministic without this, which is
+        how `[:10]` in the news/social loops came to mean nothing in
+        particular. Empty on cold start before the seeder runs.
         """
         from ..database import SessionLocal
         from ..models import Company
         with SessionLocal() as db:
-            return [t for (t,) in db.query(Company.ticker).all()]
+            q = db.query(Company.ticker)
+            if tiers is not None:
+                q = q.filter(Company.universe_tier.in_(tuple(tiers)))
+            return [t for (t,) in q.order_by(Company.ticker).all()]
 
     # ------------------------------------------------------------------
     # Read-through cache (Wave 9b Phase 2b)
@@ -554,3 +592,24 @@ class DataService:
 @lru_cache(maxsize=1)
 def get_data_service() -> DataService:
     return DataService()
+
+
+def curated_poll_universe() -> tuple[list[str], int]:
+    """Return `(tickers_to_poll, excluded)` for the scheduled pollers.
+
+    `tickers_to_poll` is the `AUTO_PULL_TIERS` slice of the universe;
+    `excluded` is how many companies the tier filter held back. Both
+    pollers need the same pair, so it lives here rather than being
+    copied into each — two copies of a constraint drift, and this one is
+    the thing the user asked for.
+
+    The count exists to be reported. A cap nobody can see is a cap that
+    gets rediscovered as a bug: `/api/admin/cron-health` should say the
+    poller skipped N companies, not quietly poll fewer than an operator
+    expects. Clamped at zero because a row inserted between the two
+    queries would otherwise show up as a negative skip count.
+    """
+    ds = get_data_service()
+    selected = ds.list_tickers(tiers=AUTO_PULL_TIERS)
+    total = len(ds.list_tickers())
+    return selected, max(total - len(selected), 0)
