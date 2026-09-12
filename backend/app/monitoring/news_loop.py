@@ -22,6 +22,13 @@ log = logging.getLogger(__name__)
 
 _THROTTLE_SECONDS = 60 * 60  # 1 hour per ticker
 
+# How often this loop runs. One constant for both the scheduler and
+# `select_focus`, because they have to agree: the rotation advances one
+# position per run, and it can only work out what "per run" means from the
+# interval it is told. `register` below hands this to APScheduler, so the
+# two cannot drift apart in a later edit.
+_RUN_INTERVAL_HOURS = 1
+
 # How many tickers one run may cover.
 #
 # Cost math: this loop runs hourly, and `news_agent.run(force_refresh=True)`
@@ -68,16 +75,29 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         # Relevance-ranked rather than an arbitrary universe slice — see
         # `research_focus` for why the old `list_tickers()[:10]` was wrong.
         #
-        # On the rotation vs. `_THROTTLE_SECONDS`: the band-3 tail window
-        # advances one position per hour while the loop also runs hourly,
-        # so a stale ticker is selected on `budget - len(head)` CONSECUTIVE
+        # On the rotation vs. `_THROTTLE_SECONDS`: the rotation window
+        # advances one position per run, so a ticker below the guaranteed
+        # prefix is selected on `research_focus.ROTATING_SLOTS` CONSECUTIVE
         # hourly runs before it rotates out. That matters because the
         # throttle and the interval are both exactly one hour: a run that
         # fires a few seconds early finds `elapsed < 3600` and skips the
-        # ticker. With a window wider than one slot, the next hour's run
-        # picks it up — a ticker that appears for only a single hour could
+        # ticker. With a window wider than one slot the next hour's run
+        # picks it up — a ticker that appeared for only a single hour could
         # be throttled out of existence forever.
-        selection = select_focus(budget=NEWS_FOCUS_BUDGET)
+        #
+        # `require_memo=True` because this loop's alerts feed exactly one
+        # action path, `update_orchestrator.on_news_alert`, and its second
+        # guard returns `no_prior_memo` when `memo_store.latest_memo` finds
+        # nothing. A slot spent on a ticker with no memo on file is
+        # therefore a guaranteed no-op — and five of the ten pins are in
+        # that state, so this frees half the budget for names someone is
+        # actually researching. The withheld tickers are named in the note,
+        # and re-enter selection by themselves once a memo lands.
+        selection = select_focus(
+            budget=NEWS_FOCUS_BUDGET,
+            require_memo=True,
+            rotation_period_hours=_RUN_INTERVAL_HOURS,
+        )
         tickers = selection.tickers
 
     events: list[dict] = []
@@ -132,4 +152,7 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
 
 
 def register(scheduler) -> None:
-    scheduler.add_job(run_once, "interval", hours=1, id="news_loop", replace_existing=True)
+    scheduler.add_job(
+        run_once, "interval", hours=_RUN_INTERVAL_HOURS,
+        id="news_loop", replace_existing=True,
+    )
