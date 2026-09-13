@@ -140,9 +140,9 @@ def test_critic_uses_anthropic_critic_model_when_anthropic_configured(monkeypatc
 
     captured: list[dict] = []
 
-    def _fake_anthropic(client, *, model, system, user, max_tokens):
+    def _fake_anthropic(client, *, model, system, user, max_tokens, json_mode=False):
         captured.append({"model": model})
-        return '{"overall_assessment": "ok"}'
+        return {"overall_assessment": "ok"} if json_mode else '{"overall_assessment": "ok"}'
 
     with patch.object(llm_mod, "_anthropic_client", return_value=object()), \
          patch.object(llm_mod, "_anthropic_chat", side_effect=_fake_anthropic), \
