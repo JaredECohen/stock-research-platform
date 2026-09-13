@@ -456,7 +456,8 @@ class DataService:
             stored = read_prices(ticker, days=days)
             fresh = bool(stored and datetime.fromisoformat(stored[-1]["fetched_at"]) >= datetime.utcnow() - timedelta(hours=24)
                          and _date.fromisoformat(stored[-1]["date"]) >= _date.today() - timedelta(days=5))
-            if len(stored) >= days and fresh and not force_refresh:
+            if (len(stored) >= days and fresh and not force_refresh
+                    and getattr(stored, "selection", {}).get("internal_continuity_verified") is True):
                 return stored
             def refresh_prices():
                 fetch_and_store_prices(ticker, days, service=self, verify_calendar=False)
@@ -464,8 +465,10 @@ class DataService:
             # Retain cache throttling for partial responses (e.g. a recent
             # IPO) and provider outages. Explicit history backfills bypass
             # these legacy response windows and validate their date range.
-            rows = self._cached("prices", f"{ticker.upper()}:{days}", refresh_prices, force_refresh=force_refresh)
-            return _clip_dated_rows(rows, "date")
+            self._cached("prices", f"{ticker.upper()}:{days}", refresh_prices, force_refresh=force_refresh)
+            # Cache controls API frequency, not durable read eligibility. Older
+            # cached payloads can contain placeholders or a now-rejected source.
+            return _clip_dated_rows(read_prices(ticker, days=days) or None, "date")
         rows = self._cached(
             "prices", f"{ticker.upper()}:{days}",
             lambda: self._try_chain_symbol("prices", "get_price_history", ticker, days),
