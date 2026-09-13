@@ -109,18 +109,16 @@ def _process_role() -> str:
     return "web"
 
 
-def note_names(names, limit: int = 5) -> str:
-    """Comma-joined names for a run note, truncated with a visible marker.
+def note_names(names) -> str:
+    """Retain every identity in the order supplied by the bounded loop.
 
     Standing rule in this repo: no silent caps. Anything a loop skipped,
     deferred or failed on has to be legible in `/api/admin/cron-health`, and a
-    bare count leaves nobody able to tell *which* names are waiting. The note
-    is one column, though, so a long list is elided with a "+N more" marker
-    rather than either dumping it all or quietly dropping the tail.
+    count or "+N more" marker cannot identify the names still waiting. Run
+    notes use a Text column and the same complete note is emitted to logs.
+    This bounds work at the caller without abbreviating its deferred list.
     """
-    names = list(names)
-    head = ", ".join(names[:limit])
-    return head if len(names) <= limit else f"{head}, +{len(names) - limit} more"
+    return ", ".join(names)
 
 
 def record_run(loop_name: str, *, success: bool = True, note: str = "") -> None:
