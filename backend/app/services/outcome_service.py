@@ -49,7 +49,8 @@ DEFAULT_BENCHMARK = "SPY"
 #
 # `get_price_series(ticker, days)` asks the provider for the last `days`
 # bars *ending today* (FMP passes it as `limit=`, Polygon and Tiingo slice
-# `[-days:]`). The window therefore slides forward every night while a
+# `[-days:]`). This is the adapter request, not a remote coverage guarantee.
+# The window therefore slides forward every night while a
 # memo's generation date stays put.
 #
 # The old sizing was `days = horizon_days + 30`, which is measured off the
@@ -70,9 +71,9 @@ DEFAULT_BENCHMARK = "SPY"
 # multiply nightly provider calls by the number of distinct memo dates.
 # Rounding up to a short ladder keeps the key stable across nights and
 # collapses all four horizons of a snapshot onto a single fetch, which is
-# strictly fewer provider calls than the four the old sizing made per
-# ticker. Slack costs nothing here: over-fetching is free, and correctness
-# is guaranteed by the proximity tolerance below, not by exact sizing.
+# fewer keys for each snapshot. Across many differently aged snapshots a
+# ticker may still use all four rungs. Larger responses cost payload; their
+# actual dates, not the requested size, determine whether scoring is safe.
 PRICE_WINDOW_RUNGS = (120, 260, 400, 800)
 
 # Slack on the memo side of the window so the rung is chosen from a date
@@ -80,11 +81,9 @@ PRICE_WINDOW_RUNGS = (120, 260, 400, 800)
 MEMO_WINDOW_BUFFER_DAYS = 7
 
 # How far a close may sit from the date it stands in for. Seven calendar
-# days clears every US market closure on record — the longest (Sept 2001)
-# left seven days between consecutive sessions — while being far tighter
-# than the weeks-to-months drift the unbounded fallback used to accept.
-# It is also the boundary of the grey band in the triage predicate used to
-# audit rows written before this fix, so the two agree.
+# days allows weekends and multi-day closures while rejecting the large
+# drift the unbounded fallback accepted. This is an operational tolerance,
+# not an exchange calendar or a guarantee about all historical closures.
 PRICE_DATE_TOLERANCE_DAYS = 7
 
 
@@ -366,9 +365,16 @@ def _evaluate_one(
     note_parts: list[str] = [
         f"horizon={horizon_days}d",
         f"baseline={baseline_date}",
+        f"target={target_hit[0]}",
+        f"price_window={window_days}",
         f"return={forward_return:+.2%}",
     ]
     if alpha is not None:
+        note_parts.extend([
+            f"benchmark={benchmark}",
+            f"benchmark_baseline={bench_memo_hit[0]}",
+            f"benchmark_target={bench_target_hit[0]}",
+        ])
         note_parts.append(f"alpha={alpha:+.2%}")
     if held is not None:
         note_parts.append("thesis_held" if held else "thesis_broken")
@@ -445,7 +451,7 @@ def evaluate_all_due(
     benchmark: str = DEFAULT_BENCHMARK,
     today: _date | None = None,
     db: Session | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Score every (snapshot, horizon) that has come of age and isn't
     already in `memo_outcomes`. Idempotent: re-running on the same day
     yields zero new rows once everything's been scored.
@@ -472,6 +478,7 @@ def evaluate_all_due(
         written = 0
         reflections = 0
         errors = 0
+        unevaluable_pairs: list[str] = []
         statuses: dict[str, int] = {
             "backtest": 0,
             "not_due": 0,
@@ -501,6 +508,8 @@ def evaluate_all_due(
                     continue
                 if status != "written":
                     statuses[status] = statuses.get(status, 0) + 1
+                if status == "memo_predates_price_window":
+                    unevaluable_pairs.append(f"{snap.ticker}:snap={snap.id}:{h}d")
                 if out is not None:
                     written += 1
                     db.commit()
@@ -547,8 +556,8 @@ def evaluate_all_due(
             log.warning(
                 "Outcome evaluation skipped %s permanently unevaluable pairs "
                 "(memo_predates_price_window): the memo is older than the "
-                "longest price window we request (%s days).",
-                unevaluable, PRICE_WINDOW_RUNGS[-1],
+                "longest price window we request (%s days). pairs=%s",
+                unevaluable, PRICE_WINDOW_RUNGS[-1], ",".join(unevaluable_pairs),
             )
         return {
             "evaluated": evaluated, "written": written,
@@ -562,6 +571,7 @@ def evaluate_all_due(
             "price_window_incomplete": statuses["price_window_incomplete"],
             "unevaluable": unevaluable,
             "memo_predates_price_window": statuses["memo_predates_price_window"],
+            "unevaluable_pairs": unevaluable_pairs,
         }
     finally:
         if own:

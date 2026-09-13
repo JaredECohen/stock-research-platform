@@ -205,6 +205,44 @@ def test_all_horizons_of_one_memo_share_a_single_price_fetch():
     assert provider.days_for(BENCH) == provider.days_for("TSTWCACHE")
 
 
+def test_all_four_horizons_reuse_the_actual_persistent_provider_cache(monkeypatch):
+    """Drive the service/cache path too: equal requested sizes alone do not
+    prove that SQL cache lookups actually suppress provider calls.
+    """
+    from sqlalchemy import select
+
+    from app.models import ProviderCache
+    from app.services import market_data_service
+    from app.services.data_service import DataService
+
+    ticker, benchmark = "TSTWDBKEY", "TSTWDBBENCH"
+    memo_date = ANCHOR - timedelta(days=500)
+    snap = _seed(ticker, memo_date=memo_date)
+    provider = _BarProvider({
+        ticker: _tape(_flat(100.0), start=ANCHOR - timedelta(days=1300)),
+        benchmark: _tape(_flat(400.0), start=ANCHOR - timedelta(days=1300)),
+    })
+    ds = DataService()
+    # No registered test provider: retain the production persistent-cache
+    # path, replacing only its outbound provider boundary.
+    monkeypatch.setattr(ds, "_try_chain", lambda _cap, _fn, t, d: provider(t, d))
+    monkeypatch.setattr(market_data_service, "get_data_service", lambda: ds)
+    for horizon in outcome_service.DEFAULT_HORIZONS:
+        with SessionLocal() as db:
+            out, status = outcome_service._evaluate_one(
+                snap, horizon, today=ANCHOR, benchmark=benchmark, db=db,
+            )
+            assert status == "written" and out is not None
+            db.commit()
+    assert provider.requests == [(ticker, 800), (benchmark, 800)]
+    with SessionLocal() as db:
+        keys = db.execute(select(ProviderCache.key).where(
+            ProviderCache.capability == "prices",
+            ProviderCache.key.in_([f"{ticker}:800", f"{benchmark}:800"]),
+        )).scalars().all()
+    assert set(keys) == {f"{ticker}:800", f"{benchmark}:800"}
+
+
 # ---------------------------------------------------------------------------
 # Claim A — an old memo must still be scoreable
 # ---------------------------------------------------------------------------
@@ -246,6 +284,10 @@ def test_four_month_old_memo_scores_against_closes_near_its_own_dates():
     assert out.forward_return == pytest.approx(0.20)
     assert out.thesis_held is True
     assert f"baseline={memo_date.isoformat()}" in out.note
+    assert "target=" in out.note
+    assert "price_window=" in out.note
+    assert "benchmark_baseline=" in out.note
+    assert "benchmark_target=" in out.note
     # Flat benchmark → alpha is the whole return, and it is present at all.
     assert out.benchmark_return == pytest.approx(0.0)
     assert out.alpha == pytest.approx(0.20)
@@ -327,10 +369,10 @@ class _TruncatingProvider(_BarProvider):
 
     This is not a hypothetical. `_live_chain("prices")` is
     `[fmp, tiingo, polygon]` and `_try_chain` takes the first truthy
-    result, so when FMP misses, Tiingo answers — and
-    `TiingoProvider.get_price_history` GETs `/tiingo/daily/{t}/prices`
-    with no `startDate`, then slices `[-days:]`. The slice cannot lengthen
-    what the endpoint returned.
+    result, so when FMP misses, Tiingo answers. Its history adapter used
+    to omit `startDate`, then slice `[-days:]` from a latest-only response.
+    That adapter is fixed separately; provider failures can still yield
+    partial history, and a slice cannot lengthen what came back.
     """
 
     def __init__(self, tapes, *, cap: int) -> None:
@@ -486,7 +528,7 @@ def test_memo_older_than_the_longest_window_is_terminal_and_costs_no_fetch():
     assert provider.requests == []
 
 
-def test_permanently_unevaluable_pairs_are_counted_apart_from_outages():
+def test_permanently_unevaluable_pairs_are_counted_apart_from_outages(caplog):
     memo_date = ANCHOR - timedelta(days=1000)
     snap = _seed("TSTWCOUNT", memo_date=memo_date, rating="Bullish")
     provider = _BarProvider({
@@ -498,6 +540,9 @@ def test_permanently_unevaluable_pairs_are_counted_apart_from_outages():
 
     assert res["unevaluable"] >= 1
     assert res["memo_predates_price_window"] >= 1
+    assert len(res["unevaluable_pairs"]) == res["unevaluable"]
+    assert f"TSTWCOUNT:snap={snap.id}:30d" in res["unevaluable_pairs"]
+    assert f"TSTWCOUNT:snap={snap.id}:30d" in caplog.text
     # A pair that came of age is still counted as due even though nothing
     # can score it — `due` keeps meaning "reached its target date".
     assert res["due"] >= res["unevaluable"]
@@ -543,6 +588,7 @@ def test_loop_note_names_each_shortfall_separately(monkeypatch):
         "price_history_too_short": 1,
         "price_window_incomplete": 1, "unevaluable": 2,
         "memo_predates_price_window": 2, "reflections": 0, "errors": 0,
+        "unevaluable_pairs": ["OLD:snap=1:30d", "OLD:snap=1:90d"],
     }
     calls: list[tuple[tuple, dict[str, Any]]] = []
     monkeypatch.setattr(outcome_loop, "evaluate_all_due", lambda: result)
@@ -558,5 +604,6 @@ def test_loop_note_names_each_shortfall_separately(monkeypatch):
     assert "short_history=1" in note
     assert "window_gap=1" in note
     assert "unevaluable=2" in note
+    assert "unevaluable_pairs=OLD:snap=1:30d,OLD:snap=1:90d" in note
     # A real outage still turns the loop red.
     assert kwargs["success"] is False

@@ -8,6 +8,7 @@ has a row in `memo_outcomes`, the evaluator skips it silently.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from ..services.outcome_service import evaluate_all_due
 from . import record_run
@@ -15,7 +16,7 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def run_once() -> dict[str, int]:
+def run_once() -> dict[str, Any]:
     res = evaluate_all_due()
     # The note names each shortfall separately. Three of them are outages,
     # all three counted in `unavailable`, and `unavailable` drives the
@@ -41,6 +42,8 @@ def run_once() -> dict[str, int]:
         f"unevaluable={res.get('unevaluable', 0)} "
         f"reflections={res['reflections']} errors={res['errors']}"
     )
+    if res.get("unevaluable_pairs"):
+        note += " unevaluable_pairs=" + ",".join(res["unevaluable_pairs"])
     success = res["errors"] == 0 and res["data_unavailable"] == 0
     record_run("outcome_loop", success=success, note=note)
     return res
