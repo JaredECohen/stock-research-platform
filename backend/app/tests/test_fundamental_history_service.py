@@ -71,6 +71,25 @@ def test_partial_provider_does_not_suppress_quarterly_fallback(database, monkeyp
     assert result["coverage"]["income"]["quarterly"]["complete"]
 
 
+def test_legacy_label_lookback_does_not_require_prelisting_history(database, monkeypatch):
+    FinancialPeriod.__table__.create(database.kw["bind"])
+    with database() as db:
+        row = FinancialPeriod(ticker="TEST", period="FY2016", period_end=date(2016, 12, 31),
+                              fiscal_year=2016, statement="income", line_item="revenue",
+                              source="live", value=10, currency="EUR")
+        db.add(row)
+        db.commit()
+        old_id = row.id
+    calls = providers(monkeypatch, ("fmp", payload()), ("alpha_vantage", payload(value=999)))
+    result = svc.backfill_fundamentals("TEST", date(2024, 9, 13), force_refresh=True)
+    assert result["success"]
+    assert calls == [("fmp", "TEST", date(2016, 12, 31))]
+    assert not any(i["kind"] in {"provider_partial_coverage", "stored_value_conflict"} for i in result["issues"])
+    with database() as db:
+        old = db.get(FinancialPeriod, old_id)
+        assert (old.period, old.period_end, old.value, old.source) == ("FY2016", date(2016, 12, 31), 10, "live")
+
+
 def test_nonfinite_missing_and_conflicting_currency_never_wipe_good_values(database, monkeypatch):
     providers(monkeypatch, ("fmp", payload()))
     svc.backfill_fundamentals("TEST", date(2024, 9, 13))
@@ -702,7 +721,7 @@ def test_external_session_owns_relabel_commit_and_rollback(database, monkeypatch
         assert all(db.get(FinancialPeriod, row_id).period == f"FY{year}" for (_, year), row_id in ids.items())
 
 
-def test_duplicate_legacy_destination_remains_an_explicit_read_gap(database, monkeypatch):
+def test_duplicate_legacy_destination_is_preserved_after_unique_provider_fact_is_stored(database, monkeypatch):
     ids = seed_shifted_legacy(database)
     with database() as db:
         extra = FinancialPeriod(ticker="TEST", period="FY2027", period_end=date(2026, 2, 1), fiscal_year=2027,
@@ -712,11 +731,14 @@ def test_duplicate_legacy_destination_remains_an_explicit_read_gap(database, mon
         extra_id = extra.id
     providers(monkeypatch, ("fmp", fiscal_payload()))
     result = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
-    assert not result["success"]
-    blocked = {i["id"] for i in result["issues"] if i["kind"] == "legacy_period_relabel_conflict"}
+    assert result["success"]
+    blocked = {i["id"] for i in result["issues"] if i["kind"] == "legacy_period_relabel_preserved_duplicate"}
     assert {ids[("income", 2026)], extra_id} <= blocked
     coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
-    assert not coverage["success"] and any(i["kind"] == "duplicate_stored_period_end" for i in coverage["issues"])
+    assert coverage["success"]
+    excluded = [i for i in coverage["issues"] if i["kind"] == "legacy_duplicate_observation_excluded"]
+    assert {i["id"] for i in excluded} == {ids[("income", 2026)], extra_id}
+    assert len({i["replacement"]["id"] for i in excluded}) == 1
     with database() as db:
         assert db.get(FinancialPeriod, extra_id).value == 90
         assert db.get(FinancialPeriod, ids[("income", 2026)]).value == 100
@@ -800,3 +822,25 @@ def test_invalid_exact_canonical_occupant_in_alias_group_stays_blocking(database
         for row_id in (alias_id, canonical_id):
             row = db.get(FinancialPeriod, row_id)
             assert row.period_end is None and row.value == 777 and row.source == "live"
+
+
+def test_fundamentals_keep_canonical_bk_routing_separate_from_price_rename(database, monkeypatch):
+    calls = providers(monkeypatch, ("fmp", payload()))
+    result = svc.backfill_fundamentals("BK", date(2024, 9, 13))
+    assert result["success"] and [symbol for _, symbol, _ in calls] == ["BK"]
+
+
+@pytest.mark.parametrize("currency", ["None", "NULL", "N/A", "NAN", "UNKNOWN", "XXX", "XTS"])
+def test_placeholder_currency_is_rejected_on_incoming_and_stored_reads(database, monkeypatch, currency):
+    providers(monkeypatch, ("fmp", payload(currency=currency)))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert not report["success"] and report["rows_written"] == 0
+    assert any(i["kind"] == "missing_or_invalid_currency" and i["currency"] == currency.upper() for i in report["issues"])
+    with database() as db:
+        db.add(FinancialPeriod(ticker="TEST", period="FY2025", fiscal_year=2025, period_end=date(2025, 12, 31),
+            statement="income", line_item="revenue", value=100, currency=currency, source="alpha_vantage"))
+        db.commit()
+    stored = svc.read_stored_financials("TEST")
+    assert not stored["income"]
+    assert any(i["kind"] == "invalid_stored_value_or_currency" for i in stored["_history_issues"])
+    assert not svc._complete(svc._coverage(payload(currency=currency), date(2024, 9, 13), date(2026, 9, 13)))

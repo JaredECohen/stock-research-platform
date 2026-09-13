@@ -43,3 +43,16 @@ class MarketDataSync(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="running")
     report: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class FinancialDataRepair(Base):
+    """Durable, reviewable before/after plan for one fenced financial repair."""
+    __tablename__ = "financial_data_repairs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    digest: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="planned")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    plan: Mapped[dict] = mapped_column(JSON, default=dict)
+    result: Mapped[dict] = mapped_column(JSON, default=dict)

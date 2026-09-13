@@ -247,7 +247,7 @@ def backfill_available_at(
         _ensure_tables(db)
         stmt = (
             select(FinancialPeriod)
-            .where(FinancialPeriod.available_at.is_(None))
+            .where(FinancialPeriod.available_at.is_(None), ~FinancialPeriod.ticker.startswith("~Q"))
             .order_by(FinancialPeriod.ticker, FinancialPeriod.id)
         )
         if tickers is not None:

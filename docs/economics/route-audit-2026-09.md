@@ -145,6 +145,9 @@ flag is on.
 | GET | `/api/admin/market-data/prices` | operations | DB-only daily prices | admin | admin | admin | One provider and close basis per returned series; no live fetch. |
 | GET | `/api/admin/market-data/backfill-status` | operations | DB-only last company import result | admin | admin | admin | Complete saved report for one target, including interruptions and incomplete data. |
 | POST | `/api/admin/market-data/backfill` | operations | price and fundamental provider APIs; durable DB upserts | admin | admin | admin | One planned ticker per request, atomic claim; no filings, transcripts, LLMs, memo generation, evaluation or historical outcome writes. |
+| POST | `/api/admin/market-data/bk-repair/plan` | operations | canonical BK fundamental API and saved repair plan | admin | admin | admin | Version-scoped before-images and proposed restoration/quarantine; no financial fact writes. |
+| GET | `/api/admin/market-data/bk-repair/{plan_id}` | operations | DB-only saved repair plan and result | admin | admin | admin | Full identities and digest for review and timeout recovery. |
+| POST | `/api/admin/market-data/bk-repair/{plan_id}/apply` | operations | transactional financial repair and durable audit | admin | admin | admin | Apply saved plan with digest and row-version fences; no provider calls, memo or outcome writes. |
 | GET | `/api/admin/per-agent-attribution` | none | DB-only | admin | admin | admin | |
 | GET | `/api/admin/regime-accuracy` | none | DB-only | admin | admin | admin | |
 | GET | `/api/admin/calibration-summary` | none | DB-only | admin | admin | admin | |

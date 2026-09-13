@@ -20,7 +20,7 @@ from ..models import FinancialPeriod
 from . import history_service as history
 from . import scorecard_pit
 from .data_service import get_data_service
-from .ticker_symbols import market_data_symbols
+from .ticker_symbols import symbol_variants
 
 log = logging.getLogger(__name__)
 LINES = {"income": history._INCOME_LINES, "balance": history._BALANCE_LINES, "cash": history._CASH_LINES}
@@ -47,6 +47,11 @@ def _today() -> date:
     return date.today()
 
 
+def _valid_currency(value: Any) -> bool:
+    code = str(value or "").strip().upper()
+    return len(code) == 3 and code.isascii() and code.isalpha() and code not in {"NAN", "XXX", "XTS"}
+
+
 def _valid_period(period: Any, period_end: Any, *, end: date) -> tuple[int | None, int | None, date | None]:
     """Validate before sorting, grouping, or enumerating fiscal gaps."""
     fy, fq = history._parse_period(period)
@@ -63,6 +68,22 @@ def _stored_period_valid(row: FinancialPeriod) -> bool:
 
 def _unusable_legacy_alias(row: FinancialPeriod, canonical: str) -> bool:
     return row.source in LEGACY_SOURCES and row.period != canonical and not _stored_period_valid(row)
+
+
+def _stored_observation_identity(row: FinancialPeriod) -> tuple:
+    """An observed statement line, independent of a possibly stale FY label."""
+    return (row.period_end, row.statement, row.line_item, row.fiscal_quarter is not None)
+
+
+def _stored_observation_evidence(row: FinancialPeriod) -> dict:
+    return {"id": row.id, "ticker": row.ticker, "period": row.period,
+            "fiscal_year": row.fiscal_year, "fiscal_quarter": row.fiscal_quarter,
+            "period_end": row.period_end.isoformat(), "statement": row.statement,
+            "line_item": row.line_item, "value": row.value, "source": row.source,
+            "currency": row.currency,
+            "available_at": row.available_at.isoformat() if row.available_at else None,
+            "available_at_source": row.available_at_source,
+            "fetched_at": row.fetched_at.isoformat() if row.fetched_at else None}
 
 
 def read_stored_financials(ticker: str, *, start_date: date | None = None, cadence: str | None = None, db: Session | None = None) -> dict[str, list[dict]]:
@@ -86,7 +107,10 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
         rows = list(db.execute(query.order_by(FinancialPeriod.period_end.desc(), FinancialPeriod.period.desc())).scalars())
         confirmed = {(r.period, r.statement, r.line_item): r for r in rows
                      if r.source not in LEGACY_SOURCES and _stored_period_valid(r)
-                     and r.value is not None and math.isfinite(r.value) and r.currency}
+                     and r.value is not None and math.isfinite(r.value) and _valid_currency(r.currency)}
+        confirmed_observations: dict[tuple, list] = {}
+        for row in confirmed.values():
+            confirmed_observations.setdefault(_stored_observation_identity(row), []).append(row)
         groups: dict[tuple[str, str], list] = {}
         for row in rows:
             if row.source == "demo" or row.statement not in LINES:
@@ -113,10 +137,25 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
                 kind = "missing_stored_primary_value" if row.line_item == PRIMARY[row.statement] else "missing_stored_optional_value"
                 issues.append({"kind": kind, **identity})
                 continue
-            if not row.currency or not math.isfinite(row.value):
+            if not _valid_currency(row.currency) or not math.isfinite(row.value):
                 issues.append({"kind": "invalid_stored_value_or_currency", **identity})
                 continue
             canonical = f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}"
+            # A legacy FY label may duplicate a separately stored, dated
+            # provider fact. Exclude only this legacy line from usable reads;
+            # every stored field remains untouched, even when values differ.
+            replacements = confirmed_observations.get(_stored_observation_identity(row), [])
+            if row.source in LEGACY_SOURCES and len(replacements) == 1:
+                replacement = replacements[0]
+                replacement_fy, replacement_fq = history._parse_period(replacement.period)
+                replacement_period = (f"{replacement_fy:04d}Q{replacement_fq}" if replacement_fq
+                                      else f"FY{replacement_fy:04d}")
+                if replacement_period != canonical:
+                    issues.append({"kind": "legacy_duplicate_observation_excluded",
+                        **_stored_observation_evidence(row),
+                        "reason": "unique_named_provider_observation_under_different_fiscal_label",
+                        "replacement": _stored_observation_evidence(replacement)})
+                    continue
             groups.setdefault((row.statement, canonical), []).append(row)
         periods_by_end: dict[tuple, set] = {}
         for (statement, period), group in groups.items():
@@ -186,7 +225,7 @@ def _coverage(statements: dict, start: date, end: date, *, issues: list[dict] | 
                     continue
                 value = row.get(PRIMARY[statement])
                 provenance = row.get("line_sources", {}).get(PRIMARY[statement], row.get("source"))
-                if provenance in LEGACY_SOURCES or not row.get("currency") or row.get("currency") == "mixed":
+                if provenance in LEGACY_SOURCES or not _valid_currency(row.get("currency")):
                     continue
                 if not d or d > end or fy is None or (fq is not None) != (cadence == "quarterly"):
                     continue
@@ -281,8 +320,9 @@ def _clean_payload(raw: dict, provider: str, symbol: str, issues: list[dict]) ->
                 issues.append({"kind": "invalid_period", **identity, "period_end": str(row.get("period_end") or row.get("date"))})
                 continue
             currency = str(row.get("currency") or "").strip().upper()
-            if not currency or len(currency) > 8:
-                issues.append({"kind": "missing_or_invalid_currency", **identity})
+            if not _valid_currency(currency):
+                issues.append({"kind": "missing_or_invalid_currency", **identity, "currency": currency,
+                               "period_end": period_end.isoformat()})
                 continue
             item = {"period": f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}", "period_end": period_end.isoformat(),
                     "currency": currency, "source": provider,
@@ -344,8 +384,9 @@ def _clean_payload(raw: dict, provider: str, symbol: str, issues: list[dict]) ->
     return clean
 
 
-def _fetch_financial_history(ticker: str, start: date) -> tuple[list[dict], list[dict], list[dict]]:
-    """Retain partial providers; try later providers until combined coverage suffices."""
+def _fetch_financial_history(ticker: str, start: date, *, required_start: date | None = None) -> tuple[list[dict], list[dict], list[dict]]:
+    """Fetch older label evidence while judging fallback against required coverage."""
+    coverage_start = required_start or start
     payloads, issues, attempts = [], [], []
     combined = {s: [] for s in LINES}
     for provider in get_data_service()._live_chain("financials"):
@@ -353,7 +394,9 @@ def _fetch_financial_history(ticker: str, start: date) -> tuple[list[dict], list
         if name in LEGACY_SOURCES:
             issues.append({"kind": "provider_identity_unusable", "provider": name})
             continue
-        for symbol in market_data_symbols(ticker):
+        # A verified price-series rename does not establish statement identity.
+        # BNY historical financial endpoints mix fiscal labels after BK's rename.
+        for symbol in symbol_variants(ticker):
             attempt = {"provider": name, "symbol": symbol}
             try:
                 method = getattr(provider, "get_financial_history", None)
@@ -380,10 +423,10 @@ def _fetch_financial_history(ticker: str, start: date) -> tuple[list[dict], list
             payloads.append(clean)
             for s in LINES:
                 combined[s].extend(clean[s])
-            coverage = _coverage(combined, start, _today())
+            coverage = _coverage(combined, coverage_start, _today())
             if _complete(coverage):
                 return payloads, issues, attempts
-            issues.append({"kind": "provider_partial_coverage", **attempt, "coverage": _coverage(clean, start, _today())})
+            issues.append({"kind": "provider_partial_coverage", **attempt, "coverage": _coverage(clean, coverage_start, _today())})
             break  # A valid alias resolved this security; next provider may add missing cadence.
     return payloads, issues, attempts
 
@@ -528,7 +571,7 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         # End the owned read transaction before spending time on provider IO.
         if own:
             db.rollback()
-        payloads, issues, attempts = _fetch_financial_history(ticker, fetch_start)
+        payloads, issues, attempts = _fetch_financial_history(ticker, fetch_start, required_start=start)
         report["issues"].extend(issues)
         report["attempts"] = attempts
         incoming = {s: [row for payload in payloads for row in payload[s]] for s in LINES}
@@ -635,7 +678,21 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                             report["rows_refreshed"] += 1
         db.flush()
         after = read_stored_financials(ticker, db=db)
+        preserved_duplicates = {i["id"]: i for i in after.get("_history_issues", [])
+                                if i["kind"] == "legacy_duplicate_observation_excluded"}
         for issue in report["issues"]:
+            # A blocked relabel need not make usable history fail when the
+            # exact preserved row has a unique authoritative replacement.
+            # Ambiguous labels and all other collisions stay blocking.
+            if (issue["kind"] == "legacy_period_relabel_conflict"
+                    and issue.get("reason") == "destination_collision"
+                    and issue.get("id") in preserved_duplicates):
+                evidence = preserved_duplicates[issue["id"]]
+                issue.update(kind="legacy_period_relabel_preserved_duplicate",
+                             original_kind="legacy_period_relabel_conflict",
+                             preserved_observation={k: v for k, v in evidence.items()
+                                                    if k not in {"kind", "reason", "replacement"}},
+                             replacement=evidence["replacement"])
             if issue in stored.get("_history_issues", []) and issue not in after.get("_history_issues", []):
                 issue["resolved"] = True
         for issue in after.get("_history_issues", []):
