@@ -15,6 +15,32 @@ from .safe_runner import note_soft
 log = logging.getLogger(__name__)
 
 
+def _retrieved_source(chunk: dict, position: int) -> dict[str, Any]:
+    """Keep a passage's own identity; a primary filing is not its provenance."""
+    meta = chunk.get("meta") if isinstance(chunk.get("meta"), dict) else {}
+    accession = meta.get("accession") or meta.get("accession_number")
+    source_id = chunk.get("source_id")
+    if isinstance(accession, str) and accession.strip():
+        ref = accession.strip()
+    elif isinstance(source_id, str) and source_id.strip() and source_id.strip() != "10K":
+        # BM25 stores the accession directly, unlike vector rows' DB IDs.
+        ref = source_id.strip()
+    elif isinstance(source_id, int) and not isinstance(source_id, bool):
+        ref = f"filing_doc:{source_id}"
+    else:
+        ref = f"unattributed_chunk:{chunk.get('id') or position}"
+    return {
+        "ref": ref,
+        "chunk_id": chunk.get("id"),
+        "source_id": source_id,
+        "section": chunk.get("section"),
+        "period_end": str(chunk["period_end"]) if chunk.get("period_end") else None,
+        "filing_date": meta.get("filing_date"),
+        "filing_type": meta.get("filing_type"),
+        "url": meta.get("url") or chunk.get("url"),
+    }
+
+
 def _flatten_key_points(raw: Any) -> list[str]:
     """Coerce a structured key_points payload into a flat List[str].
 
@@ -154,6 +180,10 @@ def run_filing_agent(
                 "text": h["text"],
                 "section": h.get("section"),
                 "source_type": "filing",
+                "id": h.get("id"),
+                "source_id": h.get("source_id"),
+                "period_end": h.get("period_end"),
+                "meta": h.get("meta"),
             }
             for h in vec_hits
         ]
@@ -180,6 +210,19 @@ def run_filing_agent(
             raw = []
         retrieved = [c for c in raw if _is_filing_chunk(c)][:4]
     primary = next((f for f in filings if f.get("type") == "10-K"), filings[0])
+    retrieved_sources = [_retrieved_source(c, i) for i, c in enumerate(retrieved, 1)]
+    if retrieved_sources:
+        finding_flags["retrieved_sources"] = retrieved_sources
+    unattributed = [s["ref"] for s in retrieved_sources if s["ref"].startswith("unattributed_chunk:")]
+    if unattributed:
+        finding_flags["unattributed_retrieved_chunks"] = unattributed
+        log.warning("Filing Analyst %s: %d unattributed retrieved chunks: %s",
+                    ticker, len(unattributed), ", ".join(unattributed))
+    source_refs = list(dict.fromkeys(
+        [str(primary.get("accession_number") or "")]
+        + [s["ref"] for s in retrieved_sources if s["ref"] not in unattributed]
+    ))
+    finding_sources = [f"filing:{ref}" for ref in source_refs if ref]
 
     # Wave 9b — pass real filing content to the LLM. SEC EDGAR returns
     # full document body for the latest 10-K / 10-Q (see
@@ -247,7 +290,7 @@ def run_filing_agent(
                     kind="filing", ref=accession, section="risk_factors",
                     excerpt=str(risks_list[0])[:300],
                 ))
-        for chunk in (retrieved or [])[:4]:
+        for chunk, source in zip((retrieved or [])[:4], retrieved_sources[:4]):
             chunk_section = (
                 chunk.get("section") if isinstance(chunk, dict) else None
             )
@@ -256,8 +299,8 @@ def run_filing_agent(
             )
             if chunk_text:
                 evidence.append(Citation(
-                    kind="filing",
-                    ref=accession or ticker,
+                    kind="other" if source["ref"] in unattributed else "filing",
+                    ref=source["ref"],
                     section=chunk_section,
                     excerpt=str(chunk_text)[:300],
                 ))
@@ -267,7 +310,7 @@ def run_filing_agent(
             summary=llm_out.get("summary", ""),
             key_points=_flatten_key_points(llm_out.get("key_points", [])),
             confidence=float(llm_out.get("confidence", 0.7)),
-            sources=[f"filing:{accession}"],
+            sources=finding_sources,
             evidence=evidence[:6],
             data=dict(finding_flags),
         )
@@ -313,7 +356,7 @@ def run_filing_agent(
         summary=summary,
         key_points=key_points,
         confidence=0.6,
-        sources=[f"filing:{primary.get('accession_number', '')}"],
+        sources=finding_sources,
         data=dict(finding_flags),
     )
 
