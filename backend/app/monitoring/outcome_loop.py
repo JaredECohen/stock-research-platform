@@ -18,20 +18,9 @@ log = logging.getLogger(__name__)
 
 def run_once() -> dict[str, Any]:
     res = evaluate_all_due()
-    # The note names each shortfall separately. Three of them are outages,
-    # all three counted in `unavailable`, and `unavailable` drives the
-    # failure flag: "the provider returned nothing for this ticker"
-    # (no_prices), "the provider returned fewer bars than we asked for, so
-    # the series begins after the memo" (short_history), and "the window
-    # has a gap around the target date" (window_gap). Only "the memo is
-    # older than the longest window we request" (unevaluable) is permanent,
-    # and it deliberately does NOT turn the loop red — a nightly failure
-    # nobody can act on is a failure everybody learns to ignore.
-    #
-    # Keeping short_history on the red side of that line is the whole
-    # point: a truncated response is the shape a *partial* provider outage
-    # takes, and filing it as permanent would show a green learning loop
-    # that wrote nothing.
+    # Missing or incomplete price coverage and evaluation errors remain
+    # actionable failures. Keep legacy unevaluable counts compatible while
+    # preserving every affected snapshot/horizon identity from the evaluator.
     note = (
         f"evaluated={res['evaluated']} due={res['due']} "
         f"written={res['written']} existing={res['already_recorded']} "
@@ -42,8 +31,9 @@ def run_once() -> dict[str, Any]:
         f"unevaluable={res.get('unevaluable', 0)} "
         f"reflections={res['reflections']} errors={res['errors']}"
     )
-    if res.get("unevaluable_pairs"):
-        note += " unevaluable_pairs=" + ",".join(res["unevaluable_pairs"])
+    for key in ("unevaluable_pairs", "unavailable_pairs", "error_pairs"):
+        if res.get(key):
+            note += f" {key}=" + ",".join(res[key])
     success = res["errors"] == 0 and res["data_unavailable"] == 0
     record_run("outcome_loop", success=success, note=note)
     return res
