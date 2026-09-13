@@ -116,8 +116,8 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 # yields chunks over it, and only one of those degrades retrieval.
 _FALLBACK_CHARS_PER_TOKEN = 3.6
 
-# A token is at least one character, so any string shorter than the budget
-# fits by construction and needs no encoding at all. Above
+# An ASCII character costs at most one token; Unicode code points can cost
+# several. Only short ASCII strings skip encoding. Above
 # `_MAX_CHARS_PER_TOKEN` x budget nothing plausibly fits, so we say so
 # without encoding. Between the two we encode — a bounded slice, never the
 # document. This is what keeps `iter_chunks` from tokenizing a 5 MB 10-K to
@@ -176,7 +176,7 @@ def _fits(text: str, budget: int) -> bool:
     string already known to be within a small multiple of the budget.
     """
     n = len(text)
-    if n <= budget:
+    if n <= budget and text.isascii():
         return True
     if n > budget * _MAX_CHARS_PER_TOKEN:
         return False
@@ -275,17 +275,20 @@ def _iter_words(text: str) -> Iterator[str]:
 
 
 def _hard_cut(text: str, budget: int) -> Iterator[str]:
-    """Last resort: fixed-width character slices of one unsplittable run.
+    """Cut an unsplittable run using bounded, measured character slices.
 
-    Reached only by a single word longer than the budget — a base64 blob or
-    a run-together table dump. Sized from the character heuristic rather
-    than by encoding, because by definition there is no boundary to respect.
+    Unicode and encoded blobs can have several model tokens per character.
+    The character estimate only selects a candidate; shrink it until its
+    measured token count fits, preserving every original code point.
     """
     width = max(1, int(budget * _FALLBACK_CHARS_PER_TOKEN))
-    for i in range(0, len(text), width):
-        piece = text[i : i + width]
-        if piece.strip():
-            yield piece
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + width)
+        while end - start > 1 and count_tokens(text[start:end]) > budget:
+            end = start + max(1, (end - start) // 2)
+        yield text[start:end]
+        start = end
 
 
 def _iter_atoms(text: str, budget: int, level: int = 0) -> Iterator[str]:
@@ -297,7 +300,7 @@ def _iter_atoms(text: str, budget: int, level: int = 0) -> Iterator[str]:
     current piece — never the whole document, and never its token list.
     """
     if _fits(text, budget):
-        if text.strip():
+        if text:
             yield text
         return
 
@@ -376,13 +379,30 @@ def _ends_in_abbreviation(fragment: str) -> bool:
 
 
 def _overlap_tail(chunk: str, overlap_tokens: int) -> str:
-    """Whole trailing sentences of `chunk`, up to `overlap_tokens`.
+    """Whole trailing sentences of `chunk`, never more than `overlap_tokens`.
 
     Fixed-width overlap was the other half of the old chunker's problem: 50
     words back from an arbitrary cut reproduces a sentence *fragment*, so
     the sentence carrying the figure is still severed — now in both chunks.
     Carrying whole sentences means the boundary never falls inside the
     statement a retrieval hit depends on.
+
+    `overlap_tokens` is a cap, including on the first sentence considered.
+    Guaranteeing one whole sentence whatever its size sounds harmless and
+    is not: a single run-on sentence — or an EDGAR table block, which has
+    no `[.!?]` boundary at all and so reads as one "sentence" — is carried
+    in full, and the chunk that follows it is then mostly a copy of its
+    predecessor. Measured on filing-shaped text, that cost ~1.9x the
+    embedding spend and ~1.9x the `doc_chunks` rows, and the near-duplicate
+    chunks compete with each other for `vector_store.search`'s top-k.
+
+    When the last sentence alone is over the cap, the overlap degrades one
+    rung down the same boundary ladder `_iter_atoms` uses — to whole
+    trailing clauses — rather than to an arbitrary word offset. Nothing is
+    severed by that: the sentence is intact at the end of `chunk`, and what
+    is carried forward is a boundary-aligned lead-in, not the sentence's
+    only copy. Below a clause there is nothing meaningful left to carry, so
+    the overlap is dropped.
     """
     if overlap_tokens <= 0 or not chunk.strip():
         return ""
@@ -390,7 +410,9 @@ def _overlap_tail(chunk: str, overlap_tokens: int) -> str:
     total = 0
     for sentence in reversed(list(_iter_sentences(chunk))):
         n = count_tokens(sentence)
-        if tail and total + n > overlap_tokens:
+        if total + n > overlap_tokens:
+            if not tail:
+                tail = _clause_tail(sentence, overlap_tokens)
             break
         tail.insert(0, sentence)
         total += n
@@ -402,6 +424,28 @@ def _overlap_tail(chunk: str, overlap_tokens: int) -> str:
     if len(out) >= len(chunk):
         return ""
     return out
+
+
+def _clause_tail(sentence: str, budget: int) -> list[str]:
+    """Whole trailing clauses of one oversized sentence, within `budget`.
+
+    Returns a list of pieces so `_overlap_tail` can join them the way it
+    joins sentences. Empty when even the last clause is over budget —
+    there is no boundary below this one worth carrying, and a bare word
+    suffix is the fragment this module exists to stop producing.
+    """
+    pieces = list(_iter_split(sentence, _CLAUSE_BREAK))
+    if len(pieces) < 2:  # no clause boundary: `_iter_split` yields the whole
+        return []
+    tail: list[str] = []
+    total = 0
+    for piece in reversed(pieces):
+        n = count_tokens(piece)
+        if total + n > budget:
+            break
+        tail.insert(0, piece)
+        total += n
+    return tail
 
 
 def iter_chunks(
@@ -438,12 +482,27 @@ def iter_chunks(
             # Push the trailing figures into the next chunk instead; the
             # loop still advances because at least one atom always stays.
             pushed: list[str] = []
+            pushed_tokens = 0
             while len(buf) > 1 and _BARE_FIGURE.match(buf[-1].strip()):
+                last_tokens = count_tokens(buf[-1])
+                # A numeric run may itself fill a chunk. Keep every figure,
+                # but never move more than fits beside the incoming atom.
+                if pushed_tokens + last_tokens + n > target:
+                    break
                 pushed.insert(0, buf.pop())
+                pushed_tokens += last_tokens
             chunk = "".join(buf)
             if chunk.strip():
                 yield chunk
-            carry = _overlap_tail(chunk, overlap)
+            # The overlap is context, and context never costs the next chunk
+            # its budget: ask for only what is left after the atom that
+            # forced this flush (and any figures pushed along with it). A
+            # long sentence therefore carries less overlap, where the
+            # alternative is a chunk well over target — `buf` is rebuilt as
+            # carry + pushed + atom, so an unbudgeted carry lands in the
+            # chunk whole.
+            room = target - n - sum(count_tokens(piece) for piece in pushed)
+            carry = _overlap_tail(chunk, min(overlap, max(0, room)))
             buf = ([carry] if carry else []) + pushed
             buf_tokens = sum(count_tokens(piece) for piece in buf)
         buf.append(atom)

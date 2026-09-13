@@ -205,8 +205,15 @@ def test_paragraph_and_section_structure_is_preferred_over_a_fixed_window():
 
 def test_overlap_carries_whole_trailing_sentences():
     """Fixed word overlap reproduced a fragment; boundary-aligned overlap
-    reproduces the sentence that carries the fact."""
-    chunks = emb.chunk_text(MDNA, target_tokens=TARGET, overlap_tokens=OVERLAP)
+    reproduces the sentence that carries the fact.
+
+    Run at an overlap budget that a whole `MDNA` sentence fits inside — the
+    regime this property actually holds in. The budget is a cap, so what
+    happens when a sentence does *not* fit is a separate question, asserted
+    directly below.
+    """
+    wide = max(emb.count_tokens(s) for s in _MDNA_SENTENCES) + 2
+    chunks = emb.chunk_text(MDNA, target_tokens=TARGET, overlap_tokens=wide)
     assert len(chunks) > 2
 
     for earlier, later in zip(chunks, chunks[1:]):
@@ -214,6 +221,94 @@ def test_overlap_carries_whole_trailing_sentences():
         assert head.strip() in earlier, (
             "the chunk boundary is not carrying a whole sentence forward"
         )
+        assert any(head.strip() == s.strip() for s in _MDNA_SENTENCES), (
+            f"the carried lead-in is not a whole sentence: {head!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The overlap budget is a cap
+# ---------------------------------------------------------------------------
+
+def test_the_overlap_never_exceeds_its_budget():
+    """The defect: one whole sentence was carried whatever its size.
+
+    `_overlap_tail` walked the chunk's sentences backwards and exempted the
+    first one it considered from the budget, to guarantee at least one whole
+    sentence of overlap. On ordinary filing prose that is a ~10% overshoot.
+    On the shapes this module exists for it is not: a run-on risk factor, or
+    an EDGAR table block — which carries no `[.!?]` boundary at all and so
+    reads as one enormous "sentence" — was carried into the next chunk
+    whole, and the overlap ran an order of magnitude over its budget.
+    """
+    huge = "The Company faces " + " ".join(
+        f"risk factor {i} with exposure of ${i},{i:03d} million" for i in range(40)
+    ) + ". "
+    chunk = "Net sales rose 12.4%. " + huge
+    assert emb.count_tokens(huge) > 10 * OVERLAP, "fixture is not oversized"
+
+    tail = emb._overlap_tail(chunk, OVERLAP)
+
+    assert emb.count_tokens(tail) <= OVERLAP, (
+        f"the overlap is {emb.count_tokens(tail)} tokens against a budget of "
+        f"{OVERLAP}: {tail[:120]!r}"
+    )
+    assert chunk.endswith(tail), "the overlap must stay a suffix of the chunk"
+
+
+def test_an_oversized_sentence_degrades_to_a_clause_not_to_nothing():
+    """Where the cap sends the overlap when a whole sentence will not fit.
+
+    Dropping the overlap entirely would be the easy cap, and it would quietly
+    disable overlap across most of the corpus: filing sentences are routinely
+    longer than a 50-token budget. So it steps one rung down the same
+    boundary ladder `_iter_atoms` uses — whole trailing clauses — which is
+    still boundary-aligned, unlike the arbitrary word offset this chunker
+    replaced.
+    """
+    sentence = (
+        "Total net sales increased 12.4% to $394,328 million in fiscal 2026 "
+        "from $350,000 million in fiscal 2025, while gross margin expanded "
+        "200 bps to 40.2%. "
+    )
+    chunk = "The prior sentence. " + sentence
+    budget = emb.count_tokens(sentence) - 5  # too small for the whole sentence
+
+    tail = emb._overlap_tail(chunk, budget)
+
+    assert tail, "a clause-aligned overlap was available and was not carried"
+    assert emb.count_tokens(tail) <= budget
+    assert tail.startswith("while gross margin"), (
+        f"the overlap did not start at a clause boundary: {tail!r}"
+    )
+
+
+def test_a_long_sentence_does_not_double_the_corpus():
+    """The cost the cap exists to stop, measured end to end at the defaults.
+
+    An uncapped carry does not just overshoot the overlap — it lands in the
+    next chunk whole, so the chunk itself blows the token budget too. Before
+    the cap this text produced 845-token chunks against a 500-token budget
+    and 1.8x the content, which is 1.8x the embedding spend, 1.8x the
+    `doc_chunks` rows, and near-duplicate chunks competing with each other
+    for `vector_store.search`'s top-k.
+    """
+    sentence = "The Company faces " + " ".join(
+        f"risk factor {i} with exposure of ${i},{i:03d} million" for i in range(38)
+    ) + ". "
+    assert 50 < emb.count_tokens(sentence) < 500, "fixture must fit one chunk"
+    doc = ("Net sales rose 12.4%. " + sentence + sentence) * 3
+
+    chunks = emb.chunk_text(doc, target_tokens=500, overlap_tokens=50)
+    sizes = [emb.count_tokens(c) for c in chunks]
+
+    assert max(sizes) <= 500, (
+        f"a chunk ran to {max(sizes)} tokens against a 500-token budget: the "
+        f"overlap is being carried into it unbudgeted"
+    )
+    assert sum(sizes) <= emb.count_tokens(doc) * 1.25, (
+        f"the corpus was duplicated {sum(sizes) / emb.count_tokens(doc):.2f}x"
+    )
 
 
 def test_every_chunk_is_a_contiguous_slice_of_the_source():
@@ -465,3 +560,24 @@ def test_chunk_text_still_returns_a_list_for_the_transcript_path():
     out = emb.chunk_text(MDNA, target_tokens=TARGET, overlap_tokens=OVERLAP)
     assert isinstance(out, list)
     assert all(isinstance(c, str) for c in out)
+
+
+@pytest.mark.parametrize("unit", ["營業收入增長風險市場", "🧑🏽‍💻🚀", "aZ3_9/"])
+def test_dense_unsplittable_runs_respect_measured_budget_without_losing_text(unit):
+    text = unit * 1200
+    chunks = emb.chunk_text(text, target_tokens=500, overlap_tokens=0)
+    assert "".join(chunks) == text
+    assert all(emb.count_tokens(chunk) <= 500 for chunk in chunks)
+
+
+def test_short_unicode_is_measured_in_tokens_not_code_points():
+    text = "🚀" * 100
+    assert len(text) <= 120 < emb.count_tokens(text)
+    assert not emb._fits(text, 120)
+
+
+def test_numeric_run_carry_cannot_overfill_the_next_paragraph():
+    text = "business " * 100 + "123 " * 200 + "\n\n" + "growth " * 473
+    chunks = emb.chunk_text(text, target_tokens=500, overlap_tokens=0)
+    assert "".join(chunks) == text
+    assert max(map(emb.count_tokens, chunks)) <= 500
