@@ -136,11 +136,14 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     events: list[dict] = []
     deferred: list[str] = []
     processed = 0
+    poll_errors: list[str] = []
+    handler_errors: list[str] = []
     for t in tickers:
         try:
             transcripts = get_transcripts(t) or []
         except Exception as exc:
-            log.warning("transcript poll failed for %s: %s", t, exc)
+            poll_errors.append(f"{t}:{type(exc).__name__}")
+            log.warning("transcript poll failed ticker=%s error_type=%s", t, type(exc).__name__)
             continue
 
         # Period is the canonical key — providers return e.g.
@@ -153,6 +156,7 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
 
         seen = _seen_periods(t)
         new = periods - seen
+        accepted_periods = set(periods)
         if new and seen:  # skip first-run init
             if processed >= MAX_EVENT_TICKERS_PER_PASS:
                 # Over the cap. The `continue` also skips the bookkeeping
@@ -169,16 +173,19 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
                     regenerated = on_transcript_event(t, period=period)
                 except Exception as exc:  # pragma: no cover — diagnostic
                     log.warning(
-                        "update_orchestrator transcript handler failed for %s/%s: %s",
-                        t, period, exc,
+                        "transcript handler failed ticker=%s period=%s error_type=%s",
+                        t, period, type(exc).__name__,
                     )
+                    handler_errors.append(f"{t}:{period}:{type(exc).__name__}")
+                if regenerated is None or regenerated.get("kind") in {"persist_error", "gate_error"}:
+                    accepted_periods.discard(period)
                 events.append({
                     "ticker": t,
                     "period": period,
                     "regenerated": regenerated,
                 })
-        if periods:
-            _save_seen_periods(t, _bounded_seen(periods, seen))
+        if accepted_periods:
+            _save_seen_periods(t, _bounded_seen(accepted_periods, seen))
 
     # `kind="gate_error"` = the auto-regen gate crashed rather than
     # decided; surface it in the note instead of letting it pass as a skip.
@@ -186,6 +193,32 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         e["ticker"] for e in events
         if isinstance(e.get("regenerated"), dict)
         and e["regenerated"].get("kind") == "gate_error"
+    ]
+    persist_errors = [
+        error for event in events
+        if isinstance(event.get("regenerated"), dict)
+        if (error := (event["regenerated"].get("persisted") or {}).get("persist_error"))
+    ]
+    fetch_failures = [
+        failure for event in events
+        if isinstance(event.get("regenerated"), dict)
+        for failure in ((event["regenerated"].get("persisted") or {}).get("filing_fetch_failures") or [])
+    ]
+    post_pass_failures = [
+        failure
+        for event in events
+        if isinstance(event.get("regenerated"), dict)
+        for failure in (
+            (event["regenerated"].get("persisted") or {}).get("post_pass_failures") or []
+        )
+    ]
+    truncated_filings = [
+        source
+        for event in events
+        if isinstance(event.get("regenerated"), dict)
+        for source in (
+            (event["regenerated"].get("persisted") or {}).get("truncated_filings") or []
+        )
     ]
     note = f"{len(events)} new transcripts"
     # Say the constraint out loud. `excluded is None` means the caller named
@@ -196,8 +229,30 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         note += f"; deferred {len(deferred)} over the {MAX_EVENT_TICKERS_PER_PASS}"
         note += f"-ticker cap: {note_names(deferred)}"
     if gate_errors:
-        note += f"; gate errors on {len(gate_errors)}: {', '.join(gate_errors[:5])}"
-    record_run("transcripts_poller", success=not gate_errors, note=note)
+        note += f"; gate errors on {len(gate_errors)}: {', '.join(gate_errors)}"
+    if poll_errors:
+        note += f"; provider errors={len(poll_errors)}: " + ", ".join(poll_errors)
+    if handler_errors:
+        note += f"; handler errors={len(handler_errors)}: " + ", ".join(handler_errors)
+    if persist_errors:
+        note += f"; persist errors={len(persist_errors)}: " + ", ".join(
+            f"{e['ticker']}:{e['stage']}:{e['error_type']}" for e in persist_errors
+        )
+    if fetch_failures:
+        from ..services.history_service import filing_fetch_failure_note
+        note += f"; filing fetch failures={len(fetch_failures)}: " + filing_fetch_failure_note(fetch_failures)
+    if post_pass_failures:
+        from ..services.history_service import post_pass_failure_note
+        note += (
+            f"; post-pass failures={len(post_pass_failures)}: "
+            + post_pass_failure_note(post_pass_failures)
+        )
+    if truncated_filings:
+        from ..services.history_service import truncated_filing_note
+        note += f"; bounded filing sources={len(truncated_filings)}: " + truncated_filing_note(truncated_filings)
+    record_run("transcripts_poller", success=not any((
+        gate_errors, post_pass_failures, persist_errors, poll_errors, handler_errors, fetch_failures,
+    )), note=note)
     return events
 
 

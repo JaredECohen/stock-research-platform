@@ -84,6 +84,10 @@ CAPABILITY_CASES = [
 @pytest.mark.parametrize("method,expected_agent", CAPABILITY_CASES)
 def test_capability_failure_lands_in_degraded_agents(monkeypatch, method, expected_agent):
     monkeypatch.setattr(DataService, method, _boom)
+    if method == "get_news":
+        from app.services import vector_store
+        # News is read only by the BM25 fallback, not a successful vector read.
+        monkeypatch.setattr(vector_store, "search", lambda *a, **kw: [])
     memo = graph.run_stock_memo("NVDA", force_refresh=True)
     assert memo.ticker == "NVDA"
     assert expected_agent in memo.degraded_agents, memo.degraded_agents

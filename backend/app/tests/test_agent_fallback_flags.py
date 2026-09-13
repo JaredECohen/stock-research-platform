@@ -243,7 +243,9 @@ def test_filing_bm25_failure_is_soft_not_fatal(monkeypatch):
     """A dead news feed reaches the filing analyst through the BM25 layer;
     it used to propagate as a hard failure that replaced the whole
     section with the "unavailable" stub."""
-    from app.services import retrieval_service
+    from app.services import retrieval_service, vector_store
+    # Force this test through BM25 even when earlier ingests populated vectors.
+    monkeypatch.setattr(vector_store, "search", lambda *a, **kw: [])
     monkeypatch.setattr(retrieval_service, "search", _boom)
     log = DegradationLog()
     with log.activate():

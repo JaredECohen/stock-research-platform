@@ -142,10 +142,14 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
         tickers = _rotated(_tier1_tickers(), day)
     totals = {"financial_periods": 0, "filings": 0, "transcripts": 0}
     errors = 0
+    error_names: list[str] = []
+    fetch_failures: list[dict] = []
     rate_limited = 0
     auth_errors = 0
     cold = 0
     deferred: list[str] = []
+    post_pass_failures: list[dict] = []
+    truncated_filings: list[dict] = []
     for t in tickers:
         try:
             # Ask before spending. A warm ticker reconciles cached rows
@@ -158,8 +162,11 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
                     continue
                 cold += 1
             res = backfill_ticker(t, prefer_cached=not single)
-            for k, v in res.items():
-                totals[k] = totals.get(k, 0) + v
+            for k in ("financial_periods", "filings", "transcripts"):
+                totals[k] += res.get(k, 0)
+            fetch_failures.extend(res.get("filing_fetch_failures") or [])
+            post_pass_failures.extend(res.get("post_pass_failures") or [])
+            truncated_filings.extend(res.get("truncated_filings") or [])
         except Exception as exc:  # pragma: no cover — diagnostic only
             errors += 1
             msg = str(exc).lower()
@@ -167,7 +174,8 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
                 rate_limited += 1
             if "401" in msg or "403" in msg or "forbidden" in msg or "unauthorized" in msg:
                 auth_errors += 1
-            log.warning("history_backfill failed for %s: %s", t, exc)
+            error_names.append(f"{t}:{type(exc).__name__}")
+            log.warning("history_backfill failed ticker=%s error_type=%s", t, type(exc).__name__)
     note_parts = [
         f"tickers={len(tickers) - len(deferred)}",
         f"fp={totals['financial_periods']}",
@@ -187,13 +195,30 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
             f"; deferred {len(deferred)} over the {MAX_COLD_TICKERS_PER_PASS}"
             f"-cold-read cap: {note_names(deferred)}"
         )
-    record_run("history_backfill", success=errors == 0, note=note)
+    if error_names:
+        note += "; failed tickers: " + ", ".join(error_names)
+    if fetch_failures:
+        from ..services.history_service import filing_fetch_failure_note
+        note += f"; filing fetch failures={len(fetch_failures)}: " + filing_fetch_failure_note(fetch_failures)
+    if post_pass_failures:
+        from ..services.history_service import post_pass_failure_note
+        note += (
+            f"; post-pass failures={len(post_pass_failures)}: "
+            + post_pass_failure_note(post_pass_failures)
+        )
+    if truncated_filings:
+        from ..services.history_service import truncated_filing_note
+        note += f"; bounded filing sources={len(truncated_filings)}: " + truncated_filing_note(truncated_filings)
+    record_run("history_backfill", success=errors == 0 and not post_pass_failures and not fetch_failures, note=note)
     totals["errors"] = errors
     totals["rate_limited"] = rate_limited
     totals["auth_errors"] = auth_errors
     totals["cold_reads"] = cold
     totals["deferred"] = len(deferred)
     totals["tickers_processed"] = len(tickers) - len(deferred)
+    totals["filing_fetch_errors"] = len(fetch_failures)
+    totals["post_pass_errors"] = len(post_pass_failures)
+    totals["truncated_filings"] = len(truncated_filings)
     return totals
 
 
