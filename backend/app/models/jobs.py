@@ -74,11 +74,12 @@ class RegenJob(Base):
 
     Lifecycle: queued → running → succeeded | failed. A single worker
     thread (`services/regen_worker.py`) claims queued jobs oldest-first.
-    On worker startup, orphaned `running` jobs (the process died
-    mid-run) are requeued once with the same `run_id` — the Wave 8A
-    checkpoint store then skips already-completed steps — and marked
-    failed on the second orphaning so a crash-looping ticker can't
-    wedge the queue.
+    Expired owned `running` attempts are requeued once with the same
+    `run_id`; checkpoints skip completed steps. Renewed leases prevent
+    rolling-deploy overlap from stealing active work. An exact memo version
+    recorded during publication lets recovery finish without rerunning;
+    repeated expiry without publication fails the job. Legacy unowned
+    running rows are explicitly deferred until process death is verified.
 
     `run_id` joins against `MemoRunCheckpoint` (per-step progress) and
     `LLMCallLog` (per-call cost/failure) so one id links the job to its
@@ -99,7 +100,11 @@ class RegenJob(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    # Version of the MemoSnapshot the job produced (success only).
+    # Nullable for safe boot migration. Unowned legacy running jobs are
+    # deferred for explicit old-process verification, never assumed dead.
+    owner_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Exact publication receipt, written atomically with the MemoSnapshot.
     memo_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_type: Mapped[str] = mapped_column(String(64), default="")
     error_message: Mapped[str] = mapped_column(Text, default="")

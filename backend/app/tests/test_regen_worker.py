@@ -47,6 +47,13 @@ def _clean_regen_jobs():
 
 
 def _fake_memo(ticker: str = "MSFT") -> SimpleNamespace:
+    # Queue-only graph stub: simulate its atomic publication receipt.
+    from app.services.regen_lease import current_claim
+    claim = current_claim()
+    if claim is not None:
+        with SessionLocal() as db:
+            db.get(RegenJob, claim.job_id).memo_version = 7
+            db.commit()
     return SimpleNamespace(ticker=ticker, rating_label="Neutral")
 
 
@@ -155,8 +162,11 @@ def test_recover_orphans_requeues_once_then_fails():
     job, _ = regen_worker.enqueue("MSFT")
     # Simulate a process death mid-run: claimed but never finished.
     claimed = regen_worker.claim_next_job()
-    assert claimed == job["id"]
+    assert claimed.job_id == job["id"]
 
+    with SessionLocal() as db:
+        db.get(RegenJob, job["id"]).lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+        db.commit()
     out = regen_worker.recover_orphans()
     assert out["requeued"] == 1
     with SessionLocal() as db:
@@ -166,6 +176,9 @@ def test_recover_orphans_requeues_once_then_fails():
 
     # Second orphaning of the same job → permanent failure, no loop.
     regen_worker.claim_next_job()
+    with SessionLocal() as db:
+        db.get(RegenJob, job["id"]).lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+        db.commit()
     out = regen_worker.recover_orphans()
     assert out["failed"] == 1
     state = regen_worker.ticker_status("MSFT")

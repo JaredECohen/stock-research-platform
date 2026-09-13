@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
 from ..models import MemoRunCheckpoint
+from .regen_lease import assert_current
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ def save_step(
             log.debug("checkpoint serialize skipped for %s/%s: %s",
                       run_id, step_name, exc)
             return False
+        assert_current(db=db, lock=True, run_id=run_id)
         existing = db.execute(
             select(MemoRunCheckpoint).where(
                 MemoRunCheckpoint.run_id == run_id,
@@ -99,7 +101,10 @@ def save_step(
                 run_id=run_id, step_name=step_name, ticker=ticker,
                 payload=blob, generated_at=_now(), expires_at=expires,
             ))
-        db.commit()
+        if own:
+            db.commit()
+        else:
+            db.flush()
         return True
     except Exception as exc:  # pragma: no cover — defensive
         log.warning("checkpoint save failed for %s/%s: %s", run_id, step_name, exc)
@@ -202,6 +207,7 @@ def checkpointed(
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> T:
             run_id = _current_run_id()
+            assert_current(run_id=run_id)
             if not run_id:
                 return fn(*args, **kwargs)
             cached = load_step(run_id, step_name)

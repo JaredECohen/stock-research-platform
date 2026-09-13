@@ -15,21 +15,15 @@ existed — the frontend just spun forever. Here every regen request is a
                       the worker's coarse waypoints with the Wave 8A
                       `MemoRunCheckpoint` rows for the job's `run_id`
 
-Crash recovery (the part the daemon thread fundamentally couldn't do):
-on worker startup, any job still marked `running` means the previous
-process died mid-run (SIGKILL, deploy). It is requeued ONCE with the
-same `run_id` — the checkpoint store then skips already-completed steps,
-so the retry resumes rather than restarts — and marked `failed` with
-`error_type=WorkerRestart` if it orphans a second time, so a ticker
-that reliably OOMs the process can't crash-loop the service. Stale
-`queued` jobs older than `regen_queue_max_age_minutes` are expired at
-startup instead of executed, so a backlog accumulated during downtime
-doesn't burn LLM spend on requests nobody is waiting for.
+Crash recovery checks expired execution leases, including during idle polling.
+A rolling-deploy predecessor keeps renewing while it executes. Per-attempt
+ownership fences progress, checkpoints, publication and completion. A snapshot's
+exact version is recorded on the job in the publication transaction, allowing
+recovery to finish a published job without repeating the graph. Unowned legacy
+running rows are reported and deferred until old-process death is verified.
 
-Single-replica by design (same assumption as the rest of the app — see
-the rate-limit / regen comments in render.yaml). The claim is still an
-atomic conditional UPDATE, so a second replica would degrade safely
-(jobs run once) rather than corrupt state.
+The worker remains single-replica because its other monitoring loops are not
+multi-instance safe; regeneration claims tolerate rolling process overlap.
 """
 from __future__ import annotations
 
@@ -50,6 +44,8 @@ from ..database import SessionLocal
 from ..models import Company, MemoRunCheckpoint, RegenJob
 from ..seed_universe import ensure_company_in_universe
 from ..services.history_service import backfill_ticker
+from . import regen_lease
+from .regen_lease import JobClaim, LeaseLost
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +81,8 @@ def _job_dict(job: RegenJob) -> dict[str, Any]:
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         "memo_version": job.memo_version,
+        "lease_expires_at": job.lease_expires_at.isoformat() if job.lease_expires_at else None,
+        "ownership_tracked": job.owner_token is not None,
         "error_type": job.error_type or "",
         "error_message": job.error_message or "",
         "traceback_tail": job.traceback_tail or "",
@@ -260,9 +258,10 @@ def _append_progress(job_id: int, step: str) -> None:
     """Append a waypoint to the job's progress trace. Never raises."""
     try:
         with SessionLocal() as db:
-            job = db.get(RegenJob, job_id)
-            if job is None:
-                return
+            claim = regen_lease.current_claim()
+            if claim is None or claim.job_id != job_id:
+                raise LeaseLost(f"No execution ownership for regeneration job {job_id}")
+            job = regen_lease.assert_claim(claim, db=db, lock=True)
             steps = list(job.progress or [])
             steps.append({"step": step, "at": _utcnow().isoformat()})
             # Reassign (don't mutate) so the JSON column change is tracked.
@@ -324,191 +323,173 @@ def _introduce_ticker(job_id: int, ticker: str) -> None:
     _append_progress(job_id, "ticker_introduced")
 
 
-def recover_orphans() -> dict[str, int]:
-    """Startup pass over jobs the previous process left behind.
+def recover_orphans(*, report_legacy: bool = True) -> dict[str, Any]:
+    """Recover only expired owned attempts, including while the worker is idle.
 
-    - `running` rows mean the process died mid-regen (OOM kill bypasses
-      every except-block — see render.yaml). First orphaning requeues
-      the job with the same `run_id` so checkpointed steps are skipped
-      on retry; the second marks it failed so a job that kills the
-      process every time can't crash-loop the service.
-    - `queued` rows older than the max queue age are expired rather
-      than executed: nobody is watching a poll loop from hours ago, and
-      silently running a backlog after downtime is pure LLM spend.
-
-    A job that ends here as `failed` delivered nothing, so its research-
-    run reservation (FEAT-002) is released; a requeued job keeps its
-    reservation because the retry may still deliver.
+    A live rolling-deploy predecessor retains its renewable lease. Legacy
+    unowned rows require explicit process-death evidence and are deferred.
+    An atomic publication receipt finishes recovery without repeating a memo.
     """
-    requeued = failed = expired = 0
-    released: list[tuple[int, int]] = []
+    requeued = failed = expired = published = 0
+    charges: list[tuple[int, int, bool]] = []
+    legacy = []
     with SessionLocal() as db:
         _ensure_table(db)
         now = _utcnow()
-        for job in db.execute(
-            select(RegenJob).where(RegenJob.status == "running")
-        ).scalars().all():
-            if job.attempts < 2:
+        candidates = list(db.execute(select(RegenJob).where(RegenJob.status == "running")).scalars())
+        for job in candidates:
+            if job.owner_token is None or job.lease_expires_at is None:
+                legacy.append({"id": job.id, "ticker": job.ticker, "run_id": job.run_id,
+                               "started_at": job.started_at.isoformat() if job.started_at else None})
+                continue
+            if job.lease_expires_at > now:
+                continue
+            # Compare the exact observed ownership and expiry; a renewal or
+            # another recovery that won the race makes this attempt a no-op.
+            changed = db.execute(update(RegenJob).where(
+                RegenJob.id == job.id, RegenJob.status == "running",
+                RegenJob.owner_token == job.owner_token,
+                RegenJob.lease_expires_at == job.lease_expires_at,
+                RegenJob.lease_expires_at <= now,
+            ).values(owner_token=job.owner_token).execution_options(synchronize_session=False)).rowcount
+            if not changed:
+                continue
+            db.refresh(job)
+            if job.memo_version is not None:
+                job.status = "succeeded"
+                job.finished_at = now
+                job.error_type = job.error_message = job.traceback_tail = ""
+                job.progress = list(job.progress or []) + [{"step": "published_memo_recovered", "at": now.isoformat()}]
+                published += 1
+                if job.usage_event_id is not None:
+                    charges.append((job.id, job.usage_event_id, True))
+            elif job.attempts < 2:
                 job.status = "queued"
                 job.enqueued_at = now
                 job.started_at = None
-                job.progress = list(job.progress or []) + [{
-                    "step": "requeued_after_process_restart",
-                    "at": now.isoformat(),
-                }]
+                job.progress = list(job.progress or []) + [{"step": "requeued_after_lease_expired", "at": now.isoformat()}]
                 requeued += 1
             else:
                 job.status = "failed"
                 job.finished_at = now
                 job.error_type = "WorkerRestart"
-                job.error_message = (
-                    "Process died mid-regeneration twice (likely OOM kill or "
-                    "deploy). Not retrying automatically — check memory "
-                    "headroom and re-trigger manually."
-                )
+                job.error_message = "Execution lease expired twice without publication; automatic retries exhausted."
                 failed += 1
                 if job.usage_event_id is not None:
-                    released.append((job.id, job.usage_event_id))
+                    charges.append((job.id, job.usage_event_id, False))
+            job.owner_token = None
+            job.lease_expires_at = None
         cutoff = now - timedelta(minutes=settings.regen_queue_max_age_minutes)
-        for job in db.execute(
-            select(RegenJob).where(
-                RegenJob.status == "queued", RegenJob.enqueued_at < cutoff,
-            )
-        ).scalars().all():
-            job.status = "failed"
-            job.finished_at = now
-            job.error_type = "QueueExpired"
-            job.error_message = (
-                f"Queued for over {settings.regen_queue_max_age_minutes} "
-                "minutes without a worker claiming it; expired at startup "
-                "instead of running stale."
-            )
-            expired += 1
-            if job.usage_event_id is not None:
-                released.append((job.id, job.usage_event_id))
+        stale_queued = list(db.execute(select(RegenJob).where(
+            RegenJob.status == "queued", RegenJob.enqueued_at < cutoff,
+        )).scalars())
+        for job in stale_queued:
+            changed = db.execute(update(RegenJob).where(
+                RegenJob.id == job.id, RegenJob.status == "queued", RegenJob.enqueued_at < cutoff,
+            ).values(status="failed", finished_at=now, error_type="QueueExpired",
+                error_message=f"Queued for over {settings.regen_queue_max_age_minutes} minutes; expired without execution.")
+                .execution_options(synchronize_session=False)).rowcount
+            if changed:
+                expired += 1
+                if job.usage_event_id is not None:
+                    charges.append((job.id, job.usage_event_id, False))
         db.commit()
-    for job_id, event_id in released:
-        _finalize_charge(event_id, commit=False, job_id=job_id)
-    if requeued or failed or expired:
-        log.warning(
-            "regen recovery: %d requeued, %d failed (repeat orphan), %d expired",
-            requeued, failed, expired,
-        )
-    return {"requeued": requeued, "failed": failed, "expired": expired}
+    for job_id, event_id, commit in charges:
+        _finalize_charge(event_id, commit=commit, job_id=job_id)
+    if requeued or failed or expired or published:
+        log.warning("regen recovery: %d requeued, %d failed, %d expired, %d published completions recovered",
+                    requeued, failed, expired, published)
+    if legacy and report_legacy:
+        log.warning("regen recovery deferred %d legacy unowned jobs; verify prior process death before intervention: %s", len(legacy), legacy)
+    result: dict[str, Any] = {"requeued": requeued, "failed": failed, "expired": expired}
+    if published:
+        result["published_recovered"] = published
+    if legacy:
+        result["legacy_deferred"] = legacy
+    return result
 
 
-def claim_next_job() -> int | None:
-    """Atomically move the oldest queued job to `running`. Returns its id."""
+def claim_next_job() -> JobClaim | None:
+    """Claim the oldest queued job; return this attempt's immutable receipt."""
     with SessionLocal() as db:
         _ensure_table(db)
-        row = db.execute(
-            select(RegenJob.id, RegenJob.attempts)
-            .where(RegenJob.status == "queued")
-            .order_by(RegenJob.id)
-        ).first()
+        row = db.execute(select(RegenJob.id).where(RegenJob.status == "queued").order_by(RegenJob.id)).first()
         if row is None:
             return None
-        job_id, attempts = row
-        res = db.execute(
-            update(RegenJob)
-            .where(RegenJob.id == job_id, RegenJob.status == "queued")
-            .values(status="running", started_at=_utcnow(), attempts=attempts + 1)
-        )
+        claim = JobClaim(job_id=row[0], owner_token=str(uuid.uuid4()))
+        now = _utcnow()
+        changed = db.execute(update(RegenJob).where(
+            RegenJob.id == claim.job_id, RegenJob.status == "queued",
+        ).values(status="running", started_at=now, attempts=RegenJob.attempts + 1,
+                 owner_token=claim.owner_token, lease_expires_at=now + timedelta(seconds=regen_lease.LEASE_SECONDS))).rowcount
         db.commit()
-        return job_id if res.rowcount else None
+        return claim if changed else None
 
 
-def execute_job(job_id: int) -> dict[str, Any]:
-    """Run one claimed job to completion and record the outcome.
-
-    Catches BaseException (not just Exception) so asyncio cancellation
-    and friends land in the failure record rather than vanishing;
-    SystemExit / KeyboardInterrupt re-raise after a waypoint so process
-    shutdown isn't swallowed.
-    """
+def _finish_claim(claim: JobClaim, error: BaseException | None = None, tb: str = "") -> dict[str, Any] | None:
+    """Only the current owner can finish; a published memo remains success."""
     with SessionLocal() as db:
-        job = db.get(RegenJob, job_id)
-        if job is None:
-            return {}
-        ticker, scenario, run_id = job.ticker, job.scenario, job.run_id
-        user_id, usage_event_id = job.requested_by_user_id, job.usage_event_id
-    started = _utcnow()
-    _append_progress(job_id, "worker_claimed")
+        try:
+            job = regen_lease.assert_claim(claim, db=db, lock=True)
+        except LeaseLost:
+            return None
+        delivered = job.memo_version is not None
+        if error is None and not delivered:
+            raise RuntimeError("Memo graph returned without an owned publication receipt")
+        job.status = "succeeded" if delivered else "failed"
+        job.finished_at = _utcnow()
+        job.error_type = "" if delivered else type(error).__name__
+        job.error_message = "" if delivered else str(error)[:500]
+        job.traceback_tail = "" if delivered else tb[-1500:]
+        job.progress = (list(job.progress or []) + [{
+            "step": "job_succeeded" if delivered else f"exception_caught {type(error).__name__}: {str(error)[:200]}",
+            "at": _utcnow().isoformat(),
+        }])[-_MAX_PROGRESS_ENTRIES:]
+        job.lease_expires_at = None
+        db.commit()
+        return _job_dict(job)
+
+
+def execute_job(claim: JobClaim) -> dict[str, Any]:
+    """Execute only the captured claim, never adopt a token from a fresh read."""
+    if not isinstance(claim, JobClaim):
+        raise TypeError("execute_job requires the immutable claim receipt")
     from . import memory_probe
-    memory_probe.log_rss("regen_job_start", job=job_id, ticker=ticker)
-    log.info("regen job %d STARTING for %s (scenario=%s, run_id=%s)",
-             job_id, ticker, scenario, run_id)
-    try:
-        # A live worker with missing credentials otherwise persists a demo
-        # memo and marks the paid/automatic research job successful.
-        if settings.app_env.lower() == "production" and not settings.llm_enabled:
-            raise RuntimeError("Production memo generation requires a configured LLM and live data")
-        _introduce_ticker(job_id, ticker)
-        _append_progress(job_id, "calling_run_stock_memo")
-        # FEAT-002: every LLM call the run makes is attributed to the
-        # customer who asked and to `research_run`, so per-plan margin can
-        # be read from `llm_call_logs`; the graph layers its own agent
-        # names and run_id on top of this.
-        with llm_call_context(user_id=user_id, feature="research_run", run_id=run_id):
-            memo = run_stock_memo(
-                ticker, scenario=scenario, force_refresh=True, run_id=run_id,
-            )
-        _append_progress(
-            job_id, f"run_stock_memo_returned rating={memo.rating_label}",
-        )
-        from . import memo_store
-        snap = memo_store.latest_memo(ticker)
-        with SessionLocal() as db:
-            row = db.get(RegenJob, job_id)
-            if row is not None:
-                row.status = "succeeded"
-                row.finished_at = _utcnow()
-                row.memo_version = snap.version if snap else None
-                row.error_type = ""
-                db.commit()
-        # The memo is persisted: the charge sticks. Committed after the
-        # job row so a crash between the two leaves a `reserved` event on
-        # a succeeded job — reconcilable — rather than a paid-for nothing.
-        _finalize_charge(usage_event_id, commit=True, job_id=job_id)
-        _append_progress(job_id, "job_succeeded")
-        log.info("regen job %d SUCCEEDED for %s in %.1fs (version=%s)",
-                 job_id, ticker, (_utcnow() - started).total_seconds(),
-                 snap.version if snap else None)
-    except (SystemExit, KeyboardInterrupt):
-        _append_progress(job_id, "process_exit_signal")
-        raise
-    except BaseException as exc:
-        tb = traceback.format_exc()
-        _append_progress(
-            job_id, f"exception_caught {type(exc).__name__}: {str(exc)[:200]}",
-        )
-        log.error(
-            "regen job %d FAILED for %s after %.1fs: %s: %s\n%s",
-            job_id, ticker, (_utcnow() - started).total_seconds(),
-            type(exc).__name__, exc, tb,
-        )
-        with SessionLocal() as db:
-            row = db.get(RegenJob, job_id)
-            if row is not None:
-                row.status = "failed"
-                row.finished_at = _utcnow()
-                row.error_type = type(exc).__name__
-                row.error_message = str(exc)[:500]
-                row.traceback_tail = tb[-1500:]
-                db.commit()
-        # Nothing was delivered: the customer gets the run back.
-        _finalize_charge(usage_event_id, commit=False, job_id=job_id)
-    # A memo run is the largest allocator in the process — 26+ LLM
-    # round-trips, filing bodies, and (pre-2026-08-12) tens of MB of chunk
-    # embeddings per specialist. CPython hands those objects back to its
-    # own freelists but not to the OS, and Render kills on RSS, so the
-    # pages have to be returned explicitly. Runs on both the success and
-    # failure paths: a job that died partway through is exactly the case
-    # where the most garbage is left behind.
-    memory_probe.trim_memory(f"regen_job_{job_id}")
-    with SessionLocal() as db:
-        job = db.get(RegenJob, job_id)
-        return _job_dict(job) if job is not None else {}
+    done = None
+    with regen_lease.claim_context(claim), regen_lease.keep_alive(claim):
+        try:
+            job = regen_lease.assert_claim(claim)
+            ticker, scenario, run_id = job.ticker, job.scenario, job.run_id
+            started = _utcnow()
+            _append_progress(claim.job_id, "worker_claimed")
+            memory_probe.log_rss("regen_job_start", job=claim.job_id, ticker=ticker)
+            log.info("regen job %d STARTING for %s (scenario=%s, run_id=%s)", claim.job_id, ticker, scenario, run_id)
+            if settings.app_env.lower() == "production" and not settings.llm_enabled:
+                raise RuntimeError("Production memo generation requires a configured LLM and live data")
+            _introduce_ticker(claim.job_id, ticker)
+            _append_progress(claim.job_id, "calling_run_stock_memo")
+            with llm_call_context(user_id=job.requested_by_user_id, feature="research_run", run_id=run_id):
+                memo = run_stock_memo(ticker, scenario=scenario, force_refresh=True, run_id=run_id)
+            _append_progress(claim.job_id, f"run_stock_memo_returned rating={memo.rating_label}")
+            done = _finish_claim(claim)
+            if done:
+                log.info("regen job %d SUCCEEDED for %s in %.1fs (version=%s)",
+                         claim.job_id, ticker, (_utcnow() - started).total_seconds(), done["memo_version"])
+        except LeaseLost as exc:
+            log.warning("regen job %d stale attempt stopped: %s", claim.job_id, exc)
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except BaseException as exc:
+            tb = traceback.format_exc()
+            log.error("regen job %d execution failed: %s: %s\n%s", claim.job_id, type(exc).__name__, exc, tb)
+            done = _finish_claim(claim, exc, tb)
+    if done is not None:
+        _finalize_charge(done["usage_event_id"], commit=done["status"] == "succeeded", job_id=claim.job_id)
+    memory_probe.trim_memory(f"regen_job_{claim.job_id}")
+    if done is not None:
+        return done
+    # A stale attempt's return must not look like the replacement's success.
+    return {"id": claim.job_id, "status": "lease_lost", "attempt_cancelled": True}
 
 
 def process_next_job() -> dict[str, Any] | None:
@@ -516,10 +497,11 @@ def process_next_job() -> dict[str, Any] | None:
     job dict, or None when the queue is empty. This is the worker loop's
     body, exposed directly so tests (incl. the nightly smoke test) can
     drain the queue deterministically without the polling thread."""
-    job_id = claim_next_job()
-    if job_id is None:
+    recover_orphans(report_legacy=False)
+    claim = claim_next_job()
+    if claim is None:
         return None
-    return execute_job(job_id)
+    return execute_job(claim)
 
 
 # ---------------------------------------------------------------------------

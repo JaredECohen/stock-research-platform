@@ -66,6 +66,10 @@ def stub_graph(monkeypatch):
 
     def fake_run(ticker, *, scenario="soft_landing", force_refresh=False, run_id=None, **_kw):
         calls.append({"ticker": ticker, "run_id": run_id, "ctx": dict(llm.current_call_context())})
+        from app.services.regen_lease import current_claim
+        with SessionLocal() as db:
+            db.get(RegenJob, current_claim().job_id).memo_version = 3
+            db.commit()
         return SimpleNamespace(ticker=ticker, rating_label="Neutral")
 
     monkeypatch.setattr(regen_worker, "run_stock_memo", fake_run)
@@ -149,11 +153,17 @@ def test_failure_releases_the_charge(auth_on, client, monkeypatch, no_provider_w
 def test_repeat_orphan_releases_the_charge(auth_on, client, no_provider_work):
     _sub, tok = pro_user(client, auth_on)
     job = _job(_analyze(client, tok).json()["job_id"])
-    assert regen_worker.claim_next_job() == job.id
+    assert regen_worker.claim_next_job().job_id == job.id
+    with SessionLocal() as db:
+        db.get(RegenJob, job.id).lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+        db.commit()
     assert regen_worker.recover_orphans()["requeued"] == 1
     # The retry may still deliver: the reservation stays.
     assert _event(job.usage_event_id).status == "reserved"
-    assert regen_worker.claim_next_job() == job.id
+    assert regen_worker.claim_next_job().job_id == job.id
+    with SessionLocal() as db:
+        db.get(RegenJob, job.id).lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+        db.commit()
     assert regen_worker.recover_orphans()["failed"] == 1
     assert _job(job.id).error_type == "WorkerRestart"
     assert _event(job.usage_event_id).status == "released"
