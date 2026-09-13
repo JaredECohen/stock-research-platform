@@ -9,7 +9,7 @@ from app.services.outcome_service import PRICE_WINDOW_RUNGS
 
 
 @pytest.mark.parametrize("days", [1, 60, *PRICE_WINDOW_RUNGS])
-def test_history_requests_dates_and_returns_requested_trading_bars(monkeypatch, days):
+def test_history_requests_dates_and_retains_complete_response(monkeypatch, days):
     today = date(2026, 9, 11)
 
     class Clock(date):
@@ -45,7 +45,10 @@ def test_history_requests_dates_and_returns_requested_trading_bars(monkeypatch, 
     assert len(requests) == 1
     assert requests[0].url.params["endDate"] == today.isoformat()
     assert "startDate" in requests[0].url.params
-    assert len(rows) == days
+    expected_start = date.fromisoformat(requests[0].url.params["startDate"])
+    expected = sum((expected_start + timedelta(days=n)).weekday() < 5 for n in range((today - expected_start).days + 1))
+    assert len(rows) == expected
+    assert len(rows) >= days
     assert rows[-1]["date"] == today.isoformat()
     assert rows == sorted(rows, key=lambda row: row["date"])
     assert rows[-1]["close"] == 100

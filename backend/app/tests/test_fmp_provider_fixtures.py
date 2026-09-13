@@ -253,7 +253,8 @@ def test_price_history_is_oldest_first(router, provider):
     assert dates[0] == "2025-08-29" and dates[-1] == "2025-09-05"
     assert set(bars[0]) == {"date", "open", "high", "low", "close", "adjusted_close", "volume"}
     assert all(b["adjusted_close"] == b["close"] for b in bars)
-    assert router.calls[0][1]["limit"] == "5"
+    assert "limit" not in router.calls[0][1]
+    assert "from" in router.calls[0][1] and "to" in router.calls[0][1]
 
 
 def test_period_labels():

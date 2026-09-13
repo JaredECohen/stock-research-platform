@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any
 
 import httpx
 
 from ..config import settings
 from .base import ProviderStatus, log_safely
+from .price_history import history_start, normalize_history
 
 log = logging.getLogger(__name__)
 BASE_URL = "https://www.alphavantage.co/query"
@@ -16,6 +18,11 @@ TIMEOUT = 10.0
 
 class AlphaVantageProvider:
     name: str = "alpha_vantage"
+    price_history_provenance = {
+        "provider": "alpha_vantage", "endpoint": "TIME_SERIES_DAILY",
+        "close_basis": "raw_as_traded", "adjusted_close_basis": "unavailable",
+        "entitlement_note": "outputsize=full requires an existing premium key; no automatic plan change",
+    }
 
     def __init__(self) -> None:
         self.api_key = settings.alpha_vantage_api_key
@@ -26,7 +33,7 @@ class AlphaVantageProvider:
             configured=bool(self.api_key),
             healthy=bool(self.api_key),
             notes="" if self.api_key else "Set ALPHA_VANTAGE_API_KEY to enable.",
-            capabilities=["transcripts", "news", "fundamentals_fallback"],
+            capabilities=["prices", "transcripts", "news", "fundamentals_fallback"],
         )
 
     def _get(self, **params: Any) -> Any | None:
@@ -65,7 +72,35 @@ class AlphaVantageProvider:
         )
 
     def get_price_history(self, ticker: str, days: int = 252) -> list[dict[str, Any]] | None:
-        return None
+        """Raw daily OHLCV; full output needs an already-entitled premium key."""
+        end = date.today()
+        start = history_start(end, days)
+        if start is None or not self.api_key:
+            return None
+        data = self._get(
+            function="TIME_SERIES_DAILY", symbol=ticker.upper(),
+            outputsize="full" if days > 100 else "compact",
+        )
+        if not isinstance(data, dict):
+            return None
+        for marker in ("Error Message", "Information", "Note"):
+            if marker in data:
+                # Only the safe category is retained; provider bodies can echo keys.
+                log.warning("AlphaVantage price history unavailable ticker=%s category=%s", ticker, marker)
+                return None
+        series = data.get("Time Series (Daily)")
+        if not isinstance(series, dict):
+            log.warning("AlphaVantage price history invalid payload ticker=%s", ticker)
+            return None
+        rows = [
+            dict(
+                date=day, open=r.get("1. open"), high=r.get("2. high"),
+                low=r.get("3. low"), close=r.get("4. close"),
+                adjusted_close=None, volume=r.get("5. volume"),
+            ) if isinstance(r, dict) else r
+            for day, r in series.items()
+        ]
+        return normalize_history(rows, provider=self.name, ticker=ticker, start=start, end=end, log=log)
 
     # ------------------------------------------------------------------
     # Wave 9b — fundamentals fallback

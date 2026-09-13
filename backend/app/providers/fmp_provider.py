@@ -12,12 +12,14 @@ service can fall through to the next provider in the chain.
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 from typing import Any
 
 import httpx
 
 from ..config import settings
 from .base import ProviderStatus, log_safely
+from .price_history import history_start, normalize_history
 
 log = logging.getLogger(__name__)
 BASE_URL = "https://financialmodelingprep.com/stable"
@@ -35,6 +37,11 @@ def _to_float(v: Any) -> float | None:
 
 class FMPProvider:
     name: str = "fmp"
+    price_history_provenance = {
+        "provider": "fmp", "endpoint": "/stable/historical-price-eod/full",
+        "close_basis": "provider_eod_close", "adjusted_close_basis": "same_as_close_not_total_return",
+        "adjustment_note": "Existing full endpoint close mapping retained; no dividend-adjusted endpoint requested.",
+    }
 
     def __init__(self) -> None:
         self.api_key = settings.fmp_api_key
@@ -156,28 +163,37 @@ class FMPProvider:
         )
 
     def get_price_history(self, ticker: str, days: int = 252) -> list[dict[str, Any]] | None:
-        """`/stable/historical-price-eod/full?symbol=…`. Returns OHLCV bars
-        most-recent first; reversed to oldest-first to match the demo /
-        downstream expectation."""
-        data = self._get(
-            "/historical-price-eod/full",
-            symbol=ticker.upper(), limit=days,
-        )
-        if not isinstance(data, list) or not data:
+        """Explicit inclusive dates; retain all returned daily bars.
+
+        A `limit` alone is not a historical date request on this endpoint.
+        Long histories are split into bounded five-calendar-year requests.
+        Any failed window rejects the result rather than claiming completion.
+        """
+        end = date.today()
+        start = history_start(end, days)
+        if start is None or not self.api_key:
             return None
-        rows = list(reversed(data))
-        return [
-            dict(
-                date=r.get("date"),
-                open=_to_float(r.get("open")),
-                high=_to_float(r.get("high")),
-                low=_to_float(r.get("low")),
-                close=_to_float(r.get("close")),
-                adjusted_close=_to_float(r.get("close")),  # /stable/ doesn't split adj
-                volume=_to_float(r.get("volume")),
+        rows = []
+        window_start = start
+        while window_start <= end:
+            window_end = min(window_start + timedelta(days=5 * 365), end)
+            data = self._get(
+                "/historical-price-eod/full", symbol=ticker.upper(),
+                **{"from": window_start.isoformat(), "to": window_end.isoformat()},
             )
-            for r in rows
-        ]
+            if not isinstance(data, list):
+                log.warning("FMP price history window unavailable ticker=%s from=%s to=%s", ticker, window_start, window_end)
+                return None
+            rows.extend(
+                dict(
+                    date=r.get("date"), open=r.get("open"), high=r.get("high"),
+                    low=r.get("low"), close=r.get("close"),
+                    adjusted_close=r.get("close"), volume=r.get("volume"),
+                ) if isinstance(r, dict) else r
+                for r in data
+            )
+            window_start = window_end + timedelta(days=1)
+        return normalize_history(rows, provider=self.name, ticker=ticker, start=start, end=end, log=log)
 
     # ------------------------------------------------------------------
     # Financial statements
