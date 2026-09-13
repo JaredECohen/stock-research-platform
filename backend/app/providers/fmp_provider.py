@@ -324,6 +324,46 @@ class FMPProvider:
             cash=[self._cash_row(r) for r in cash],
         )
 
+    def get_financial_history(self, ticker: str, start_date) -> dict[str, Any]:
+        """Fetch annual AND quarterly statements to the requested history boundary.
+
+        This dedicated backfill path does not change the normal eight-annual-row
+        read. Requests include one earlier period for boundary coverage; provider
+        truncation/entitlements remain visible in the caller's coverage report.
+        """
+        from datetime import date
+
+        start = date.fromisoformat(str(start_date)[:10])
+        years = max(1, date.today().year - start.year + 1)
+        result: dict[str, Any] = {"income": [], "balance": [], "cash": [], "_history_issues": []}
+        for statement, path, mapper in (
+            ("income", "/income-statement", self._income_row),
+            ("balance", "/balance-sheet-statement", self._balance_row),
+            ("cash", "/cash-flow-statement", self._cash_row),
+        ):
+            for cadence, api_period, limit in (("annual", "annual", years + 2), ("quarterly", "quarter", years * 4 + 4)):
+                raw = self._get(path, symbol=ticker.upper(), period=api_period, limit=limit)
+                if not isinstance(raw, list) or not raw:
+                    result["_history_issues"].append({"kind": "provider_no_data", "statement": statement, "cadence": cadence})
+                    continue
+                for row in raw:
+                    if not isinstance(row, dict):
+                        result["_history_issues"].append({"kind": "invalid_provider_row", "statement": statement, "cadence": cadence})
+                        continue
+                    normalized = mapper(row)
+                    # Stable API fiscalYear is authoritative for non-calendar FYs.
+                    year = str(row.get("fiscalYear") or str(row.get("date") or "")[:4])
+                    quarter = str(row.get("period") or "").upper()
+                    if cadence == "quarterly" and quarter not in {"Q1", "Q2", "Q3", "Q4"}:
+                        result["_history_issues"].append({"kind": "invalid_fiscal_quarter", "statement": statement, "cadence": cadence, "period_end": row.get("date")})
+                        continue
+                    normalized["period"] = f"FY{year}" if cadence == "annual" else f"{year}{quarter}"
+                    normalized["currency"] = row.get("reportedCurrency") or ""
+                    normalized["source"] = self.name
+                    normalized["cadence"] = cadence
+                    result[statement].append(normalized)
+        return result
+
     # ------------------------------------------------------------------
     # Ratios + key metrics (price-derived; recomputed daily by FMP)
     # ------------------------------------------------------------------

@@ -21,6 +21,7 @@ never duplicates rows.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable
 from datetime import date as _date
 from datetime import datetime
@@ -119,18 +120,21 @@ def _upsert_financial_period(
     available_at: _date | None = None,
     available_at_source: str | None = None,
     fetched_at: datetime | None = None,
+    currency: str | None = None,
+    existing_rows: dict | None = None,
 ) -> bool:
     """Insert-or-update one row. Returns True if an actual write happened.
 
     `available_at` / `available_at_source` (Phase 6, point-in-time) are
-    written on INSERT only. A restatement overwrites `value` and
-    `period_end` but never moves `available_at`: the figure was first
-    knowable when it was first published, and re-dating it to the
-    restatement would let a historical scorecard "know" a number before
-    anyone did. Rows that predate the column keep NULL here and are filled
-    by `scorecard_pit.backfill_available_at`.
+    preserved once present; a new provider refresh may fill legacy NULLs.
+    A same-provider restatement updates the value at its original availability
+    date. This retains existing latest-restated semantics; it is not a revision
+    ledger and must not be described as as-originally-reported data.
     """
-    existing = db.execute(
+    if value is None or not math.isfinite(value):
+        return False  # Missing/bad refresh data must not erase a usable history value.
+    key = (period, statement, line_item)
+    existing = existing_rows.get(key) if existing_rows is not None else db.execute(
         select(FinancialPeriod).where(
             FinancialPeriod.ticker == ticker,
             FinancialPeriod.period == period,
@@ -140,23 +144,41 @@ def _upsert_financial_period(
     ).scalar_one_or_none()
     now = fetched_at or datetime.utcnow()
     if existing is not None:
-        # Cheap value compare with float tolerance to avoid spurious rewrites.
-        if existing.value == value and existing.period_end == period_end:
+        # Exact comparison avoids rewrites when all stored facts are unchanged.
+        new_currency = currency or existing.currency
+        legacy = {"live", "unknown", "demo", ""}
+        if source in legacy and existing.source not in legacy and (
+            existing.value != value or existing.currency != new_currency
+        ):
+            log.warning("financial history %s %s %s.%s: ignored replacement without provider identity", ticker, period, statement, line_item)
             return False
+        new_source = existing.source if source in legacy and existing.source not in legacy else source
+        new_available = existing.available_at or available_at
+        new_available_source = existing.available_at_source or available_at_source
+        if (existing.value == value and existing.period_end == period_end
+                and existing.currency == new_currency and existing.source == new_source
+                and existing.available_at == new_available and existing.available_at_source == new_available_source):
+            return False
+        existing.currency = new_currency
+        existing.available_at = new_available
+        existing.available_at_source = new_available_source
         existing.value = value
         existing.period_end = period_end
         existing.fiscal_year = fiscal_year
         existing.fiscal_quarter = fiscal_quarter
-        existing.source = source
+        existing.source = new_source
         existing.fetched_at = now
         return True
-    db.add(FinancialPeriod(
+    new_row = FinancialPeriod(
         ticker=ticker, period=period, statement=statement,
         line_item=line_item, value=value, period_end=period_end,
         fiscal_year=fiscal_year, fiscal_quarter=fiscal_quarter,
-        source=source, fetched_at=now,
+        source=source, fetched_at=now, currency=currency or "USD",
         available_at=available_at, available_at_source=available_at_source,
-    ))
+    )
+    db.add(new_row)
+    if existing_rows is not None:
+        existing_rows[key] = new_row
     return True
 
 
@@ -203,7 +225,7 @@ def _ingest_statement_rows(
                 line_item=line, value=value, period_end=period_end,
                 fiscal_year=fy, fiscal_quarter=fq, source=source,
                 available_at=available_at, available_at_source=available_at_source,
-                fetched_at=fetched_at,
+                fetched_at=fetched_at, currency=row.get("currency"),
             ):
                 written += 1
     return written
