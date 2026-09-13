@@ -62,7 +62,10 @@ class _Router:
             return httpx.Response(404, text="not routed by test")
         if route.exc is not None:
             raise route.exc
-        return httpx.Response(route.status, text=route.body)
+        return httpx.Response(
+            route.status, stream=httpx.ByteStream(route.body.encode()),
+            headers={"content-type": "text/html; charset=utf-8"},
+        )
 
 
 class _FakeHttpx:
