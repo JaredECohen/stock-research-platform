@@ -122,7 +122,21 @@ def sync_ticker(ticker: str, *, force_refresh: bool = False) -> dict:
         except Exception as exc:
             report[kind] = {"success": False, "error_type": type(exc).__name__}
             log.warning("market data backfill failed ticker=%s stage=%s error_type=%s", ticker, kind, type(exc).__name__)
-    report["success"] = all(report[kind].get("success", False) for kind in ("prices", "fundamentals"))
+    # Cached pre-repair annual labels/values must not be re-ingested over the
+    # corrected durable facts by the other process's next ordinary consumer.
+    financials = report["fundamentals"]
+    cache = {"success": True, "status": "not_needed", "rows_removed": 0}
+    if financials.get("committed"):
+        from .provider_cache import invalidate
+        try:
+            cache = {"success": True, "status": "invalidated", "capability": "financials",
+                     "key": ticker, "rows_removed": invalidate("financials", ticker)}
+        except Exception as exc:
+            cache = {"success": False, "status": "failed", "capability": "financials",
+                     "key": ticker, "error_type": type(exc).__name__}
+        log.info("market data financial cache ticker=%s result=%s", ticker, cache)
+    report["financial_cache_invalidation"] = cache
+    report["success"] = all(report[kind].get("success", False) for kind in ("prices", "fundamentals")) and cache["success"]
     report["status"] = "complete" if report["success"] else "incomplete"
     report["completed_at"] = datetime.utcnow().isoformat()
     with SessionLocal() as db:

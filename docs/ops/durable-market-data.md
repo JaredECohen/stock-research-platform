@@ -20,6 +20,8 @@ The existing 21 scheduled loops remain unchanged in number. This release creates
 
 The coverage response includes raw database price/fundamental row counts separately from usable coverage. Counts include preexisting rows and excluded observations; they are not counts of verified usable facts. Forced refresh is appropriate after a mapper correction, including for companies that previously passed coverage, because ordinary seven-day fundamental freshness can otherwise retain the old mapped values.
 
+A committed fundamental import invalidates that ticker's shared `financials` cache so an ordinary consumer cannot reuse a pre-repair annual statement. A cache invalidation failure is reported as an incomplete import, and an idempotent retry still attempts cache repair even if no financial rows need rewriting. Unrelated tickers and capabilities are preserved.
+
 ## Usable trades and provider-series selection
 
 Raw daily bars remain stored even when a provider supplies explicit non-trading placeholders: volume is exactly zero and open, high, low, and close are all present and equal. Such bars are excluded from usable reads, date coverage, and currentness. Missing volume or incomplete OHLC does not meet that exclusion. Coverage and the read-only stored-prices endpoint expose every excluded date together with its provider and adjustment basis; the read-selection warning logs retain the same identities.
