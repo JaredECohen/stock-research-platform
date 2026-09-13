@@ -283,6 +283,7 @@ def test_get_filings_fetches_text_and_extracts_sections(router):
     rows = SECEdgarProvider().get_filings("ACME", cik="123456")
     assert rows is not None and len(rows) == 4
     ten_k, eight_k, ten_q, dead_q = rows
+    assert dead_q["text_fetch_error"] == "http_status_504"
 
     assert "TOC-SENTINEL-RISK" in ten_k["raw_text"]
     assert "TOC-SENTINEL-MDA" in ten_k["mda"] and len(ten_k["mda"]) <= 8000

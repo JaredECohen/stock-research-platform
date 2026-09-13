@@ -43,6 +43,7 @@ class FilingTextResult:
     retained_chars: int
     bytes_read: int
     oversized_tokens: int
+    error: str | None = None
 
     @property
     def truncated(self) -> bool:
@@ -209,7 +210,7 @@ class SECEdgarProvider:
     def fetch_filing_text(self, url: str) -> str | None:
         """Compatibility view of the bounded, instrumented document fetch."""
         result = self.fetch_filing_document(url)
-        return result.text if result is not None else None
+        return result.text if result is not None and not result.error else None
 
     def fetch_filing_document(self, url: str) -> FilingTextResult | None:
         """Stream HTML while retaining the existing normalized-text prefix.
@@ -232,7 +233,11 @@ class SECEdgarProvider:
                 with client.stream("GET", url, follow_redirects=True) as response:
                     if response.status_code != 200:
                         log.warning("SEC doc %s -> %s", url, response.status_code)
-                        return None
+                        return FilingTextResult(
+                            text="", observed_chars=0, retained_chars=0,
+                            bytes_read=0, oversized_tokens=0,
+                            error=f"http_status_{response.status_code}",
+                        )
                     decoder = codecs.getincrementaldecoder(response.encoding or "utf-8")(errors="replace")
                     for fragment in decoded_bytes(
                         response.iter_raw(chunk_size=4096),
@@ -244,7 +249,12 @@ class SECEdgarProvider:
             parser.close()
         except Exception as exc:  # pragma: no cover
             log_safely(log, f"SEC doc fetch failed for {url}", exc)
-            return None
+            return FilingTextResult(
+                text="", observed_chars=parser.output.observed_chars,
+                retained_chars=0, bytes_read=bytes_read,
+                oversized_tokens=parser.oversized_tokens,
+                error=f"fetch_or_parse_error:{type(exc).__name__}",
+            )
         finally:
             log_rss("sec_filing_fetch_end", url=url)
         prefix = parser.output.text()
@@ -333,7 +343,11 @@ class SECEdgarProvider:
         for filing in results:
             time.sleep(RATE_LIMIT_SLEEP)
             document = self.fetch_filing_document(filing["url"])
+            if document is not None and document.error:
+                filing["text_fetch_error"] = document.error
+                continue
             if document is None or not document.text:
+                filing["text_fetch_error"] = "empty_document"
                 continue
             text = document.text
             filing["raw_text"] = text
