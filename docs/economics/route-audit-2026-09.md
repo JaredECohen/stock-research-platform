@@ -140,6 +140,11 @@ flag is on.
 | GET | `/api/admin/sdk-traces/{run_id}` | none | DB-only | admin | admin | admin | |
 | GET | `/api/admin/calibration` | none | DB-only | admin | admin | admin | |
 | GET | `/api/admin/outcome-audit` | operations review | DB-only (one SELECT over all outcomes and snapshot metadata) | admin | admin | admin | Read-only, uncapped triage; no provider calls, evaluations, row mutations, or KPI changes. |
+| GET | `/api/admin/market-data/plan` | operations | DB-only metadata | admin | admin | admin | All companies, benchmark and legacy memo symbols; minimum two years and older required memo dates. No full memo bodies. |
+| GET | `/api/admin/market-data/coverage` | operations | DB-only prices and financial periods | admin | admin | admin | Full per-source date bounds and missing-session/period identities; no provider calls. |
+| GET | `/api/admin/market-data/prices` | operations | DB-only daily prices | admin | admin | admin | One provider and close basis per returned series; no live fetch. |
+| GET | `/api/admin/market-data/backfill-status` | operations | DB-only last company import result | admin | admin | admin | Complete saved report for one target, including interruptions and incomplete data. |
+| POST | `/api/admin/market-data/backfill` | operations | price and fundamental provider APIs; durable DB upserts | admin | admin | admin | One planned ticker per request, atomic claim; no filings, transcripts, LLMs, memo generation, evaluation or historical outcome writes. |
 | GET | `/api/admin/per-agent-attribution` | none | DB-only | admin | admin | admin | |
 | GET | `/api/admin/regime-accuracy` | none | DB-only | admin | admin | admin | |
 | GET | `/api/admin/calibration-summary` | none | DB-only | admin | admin | admin | |

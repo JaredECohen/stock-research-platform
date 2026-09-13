@@ -110,6 +110,7 @@ MODEL_NAMES = [
     "Company", "StockMemo", "ScreenerScore", "CachedDocument", "ProviderCache",
     "ScreenerMetric", "MemoSnapshot", "PortfolioRun", "LLMCallLog", "SDKTrace",
     "UILog", "FinancialPeriod", "FilingDoc", "MemoRunCheckpoint", "DCFModel",
+    "DailyPrice", "MarketDataSync",
     "MemoOutcome", "EarningsTranscript", "DocChunk", "MemoPostmortem",
     "ThemeExposure", "CatalystEvent", "RegenJob", "MispricingAudit",
     "CronLoopRun",
@@ -135,6 +136,7 @@ MODEL_NAMES = [
 TABLE_NAMES = sorted([
     "cache_cost_logs", "cached_documents", "catalyst_events", "companies",
     "cron_loop_runs", "dcf_models", "doc_chunks", "earnings_transcripts",
+    "daily_prices", "market_data_syncs",
     "filing_docs", "financial_periods", "llm_call_logs", "memo_outcomes",
     "memo_postmortems", "memo_run_checkpoints", "memo_snapshots",
     "mispricing_audits", "portfolio_runs", "provider_cache", "regen_jobs",

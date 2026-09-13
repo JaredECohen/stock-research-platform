@@ -23,6 +23,7 @@ import contextvars
 import logging
 from collections.abc import Callable, Collection
 from datetime import date as _date
+from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
@@ -272,7 +273,7 @@ class DataService:
     def _live_chain(self, capability: str) -> list[Any]:
         chains: dict[str, list[Any]] = {
             "profile": [self.fmp, self.alpha],
-            "prices": [self.fmp, self.tiingo, self.polygon],
+            "prices": [self.fmp, self.tiingo, self.polygon, self.alpha],
             "quote": [self.fmp, self.tiingo, self.polygon],
             # Wave 9b — Alpha Vantage as a financials fallback. FMP's
             # Starter tier returns 403 on most fundamentals endpoints;
@@ -448,6 +449,23 @@ class DataService:
     def get_price_history(
         self, ticker: str, days: int = 252, *, force_refresh: bool = False,
     ) -> list[dict[str, Any]] | None:
+        # Fixture and historical-context behavior stays deterministic. Live
+        # reads use durable per-date rows; expiry never removes old closes.
+        if self._test_provider is None and current_as_of_date() is None and not settings.use_demo_data_only:
+            from .price_history_service import fetch_and_store_prices, read_prices
+            stored = read_prices(ticker, days=days)
+            fresh = bool(stored and datetime.fromisoformat(stored[-1]["fetched_at"]) >= datetime.utcnow() - timedelta(hours=24)
+                         and _date.fromisoformat(stored[-1]["date"]) >= _date.today() - timedelta(days=5))
+            if len(stored) >= days and fresh and not force_refresh:
+                return stored
+            def refresh_prices():
+                fetch_and_store_prices(ticker, days, service=self, verify_calendar=False)
+                return read_prices(ticker, days=days) or None
+            # Retain cache throttling for partial responses (e.g. a recent
+            # IPO) and provider outages. Explicit history backfills bypass
+            # these legacy response windows and validate their date range.
+            rows = self._cached("prices", f"{ticker.upper()}:{days}", refresh_prices, force_refresh=force_refresh)
+            return _clip_dated_rows(rows, "date")
         rows = self._cached(
             "prices", f"{ticker.upper()}:{days}",
             lambda: self._try_chain_symbol("prices", "get_price_history", ticker, days),
@@ -484,6 +502,12 @@ class DataService:
             force_refresh=force_refresh,
             ttl_override=86400 * 7,
         )
+        if not statements and self._test_provider is None and not settings.use_demo_data_only:
+            from .fundamental_history_service import read_stored_financials
+            # Normal valuation consumers expect annual statement rows. The
+            # durable store also has quarters, but those must not be mixed
+            # into an annual DCF or ratio series.
+            statements = read_stored_financials(ticker, cadence="annual")
         return _clip_statements(statements)
 
     def get_ratios(

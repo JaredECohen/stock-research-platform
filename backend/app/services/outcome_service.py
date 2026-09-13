@@ -100,8 +100,8 @@ def _ensure_table(db: Session) -> None:
 def _window_days_for_memo(generated_date: _date, today: _date) -> int | None:
     """Smallest ladder rung whose fetch reaches back past `generated_date`.
 
-    ``None`` when the memo is older than the longest rung — a permanent
-    condition, since tomorrow's window starts a day later still.
+    ``None`` when the memo needs the durable archive beyond these remote
+    request rungs. Missing archived history can be repaired by backfill.
     """
     span = (today - generated_date).days + MEMO_WINDOW_BUFFER_DAYS
     for rung in PRICE_WINDOW_RUNGS:
@@ -260,10 +260,10 @@ def _evaluate_one(
     production price data.  The latter left hundreds of due outcomes
     unwritten while the cron job still reported success.
 
-    The four no-data statuses are deliberately distinct:
+    The no-data statuses are deliberately distinct:
 
     ``ticker_prices_unavailable``
-        the provider returned nothing at all for this ticker — an outage;
+        neither requested provider history nor durable archive is available;
     ``price_history_too_short``
         the provider answered, but with fewer bars than were asked for, so
         the series begins after the memo — also an outage, just a partial
@@ -271,14 +271,9 @@ def _evaluate_one(
     ``price_window_incomplete``
         prices exist and reach the memo, but none sits near the target
         date — a gap a later run may still fill;
-    ``memo_predates_price_window``
-        the memo is older than the longest window we are willing to
-        request.  Decided from the dates alone, so the pair can never be
-        scored and never will be.
-
-    Only the last is permanent.  The other three describe what a provider
-    handed back on this particular run, and all three drive the loop's
-    failure flag.
+    All three describe repairable coverage shortfalls and drive the loop's
+    failure flag. The legacy permanent-window counter is retained in the
+    aggregate response for compatibility but old dates now use the archive.
     """
     # Backtest snapshots have `as_of_date` set; outcome scoring is for live memos only.
     if snap.as_of_date is not None:
@@ -307,15 +302,23 @@ def _evaluate_one(
     # ends today, so what it has to span is memo date → today.
     window_days = _window_days_for_memo(generated_date, today)
     if window_days is None:
-        return None, "memo_predates_price_window"
-
-    from .market_data_service import get_price_series
-    ticker_rows = get_price_series(snap.ticker, window_days) or []
+        # A durable backfill can reach beyond the remote response ladder.
+        # Never discard an otherwise evaluable old memo merely because its
+        # required date is no longer in a provider's rolling cache window.
+        from .price_history_service import read_prices
+        start = generated_date - timedelta(days=MEMO_WINDOW_BUFFER_DAYS)
+        ticker_rows = read_prices(snap.ticker, start=start, end=today)
+        if not ticker_rows:
+            return None, "ticker_prices_unavailable"
+        bench_rows = read_prices(benchmark, start=start, end=today)
+    else:
+        from .market_data_service import get_price_series
+        ticker_rows = get_price_series(snap.ticker, window_days) or []
+        bench_rows = get_price_series(benchmark, window_days) or [] if ticker_rows else []
     if not ticker_rows:
         return None, "ticker_prices_unavailable"
     # Same rung for the benchmark: one cache key, and both legs of alpha
     # measured over the same span.
-    bench_rows = get_price_series(benchmark, window_days) or []
 
     memo_hit = _baseline_close(ticker_rows, generated_date)
     if memo_hit is None:
@@ -370,9 +373,13 @@ def _evaluate_one(
         f"horizon={horizon_days}d",
         f"baseline={baseline_date}",
         f"target={target_hit[0]}",
-        f"price_window={window_days}",
+        f"price_window={window_days if window_days is not None else 'durable_history'}",
         f"return={forward_return:+.2%}",
     ]
+    for label, rows in (("price", ticker_rows), ("benchmark_price", bench_rows)):
+        provenance = {(str(row.get("source")), str(row.get("close_basis"))) for row in rows if row.get("source")}
+        if provenance:
+            note_parts.append(f"{label}_source=" + ";".join(f"{source}:{basis}" for source, basis in sorted(provenance)))
     if alpha is not None:
         note_parts.extend([
             f"benchmark={benchmark}",

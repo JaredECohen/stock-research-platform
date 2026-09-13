@@ -102,6 +102,57 @@ def monitoring_status() -> dict:
     return {"loops": status_snapshot()}
 
 
+@router.get("/api/admin/market-data/plan")
+def market_data_plan() -> dict:
+    """Read-only: all company/benchmark targets and due unrecorded memo keys."""
+    from ..services.market_data_backfill import backfill_plan
+    return backfill_plan()
+
+
+@router.get("/api/admin/market-data/coverage")
+def market_data_coverage(ticker: str | None = Query(None, max_length=16)) -> dict:
+    """Read-only database coverage. Never fetch providers or generate memos."""
+    from ..services.market_data_backfill import coverage_report
+    return coverage_report(ticker)
+
+
+@router.post("/api/admin/market-data/backfill")
+def market_data_backfill(
+    ticker: str = Query(..., min_length=1, max_length=16, pattern=r"^[A-Za-z0-9][A-Za-z0-9.\-^=]*$"),
+    force_refresh: bool = False,
+) -> dict:
+    """Populate one target; the plan endpoint enumerates the complete universe.
+
+    A resumable client submits targets sequentially. Only prices and
+    fundamentals are fetched: no filings, LLMs, memos or outcome writes.
+    """
+    from ..services.market_data_backfill import sync_ticker
+    try:
+        return sync_ticker(ticker, force_refresh=force_refresh)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/api/admin/market-data/prices")
+def stored_market_prices(ticker: str, start: date | None = None, end: date | None = None) -> dict:
+    """Read a single-provider stored daily series without API access."""
+    from ..services.price_history_service import read_prices
+    rows = read_prices(ticker, start=start, end=end)
+    return {"ticker": ticker.upper(), "count": len(rows), "rows": rows, "read_only": True}
+
+
+@router.get("/api/admin/market-data/backfill-status")
+def market_data_backfill_status(ticker: str) -> dict:
+    from ..database import SessionLocal
+    from ..models import MarketDataSync
+    with SessionLocal() as db:
+        row = db.get(MarketDataSync, ticker.upper())
+        if row is None:
+            return {"ticker": ticker.upper(), "status": "never_run", "read_only": True}
+        return {"ticker": row.ticker, "status": row.status, "started_at": row.started_at,
+                "completed_at": row.completed_at, "report": row.report, "read_only": True}
+
+
 @router.get("/api/admin/abuse-telemetry")
 def abuse_telemetry_endpoint() -> dict[str, Any]:
     """FEAT-002 phase 6 — the numbers behind "is the login wall being
