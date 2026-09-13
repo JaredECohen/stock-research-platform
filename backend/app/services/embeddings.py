@@ -116,8 +116,8 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 # yields chunks over it, and only one of those degrades retrieval.
 _FALLBACK_CHARS_PER_TOKEN = 3.6
 
-# A token is at least one character, so any string shorter than the budget
-# fits by construction and needs no encoding at all. Above
+# An ASCII character costs at most one token; Unicode code points can cost
+# several. Only short ASCII strings skip encoding. Above
 # `_MAX_CHARS_PER_TOKEN` x budget nothing plausibly fits, so we say so
 # without encoding. Between the two we encode — a bounded slice, never the
 # document. This is what keeps `iter_chunks` from tokenizing a 5 MB 10-K to
@@ -176,7 +176,7 @@ def _fits(text: str, budget: int) -> bool:
     string already known to be within a small multiple of the budget.
     """
     n = len(text)
-    if n <= budget:
+    if n <= budget and text.isascii():
         return True
     if n > budget * _MAX_CHARS_PER_TOKEN:
         return False
@@ -275,17 +275,20 @@ def _iter_words(text: str) -> Iterator[str]:
 
 
 def _hard_cut(text: str, budget: int) -> Iterator[str]:
-    """Last resort: fixed-width character slices of one unsplittable run.
+    """Cut an unsplittable run using bounded, measured character slices.
 
-    Reached only by a single word longer than the budget — a base64 blob or
-    a run-together table dump. Sized from the character heuristic rather
-    than by encoding, because by definition there is no boundary to respect.
+    Unicode and encoded blobs can have several model tokens per character.
+    The character estimate only selects a candidate; shrink it until its
+    measured token count fits, preserving every original code point.
     """
     width = max(1, int(budget * _FALLBACK_CHARS_PER_TOKEN))
-    for i in range(0, len(text), width):
-        piece = text[i : i + width]
-        if piece.strip():
-            yield piece
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + width)
+        while end - start > 1 and count_tokens(text[start:end]) > budget:
+            end = start + max(1, (end - start) // 2)
+        yield text[start:end]
+        start = end
 
 
 def _iter_atoms(text: str, budget: int, level: int = 0) -> Iterator[str]:

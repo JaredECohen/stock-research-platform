@@ -302,7 +302,7 @@ def test_a_long_sentence_does_not_double_the_corpus():
     chunks = emb.chunk_text(doc, target_tokens=500, overlap_tokens=50)
     sizes = [emb.count_tokens(c) for c in chunks]
 
-    assert max(sizes) <= 500 * 1.2, (
+    assert max(sizes) <= 500, (
         f"a chunk ran to {max(sizes)} tokens against a 500-token budget: the "
         f"overlap is being carried into it unbudgeted"
     )
@@ -560,3 +560,17 @@ def test_chunk_text_still_returns_a_list_for_the_transcript_path():
     out = emb.chunk_text(MDNA, target_tokens=TARGET, overlap_tokens=OVERLAP)
     assert isinstance(out, list)
     assert all(isinstance(c, str) for c in out)
+
+
+@pytest.mark.parametrize("unit", ["營業收入增長風險市場", "🧑🏽‍💻🚀", "aZ3_9/"])
+def test_dense_unsplittable_runs_respect_measured_budget_without_losing_text(unit):
+    text = unit * 1200
+    chunks = emb.chunk_text(text, target_tokens=500, overlap_tokens=0)
+    assert "".join(chunks) == text
+    assert all(emb.count_tokens(chunk) <= 500 for chunk in chunks)
+
+
+def test_short_unicode_is_measured_in_tokens_not_code_points():
+    text = "🚀" * 100
+    assert len(text) <= 120 < emb.count_tokens(text)
+    assert not emb._fits(text, 120)
