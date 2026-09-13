@@ -71,6 +71,25 @@ def test_partial_provider_does_not_suppress_quarterly_fallback(database, monkeyp
     assert result["coverage"]["income"]["quarterly"]["complete"]
 
 
+def test_legacy_label_lookback_does_not_require_prelisting_history(database, monkeypatch):
+    FinancialPeriod.__table__.create(database.kw["bind"])
+    with database() as db:
+        row = FinancialPeriod(ticker="TEST", period="FY2016", period_end=date(2016, 12, 31),
+                              fiscal_year=2016, statement="income", line_item="revenue",
+                              source="live", value=10, currency="EUR")
+        db.add(row)
+        db.commit()
+        old_id = row.id
+    calls = providers(monkeypatch, ("fmp", payload()), ("alpha_vantage", payload(value=999)))
+    result = svc.backfill_fundamentals("TEST", date(2024, 9, 13), force_refresh=True)
+    assert result["success"]
+    assert calls == [("fmp", "TEST", date(2016, 12, 31))]
+    assert not any(i["kind"] in {"provider_partial_coverage", "stored_value_conflict"} for i in result["issues"])
+    with database() as db:
+        old = db.get(FinancialPeriod, old_id)
+        assert (old.period, old.period_end, old.value, old.source) == ("FY2016", date(2016, 12, 31), 10, "live")
+
+
 def test_nonfinite_missing_and_conflicting_currency_never_wipe_good_values(database, monkeypatch):
     providers(monkeypatch, ("fmp", payload()))
     svc.backfill_fundamentals("TEST", date(2024, 9, 13))

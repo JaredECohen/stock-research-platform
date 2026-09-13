@@ -344,8 +344,9 @@ def _clean_payload(raw: dict, provider: str, symbol: str, issues: list[dict]) ->
     return clean
 
 
-def _fetch_financial_history(ticker: str, start: date) -> tuple[list[dict], list[dict], list[dict]]:
-    """Retain partial providers; try later providers until combined coverage suffices."""
+def _fetch_financial_history(ticker: str, start: date, *, required_start: date | None = None) -> tuple[list[dict], list[dict], list[dict]]:
+    """Fetch older label evidence while judging fallback against required coverage."""
+    coverage_start = required_start or start
     payloads, issues, attempts = [], [], []
     combined = {s: [] for s in LINES}
     for provider in get_data_service()._live_chain("financials"):
@@ -380,10 +381,10 @@ def _fetch_financial_history(ticker: str, start: date) -> tuple[list[dict], list
             payloads.append(clean)
             for s in LINES:
                 combined[s].extend(clean[s])
-            coverage = _coverage(combined, start, _today())
+            coverage = _coverage(combined, coverage_start, _today())
             if _complete(coverage):
                 return payloads, issues, attempts
-            issues.append({"kind": "provider_partial_coverage", **attempt, "coverage": _coverage(clean, start, _today())})
+            issues.append({"kind": "provider_partial_coverage", **attempt, "coverage": _coverage(clean, coverage_start, _today())})
             break  # A valid alias resolved this security; next provider may add missing cadence.
     return payloads, issues, attempts
 
@@ -528,7 +529,7 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         # End the owned read transaction before spending time on provider IO.
         if own:
             db.rollback()
-        payloads, issues, attempts = _fetch_financial_history(ticker, fetch_start)
+        payloads, issues, attempts = _fetch_financial_history(ticker, fetch_start, required_start=start)
         report["issues"].extend(issues)
         report["attempts"] = attempts
         incoming = {s: [row for payload in payloads for row in payload[s]] for s in LINES}
