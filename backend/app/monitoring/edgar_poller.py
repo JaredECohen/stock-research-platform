@@ -52,7 +52,7 @@ from collections.abc import Iterable
 from ..cache import cache_get, cache_put, invalidate
 from ..services.data_service import curated_poll_universe
 from ..services.filings_service import get_filings_index, invalidate_filings_text
-from . import note_names, record_run
+from . import record_progress, record_run
 
 log = logging.getLogger(__name__)
 
@@ -73,10 +73,9 @@ _FILING_TYPES = {"10-K", "10-Q", "8-K"}
 # simultaneous burst of downloads, embeddings and LLM calls on the worker that
 # Render has already OOM-killed twice.
 #
-# 15 per pass drains that backlog in ~12 passes — under six hours at the
-# 30-minute cadence — while keeping the per-pass cost in the tens of LLM calls
-# rather than the hundreds. Steady state is far below the cap: a normal pass
-# sees a handful of 8-Ks across the whole universe.
+# 15 per pass bounds expensive handlers; it is not a drain-time guarantee.
+# Restarts, pass budgets and provider latency can delay completion. Steady
+# state is normally below the cap.
 MAX_FILING_EVENTS_PER_PASS = 15
 
 # Upper bound on the per-ticker `edgar_seen_accessions` bookkeeping set.
@@ -94,13 +93,9 @@ MAX_SEEN_ACCESSIONS = 50
 # The loop is registered `interval, minutes=30` and APScheduler defaults to
 # `max_instances=1`, so a pass that outlives its interval does not overlap —
 # it silently eats the next tick, and the one after that. Measured in
-# production on 2026-09-12: the last COMPLETED pass was logged at 20:52:34Z
-# and it was still running 95 minutes later, having fired AAPL at 21:29Z and
-# AMZN at 22:05Z — 36 minutes apart, in alphabetical order, so the pass was
-# working the whole time. Nothing was wrong except that it could not finish,
-# and `record_run` fires only at the END of `run_once`, so cron-health showed
-# one stale timestamp for the entire hour and a half. An operator could not
-# tell a slow pass from a wedged loop.
+# production on 2026-09-12: a stale completed timestamp concealed worker
+# OOM kills at 21:29Z and 22:06Z, not one continuously healthy slow pass.
+# A job's eventual success did not prove uninterrupted worker health.
 #
 # 20 minutes leaves a third of the interval as headroom for the ticker that
 # is in flight when the budget runs out (`on_filing_event` downloads
@@ -111,13 +106,13 @@ MAX_SEEN_ACCESSIONS = 50
 # rotated one, see `_rotated` — picks them up.
 MAX_PASS_SECONDS = 20 * 60
 
-# How often a long pass reports progress to `record_run`.
+# How often a long pass reports progress to `record_progress`.
 #
 # `record_run` used to fire once, at the end. Until it did, `/api/admin/
 # cron-health` reported the *previous* pass's timestamp, so a pass that ran
 # 95 minutes looked identical to a loop that had died 95 minutes ago. Calling
-# it periodically mid-pass costs one upsert every two minutes and makes the
-# difference legible: a progress note names how far the pass has got.
+# a separate persisted progress record costs one upsert every two minutes
+# and names how far the pass has got without overwriting its last completion.
 PROGRESS_INTERVAL_SECONDS = 120
 
 
@@ -218,12 +213,11 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     untouched, so the next pass still sees its accessions as new and picks
     it up. Both are named in the run note.
 
-    Progress is reported to `record_run` every
+    Progress is reported to `record_progress` every
     `PROGRESS_INTERVAL_SECONDS`, so cron-health distinguishes a long pass
     from a dead loop while it is still running. A progress record carries
     the verdict the pass has reached *so far* — gate errors already seen
-    keep saying so — because the row it writes is the same one the last
-    completed pass's verdict lives in.
+    keep saying so — while the prior completed result remains untouched.
 
     No-op for tickers without filings. The EDGAR provider returns an empty
     list in demo mode, so this loop becomes a quiet bookkeeping pass.
@@ -240,9 +234,49 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     last_progress = started
     events: list[dict] = []
     gate_errors: list[str] = []
+    index_errors: list[str] = []
+    handler_errors: list[str] = []
+    bookkeeping_errors: list[str] = []
+    persist_errors: list[str] = []
+    post_pass_failures: list[dict] = []
+    truncated_filings: list[dict] = []
     deferred: list[str] = []
     unvisited: list[str] = []
     polled = 0
+
+    def failure_note() -> str:
+        parts = []
+        for label, names in (
+            ("index errors", index_errors), ("handler errors", handler_errors),
+            ("gate errors", gate_errors), ("bookkeeping errors", bookkeeping_errors),
+            ("persist errors", persist_errors),
+        ):
+            if names:
+                parts.append(f"{label} on {len(names)}: {', '.join(names)}")
+        if post_pass_failures:
+            # Keep this formatter local so deployment does not require a
+            # simultaneous change to the orchestrator's additive report.
+            names = [
+                f"{f['ticker']}:{f['kind']}:{f['id']}:{f['stage']}:{f['error_type']}"
+                for f in post_pass_failures
+            ]
+            parts.append(f"post-pass failures={len(names)}: {', '.join(names)}")
+        return "; ".join(parts)
+
+    def bounded_note() -> str:
+        if not truncated_filings:
+            return ""
+        names = [
+            f"{s['ticker']}:{s['accession_number']}"
+            f"(retained={s.get('text_retained_chars', 'unknown')},"
+            f"observed={s.get('text_observed_chars', 'unknown')},"
+            f"bytes_read={s.get('text_bytes_read', 'unknown')},"
+            f"oversized_tokens={s.get('html_oversized_tokens', 0)})"
+            for s in truncated_filings
+        ]
+        return f"bounded filing sources={len(names)}: {', '.join(names)}"
+
+    record_progress("edgar_poller", note=f"in progress: polled 0/{len(tickers)}, starting pass")
 
     for index, t in enumerate(tickers):
         # Checked before the ticker is touched, never during it.
@@ -256,41 +290,38 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         now = time.monotonic()
         if now - last_progress >= PROGRESS_INTERVAL_SECONDS:
             last_progress = now
-            # The progress ping reports the verdict this pass has reached so
-            # far, never a literal True. `record_run` keeps ONE row per loop
-            # and overwrites `success` along with the note, so a hardcoded
-            # True here is a lie twice over: it erases the previous pass's
-            # failure two minutes into a pass that has established nothing,
-            # and — on a worker Render has OOM-killed twice — it leaves a
-            # *fresh* success behind for a pass that was killed mid-run,
-            # which is the one case cron-health most needs to show.
             progress = (
                 f"in progress: polled {polled}/{len(tickers)}, "
                 f"{len(events)} new filings, {int(now - started)}s elapsed"
             )
-            if gate_errors:
-                progress += (
-                    f"; gate errors on {len(gate_errors)}: "
-                    f"{', '.join(gate_errors[:5])}"
-                )
-            record_run("edgar_poller", success=not gate_errors, note=progress)
+            failures = failure_note()
+            if failures:
+                progress += "; " + failures
+            if bounded_note():
+                progress += "; " + bounded_note()
+            record_progress("edgar_poller", success=not failures, note=progress)
 
         polled += 1
         try:
             filings = get_filings_index(t) or []
+            accessions: set[str] = set()
+            for f in filings:
+                if f.get("type") not in _FILING_TYPES:
+                    continue
+                acc = f.get("accession_number") or ""
+                if acc:
+                    accessions.add(acc)
         except Exception as exc:
-            log.warning("EDGAR poll failed for %s: %s", t, exc)
+            index_errors.append(t)
+            log.warning("EDGAR index failed for %s: %s", t, type(exc).__name__)
             continue
 
-        accessions: set[str] = set()
-        for f in filings:
-            if f.get("type") not in _FILING_TYPES:
-                continue
-            acc = f.get("accession_number") or ""
-            if acc:
-                accessions.add(acc)
-
-        seen = _seen_accessions(t)
+        try:
+            seen = _seen_accessions(t)
+        except Exception as exc:
+            bookkeeping_errors.append(t)
+            log.warning("EDGAR seen read failed for %s: %s", t, type(exc).__name__)
+            continue
         new = accessions - seen
         if new and seen:  # Skip first-run, when seen is empty (initialization)
             if len(events) >= MAX_FILING_EVENTS_PER_PASS:
@@ -302,15 +333,10 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
                 # for this filing again.
                 deferred.append(t)
                 continue
-            invalidate(t, kind="company_cold")
             # Detection reads the index; every downstream reader reads the
             # bodies. Forget the cached bodies for this ticker so the full
             # read that follows fetches the new document instead of serving
             # the one that was cached before it existed.
-            try:
-                invalidate_filings_text(t)
-            except Exception as exc:  # pragma: no cover — diagnostic only
-                log.warning("filings cache invalidation failed for %s: %s", t, exc)
             events.append({"ticker": t, "new_accessions": sorted(new)})
             # Wave 5B: hand the new-filing event to the update orchestrator,
             # which enqueues a `full_reanalysis` job on the durable
@@ -318,17 +344,37 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
             # Wrapped so an enqueue failure doesn't block the next
             # ticker's poll.
             try:
+                invalidate(t, kind="company_cold")
+                invalidate_filings_text(t)
                 from ..services.update_orchestrator import on_filing_event
                 res = on_filing_event(t)
+                if isinstance(res, dict):
+                    persisted = res.get("persisted") or {}
+                    post_pass_failures.extend(persisted.get("post_pass_failures") or [])
+                    truncated_filings.extend(persisted.get("truncated_filings") or [])
+                    if res.get("kind") == "persist_error" or persisted.get("persist_error"):
+                        error = persisted.get("persist_error") or {}
+                        persist_errors.append(f"{t}:{error.get('stage', 'unknown')}:{error.get('error_type', 'unknown')}")
+                        continue
                 # `kind="gate_error"` means the auto-regen gate crashed
                 # (e.g. a DB error) rather than deciding to skip; count it
                 # so the note stops reading as "nothing to do".
                 if isinstance(res, dict) and res.get("kind") == "gate_error":
                     gate_errors.append(t)
-            except Exception as exc:  # pragma: no cover — diagnostic only
-                log.warning("update_orchestrator filing handler failed for %s: %s", t, exc)
+                    continue
+            except Exception as exc:
+                handler_errors.append(t)
+                log.warning("EDGAR filing handler failed for %s: %s", t, type(exc).__name__)
+                continue
         if accessions:
-            _save_seen_accessions(t, _bounded_seen(accessions, seen))
+            # Post-pass failures describe docs already persisted. Retaining
+            # seen would not retry them (unchanged ingest skips those IDs),
+            # so surface them as failures without pretending to repair them.
+            try:
+                _save_seen_accessions(t, _bounded_seen(accessions, seen))
+            except Exception as exc:
+                bookkeeping_errors.append(t)
+                log.warning("EDGAR seen write failed for %s: %s", t, type(exc).__name__)
 
     # Where the next scheduled pass starts. The first unvisited ticker when
     # the budget bit, otherwise back to the head of the universe. Written
@@ -338,7 +384,8 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         try:
             _save_resume_from(unvisited[0] if unvisited else None)
         except Exception as exc:  # pragma: no cover — diagnostic only
-            log.warning("edgar pass cursor write failed: %s", exc)
+            bookkeeping_errors.append(_CURSOR_KEY)
+            log.warning("edgar pass cursor write failed: %s", type(exc).__name__)
 
     note = f"{len(events)} new filings"
     # Say the constraint out loud. `excluded is None` means the caller named
@@ -348,15 +395,19 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         note += f"; polled {polled}/{len(tickers)} in-tier, skipped {excluded} out-of-tier"
     if deferred:
         note += f"; deferred {len(deferred)} over the {MAX_FILING_EVENTS_PER_PASS}"
-        note += f"-event cap: {note_names(deferred)}"
+        note += f"-event cap: {', '.join(deferred)}"
     if unvisited:
         note += (
             f"; stopped at the {MAX_PASS_SECONDS}s pass budget with "
-            f"{len(unvisited)} unvisited: {note_names(unvisited)}"
+            f"{len(unvisited)} unvisited: {', '.join(unvisited)}"
         )
-    if gate_errors:
-        note += f"; gate errors on {len(gate_errors)}: {', '.join(gate_errors[:5])}"
-    record_run("edgar_poller", success=not gate_errors, note=note)
+    failures = failure_note()
+    if failures:
+        note += "; " + failures
+    if bounded_note():
+        note += "; " + bounded_note()
+    log.log(logging.WARNING if failures else logging.INFO, "EDGAR pass complete: %s", note)
+    record_run("edgar_poller", success=not failures, note=note)
     return events
 
 
