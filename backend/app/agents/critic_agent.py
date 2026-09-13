@@ -17,21 +17,13 @@ def _prior_memo_context(ticker: str) -> str:
     if not ticker:
         return ""
     try:
-        from sqlalchemy import select
-
-        from ..database import SessionLocal
-        from ..models import MemoSnapshot
-        with SessionLocal() as db:
-            rows = db.execute(
-                select(MemoSnapshot)
-                .where(MemoSnapshot.ticker == ticker.upper())
-                .order_by(MemoSnapshot.version.desc())
-                .limit(2)
-            ).scalars().all()
-        if len(rows) < 2:
+        from ..services import memo_store
+        # Review precedes persistence of the current draft. The latest stored
+        # live snapshot is therefore the prior; a single existing memo counts.
+        snapshot = memo_store.latest_memo(ticker)
+        if snapshot is None:
             return ""
-        # rows[0] is the just-written memo; rows[1] is the prior version.
-        prior = rows[1].memo_json or {}
+        prior = snapshot.memo_json or {}
         if not isinstance(prior, dict):
             return ""
         prior_mp = prior.get("mispricing_thesis") or {}
@@ -48,8 +40,8 @@ def _prior_memo_context(ticker: str) -> str:
             "reversal (rating shift without rationale) as a major "
             "challenge."
         ).format(
-            ver=rows[1].version,
-            when=(rows[1].generated_at.date().isoformat() if rows[1].generated_at else "—"),
+            ver=snapshot.version,
+            when=(snapshot.generated_at.date().isoformat() if snapshot.generated_at else "—"),
             rating=prior.get("rating_label") or "—",
             thesis=(prior.get("one_sentence_thesis") or "")[:200],
             cv=(prior_mp.get("consensus_view") or "")[:200],
@@ -119,6 +111,7 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
     if llm_out:
         review = CriticReview(
             overall_assessment=llm_out.get("overall_assessment", "Reviewed."),
+            review_mode="live",
             challenges=llm_out.get("challenges", []),
             underweighted_risks=llm_out.get("underweighted_risks", []),
             suggested_revisions=llm_out.get("suggested_revisions", []),
@@ -127,7 +120,12 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
             ),
         )
     else:
-        # Deterministic fallback
+        # This checks a few fields, not factual accuracy or research quality.
+        # A missing live result must not read as an independent endorsement.
+        if settings.has_llm or (settings.enable_live_data and not settings.use_demo_data):
+            from .safe_runner import note_soft
+            note_soft("Risk Committee", "Live critic unavailable; only rule-based checks were completed.",
+                      kind="CriticUnavailable")
         challenges: list[str] = []
         rating = memo_dict.get("rating_label", "")
         if rating in ("Bullish", "Bearish"):
@@ -145,11 +143,15 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
             "If valuation is elevated, explicitly state what the market is pricing in.",
         ]
         review = CriticReview(
-            overall_assessment="Memo is structurally sound; balance and source citations should be tightened.",
-            challenges=challenges or ["No major issues detected."],
+            overall_assessment=(
+                "Rule-based check only; no live critic review was completed. "
+                "Claim accuracy, completeness, and research quality were not independently assessed."
+            ),
+            review_mode="rule_based",
+            challenges=challenges,
             underweighted_risks=underweighted,
             suggested_revisions=suggested,
-            advice_compliance_check="Output framed as research/education only; no direct buy/sell language detected.",
+            advice_compliance_check="Advice compliance was not assessed by this rule-based check.",
         )
 
     # Append citation-discipline findings — surfaced regardless of LLM availability.

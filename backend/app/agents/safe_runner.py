@@ -221,6 +221,7 @@ def safe_critic(
             log_to.record("Risk Committee", exc)
         return CriticReview(
             overall_assessment="Critic agent unavailable for this run.",
+            review_mode="unavailable",
             challenges=[],
             underweighted_risks=[],
             suggested_revisions=[

@@ -222,6 +222,8 @@ class EarningsStructured(BaseModel):
 
 class CriticReview(BaseModel):
     overall_assessment: str
+    # Older stored reviews lack provenance; do not relabel them as live.
+    review_mode: Literal["unknown", "pending", "live", "rule_based", "unavailable"] = "unknown"
     challenges: list[str] = Field(default_factory=list)
     underweighted_risks: list[str] = Field(default_factory=list)
     suggested_revisions: list[str] = Field(default_factory=list)

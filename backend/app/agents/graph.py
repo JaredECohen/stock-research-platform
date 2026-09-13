@@ -1822,11 +1822,10 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
         dcf_pm_adjustments=dcf_stage.pm_adjustments,
         dcf_pm_adjustment_headline=dcf_stage.pm_headline,
         portfolio_fit=_portfolio_fit(profile, rating),
-        # Stub critic seeded here, then replaced by the real critic in the
-        # review stage. safe_critic guarantees a typed CriticReview even if
-        # the stub raises.
-        risk_committee_challenge=safe_critic(run_critic, {}, log_to=None) or CriticReview(
-            overall_assessment="Pending critic review.",
+        # Composition only seeds a typed placeholder. The review stage runs
+        # the critic once, against the complete draft, before persistence.
+        risk_committee_challenge=CriticReview(
+            overall_assessment="Pending critic review.", review_mode="pending",
         ),
         final_verdict="",
         scores=_build_scores_dict(
