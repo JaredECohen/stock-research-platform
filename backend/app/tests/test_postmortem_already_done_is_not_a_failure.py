@@ -214,7 +214,7 @@ def test_already_done_is_reported_apart_from_written_and_skipped(
     _drain(90)
     ticker = "ZZPMR1"
     (snap_id,) = _seed(ticker, versions=1, horizon=90)
-    due, _ = pm._scan_due(90, limit=25)
+    due = pm._scan_due(90, limit=25).items
     assert [d["outcome"].memo_snapshot_id for d in due] == [snap_id]
 
     # Another writer gets there first, between the query and the write.
@@ -226,7 +226,7 @@ def test_already_done_is_reported_apart_from_written_and_skipped(
         ))
         db.commit()
 
-    monkeypatch.setattr(pm, "_scan_due", lambda h, *, limit: (due, 0))
+    monkeypatch.setattr(pm, "_scan_due", lambda h, *, limit: pm.DueScan(items=due))
     before = len(_no_llm)
     report = pm.run_postmortems(horizon_days=90, limit=25)
 
@@ -250,11 +250,11 @@ def test_one_pass_never_attempts_the_same_key_twice(memory_dir, _no_llm, monkeyp
     _drain(90)
     ticker = "ZZPMD1"
     (snap_id,) = _seed(ticker, versions=1, horizon=90)
-    due, _ = pm._scan_due(90, limit=25)
+    due = pm._scan_due(90, limit=25).items
     assert len(due) == 1
     doubled = due + due
 
-    monkeypatch.setattr(pm, "_scan_due", lambda h, *, limit: (doubled, 0))
+    monkeypatch.setattr(pm, "_scan_due", lambda h, *, limit: pm.DueScan(items=doubled))
     report = pm.run_postmortems(horizon_days=90, limit=25)
 
     assert report["due"] == 2
@@ -271,7 +271,7 @@ def test_the_due_scan_is_deduplicated_on_the_constraints_own_key(memory_dir):
     """Whatever the query returns, the list is one entry per (snapshot, horizon)."""
     ticker = "ZZPMK1"
     ids = _seed(ticker, versions=3, horizon=90)
-    due, _ = pm._scan_due(90, limit=25)
+    due = pm._scan_due(90, limit=25).items
 
     keys = [(d["outcome"].memo_snapshot_id, 90) for d in due]
     assert len(keys) == len(set(keys))
@@ -289,12 +289,12 @@ def test_the_scan_excludes_what_the_constraint_would_reject(memory_dir):
         ))
         db.commit()
 
-    due, _ = pm._scan_due(90, limit=25)
+    due = pm._scan_due(90, limit=25).items
     assert ids[0] not in [d["outcome"].memo_snapshot_id for d in due]
 
     # Another horizon is a different key and stays due.
     _seed(ticker + "B", versions=1, horizon=30)
-    assert [d["outcome"].memo_snapshot_id for d in pm._scan_due(30, limit=25)[0]]
+    assert [d["outcome"].memo_snapshot_id for d in pm._scan_due(30, limit=25).items]
 
 
 def test_persist_classifies_the_three_outcomes_it_can_have(memory_dir):

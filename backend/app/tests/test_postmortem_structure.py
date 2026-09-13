@@ -233,6 +233,7 @@ def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir, no_llm):
     report = pm.run_postmortems(horizon_days=90, limit=500)
     assert set(report) == {
         "horizon_days", "due", "written", "already_done", "deduped", "skipped",
+        "deduped_memos", "deferred", "deferred_memos",
     }
     assert report["horizon_days"] == 90 and report["written"] >= 1
     assert {"ticker": t, "horizon": 90} in no_llm       # the LLM was asked, and declined

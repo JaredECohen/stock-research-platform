@@ -42,11 +42,20 @@ def _summarize(report: dict) -> str:
     from the note is what let "23 memos we could not postmortem" stand in
     for "23 memos that were already postmortem'd" for months.
     """
-    return (
+    summary = (
         f"due={report.get('due', 0)} written={report.get('written', 0)} "
         f"already_done={report.get('already_done', 0)} "
-        f"deduped={report.get('deduped', 0)} skipped={report.get('skipped', 0)}"
+        f"deduped={report.get('deduped', 0)} skipped={report.get('skipped', 0)} "
+        f"deferred={report.get('deferred', 0)}"
     )
+    for label in ("deduped", "deferred"):
+        memos = report.get(f"{label}_memos", [])
+        if memos:
+            summary += f"; {label} memos: " + ", ".join(
+                f"{m['ticker']}#{m['memo_snapshot_id']} ({m['reason']})"
+                for m in memos
+            )
+    return summary
 
 
 def run_once(*, limit_per_horizon: int = 25) -> dict[str, int]:

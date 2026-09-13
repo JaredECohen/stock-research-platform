@@ -434,11 +434,16 @@ class DataService:
     def get_company_profile(
         self, ticker: str, *, force_refresh: bool = False,
     ) -> dict[str, Any] | None:
-        return self._cached(
+        profile = self._cached(
             "profile", ticker.upper(),
             lambda: self._try_chain_symbol("profile", "get_company_profile", ticker),
             force_refresh=force_refresh,
         )
+        # The provider spelling is a lookup detail. Memo composition and
+        # persistence take their identity from this field, not the request.
+        # Normalize after the cache read too, so old alias-bearing payloads
+        # cannot keep filing BRK.B research under BRK-B for the profile TTL.
+        return {**profile, "ticker": ticker.strip().upper()} if profile else None
 
     def get_price_history(
         self, ticker: str, days: int = 252, *, force_refresh: bool = False,

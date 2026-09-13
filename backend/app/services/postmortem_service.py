@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -130,14 +131,24 @@ def _postmortem_exists(db, memo_snapshot_id: int, horizon_days: int) -> bool:
 
 def _due_memos(horizon_days: int, *, limit: int = 50) -> list[dict[str, Any]]:
     """The due list alone — see `_scan_due` for what it means."""
-    return _scan_due(horizon_days, limit=limit)[0]
+    return _scan_due(horizon_days, limit=limit).items
+
+
+@dataclass
+class DueScan:
+    items: list[dict[str, Any]] = field(default_factory=list)
+    deduped: list[dict[str, Any]] = field(default_factory=list)
+    deferred: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _memo_identity(snap: MemoSnapshot, reason: str) -> dict[str, Any]:
+    return {"ticker": snap.ticker, "memo_snapshot_id": snap.id, "reason": reason}
 
 
 def _scan_due(
     horizon_days: int, *, limit: int = 50,
-) -> tuple[list[dict[str, Any]], int]:
-    """`(due, deduped)` — memos with an outcome at this horizon and no
-    postmortem yet, plus how many the policy dedupe held back.
+) -> DueScan:
+    """Select due memos and retain every policy or budget omission.
 
     The count is returned rather than stashed on the module, because the
     loops run in `marketmosaic-worker` while cron-health is served by the
@@ -168,8 +179,9 @@ def _scan_due(
     slice of the backlog rather than whatever the engine hands back, and
     the next pass continues from a predictable place.
     """
-    out: list[dict[str, Any]] = []
-    deduped: list[dict[str, Any]] = []
+    if limit < 0:
+        raise ValueError("postmortem limit must be non-negative")
+    scan = DueScan()
     seen_keys: set[tuple[int, int]] = set()
     with SessionLocal() as db:
         stmt = (
@@ -189,16 +201,13 @@ def _scan_due(
             seen_keys.add(key)
             proceed, reason = _should_postmortem(db, snap, horizon_days)
             if not proceed:
-                deduped.append({"ticker": snap.ticker, "reason": reason})
+                scan.deduped.append(_memo_identity(snap, reason))
                 continue
-            out.append({"outcome": outcome, "snapshot": snap})
-            if len(out) >= limit:
-                break
-    if deduped:
-        log.debug(
-            "postmortem dedupe skipped %d memos: %s", len(deduped), deduped[:5],
-        )
-    return out, len(deduped)
+            if len(scan.items) >= limit:
+                scan.deferred.append(_memo_identity(snap, "pass budget"))
+                continue
+            scan.items.append({"outcome": outcome, "snapshot": snap})
+    return scan
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +393,7 @@ def _persist_postmortem(row: MemoPostmortem) -> str:
 def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any]:
     """Process up to `limit` memos due for a postmortem at this horizon.
 
-    Returns a report that distinguishes the four states a due memo can end
+    Returns a report that distinguishes the states a candidate can end
     in, because collapsing them is how a healthy backlog came to be
     reported as a nightly failure:
 
@@ -396,10 +405,13 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
                       discover what a SELECT could have said.
       `deduped`       policy held it back (rating unchanged since the prior
                       version, or the 14-day per-ticker rate limit).
+      `deferred`      eligible work beyond this pass's budget, with every
+                      omitted snapshot named in `deferred_memos`.
       `skipped`       it should have been written and could not be. This is
                       the only one that means the loop is unhealthy.
     """
-    due, deduped = _scan_due(horizon_days, limit=limit)
+    scan = _scan_due(horizon_days, limit=limit)
+    due = scan.items
     written = 0
     already_done = 0
     skipped = 0
@@ -413,6 +425,13 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
         with SessionLocal() as db:
             if _postmortem_exists(db, outcome.memo_snapshot_id, horizon_days):
                 already_done += 1
+                continue
+            # The scan precedes every LLM call and write in this pass.
+            # A prior item (or an admin run) may have consumed the ticker's
+            # 14-day allowance since then; check before spending again.
+            proceed, reason = _should_postmortem(db, snap, horizon_days)
+            if not proceed:
+                scan.deduped.append(_memo_identity(snap, reason))
                 continue
         try:
             # MemoSnapshot stores the report in ``memo_json``.  ``snap.memo``
@@ -477,11 +496,18 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
             except Exception as exc:  # pragma: no cover
                 log.debug("postmortem written_to_memory flag failed: %s", exc)
         written += 1
-    return {
+    report = {
         "horizon_days": horizon_days,
         "due": len(due),
         "written": written,
         "already_done": already_done,
-        "deduped": deduped,
+        "deduped": len(scan.deduped),
+        "deduped_memos": scan.deduped,
+        "deferred": len(scan.deferred),
+        "deferred_memos": scan.deferred,
         "skipped": skipped,
     }
+    # Admin runs do not go through the scheduled loop, so keep their
+    # complete omission details in the log as well as the returned report.
+    log.info("postmortem %sd report: %s", horizon_days, report)
+    return report

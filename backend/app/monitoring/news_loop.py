@@ -121,6 +121,8 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
 
     events: list[dict] = []
     assessment_failures = 0
+    agent_failures: list[str] = []
+    update_failures: list[str] = []
     for t in tickers:
         last = _last_run_for(t)
         if last and (datetime.utcnow() - last).total_seconds() < _THROTTLE_SECONDS:
@@ -129,6 +131,7 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
             alerts = news_agent.run(t, force_refresh=True)
         except Exception as exc:
             log.warning("news_agent failed for %s: %s", t, exc)
+            agent_failures.append(t)
             continue
         _record_run_for(t)
 
@@ -158,15 +161,25 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
                         assessment_failures += 1
             except Exception as exc:  # pragma: no cover — diagnostic only
                 log.warning("update_orchestrator failed for %s: %s", t, exc)
+                update_failures.append(t)
 
     note = f"{len(events)} material events"
     if assessment_failures:
         note += f"; {assessment_failures} assessments failed"
+    if agent_failures:
+        note += f"; {len(agent_failures)} news agents failed: " + ", ".join(agent_failures)
+    if update_failures:
+        note += f"; {len(update_failures)} updates failed: " + ", ".join(update_failures)
     if selection is not None:
         # Folded in so cron-health shows what this run covered and, more
         # importantly, which qualifying tickers the budget could not reach.
         note += f"; {selection.note()}"
-    record_run("news_loop", success=assessment_failures == 0, note=note)
+    log.info("news_loop: %s", note)
+    record_run(
+        "news_loop",
+        success=assessment_failures == 0 and not agent_failures and not update_failures,
+        note=note,
+    )
     return events
 
 
