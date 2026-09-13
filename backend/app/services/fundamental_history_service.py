@@ -19,7 +19,7 @@ from ..models import FinancialPeriod
 from . import history_service as history
 from . import scorecard_pit
 from .data_service import get_data_service
-from .ticker_symbols import symbol_variants
+from .ticker_symbols import market_data_symbols
 
 log = logging.getLogger(__name__)
 LINES = {"income": history._INCOME_LINES, "balance": history._BALANCE_LINES, "cash": history._CASH_LINES}
@@ -283,7 +283,7 @@ def _fetch_financial_history(ticker: str, start: date) -> tuple[list[dict], list
         if name in LEGACY_SOURCES:
             issues.append({"kind": "provider_identity_unusable", "provider": name})
             continue
-        for symbol in symbol_variants(ticker):
+        for symbol in market_data_symbols(ticker):
             attempt = {"provider": name, "symbol": symbol}
             try:
                 method = getattr(provider, "get_financial_history", None)

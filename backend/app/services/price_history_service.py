@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 
 from ..database import SessionLocal
 from ..models import DailyPrice
-from .ticker_symbols import symbol_variants
+from .ticker_symbols import market_data_symbols
 
 log = logging.getLogger(__name__)
 SOURCE_ORDER = ("fmp", "tiingo", "polygon", "alpha_vantage")
@@ -220,7 +220,7 @@ def fetch_and_store_prices(ticker: str, days: int, *, service=None, verify_calen
     start = date.today() - timedelta(days=days)
     attempts = []
     for provider in ds._live_chain("prices"):
-        for symbol in symbol_variants(ticker):
+        for symbol in market_data_symbols(ticker):
             name = str(provider.name).lower()
             try:
                 rows = provider.get_price_history(symbol, days) or []
