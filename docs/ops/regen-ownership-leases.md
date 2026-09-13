@@ -26,9 +26,16 @@ owned sessions retain commit and rollback authority.
 
 ## First rollout from an older worker
 
-The additive nullable columns are reconciled at database initialization. An old
-binary cannot honor a new fence. Let old-code running memo jobs drain and verify
-old-process shutdown before deploying this change. Legacy running rows without
+Both web and worker synchronously initialize the database and execute the mapped
+job projection before starting loops or accepting requests. Missing ownership
+columns fail startup even if generic reconciliation only logged its failure.
+Provider seeding remains separate from this DB-only readiness check.
+
+An old binary cannot honor a new fence. Let old-code running memo jobs drain
+before initiating the rolling deployment. After replacement, verify the
+predecessor's shutdown and check for remaining legacy unowned rows. Render
+initiates predecessor shutdown during replacement; no stop-service step is
+required. Legacy running rows without
 ownership metadata are **not** assumed dead, adopted, requeued or failed.
 Startup logs name every such job, ticker, run ID and start time; the recovery
 result also returns the full `legacy_deferred` list. Resolve any remaining row

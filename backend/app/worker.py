@@ -110,6 +110,7 @@ def _heartbeat() -> None:
 
 def main() -> int:
     from .config import settings
+    from .database import bootstrap_runtime_schema
     from .services import memory_probe
 
     # Render sends SIGTERM on deploy/scale-down; handling it lets an
@@ -128,6 +129,11 @@ def main() -> int:
 
     memory_probe.log_rss("worker_boot")
 
+    # Schema migration must finish before the asynchronous seed, scheduler or
+    # queue can query mapped columns. Do not continue with a missing job fence.
+    # This is DB-only; provider seeding remains on the daemon thread below.
+    bootstrap_runtime_schema()
+
     # Idempotent — the web service runs the same seed on its boot. Doing
     # it here too means the worker doesn't depend on web having started
     # first (Render gives no ordering guarantee between services), and
@@ -142,10 +148,9 @@ def main() -> int:
     # Daemon-threading it lets main() reach the shutdown-aware loop
     # immediately, and the process can exit without waiting for it.
     #
-    # Safe ordering-wise: every monitoring loop is scheduled at a future
-    # cron time or interval (the earliest, edgar_poller, is 30 minutes
-    # out), and the regen worker reads `companies` per job rather than at
-    # startup — so nothing consumes the universe before the seed lands.
+    # Schema readiness is synchronous above. Universe enrichment remains
+    # asynchronous; jobs and loops may see the existing stored universe while
+    # enrichment is in progress.
     def _seed() -> None:
         try:
             from .seed_universe import run_full_seed
