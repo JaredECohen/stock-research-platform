@@ -54,9 +54,9 @@ class _Calls:
         self.openai_calls.append({"model": model, "max_tokens": max_tokens})
         return self._openai_result
 
-    def anthropic(self, client, *, model, system, user, max_tokens):
+    def anthropic(self, client, *, model, system, user, max_tokens, json_mode=False):
         self.anthropic_calls.append({"model": model, "max_tokens": max_tokens, "system": system})
-        return self._anthropic_result
+        return llm._extract_json(self._anthropic_result) if json_mode and self._anthropic_result else self._anthropic_result
 
 
 def _patched(calls: _Calls):

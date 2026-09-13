@@ -457,6 +457,35 @@ def _usage_from_gemini(resp: Any) -> tuple[int, int]:
     )
 
 
+def _safe_finish_diagnostic(provider: str, response: Any) -> str:
+    """Read existing stop metadata without persisting arbitrary response text."""
+    try:
+        if provider == "anthropic":
+            field = "stop_reason"
+            value = getattr(response, field, None)
+            allowed = {"end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal", "model_context_window_exceeded"}
+        elif provider == "openai":
+            field = "finish_reason"
+            value = getattr(response.choices[0], field, None)
+            allowed = {"stop", "length", "tool_calls", "content_filter", "function_call"}
+        else:
+            field = "finish_reason"
+            candidates = getattr(response, "candidates", None) or []
+            value = getattr(candidates[0], field, None) if candidates else None
+            allowed = {
+                "stop", "max_tokens", "safety", "recitation", "other", "blocklist",
+                "prohibited_content", "spii", "malformed_function_call", "language",
+                "unexpected_tool_call", "finish_reason_unspecified",
+            }
+        if value is None:
+            return ""
+        name = value if isinstance(value, str) else getattr(value, "name", None)
+        reason = name.lower() if isinstance(name, str) and name.lower() in allowed else "unrecognized"
+        return f";{field}={reason}"
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # Client factories
 # ---------------------------------------------------------------------------
@@ -546,7 +575,8 @@ def gemini_chat_text(
     model: str | None = None,
     enable_search_grounding: bool = False,
     max_tokens: int = 800,
-) -> str | None:
+    _json_mode: bool = False,
+) -> Any:
     """Lightweight Gemini text-completion wrapper.
 
     Search grounding is enabled by passing the `google_search` tool to the
@@ -562,6 +592,11 @@ def gemini_chat_text(
     full_prompt = (system + "\n\n" + prompt).strip() if system else prompt
     import time as _time
     t0 = _time.perf_counter()
+    in_tok = out_tok = 0
+    received_response = False
+    out = None
+    error = ""
+    finish_diagnostic = ""
     try:
         # Build config dynamically — different google-genai versions accept
         # slightly different shapes. We err on the side of being permissive.
@@ -579,26 +614,29 @@ def gemini_chat_text(
             contents=full_prompt,
             config=config,
         )
-        dur = int((_time.perf_counter() - t0) * 1000)
+        received_response = True
         in_tok, out_tok = _usage_from_gemini(resp)
+        finish_diagnostic = _safe_finish_diagnostic("gemini", resp)
         text = getattr(resp, "text", None)
-        _record_usage(
-            "gemini", chosen_model, in_tok, out_tok,
-            duration_ms=dur, success=bool(text),
-            error="" if text else "empty_response",
-        )
-        if text:
-            _record_success("gemini")
-            return text
-        _record_failure("gemini")
-        return None
+        out = _extract_json(text) if _json_mode and text else (text or None)
+        if out is None:
+            error = "invalid_json_response" if text else "empty_response"
     except Exception as exc:  # pragma: no cover
-        dur = int((_time.perf_counter() - t0) * 1000)
-        log_safely(log, "Gemini call failed", exc)
-        _record_usage("gemini", chosen_model, 0, 0,
-                      duration_ms=dur, success=False, error=redact(exc))
+        error = f"{'response_error' if received_response else 'provider_error'}:{type(exc).__name__}"
+        log.warning("Gemini call failed (%s)", error)
+        out = None
+    # JSON success is decided only after the existing recovery parser runs.
+    # A failed parse still consumed the response's real tokens: one call, one row.
+    _record_usage(
+        "gemini", chosen_model, in_tok, out_tok,
+        duration_ms=int((_time.perf_counter() - t0) * 1000),
+        success=out is not None, error=error + finish_diagnostic if error else "",
+    )
+    if out is None:
         _record_failure("gemini")
-        return None
+    else:
+        _record_success("gemini")
+    return out
 
 
 def gemini_chat_json(
@@ -614,11 +652,11 @@ def gemini_chat_json(
     the Anthropic branch.
     """
     sys_with_json = (system + "\n\nReturn ONLY valid JSON, no prose.").strip()
-    text = gemini_chat_text(
+    return gemini_chat_text(
         prompt, system=sys_with_json, model=model,
         enable_search_grounding=enable_search_grounding, max_tokens=max_tokens,
+        _json_mode=True,
     )
-    return _extract_json(text or "")
 
 
 # ---------------------------------------------------------------------------
@@ -746,9 +784,17 @@ def _anthropic_supports_custom_temp(model: str) -> bool:
     return True
 
 
-def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> str | None:
+def _anthropic_chat(
+    client: Any, *, model: str, system: str, user: str, max_tokens: int,
+    json_mode: bool = False,
+) -> Any:
     import time as _time
     t0 = _time.perf_counter()
+    in_tok = out_tok = 0
+    received_response = False
+    out = None
+    error = ""
+    finish_diagnostic = ""
     try:
         kwargs: dict[str, Any] = {
             "model": model,
@@ -759,9 +805,10 @@ def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_toke
         if _anthropic_supports_custom_temp(model):
             kwargs["temperature"] = 0.3
         msg = client.messages.create(**kwargs)
-        dur = int((_time.perf_counter() - t0) * 1000)
+        received_response = True
         # Capture real token usage for cost accounting (Phase C) + log row (Wave 1A).
         in_tok, out_tok = _usage_from_anthropic(msg)
+        finish_diagnostic = _safe_finish_diagnostic("anthropic", msg)
         # Concatenate text blocks
         parts = []
         for block in getattr(msg, "content", []) or []:
@@ -770,17 +817,20 @@ def _anthropic_chat(client: Any, *, model: str, system: str, user: str, max_toke
                 parts.append(text)
             elif isinstance(block, dict):
                 parts.append(block.get("text", ""))
-        out = "".join(parts).strip() or None
-        _record_usage("anthropic", model, in_tok, out_tok,
-                      duration_ms=dur, success=bool(out),
-                      error="" if out else "empty_response")
-        return out
+        text = "".join(parts).strip() or None
+        out = _extract_json(text) if json_mode and text is not None else text
+        if out is None:
+            error = "invalid_json_response" if text else "empty_response"
     except Exception as exc:  # pragma: no cover
-        dur = int((_time.perf_counter() - t0) * 1000)
-        log_safely(log, "Anthropic call failed", exc)
-        _record_usage("anthropic", model, 0, 0,
-                      duration_ms=dur, success=False, error=redact(exc))
-        return None
+        error = f"{'response_error' if received_response else 'provider_error'}:{type(exc).__name__}"
+        log.warning("Anthropic call failed (%s)", error)
+        out = None
+    _record_usage(
+        "anthropic", model, in_tok, out_tok,
+        duration_ms=int((_time.perf_counter() - t0) * 1000),
+        success=out is not None, error=error + finish_diagnostic if error else "",
+    )
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -820,6 +870,11 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": user + "\n\nReturn ONLY valid JSON."})
     t0 = _time.perf_counter()
+    in_tok = out_tok = 0
+    received_response = False
+    out = None
+    error = ""
+    finish_diagnostic = ""
     try:
         kwargs = {
             "model": model,
@@ -830,19 +885,26 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
         if _openai_supports_custom_temp(model):
             kwargs["temperature"] = 0.3
         resp = client.chat.completions.create(**kwargs)
-        dur = int((_time.perf_counter() - t0) * 1000)
+        received_response = True
         in_tok, out_tok = _usage_from_openai(resp)
+        finish_diagnostic = _safe_finish_diagnostic("openai", resp)
         content = resp.choices[0].message.content
-        out = json.loads(content)
-        _record_usage("openai", model, in_tok, out_tok,
-                      duration_ms=dur, success=True)
-        return out
+        try:
+            out = json.loads(content)
+        except (ValueError, TypeError):
+            error = "invalid_json_response" if content else "empty_response"
+        if out is None and not error:
+            error = "invalid_json_response"
     except Exception as exc:  # pragma: no cover
-        dur = int((_time.perf_counter() - t0) * 1000)
-        log_safely(log, "OpenAI JSON call failed", exc)
-        _record_usage("openai", model, 0, 0,
-                      duration_ms=dur, success=False, error=redact(exc))
-        return None
+        error = f"{'response_error' if received_response else 'provider_error'}:{type(exc).__name__}"
+        log.warning("OpenAI JSON call failed (%s)", error)
+        out = None
+    _record_usage(
+        "openai", model, in_tok, out_tok,
+        duration_ms=int((_time.perf_counter() - t0) * 1000),
+        success=out is not None, error=error + finish_diagnostic if error else "",
+    )
+    return out
 
 
 def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> str | None:
@@ -920,12 +982,15 @@ def _call_json(
             return None
         chosen = (model or "").strip() or _model_for("anthropic", route)
         sys_with_json = (system + "\n\nReturn ONLY valid JSON, no prose.").strip()
-        text = _anthropic_chat(client, model=chosen, system=sys_with_json, user=prompt, max_tokens=max_tokens)
-        if text is None:
+        out = _anthropic_chat(
+            client, model=chosen, system=sys_with_json, user=prompt,
+            max_tokens=max_tokens, json_mode=True,
+        )
+        if out is None:
             _record_failure("anthropic")
-            return None
-        _record_success("anthropic")
-        return _extract_json(text)
+        else:
+            _record_success("anthropic")
+        return out
 
     client = _openai_client()
     if client is None:
