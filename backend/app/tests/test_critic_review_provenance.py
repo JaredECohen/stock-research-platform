@@ -98,3 +98,20 @@ def test_composition_is_pending_and_only_real_review_invokes_critic(monkeypatch)
     graph._review_memo(memo, inputs, analysts)
     assert len(calls) == 1
     assert memo.risk_committee_challenge.review_mode == "live"
+
+
+@pytest.mark.parametrize("payload", [
+    {"unexpected": "x"}, {"overall_assessment": ""},
+    {"overall_assessment": "   "}, {"overall_assessment": 42}, ["not a review"],
+])
+def test_malformed_critic_payload_never_claims_a_live_review(monkeypatch, payload):
+    monkeypatch.setattr(critic_agent.llm, "chat_json", lambda *a, **kw: payload)
+    monkeypatch.setattr(settings, "enable_live_data", True)
+    monkeypatch.setattr(settings, "use_demo_data", False)
+    log = DegradationLog()
+    with log.activate():
+        review = critic_agent.run_critic({"sources_used": ["filing:1"]})
+    assert review.review_mode == "rule_based"
+    assert review.overall_assessment != "Reviewed."
+    assert log.degraded_agents() == ["Risk Committee"]
+    assert log.events()[0]["error_type"] == "CriticUnavailable"

@@ -108,9 +108,10 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
         provider_override=provider_override,
         model=critic_model,
     )
-    if llm_out:
+    assessment = llm_out.get("overall_assessment") if isinstance(llm_out, dict) else None
+    if isinstance(assessment, str) and assessment.strip():
         review = CriticReview(
-            overall_assessment=llm_out.get("overall_assessment", "Reviewed."),
+            overall_assessment=assessment,
             review_mode="live",
             challenges=llm_out.get("challenges", []),
             underweighted_risks=llm_out.get("underweighted_risks", []),
