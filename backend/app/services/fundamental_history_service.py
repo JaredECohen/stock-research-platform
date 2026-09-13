@@ -20,7 +20,7 @@ from ..models import FinancialPeriod
 from . import history_service as history
 from . import scorecard_pit
 from .data_service import get_data_service
-from .ticker_symbols import market_data_symbols
+from .ticker_symbols import symbol_variants
 
 log = logging.getLogger(__name__)
 LINES = {"income": history._INCOME_LINES, "balance": history._BALANCE_LINES, "cash": history._CASH_LINES}
@@ -45,6 +45,11 @@ def _has_blockers(issues: list[dict]) -> bool:
 
 def _today() -> date:
     return date.today()
+
+
+def _valid_currency(value: Any) -> bool:
+    code = str(value or "").strip().upper()
+    return len(code) == 3 and code.isascii() and code.isalpha() and code not in {"NAN", "XXX", "XTS"}
 
 
 def _valid_period(period: Any, period_end: Any, *, end: date) -> tuple[int | None, int | None, date | None]:
@@ -102,7 +107,7 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
         rows = list(db.execute(query.order_by(FinancialPeriod.period_end.desc(), FinancialPeriod.period.desc())).scalars())
         confirmed = {(r.period, r.statement, r.line_item): r for r in rows
                      if r.source not in LEGACY_SOURCES and _stored_period_valid(r)
-                     and r.value is not None and math.isfinite(r.value) and r.currency}
+                     and r.value is not None and math.isfinite(r.value) and _valid_currency(r.currency)}
         confirmed_observations: dict[tuple, list] = {}
         for row in confirmed.values():
             confirmed_observations.setdefault(_stored_observation_identity(row), []).append(row)
@@ -132,7 +137,7 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
                 kind = "missing_stored_primary_value" if row.line_item == PRIMARY[row.statement] else "missing_stored_optional_value"
                 issues.append({"kind": kind, **identity})
                 continue
-            if not row.currency or not math.isfinite(row.value):
+            if not _valid_currency(row.currency) or not math.isfinite(row.value):
                 issues.append({"kind": "invalid_stored_value_or_currency", **identity})
                 continue
             canonical = f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}"
@@ -220,7 +225,7 @@ def _coverage(statements: dict, start: date, end: date, *, issues: list[dict] | 
                     continue
                 value = row.get(PRIMARY[statement])
                 provenance = row.get("line_sources", {}).get(PRIMARY[statement], row.get("source"))
-                if provenance in LEGACY_SOURCES or not row.get("currency") or row.get("currency") == "mixed":
+                if provenance in LEGACY_SOURCES or not _valid_currency(row.get("currency")):
                     continue
                 if not d or d > end or fy is None or (fq is not None) != (cadence == "quarterly"):
                     continue
@@ -315,8 +320,9 @@ def _clean_payload(raw: dict, provider: str, symbol: str, issues: list[dict]) ->
                 issues.append({"kind": "invalid_period", **identity, "period_end": str(row.get("period_end") or row.get("date"))})
                 continue
             currency = str(row.get("currency") or "").strip().upper()
-            if not currency or len(currency) > 8:
-                issues.append({"kind": "missing_or_invalid_currency", **identity})
+            if not _valid_currency(currency):
+                issues.append({"kind": "missing_or_invalid_currency", **identity, "currency": currency,
+                               "period_end": period_end.isoformat()})
                 continue
             item = {"period": f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}", "period_end": period_end.isoformat(),
                     "currency": currency, "source": provider,
@@ -388,7 +394,9 @@ def _fetch_financial_history(ticker: str, start: date, *, required_start: date |
         if name in LEGACY_SOURCES:
             issues.append({"kind": "provider_identity_unusable", "provider": name})
             continue
-        for symbol in market_data_symbols(ticker):
+        # A verified price-series rename does not establish statement identity.
+        # BNY historical financial endpoints mix fiscal labels after BK's rename.
+        for symbol in symbol_variants(ticker):
             attempt = {"provider": name, "symbol": symbol}
             try:
                 method = getattr(provider, "get_financial_history", None)

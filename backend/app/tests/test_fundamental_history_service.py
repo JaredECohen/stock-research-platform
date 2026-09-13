@@ -822,3 +822,25 @@ def test_invalid_exact_canonical_occupant_in_alias_group_stays_blocking(database
         for row_id in (alias_id, canonical_id):
             row = db.get(FinancialPeriod, row_id)
             assert row.period_end is None and row.value == 777 and row.source == "live"
+
+
+def test_fundamentals_keep_canonical_bk_routing_separate_from_price_rename(database, monkeypatch):
+    calls = providers(monkeypatch, ("fmp", payload()))
+    result = svc.backfill_fundamentals("BK", date(2024, 9, 13))
+    assert result["success"] and [symbol for _, symbol, _ in calls] == ["BK"]
+
+
+@pytest.mark.parametrize("currency", ["None", "NULL", "N/A", "NAN", "UNKNOWN", "XXX", "XTS"])
+def test_placeholder_currency_is_rejected_on_incoming_and_stored_reads(database, monkeypatch, currency):
+    providers(monkeypatch, ("fmp", payload(currency=currency)))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert not report["success"] and report["rows_written"] == 0
+    assert any(i["kind"] == "missing_or_invalid_currency" and i["currency"] == currency.upper() for i in report["issues"])
+    with database() as db:
+        db.add(FinancialPeriod(ticker="TEST", period="FY2025", fiscal_year=2025, period_end=date(2025, 12, 31),
+            statement="income", line_item="revenue", value=100, currency=currency, source="alpha_vantage"))
+        db.commit()
+    stored = svc.read_stored_financials("TEST")
+    assert not stored["income"]
+    assert any(i["kind"] == "invalid_stored_value_or_currency" for i in stored["_history_issues"])
+    assert not svc._complete(svc._coverage(payload(currency=currency), date(2024, 9, 13), date(2026, 9, 13)))
