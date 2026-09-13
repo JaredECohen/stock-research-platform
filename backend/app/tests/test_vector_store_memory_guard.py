@@ -18,7 +18,11 @@ back to deterministic hash vectors, which is also how CI runs.
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.database import SessionLocal
 from app.models import DocChunk
@@ -36,8 +40,13 @@ def _chunk(text: str, section: str = "risk_factors") -> dict:
 
 
 @pytest.fixture()
-def seeded():
-    """Insert a small, known corpus for two tickers; clean up after."""
+def seeded(monkeypatch, tmp_path):
+    """Use an isolated corpus: global-scan assertions cannot share earlier ingests."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'vectors.db'}")
+    DocChunk.__table__.create(engine)
+    local_sessions = sessionmaker(bind=engine)
+    monkeypatch.setattr(vector_store, "SessionLocal", local_sessions)
+    monkeypatch.setattr(sys.modules[__name__], "SessionLocal", local_sessions)
     _purge()
     vector_store.upsert_source(
         ticker=T1, source_type="filing", source_id=9001,
@@ -57,6 +66,7 @@ def seeded():
     )
     yield
     _purge()
+    engine.dispose()
 
 
 def _purge() -> None:

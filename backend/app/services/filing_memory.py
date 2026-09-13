@@ -32,7 +32,7 @@ from collections.abc import Iterator
 from datetime import date
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from ..config import settings
 from ..database import SessionLocal
@@ -41,6 +41,20 @@ from . import embeddings as emb_svc
 from . import vector_store
 
 log = logging.getLogger(__name__)
+
+
+def _section_text(value: Any) -> str:
+    """Render text, bullet lists and structured segment rows without data loss."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(item, (str, dict)) for item in value):
+        return "\n".join(
+            item if isinstance(item, str) else json.dumps(item, sort_keys=True, ensure_ascii=False)
+            for item in value
+        )
+    raise TypeError(f"unsupported filing section type: {type(value).__name__}")
 
 
 # ---------------------------------------------------------------------------
@@ -62,9 +76,13 @@ def _iter_filing_chunks(filing: FilingDoc) -> Iterator[dict[str, Any]]:
         "filing_type": filing.filing_type,
         "filing_date": filing.filing_date.isoformat() if filing.filing_date else None,
         "url": filing.url or "",
+        **((filing.sections or {}).get("_source_metadata") or {}),
     }
-    for section_name, section_text in (filing.sections or {}).items():
-        if not isinstance(section_text, str) or not section_text.strip():
+    for section_name, value in (filing.sections or {}).items():
+        if section_name == "_source_metadata":
+            continue
+        section_text = _section_text(value)
+        if not section_text.strip():
             continue
         for piece in emb_svc.iter_chunks(section_text):
             yield {
@@ -88,6 +106,7 @@ def index_filing(filing: FilingDoc) -> int:
         source_type="filing",
         source_id=filing.id,
         chunks=_iter_filing_chunks(filing),
+        raise_on_error=True,
     )
 
 
@@ -167,6 +186,7 @@ def index_transcript(transcript) -> int:
         source_type="transcript",
         source_id=transcript.id,
         chunks=_iter_transcript_chunks(transcript, period_end),
+        raise_on_error=True,
     )
 
 
@@ -175,6 +195,14 @@ def index_transcript(transcript) -> int:
 # ---------------------------------------------------------------------------
 
 def _prior_filing_of_same_type(filing: FilingDoc) -> FilingDoc | None:
+    # A committed batch contains both newer and older filings. Never diff
+    # against a future filing merely because it is the newest stored row.
+    before = FilingDoc.id < filing.id
+    if filing.filing_date is not None:
+        before = or_(
+            FilingDoc.filing_date < filing.filing_date,
+            and_(FilingDoc.filing_date == filing.filing_date, FilingDoc.id < filing.id),
+        )
     with SessionLocal() as db:
         row = db.execute(
             select(FilingDoc)
@@ -182,8 +210,9 @@ def _prior_filing_of_same_type(filing: FilingDoc) -> FilingDoc | None:
                 FilingDoc.ticker == filing.ticker,
                 FilingDoc.filing_type == filing.filing_type,
                 FilingDoc.id != filing.id,
+                before,
             )
-            .order_by(FilingDoc.filing_date.desc().nullslast())
+            .order_by(FilingDoc.filing_date.desc().nullslast(), FilingDoc.id.desc())
             .limit(1)
         ).scalars().first()
         return row
@@ -198,10 +227,10 @@ def _deterministic_diff(prior: FilingDoc, new: FilingDoc) -> list[str]:
     bullets: list[str] = []
     p_secs = prior.sections or {}
     n_secs = new.sections or {}
-    keys = set(p_secs.keys()) | set(n_secs.keys())
+    keys = (set(p_secs.keys()) | set(n_secs.keys())) - {"_source_metadata"}
     for k in sorted(keys):
-        p_text = (p_secs.get(k) or "")
-        n_text = (n_secs.get(k) or "")
+        p_text = _section_text(p_secs.get(k))
+        n_text = _section_text(n_secs.get(k))
         if not p_text and n_text:
             bullets.append(f"New section disclosed: **{k}** ({len(n_text.split())} words).")
         elif p_text and not n_text:
@@ -242,12 +271,12 @@ def _llm_diff(prior: FilingDoc, new: FilingDoc) -> dict[str, Any] | None:
         "prior": {
             "filing_type": prior.filing_type,
             "filing_date": prior.filing_date.isoformat() if prior.filing_date else None,
-            "sections": {k: v[:8000] for k, v in p_secs.items() if isinstance(v, str)},
+            "sections": {k: _section_text(v)[:8000] for k, v in p_secs.items() if k != "_source_metadata"},
         },
         "new": {
             "filing_type": new.filing_type,
             "filing_date": new.filing_date.isoformat() if new.filing_date else None,
-            "sections": {k: v[:8000] for k, v in n_secs.items() if isinstance(v, str)},
+            "sections": {k: _section_text(v)[:8000] for k, v in n_secs.items() if k != "_source_metadata"},
         },
     }
     from ..agents import llm
@@ -337,11 +366,14 @@ def post_pass(filing: FilingDoc, profile: dict[str, Any] | None = None) -> dict[
         "indexed_chunks": 0,
         "delta_bullets": [],
         "sector_pattern_written": False,
+        "errors": [],
     }
     try:
         report["indexed_chunks"] = index_filing(filing)
     except Exception as exc:  # pragma: no cover
-        log.warning("filing index failed: %s", exc)
+        report["errors"].append({"stage": "index", "error_type": type(exc).__name__})
+        log.warning("filing index failed ticker=%s filing_id=%s error_type=%s",
+                    filing.ticker, filing.id, type(exc).__name__)
 
     prior = _prior_filing_of_same_type(filing)
     if prior is None:

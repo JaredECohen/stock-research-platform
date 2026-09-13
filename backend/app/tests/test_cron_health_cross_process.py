@@ -14,6 +14,10 @@ failures.
 """
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from datetime import datetime, timedelta
 
 import pytest
@@ -83,6 +87,119 @@ def test_record_run_upserts_rather_than_appending():
     assert len(rows) == 1
     assert rows[0].note == "second"
     assert rows[0].success is True
+
+
+def _other_process(code: str) -> dict:
+    """A fresh module state against the same isolated test database."""
+    result = subprocess.run(
+        [sys.executable, "-c", "from app.tests import netguard; netguard.install(); " + code],
+        env={**os.environ, "MM_PROCESS_ROLE": "worker"},
+        capture_output=True, text=True, check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_progress_preserves_failed_completion_across_actual_processes():
+    import app.monitoring as monitoring
+    from app.api.routes_admin import cron_health_endpoint
+
+    monitoring.record_run(LOOP, success=False, note="prior completed failure: AAPL")
+    before = monitoring.status_snapshot()[LOOP]
+    child = _other_process(
+        "import json; import app.monitoring as m; "
+        f"m.record_progress('{LOOP}', success=True, note='new pass has polled 3'); "
+        f"print(json.dumps(m.status_snapshot()['{LOOP}']))"
+    )
+    # A stale _LAST_RUNS entry in the parent must not hide the child's write.
+    parent = monitoring.status_snapshot()[LOOP]
+    assert parent == child
+    assert parent["last_run_at"] == before["last_run_at"]
+    assert parent["success"] is False
+    assert parent["note"] == before["note"]
+    assert parent["progress_success"] is True
+    assert parent["progress_note"] == "new pass has polled 3"
+    assert parent["progress_at"] is not None
+    public = next(row for row in cron_health_endpoint()["loops"] if row["loop"] == LOOP)
+    assert public["success"] is False and public["progress_success"] is True
+    assert public["progress_at"] == parent["progress_at"]
+
+    # Another fresh process (worker restart) still sees the failure until
+    # an actual completion arrives, at which point progress is cleared.
+    restarted = _other_process(
+        f"import json; import app.monitoring as m; print(json.dumps(m.status_snapshot()['{LOOP}']))"
+    )
+    assert restarted == parent
+    _other_process(
+        "import json; import app.monitoring as m; "
+        f"m.record_run('{LOOP}', success=True, note='completed recovery'); "
+        f"print(json.dumps(m.status_snapshot()['{LOOP}']))"
+    )
+    completed = monitoring.status_snapshot()[LOOP]
+    assert completed["success"] is True
+    assert completed["note"] == "completed recovery"
+    assert all(completed[key] is None for key in ("progress_at", "progress_note", "progress_success"))
+
+
+def test_first_progress_is_never_reported_as_a_completed_run():
+    import app.monitoring as monitoring
+    from app.api.routes_admin import cron_health_endpoint
+
+    monitoring.record_progress(LOOP, note="first pass starting")
+    with SessionLocal() as db:
+        stored = db.query(CronLoopRun).filter_by(loop_name=LOOP).one()
+        assert stored.last_run_at == monitoring.NEVER_COMPLETED_AT
+        assert stored.success is False
+    child = _other_process(
+        f"import json; import app.monitoring as m; print(json.dumps(m.status_snapshot()['{LOOP}']))"
+    )
+    assert child["last_run_at"] is None and child["success"] is None
+    assert child["note"] == "never run"
+    assert child["progress_at"] is not None
+    assert child["progress_success"] is None
+    row = next(row for row in cron_health_endpoint()["loops"] if row["loop"] == LOOP)
+    assert row["stale"] is True
+    assert row["last_run_at"] is None and row["age_seconds"] is None
+
+
+def test_interrupted_progress_failure_is_retained_across_restart_until_completion():
+    import app.monitoring as monitoring
+
+    monitoring.record_run(LOOP, success=True, note="previous completed pass")
+    monitoring.record_progress(LOOP, success=False, note="index errors on 1: AAPL")
+    child = _other_process(
+        "import json; import app.monitoring as m; "
+        f"m.record_progress('{LOOP}', note='new worker starting'); "
+        f"m.record_progress('{LOOP}', success=True, note='polled 5 so far'); "
+        f"print(json.dumps(m.status_snapshot()['{LOOP}']))"
+    )
+    assert child["success"] is True  # last completed pass is unchanged
+    assert child["progress_success"] is False
+    assert "AAPL" in child["progress_note"]
+    assert "polled 5 so far" in child["progress_note"]
+    assert child["progress_note"].count("Latest activity:") == 1
+    monitoring.record_run(LOOP, success=True, note="completed recovery")
+    assert monitoring.status_snapshot()[LOOP]["progress_success"] is None
+
+
+def test_progress_columns_are_nullable_and_reconcile_without_erasing_history(monkeypatch):
+    from sqlalchemy import create_engine, text
+
+    from app import database
+
+    isolated = create_engine("sqlite://")
+    with isolated.begin() as conn:
+        conn.execute(text("CREATE TABLE cron_loop_runs (id INTEGER PRIMARY KEY, loop_name VARCHAR(64), "
+                          "last_run_at DATETIME NOT NULL, success BOOLEAN NOT NULL, note TEXT, reported_by VARCHAR(32))"))
+        conn.execute(text("INSERT INTO cron_loop_runs VALUES (1, 'old_loop', '2026-09-01 01:00:00', 0, 'failure', 'worker')"))
+    monkeypatch.setattr(database, "engine", isolated)
+    repaired = database.reconcile_missing_columns()
+    assert set(repaired) == {f"cron_loop_runs.{name}" for name in ("progress_at", "progress_note", "progress_success")}
+    with isolated.connect() as conn:
+        row = conn.execute(text("SELECT * FROM cron_loop_runs")).mappings().one()
+    assert row["success"] == 0 and row["note"] == "failure"
+    assert row["last_run_at"] == "2026-09-01 01:00:00"
+    assert all(row[key] is None for key in ("progress_at", "progress_note", "progress_success"))
+    isolated.dispose()
 
 
 def test_record_run_never_raises_when_the_db_is_unavailable(monkeypatch):

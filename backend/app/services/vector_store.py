@@ -321,6 +321,7 @@ def upsert_source(
     section: str | None = None,
     period_end: date | None = None,
     batch_size: int = EMBED_BATCH_SIZE,
+    raise_on_error: bool = False,
 ) -> int:
     """Insert chunks for a (source_type, source_id). Replaces any prior
     chunks for the same source so re-ingesting a filing doesn't
@@ -401,7 +402,9 @@ def upsert_source(
                 db.rollback()
                 return 0
             db.commit()
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # callers may retain source-specific failures
+        if raise_on_error:
+            raise
         log.warning("upsert chunks failed: %s", exc)
         return 0
     # Mirror the freshly-written JSON embeddings into the pgvector column

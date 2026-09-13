@@ -48,6 +48,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.models import Company, MemoSnapshot, RegenJob
 from app.monitoring import news_loop, social_loop
+from app.monitoring import research_focus as rf
 from app.monitoring.research_focus import (
     BAND_DEGRADED,
     BAND_MEMO_FRESH,
@@ -827,7 +828,17 @@ def test_neither_loop_picks_tickers_off_an_arbitrary_universe_slice(module):
 
 
 def test_each_loop_declares_its_budget_as_a_named_constant_with_the_cost_math():
-    assert news_loop.NEWS_FOCUS_BUDGET == 10
+    """The numbers are spend, so they are pinned and their arithmetic is read.
+
+    `NEWS_FOCUS_BUDGET` was 10 only because that is what the arbitrary
+    `list_tickers()[:10]` slice it replaced happened to spend; holding it
+    there kept the relevance fix from quietly changing the bill. The owner
+    raised it to 25 — 600 Gemini calls a day against 240 — which covers
+    every ticker carrying any research signal at all (the 10 curated pins
+    plus the 17 that have ever had a memo, less the overlap).
+    `SOCIAL_FOCUS_BUDGET` was not part of that decision and stays at 10.
+    """
+    assert news_loop.NEWS_FOCUS_BUDGET == 25
     assert social_loop.SOCIAL_FOCUS_BUDGET == 10
     for module, name in ((news_loop, "NEWS_FOCUS_BUDGET"), (social_loop, "SOCIAL_FOCUS_BUDGET")):
         source = inspect.getsource(module)
@@ -836,6 +847,33 @@ def test_each_loop_declares_its_budget_as_a_named_constant_with_the_cost_math():
             f"{module.__name__}'s budget constant has no cost math above it; the "
             "number is meaningless to whoever considers raising it"
         )
+    news_head = inspect.getsource(news_loop).split("NEWS_FOCUS_BUDGET =")[0]
+    assert "600" in news_head and "240" in news_head, (
+        "the news budget's comment still states the old spend; a stale cost "
+        "note is worse than none, because the next reader will trust it"
+    )
+
+
+def test_the_focus_splitters_are_slot_counts_not_fractions_of_the_budget():
+    """Why raising the budget did not move `LIVE_RESEARCH_RESERVE`/`ROTATING_SLOTS`.
+
+    Both were sized against a budget of 10, so a budget of 25 is the moment
+    to check they were not secretly proportional. They are absolute slot
+    counts taken off the top of an over-budget run, and the guaranteed
+    prefix absorbs the rest — so the reserve still guarantees live research
+    its slots and the rotation still walks the tail, at either budget.
+    """
+    for budget in (10, 25):
+        reserved, guaranteed, rotating = rf._split_budget(budget, live_available=5)
+        assert reserved == rf.LIVE_RESEARCH_RESERVE
+        assert rotating == rf.ROTATING_SLOTS
+        assert reserved + guaranteed + rotating == budget
+        assert guaranteed == budget - reserved - rotating
+
+    # And the increase lands entirely on the always-covered prefix.
+    assert (
+        rf._split_budget(25, 5)[1] - rf._split_budget(10, 5)[1] == 15
+    )
 
 
 class _FakeScheduler:

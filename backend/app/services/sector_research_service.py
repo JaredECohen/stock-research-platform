@@ -9,6 +9,8 @@ cohort. The sector agent consumes this output to write a grounded narrative.
 from __future__ import annotations
 
 import json
+import logging
+import math
 from collections import Counter
 from pathlib import Path
 from statistics import mean, median, pstdev
@@ -21,6 +23,7 @@ from .fundamentals_service import get_full_financials
 
 _SECTOR_CONFIG_CACHE: dict[str, dict] | None = None
 _CANONICAL_INDEX_CACHE: dict[str, str] | None = None
+log = logging.getLogger(__name__)
 
 
 def _sector_config() -> dict[str, dict]:
@@ -172,6 +175,11 @@ def _resolve_subindustry_overrides(sector_block: dict, industry: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def build_cohort(target_ticker: str) -> list[str]:
+    """Compatibility list view of the selected cohort."""
+    return _cohort_selection(target_ticker)[0]
+
+
+def _cohort_selection(target_ticker: str) -> tuple[list[str], str]:
     """Return peers in the same sector + (preferably) sub-industry as the target.
 
     Sub-industry is preferred so semis aren't lumped with software when both
@@ -181,7 +189,7 @@ def build_cohort(target_ticker: str) -> list[str]:
     ds = get_data_service()
     target = ds.get_company_profile(target_ticker) or {}
     if not target:
-        return []
+        return [], "unavailable"
     sector = target.get("sector")
     industry = target.get("industry")
     sub_ind = target.get("sub_industry")
@@ -204,10 +212,10 @@ def build_cohort(target_ticker: str) -> list[str]:
             same_sector.append(t)
 
     if len(same_sub) >= 3:
-        return same_sub
+        return same_sub, "sub_industry"
     if len(same_industry) >= 3:
-        return same_industry
-    return same_sector
+        return same_industry, "industry"
+    return same_sector, "sector" if sector else "unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +267,10 @@ def compute_kpi_placements(
         for kpi in kpis:
             target_val = target_ratios.get(kpi)
             cohort_vals = [r.get(kpi) for r in cohort_ratios]
+            if kpi == "EV_EBITDA":
+                cohort_vals = [v for v in cohort_vals if _multiple_exclusion(v) is None]
+                if _multiple_exclusion(target_val) is not None:
+                    target_val = None
             dist = _distribution(cohort_vals)
             if not dist:
                 continue
@@ -304,6 +316,19 @@ def _argmin(rows: list[tuple[str, float | None]]) -> str | None:
     return min(clean, key=lambda r: r[1])[0] if clean else None
 
 
+def _multiple_exclusion(value: Any) -> str | None:
+    """EV/EBITDA is a cheapness comparison only for finite positive values."""
+    if value is None:
+        return "missing"
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "non_numeric"
+    if not math.isfinite(value):
+        return "non_finite"
+    if value <= 0:
+        return "non_positive"
+    return None
+
+
 def detect_outliers(cohort_with_target: list[dict]) -> dict[str, str | None]:
     """Return tickers leading the cohort on growth, margin, ROIC, and valuation."""
     if not cohort_with_target:
@@ -312,7 +337,10 @@ def detect_outliers(cohort_with_target: list[dict]) -> dict[str, str | None]:
     op_margin = [(r["ticker"], r["ratios"].get("operating_margin")) for r in cohort_with_target]
     roic = [(r["ticker"], r["ratios"].get("ROIC")) for r in cohort_with_target]
     fcf_yield = [(r["ticker"], r["ratios"].get("FCF_yield")) for r in cohort_with_target]
-    ev_ebitda = [(r["ticker"], r["ratios"].get("EV_EBITDA")) for r in cohort_with_target]
+    ev_ebitda = [
+        (r["ticker"], r["ratios"].get("EV_EBITDA")) for r in cohort_with_target
+        if _multiple_exclusion(r["ratios"].get("EV_EBITDA")) is None
+    ]
     return {
         "growth_leader": _argmax(growth),
         "margin_leader": _argmax(op_margin),
@@ -407,20 +435,23 @@ _RISK_KEYWORDS = [
 def aggregate_cohort_filing_themes(cohort_tickers: list[str]) -> list[dict[str, Any]]:
     """Cluster risk-factor language across the cohort into named themes."""
     counter: Counter = Counter()
-    n_filings = 0
     for t in cohort_tickers:
         for f in get_filings(t):
             risks = f.get("risk_factors") or []
-            n_filings += 1
             text = " ".join(risks).lower() + " " + (f.get("mda", "") or "").lower()
             for needle, label in _RISK_KEYWORDS:
                 if needle in text:
                     counter[label] += 1
     if not counter:
         return []
-    top = counter.most_common(8)
+    # The vocabulary has only thirteen named themes; returning them all
+    # avoids silently losing valid cohort evidence below a top-eight cut.
+    top = counter.most_common()
     return [
-        {"theme": label, "cohort_mentions": cnt, "share": round(cnt / max(1, len(cohort_tickers)), 2)}
+        {
+            "theme": label, "cohort_mentions": cnt,
+            "mentions_per_peer": round(cnt / max(1, len(cohort_tickers)), 2),
+        }
         for label, cnt in top
     ]
 
@@ -543,7 +574,10 @@ def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> d
     cache_key = f"{sector}:{sub_industry}:{target_ticker}"
     if not force_refresh:
         cached = cache_get(cache_key, "sector_warm", max_age_seconds=7 * 24 * 3600)
-        if cached and isinstance(cached.payload, dict):
+        if (
+            cached and isinstance(cached.payload, dict)
+            and "valuation_exclusions" in cached.payload
+        ):
             payload = dict(cached.payload)
             payload.pop("schema_version", None)
             return payload
@@ -557,12 +591,14 @@ def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> d
             "_subindustry_extra": sub_overrides["additional_kpis"],
         }
 
-    cohort_tickers = build_cohort(target_ticker)
+    cohort_tickers, selection_basis = _cohort_selection(target_ticker)
     cohort_with_target: list[dict] = []
     cohort_ratios: list[dict] = []
     cohort_fins: list[dict] = []
+    valuation_inputs: dict[str, dict] = {}
     for t in cohort_tickers:
         fin = get_full_financials(t)
+        valuation_inputs[t] = (fin or {}).get("ratios") or {}
         if not fin or not fin.get("ratios"):
             continue
         ratios = fin["ratios"]
@@ -582,9 +618,25 @@ def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> d
         "financials": target_fin,
     })
     cohort_fins.append(target_fin)
+    valuation_inputs[target_ticker] = target_ratios
 
     placements = compute_kpi_placements(target_ratios, cohort_ratios, kpi_groups)
     outliers = detect_outliers(cohort_with_target)
+    excluded = [
+        {"ticker": ticker, "reason": reason}
+        for ticker, ratios in valuation_inputs.items()
+        if (reason := _multiple_exclusion(ratios.get("EV_EBITDA"))) is not None
+    ]
+    valuation_exclusions = {
+        "metric": "EV_EBITDA", "count": len(excluded),
+        "tickers": [row["ticker"] for row in excluded], "details": excluded,
+    }
+    if excluded:
+        log.info(
+            "sector research %s excludes %d EV_EBITDA comparisons: %s",
+            target_ticker, len(excluded),
+            ", ".join(f"{row['ticker']} ({row['reason']})" for row in excluded),
+        )
     trends = compute_sector_trends(cohort_fins)
     structure = industry_structure(cohort_with_target)
     filing_themes = aggregate_cohort_filing_themes(cohort_tickers)
@@ -598,7 +650,7 @@ def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> d
         "cohort": {
             "peers": cohort_tickers,
             "size": len(cohort_tickers),
-            "selection_basis": "sub_industry" if len(cohort_tickers) > 0 else "sector",
+            "selection_basis": selection_basis,
         },
         "sector_drivers": sector_block.get("key_drivers", []),
         "sector_secular_trends": sector_block.get("secular_trends", []),
@@ -610,6 +662,7 @@ def run_sector_research(target_ticker: str, *, force_refresh: bool = False) -> d
         "industry_structure": structure,
         "kpi_placements": placements,
         "outliers": outliers,
+        "valuation_exclusions": valuation_exclusions,
         "trends": trends,
         "regime": regime,
         "cohort_filing_themes": filing_themes,

@@ -201,25 +201,25 @@ def fake_index(monkeypatch):
 
 @pytest.fixture()
 def runs(monkeypatch) -> list[dict]:
-    """Every `record_run` the poller makes — the verdict as well as the note.
-
-    Capturing only the note is how a progress record's `success` flag went
-    unasserted while it was hardcoded to True. `record_run` keeps one row
-    per loop and overwrites both fields, so the flag is half of what
-    cron-health shows and belongs in the capture.
-    """
+    """Capture both surfaces while keeping completion distinct from progress."""
     captured: list[dict] = []
     monkeypatch.setattr(
         edgar_poller, "record_run",
         lambda *a, **k: captured.append(
-            {"success": k.get("success", True), "note": k.get("note", "")}
+            {"kind": "complete", "success": k.get("success", True), "note": k.get("note", "")}
+        ),
+    )
+    monkeypatch.setattr(
+        edgar_poller, "record_progress",
+        lambda *a, **k: captured.append(
+            {"kind": "progress", "success": k.get("success"), "note": k.get("note", "")}
         ),
     )
     return captured
 
 
-def _notes(runs: list[dict]) -> list[str]:
-    return [r["note"] for r in runs]
+def _notes(runs: list[dict], *, include_progress=False) -> list[str]:
+    return [r["note"] for r in runs if include_progress or r["kind"] == "complete"]
 
 
 def _prime(fake_index: dict, tickers: list[str]) -> None:
@@ -311,8 +311,9 @@ def test_the_note_reports_the_deferred_count_and_names(fake_index, runs):
         assert t in note, f"{t} was deferred but not named in the note: {note}"
 
 
-def test_a_long_deferral_list_is_elided_rather_than_dropped(fake_index, runs):
+def test_a_long_deferral_list_names_every_ticker_in_notes_and_logs(fake_index, runs, caplog):
     """The first pass after the fix defers ~150 names. The note says so."""
+    caplog.set_level("INFO", logger=edgar_poller.__name__)
     count = edgar_poller.MAX_FILING_EVENTS_PER_PASS + 9
     tickers = [f"ZZEL{_suffix()}{i:02d}" for i in range(count)]
     _prime(fake_index, tickers)
@@ -326,7 +327,10 @@ def test_a_long_deferral_list_is_elided_rather_than_dropped(fake_index, runs):
 
     (note,) = _notes(runs)
     assert "deferred 9" in note
-    assert "+4 more" in note, f"truncation must be visible, not silent: {note}"
+    assert "+4 more" not in note
+    for ticker in tickers[edgar_poller.MAX_FILING_EVENTS_PER_PASS:]:
+        assert ticker in note
+        assert ticker in caplog.text
 
 
 def test_an_uncapped_pass_still_reports_no_deferrals(fake_index, runs):
@@ -345,6 +349,141 @@ def test_an_uncapped_pass_still_reports_no_deferrals(fake_index, runs):
     (note,) = _notes(runs)
     assert "deferred" not in note
     assert note.startswith("3 new filings")
+
+
+@pytest.mark.parametrize("failure", ["index", "handler", "gate", "invalidation", "persist"])
+def test_failed_ticker_retains_seen_and_retries_on_next_pass(fake_index, runs, monkeypatch, failure, caplog):
+    tickers = [f"ZZFAIL{_suffix()}", f"ZZGOOD{_suffix()}"]
+    failed, good = tickers
+    _prime(fake_index, tickers)
+    for ticker in tickers:
+        fake_index[ticker].append({"type": "8-K", "accession_number": _accession(2)})
+    before = edgar_poller._seen_accessions(failed)
+    calls = []
+
+    def index(ticker):
+        if ticker == failed and failure == "index":
+            raise RuntimeError("index down")
+        return fake_index[ticker]
+
+    def handler(ticker):
+        calls.append(ticker)
+        if ticker == failed:
+            if failure == "handler":
+                raise RuntimeError("handler down")
+            if failure == "gate":
+                return {"kind": "gate_error"}
+            if failure == "persist":
+                return {"kind": "persist_error", "persisted": {"persist_error": {
+                    "ticker": ticker, "stage": "raw_ingest", "error_type": "ValueError",
+                }}}
+        return {"kind": "skipped"}
+
+    def invalidate(ticker):
+        if ticker == failed and failure == "invalidation":
+            raise RuntimeError("cache unavailable")
+
+    monkeypatch.setattr(edgar_poller, "get_filings_index", index)
+    monkeypatch.setattr(edgar_poller, "invalidate_filings_text", invalidate)
+    monkeypatch.setattr("app.services.update_orchestrator.on_filing_event", handler)
+    runs.clear()
+    edgar_poller.run_once(tickers)
+    assert good in calls
+    assert edgar_poller._seen_accessions(failed) == before
+    assert _accession(2) in edgar_poller._seen_accessions(good)
+    assert runs[-1]["success"] is False
+    assert failed in runs[-1]["note"] and failed in caplog.text
+    if failure == "persist":
+        assert f"{failed}:raw_ingest:ValueError" in runs[-1]["note"]
+
+    monkeypatch.setattr(edgar_poller, "get_filings_index", lambda ticker: fake_index[ticker])
+    monkeypatch.setattr(edgar_poller, "invalidate_filings_text", lambda ticker: None)
+    retried = []
+    monkeypatch.setattr("app.services.update_orchestrator.on_filing_event", lambda ticker: retried.append(ticker) or {"kind": "skipped"})
+    edgar_poller.run_once(tickers)
+    assert retried == [failed]
+    assert _accession(2) in edgar_poller._seen_accessions(failed)
+    assert runs[-1]["success"] is True
+
+
+def test_all_gate_error_names_survive_notes_and_logs(fake_index, runs, monkeypatch, caplog):
+    tickers = [f"ZZGATE{_suffix()}{i}" for i in range(8)]
+    _prime(fake_index, tickers)
+    for ticker in tickers:
+        fake_index[ticker].append({"type": "8-K", "accession_number": _accession(2)})
+    monkeypatch.setattr("app.services.update_orchestrator.on_filing_event", lambda ticker: {"kind": "gate_error"})
+    edgar_poller.run_once(tickers)
+    assert "gate errors on 8" in runs[-1]["note"]
+    for ticker in tickers:
+        assert ticker in runs[-1]["note"] and ticker in caplog.text
+        assert _accession(2) not in edgar_poller._seen_accessions(ticker)
+
+
+def test_persisted_postpass_failures_are_failed_and_named_without_fake_retry(fake_index, runs, monkeypatch, caplog):
+    ticker = f"ZZPOST{_suffix()}"
+    _prime(fake_index, [ticker])
+    fake_index[ticker].append({"type": "8-K", "accession_number": _accession(2)})
+    failures = [{"ticker": ticker, "kind": "filing", "id": n,
+                 "stage": "index", "error_type": "TypeError"} for n in range(8)]
+    calls = []
+    monkeypatch.setattr("app.services.update_orchestrator.on_filing_event", lambda ticker:
+                        calls.append(ticker) or {"kind": "skipped", "persisted": {"post_pass_failures": failures}})
+    edgar_poller.run_once([ticker])
+    assert runs[-1]["success"] is False
+    assert "post-pass failures=8" in runs[-1]["note"]
+    for failure in failures:
+        identity = f"{ticker}:filing:{failure['id']}:index:TypeError"
+        assert identity in runs[-1]["note"] and identity in caplog.text
+    assert _accession(2) in edgar_poller._seen_accessions(ticker)
+    edgar_poller.run_once([ticker])
+    assert calls == [ticker]  # unchanged ingestion would not retry those IDs
+
+
+def test_bounded_filing_sources_are_all_named_without_alone_failing_the_pass(fake_index, runs, monkeypatch, caplog):
+    ticker = f"ZZBOUND{_suffix()}"
+    _prime(fake_index, [ticker])
+    fake_index[ticker].append({"type": "8-K", "accession_number": _accession(2)})
+    sources = [{"ticker": ticker, "accession_number": f"SOURCE-{n}", "text_retained_chars": 200000,
+                "text_observed_chars": 250000, "text_bytes_read": 500000, "html_oversized_tokens": 1}
+               for n in range(8)]
+    monkeypatch.setattr("app.services.update_orchestrator.on_filing_event", lambda ticker:
+                        {"kind": "skipped", "persisted": {"truncated_filings": sources}})
+    caplog.set_level("INFO", logger=edgar_poller.__name__)
+    edgar_poller.run_once([ticker])
+    note = runs[-1]["note"]
+    assert runs[-1]["success"] is True
+    assert "bounded filing sources=8" in note
+    for source in sources:
+        identity = f"{ticker}:{source['accession_number']}"
+        assert identity in note and identity in caplog.text
+    assert "retained=200000,observed=250000,bytes_read=500000,oversized_tokens=1" in note
+
+
+@pytest.mark.parametrize("aggregate", [False, True])
+def test_failed_filing_bodies_name_every_accession_and_keep_event_retryable(fake_index, runs, monkeypatch, caplog, aggregate):
+    ticker = f"ZZBODY{_suffix()}"
+    _prime(fake_index, [ticker])
+    fake_index[ticker].append({"type": "8-K", "accession_number": _accession(2)})
+    failures = [{"ticker": ticker, "accession_number": f"FAILED-{n}", "error_type": "FetchFailed"} for n in range(8)]
+    persisted = {"filing_fetch_failures": failures}
+    if aggregate:
+        persisted["persist_error"] = {"ticker": ticker, "stage": "filing_fetch", "error_type": "IncompleteFilingBody"}
+    monkeypatch.setattr("app.services.update_orchestrator.on_filing_event", lambda ticker: {
+        "kind": "persist_error" if aggregate else "skipped", "persisted": persisted,
+    })
+    edgar_poller.run_once([ticker])
+    note = runs[-1]["note"]
+    assert runs[-1]["success"] is False
+    assert "filing fetch failures=8" in note
+    for failure in failures:
+        identity = f"{ticker}:{failure['accession_number']}:FetchFailed"
+        assert identity in note and identity in caplog.text
+    assert _accession(2) not in edgar_poller._seen_accessions(ticker)
+    retry = []
+    monkeypatch.setattr("app.services.update_orchestrator.on_filing_event", lambda ticker: retry.append(ticker) or {"kind": "skipped"})
+    edgar_poller.run_once([ticker])
+    assert retry == [ticker]
+    assert _accession(2) in edgar_poller._seen_accessions(ticker)
 
 
 # ---------------------------------------------------------------------------
@@ -589,13 +728,14 @@ def test_a_long_pass_reports_progress_before_it_finishes(
         handler.return_value = {"kind": "skipped"}
         edgar_poller.run_once()
 
-    notes = _notes(runs)
+    notes = _notes(runs, include_progress=True)
     progress = [n for n in notes if n.startswith("in progress")]
     assert progress, (
         f"a pass spanning {8 * 60}s of wall clock reported nothing until it "
         f"finished: {notes}"
     )
-    assert "polled" in progress[0] and "elapsed" in progress[0]
+    assert "polled" in progress[0]
+    assert any("elapsed" in note for note in progress)
     assert not notes[-1].startswith("in progress"), (
         "the completion note must be the last thing recorded"
     )
@@ -631,7 +771,7 @@ def test_a_progress_record_never_claims_a_success_the_pass_has_not_earned(
         handler.return_value = {"kind": "gate_error"}
         edgar_poller.run_once()
 
-    progress = [r for r in runs if r["note"].startswith("in progress")]
+    progress = [r for r in runs if r["kind"] == "progress" and r["success"] is not None]
     assert progress, f"no progress record to check: {_notes(runs)}"
     assert all(r["success"] is False for r in progress), (
         "a pass that has already seen gate errors reported success mid-flight, "
@@ -663,7 +803,7 @@ def test_a_clean_pass_still_reports_progress_as_a_success(
         handler.return_value = {"kind": "skipped"}
         edgar_poller.run_once()
 
-    progress = [r for r in runs if r["note"].startswith("in progress")]
+    progress = [r for r in runs if r["kind"] == "progress" and r["success"] is not None]
     assert progress and all(r["success"] is True for r in progress)
     assert all("gate errors" not in r["note"] for r in progress)
 

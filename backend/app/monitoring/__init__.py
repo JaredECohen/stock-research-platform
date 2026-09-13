@@ -15,6 +15,11 @@ from datetime import datetime
 # own import-time wiring without a circular import.
 _LAST_RUNS: dict = {}
 
+# Existing deployments require last_run_at/success to be NOT NULL. A
+# progress-only row uses this sentinel; public snapshots normalize it to
+# None rather than inventing a completed run. No real loop ran in 1970.
+NEVER_COMPLETED_AT = datetime(1970, 1, 1)
+
 # Every loop `register_all` wires up, by the name it passes to
 # `record_run`. Needed because `/api/admin/cron-health` reports what has
 # been *recorded* — so a loop that has never completed once has no row
@@ -134,6 +139,7 @@ def record_run(loop_name: str, *, success: bool = True, note: str = "") -> None:
     _LAST_RUNS[loop_name] = {
         "last_run_at": datetime.utcnow().isoformat(),
         "success": success, "note": note,
+        "progress_at": None, "progress_note": None, "progress_success": None,
     }
     try:
         from ..database import SessionLocal
@@ -149,6 +155,9 @@ def record_run(loop_name: str, *, success: bool = True, note: str = "") -> None:
             row.success = bool(success)
             row.note = note or ""
             row.reported_by = _process_role()
+            row.progress_at = None
+            row.progress_note = None
+            row.progress_success = None
             db.commit()
     except Exception:  # pragma: no cover — diagnostics must never break a loop
         import logging
@@ -157,12 +166,46 @@ def record_run(loop_name: str, *, success: bool = True, note: str = "") -> None:
         )
 
 
-def status_snapshot() -> dict:
-    """Merged view of loop runs: DB first, in-process state layered on top.
+def record_progress(loop_name: str, *, success: bool | None = None, note: str = "") -> None:
+    """Persist in-flight activity without changing the last completed run.
 
-    DB rows are the cross-process truth. The in-memory dict wins on ties
-    only because if this process just ran a loop, its record is at least
-    as fresh as anything it could read back.
+    Progress survives worker death and is cleared only by record_run. The
+    nullable verdict describes this pass so far, never overall loop health.
+    It is deliberately not held in a process-local fallback dictionary.
+    """
+    try:
+        from ..database import SessionLocal
+        from ..models import CronLoopRun
+        with SessionLocal() as db:
+            row = db.query(CronLoopRun).filter(CronLoopRun.loop_name == loop_name).one_or_none()
+            if row is None:
+                row = CronLoopRun(
+                    loop_name=loop_name, last_run_at=NEVER_COMPLETED_AT,
+                    success=False, note="never run", reported_by=_process_role(),
+                )
+                db.add(row)
+            row.progress_at = datetime.utcnow()
+            if row.progress_success is False and success is not False:
+                # A worker restart must not clear a failure from an
+                # interrupted pass just by announcing new activity.
+                retained = (row.progress_note or "").split("\nLatest activity: ", 1)[0]
+                row.progress_note = f"{retained}\nLatest activity: {note or ''}"
+            else:
+                row.progress_note = note or ""
+                row.progress_success = success
+            db.commit()
+    except Exception:  # pragma: no cover — diagnostics must never break a loop
+        import logging
+        logging.getLogger(__name__).warning(
+            "failed to persist cron progress for %s", loop_name, exc_info=True,
+        )
+
+
+def status_snapshot() -> dict:
+    """Shared DB state is authoritative; local completions are fallback.
+
+    A stale completion cached by this process must not overwrite progress
+    or a later completion written by the worker.
     """
     merged: dict = {}
     try:
@@ -170,11 +213,15 @@ def status_snapshot() -> dict:
         from ..models import CronLoopRun
         with SessionLocal() as db:
             for row in db.query(CronLoopRun).all():
+                completed = row.last_run_at != NEVER_COMPLETED_AT
                 merged[row.loop_name] = {
-                    "last_run_at": row.last_run_at.isoformat() if row.last_run_at else None,
-                    "success": row.success,
+                    "last_run_at": row.last_run_at.isoformat() if completed and row.last_run_at else None,
+                    "success": row.success if completed else None,
                     "note": row.note or "",
                     "reported_by": row.reported_by or "",
+                    "progress_at": row.progress_at.isoformat() if row.progress_at else None,
+                    "progress_note": row.progress_note,
+                    "progress_success": row.progress_success,
                 }
     except Exception:  # pragma: no cover — fall back to in-process state
         import logging
@@ -182,7 +229,8 @@ def status_snapshot() -> dict:
             "cron status DB read failed; reporting in-process state only",
             exc_info=True,
         )
-    merged.update(_LAST_RUNS)
+    for name, local in _LAST_RUNS.items():
+        merged.setdefault(name, local)
     return merged
 
 

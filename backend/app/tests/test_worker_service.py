@@ -68,3 +68,21 @@ def test_worker_main_exits_promptly_when_shutdown_is_already_set(monkeypatch):
         worker._shutdown.clear()
 
     assert elapsed < 10, f"main() blocked on the seed for {elapsed:.1f}s"
+
+
+def test_production_heartbeat_exposes_missing_llm_configuration(monkeypatch):
+    from app import monitoring, worker
+    from app.config import settings
+    from app.services import memory_probe
+    calls = []
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    monkeypatch.setattr(settings, "enable_industry_reports", False)
+    monkeypatch.setattr(memory_probe, "rss_mb", lambda: 165)
+    monkeypatch.setattr(monitoring, "record_run", lambda *a, **kw: calls.append(kw))
+    worker._heartbeat()
+    assert calls[0]["success"] is False
+    assert "generation_mode=demo" in calls[0]["note"]
+    assert "llm=none" in calls[0]["note"]
+    assert "embeddings=hash" in calls[0]["note"]

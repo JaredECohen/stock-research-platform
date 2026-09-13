@@ -218,23 +218,15 @@ services:
   # `doc_chunks` scan that caused the original OOM is gone. 133MB against
   # a 512MB cap is 3.8x headroom.
   #
-  # 2026-08-15: the nightly sweep has now RUN on this plan, so the one
-  # open question about the downsize is closed. Render metrics over the
-  # 24h spanning it:
-  #
-  #   overall              avg 180MB  peak 212MB
-  #   nightly 03:00-06:00  avg 193MB  peak 212MB   (peak at 02:46 UTC)
-  #
-  # 212MB against the 512MB cap is 2.4x headroom with the heaviest
-  # workload the service has. The sweep costs ~80MB over idle, which
-  # matches the expectation that it is a sequential per-ticker walk whose
-  # per-ticker peaks are freed each iteration.
-  #
-  # If a future change does push this over: the failure mode is bounded
-  # and observable — an OOM restarts the worker, `recover_orphans`
-  # requeues the in-flight job once with checkpoint resume, and the missed
-  # loop surfaces as a stale entry in `/api/admin/cron-health`. Revert
-  # this line to `standard`.
+  # The August sweep peaked at 212MB, but that measurement predates
+  # functioning automatic filing-triggered regeneration. After the cache
+  # repair activated that work, Render recorded OOM kills on September
+  # 12 at 21:29/22:06 UTC and September 13 at 00:36/01:09 UTC.
+  # Do not treat the old headroom as a capacity guarantee. SEC response
+  # parsing now streams before applying its text cap; remeasure concurrent
+  # ingestion and live LLM regeneration before deciding on a plan change.
+  # A succeeded job can have resumed after an OOM, so check Render events
+  # and RSS in addition to queue status and completed/progress loop notes.
   #
   # NOTE the web service stays `standard`: 334MB peak against a 512MB cap
   # is only 1.5x headroom on the traffic-exposed, latency-sensitive
@@ -312,6 +304,9 @@ services:
       # Secrets — set values in the Render dashboard, not in this file.
       # The worker needs the full set: the monitoring loops hit every
       # provider and memo regen makes the LLM calls.
+      # sync:false declares a secret but does not copy the web value.
+      # Verify actual worker credentials; live-data flags alone do not
+      # enable live reasoning. The worker heartbeat reports both modes.
       - key: SEC_USER_AGENT
         sync: false
       - key: FMP_API_KEY

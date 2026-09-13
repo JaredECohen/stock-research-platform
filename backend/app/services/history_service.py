@@ -223,7 +223,47 @@ def _filing_word_count(sections: dict[str, Any], raw: str) -> int:
     return total
 
 
-def _ingest_filings(db: Session, ticker: str, filings: list[dict[str, Any]]) -> int:
+_FILING_SOURCE_METADATA_FIELDS = (
+    "text_fetch_error", "text_truncated", "text_observed_chars", "text_retained_chars",
+    "text_bytes_read", "html_oversized_tokens",
+)
+
+
+def truncated_filing_sources(ticker: str, filings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Name every bounded source, including unchanged cached provider reads."""
+    return [
+        {"ticker": ticker, "accession_number": f.get("accession_number") or f.get("accession") or "",
+         **{k: f[k] for k in _FILING_SOURCE_METADATA_FIELDS if k in f}}
+        for f in filings if f.get("text_truncated") or f.get("html_oversized_tokens")
+    ]
+
+
+def filing_fetch_failures(ticker: str, filings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {"ticker": ticker, "accession_number": f.get("accession_number") or f.get("accession") or "",
+         "error_type": f["text_fetch_error"]}
+        for f in filings if f.get("text_fetch_error")
+    ]
+
+
+def filing_fetch_failure_note(failures: list[dict[str, Any]]) -> str:
+    return ", ".join(f"{f['ticker']}:{f['accession_number']}:{f['error_type']}" for f in failures)
+
+
+def truncated_filing_note(sources: list[dict[str, Any]]) -> str:
+    return ", ".join(
+        f"{s['ticker']}:{s['accession_number']}"
+        f"(retained={s.get('text_retained_chars', 'unknown')},"
+        f"observed={s.get('text_observed_chars', 'unknown')},"
+        f"oversized_tokens={s.get('html_oversized_tokens', 0)})"
+        for s in sources
+    )
+
+
+def _ingest_filings(
+    db: Session, ticker: str, filings: list[dict[str, Any]], *,
+    post_pass_ids: list[int] | None = None,
+) -> int:
     """Idempotently store filings. Returns the count of rows that actually
     changed — an insert, or an update whose content differs from what is
     already stored. Re-ingesting an unchanged filing counts zero and writes
@@ -239,11 +279,9 @@ def _ingest_filings(db: Session, ticker: str, filings: list[dict[str, Any]]) -> 
     A counter that cannot say "nothing happened" cannot report that anything
     did.
 
-    Wave 10 — after a NEW filing row is inserted (not on updates), we
-    fire `filing_memory.post_pass` to (a) index its chunks into the
-    vector store and (b) write the diff against the prior filing of
-    the same type into company / sector memory. Failures are swallowed
-    — memory updates are non-critical to the ingest pipeline.
+    Append NEW row IDs to `post_pass_ids`; the transaction owner must
+    call `run_ingest_post_passes` AFTER commit. Indexing opens its own
+    write transaction, which cannot see uncommitted rows and locks SQLite.
     """
     new_filing_ids: list[int] = []
     written = 0
@@ -261,12 +299,21 @@ def _ingest_filings(db: Session, ticker: str, filings: list[dict[str, Any]]) -> 
                 "segments", "legal_or_regulatory", "financial_highlights",
             ) if k in f
         }
+        source_metadata = {k: f[k] for k in _FILING_SOURCE_METADATA_FIELDS if k in f}
+        if source_metadata:
+            # Preserve source completeness without a production schema migration.
+            # This reserved entry is metadata, never a retrievable text section.
+            sections["_source_metadata"] = source_metadata
         raw_text = f.get("raw_text") or ""
         wc = _filing_word_count(sections, raw_text)
         existing = db.execute(
             select(FilingDoc).where(FilingDoc.accession_number == accession)
         ).scalar_one_or_none()
         if existing is not None:
+            prior_incomplete = (existing.sections or {}).get("_source_metadata", {}).get("text_fetch_error")
+            if f.get("text_fetch_error") and not prior_incomplete:
+                # A failed refresh must never erase a previously stored body.
+                continue
             # Compare before writing, so an unchanged re-ingest is a true
             # no-op rather than a refreshed `fetched_at` counted as a write.
             unchanged = (
@@ -290,6 +337,9 @@ def _ingest_filings(db: Session, ticker: str, filings: list[dict[str, Any]]) -> 
             existing.word_count = wc
             existing.url = url
             existing.fetched_at = datetime.utcnow()
+            if prior_incomplete and not f.get("text_fetch_error"):
+                # Complete only this explicitly failed ingest, not older corpus rows.
+                new_filing_ids.append(existing.id)
             written += 1
             continue
         new_row = FilingDoc(
@@ -300,21 +350,11 @@ def _ingest_filings(db: Session, ticker: str, filings: list[dict[str, Any]]) -> 
         )
         db.add(new_row)
         db.flush()  # populate new_row.id without committing the outer txn
-        new_filing_ids.append(new_row.id)
+        if not f.get("text_fetch_error"):
+            new_filing_ids.append(new_row.id)
         written += 1
-    if new_filing_ids:
-        # Defer the post-pass until after the outer commit — running it
-        # here would happen inside the same session. We just stash the
-        # IDs on the session via a hook and fire after commit.
-        try:
-            from . import filing_memory
-            db.flush()
-            for fid in new_filing_ids:
-                row = db.get(FilingDoc, fid)
-                if row is not None:
-                    filing_memory.post_pass(row)
-        except Exception as exc:  # pragma: no cover — never block ingest
-            log.warning("filing_memory post_pass failed: %s", exc)
+    if post_pass_ids is not None:
+        post_pass_ids.extend(new_filing_ids)
     return written
 
 
@@ -378,7 +418,8 @@ def _transcript_blocks(t: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
 
 
 def _ingest_transcripts(
-    db: Session, ticker: str, transcripts: list[dict[str, Any]],
+    db: Session, ticker: str, transcripts: list[dict[str, Any]], *,
+    post_pass_ids: list[int] | None = None,
 ) -> int:
     """Persist transcripts → EarningsTranscript table. New rows are
     embedded into `doc_chunks` via `filing_memory.index_transcript`
@@ -437,16 +478,59 @@ def _ingest_transcripts(
         db.flush()  # populate row.id without committing
         new_transcript_ids.append(row.id)
         written += 1
-    if new_transcript_ids:
-        try:
-            from . import filing_memory
-            for tid in new_transcript_ids:
-                t_row = db.get(EarningsTranscript, tid)
-                if t_row is not None:
-                    filing_memory.index_transcript(t_row)
-        except Exception as exc:  # pragma: no cover — never block ingest
-            log.warning("filing_memory.index_transcript failed: %s", exc)
+    if post_pass_ids is not None:
+        post_pass_ids.extend(new_transcript_ids)
     return written
+
+
+def run_ingest_post_passes(
+    filing_ids: list[int], transcript_ids: list[int],
+) -> list[dict[str, Any]]:
+    """Process only this ingest's committed rows, isolating every failure.
+
+    Load and detach one row at a time before indexing opens another session.
+    Failures leave the durable raw row intact and name the exact repair set;
+    this does not retry or reindex previously stored documents.
+    """
+    from . import filing_memory
+
+    failures: list[dict[str, Any]] = []
+    for kind, model, ids in (
+        ("filing", FilingDoc, filing_ids),
+        ("transcript", EarningsTranscript, transcript_ids),
+    ):
+        for row_id in ids:
+            ticker = "unknown"
+            try:
+                with SessionLocal() as reader:
+                    row = reader.get(model, row_id)
+                    if row is None:
+                        raise LookupError("committed ingest row missing")
+                    ticker = row.ticker
+                if kind == "filing":
+                    report = filing_memory.post_pass(row) or {}
+                    errors = report.get("errors") or []
+                else:
+                    filing_memory.index_transcript(row)
+                    errors = []
+            except Exception as exc:
+                errors = [{"stage": "post_pass", "error_type": type(exc).__name__}]
+            for error in errors:
+                failure = {"ticker": ticker, "kind": kind, "id": row_id, **error}
+                failures.append(failure)
+                log.warning(
+                    "ingest post-pass failed ticker=%s kind=%s id=%s stage=%s error_type=%s",
+                    ticker, kind, row_id, error.get("stage"), error.get("error_type"),
+                )
+    return failures
+
+
+def post_pass_failure_note(failures: list[dict[str, Any]]) -> str:
+    """Complete identities for cron notes; exception text may contain secrets."""
+    return ", ".join(
+        f"{f['ticker']}:{f['kind']}:{f['id']}:{f['stage']}:{f['error_type']}"
+        for f in failures
+    )
 
 
 # The two reads in `backfill_ticker` that cost real money on a miss, and so
@@ -479,7 +563,7 @@ def backfill_hits_provider(ticker: str) -> bool:
 
 def backfill_ticker(
     ticker: str, *, db: Session | None = None, prefer_cached: bool = False,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Full backfill of one ticker against the data_service.
 
     Returns a `{financial_periods, filings, transcripts}` dict of net
@@ -518,7 +602,9 @@ def backfill_ticker(
         # provider did not supply one, and `_ingest_filings` flushes new
         # rows, so the same pass can see them. Order is otherwise
         # irrelevant — the three ingests share nothing else.
-        n_filings = _ingest_filings(db, ticker, filings)
+        filing_ids: list[int] = []
+        transcript_ids: list[int] = []
+        n_filings = _ingest_filings(db, ticker, filings, post_pass_ids=filing_ids)
         n_fp = 0
         n_fp += _ingest_statement_rows(
             db, ticker, "income", statements.get("income", []),
@@ -532,13 +618,25 @@ def backfill_ticker(
             db, ticker, "cash", statements.get("cash", []),
             _CASH_LINES, source,
         )
-        n_tx = _ingest_transcripts(db, ticker, transcripts)
+        n_tx = _ingest_transcripts(db, ticker, transcripts, post_pass_ids=transcript_ids)
         db.commit()
-        return {
+        result: dict[str, Any] = {
             "financial_periods": n_fp,
             "filings": n_filings,
             "transcripts": n_tx,
         }
+        failures = run_ingest_post_passes(filing_ids, transcript_ids)
+        if failures:
+            result["post_pass_failures"] = failures
+        fetch_failures = filing_fetch_failures(ticker, filings)
+        if fetch_failures:
+            result["filing_fetch_failures"] = fetch_failures
+            log.warning("filing fetch failures count=%d: %s", len(fetch_failures), filing_fetch_failure_note(fetch_failures))
+        truncated = truncated_filing_sources(ticker, filings)
+        if truncated:
+            result["truncated_filings"] = truncated
+            log.warning("bounded filing sources count=%d: %s", len(truncated), truncated_filing_note(truncated))
+        return result
     finally:
         if own:
             db.close()

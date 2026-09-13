@@ -236,7 +236,8 @@ def test_postmortem_feedback_is_persisted_from_memo_json(monkeypatch):
     # intentionally has a deterministic lesson fallback when no LLM answer
     # is available; the DB row is what influence_feedback reads later.
     monkeypatch.setattr(postmortem_service, "_llm_postmortem", lambda *a, **k: None)
-    monkeypatch.setattr(postmortem_service, "_write_lesson_to_memory", lambda *a, **k: None)
+    from app.config import settings
+    monkeypatch.setattr(settings, "enable_long_term_memory", False)
     report = postmortem_service.run_postmortems(horizon_days=90, limit=200)
     assert report["written"] >= 1
 

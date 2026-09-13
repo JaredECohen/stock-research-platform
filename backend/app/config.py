@@ -54,10 +54,10 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_strong_model: str = "gpt-5.5"
     openai_cheap_model: str = "gpt-4.1-mini"
-    # Multi-agent role assignment (Phase 3+). Defaults reflect the architecture
-    # spec: PM=GPT-5.5 Pro, sector/tool agents=GPT-5.4, critic=Opus 4.7,
-    # news/social/long-doc analysts=Gemini.
-    openai_pm_model: str = "gpt-5.5-pro"
+    # Multi-agent role assignment (Phase 3+). The PM uses the existing Chat
+    # Completions route; match the model already selected in config.env even
+    # when that repository-level file is absent from the deployment image.
+    openai_pm_model: str = "gpt-5.5"
     openai_sector_model: str = "gpt-5.4"
     openai_tool_model: str = "gpt-5.4"
     # Macro agent: GPT-5.4 default per the architecture spec; flip to Gemini

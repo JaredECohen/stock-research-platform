@@ -32,17 +32,37 @@ _RUN_INTERVAL_HOURS = 1
 # How many tickers one run may cover.
 #
 # Cost math: this loop runs hourly, and `news_agent.run(force_refresh=True)`
-# makes one Gemini call per ticker (`settings.gemini_news_model`). So the
-# steady-state spend is budget x 24 calls/day — at 10, that is 240 Gemini
-# calls a day. Raising it to ~25 (600/day) would cover every ticker that
-# carries any research signal at all today: the 10 pins plus the 17 that
-# have ever had a memo generated, minus the overlap.
+# can make one Gemini call per ticker when Gemini is configured. The
+# ceiling is budget x 24 calls/day — at 25, up to 600 instead of 240.
+# Actual calls depend on eligible names, throttle state and provider
+# configuration; without Gemini this uses deterministic provider news.
 #
-# Deliberately left at 10, which is exactly what the old arbitrary
-# `list_tickers()[:10]` slice spent. This change is about WHICH ten, not
-# how many; raising it is a spend decision for the owner, not a side effect
-# of a relevance fix.
-NEWS_FOCUS_BUDGET = 10
+# The previous 10 was not a judgement about coverage. It was exactly what
+# the old arbitrary `list_tickers()[:10]` slice spent, held constant so that
+# shipping the relevance ranking changed WHICH ten ran and not how many —
+# spend being the owner's decision, not a side effect of a correctness fix.
+# The owner has now taken it: 25.
+#
+# 25 is the size of the thing worth covering rather than a round number. The
+# tickers that carry any research signal at all are the 10 curated pins plus
+# the 17 that have ever had a memo generated, which overlap by a couple, so
+# a budget of 25 reaches essentially all of them every hour. Above that the
+# ranking has nothing left to rank: band 3 runs out, and the extra calls
+# would buy news on tickers nobody has looked at.
+#
+# `research_focus`'s `LIVE_RESEARCH_RESERVE` and `ROTATING_SLOTS` are
+# unchanged and deliberately so. Both are absolute slot counts, not
+# fractions of the budget, and both exist for the *over*-budget case — the
+# reserve so a ticker someone is researching right now outranks a full pin
+# list, the rotation so the tail below the guaranteed prefix is covered in
+# turn rather than never. A budget of 25 against a pool of ~25 mostly takes
+# `_select`'s "everything fits" path, where neither fires; when the pool
+# does grow past the budget again they do exactly what they did at 10.
+# Raising either would not raise spend, only move slots between "covered
+# every run" and "covered in turn".
+#
+# `SOCIAL_FOCUS_BUDGET` is untouched: the owner approved the news budget.
+NEWS_FOCUS_BUDGET = 25
 
 
 def _last_run_for(ticker: str) -> datetime | None:
@@ -101,7 +121,9 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         tickers = selection.tickers
 
     events: list[dict] = []
-    assessment_failures = 0
+    assessment_failures: list[str] = []
+    agent_failures: list[str] = []
+    update_failures: list[str] = []
     for t in tickers:
         last = _last_run_for(t)
         if last and (datetime.utcnow() - last).total_seconds() < _THROTTLE_SECONDS:
@@ -109,7 +131,8 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         try:
             alerts = news_agent.run(t, force_refresh=True)
         except Exception as exc:
-            log.warning("news_agent failed for %s: %s", t, exc)
+            log.warning("news_agent failed ticker=%s error_type=%s", t, type(exc).__name__)
+            agent_failures.append(t)
             continue
         _record_run_for(t)
 
@@ -136,18 +159,28 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
                     # A dead news-impact LLM used to read as "no material
                     # news"; the handler now reports it and the note counts it.
                     if isinstance(res, dict) and res.get("reason") == "assessment_error":
-                        assessment_failures += 1
+                        assessment_failures.append(t)
             except Exception as exc:  # pragma: no cover — diagnostic only
-                log.warning("update_orchestrator failed for %s: %s", t, exc)
+                log.warning("news update failed ticker=%s error_type=%s", t, type(exc).__name__)
+                update_failures.append(t)
 
     note = f"{len(events)} material events"
     if assessment_failures:
-        note += f"; {assessment_failures} assessments failed"
+        note += f"; {len(assessment_failures)} assessments failed: " + ", ".join(assessment_failures)
+    if agent_failures:
+        note += f"; {len(agent_failures)} news agents failed: " + ", ".join(agent_failures)
+    if update_failures:
+        note += f"; {len(update_failures)} updates failed: " + ", ".join(update_failures)
     if selection is not None:
         # Folded in so cron-health shows what this run covered and, more
         # importantly, which qualifying tickers the budget could not reach.
         note += f"; {selection.note()}"
-    record_run("news_loop", success=assessment_failures == 0, note=note)
+    log.info("news_loop: %s", note)
+    record_run(
+        "news_loop",
+        success=not assessment_failures and not agent_failures and not update_failures,
+        note=note,
+    )
     return events
 
 

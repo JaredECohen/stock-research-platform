@@ -174,11 +174,13 @@ MODEL_SUBMODULES = [
 # without a cycle (roster imports `..schemas`). The frozen enum is what
 # made the Industry Group Analyst unreachable from the PM dialog;
 # `deep_research._addressable` validates against the live roster instead.
-# That widened value is what is pinned here. Update this deliberately, in
+# The critic-provenance repair then added optional CriticReview.review_mode,
+# defaulting to unknown for old snapshots. These intentional changes are
+# pinned here. Update this deliberately, in
 # the same commit, whenever `StockMemoOut` itself changes — never to make
 # an accidental drift pass.
 STOCK_MEMO_OUT_SCHEMA_SHA256 = (
-    "c259e5b6e1901f1146b6c3450a012b4816fb5b14d7b0131fbf37becb4f91a562"
+    "9bc783587bb9b3521c678e6bcf09ba09b0799b770c843ce9085da24a8ad2ff54"
 )
 
 

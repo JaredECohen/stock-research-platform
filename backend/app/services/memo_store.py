@@ -131,6 +131,17 @@ def save_memo(
             db.close()
 
 
+def memo_version(ticker: str, version: int) -> MemoSnapshot | None:
+    """Read an exact live snapshot; never substitute the latest or generate."""
+    with SessionLocal() as db:
+        _ensure_table(db)
+        return db.execute(select(MemoSnapshot).where(
+            MemoSnapshot.ticker == ticker.upper(),
+            MemoSnapshot.version == version,
+            MemoSnapshot.as_of_date.is_(None),
+        )).scalar_one_or_none()
+
+
 def latest_memo(
     ticker: str, *,
     include_backtests: bool = False,

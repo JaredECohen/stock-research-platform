@@ -23,10 +23,12 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from ..config import settings
 from ..database import SessionLocal
@@ -112,37 +114,100 @@ def _should_postmortem(
     return True, "ok"
 
 
+def _postmortem_exists(db, memo_snapshot_id: int, horizon_days: int) -> bool:
+    """Is there already a postmortem for exactly what the constraint keys on?
+
+    One function, used by the due query's anti-join, by the pre-flight check
+    and by the write's error classification, so those three can never drift
+    apart on which columns they mean.
+    """
+    return db.execute(
+        select(MemoPostmortem.id).where(
+            MemoPostmortem.memo_snapshot_id == memo_snapshot_id,
+            MemoPostmortem.horizon_days == horizon_days,
+        ).limit(1)
+    ).first() is not None
+
+
 def _due_memos(horizon_days: int, *, limit: int = 50) -> list[dict[str, Any]]:
-    """Memos with an outcome at this horizon and no postmortem yet, after
-    dedupe (rating-change + 14d rate-limit) is applied."""
-    out: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
+    """The due list alone — see `_scan_due` for what it means."""
+    return _scan_due(horizon_days, limit=limit).items
+
+
+@dataclass
+class DueScan:
+    items: list[dict[str, Any]] = field(default_factory=list)
+    deduped: list[dict[str, Any]] = field(default_factory=list)
+    deferred: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _memo_identity(snap: MemoSnapshot, reason: str) -> dict[str, Any]:
+    return {"ticker": snap.ticker, "memo_snapshot_id": snap.id, "reason": reason}
+
+
+def _scan_due(
+    horizon_days: int, *, limit: int = 50,
+) -> DueScan:
+    """Select due memos and retain every policy or budget omission.
+
+    The count is returned rather than stashed on the module, because the
+    loops run in `marketmosaic-worker` while cron-health is served by the
+    web service and module-level state does not cross that boundary.
+
+    "Due" means: an outcome exists at this horizon, no postmortem exists for
+    this `(snapshot, horizon)`, and the policy dedupe (rating-change skip +
+    14-day per-ticker rate limit) lets it through.
+
+    Two properties this function is responsible for, both of them learned
+    from `postmortem_loop` reporting `success=False` every night for work
+    that was already finished:
+
+    * **The exclusion is the constraint.** `memo_postmortems` is unique on
+      `(memo_snapshot_id, horizon_days)`; the exclusion is a `NOT EXISTS`
+      on those two columns and nothing else, pushed into the same statement
+      rather than run per row afterwards.
+    * **The list is keyed like the constraint.** It used to be keyed by
+      *outcome row*: one entry per `memo_outcomes` row that survived the
+      checks. Those are different keys, and the moment they diverge — a
+      duplicated outcome row, anything that puts the same snapshot in the
+      list twice — the pass attempts the identical insert twice, the second
+      one is rejected by the database, and the rejection is counted as a
+      failed postmortem. Deduplicating on the constraint's own key makes
+      that impossible to express.
+
+    Ordered by snapshot id so that a `limit`-capped pass takes a defined
+    slice of the backlog rather than whatever the engine hands back, and
+    the next pass continues from a predictable place.
+    """
+    if limit < 0:
+        raise ValueError("postmortem limit must be non-negative")
+    scan = DueScan()
+    seen_keys: set[tuple[int, int]] = set()
     with SessionLocal() as db:
         stmt = (
             select(MemoOutcome, MemoSnapshot)
             .join(MemoSnapshot, MemoOutcome.memo_snapshot_id == MemoSnapshot.id)
             .where(MemoOutcome.horizon_days == horizon_days)
+            .where(~select(MemoPostmortem.id).where(
+                MemoPostmortem.memo_snapshot_id == MemoOutcome.memo_snapshot_id,
+                MemoPostmortem.horizon_days == horizon_days,
+            ).exists())
+            .order_by(MemoOutcome.memo_snapshot_id)
         )
-        rows = db.execute(stmt).all()
-        for outcome, snap in rows:
-            existing = db.execute(
-                select(MemoPostmortem).where(
-                    MemoPostmortem.memo_snapshot_id == outcome.memo_snapshot_id,
-                    MemoPostmortem.horizon_days == horizon_days,
-                )
-            ).scalars().first()
-            if existing is not None:
+        for outcome, snap in db.execute(stmt).all():
+            key = (outcome.memo_snapshot_id, horizon_days)
+            if key in seen_keys:
                 continue
+            seen_keys.add(key)
             proceed, reason = _should_postmortem(db, snap, horizon_days)
             if not proceed:
-                skipped.append({"ticker": snap.ticker, "reason": reason})
+                scan.deduped.append(_memo_identity(snap, reason))
                 continue
-            out.append({"outcome": outcome, "snapshot": snap})
-            if len(out) >= limit:
-                break
-    if skipped:
-        log.debug("postmortem dedupe skipped %d memos: %s", len(skipped), skipped[:5])
-    return out
+            if len(scan.items) >= limit:
+                scan.deferred.append(_memo_identity(snap, "pass budget"))
+                continue
+            scan.items.append({"outcome": outcome, "snapshot": snap})
+    return scan
 
 
 # ---------------------------------------------------------------------------
@@ -235,12 +300,15 @@ def _deterministic_lesson(
     memo: dict[str, Any], outcome: MemoOutcome, verdict: str, horizon_days: int,
 ) -> str:
     rating = memo.get("rating_label", "")
-    alpha = outcome.alpha if outcome.alpha is not None else 0.0
+
+    def percent(value: float | None) -> str:
+        return "unavailable" if value is None else f"{value * 100:.1f}%"
+
     return (
         f"{horizon_days}d postmortem ({verdict}). Memo rated {rating}; "
-        f"alpha {alpha*100:.1f}% vs benchmark over the window. "
-        f"Realized return {outcome.forward_return*100:.1f}%, "
-        f"benchmark {outcome.benchmark_return*100:.1f}%."
+        f"alpha {percent(outcome.alpha)} vs benchmark over the window. "
+        f"Realized return {percent(outcome.forward_return)}, "
+        f"benchmark {percent(outcome.benchmark_return)}."
     )
 
 
@@ -248,9 +316,29 @@ def _deterministic_lesson(
 # Memory writers
 # ---------------------------------------------------------------------------
 
+@dataclass
+class MemoryWriteResult:
+    status: str
+    written_targets: list[str] = field(default_factory=list)
+    errors: dict[str, str] = field(default_factory=dict)
+
+
 def _write_lesson_to_memory(
     ticker: str, sector: str | None, lesson: str, sector_lesson: str,
-) -> None:
+) -> MemoryWriteResult:
+    if not settings.enable_long_term_memory:
+        return MemoryWriteResult("disabled")
+    result = MemoryWriteResult("not_requested")
+    # Parsed model JSON can contain wrong types. Validate before touching
+    # either file so a malformed field cannot escape after a partial save.
+    if not isinstance(lesson, str):
+        result.errors["company"] = "invalid_lesson_type"
+        lesson = ""
+    if not isinstance(sector_lesson, str):
+        result.errors["sector"] = "invalid_lesson_type"
+        sector_lesson = ""
+    if sector_lesson.strip() and (not isinstance(sector, str) or not sector.strip()):
+        result.errors["sector"] = "sector_unavailable"
     if lesson.strip():
         try:
             from ..memory import CompanyMemory, MemoryEntry
@@ -261,11 +349,14 @@ def _write_lesson_to_memory(
                 body=lesson,
             ))
             cm.save()
-        except Exception as exc:  # pragma: no cover
+            result.written_targets.append("company")
+        except Exception as exc:
+            result.errors["company"] = type(exc).__name__
             log.warning("postmortem→company memory failed for %s: %s", ticker, exc)
-    if sector and sector_lesson.strip():
+    if sector_lesson.strip() and "sector" not in result.errors:
         try:
-            from ..memory import CrossCompanyPattern, SectorMemory
+            from ..memory import SectorMemory
+            from ..memory.longterm import CrossCompanyPattern
             sm = SectorMemory.for_sector(sector)
             sm.add_pattern(CrossCompanyPattern(
                 date=date.today().isoformat(),
@@ -274,25 +365,109 @@ def _write_lesson_to_memory(
                 lesson=sector_lesson.strip(),
             ))
             sm.save()
-        except Exception as exc:  # pragma: no cover
-            log.warning("postmortem→sector memory failed: %s", exc)
+            result.written_targets.append("sector")
+        except Exception as exc:
+            result.errors["sector"] = type(exc).__name__
+            log.warning("postmortem→sector memory failed for %s: %s", ticker, exc)
+    result.status = "failed" if result.errors else ("written" if result.written_targets else "not_requested")
+    return result
 
 
 # ---------------------------------------------------------------------------
 # Top-level driver
 # ---------------------------------------------------------------------------
 
+def _persist_postmortem(row: MemoPostmortem) -> str:
+    """Write one postmortem. Returns "written", "already_done" or "failed".
+
+    An `IntegrityError` on `uq_memo_postmortem_snapshot_horizon` means the
+    row this pass was about to write is already there. That is not a
+    failure and it is not work — it is the answer "already done", and it
+    has to be reported as such. Counting it as a skipped postmortem is what
+    made `postmortem_loop` report `success=False` every night for a
+    backlog that was fine: 23 of 25 memos a night, each one logged as
+    "postmortem persist failed", none of them actually a problem.
+
+    The re-read is what distinguishes the two. An IntegrityError from
+    anything else — a foreign key, a NOT NULL — leaves no row behind, and
+    that genuinely is a failure.
+    """
+    try:
+        with SessionLocal() as db:
+            db.add(row)
+            db.commit()
+        return "written"
+    except IntegrityError:
+        try:
+            with SessionLocal() as db:
+                if _postmortem_exists(db, row.memo_snapshot_id, row.horizon_days):
+                    log.info(
+                        "postmortem for memo %s at %sd already existed",
+                        row.memo_snapshot_id, row.horizon_days,
+                    )
+                    return "already_done"
+        except Exception as exc:  # pragma: no cover — diagnostic only
+            log.warning("postmortem existence re-check failed: %s", exc)
+        log.warning(
+            "postmortem persist rejected for memo %s at %sd",
+            row.memo_snapshot_id, row.horizon_days,
+        )
+        return "failed"
+    except Exception as exc:  # pragma: no cover — defensive
+        log.warning(
+            "postmortem persist failed for memo %s: %s", row.memo_snapshot_id, exc,
+        )
+        return "failed"
+
+
 def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any]:
     """Process up to `limit` memos due for a postmortem at this horizon.
 
-    Returns a small report dict for cron logs / observability.
+    Returns a report that distinguishes the states a candidate can end
+    in, because collapsing them is how a healthy backlog came to be
+    reported as a nightly failure:
+
+      `written`       a postmortem was created.
+      `already_done`  one already existed. Not work, not a failure — and
+                      crucially it costs nothing now: the existence check
+                      runs *before* the strong-route LLM call, so a memo in
+                      this state no longer burns a model round-trip to
+                      discover what a SELECT could have said.
+      `deduped`       policy held it back (rating unchanged since the prior
+                      version, or the 14-day per-ticker rate limit).
+      `deferred`      eligible work beyond this pass's budget, with every
+                      omitted snapshot named in `deferred_memos`.
+      `skipped`       the postmortem could not be parsed or persisted.
+      `memory_failed` the new postmortem exists, but its requested memory
+                      writes or their persisted completion flag failed.
+      `memory_disabled` memory was disabled; no file was touched.
     """
-    due = _due_memos(horizon_days, limit=limit)
+    scan = _scan_due(horizon_days, limit=limit)
+    due = scan.items
     written = 0
-    skipped = 0
+    already_done = 0
+    skipped_memos: list[dict[str, Any]] = []
+    memory_memos: dict[str, list[dict[str, Any]]] = {
+        status: [] for status in ("written", "disabled", "failed", "not_requested")
+    }
     for item in due:
         outcome: MemoOutcome = item["outcome"]
         snap: MemoSnapshot = item["snapshot"]
+        # Re-read immediately before spending anything. The due list is a
+        # snapshot of a query that ran before the first LLM call of a pass
+        # that makes one per memo; by the time this memo comes round, an
+        # admin re-run or another writer may have covered it.
+        with SessionLocal() as db:
+            if _postmortem_exists(db, outcome.memo_snapshot_id, horizon_days):
+                already_done += 1
+                continue
+            # The scan precedes every LLM call and write in this pass.
+            # A prior item (or an admin run) may have consumed the ticker's
+            # 14-day allowance since then; check before spending again.
+            proceed, reason = _should_postmortem(db, snap, horizon_days)
+            if not proceed:
+                scan.deduped.append(_memo_identity(snap, reason))
+                continue
         try:
             # MemoSnapshot stores the report in ``memo_json``.  ``snap.memo``
             # never existed; the AttributeError was swallowed here and made
@@ -300,8 +475,10 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
             memo = snap.memo_json or {}
             if not isinstance(memo, dict):
                 memo = json.loads(memo)
-        except Exception:
-            skipped += 1
+            if not isinstance(memo, dict):
+                raise TypeError("memo must be an object")
+        except Exception as exc:
+            skipped_memos.append(_memo_identity(snap, f"memo_parse_error:{type(exc).__name__}"))
             continue
         verdict = _classify_verdict(memo.get("rating_label", ""), outcome.alpha)
         llm_out = _llm_postmortem(memo, outcome, horizon_days)
@@ -316,51 +493,76 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
             str(memo.get("macro_regime_at_memo") or "").strip()
             or (llm_out or {}).get("regime_at_memo") or ""
         )
-        try:
-            with SessionLocal() as db:
-                pm_row = MemoPostmortem(
-                    memo_snapshot_id=outcome.memo_snapshot_id,
-                    ticker=outcome.ticker,
-                    horizon_days=horizon_days,
-                    verdict=verdict,
-                    lesson=lesson,
-                    agent_attribution=attribution if isinstance(attribution, dict) else {},
-                    realized_return=outcome.forward_return,
-                    benchmark_return=outcome.benchmark_return,
-                    regime_at_memo=regime[:32] if regime else None,
-                    written_to_memory=False,
-                    created_at=datetime.utcnow(),
-                )
-                db.add(pm_row)
-                db.commit()
-        except Exception as exc:  # pragma: no cover
-            log.warning("postmortem persist failed for memo %s: %s", outcome.memo_snapshot_id, exc)
-            skipped += 1
+        status = _persist_postmortem(MemoPostmortem(
+            memo_snapshot_id=outcome.memo_snapshot_id,
+            ticker=outcome.ticker,
+            horizon_days=horizon_days,
+            verdict=verdict,
+            lesson=lesson,
+            agent_attribution=attribution if isinstance(attribution, dict) else {},
+            realized_return=outcome.forward_return,
+            benchmark_return=outcome.benchmark_return,
+            regime_at_memo=regime[:32] if regime else None,
+            written_to_memory=False,
+            created_at=datetime.utcnow(),
+        ))
+        if status == "already_done":
+            already_done += 1
+            continue
+        if status == "failed":
+            skipped_memos.append(_memo_identity(snap, "postmortem_persist_failed"))
             continue
         # Write the lesson back into memory only on the 90d cadence —
         # the 30d "early read" stays in the DB but doesn't pollute the
         # narrative memory yet.
         if horizon_days >= 90:
-            _write_lesson_to_memory(
+            memory_result = _write_lesson_to_memory(
                 outcome.ticker, memo.get("sector"), lesson, sector_lesson,
             )
-            try:
-                with SessionLocal() as db:
-                    row = db.execute(
-                        select(MemoPostmortem).where(
-                            MemoPostmortem.memo_snapshot_id == outcome.memo_snapshot_id,
-                            MemoPostmortem.horizon_days == horizon_days,
-                        )
-                    ).scalars().first()
-                    if row is not None:
+            # This flag means every requested destination saved. Preserve
+            # partial successes in the report while leaving the flag false.
+            if memory_result.status == "written":
+                try:
+                    with SessionLocal() as db:
+                        row = db.execute(
+                            select(MemoPostmortem).where(
+                                MemoPostmortem.memo_snapshot_id == outcome.memo_snapshot_id,
+                                MemoPostmortem.horizon_days == horizon_days,
+                            )
+                        ).scalars().one()
                         row.written_to_memory = True
                         db.commit()
-            except Exception as exc:  # pragma: no cover
-                log.debug("postmortem written_to_memory flag failed: %s", exc)
+                except Exception as exc:
+                    memory_result.status = "failed"
+                    memory_result.errors["completion_flag"] = type(exc).__name__
+            if memory_result.status == "disabled":
+                reason = "enable_long_term_memory=false"
+            elif memory_result.errors:
+                reason = ", ".join(f"{target}:{error}" for target, error in memory_result.errors.items())
+            else:
+                reason = memory_result.status
+            memory_memos[memory_result.status].append({
+                **_memo_identity(snap, reason),
+                "written_targets": memory_result.written_targets,
+                "errors": memory_result.errors,
+            })
         written += 1
-    return {
+    report = {
         "horizon_days": horizon_days,
         "due": len(due),
         "written": written,
-        "skipped": skipped,
+        "already_done": already_done,
+        "deduped": len(scan.deduped),
+        "deduped_memos": scan.deduped,
+        "deferred": len(scan.deferred),
+        "deferred_memos": scan.deferred,
+        "skipped": len(skipped_memos),
+        "skipped_memos": skipped_memos,
     }
+    for status, identities in memory_memos.items():
+        report[f"memory_{status}"] = len(identities)
+        report[f"memory_{status}_memos"] = identities
+    # Admin runs do not go through the scheduled loop, so keep their
+    # complete omission details in the log as well as the returned report.
+    log.info("postmortem %sd report: %s", horizon_days, report)
+    return report

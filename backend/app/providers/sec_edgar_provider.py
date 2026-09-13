@@ -12,10 +12,12 @@ calls so the universe-wide backfill stays under that ceiling.
 """
 from __future__ import annotations
 
+import codecs
 import html
 import logging
 import re
 import time
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
 
@@ -23,6 +25,7 @@ import httpx
 
 from ..config import settings
 from .base import ProviderStatus, log_safely
+from .sec_text import BoundedHTMLStripper, decoded_bytes
 
 log = logging.getLogger(__name__)
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -31,6 +34,20 @@ TIMEOUT = 30.0          # filings can be a few MB; 10s is too tight
 DOC_TIMEOUT = 60.0
 RATE_LIMIT_SLEEP = 0.12  # ~8 req/sec — under SEC's 10/sec ceiling
 MAX_TEXT_BYTES = 250_000  # ~50k tokens; trim huge filings so we don't blow the DB
+
+
+@dataclass(frozen=True)
+class FilingTextResult:
+    text: str
+    observed_chars: int
+    retained_chars: int
+    bytes_read: int
+    oversized_tokens: int
+    error: str | None = None
+
+    @property
+    def truncated(self) -> bool:
+        return self.observed_chars > self.retained_chars
 
 
 class _HTMLStripper(HTMLParser):
@@ -191,27 +208,70 @@ class SECEdgarProvider:
         return self._ticker_cik_map.get(ticker)
 
     def fetch_filing_text(self, url: str) -> str | None:
-        """Download a primary filing document and return plain text.
+        """Compatibility view of the bounded, instrumented document fetch."""
+        result = self.fetch_filing_document(url)
+        return result.text if result is not None and not result.error else None
 
-        Caps the result at MAX_TEXT_BYTES so a 5MB 10-K doesn't blow up
-        the DB. Returns None on network / parse failure so the caller
-        can still persist the filing's metadata."""
+    def fetch_filing_document(self, url: str) -> FilingTextResult | None:
+        """Stream HTML while retaining the existing normalized-text prefix.
+
+        The former full response, decoded body, fragment list and regex
+        copies coexisted before truncation. A 20 MiB offline HTML response
+        reproduced a 272 MiB peak increase despite the 250k output cap.
+        Count the whole streamed document so every omitted character and
+        its source remain visible without holding the whole body in RAM.
+        """
         if not url:
             return None
+        from ..services.memory_probe import log_rss
+        parser = BoundedHTMLStripper(MAX_TEXT_BYTES)
+        log_rss("sec_filing_fetch_start", url=url)
+        bytes_read = 0
         try:
-            with httpx.Client(timeout=DOC_TIMEOUT, headers=self._headers("text/html")) as client:
-                r = client.get(url, follow_redirects=True)
-                if r.status_code != 200:
-                    log.warning("SEC doc %s -> %s", url, r.status_code)
-                    return None
-                body = r.text
+            headers = {**self._headers("text/html"), "Accept-Encoding": "identity"}
+            with httpx.Client(timeout=DOC_TIMEOUT, headers=headers) as client:
+                with client.stream("GET", url, follow_redirects=True) as response:
+                    if response.status_code != 200:
+                        log.warning("SEC doc %s -> %s", url, response.status_code)
+                        return FilingTextResult(
+                            text="", observed_chars=0, retained_chars=0,
+                            bytes_read=0, oversized_tokens=0,
+                            error=f"http_status_{response.status_code}",
+                        )
+                    decoder = codecs.getincrementaldecoder(response.encoding or "utf-8")(errors="replace")
+                    for fragment in decoded_bytes(
+                        response.iter_raw(chunk_size=4096),
+                        response.headers.get("content-encoding", ""),
+                    ):
+                        parser.feed(decoder.decode(fragment))
+                    parser.feed(decoder.decode(b"", final=True))
+                    bytes_read = response.num_bytes_downloaded
+            parser.close()
         except Exception as exc:  # pragma: no cover
             log_safely(log, f"SEC doc fetch failed for {url}", exc)
-            return None
-        text = _strip_html(body)
-        if len(text) > MAX_TEXT_BYTES:
-            text = text[:MAX_TEXT_BYTES] + "\n\n…[truncated]"
-        return text
+            return FilingTextResult(
+                text="", observed_chars=parser.output.observed_chars,
+                retained_chars=0, bytes_read=bytes_read,
+                oversized_tokens=parser.oversized_tokens,
+                error=f"fetch_or_parse_error:{type(exc).__name__}",
+            )
+        finally:
+            log_rss("sec_filing_fetch_end", url=url)
+        prefix = parser.output.text()
+        observed = parser.output.observed_chars
+        truncated = observed > len(prefix)
+        result = FilingTextResult(
+            text=prefix + ("\n\n…[truncated]" if truncated else ""),
+            observed_chars=observed, retained_chars=len(prefix),
+            bytes_read=bytes_read, oversized_tokens=parser.oversized_tokens,
+        )
+        log.info(
+            "SEC document %s bytes_read=%d observed_chars=%d retained_chars=%d "
+            "truncated_chars=%d oversized_markup_tokens=%d",
+            url, bytes_read, observed, len(prefix), max(0, observed - len(prefix)),
+            parser.oversized_tokens,
+        )
+        return result
 
     def get_filings(
         self, ticker: str, *, cik: str | None = None,
@@ -282,10 +342,22 @@ class SECEdgarProvider:
         # per ticker on cold load (cached after that via provider_cache).
         for filing in results:
             time.sleep(RATE_LIMIT_SLEEP)
-            text = self.fetch_filing_text(filing["url"])
-            if not text:
+            document = self.fetch_filing_document(filing["url"])
+            if document is not None and document.error:
+                filing["text_fetch_error"] = document.error
                 continue
+            if document is None or not document.text:
+                filing["text_fetch_error"] = "empty_document"
+                continue
+            text = document.text
             filing["raw_text"] = text
+            filing.update(
+                text_truncated=document.truncated,
+                text_observed_chars=document.observed_chars,
+                text_retained_chars=document.retained_chars,
+                text_bytes_read=document.bytes_read,
+                html_oversized_tokens=document.oversized_tokens,
+            )
             # Section extraction targets 10-K/10-Q Item-N headers; 8-Ks
             # use a different structure (Item 2.02, Item 7.01, etc.)
             # without long bodies, so the section dict will mostly stay

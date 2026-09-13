@@ -68,13 +68,25 @@ def _heartbeat() -> None:
     appear. Its row carries queue depth, not just liveness.
     """
     try:
+        import os
+
+        from .config import settings
         from .monitoring import record_run
         from .services import memory_probe
         rss = memory_probe.rss_mb()
+        ready = settings.llm_enabled
+        mode = "live" if ready else "demo"
+        note = (
+            f"llm={settings.active_llm_provider}; generation_mode={mode}; "
+            f"embeddings={'openai' if settings.has_openai else 'hash'}; "
+            f"build={os.environ.get('RENDER_GIT_COMMIT', 'unknown')}"
+        )
+        if rss is not None:
+            note = f"rss={rss:.0f}MB; " + note
         record_run(
             "worker_heartbeat",
-            success=True,
-            note=f"rss={rss:.0f}MB" if rss is not None else "",
+            success=settings.app_env.lower() != "production" or ready,
+            note=note,
         )
     except Exception:  # pragma: no cover — liveness must not kill the worker
         log.warning("worker heartbeat failed", exc_info=True)

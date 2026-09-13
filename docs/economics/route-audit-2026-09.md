@@ -139,6 +139,7 @@ flag is on.
 | GET | `/api/admin/sdk-traces` | none | DB-only (`sdk_traces`) | admin | admin | admin | |
 | GET | `/api/admin/sdk-traces/{run_id}` | none | DB-only | admin | admin | admin | |
 | GET | `/api/admin/calibration` | none | DB-only | admin | admin | admin | |
+| GET | `/api/admin/outcome-audit` | operations review | DB-only (one SELECT over all outcomes and snapshot metadata) | admin | admin | admin | Read-only, uncapped triage; no provider calls, evaluations, row mutations, or KPI changes. |
 | GET | `/api/admin/per-agent-attribution` | none | DB-only | admin | admin | admin | |
 | GET | `/api/admin/regime-accuracy` | none | DB-only | admin | admin | admin | |
 | GET | `/api/admin/calibration-summary` | none | DB-only | admin | admin | admin | |

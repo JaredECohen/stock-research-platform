@@ -143,7 +143,7 @@ def _skip_kind(decision: dict[str, Any]) -> str:
     return "gate_error" if decision.get("reason") in GATE_ERROR_REASONS else "skipped"
 
 
-def _persist_raw_data_only(ticker: str) -> dict[str, int]:
+def _persist_raw_data_only(ticker: str) -> dict[str, Any]:
     """Ingest fresh filings + transcripts into FilingDoc / EarningsTranscript
     + the vector store, WITHOUT running the LLM memo synthesis.
 
@@ -153,7 +153,8 @@ def _persist_raw_data_only(ticker: str) -> dict[str, int]:
     on this path; filing_memory.post_pass DOES use the LLM for the
     diff bullets, but that's a separate gate inside that function).
     """
-    counts = {"filings": 0, "transcripts": 0}
+    counts: dict[str, Any] = {"filings": 0, "transcripts": 0}
+    committed = False
     try:
         from ..database import SessionLocal
         from . import history_service
@@ -161,15 +162,45 @@ def _persist_raw_data_only(ticker: str) -> dict[str, int]:
         ds = get_data_service()
         filings = ds.get_filings(ticker) or []
         transcripts = ds.get_earnings_transcripts(ticker) or []
+        filing_ids: list[int] = []
+        transcript_ids: list[int] = []
         with SessionLocal() as db:
             history_service._ensure_tables(db)
-            counts["filings"] = history_service._ingest_filings(db, ticker, filings)
+            counts["filings"] = history_service._ingest_filings(
+                db, ticker, filings, post_pass_ids=filing_ids,
+            )
             counts["transcripts"] = history_service._ingest_transcripts(
-                db, ticker, transcripts,
+                db, ticker, transcripts, post_pass_ids=transcript_ids,
             )
             db.commit()
-    except Exception as exc:  # pragma: no cover — never block the poller
-        log.warning("_persist_raw_data_only failed for %s: %s", ticker, exc)
+            committed = True
+        failures = history_service.run_ingest_post_passes(filing_ids, transcript_ids)
+        if failures:
+            counts["post_pass_failures"] = failures
+        fetch_failures = history_service.filing_fetch_failures(ticker, filings)
+        if fetch_failures:
+            counts["filing_fetch_failures"] = fetch_failures
+            counts["persist_error"] = {
+                "ticker": ticker, "stage": "filing_fetch", "error_type": "IncompleteFilingBody",
+            }
+            log.warning("filing fetch failures count=%d: %s", len(fetch_failures),
+                        history_service.filing_fetch_failure_note(fetch_failures))
+        truncated = history_service.truncated_filing_sources(ticker, filings)
+        if truncated:
+            counts["truncated_filings"] = truncated
+            log.warning("bounded filing sources count=%d: %s",
+                        len(truncated), history_service.truncated_filing_note(truncated))
+    except Exception as exc:  # report failures without exposing provider request details
+        if not committed:
+            counts = {"filings": 0, "transcripts": 0}
+        error = {
+            "ticker": ticker,
+            "stage": "post_pass_dispatch" if committed else "raw_ingest",
+            "error_type": type(exc).__name__,
+        }
+        counts["persist_error"] = error
+        log.warning("raw persistence failed ticker=%s stage=%s error_type=%s",
+                    ticker, error["stage"], error["error_type"])
     return counts
 
 
@@ -186,6 +217,8 @@ def on_transcript_event(ticker: str, *, period: str = "") -> dict[str, Any]:
     """
     ticker = ticker.upper()
     persist_counts = _persist_raw_data_only(ticker)
+    if persist_counts.get("persist_error"):
+        return {"ticker": ticker, "kind": "persist_error", "persisted": persist_counts}
     decision = should_auto_regen(ticker)
     if not decision["should"]:
         return {
@@ -228,6 +261,8 @@ def on_filing_event(ticker: str, *, source: str = "filing_event") -> dict[str, A
     """
     ticker = ticker.upper()
     persist_counts = _persist_raw_data_only(ticker)
+    if persist_counts.get("persist_error"):
+        return {"ticker": ticker, "kind": "persist_error", "persisted": persist_counts}
     decision = should_auto_regen(ticker)
     if not decision["should"]:
         return {

@@ -185,6 +185,7 @@ def test_due_memos_excludes_already_written_and_deduped():
 @pytest.fixture
 def memory_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "memory_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "enable_long_term_memory", True)
     return tmp_path
 
 
@@ -222,7 +223,7 @@ def test_deterministic_lesson_text():
         "over the window. Realized return 20.0%, benchmark 6.0%."
     )
     no_alpha = MemoOutcome(forward_return=0.0, benchmark_return=0.0, alpha=None)
-    assert "alpha 0.0%" in pm._deterministic_lesson({}, no_alpha, "pending", 30)
+    assert "alpha unavailable" in pm._deterministic_lesson({}, no_alpha, "pending", 30)
 
 
 def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir, no_llm):
@@ -231,7 +232,13 @@ def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir, no_llm):
     outcome = _seed_outcome(snap, horizon=90, fwd=0.20, bench=0.06)
 
     report = pm.run_postmortems(horizon_days=90, limit=500)
-    assert set(report) == {"horizon_days", "due", "written", "skipped"}
+    assert set(report) == {
+        "horizon_days", "due", "written", "already_done", "deduped", "skipped",
+        "deduped_memos", "deferred", "deferred_memos",
+        "skipped_memos", "memory_written", "memory_written_memos",
+        "memory_failed", "memory_failed_memos", "memory_disabled", "memory_disabled_memos",
+        "memory_not_requested", "memory_not_requested_memos",
+    }
     assert report["horizon_days"] == 90 and report["written"] >= 1
     assert {"ticker": t, "horizon": 90} in no_llm       # the LLM was asked, and declined
 
@@ -254,7 +261,11 @@ def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir, no_llm):
     again = pm.run_postmortems(horizon_days=90, limit=500)
     assert not [d for d in pm._due_memos(90, limit=500) if d["snapshot"].ticker == t]
     assert len(_postmortems(t, 90)) == 1
-    assert again["written"] + again["skipped"] == again["due"]
+    assert (
+        again["written"] + again["already_done"] + again["skipped"] == again["due"]
+    )
+    # Nothing was re-attempted and nothing reads as a failure.
+    assert again["due"] == again["written"] == again["skipped"] == 0
 
 
 def test_run_postmortems_30d_early_read_stays_out_of_memory(memory_dir, no_llm):
