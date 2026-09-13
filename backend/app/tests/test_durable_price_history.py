@@ -65,6 +65,15 @@ def test_provider_histories_are_never_spliced(database):
     assert len({row["source"] for row in rows}) == 1
 
 
+def test_stored_api_uses_the_same_bar_count_selection_without_fetch(database):
+    from app.api.routes_admin import stored_market_prices
+    prices.persist_prices("ABC", tape(date(2025, 1, 1), date(2025, 1, 31)), source="fmp")
+    response = stored_market_prices("ABC", days=3)
+    assert response["count"] == 3
+    assert response["rows"] == prices.read_prices("ABC", days=3)
+    assert response["read_only"] is True
+
+
 def test_duplicates_invalid_dates_are_fully_reported(database):
     result = prices.persist_prices("ABC", [{"date": "2025-01-02", "close": 1}, {"date": "2025-01-02", "close": 1}, {"date": "not-a-date", "close": 1}], source="fmp")
     assert result["duplicate_dates"] == ["2025-01-02"]
@@ -211,6 +220,42 @@ def test_sync_reports_partial_failure_without_generating_or_scoring(database, mo
         assert db.get(MarketDataSync, "ABC").report == result
         assert db.execute(select(MemoSnapshot)).scalars().all() == []
         assert db.execute(select(MemoOutcome)).scalars().all() == []
+
+
+def test_superseded_import_cannot_overwrite_newer_claim(database, monkeypatch):
+    from app.services import fundamental_history_service as fundamentals
+    with database[0]() as db:
+        db.add(Company(ticker="ABC", company_name="ABC", sector="Unknown", industry="Unknown"))
+        db.commit()
+    def replace_claim(*args, **kwargs):
+        with database[0]() as db:
+            row = db.get(MarketDataSync, "ABC")
+            row.started_at += timedelta(seconds=1)
+            row.report = {"belongs_to": "newer claim"}
+            db.commit()
+        return {"success": True}
+    monkeypatch.setattr(backfill, "backfill_prices", replace_claim)
+    monkeypatch.setattr(fundamentals, "backfill_fundamentals", lambda *args, **kwargs: {"success": True})
+    result = backfill.sync_ticker("ABC")
+    assert result["status"] == "superseded"
+    with database[0]() as db:
+        assert db.get(MarketDataSync, "ABC").report == {"belongs_to": "newer claim"}
+
+
+def test_freshly_imported_halted_series_is_not_treated_as_current(database, monkeypatch):
+    from app.config import settings
+    from app.services.data_service import DataService
+    start, end = date(2024, 1, 1), date(2025, 1, 1)
+    prices.persist_prices("ABC", tape(start, end), source="fmp")
+    monkeypatch.setattr(settings, "use_demo_data", False)
+    monkeypatch.setattr(settings, "enable_live_data", True)
+    ds = DataService()
+    attempted = []
+    monkeypatch.setattr(prices, "fetch_and_store_prices", lambda *args, **kwargs: attempted.append(args) or {})
+    monkeypatch.setattr(ds, "_cached", lambda capability, key, fetcher, **kwargs: fetcher())
+    rows = ds.get_price_history("ABC", days=200)
+    assert attempted, "fresh import timestamp must not hide a halted historical series"
+    assert rows[-1]["date"] == "2025-01-01"
 
 
 def test_old_memo_can_use_durable_history_beyond_remote_ladder(database):

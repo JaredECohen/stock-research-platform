@@ -134,11 +134,13 @@ def market_data_backfill(
 
 
 @router.get("/api/admin/market-data/prices")
-def stored_market_prices(ticker: str, start: date | None = None, end: date | None = None) -> dict:
+def stored_market_prices(ticker: str, start: date | None = None, end: date | None = None,
+                         days: int | None = Query(None, ge=1)) -> dict:
     """Read a single-provider stored daily series without API access."""
     from ..services.price_history_service import read_prices
-    rows = read_prices(ticker, start=start, end=end)
-    return {"ticker": ticker.upper(), "count": len(rows), "rows": rows, "read_only": True}
+    rows = read_prices(ticker, start=start, end=end, days=days)
+    return {"ticker": ticker.upper(), "count": len(rows), "rows": rows, "read_only": True,
+            "selection": {"days": days, "start": start, "end": end}}
 
 
 @router.get("/api/admin/market-data/backfill-status")
