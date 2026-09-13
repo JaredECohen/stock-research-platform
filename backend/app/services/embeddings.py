@@ -300,7 +300,7 @@ def _iter_atoms(text: str, budget: int, level: int = 0) -> Iterator[str]:
     current piece — never the whole document, and never its token list.
     """
     if _fits(text, budget):
-        if text.strip():
+        if text:
             yield text
         return
 
@@ -482,8 +482,15 @@ def iter_chunks(
             # Push the trailing figures into the next chunk instead; the
             # loop still advances because at least one atom always stays.
             pushed: list[str] = []
+            pushed_tokens = 0
             while len(buf) > 1 and _BARE_FIGURE.match(buf[-1].strip()):
+                last_tokens = count_tokens(buf[-1])
+                # A numeric run may itself fill a chunk. Keep every figure,
+                # but never move more than fits beside the incoming atom.
+                if pushed_tokens + last_tokens + n > target:
+                    break
                 pushed.insert(0, buf.pop())
+                pushed_tokens += last_tokens
             chunk = "".join(buf)
             if chunk.strip():
                 yield chunk

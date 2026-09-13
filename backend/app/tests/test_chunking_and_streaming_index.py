@@ -574,3 +574,10 @@ def test_short_unicode_is_measured_in_tokens_not_code_points():
     text = "🚀" * 100
     assert len(text) <= 120 < emb.count_tokens(text)
     assert not emb._fits(text, 120)
+
+
+def test_numeric_run_carry_cannot_overfill_the_next_paragraph():
+    text = "business " * 100 + "123 " * 200 + "\n\n" + "growth " * 473
+    chunks = emb.chunk_text(text, target_tokens=500, overlap_tokens=0)
+    assert "".join(chunks) == text
+    assert max(map(emb.count_tokens, chunks)) <= 500
