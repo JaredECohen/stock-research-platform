@@ -46,9 +46,13 @@ def _summarize(report: dict) -> str:
         f"due={report.get('due', 0)} written={report.get('written', 0)} "
         f"already_done={report.get('already_done', 0)} "
         f"deduped={report.get('deduped', 0)} skipped={report.get('skipped', 0)} "
-        f"deferred={report.get('deferred', 0)}"
+        f"deferred={report.get('deferred', 0)} "
+        f"memory_written={report.get('memory_written', 0)} "
+        f"memory_disabled={report.get('memory_disabled', 0)} "
+        f"memory_failed={report.get('memory_failed', 0)} "
+        f"memory_not_requested={report.get('memory_not_requested', 0)}"
     )
-    for label in ("deduped", "deferred"):
+    for label in ("deduped", "deferred", "skipped", "memory_disabled", "memory_failed", "memory_not_requested"):
         memos = report.get(f"{label}_memos", [])
         if memos:
             summary += f"; {label} memos: " + ", ".join(
@@ -73,11 +77,11 @@ def run_once(*, limit_per_horizon: int = 25) -> dict[str, int]:
         )
         raise
     note = f"30d {_summarize(early)}; 90d {_summarize(full)}"
-    # Only genuinely unwritten work fails the loop. `already_done` and
+    # Failed postmortem or memory writes fail the loop. `already_done` and
     # `deduped` are answers, not failures — folding them into `skipped` is
     # what had this loop reporting success=False every single night for a
     # backlog that was entirely fine.
-    success = early.get("skipped", 0) + full.get("skipped", 0) == 0
+    success = sum(report.get(key, 0) for report in (early, full) for key in ("skipped", "memory_failed")) == 0
     record_run("postmortem_loop", success=success, note=note)
     return {
         "early_due": early["due"], "early_written": early["written"],

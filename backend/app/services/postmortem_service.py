@@ -300,12 +300,15 @@ def _deterministic_lesson(
     memo: dict[str, Any], outcome: MemoOutcome, verdict: str, horizon_days: int,
 ) -> str:
     rating = memo.get("rating_label", "")
-    alpha = outcome.alpha if outcome.alpha is not None else 0.0
+
+    def percent(value: float | None) -> str:
+        return "unavailable" if value is None else f"{value * 100:.1f}%"
+
     return (
         f"{horizon_days}d postmortem ({verdict}). Memo rated {rating}; "
-        f"alpha {alpha*100:.1f}% vs benchmark over the window. "
-        f"Realized return {outcome.forward_return*100:.1f}%, "
-        f"benchmark {outcome.benchmark_return*100:.1f}%."
+        f"alpha {percent(outcome.alpha)} vs benchmark over the window. "
+        f"Realized return {percent(outcome.forward_return)}, "
+        f"benchmark {percent(outcome.benchmark_return)}."
     )
 
 
@@ -313,9 +316,29 @@ def _deterministic_lesson(
 # Memory writers
 # ---------------------------------------------------------------------------
 
+@dataclass
+class MemoryWriteResult:
+    status: str
+    written_targets: list[str] = field(default_factory=list)
+    errors: dict[str, str] = field(default_factory=dict)
+
+
 def _write_lesson_to_memory(
     ticker: str, sector: str | None, lesson: str, sector_lesson: str,
-) -> None:
+) -> MemoryWriteResult:
+    if not settings.enable_long_term_memory:
+        return MemoryWriteResult("disabled")
+    result = MemoryWriteResult("not_requested")
+    # Parsed model JSON can contain wrong types. Validate before touching
+    # either file so a malformed field cannot escape after a partial save.
+    if not isinstance(lesson, str):
+        result.errors["company"] = "invalid_lesson_type"
+        lesson = ""
+    if not isinstance(sector_lesson, str):
+        result.errors["sector"] = "invalid_lesson_type"
+        sector_lesson = ""
+    if sector_lesson.strip() and (not isinstance(sector, str) or not sector.strip()):
+        result.errors["sector"] = "sector_unavailable"
     if lesson.strip():
         try:
             from ..memory import CompanyMemory, MemoryEntry
@@ -326,11 +349,14 @@ def _write_lesson_to_memory(
                 body=lesson,
             ))
             cm.save()
-        except Exception as exc:  # pragma: no cover
+            result.written_targets.append("company")
+        except Exception as exc:
+            result.errors["company"] = type(exc).__name__
             log.warning("postmortem→company memory failed for %s: %s", ticker, exc)
-    if sector and sector_lesson.strip():
+    if sector_lesson.strip() and "sector" not in result.errors:
         try:
-            from ..memory import CrossCompanyPattern, SectorMemory
+            from ..memory import SectorMemory
+            from ..memory.longterm import CrossCompanyPattern
             sm = SectorMemory.for_sector(sector)
             sm.add_pattern(CrossCompanyPattern(
                 date=date.today().isoformat(),
@@ -339,8 +365,12 @@ def _write_lesson_to_memory(
                 lesson=sector_lesson.strip(),
             ))
             sm.save()
-        except Exception as exc:  # pragma: no cover
-            log.warning("postmortem→sector memory failed: %s", exc)
+            result.written_targets.append("sector")
+        except Exception as exc:
+            result.errors["sector"] = type(exc).__name__
+            log.warning("postmortem→sector memory failed for %s: %s", ticker, exc)
+    result.status = "failed" if result.errors else ("written" if result.written_targets else "not_requested")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -407,14 +437,19 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
                       version, or the 14-day per-ticker rate limit).
       `deferred`      eligible work beyond this pass's budget, with every
                       omitted snapshot named in `deferred_memos`.
-      `skipped`       it should have been written and could not be. This is
-                      the only one that means the loop is unhealthy.
+      `skipped`       the postmortem could not be parsed or persisted.
+      `memory_failed` the new postmortem exists, but its requested memory
+                      writes or their persisted completion flag failed.
+      `memory_disabled` memory was disabled; no file was touched.
     """
     scan = _scan_due(horizon_days, limit=limit)
     due = scan.items
     written = 0
     already_done = 0
-    skipped = 0
+    skipped_memos: list[dict[str, Any]] = []
+    memory_memos: dict[str, list[dict[str, Any]]] = {
+        status: [] for status in ("written", "disabled", "failed", "not_requested")
+    }
     for item in due:
         outcome: MemoOutcome = item["outcome"]
         snap: MemoSnapshot = item["snapshot"]
@@ -440,8 +475,10 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
             memo = snap.memo_json or {}
             if not isinstance(memo, dict):
                 memo = json.loads(memo)
-        except Exception:
-            skipped += 1
+            if not isinstance(memo, dict):
+                raise TypeError("memo must be an object")
+        except Exception as exc:
+            skipped_memos.append(_memo_identity(snap, f"memo_parse_error:{type(exc).__name__}"))
             continue
         verdict = _classify_verdict(memo.get("rating_label", ""), outcome.alpha)
         llm_out = _llm_postmortem(memo, outcome, horizon_days)
@@ -473,28 +510,42 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
             already_done += 1
             continue
         if status == "failed":
-            skipped += 1
+            skipped_memos.append(_memo_identity(snap, "postmortem_persist_failed"))
             continue
         # Write the lesson back into memory only on the 90d cadence —
         # the 30d "early read" stays in the DB but doesn't pollute the
         # narrative memory yet.
         if horizon_days >= 90:
-            _write_lesson_to_memory(
+            memory_result = _write_lesson_to_memory(
                 outcome.ticker, memo.get("sector"), lesson, sector_lesson,
             )
-            try:
-                with SessionLocal() as db:
-                    row = db.execute(
-                        select(MemoPostmortem).where(
-                            MemoPostmortem.memo_snapshot_id == outcome.memo_snapshot_id,
-                            MemoPostmortem.horizon_days == horizon_days,
-                        )
-                    ).scalars().first()
-                    if row is not None:
+            # This flag means every requested destination saved. Preserve
+            # partial successes in the report while leaving the flag false.
+            if memory_result.status == "written":
+                try:
+                    with SessionLocal() as db:
+                        row = db.execute(
+                            select(MemoPostmortem).where(
+                                MemoPostmortem.memo_snapshot_id == outcome.memo_snapshot_id,
+                                MemoPostmortem.horizon_days == horizon_days,
+                            )
+                        ).scalars().one()
                         row.written_to_memory = True
                         db.commit()
-            except Exception as exc:  # pragma: no cover
-                log.debug("postmortem written_to_memory flag failed: %s", exc)
+                except Exception as exc:
+                    memory_result.status = "failed"
+                    memory_result.errors["completion_flag"] = type(exc).__name__
+            if memory_result.status == "disabled":
+                reason = "enable_long_term_memory=false"
+            elif memory_result.errors:
+                reason = ", ".join(f"{target}:{error}" for target, error in memory_result.errors.items())
+            else:
+                reason = memory_result.status
+            memory_memos[memory_result.status].append({
+                **_memo_identity(snap, reason),
+                "written_targets": memory_result.written_targets,
+                "errors": memory_result.errors,
+            })
         written += 1
     report = {
         "horizon_days": horizon_days,
@@ -505,8 +556,12 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
         "deduped_memos": scan.deduped,
         "deferred": len(scan.deferred),
         "deferred_memos": scan.deferred,
-        "skipped": skipped,
+        "skipped": len(skipped_memos),
+        "skipped_memos": skipped_memos,
     }
+    for status, identities in memory_memos.items():
+        report[f"memory_{status}"] = len(identities)
+        report[f"memory_{status}_memos"] = identities
     # Admin runs do not go through the scheduled loop, so keep their
     # complete omission details in the log as well as the returned report.
     log.info("postmortem %sd report: %s", horizon_days, report)
