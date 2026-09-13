@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
@@ -311,9 +312,17 @@ def _llm_diff(prior: FilingDoc, new: FilingDoc) -> dict[str, Any] | None:
 # Memory writers
 # ---------------------------------------------------------------------------
 
-def _write_to_company_memory(ticker: str, filing: FilingDoc, bullets: list[str]) -> None:
+@dataclass
+class MemoryWriteResult:
+    status: str
+    error_type: str | None = None
+
+
+def _write_to_company_memory(ticker: str, filing: FilingDoc, bullets: list[str]) -> MemoryWriteResult:
+    if not settings.enable_long_term_memory:
+        return MemoryWriteResult("disabled")
     if not bullets:
-        return
+        return MemoryWriteResult("not_requested")
     try:
         from ..memory import CompanyMemory, MemoryEntry
         cm = CompanyMemory.for_ticker(ticker)
@@ -325,17 +334,29 @@ def _write_to_company_memory(ticker: str, filing: FilingDoc, bullets: list[str])
         )
         cm.append_entry(entry)
         cm.save()
-    except Exception as exc:  # pragma: no cover
-        log.warning("company memory write failed for %s: %s", ticker, exc)
+        return MemoryWriteResult("written")
+    except Exception as exc:
+        return MemoryWriteResult("failed", type(exc).__name__)
 
 
 def _write_to_sector_memory(
     sector: str | None, filing: FilingDoc, sector_pattern: str,
-) -> None:
-    if not sector or not sector_pattern.strip():
-        return
+) -> MemoryWriteResult:
+    if not settings.enable_long_term_memory:
+        return MemoryWriteResult("disabled")
+    if not isinstance(sector_pattern, str):
+        return MemoryWriteResult("failed", "invalid_lesson_type")
+    if not sector_pattern.strip():
+        return MemoryWriteResult("not_requested")
     try:
-        from ..memory import CrossCompanyPattern, SectorMemory
+        from ..memory import SectorMemory
+        from ..memory.longterm import CrossCompanyPattern
+        if not isinstance(sector, str) or not sector.strip():
+            from ..models import Company
+            with SessionLocal() as db:
+                sector = db.execute(select(Company.sector).where(Company.ticker == filing.ticker)).scalar_one_or_none()
+        if not sector or not sector.strip():
+            return MemoryWriteResult("failed", "sector_unavailable")
         sm = SectorMemory.for_sector(sector)
         sm.add_pattern(CrossCompanyPattern(
             date=(filing.filing_date or date.today()).isoformat(),
@@ -344,8 +365,19 @@ def _write_to_sector_memory(
             lesson=sector_pattern.strip(),
         ))
         sm.save()
-    except Exception as exc:  # pragma: no cover
-        log.warning("sector memory write failed: %s", exc)
+        return MemoryWriteResult("written")
+    except Exception as exc:
+        return MemoryWriteResult("failed", type(exc).__name__)
+
+
+def _record_memory_result(report: dict, target: str, result: MemoryWriteResult) -> None:
+    report["memory_writes"][target] = {"status": result.status, "error_type": result.error_type}
+    if result.status == "failed":
+        report["errors"].append({"stage": f"{target}_memory", "error_type": result.error_type})
+    log.info(
+        "filing memory ticker=%s filing_id=%s accession=%s target=%s status=%s error_type=%s",
+        report["ticker"], report["filing_id"], report["accession_number"], target, result.status, result.error_type,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -362,10 +394,14 @@ def post_pass(filing: FilingDoc, profile: dict[str, Any] | None = None) -> dict[
     """
     report: dict[str, Any] = {
         "ticker": filing.ticker,
+        "filing_id": filing.id,
+        "accession_number": filing.accession_number,
         "filing_type": filing.filing_type,
         "indexed_chunks": 0,
         "delta_bullets": [],
         "sector_pattern_written": False,
+        "company_memory_written": False,
+        "memory_writes": {},
         "errors": [],
     }
     try:
@@ -384,7 +420,9 @@ def post_pass(filing: FilingDoc, profile: dict[str, Any] | None = None) -> dict[
             f"{filing.filing_date.isoformat() if filing.filing_date else 'undated'})."
         ]
         report["delta_bullets"] = bullets
-        _write_to_company_memory(filing.ticker, filing, bullets)
+        result = _write_to_company_memory(filing.ticker, filing, bullets)
+        _record_memory_result(report, "company", result)
+        report["company_memory_written"] = result.status == "written"
         return report
 
     llm_out = _llm_diff(prior, filing)
@@ -419,11 +457,14 @@ def post_pass(filing: FilingDoc, profile: dict[str, Any] | None = None) -> dict[
     report["risk_additions"] = risk_additions
     report["risk_removals"] = risk_removals
     report["risk_expanded"] = risk_expanded
-    _write_to_company_memory(filing.ticker, filing, bullets)
+    result = _write_to_company_memory(filing.ticker, filing, bullets)
+    _record_memory_result(report, "company", result)
+    report["company_memory_written"] = result.status == "written"
     if sector_pattern:
         sector = (profile or {}).get("sector") or ""
-        _write_to_sector_memory(sector, filing, sector_pattern)
-        report["sector_pattern_written"] = True
+        result = _write_to_sector_memory(sector, filing, sector_pattern)
+        _record_memory_result(report, "sector", result)
+        report["sector_pattern_written"] = result.status == "written"
     return report
 
 
@@ -514,7 +555,7 @@ def weekly_digest(
         )
 
     wrote = False
-    if write_memory:
+    if write_memory and settings.enable_long_term_memory:
         try:
             from ..memory import CompanyMemory, MemoryEntry
             cm = CompanyMemory.for_ticker(ticker)
@@ -634,19 +675,21 @@ def weekly_sector_digest(sector: str, *, days_back: int = 7) -> dict[str, Any]:
         )
 
     wrote = False
-    try:
-        from ..memory import CrossCompanyPattern, SectorMemory
-        sm = SectorMemory.for_sector(sector)
-        sm.add_pattern(CrossCompanyPattern(
-            date=date.today().isoformat(),
-            source_company="(weekly_digest)",
-            applies_to=[],
-            lesson=f"**Weekly cohort digest ({days_back}d):**\n\n{summary}",
-        ))
-        sm.save()
-        wrote = True
-    except Exception as exc:  # pragma: no cover
-        log.warning("weekly sector digest write failed for %s: %s", sector, exc)
+    if settings.enable_long_term_memory:
+        try:
+            from ..memory import SectorMemory
+            from ..memory.longterm import CrossCompanyPattern
+            sm = SectorMemory.for_sector(sector)
+            sm.add_pattern(CrossCompanyPattern(
+                date=date.today().isoformat(),
+                source_company="(weekly_digest)",
+                applies_to=[],
+                lesson=f"**Weekly cohort digest ({days_back}d):**\n\n{summary}",
+            ))
+            sm.save()
+            wrote = True
+        except Exception as exc:  # pragma: no cover
+            log.warning("weekly sector digest write failed for %s: %s", sector, exc)
 
     return {
         "sector": sector,

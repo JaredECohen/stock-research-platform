@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models import DocChunk, EarningsTranscript, FilingDoc
 from app.monitoring import history_backfill, transcripts_poller
@@ -37,8 +38,7 @@ def source(monkeypatch):
     )
     monkeypatch.setattr(data_service, "get_data_service", lambda: provider)
     monkeypatch.setattr(filing_memory, "_llm_diff", lambda *a: None)
-    monkeypatch.setattr(filing_memory, "_write_to_company_memory", lambda *a: None)
-    monkeypatch.setattr(filing_memory, "_write_to_sector_memory", lambda *a: None)
+    monkeypatch.setattr(settings, "enable_long_term_memory", False)
     yield ticker, risk, filings
     with SessionLocal() as db:
         db.query(DocChunk).filter_by(ticker=ticker).delete(synchronize_session=False)
