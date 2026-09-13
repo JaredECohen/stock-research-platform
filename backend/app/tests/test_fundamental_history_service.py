@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -54,7 +54,7 @@ def test_two_years_annual_and_quarterly_are_durable_and_idempotent(database, mon
     second = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
     assert second["rows_written"] == 0 and len(calls) == 1
     third = svc.backfill_fundamentals("TEST", date(2024, 9, 13), force_refresh=True)
-    assert third["rows_written"] == 0 and len(calls) == 2
+    assert third["rows_written"] == third["rows_refreshed"] == 36 and len(calls) == 2
     rows = svc.read_stored_financials("TEST")
     assert len(rows["income"]) == 12
     assert rows["income"][0]["currency"] == "EUR"
@@ -205,3 +205,277 @@ def test_fmp_unidentified_quarter_is_reported_not_relabeled_as_annual(monkeypatc
     assert len(result["_history_issues"]) == 3
     assert all(i["kind"] == "invalid_fiscal_quarter" for i in result["_history_issues"])
     assert all(r["cadence"] == "annual" for s in svc.LINES for r in result[s])
+
+
+@pytest.mark.parametrize("period", ["2025-12-31", "FY20251231", "2025Q40", "2025Q0", "FY0000", "99999", "1e9"])
+def test_strict_period_parser_rejects_date_and_unbounded_years(period):
+    assert history_service._parse_period(period) == (None, None)
+
+
+def test_invalid_incoming_and_preexisting_years_cannot_expand_coverage(database, monkeypatch):
+    rows = payload()
+    rows["income"].append({"period": "FY20251231", "period_end": "2025-12-31", "currency": "EUR", "revenue": 4})
+    rows["income"].append({"period": "FY9999", "period_end": "2025-12-31", "currency": "EUR", "revenue": 4})
+    providers(monkeypatch, ("fmp", rows))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert not report["success"]
+    assert {i["period"] for i in report["issues"] if i["kind"] == "invalid_period"} == {"FY20251231", "FY9999"}
+    with database() as db:
+        db.add(FinancialPeriod(ticker="TEST", period="FY20251231", period_end=date(2025, 12, 31), fiscal_year=20251231,
+                               statement="income", line_item="revenue", value=1, currency="EUR", source="alpha_vantage"))
+        db.commit()
+    coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    assert not coverage["success"]
+    assert any(i["kind"] == "invalid_stored_period" and i["period"] == "FY20251231" for i in coverage["issues"])
+    assert len(coverage["coverage"]["income"]["annual"]["missing_periods"]) < 5
+
+
+def test_mixed_stored_dates_and_currency_are_excluded_with_every_row_identity(database):
+    with database() as db:
+        FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
+        for line, end, currency in [("revenue", date(2025, 12, 31), "USD"), ("net_income", date(2025, 12, 30), "EUR")]:
+            db.add(FinancialPeriod(ticker="TEST", period="FY2025", period_end=end, fiscal_year=2025,
+                                   statement="income", line_item=line, value=3, currency=currency, source="fmp"))
+        db.commit()
+    stored = svc.read_stored_financials("TEST", start_date=date(2025, 12, 31), cadence="annual")
+    assert stored["income"] == []
+    issue = stored["_history_issues"][0]
+    assert issue["kind"] == "conflicting_stored_statement"
+    assert {r["line_item"] for r in issue["rows"]} == {"revenue", "net_income"}
+    assert all(r["id"] for r in issue["rows"])
+
+
+def test_same_value_corroboration_preserves_owner_for_later_restatement(database, monkeypatch):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    providers(monkeypatch, ("alpha_vantage", payload()))
+    result = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert result["success"] and result["rows_written"] == 0
+    assert {r["source"] for r in svc.read_stored_financials("TEST")["income"]} == {"fmp"}
+    providers(monkeypatch, ("fmp", payload(value=101)))
+    result = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert result["success"] and result["rows_written"] == 36
+
+
+def test_conflicting_provider_duplicates_and_stored_period_changes_are_rejected(database, monkeypatch):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    rows = payload()
+    rows["income"].append({**rows["income"][0], "revenue": 999})
+    rows["balance"][0]["period_end"] = "2023-12-30"
+    providers(monkeypatch, ("fmp", rows))
+    result = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert not result["success"] and result["rows_written"] == result["rows_refreshed"] == 34
+    assert {"conflicting_provider_period", "stored_period_end_conflict"} <= {i["kind"] for i in result["issues"]}
+    assert next(r for r in svc.read_stored_financials("TEST")["income"] if r["period"] == "FY2023")["revenue"] == 100
+
+
+def test_alpha_explicit_report_lists_keep_annual_and_noncalendar_quarters_separate(monkeypatch):
+    from app.providers.alpha_vantage_provider import AlphaVantageProvider
+    provider = AlphaVantageProvider()
+    requests = []
+    def fetch(**params):
+        requests.append(params)
+        return {"annualReports": [{"fiscalDateEnding": "2025-06-28", "reportedCurrency": "EUR", "totalRevenue": "500"}],
+                "quarterlyReports": [{"fiscalDateEnding": "2025-03-29", "reportedCurrency": "EUR", "totalRevenue": "110"},
+                                     {"fiscalDateEnding": "2025-09-27", "reportedCurrency": "EUR", "totalRevenue": "130"}]}
+    monkeypatch.setattr(provider, "_get", fetch)
+    rows = provider.get_financial_history("TEST", date(2023, 1, 1))
+    assert len(requests) == 3
+    income = {r["period"]: r for r in rows["income"]}
+    assert set(income) == {"FY2025", "2025Q3", "2026Q1"}
+    assert income["FY2025"]["revenue"] == 500 and income["FY2025"]["cadence"] == "annual"
+    assert income["2025Q3"]["revenue"] == 110 and income["2025Q3"]["cadence"] == "quarterly"
+    assert income["2026Q1"]["period_basis"] == "extrapolated_annual_end"
+    assert {r["period"] for r in rows["balance"]} == set(income)
+    assert {r["period"] for r in rows["cash"]} == set(income)
+
+
+def test_fmp_actual_normalizers_preserve_reported_availability_dates(monkeypatch):
+    provider = FMPProvider()
+    monkeypatch.setattr(provider, "_get", lambda *a, **k: [{"date": "2025-12-31", "fiscalYear": "2025", "period": "FY" if k["period"] == "annual" else "Q4",
+        "reportedCurrency": "USD", "filingDate": "2026-01-28", "acceptedDate": "2026-01-28 16:00:00"}])
+    result = provider.get_financial_history("TEST", date(2024, 1, 1))
+    assert all(r["filing_date"] == "2026-01-28" and r["accepted_date"] == "2026-01-28 16:00:00" for s in svc.LINES for r in result[s])
+
+
+@pytest.mark.parametrize("legacy", ["live", "unknown", ""], ids=["mode_only", "unknown_source", "empty_source"])
+def test_verified_refresh_upgrades_legacy_values_with_source_and_value_audit(database, monkeypatch, legacy):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    with database() as db:
+        for row in db.execute(select(FinancialPeriod)).scalars():
+            row.source = legacy
+        db.commit()
+    providers(monkeypatch, ("fmp", payload(value=105)))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert report["success"] and report["rows_written"] == 36
+    assert len(report["source_upgrades"]) == 36
+    assert all(u["old_source"] == legacy and u["new_source"] == "fmp" and u["old_value"] == 100 and u["new_value"] == 105
+               and u["ticker"] == "TEST" and u["id"] and u["period"] and u["line_item"] for u in report["source_upgrades"])
+    assert {r["source"] for r in svc.read_stored_financials("TEST")["income"]} == {"fmp"}
+
+
+@pytest.mark.parametrize("failed_result", [None, RuntimeError("secret provider URL"), {}])
+def test_failed_force_refresh_does_not_claim_stored_coverage_is_fresh_success(database, monkeypatch, failed_result):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    providers(monkeypatch, ("fmp", failed_result))
+    result = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert not result["success"] and not result["refresh_complete"] and result["rows_written"] == 0
+    assert svc._complete(result["coverage"])
+    assert any(i["kind"] == "refresh_incomplete" for i in result["issues"])
+    assert "secret" not in str(result)
+
+
+def test_partial_force_refresh_reports_missing_fresh_cadence_even_when_stored_complete(database, monkeypatch):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    providers(monkeypatch, ("fmp", payload(quarterly=False)))
+    result = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert svc._complete(result["coverage"]) and not result["success"] and not result["refresh_complete"]
+
+
+def test_old_valid_anchor_cannot_expand_requested_coverage_gap_range():
+    rows = {s: [{"period": "FY0001", "period_end": "0001-12-31", "currency": "USD", "source": "fmp", primary: 1},
+                {"period": "FY2025", "period_end": "2025-12-31", "currency": "USD", "source": "fmp", primary: 1}]
+            for s, primary in svc.PRIMARY.items()}
+    result = svc._coverage(rows, date(2024, 9, 13), date(2026, 9, 13))
+    assert result["income"]["annual"]["missing_periods"] == []
+    assert not result["income"]["annual"]["covers_start"]
+
+
+def test_unsafe_generic_financial_adapter_is_not_called(database, monkeypatch):
+    unsafe = SimpleNamespace(name="generic", get_financial_statements=lambda ticker: pytest.fail("unknown cadence is unsafe"))
+    monkeypatch.setattr(svc, "get_data_service", lambda: SimpleNamespace(_live_chain=lambda cap: [unsafe]))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert not report["success"]
+    assert report["issues"][0] == {"kind": "history_adapter_unavailable", "provider": "generic", "symbol": "TEST"}
+
+
+def test_alpha_period_derivation_survives_in_backfill_report_and_missing_anchor_is_named(database, monkeypatch):
+    from app.providers.alpha_vantage_provider import AlphaVantageProvider
+    provider = AlphaVantageProvider()
+    monkeypatch.setattr(provider, "_get", lambda **params: {
+        "annualReports": [{"fiscalDateEnding": "2025-06-28", "reportedCurrency": "USD", "totalRevenue": "100",
+                           "totalAssets": "200", "operatingCashflow": "50"}],
+        "quarterlyReports": [{"fiscalDateEnding": "2025-09-27", "reportedCurrency": "USD", "totalRevenue": "30",
+                              "totalAssets": "210", "operatingCashflow": "15"}]})
+    monkeypatch.setattr(svc, "get_data_service", lambda: SimpleNamespace(_live_chain=lambda cap: [provider]))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    inferred = [i for i in report["issues"] if i["kind"] == "fiscal_period_derivation" and i["period"] == "2026Q1"]
+    assert len(inferred) == 3
+    assert all(i["provider"] == "alpha_vantage" and i["symbol"] == "TEST" and i["anchor_date"] == "2026-06-28"
+               and i["period_basis"] == "extrapolated_annual_end" for i in inferred)
+    assert next(r for r in svc.read_stored_financials("TEST")["income"] if r["period"] == "2026Q1")["revenue"] == 30
+    monkeypatch.setattr(provider, "_get", lambda **params: {"quarterlyReports": [{"fiscalDateEnding": "2025-09-27"}]})
+    raw = provider.get_financial_history("TEST", date(2024, 9, 13))
+    assert not any(raw[s] for s in svc.LINES)
+    assert len([i for i in raw["_history_issues"] if i["kind"] == "fiscal_quarter_unresolved"]) == 3
+
+
+def test_stored_period_aliases_merge_once_and_conflicting_values_are_excluded(database):
+    with database() as db:
+        FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
+        for period in ("2025", "FY2025"):
+            db.add(FinancialPeriod(ticker="TEST", period=period, period_end=date(2025, 12, 31), fiscal_year=2025,
+                                   statement="income", line_item="revenue", value=100, currency="EUR", source="fmp"))
+        db.commit()
+    rows = svc.read_stored_financials("TEST", cadence="annual")
+    assert len(rows["income"]) == 1 and rows["income"][0]["period"] == "FY2025"
+    with database() as db:
+        db.execute(select(FinancialPeriod).where(FinancialPeriod.period == "2025")).scalar_one().value = 200
+        db.commit()
+    rows = svc.read_stored_financials("TEST", cadence="annual")
+    assert rows["income"] == []
+    assert {r["period"] for r in rows["_history_issues"][0]["rows"]} == {"2025", "FY2025"}
+
+
+def test_backfill_updates_single_alias_without_inserting_duplicate_and_repairs_null_end(database, monkeypatch):
+    with database() as db:
+        FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
+        db.add(FinancialPeriod(ticker="TEST", period="2025", period_end=None, fiscal_year=2025,
+                               statement="income", line_item="revenue", value=90, currency="EUR", source="live"))
+        db.commit()
+    providers(monkeypatch, ("fmp", payload()))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert report["success"] and report["rows_written"] == 36
+    assert any(i["kind"] == "invalid_stored_period" and i["resolved"] for i in report["issues"])
+    with database() as db:
+        rows = db.execute(select(FinancialPeriod).where(FinancialPeriod.statement == "income", FinancialPeriod.fiscal_year == 2025,
+                                                       FinancialPeriod.fiscal_quarter.is_(None))).scalars().all()
+        assert len(rows) == 1 and rows[0].period == "2025" and rows[0].value == 100 and rows[0].source == "fmp"
+        assert rows[0].period_end == date(2025, 12, 31)
+
+
+def test_duplicate_stored_aliases_are_not_arbitrarily_restated(database, monkeypatch):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    with database() as db:
+        db.add(FinancialPeriod(ticker="TEST", period="2025", period_end=date(2025, 12, 31), fiscal_year=2025,
+                               statement="income", line_item="revenue", value=100, currency="EUR", source="fmp"))
+        db.commit()
+    providers(monkeypatch, ("fmp", payload(value=101)))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert not report["success"]
+    issue = next(i for i in report["issues"] if i["kind"] == "stored_period_alias_conflict")
+    assert {r["period"] for r in issue["rows"]} == {"FY2025", "2025"}
+    assert next(r for r in svc.read_stored_financials("TEST")["income"] if r["period"] == "FY2025")["revenue"] == 100
+
+
+def test_quarter_freshness_names_missing_later_quarter():
+    rows = {"income": [{"period": "2026Q1", "period_end": "2026-03-31", "currency": "USD", "source": "fmp", "revenue": 10}]}
+    bucket = svc._coverage(rows, date(2024, 9, 13), date(2026, 9, 13))["income"]["quarterly"]
+    assert bucket["stale"] and bucket["stale_threshold_days"] == 140
+    rows["income"][0].update(period="2025Q3", period_end="2025-09-30")
+    bucket = svc._coverage(rows, date(2024, 9, 13), date(2026, 3, 1))["income"]["quarterly"]
+    assert not bucket["stale"] and bucket["stale_threshold_days"] == 185
+
+
+def test_boolean_values_are_rejected_before_real_provider_mapping(monkeypatch):
+    from app.providers.alpha_vantage_provider import AlphaVantageProvider
+    fmp = FMPProvider()
+    monkeypatch.setattr(fmp, "_get", lambda *a, **k: [{"date": "2025-12-31", "fiscalYear": "2025",
+        "period": "FY" if k["period"] == "annual" else "Q4", "reportedCurrency": "USD", "revenue": True}])
+    raw = fmp.get_financial_history("TEST", date(2024, 1, 1))
+    assert all(r["revenue"] is None for r in raw["income"])
+    assert any(i["raw_field"] == "revenue" and i["reason"] == "boolean_value" for i in raw["_history_issues"])
+    alpha = AlphaVantageProvider()
+    monkeypatch.setattr(alpha, "_get", lambda **k: {"annualReports": [{"fiscalDateEnding": "2025-12-31",
+        "reportedCurrency": "USD", "totalRevenue": True}], "quarterlyReports": []})
+    raw = alpha.get_financial_history("TEST", date(2024, 1, 1))
+    assert raw["income"][0]["revenue"] is None
+    assert any(i.get("raw_field") == "totalRevenue" and i["reason"] == "boolean_value" for i in raw["_history_issues"])
+
+
+def test_complete_but_week_old_primary_values_trigger_provider_refresh(database, monkeypatch):
+    calls = providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    old = datetime.utcnow() - timedelta(days=8)
+    with database() as db:
+        for row in db.execute(select(FinancialPeriod)).scalars():
+            row.fetched_at = old
+        db.commit()
+    coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    assert svc._complete(coverage["coverage"]) and not coverage["success"]
+    assert len([i for i in coverage["issues"] if i["kind"] == "stored_fetch_stale"]) == 6
+    assert coverage["coverage"]["income"]["annual"]["refresh_ttl_days"] == 7
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert report["success"] and len(calls) == 2
+    assert report["rows_written"] == report["rows_refreshed"] == 36
+    assert all(b["fresh"] for s in report["coverage"].values() for b in s.values())
+    again = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert again["rows_written"] == 0 and len(calls) == 2
+
+
+def test_primary_fetch_freshness_is_not_hidden_by_a_fresh_optional_line(database, monkeypatch):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    with database() as db:
+        row = db.execute(select(FinancialPeriod).where(FinancialPeriod.statement == "income", FinancialPeriod.period == "FY2025")).scalar_one()
+        row.fetched_at = datetime.utcnow() - timedelta(days=8)
+        db.add(FinancialPeriod(ticker="TEST", statement="income", period="FY2025", period_end=date(2025, 12, 31), fiscal_year=2025,
+                               line_item="net_income", value=3, currency="EUR", source="fmp", fetched_at=datetime.utcnow()))
+        db.commit()
+    report = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    assert not report["coverage"]["income"]["annual"]["fresh"] and not report["success"]

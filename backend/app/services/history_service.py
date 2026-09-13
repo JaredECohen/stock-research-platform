@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from collections.abc import Iterable
 from datetime import date as _date
 from datetime import datetime
@@ -76,23 +77,15 @@ def _ensure_tables(db: Session) -> None:
 # ---------------------------------------------------------------------------
 
 def _parse_period(period: Any) -> tuple[int | None, int | None]:
-    """Best-effort extract `(fiscal_year, fiscal_quarter)` from a period
-    label. Accepts `2024Q4`, `2024-Q4`, `FY2024`, `2024`, integers."""
-    if period is None:
+    """Parse only an explicit four-digit fiscal year and optional Q1–Q4.
+
+    ISO dates are not fiscal-year labels. Removing their separators previously
+    turned 2025-12-31 into year 20251231 and made gap enumeration unbounded.
+    """
+    match = re.fullmatch(r"(?:FY)?([0-9]{4})(?:-?Q([1-4]))?", str(period or "").strip().upper().replace(" ", ""))
+    if not match or int(match[1]) == 0:
         return None, None
-    s = str(period).upper().replace("-", "").replace(" ", "")
-    if "FY" in s:
-        s = s.replace("FY", "")
-    if "Q" in s:
-        try:
-            year_part, q_part = s.split("Q", 1)
-            return int(year_part), int(q_part[:1])
-        except (ValueError, IndexError):
-            return None, None
-    try:
-        return int(s), None
-    except ValueError:
-        return None, None
+    return int(match[1]), int(match[2]) if match[2] else None
 
 
 def _coerce_date(d: Any) -> _date | None:
@@ -157,7 +150,8 @@ def _upsert_financial_period(
         new_available_source = existing.available_at_source or available_at_source
         if (existing.value == value and existing.period_end == period_end
                 and existing.currency == new_currency and existing.source == new_source
-                and existing.available_at == new_available and existing.available_at_source == new_available_source):
+                and existing.available_at == new_available and existing.available_at_source == new_available_source
+                and existing.fiscal_year == fiscal_year and existing.fiscal_quarter == fiscal_quarter):
             return False
         existing.currency = new_currency
         existing.available_at = new_available
@@ -207,6 +201,9 @@ def _ingest_statement_rows(
     for period, row in by_period.items():
         period_end = _coerce_date(row.get("period_end") or row.get("date") or row.get("period"))
         fy, fq = _parse_period(period)
+        if fy is None or (period_end is not None and abs(fy - period_end.year) > 1):
+            log.warning("financial history %s %s: rejected invalid fiscal period %s end=%s", ticker, statement, period, period_end)
+            continue
         available_at, available_at_source = scorecard_pit.derive_available_at(
             ticker=ticker, period_end=period_end, fiscal_year=fy, fiscal_quarter=fq,
             provider_date=row.get("filing_date") or row.get("accepted_date"),

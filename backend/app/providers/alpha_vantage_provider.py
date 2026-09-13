@@ -207,6 +207,92 @@ class AlphaVantageProvider:
             return None
         return dict(income=income, balance=balance, cash=cash)
 
+    def get_financial_history(self, ticker: str, start_date) -> dict[str, Any]:
+        """Normalize the provider's explicit annualReports/quarterlyReports lists.
+
+        Alpha's normal statement method remains unchanged. Annual fiscal-end
+        anchors identify non-calendar quarters; an absent/ambiguous anchor is a
+        named gap, never an assumption that annual revenue is quarterly revenue.
+        """
+        from calendar import monthrange
+        from datetime import date
+
+        def parsed(value):
+            try:
+                return date.fromisoformat(str(value)[:10])
+            except (TypeError, ValueError):
+                return None
+
+        result: dict[str, Any] = {"income": [], "balance": [], "cash": [], "_history_issues": []}
+        raw = {}
+        mapping = (("income", "INCOME_STATEMENT", self._income_row),
+                   ("balance", "BALANCE_SHEET", self._balance_row),
+                   ("cash", "CASH_FLOW", self._cash_row))
+        for statement, function, _ in mapping:
+            response = self._get(function=function, symbol=ticker.upper())
+            if not isinstance(response, dict):
+                response = {}
+            if any(key in response for key in ("Error Message", "Information", "Note")):
+                result["_history_issues"].append({"kind": "provider_no_data", "statement": statement})
+                response = {}
+            raw[statement] = response
+        anchors = sorted({d for response in raw.values() for row in (response.get("annualReports") or [])
+                          if isinstance(row, dict) and (d := parsed(row.get("fiscalDateEnding"))) is not None and d <= date.today()})
+
+        def quarterly_label(d):
+            candidates = [a for a in anchors if -7 <= (a - d).days <= 300]
+            inferred = False
+            if not candidates and anchors and d > anchors[-1]:
+                prior = anchors[-1]
+                # Extend the known year-end convention only to the next fiscal
+                # year. Older/missing anchors do not license arbitrary guessing.
+                year = prior.year + 1
+                if year <= date.max.year:
+                    inferred_end = date(year, prior.month, min(prior.day, monthrange(year, prior.month)[1]))
+                    if -7 <= (inferred_end - d).days <= 300:
+                        candidates = [inferred_end]
+                        inferred = True
+            if not candidates:
+                return None, None, None
+            if len(candidates) > 1:
+                return None, None, None  # Conflicting year-end anchors need an explicit fiscal calendar.
+            anchor = min(candidates, key=lambda a: abs((a - d).days))
+            days = (anchor - d).days
+            quarter = 4 - round(days / 91.3125)
+            if quarter not in (1, 2, 3, 4) or abs(days - (4 - quarter) * 91.3125) > 20:
+                return None, None, None
+            return f"{anchor.year}Q{quarter}", "extrapolated_annual_end" if inferred else "annual_end_anchor", anchor.isoformat()
+
+        for statement, _, mapper in mapping:
+            for cadence, key in (("annual", "annualReports"), ("quarterly", "quarterlyReports")):
+                rows = raw[statement].get(key)
+                if not isinstance(rows, list) or not rows:
+                    result["_history_issues"].append({"kind": "provider_no_data", "statement": statement, "cadence": cadence})
+                    continue
+                for row in rows:
+                    d = parsed(row.get("fiscalDateEnding")) if isinstance(row, dict) else None
+                    if d is None:
+                        result["_history_issues"].append({"kind": "invalid_period", "statement": statement, "cadence": cadence,
+                                                         "period_end": row.get("fiscalDateEnding") if isinstance(row, dict) else None})
+                        continue
+                    period, basis, anchor = (f"FY{d.year}", "annual_report_date", d.isoformat()) if cadence == "annual" else quarterly_label(d)
+                    if period is None:
+                        result["_history_issues"].append({"kind": "fiscal_quarter_unresolved", "statement": statement,
+                                                         "cadence": cadence, "period_end": d.isoformat()})
+                        continue
+                    boolean_fields = [key for key, value in row.items() if isinstance(value, bool)]
+                    if boolean_fields:
+                        result["_history_issues"].extend({"kind": "invalid_value", "statement": statement, "cadence": cadence,
+                            "period": period, "period_end": d.isoformat(), "raw_field": key, "reason": "boolean_value"} for key in boolean_fields)
+                        row = {key: None if key in boolean_fields else value for key, value in row.items()}
+                    item = mapper(row)
+                    item.update(period=period, period_end=d.isoformat(), currency=row.get("reportedCurrency") or "",
+                                source=self.name, cadence=cadence, period_basis=basis, period_anchor_date=anchor)
+                    if row.get("reportedDate"):
+                        item["filing_date"] = row["reportedDate"]
+                    result[statement].append(item)
+        return result
+
     def get_ratios(self, ticker: str) -> dict[str, Any] | None:
         return None
 

@@ -373,9 +373,13 @@ def _av_report(date_str: str, **fields):
     return base
 
 
-def _ingest_av_year(db, ticker: str, date_str: str, scale: float) -> None:
-    """Ingest one AlphaVantage-shaped fiscal year exactly as the live
-    `financials` fallback does: provider row builders → history_service."""
+def _seed_legacy_av_year(db, ticker: str, date_str: str, scale: float) -> None:
+    """Seed the historical malformed shape for read compatibility.
+
+    New history ingestion rejects date strings as fiscal labels. This fixture
+    deliberately models rows written before that guard instead of requiring the
+    current producer to keep creating malformed fiscal years.
+    """
     from app.providers.alpha_vantage_provider import AlphaVantageProvider as AV
     income = AV._income_row(_av_report(
         date_str, totalRevenue=1000 * scale, grossProfit=600 * scale,
@@ -397,15 +401,21 @@ def _ingest_av_year(db, ticker: str, date_str: str, scale: float) -> None:
         ("balance", [balance], history_service._BALANCE_LINES),
         ("cash", [cash], history_service._CASH_LINES),
     ):
-        history_service._ingest_statement_rows(db, ticker, statement, rows, lines, "alpha_vantage")
+        for row in rows:
+            for line in lines:
+                if row.get(line) is not None:
+                    db.add(FinancialPeriod(ticker=ticker, period=row["period"], period_end=date.fromisoformat(date_str),
+                        fiscal_year=int(date_str[:4]) if statement == "income" else int(date_str.replace("-", "")),
+                        fiscal_quarter=4 if statement == "income" else None, statement=statement, line_item=line,
+                        value=row[line], currency="USD", source="alpha_vantage", fetched_at=FRESH))
 
 
 def test_alpha_vantage_shaped_annual_rows_are_annual_not_not_backfilled(db, clean, clock, caplog):
     """The high finding: AV labels annual income rows `2024Q4` (fiscal_quarter=4)
     and balance/cash rows `2024-12-31` (fiscal_year=20241231). They are the
     annual data and must render, not collapse into a false `not_backfilled`."""
-    _ingest_av_year(db, "FXV", "2023-12-31", 1.0)
-    _ingest_av_year(db, "FXV", "2024-12-31", 1.1)
+    _seed_legacy_av_year(db, "FXV", "2023-12-31", 1.0)
+    _seed_legacy_av_year(db, "FXV", "2024-12-31", 1.1)
     db.commit()
     stored = db.query(FinancialPeriod).filter(FinancialPeriod.ticker == "FXV").all()
     assert {r.period for r in stored} == {"2023Q4", "2024Q4", "2023-12-31", "2024-12-31"}

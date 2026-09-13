@@ -350,6 +350,11 @@ class FMPProvider:
                     if not isinstance(row, dict):
                         result["_history_issues"].append({"kind": "invalid_provider_row", "statement": statement, "cadence": cadence})
                         continue
+                    boolean_fields = [key for key, value in row.items() if isinstance(value, bool)]
+                    if boolean_fields:
+                        result["_history_issues"].extend({"kind": "invalid_value", "statement": statement, "cadence": cadence,
+                            "period_end": row.get("date"), "raw_field": key, "reason": "boolean_value"} for key in boolean_fields)
+                        row = {key: None if key in boolean_fields else value for key, value in row.items()}
                     normalized = mapper(row)
                     # Stable API fiscalYear is authoritative for non-calendar FYs.
                     year = str(row.get("fiscalYear") or str(row.get("date") or "")[:4])
