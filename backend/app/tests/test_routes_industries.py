@@ -936,6 +936,7 @@ ADMIN_CALLS = [
     ("POST", "/api/admin/industries/classify", {"tickers": []}),
     ("POST", "/api/admin/industries/reports/regenerate", {"codes": []}),
     ("GET", "/api/admin/industries/jobs", None),
+    ("POST", "/api/admin/industries/jobs/recover-legacy", {}),
 ]
 
 
@@ -1067,6 +1068,8 @@ def test_admin_jobs_counts_the_whole_queue_not_the_page(client, admin_token, gro
                 industry_group_code=group.code, period_key="2026-W36", run_id=f"r{i}",
                 status="queued" if i else "failed", attempts=i, max_attempts=3,
                 enqueued_at=NOW, source="weekly_cron",
+                owner_token="private-industry-claim" if i == 2 else None,
+                lease_expires_at=NOW + timedelta(seconds=120) if i == 2 else None,
             ))
         db.commit()
     body = client.get(f"/api/admin/industries/jobs?code={group.code}&limit=1",
@@ -1074,7 +1077,100 @@ def test_admin_jobs_counts_the_whole_queue_not_the_page(client, admin_token, gro
     assert body["count"] == 1 and body["truncated"] == 2
     assert body["status_counts"] == {"queued": 2, "failed": 1}
     assert body["jobs"][0]["code"] == group.code
+    assert body["jobs"][0]["ownership_tracked"] is True
+    assert body["jobs"][0]["lease_expires_at"] == (NOW + timedelta(seconds=120)).isoformat()
+    assert "owner_token" not in body["jobs"][0]
+    assert "private-industry-claim" not in str(body)
     assert "drainer" in body and "enabled" in body["drainer"]
+
+
+def _legacy_recovery_payload():
+    return {
+        "expected_jobs": [{
+            "id": 42, "run_id": "legacy-run", "attempts": 1,
+            "started_at": "2026-09-13T06:00:00", "heartbeat_at": None,
+        }],
+        "retirement_evidence": "Render predecessor retirement verified from shutdown and replacement evidence.",
+    }
+
+
+def test_legacy_recovery_route_preserves_expected_state_and_all_results(
+    client, admin_token, monkeypatch,
+):
+    from app.services import industry_legacy_recovery
+
+    seen = []
+    expected = {
+        "requested": 1, "recovered": 0,
+        "results": [{"id": 42, "action": "rejected", "reason": "row_changed"}],
+        "retirement_evidence": _legacy_recovery_payload()["retirement_evidence"],
+    }
+
+    def recover(rows, evidence):
+        seen.append((rows, evidence))
+        return expected
+
+    monkeypatch.setattr(industry_legacy_recovery, "recover_legacy_jobs", recover)
+    response = client.post(
+        "/api/admin/industries/jobs/recover-legacy",
+        json=_legacy_recovery_payload(), headers=admin_token,
+    )
+    assert response.status_code == 200 and response.json() == expected
+    rows, evidence = seen[0]
+    assert rows == [{"id": 42, "run_id": "legacy-run", "attempts": 1,
+                     "started_at": datetime(2026, 9, 13, 6), "heartbeat_at": None}]
+    assert evidence == expected["retirement_evidence"]
+
+
+@pytest.mark.parametrize("invalid", [
+    "empty_jobs", "too_many_jobs", "missing_timestamp", "empty_evidence",
+    "unknown_expected_field", "boolean_id", "numeric_timestamp",
+])
+def test_legacy_recovery_invalid_request_never_reaches_service(
+    client, admin_token, monkeypatch, invalid,
+):
+    from app.services import industry_legacy_recovery
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Invalid recovery input must not reach the mutation service")
+
+    monkeypatch.setattr(industry_legacy_recovery, "recover_legacy_jobs", forbidden)
+    body = _legacy_recovery_payload()
+    if invalid == "empty_jobs":
+        body["expected_jobs"] = []
+    elif invalid == "too_many_jobs":
+        body["expected_jobs"] = [dict(body["expected_jobs"][0], id=n + 1) for n in range(51)]
+    elif invalid == "missing_timestamp":
+        del body["expected_jobs"][0]["heartbeat_at"]
+    elif invalid == "empty_evidence":
+        body["retirement_evidence"] = " " * 30
+    elif invalid == "unknown_expected_field":
+        body["expected_jobs"][0]["ignored_owner"] = "must-not-be-ignored"
+    elif invalid == "numeric_timestamp":
+        body["expected_jobs"][0]["started_at"] = 1789280000
+    else:
+        body["expected_jobs"][0]["id"] = True
+    response = client.post(
+        "/api/admin/industries/jobs/recover-legacy", json=body, headers=admin_token,
+    )
+    assert response.status_code == 422
+
+
+def test_legacy_recovery_service_refusal_is_structured(client, admin_token, monkeypatch):
+    from app.services import industry_legacy_recovery
+
+    def refuse(*args, **kwargs):
+        raise ValueError("Duplicate job identities")
+
+    monkeypatch.setattr(industry_legacy_recovery, "recover_legacy_jobs", refuse)
+    response = client.post(
+        "/api/admin/industries/jobs/recover-legacy",
+        json=_legacy_recovery_payload(), headers=admin_token,
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": "invalid_legacy_recovery", "message": "Duplicate job identities",
+    }
 
 
 def test_default_period_key_follows_the_configured_as_of_weekday():

@@ -5,7 +5,7 @@ moment they are mounted (bearer `ADMIN_API_TOKEN`), and `auth/policy.py`
 classifies them as `admin`: a customer JWT never opens one, and none of
 them is browser-called, so none is exempt.
 
-Four operations, and what each one does NOT do:
+Operations and their boundaries:
 
 * **import** — reads the bundled knowledge JSON (the one taxonomy source)
   and writes the node rows. Idempotent by checksum; the same key with a
@@ -20,6 +20,9 @@ Four operations, and what each one does NOT do:
   names what is missing rather than pretending a job was queued.
 * **jobs** — reads the queue. Counts by status come from SQL, not from
   the returned page, so a capped list never understates the backlog.
+* **recover-legacy** — reconciles explicitly identified legacy jobs after
+  an operator verifies predecessor retirement. It never executes work;
+  ownership and every expected row field must still match.
 """
 from __future__ import annotations
 
@@ -38,6 +41,7 @@ from ..schemas.industry import (
     ClassifyOut,
     ClassifyRequest,
     IndustryJobsOut,
+    LegacyIndustryRecoveryRequest,
     RegenerateOut,
     RegenerateRequest,
     TaxonomyImportOut,
@@ -293,10 +297,35 @@ def _job_dict(row: IndustryReportJob) -> dict[str, Any]:
         "source": row.source,
         "force": bool(row.force),
         "report_id": row.report_id,
+        "snapshot_id": row.snapshot_id,
+        "ownership_tracked": bool(row.owner_token),
+        "lease_expires_at": row.lease_expires_at.isoformat() if row.lease_expires_at else None,
         "error_type": row.error_type or "",
         "error_message": (row.error_message or "")[:500],
         "progress_waypoints": len(row.progress or []),
     }
+
+
+@router.post("/api/admin/industries/jobs/recover-legacy")
+@limiter.limit(LIMITS["industry_admin"])
+def recover_legacy_industry_jobs_endpoint(
+    request: Request, response: Response, payload: LegacyIndustryRecoveryRequest,
+) -> dict[str, Any]:
+    """Reconcile explicitly identified jobs after verified predecessor retirement.
+
+    This operator-only action never runs a report or calls a provider. The
+    service compares every expected field and refuses changed or owned jobs;
+    ordinary worker startup continues to defer unknown legacy ownership.
+    """
+    from ..services.industry_legacy_recovery import recover_legacy_jobs
+
+    try:
+        return recover_legacy_jobs(
+            [job.model_dump(mode="python") for job in payload.expected_jobs],
+            payload.retirement_evidence,
+        )
+    except ValueError as exc:
+        raise _error(400, "invalid_legacy_recovery", str(exc)) from None
 
 
 @router.get("/api/admin/industries/jobs", response_model=IndustryJobsOut)

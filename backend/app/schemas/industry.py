@@ -29,9 +29,10 @@ scenario, not a recommendation.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Access (the Phase 4 entitlement seam)
@@ -510,6 +511,9 @@ class IndustryJobOut(BaseModel):
     source: str = ""
     force: bool = False
     report_id: int | None = None
+    snapshot_id: int | None = None
+    ownership_tracked: bool = False
+    lease_expires_at: str | None = None
     error_type: str = ""
     error_message: str = ""
     progress_waypoints: int = 0
@@ -523,3 +527,36 @@ class IndustryJobsOut(BaseModel):
     taxonomy_version: str = ""
     drainer: dict[str, Any] = Field(default_factory=dict)
     jobs: list[IndustryJobOut] = Field(default_factory=list)
+
+
+class LegacyIndustryJobExpectation(BaseModel):
+    """Exact observed legacy state; omitted timestamps are not wildcards."""
+    model_config = ConfigDict(extra="forbid")
+    id: int = Field(gt=0, strict=True)
+    run_id: str = Field(min_length=1, max_length=128)
+    attempts: int = Field(ge=0, strict=True)
+    started_at: datetime | None
+    heartbeat_at: datetime | None
+
+    @field_validator("started_at", "heartbeat_at", mode="before")
+    @classmethod
+    def require_explicit_timestamp(cls, value: Any) -> Any:
+        if value is not None and not isinstance(value, (str, datetime)):
+            raise ValueError("Expected an explicit datetime string or null")
+        return value
+
+
+class LegacyIndustryRecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_jobs: list[LegacyIndustryJobExpectation] = Field(min_length=1, max_length=50)
+    retirement_evidence: str = Field(
+        min_length=20, max_length=4000,
+        description="Operator evidence that every predecessor capable of owning these jobs has retired.",
+    )
+
+    @field_validator("retirement_evidence")
+    @classmethod
+    def require_retirement_evidence(cls, value: str) -> str:
+        if len(value.strip()) < 20:
+            raise ValueError("Describe the verified predecessor retirement before recovery")
+        return value.strip()

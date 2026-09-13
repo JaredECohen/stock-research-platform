@@ -302,6 +302,7 @@ ADMIN_ROUTES = (
     ("POST", "/api/admin/industries/classify"),
     ("POST", "/api/admin/industries/reports/regenerate"),
     ("GET", "/api/admin/industries/jobs"),
+    ("POST", "/api/admin/industries/jobs/recover-legacy"),
 )
 
 
@@ -350,6 +351,7 @@ def test_a_pro_customer_token_does_not_open_an_ops_route(auth_on, admin_token, c
     ("routes_industries_admin", "import_taxonomy_endpoint", "industry_admin"),
     ("routes_industries_admin", "classify_endpoint", "industry_admin"),
     ("routes_industries_admin", "regenerate_reports_endpoint", "industry_admin"),
+    ("routes_industries_admin", "recover_legacy_industry_jobs_endpoint", "industry_admin"),
 ])
 def test_every_industry_route_declares_an_ip_limit(module, handler, limit_key):
     from limits import parse
