@@ -122,11 +122,11 @@ def test_apply_patch_appends_to_bull_bear_key_points():
 def test_apply_patch_replaces_rating_and_confidence():
     memo = _stub_memo()
     patched = news_impact_agent.apply_patch(memo, {
-        "rating_label": "Mixed Negative",
+        "rating_label": "Bearish",
         "confidence_score": 60.0,
         "one_sentence_thesis": "Thesis softened post-news.",
     })
-    assert patched.rating_label == "Mixed Negative"
+    assert patched.rating_label == "Bearish"
     assert patched.confidence_score == 60.0
     assert "softened" in patched.one_sentence_thesis
 
@@ -165,7 +165,7 @@ def test_on_news_alert_writes_incremental_patch_when_material():
     fake_assessment = {
         "material": True,
         "patch": {
-            "rating_label": "Mixed Positive",
+            "rating_label": "Neutral",
             "confidence_score": 65.0,
             "one_sentence_thesis": "Thesis softened by guidance miss.",
         },

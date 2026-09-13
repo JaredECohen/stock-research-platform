@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
@@ -88,6 +89,9 @@ def save_memo(
     """
     if trigger not in TRIGGERS:
         raise ValueError(f"unknown trigger: {trigger!r}; allowed: {sorted(TRIGGERS)}")
+    # Assignment/model_copy can bypass pydantic validation. A serializable
+    # object is not necessarily a readable memo; validate before any DB work.
+    memo = StockMemoOut.model_validate(memo.model_dump(mode="python", warnings=False))
     own = db is None
     if own:
         db = SessionLocal()
@@ -288,5 +292,41 @@ def memo_history(
 
 
 def memo_to_pydantic(snap: MemoSnapshot) -> StockMemoOut:
-    """Re-hydrate a stored snapshot back into the pydantic model."""
-    return StockMemoOut.model_validate(snap.memo_json)
+    """Read a snapshot, projecting only unambiguous legacy case lists.
+
+    This adapter never writes to the snapshot and is deliberately absent from
+    new-publication validation. An absent legacy headline remains empty; no
+    research narrative is inferred. The complete original case is retained in
+    visible degradation metadata alongside its source snapshot identity.
+    """
+    payload = deepcopy(snap.memo_json)
+    if not isinstance(payload, dict):
+        return StockMemoOut.model_validate(payload)
+    for field in ("bull_case", "bear_case"):
+        legacy = payload.get(field)
+        if not isinstance(legacy, list):
+            continue
+        if all(isinstance(point, str) for point in legacy):
+            points = list(legacy)
+        elif all(isinstance(point, dict) and isinstance(point.get("key_point"), str)
+                 for point in legacy):
+            points = [point["key_point"] for point in legacy]
+        else:
+            # Leave ambiguous shapes to ordinary schema validation.
+            continue
+        payload[field] = {"headline": "", "key_points": points}
+        agent = "Stored memo compatibility"
+        degraded = payload.setdefault("degraded_agents", [])
+        if agent not in degraded:
+            degraded.append(agent)
+        payload.setdefault("degradation_events", []).append({
+            "agent": agent,
+            "error_type": "LegacyCaseShape",
+            "message": f"{field} was a legacy list; exact points retained, headline unavailable.",
+            "field": field,
+            "source_snapshot_id": snap.id,
+            "source_snapshot_version": snap.version,
+            "source_snapshot_ticker": snap.ticker,
+            "original_value": legacy,
+        })
+    return StockMemoOut.model_validate(payload)

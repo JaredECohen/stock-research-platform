@@ -48,8 +48,10 @@ def expire(database, receipt):
 
 
 def fake_memo(ticker="LEASE"):
-    return SimpleNamespace(ticker=ticker, rating_label="Neutral",
-        model_dump_json=lambda: json.dumps({"ticker": ticker, "rating_label": "Neutral"}))
+    from app.tests.test_update_orchestrator import _stub_memo
+    memo = _stub_memo(ticker)
+    memo.rating_label = "Neutral"
+    return memo
 
 
 def snapshot(database):

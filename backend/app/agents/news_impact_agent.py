@@ -188,6 +188,20 @@ def apply_patch(
     Bull/bear case patches APPEND to the existing key_points; they don't
     replace the whole case. Same for key_risks. Other fields replace.
     """
+    # Partial case patches have their own shape. In particular a list of
+    # key_point objects must not fall through to setattr and replace the case.
+    for field in ("bull_case", "bear_case"):
+        if field not in patch:
+            continue
+        value = patch[field]
+        if (not isinstance(value, dict)
+                or set(value) - {"headline", "key_points"}
+                or ("headline" in value and not isinstance(value["headline"], str))
+                or ("key_points" in value and (
+                    not isinstance(value["key_points"], list)
+                    or not all(isinstance(point, str) for point in value["key_points"])
+                ))):
+            raise ValueError(f"Invalid news patch shape for {field}")
     new = memo.model_copy(deep=True)
     for k, v in patch.items():
         if k == "bull_case" and isinstance(v, dict):
@@ -215,4 +229,6 @@ def apply_patch(
                 setattr(new, k, v)
             except Exception:
                 continue
-    return new
+    # Pydantic assignment is not validation. Reject an unreadable patch here,
+    # before the orchestrator can ask the store to publish it.
+    return StockMemoOut.model_validate(new.model_dump(mode="python", warnings=False))
