@@ -200,13 +200,26 @@ def fake_index(monkeypatch):
 
 
 @pytest.fixture()
-def notes(monkeypatch) -> list[str]:
-    captured: list[str] = []
+def runs(monkeypatch) -> list[dict]:
+    """Every `record_run` the poller makes — the verdict as well as the note.
+
+    Capturing only the note is how a progress record's `success` flag went
+    unasserted while it was hardcoded to True. `record_run` keeps one row
+    per loop and overwrites both fields, so the flag is half of what
+    cron-health shows and belongs in the capture.
+    """
+    captured: list[dict] = []
     monkeypatch.setattr(
         edgar_poller, "record_run",
-        lambda *a, **k: captured.append(k.get("note", "")),
+        lambda *a, **k: captured.append(
+            {"success": k.get("success", True), "note": k.get("note", "")}
+        ),
     )
     return captured
+
+
+def _notes(runs: list[dict]) -> list[str]:
+    return [r["note"] for r in runs]
 
 
 def _prime(fake_index: dict, tickers: list[str]) -> None:
@@ -222,7 +235,7 @@ def _prime(fake_index: dict, tickers: list[str]) -> None:
         assert edgar_poller.run_once(tickers) == []
 
 
-def test_the_cap_defers_the_overflow_and_a_later_pass_picks_it_up(fake_index, notes):
+def test_the_cap_defers_the_overflow_and_a_later_pass_picks_it_up(fake_index, runs):
     """The one that matters. A deferred ticker's event must still fire.
 
     Deferral is only acceptable because it is a delay. If `seen` were updated
@@ -278,13 +291,13 @@ def test_the_cap_defers_the_overflow_and_a_later_pass_picks_it_up(fake_index, no
         assert edgar_poller.run_once(tickers) == []
 
 
-def test_the_note_reports_the_deferred_count_and_names(fake_index, notes):
+def test_the_note_reports_the_deferred_count_and_names(fake_index, runs):
     """No silent caps: cron-health has to show what is waiting, by name."""
     overflow = 2
     count = edgar_poller.MAX_FILING_EVENTS_PER_PASS + overflow
     tickers = [f"ZZNT{_suffix()}{i:02d}" for i in range(count)]
     _prime(fake_index, tickers)
-    notes.clear()
+    runs.clear()
     for t in tickers:
         fake_index[t].append({"type": "8-K", "accession_number": _accession(2)})
 
@@ -292,18 +305,18 @@ def test_the_note_reports_the_deferred_count_and_names(fake_index, notes):
         handler.return_value = {"kind": "skipped"}
         edgar_poller.run_once(tickers)
 
-    (note,) = notes
+    (note,) = _notes(runs)
     assert f"deferred {overflow}" in note, note
     for t in tickers[edgar_poller.MAX_FILING_EVENTS_PER_PASS:]:
         assert t in note, f"{t} was deferred but not named in the note: {note}"
 
 
-def test_a_long_deferral_list_is_elided_rather_than_dropped(fake_index, notes):
+def test_a_long_deferral_list_is_elided_rather_than_dropped(fake_index, runs):
     """The first pass after the fix defers ~150 names. The note says so."""
     count = edgar_poller.MAX_FILING_EVENTS_PER_PASS + 9
     tickers = [f"ZZEL{_suffix()}{i:02d}" for i in range(count)]
     _prime(fake_index, tickers)
-    notes.clear()
+    runs.clear()
     for t in tickers:
         fake_index[t].append({"type": "8-K", "accession_number": _accession(2)})
 
@@ -311,16 +324,16 @@ def test_a_long_deferral_list_is_elided_rather_than_dropped(fake_index, notes):
         handler.return_value = {"kind": "skipped"}
         edgar_poller.run_once(tickers)
 
-    (note,) = notes
+    (note,) = _notes(runs)
     assert "deferred 9" in note
     assert "+4 more" in note, f"truncation must be visible, not silent: {note}"
 
 
-def test_an_uncapped_pass_still_reports_no_deferrals(fake_index, notes):
+def test_an_uncapped_pass_still_reports_no_deferrals(fake_index, runs):
     """Steady state: a handful of 8-Ks, no cap language in the note."""
     tickers = [f"ZZOK{_suffix()}{i:02d}" for i in range(3)]
     _prime(fake_index, tickers)
-    notes.clear()
+    runs.clear()
     for t in tickers:
         fake_index[t].append({"type": "8-K", "accession_number": _accession(2)})
 
@@ -329,7 +342,7 @@ def test_an_uncapped_pass_still_reports_no_deferrals(fake_index, notes):
         events = edgar_poller.run_once(tickers)
 
     assert len(events) == 3
-    (note,) = notes
+    (note,) = _notes(runs)
     assert "deferred" not in note
     assert note.startswith("3 new filings")
 
@@ -439,7 +452,7 @@ def scheduled_universe(monkeypatch):
 
 
 def test_the_budget_stops_the_pass_and_consecutive_passes_cover_everyone(
-    timed_index, notes, clock, scheduled_universe, monkeypatch,
+    timed_index, runs, clock, scheduled_universe, monkeypatch,
 ):
     """The one that matters, and the twin of the burst-cap test above.
 
@@ -480,7 +493,7 @@ def test_the_budget_stops_the_pass_and_consecutive_passes_cover_everyone(
 
 
 def test_an_unvisited_ticker_keeps_its_bookkeeping(
-    timed_index, notes, clock, scheduled_universe, monkeypatch,
+    timed_index, runs, clock, scheduled_universe, monkeypatch,
 ):
     """Same rule as the event cap: never record what was not processed."""
     monkeypatch.setattr(edgar_poller, "MAX_PASS_SECONDS", 60)
@@ -508,7 +521,7 @@ def test_an_unvisited_ticker_keeps_its_bookkeeping(
 
 
 def test_the_note_says_how_far_the_pass_got(
-    timed_index, notes, clock, scheduled_universe, monkeypatch,
+    timed_index, runs, clock, scheduled_universe, monkeypatch,
 ):
     """No silent caps — cron-health has to show what is still waiting."""
     monkeypatch.setattr(edgar_poller, "MAX_PASS_SECONDS", 180)
@@ -517,13 +530,13 @@ def test_the_note_says_how_far_the_pass_got(
 
     clock.cost = 0.0
     _prime(timed_index, tickers)
-    notes.clear()
+    runs.clear()
     clock.cost = 60.0
     with patch("app.services.update_orchestrator.on_filing_event") as handler:
         handler.return_value = {"kind": "skipped"}
         edgar_poller.run_once()
 
-    note = notes[-1]
+    note = _notes(runs)[-1]
     assert "polled 3/8" in note, note
     assert "5 unvisited" in note, note
     assert str(edgar_poller.MAX_PASS_SECONDS) in note, note
@@ -532,7 +545,7 @@ def test_the_note_says_how_far_the_pass_got(
 
 
 def test_a_pass_that_finishes_reports_no_budget_language(
-    timed_index, notes, clock, scheduled_universe, monkeypatch,
+    timed_index, runs, clock, scheduled_universe, monkeypatch,
 ):
     monkeypatch.setattr(edgar_poller, "MAX_PASS_SECONDS", 1800)
     tickers = [f"ZZFN{_suffix()}{i:02d}" for i in range(4)]
@@ -540,13 +553,13 @@ def test_a_pass_that_finishes_reports_no_budget_language(
 
     clock.cost = 0.0
     _prime(timed_index, tickers)
-    notes.clear()
+    runs.clear()
     clock.cost = 60.0
     with patch("app.services.update_orchestrator.on_filing_event") as handler:
         handler.return_value = {"kind": "skipped"}
         edgar_poller.run_once()
 
-    note = notes[-1]
+    note = _notes(runs)[-1]
     assert "unvisited" not in note, note
     assert "polled 4/4" in note, note
     # And the cursor is back at the head, so the next pass is a full sweep.
@@ -554,7 +567,7 @@ def test_a_pass_that_finishes_reports_no_budget_language(
 
 
 def test_a_long_pass_reports_progress_before_it_finishes(
-    timed_index, notes, clock, scheduled_universe, monkeypatch,
+    timed_index, runs, clock, scheduled_universe, monkeypatch,
 ):
     """The other half of the production symptom.
 
@@ -570,12 +583,13 @@ def test_a_long_pass_reports_progress_before_it_finishes(
 
     clock.cost = 0.0
     _prime(timed_index, tickers)
-    notes.clear()
+    runs.clear()
     clock.cost = 60.0
     with patch("app.services.update_orchestrator.on_filing_event") as handler:
         handler.return_value = {"kind": "skipped"}
         edgar_poller.run_once()
 
+    notes = _notes(runs)
     progress = [n for n in notes if n.startswith("in progress")]
     assert progress, (
         f"a pass spanning {8 * 60}s of wall clock reported nothing until it "
@@ -587,8 +601,75 @@ def test_a_long_pass_reports_progress_before_it_finishes(
     )
 
 
+def test_a_progress_record_never_claims_a_success_the_pass_has_not_earned(
+    timed_index, runs, clock, scheduled_universe, monkeypatch,
+):
+    """The verdict half of the progress ping — the half cron-health alarms on.
+
+    `record_run` keeps ONE row per loop and overwrites `success` along with
+    the note, so a progress ping that hardcodes True is false telemetry of
+    exactly the kind this branch exists to remove: it erases the previous
+    pass's failure two minutes into a pass that has established nothing,
+    and it leaves a *fresh* `success=true` behind for a pass the OOM killer
+    stopped mid-run — the one case an operator most needs to see. A ping
+    reports the verdict the pass has reached so far, and names what failed.
+    """
+    monkeypatch.setattr(edgar_poller, "MAX_PASS_SECONDS", 100_000)
+    monkeypatch.setattr(edgar_poller, "PROGRESS_INTERVAL_SECONDS", 120)
+    tickers = [f"ZZGV{_suffix()}{i:02d}" for i in range(8)]
+    scheduled_universe.extend(tickers)
+
+    clock.cost = 0.0
+    _prime(timed_index, tickers)
+    for t in tickers:
+        timed_index[t].append({"type": "8-K", "accession_number": _accession(2)})
+    runs.clear()
+    clock.cost = 60.0
+    with patch("app.services.update_orchestrator.on_filing_event") as handler:
+        # What a DB hiccup on the worker produces: the auto-regen gate
+        # crashed rather than deciding to skip.
+        handler.return_value = {"kind": "gate_error"}
+        edgar_poller.run_once()
+
+    progress = [r for r in runs if r["note"].startswith("in progress")]
+    assert progress, f"no progress record to check: {_notes(runs)}"
+    assert all(r["success"] is False for r in progress), (
+        "a pass that has already seen gate errors reported success mid-flight, "
+        f"overwriting the standing verdict: {progress}"
+    )
+    assert all("gate errors" in r["note"] for r in progress), (
+        f"the progress note must name what is failing, not only how far the "
+        f"pass got: {progress}"
+    )
+    # The completion record still has the last word, and agrees.
+    assert runs[-1]["success"] is False
+    assert not runs[-1]["note"].startswith("in progress")
+
+
+def test_a_clean_pass_still_reports_progress_as_a_success(
+    timed_index, runs, clock, scheduled_universe, monkeypatch,
+):
+    """The other side of it: the verdict tracks the pass, it is not pinned False."""
+    monkeypatch.setattr(edgar_poller, "MAX_PASS_SECONDS", 100_000)
+    monkeypatch.setattr(edgar_poller, "PROGRESS_INTERVAL_SECONDS", 120)
+    tickers = [f"ZZGC{_suffix()}{i:02d}" for i in range(8)]
+    scheduled_universe.extend(tickers)
+
+    clock.cost = 0.0
+    _prime(timed_index, tickers)
+    runs.clear()
+    clock.cost = 60.0
+    with patch("app.services.update_orchestrator.on_filing_event") as handler:
+        handler.return_value = {"kind": "skipped"}
+        edgar_poller.run_once()
+
+    progress = [r for r in runs if r["note"].startswith("in progress")]
+    assert progress and all(r["success"] is True for r in progress)
+    assert all("gate errors" not in r["note"] for r in progress)
+
+
 def test_an_explicit_ticker_list_does_not_move_the_scheduled_cursor(
-    fake_index, notes,
+    fake_index, runs,
 ):
     """An admin re-run for one name must not reposition the nightly sweep."""
     edgar_poller._save_resume_from("ZZANCHOR")

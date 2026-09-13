@@ -220,7 +220,10 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
 
     Progress is reported to `record_run` every
     `PROGRESS_INTERVAL_SECONDS`, so cron-health distinguishes a long pass
-    from a dead loop while it is still running.
+    from a dead loop while it is still running. A progress record carries
+    the verdict the pass has reached *so far* — gate errors already seen
+    keep saying so — because the row it writes is the same one the last
+    completed pass's verdict lives in.
 
     No-op for tickers without filings. The EDGAR provider returns an empty
     list in demo mode, so this loop becomes a quiet bookkeeping pass.
@@ -253,13 +256,24 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         now = time.monotonic()
         if now - last_progress >= PROGRESS_INTERVAL_SECONDS:
             last_progress = now
-            record_run(
-                "edgar_poller", success=True,
-                note=(
-                    f"in progress: polled {polled}/{len(tickers)}, "
-                    f"{len(events)} new filings, {int(now - started)}s elapsed"
-                ),
+            # The progress ping reports the verdict this pass has reached so
+            # far, never a literal True. `record_run` keeps ONE row per loop
+            # and overwrites `success` along with the note, so a hardcoded
+            # True here is a lie twice over: it erases the previous pass's
+            # failure two minutes into a pass that has established nothing,
+            # and — on a worker Render has OOM-killed twice — it leaves a
+            # *fresh* success behind for a pass that was killed mid-run,
+            # which is the one case cron-health most needs to show.
+            progress = (
+                f"in progress: polled {polled}/{len(tickers)}, "
+                f"{len(events)} new filings, {int(now - started)}s elapsed"
             )
+            if gate_errors:
+                progress += (
+                    f"; gate errors on {len(gate_errors)}: "
+                    f"{', '.join(gate_errors[:5])}"
+                )
+            record_run("edgar_poller", success=not gate_errors, note=progress)
 
         polled += 1
         try:
