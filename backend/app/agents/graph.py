@@ -1890,6 +1890,9 @@ def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound)
     """
     degradation = inputs.degradation
     risk_finding = analysts.findings["risk"]
+    initial_rating = memo.rating_label
+    initial_confidence = memo.confidence_score
+    initial_pm_view = memo.final_pm_view
 
     # Run critic on a draft of the memo (pass dict to avoid recursion).
     # safe_critic upgrades exceptions into a typed "critic unavailable" review
@@ -1938,6 +1941,19 @@ def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound)
         risk_finding.data["applied_recommendations"] = applied_risk_recs
 
     _blend_rating(memo)
+    # The PM wrote this rationale before risk recommendations and the
+    # existing factor blend. Preserve it as that stage's opinion instead
+    # of presenting an obsolete call as the final decision. This changes
+    # presentation only; no weights, thresholds, or recommendations move.
+    if memo.rating_label != initial_rating or memo.confidence_score != initial_confidence:
+        memo.final_pm_view = (
+            f"Final rating after risk review and factor blend: {memo.rating_label} "
+            f"(confidence {memo.confidence_score:g}/100).\n\n"
+            f"PM rationale before those adjustments (rating {initial_rating}; "
+            f"confidence {initial_confidence:g}/100):\n{initial_pm_view}"
+        )
+    if isinstance(memo.scores, dict):
+        memo.scores = {**memo.scores, "confidence": float(memo.confidence_score)}
     return memo
 
 
