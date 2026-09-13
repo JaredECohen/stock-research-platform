@@ -83,8 +83,8 @@ def _ensure_lazy_universe(ticker: str) -> str:
     # 403s, we still return the memo using whatever did land.
     try:
         backfill_ticker(t)
-    except Exception:  # pragma: no cover
-        pass
+    except Exception as exc:  # preserve optional behavior, expose the failure
+        log.warning("symbol introduction backfill failed ticker=%s error_type=%s", t, type(exc).__name__)
     return "analyzed_on_demand"
 
 
