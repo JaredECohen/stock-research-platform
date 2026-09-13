@@ -190,3 +190,58 @@ def test_non_integer_lineage_entries_are_skipped_not_fatal():
         db.commit()
     assert mark_stale_descendants(parent.id) == 1
     assert _stale(child.id)
+
+
+def test_lineage_rows_stream_across_batches_without_retaining_empty_bookkeeping(tmp_path, monkeypatch):
+    """Exercise the real DBAPI: eager fetchall is forbidden for the lineage scan."""
+    import sqlite3
+
+    from sqlalchemy import create_engine, insert, select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.cache import snapshots
+
+    fetched = []
+
+    class Cursor(sqlite3.Cursor):
+        lineage = False
+
+        def execute(self, statement, parameters=()):
+            self.lineage = statement.lstrip().upper().startswith("SELECT") and "parent_snapshot_ids" in statement
+            return super().execute(statement, parameters)
+
+        def fetchall(self):
+            if self.lineage:
+                raise AssertionError("lineage metadata must not be fetched all at once")
+            return super().fetchall()
+
+        def fetchmany(self, size=None):
+            rows = super().fetchmany(size) if size is not None else super().fetchmany()
+            if self.lineage:
+                fetched.append(len(rows))
+            return rows
+
+    class Connection(sqlite3.Connection):
+        def cursor(self, *args, **kwargs):
+            kwargs["factory"] = Cursor
+            return super().cursor(*args, **kwargs)
+
+    local = create_engine("sqlite://", creator=lambda: sqlite3.connect(tmp_path / "lineage.db", factory=Connection))
+    sessions = sessionmaker(bind=local)
+    monkeypatch.setattr(snapshots, "SessionLocal", sessions)
+    ResearchSnapshot.__table__.create(local)
+    parents = {1: [2101], 500: [1], 1501: [500], 2101: [1501]}
+    with local.begin() as conn:
+        conn.execute(insert(ResearchSnapshot), [
+            {"id": i, "subject": "BOOKKEEPING", "kind": "edgar_seen_accessions", "parent_snapshot_ids": parents.get(i, [])}
+            for i in range(1, 2102)
+        ])
+    try:
+        assert snapshots.mark_stale_descendants(1) == 3
+        assert sum(fetched) == 2101
+        assert max(fetched) <= 500
+        assert len([n for n in fetched if n]) > 1
+        with sessions() as db:
+            assert set(db.execute(select(ResearchSnapshot.id).where(ResearchSnapshot.stale.is_(True))).scalars()) == {500, 1501, 2101}
+    finally:
+        local.dispose()

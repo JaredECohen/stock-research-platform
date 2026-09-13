@@ -398,7 +398,12 @@ def mark_stale_descendants(
         rows = db.execute(
             select(ResearchSnapshot.id, ResearchSnapshot.parent_snapshot_ids)
             .where(ResearchSnapshot.stale.is_(False))
-        ).all()
+            .execution_options(yield_per=500)
+        )
+        # Most live bookkeeping rows have no parents. Consume metadata in
+        # bounded batches instead of retaining an entire empty-lineage
+        # table alongside the adjacency graph. All actual edges still
+        # participate in the same transitive walk below.
         for row_id, parents in rows:
             for parent_id in (parents or []):
                 try:
