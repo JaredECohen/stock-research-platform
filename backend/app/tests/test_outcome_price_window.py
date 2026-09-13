@@ -477,14 +477,14 @@ def test_short_provider_response_is_an_outage_not_a_permanent_refusal():
 
     # The contrast that matters, taken per-pair so no other test's
     # snapshots can colour it: the *same* truncating provider, and a memo
-    # old enough to fail on the dates alone, is the one genuinely
-    # permanent case.
+    # older than the remote ladder now needs the durable archive. Missing
+    # archived history is repairable by the explicit backfill.
     ancient = _seed("TSTWTRUNCOLD", memo_date=ANCHOR - timedelta(days=1000))
     truncating = _TruncatingProvider(tapes, cap=5)
     with _stub(truncating):
         out, status = _evaluate(ancient, 30)
     assert out is None
-    assert status == "memo_predates_price_window"
+    assert status == "ticker_prices_unavailable"
     assert truncating.requests == []   # settled before any provider call
 
     # Same pair, same code, provider restored: it scores. Nothing about
@@ -568,10 +568,10 @@ def test_series_that_stops_before_the_target_is_not_scored_as_the_target():
 
 
 # ---------------------------------------------------------------------------
-# A memo nothing can score must not hold the loop red forever
+# Old memos can be repaired with durable history beyond the remote ladder
 # ---------------------------------------------------------------------------
 
-def test_memo_older_than_the_longest_window_is_terminal_and_costs_no_fetch():
+def test_memo_older_than_the_longest_window_requires_archive_without_remote_fetch():
     memo_date = ANCHOR - timedelta(days=1000)
     snap = _seed("TSTWANCIENT", memo_date=memo_date, rating="Bullish")
     provider = _BarProvider({
@@ -582,12 +582,12 @@ def test_memo_older_than_the_longest_window_is_terminal_and_costs_no_fetch():
         out, status = _evaluate(snap, 30)
 
     assert out is None
-    assert status == "memo_predates_price_window"
-    # Decided from the dates alone — an unscoreable pair spends no provider call.
+    assert status == "ticker_prices_unavailable"
+    # This path reads the archive; the explicit backfill supplies missing dates.
     assert provider.requests == []
 
 
-def test_permanently_unevaluable_pairs_are_counted_apart_from_outages(caplog):
+def test_missing_old_archived_history_is_counted_as_repairable_outage(caplog):
     memo_date = ANCHOR - timedelta(days=1000)
     snap = _seed("TSTWCOUNT", memo_date=memo_date, rating="Bullish")
     provider = _BarProvider({
@@ -597,14 +597,11 @@ def test_permanently_unevaluable_pairs_are_counted_apart_from_outages(caplog):
     with _stub(provider):
         res = outcome_service.evaluate_all_due(horizons=[30], today=ANCHOR)
 
-    assert res["unevaluable"] >= 1
-    assert res["memo_predates_price_window"] >= 1
-    assert len(res["unevaluable_pairs"]) == res["unevaluable"]
-    assert f"TSTWCOUNT:snap={snap.id}:30d" in res["unevaluable_pairs"]
-    assert f"TSTWCOUNT:snap={snap.id}:30d" in caplog.text
-    # A pair that came of age is still counted as due even though nothing
-    # can score it — `due` keeps meaning "reached its target date".
-    assert res["due"] >= res["unevaluable"]
+    assert res["ticker_prices_unavailable"] >= 1
+    assert res["data_unavailable"] >= 1
+    assert res["memo_predates_price_window"] == 0
+    assert res["unevaluable_pairs"] == []
+    assert res["due"] >= res["data_unavailable"]
     assert outcome_service.get_outcomes_for_snapshot(snap.id) == []
 
 

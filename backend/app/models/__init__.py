@@ -1,10 +1,9 @@
 """SQLAlchemy ORM models for MarketMosaic.
 
-We persist the master security universe, daily price snapshots, generated
-agent memos and screener score history. Detailed financial statements are
-loaded from JSON-backed providers rather than the DB to keep the schema lean
-in demo mode; in live mode the same provider interface returns identical
-shapes from external APIs and can be cached into ORM tables if desired.
+We persist the master security universe, daily prices with provider and
+adjustment provenance, annual/quarterly financial periods, generated agent
+memos and screener score history. Expiring provider responses are separate
+from these durable historical records.
 
 This package replaced the single `models.py` module (RP-004). Every ORM
 class is re-exported here so `from app.models import X` keeps working, and
@@ -51,6 +50,7 @@ from .industry import (
     TaxonomyVersion,
 )
 from .jobs import CatalystEvent, CronLoopRun, RegenJob, ThemeExposure
+from .market_data import DailyPrice, MarketDataSync
 from .memo import (
     MemoOutcome,
     MemoPostmortem,
@@ -93,6 +93,8 @@ __all__ = [
     "CachedDocument",
     "ProviderCache",
     "FinancialPeriod",
+    "DailyPrice",
+    "MarketDataSync",
     "FilingDoc",
     "EarningsTranscript",
     "DocChunk",

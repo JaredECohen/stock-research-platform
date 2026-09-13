@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 import httpx
 
 from ..config import settings
 from .base import ProviderStatus, log_safely
+from .price_history import history_start, normalize_history
 
 log = logging.getLogger(__name__)
 BASE = "https://api.tiingo.com"
@@ -17,6 +18,10 @@ TIMEOUT = 10.0
 
 class TiingoProvider:
     name: str = "tiingo"
+    price_history_provenance = {
+        "provider": "tiingo", "endpoint": "/tiingo/daily/{ticker}/prices",
+        "close_basis": "raw_as_traded", "adjusted_close_basis": "split_and_dividend_adjusted",
+    }
 
     def __init__(self) -> None:
         self.api_key = settings.tiingo_api_key
@@ -67,31 +72,34 @@ class TiingoProvider:
         if not self.api_key:
             return None
         # Without startDate this endpoint returns only the latest close.
-        # Match Polygon's calendar-day slack, then retain `days` trading bars.
+        # Match Polygon's calendar-day slack and retain the complete response.
         end = date.today()
-        start = end - timedelta(days=int(days * 1.6))
+        start = history_start(end, days)
+        if start is None:
+            return None
         try:
             with httpx.Client(timeout=TIMEOUT, headers=self._headers()) as client:
-                r = client.get(f"{BASE}/tiingo/daily/{ticker}/prices", params={
+                r = client.get(f"{BASE}/tiingo/daily/{ticker.upper()}/prices", params={
                     "resampleFreq": "daily",
                     "startDate": start.isoformat(),
                     "endDate": end.isoformat(),
                 })
                 if r.status_code != 200:
+                    log.warning("Tiingo price history ticker=%s status=%s", ticker, r.status_code)
                     return None
                 rows = r.json()
-            return [
+            if not isinstance(rows, list):
+                log.warning("Tiingo price history invalid payload ticker=%s", ticker)
+                return None
+            mapped = [
                 dict(
-                    date=row.get("date", "")[:10],
-                    open=row.get("open"),
-                    high=row.get("high"),
-                    low=row.get("low"),
-                    close=row.get("close"),
-                    adjusted_close=row.get("adjClose"),
-                    volume=row.get("volume"),
-                )
+                    date=row.get("date"), open=row.get("open"), high=row.get("high"),
+                    low=row.get("low"), close=row.get("close"),
+                    adjusted_close=row.get("adjClose"), volume=row.get("volume"),
+                ) if isinstance(row, dict) else row
                 for row in rows
-            ][-days:]
+            ]
+            return normalize_history(mapped, provider=self.name, ticker=ticker, start=start, end=end, log=log)
         except Exception as exc:  # pragma: no cover
             log_safely(log, f"Tiingo fetch failed for {ticker}", exc)
             return None

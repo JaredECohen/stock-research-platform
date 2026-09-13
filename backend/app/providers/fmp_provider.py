@@ -12,12 +12,14 @@ service can fall through to the next provider in the chain.
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 from typing import Any
 
 import httpx
 
 from ..config import settings
 from .base import ProviderStatus, log_safely
+from .price_history import history_start, normalize_history
 
 log = logging.getLogger(__name__)
 BASE_URL = "https://financialmodelingprep.com/stable"
@@ -35,6 +37,11 @@ def _to_float(v: Any) -> float | None:
 
 class FMPProvider:
     name: str = "fmp"
+    price_history_provenance = {
+        "provider": "fmp", "endpoint": "/stable/historical-price-eod/full",
+        "close_basis": "provider_eod_close", "adjusted_close_basis": "same_as_close_not_total_return",
+        "adjustment_note": "Existing full endpoint close mapping retained; no dividend-adjusted endpoint requested.",
+    }
 
     def __init__(self) -> None:
         self.api_key = settings.fmp_api_key
@@ -156,28 +163,37 @@ class FMPProvider:
         )
 
     def get_price_history(self, ticker: str, days: int = 252) -> list[dict[str, Any]] | None:
-        """`/stable/historical-price-eod/full?symbol=…`. Returns OHLCV bars
-        most-recent first; reversed to oldest-first to match the demo /
-        downstream expectation."""
-        data = self._get(
-            "/historical-price-eod/full",
-            symbol=ticker.upper(), limit=days,
-        )
-        if not isinstance(data, list) or not data:
+        """Explicit inclusive dates; retain all returned daily bars.
+
+        A `limit` alone is not a historical date request on this endpoint.
+        Long histories are split into bounded five-calendar-year requests.
+        Any failed window rejects the result rather than claiming completion.
+        """
+        end = date.today()
+        start = history_start(end, days)
+        if start is None or not self.api_key:
             return None
-        rows = list(reversed(data))
-        return [
-            dict(
-                date=r.get("date"),
-                open=_to_float(r.get("open")),
-                high=_to_float(r.get("high")),
-                low=_to_float(r.get("low")),
-                close=_to_float(r.get("close")),
-                adjusted_close=_to_float(r.get("close")),  # /stable/ doesn't split adj
-                volume=_to_float(r.get("volume")),
+        rows = []
+        window_start = start
+        while window_start <= end:
+            window_end = min(window_start + timedelta(days=5 * 365), end)
+            data = self._get(
+                "/historical-price-eod/full", symbol=ticker.upper(),
+                **{"from": window_start.isoformat(), "to": window_end.isoformat()},
             )
-            for r in rows
-        ]
+            if not isinstance(data, list):
+                log.warning("FMP price history window unavailable ticker=%s from=%s to=%s", ticker, window_start, window_end)
+                return None
+            rows.extend(
+                dict(
+                    date=r.get("date"), open=r.get("open"), high=r.get("high"),
+                    low=r.get("low"), close=r.get("close"),
+                    adjusted_close=r.get("close"), volume=r.get("volume"),
+                ) if isinstance(r, dict) else r
+                for r in data
+            )
+            window_start = window_end + timedelta(days=1)
+        return normalize_history(rows, provider=self.name, ticker=ticker, start=start, end=end, log=log)
 
     # ------------------------------------------------------------------
     # Financial statements
@@ -307,6 +323,51 @@ class FMPProvider:
             balance=[self._balance_row(r) for r in balance],
             cash=[self._cash_row(r) for r in cash],
         )
+
+    def get_financial_history(self, ticker: str, start_date) -> dict[str, Any]:
+        """Fetch annual AND quarterly statements to the requested history boundary.
+
+        This dedicated backfill path does not change the normal eight-annual-row
+        read. Requests include one earlier period for boundary coverage; provider
+        truncation/entitlements remain visible in the caller's coverage report.
+        """
+        from datetime import date
+
+        start = date.fromisoformat(str(start_date)[:10])
+        years = max(1, date.today().year - start.year + 1)
+        result: dict[str, Any] = {"income": [], "balance": [], "cash": [], "_history_issues": []}
+        for statement, path, mapper in (
+            ("income", "/income-statement", self._income_row),
+            ("balance", "/balance-sheet-statement", self._balance_row),
+            ("cash", "/cash-flow-statement", self._cash_row),
+        ):
+            for cadence, api_period, limit in (("annual", "annual", years + 2), ("quarterly", "quarter", years * 4 + 4)):
+                raw = self._get(path, symbol=ticker.upper(), period=api_period, limit=limit)
+                if not isinstance(raw, list) or not raw:
+                    result["_history_issues"].append({"kind": "provider_no_data", "statement": statement, "cadence": cadence})
+                    continue
+                for row in raw:
+                    if not isinstance(row, dict):
+                        result["_history_issues"].append({"kind": "invalid_provider_row", "statement": statement, "cadence": cadence})
+                        continue
+                    boolean_fields = [key for key, value in row.items() if isinstance(value, bool)]
+                    if boolean_fields:
+                        result["_history_issues"].extend({"kind": "invalid_value", "statement": statement, "cadence": cadence,
+                            "period_end": row.get("date"), "raw_field": key, "reason": "boolean_value"} for key in boolean_fields)
+                        row = {key: None if key in boolean_fields else value for key, value in row.items()}
+                    normalized = mapper(row)
+                    # Stable API fiscalYear is authoritative for non-calendar FYs.
+                    year = str(row.get("fiscalYear") or str(row.get("date") or "")[:4])
+                    quarter = str(row.get("period") or "").upper()
+                    if cadence == "quarterly" and quarter not in {"Q1", "Q2", "Q3", "Q4"}:
+                        result["_history_issues"].append({"kind": "invalid_fiscal_quarter", "statement": statement, "cadence": cadence, "period_end": row.get("date")})
+                        continue
+                    normalized["period"] = f"FY{year}" if cadence == "annual" else f"{year}{quarter}"
+                    normalized["currency"] = row.get("reportedCurrency") or ""
+                    normalized["source"] = self.name
+                    normalized["cadence"] = cadence
+                    result[statement].append(normalized)
+        return result
 
     # ------------------------------------------------------------------
     # Ratios + key metrics (price-derived; recomputed daily by FMP)

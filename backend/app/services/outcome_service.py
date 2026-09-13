@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from datetime import date as _date
 from datetime import datetime, timedelta
+from functools import cached_property
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
@@ -100,8 +103,8 @@ def _ensure_table(db: Session) -> None:
 def _window_days_for_memo(generated_date: _date, today: _date) -> int | None:
     """Smallest ladder rung whose fetch reaches back past `generated_date`.
 
-    ``None`` when the memo is older than the longest rung — a permanent
-    condition, since tomorrow's window starts a day later still.
+    ``None`` when the memo needs the durable archive beyond these remote
+    request rungs. Missing archived history can be repaired by backfill.
     """
     span = (today - generated_date).days + MEMO_WINDOW_BUFFER_DAYS
     for rung in PRICE_WINDOW_RUNGS:
@@ -260,10 +263,10 @@ def _evaluate_one(
     production price data.  The latter left hundreds of due outcomes
     unwritten while the cron job still reported success.
 
-    The four no-data statuses are deliberately distinct:
+    The no-data statuses are deliberately distinct:
 
     ``ticker_prices_unavailable``
-        the provider returned nothing at all for this ticker — an outage;
+        neither requested provider history nor durable archive is available;
     ``price_history_too_short``
         the provider answered, but with fewer bars than were asked for, so
         the series begins after the memo — also an outage, just a partial
@@ -271,14 +274,9 @@ def _evaluate_one(
     ``price_window_incomplete``
         prices exist and reach the memo, but none sits near the target
         date — a gap a later run may still fill;
-    ``memo_predates_price_window``
-        the memo is older than the longest window we are willing to
-        request.  Decided from the dates alone, so the pair can never be
-        scored and never will be.
-
-    Only the last is permanent.  The other three describe what a provider
-    handed back on this particular run, and all three drive the loop's
-    failure flag.
+    All three describe repairable coverage shortfalls and drive the loop's
+    failure flag. The legacy permanent-window counter is retained in the
+    aggregate response for compatibility but old dates now use the archive.
     """
     # Backtest snapshots have `as_of_date` set; outcome scoring is for live memos only.
     if snap.as_of_date is not None:
@@ -307,15 +305,23 @@ def _evaluate_one(
     # ends today, so what it has to span is memo date → today.
     window_days = _window_days_for_memo(generated_date, today)
     if window_days is None:
-        return None, "memo_predates_price_window"
-
-    from .market_data_service import get_price_series
-    ticker_rows = get_price_series(snap.ticker, window_days) or []
+        # A durable backfill can reach beyond the remote response ladder.
+        # Never discard an otherwise evaluable old memo merely because its
+        # required date is no longer in a provider's rolling cache window.
+        from .price_history_service import read_prices
+        start = generated_date - timedelta(days=MEMO_WINDOW_BUFFER_DAYS)
+        ticker_rows = read_prices(snap.ticker, start=start, end=today)
+        if not ticker_rows:
+            return None, "ticker_prices_unavailable"
+        bench_rows = read_prices(benchmark, start=start, end=today)
+    else:
+        from .market_data_service import get_price_series
+        ticker_rows = get_price_series(snap.ticker, window_days) or []
+        bench_rows = get_price_series(benchmark, window_days) or [] if ticker_rows else []
     if not ticker_rows:
         return None, "ticker_prices_unavailable"
     # Same rung for the benchmark: one cache key, and both legs of alpha
     # measured over the same span.
-    bench_rows = get_price_series(benchmark, window_days) or []
 
     memo_hit = _baseline_close(ticker_rows, generated_date)
     if memo_hit is None:
@@ -370,9 +376,13 @@ def _evaluate_one(
         f"horizon={horizon_days}d",
         f"baseline={baseline_date}",
         f"target={target_hit[0]}",
-        f"price_window={window_days}",
+        f"price_window={window_days if window_days is not None else 'durable_history'}",
         f"return={forward_return:+.2%}",
     ]
+    for label, rows in (("price", ticker_rows), ("benchmark_price", bench_rows)):
+        provenance = {(str(row.get("source")), str(row.get("close_basis"))) for row in rows if row.get("source")}
+        if provenance:
+            note_parts.append(f"{label}_source=" + ";".join(f"{source}:{basis}" for source, basis in sorted(provenance)))
     if alpha is not None:
         note_parts.extend([
             f"benchmark={benchmark}",
@@ -457,6 +467,65 @@ def _maybe_write_reflection(
 # Public API
 # ---------------------------------------------------------------------------
 
+@dataclass
+class _OutcomeSnapshot:
+    """Small immutable-snapshot view, with the body loaded only for scoring."""
+
+    id: int
+    ticker: str
+    version: int
+    generated_at: datetime
+    as_of_date: datetime | None
+    db: Session = field(repr=False)
+
+    @cached_property
+    def memo_json(self) -> Any:
+        # _evaluate_one reaches this only after its date, idempotency and
+        # price-coverage checks. Do not fetch the unused revision log.
+        return self.db.execute(
+            select(MemoSnapshot.memo_json).where(MemoSnapshot.id == self.id)
+        ).scalar_one()
+
+
+def _iter_outcome_snapshots(db: Session) -> Iterator[_OutcomeSnapshot]:
+    """Page metadata without keeping a server cursor open across commits.
+
+    Outcomes commit per pair and roll back a failed pair. A streamed cursor
+    on that same PostgreSQL transaction would be invalidated by either, so
+    consume each small page before yielding candidates. The initial ID fence
+    excludes snapshots inserted during the pass, as the old single query did.
+    """
+    max_id = db.execute(select(func.max(MemoSnapshot.id))).scalar_one()
+    if max_id is None:
+        return
+    cursor: tuple[datetime, int] | None = None
+    while True:
+        stmt = select(
+            MemoSnapshot.id, MemoSnapshot.ticker, MemoSnapshot.version,
+            MemoSnapshot.generated_at, MemoSnapshot.as_of_date,
+        ).where(
+            MemoSnapshot.as_of_date.is_(None),
+            MemoSnapshot.id <= max_id,
+        )
+        if cursor is not None:
+            generated_at, snapshot_id = cursor
+            stmt = stmt.where(or_(
+                MemoSnapshot.generated_at > generated_at,
+                and_(
+                    MemoSnapshot.generated_at == generated_at,
+                    MemoSnapshot.id > snapshot_id,
+                ),
+            ))
+        page = db.execute(
+            stmt.order_by(MemoSnapshot.generated_at.asc(), MemoSnapshot.id.asc()).limit(100)
+        ).all()
+        if not page:
+            return
+        for row in page:
+            yield _OutcomeSnapshot(*row, db=db)
+        cursor = (page[-1].generated_at, page[-1].id)
+
+
 def evaluate_all_due(
     *, horizons: list[int] | None = None,
     benchmark: str = DEFAULT_BENCHMARK,
@@ -470,8 +539,8 @@ def evaluate_all_due(
     ``evaluated`` retains its historical meaning (all snapshot/horizon pairs
     scanned).  ``due`` and ``data_unavailable`` distinguish work that should
     have produced a row from harmless future/idempotent skips, and
-    ``unevaluable`` separates the permanently unscoreable pairs from the
-    ones a later run can still fill in.
+    ``unevaluable`` retains the legacy date-window status for compatibility;
+    coverage classification remains delegated to ``_evaluate_one``.
     """
     today = today or _date.today()
     horizons = list(horizons or DEFAULT_HORIZONS)
@@ -480,16 +549,15 @@ def evaluate_all_due(
         db = SessionLocal()
     try:
         _ensure_table(db)
-        snaps = db.execute(
-            select(MemoSnapshot).where(
-                MemoSnapshot.as_of_date.is_(None),  # skip backtests
-            ).order_by(MemoSnapshot.generated_at.asc())
-        ).scalars().all()
+        from .memory_probe import log_rss
+        log_rss("outcome_scan_start")
         evaluated = 0
         written = 0
         reflections = 0
         errors = 0
         unevaluable_pairs: list[str] = []
+        unavailable_pairs: list[str] = []
+        error_pairs: list[str] = []
         statuses: dict[str, int] = {
             "backtest": 0,
             "not_due": 0,
@@ -499,7 +567,7 @@ def evaluate_all_due(
             "price_window_incomplete": 0,
             "memo_predates_price_window": 0,
         }
-        for snap in snaps:
+        for snap in _iter_outcome_snapshots(db):
             for h in horizons:
                 evaluated += 1
                 try:
@@ -508,6 +576,7 @@ def evaluate_all_due(
                     )
                 except Exception as exc:  # pragma: no cover — defensive
                     errors += 1
+                    error_pairs.append(f"{snap.ticker}:snap={snap.id}:{h}d:{type(exc).__name__}")
                     # A database exception (for example schema drift) leaves
                     # PostgreSQL's transaction aborted.  Roll it back so one
                     # bad pair does not turn every later pair into a cascade.
@@ -519,6 +588,8 @@ def evaluate_all_due(
                     continue
                 if status != "written":
                     statuses[status] = statuses.get(status, 0) + 1
+                if status in {"ticker_prices_unavailable", "price_history_too_short", "price_window_incomplete"}:
+                    unavailable_pairs.append(f"{snap.ticker}:snap={snap.id}:{h}d:{status}")
                 if status == "memo_predates_price_window":
                     unevaluable_pairs.append(f"{snap.ticker}:snap={snap.id}:{h}d")
                 if out is not None:
@@ -538,16 +609,9 @@ def evaluate_all_due(
             + statuses["price_history_too_short"]
             + statuses["price_window_incomplete"]
         )
-        # `unevaluable` is the permanent shortfall, and it is settled from
-        # the dates alone: the memo is older than the longest window we are
-        # willing to request, and tomorrow's window begins a day later
-        # still. No provider behaviour can move a pair into or out of this
-        # bucket, which is precisely what makes it safe to exclude from the
-        # failure flag — folding it in would hold the loop red forever for
-        # a reason nobody can fix, which is how two earlier alarms in this
-        # codebase ended up ignored. A truncated provider response is NOT
-        # this: it looks the same at the call site but clears itself on the
-        # next run, so it is counted as an outage above.
+        # Preserve the legacy status fields without duplicating date-window
+        # policy here. The evaluator can classify archive gaps as repairable
+        # data_unavailable even when their dates exceed remote request rungs.
         unevaluable = statuses["memo_predates_price_window"]
         due = (
             written + statuses["already_recorded"]
@@ -557,19 +621,21 @@ def evaluate_all_due(
             log.error(
                 "Outcome evaluation left %s due rows pending: "
                 "ticker_prices_unavailable=%s price_history_too_short=%s "
-                "price_window_incomplete=%s",
+                "price_window_incomplete=%s pairs=%s",
                 data_unavailable,
                 statuses["ticker_prices_unavailable"],
                 statuses["price_history_too_short"],
-                statuses["price_window_incomplete"],
+                statuses["price_window_incomplete"], ",".join(unavailable_pairs),
             )
+        if errors:
+            log.error("Outcome evaluation failed for %s pairs: %s", errors, ",".join(error_pairs))
         if unevaluable:
             log.warning(
-                "Outcome evaluation skipped %s permanently unevaluable pairs "
-                "(memo_predates_price_window): the memo is older than the "
-                "longest price window we request (%s days). pairs=%s",
-                unevaluable, PRICE_WINDOW_RUNGS[-1], ",".join(unevaluable_pairs),
+                "Outcome evaluation returned %s legacy unevaluable pairs "
+                "(memo_predates_price_window). pairs=%s",
+                unevaluable, ",".join(unevaluable_pairs),
             )
+        log_rss("outcome_scan_end", evaluated=evaluated, written=written, errors=errors)
         return {
             "evaluated": evaluated, "written": written,
             "reflections": reflections, "errors": errors,
@@ -583,6 +649,8 @@ def evaluate_all_due(
             "unevaluable": unevaluable,
             "memo_predates_price_window": statuses["memo_predates_price_window"],
             "unevaluable_pairs": unevaluable_pairs,
+            "unavailable_pairs": unavailable_pairs,
+            "error_pairs": error_pairs,
         }
     finally:
         if own:

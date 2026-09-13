@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any
 
 import httpx
 
 from ..config import settings
 from .base import ProviderStatus, log_safely
+from .price_history import history_start, normalize_history
 
 log = logging.getLogger(__name__)
 BASE_URL = "https://www.alphavantage.co/query"
@@ -16,6 +18,11 @@ TIMEOUT = 10.0
 
 class AlphaVantageProvider:
     name: str = "alpha_vantage"
+    price_history_provenance = {
+        "provider": "alpha_vantage", "endpoint": "TIME_SERIES_DAILY",
+        "close_basis": "raw_as_traded", "adjusted_close_basis": "unavailable",
+        "entitlement_note": "outputsize=full requires an existing premium key; no automatic plan change",
+    }
 
     def __init__(self) -> None:
         self.api_key = settings.alpha_vantage_api_key
@@ -26,7 +33,7 @@ class AlphaVantageProvider:
             configured=bool(self.api_key),
             healthy=bool(self.api_key),
             notes="" if self.api_key else "Set ALPHA_VANTAGE_API_KEY to enable.",
-            capabilities=["transcripts", "news", "fundamentals_fallback"],
+            capabilities=["prices", "transcripts", "news", "fundamentals_fallback"],
         )
 
     def _get(self, **params: Any) -> Any | None:
@@ -65,7 +72,35 @@ class AlphaVantageProvider:
         )
 
     def get_price_history(self, ticker: str, days: int = 252) -> list[dict[str, Any]] | None:
-        return None
+        """Raw daily OHLCV; full output needs an already-entitled premium key."""
+        end = date.today()
+        start = history_start(end, days)
+        if start is None or not self.api_key:
+            return None
+        data = self._get(
+            function="TIME_SERIES_DAILY", symbol=ticker.upper(),
+            outputsize="full" if days > 100 else "compact",
+        )
+        if not isinstance(data, dict):
+            return None
+        for marker in ("Error Message", "Information", "Note"):
+            if marker in data:
+                # Only the safe category is retained; provider bodies can echo keys.
+                log.warning("AlphaVantage price history unavailable ticker=%s category=%s", ticker, marker)
+                return None
+        series = data.get("Time Series (Daily)")
+        if not isinstance(series, dict):
+            log.warning("AlphaVantage price history invalid payload ticker=%s", ticker)
+            return None
+        rows = [
+            dict(
+                date=day, open=r.get("1. open"), high=r.get("2. high"),
+                low=r.get("3. low"), close=r.get("4. close"),
+                adjusted_close=None, volume=r.get("5. volume"),
+            ) if isinstance(r, dict) else r
+            for day, r in series.items()
+        ]
+        return normalize_history(rows, provider=self.name, ticker=ticker, start=start, end=end, log=log)
 
     # ------------------------------------------------------------------
     # Wave 9b — fundamentals fallback
@@ -171,6 +206,92 @@ class AlphaVantageProvider:
         if not income:
             return None
         return dict(income=income, balance=balance, cash=cash)
+
+    def get_financial_history(self, ticker: str, start_date) -> dict[str, Any]:
+        """Normalize the provider's explicit annualReports/quarterlyReports lists.
+
+        Alpha's normal statement method remains unchanged. Annual fiscal-end
+        anchors identify non-calendar quarters; an absent/ambiguous anchor is a
+        named gap, never an assumption that annual revenue is quarterly revenue.
+        """
+        from calendar import monthrange
+        from datetime import date
+
+        def parsed(value):
+            try:
+                return date.fromisoformat(str(value)[:10])
+            except (TypeError, ValueError):
+                return None
+
+        result: dict[str, Any] = {"income": [], "balance": [], "cash": [], "_history_issues": []}
+        raw = {}
+        mapping = (("income", "INCOME_STATEMENT", self._income_row),
+                   ("balance", "BALANCE_SHEET", self._balance_row),
+                   ("cash", "CASH_FLOW", self._cash_row))
+        for statement, function, _ in mapping:
+            response = self._get(function=function, symbol=ticker.upper())
+            if not isinstance(response, dict):
+                response = {}
+            if any(key in response for key in ("Error Message", "Information", "Note")):
+                result["_history_issues"].append({"kind": "provider_no_data", "statement": statement})
+                response = {}
+            raw[statement] = response
+        anchors = sorted({d for response in raw.values() for row in (response.get("annualReports") or [])
+                          if isinstance(row, dict) and (d := parsed(row.get("fiscalDateEnding"))) is not None and d <= date.today()})
+
+        def quarterly_label(d):
+            candidates = [a for a in anchors if -7 <= (a - d).days <= 300]
+            inferred = False
+            if not candidates and anchors and d > anchors[-1]:
+                prior = anchors[-1]
+                # Extend the known year-end convention only to the next fiscal
+                # year. Older/missing anchors do not license arbitrary guessing.
+                year = prior.year + 1
+                if year <= date.max.year:
+                    inferred_end = date(year, prior.month, min(prior.day, monthrange(year, prior.month)[1]))
+                    if -7 <= (inferred_end - d).days <= 300:
+                        candidates = [inferred_end]
+                        inferred = True
+            if not candidates:
+                return None, None, None
+            if len(candidates) > 1:
+                return None, None, None  # Conflicting year-end anchors need an explicit fiscal calendar.
+            anchor = min(candidates, key=lambda a: abs((a - d).days))
+            days = (anchor - d).days
+            quarter = 4 - round(days / 91.3125)
+            if quarter not in (1, 2, 3, 4) or abs(days - (4 - quarter) * 91.3125) > 20:
+                return None, None, None
+            return f"{anchor.year}Q{quarter}", "extrapolated_annual_end" if inferred else "annual_end_anchor", anchor.isoformat()
+
+        for statement, _, mapper in mapping:
+            for cadence, key in (("annual", "annualReports"), ("quarterly", "quarterlyReports")):
+                rows = raw[statement].get(key)
+                if not isinstance(rows, list) or not rows:
+                    result["_history_issues"].append({"kind": "provider_no_data", "statement": statement, "cadence": cadence})
+                    continue
+                for row in rows:
+                    d = parsed(row.get("fiscalDateEnding")) if isinstance(row, dict) else None
+                    if d is None:
+                        result["_history_issues"].append({"kind": "invalid_period", "statement": statement, "cadence": cadence,
+                                                         "period_end": row.get("fiscalDateEnding") if isinstance(row, dict) else None})
+                        continue
+                    period, basis, anchor = (f"FY{d.year}", "annual_report_date", d.isoformat()) if cadence == "annual" else quarterly_label(d)
+                    if period is None:
+                        result["_history_issues"].append({"kind": "fiscal_quarter_unresolved", "statement": statement,
+                                                         "cadence": cadence, "period_end": d.isoformat()})
+                        continue
+                    boolean_fields = [key for key, value in row.items() if isinstance(value, bool)]
+                    if boolean_fields:
+                        result["_history_issues"].extend({"kind": "invalid_value", "statement": statement, "cadence": cadence,
+                            "period": period, "period_end": d.isoformat(), "raw_field": key, "reason": "boolean_value"} for key in boolean_fields)
+                        row = {key: None if key in boolean_fields else value for key, value in row.items()}
+                    item = mapper(row)
+                    item.update(period=period, period_end=d.isoformat(), currency=row.get("reportedCurrency") or "",
+                                source=self.name, cadence=cadence, period_basis=basis, period_anchor_date=anchor)
+                    if row.get("reportedDate"):
+                        item["filing_date"] = row["reportedDate"]
+                    result[statement].append(item)
+        return result
 
     def get_ratios(self, ticker: str) -> dict[str, Any] | None:
         return None
