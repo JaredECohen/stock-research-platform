@@ -48,31 +48,47 @@ log = logging.getLogger(__name__)
 _DEDUPE_WINDOW_DAYS = 14  # rate-limit: 1 postmortem per (ticker, horizon) per window
 
 
-def _rating_of(snap: MemoSnapshot) -> str:
+@dataclass(frozen=True)
+class SnapshotCandidate:
+    """Only the fields needed to select work; never holds the memo body."""
+
+    id: int
+    ticker: str
+    version: int
+    rating: Any
+
+
+def _rating_of(snap: MemoSnapshot | SnapshotCandidate) -> str:
     """Pull the rating label out of a snapshot's memo_json defensively."""
+    if isinstance(snap, SnapshotCandidate):
+        return str(snap.rating or "").strip()
     memo = snap.memo_json or {}
     if not isinstance(memo, dict):
         return ""
     return str(memo.get("rating_label") or "").strip()
 
 
-def _prior_snapshot(db, ticker: str, version: int) -> MemoSnapshot | None:
+def _prior_snapshot(db, ticker: str, version: int) -> SnapshotCandidate | None:
     """The most recent prior version for this ticker (version < current)."""
-    return db.execute(
-        select(MemoSnapshot)
+    row = db.execute(
+        select(
+            MemoSnapshot.id, MemoSnapshot.ticker, MemoSnapshot.version,
+            MemoSnapshot.memo_json["rating_label"].label("rating"),
+        )
         .where(MemoSnapshot.ticker == ticker, MemoSnapshot.version < version)
         .order_by(MemoSnapshot.version.desc())
         .limit(1)
-    ).scalars().first()
+    ).first()
+    return SnapshotCandidate(*row) if row is not None else None
 
 
 def _recent_postmortem_within(
     db, ticker: str, horizon_days: int, window_days: int,
-) -> MemoPostmortem | None:
+) -> datetime | None:
     """Most recent postmortem for (ticker, horizon) within `window_days`."""
     cutoff = datetime.utcnow() - timedelta(days=window_days)
     return db.execute(
-        select(MemoPostmortem)
+        select(MemoPostmortem.created_at)
         .where(
             MemoPostmortem.ticker == ticker,
             MemoPostmortem.horizon_days == horizon_days,
@@ -84,7 +100,7 @@ def _recent_postmortem_within(
 
 
 def _should_postmortem(
-    db, snap: MemoSnapshot, horizon_days: int,
+    db, snap: MemoSnapshot | SnapshotCandidate, horizon_days: int,
 ) -> tuple[bool, str]:
     """Dedupe + rate-limit guard.
 
@@ -109,7 +125,7 @@ def _should_postmortem(
     if recent is not None:
         return False, (
             f"recent postmortem exists "
-            f"({recent.created_at.date().isoformat()}, within {_DEDUPE_WINDOW_DAYS}d)"
+            f"({recent.date().isoformat()}, within {_DEDUPE_WINDOW_DAYS}d)"
         )
     return True, "ok"
 
@@ -141,7 +157,7 @@ class DueScan:
     deferred: list[dict[str, Any]] = field(default_factory=list)
 
 
-def _memo_identity(snap: MemoSnapshot, reason: str) -> dict[str, Any]:
+def _memo_identity(snap: MemoSnapshot | SnapshotCandidate, reason: str) -> dict[str, Any]:
     return {"ticker": snap.ticker, "memo_snapshot_id": snap.id, "reason": reason}
 
 
@@ -181,11 +197,17 @@ def _scan_due(
     """
     if limit < 0:
         raise ValueError("postmortem limit must be non-negative")
+    from .memory_probe import log_rss
+    log_rss("postmortem_scan_start", horizon_days=horizon_days, limit=limit)
     scan = DueScan()
     seen_keys: set[tuple[int, int]] = set()
     with SessionLocal() as db:
         stmt = (
-            select(MemoOutcome, MemoSnapshot)
+            select(
+                MemoOutcome, MemoSnapshot.id, MemoSnapshot.ticker,
+                MemoSnapshot.version,
+                MemoSnapshot.memo_json["rating_label"].label("rating"),
+            )
             .join(MemoSnapshot, MemoOutcome.memo_snapshot_id == MemoSnapshot.id)
             .where(MemoOutcome.horizon_days == horizon_days)
             .where(~select(MemoPostmortem.id).where(
@@ -194,7 +216,14 @@ def _scan_due(
             ).exists())
             .order_by(MemoOutcome.memo_snapshot_id)
         )
-        for outcome, snap in db.execute(stmt).all():
+        # A budget of 25 used to apply *after* fetching every full memo.
+        # JSON bodies and revision logs can dwarf the result metadata and
+        # overlap the filing poller's working set. Select just the policy
+        # inputs, stream those rows, and keep every omission identity.
+        for outcome, snapshot_id, ticker, version, rating in db.execute(
+            stmt.execution_options(yield_per=100)
+        ):
+            snap = SnapshotCandidate(snapshot_id, ticker, version, rating)
             key = (outcome.memo_snapshot_id, horizon_days)
             if key in seen_keys:
                 continue
@@ -207,6 +236,10 @@ def _scan_due(
                 scan.deferred.append(_memo_identity(snap, "pass budget"))
                 continue
             scan.items.append({"outcome": outcome, "snapshot": snap})
+    log_rss(
+        "postmortem_scan_end", horizon_days=horizon_days,
+        selected=len(scan.items), deduped=len(scan.deduped), deferred=len(scan.deferred),
+    )
     return scan
 
 
@@ -451,8 +484,11 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
         status: [] for status in ("written", "disabled", "failed", "not_requested")
     }
     for item in due:
+        # Drop the prior body before the next SELECT is evaluated; neither
+        # locals nor the metadata-only due list should retain it.
+        memo = current = None
         outcome: MemoOutcome = item["outcome"]
-        snap: MemoSnapshot = item["snapshot"]
+        snap: MemoSnapshot | SnapshotCandidate = item["snapshot"]
         # Re-read immediately before spending anything. The due list is a
         # snapshot of a query that ran before the first LLM call of a pass
         # that makes one per memo; by the time this memo comes round, an
@@ -468,6 +504,14 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
             if not proceed:
                 scan.deduped.append(_memo_identity(snap, reason))
                 continue
+            # Hydrate only the item about to run, after both policy checks.
+            # The due list holds metadata, so neither deferred work nor the
+            # remaining selected items retain large JSON bodies in memory.
+            current = db.get(MemoSnapshot, snap.id)
+            if current is None:
+                skipped_memos.append(_memo_identity(snap, "memo_snapshot_missing"))
+                continue
+            snap = current
         try:
             # MemoSnapshot stores the report in ``memo_json``.  ``snap.memo``
             # never existed; the AttributeError was swallowed here and made
