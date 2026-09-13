@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 from typing import Any
 
 import httpx
@@ -65,9 +66,17 @@ class TiingoProvider:
     def get_price_history(self, ticker: str, days: int = 252) -> list[dict[str, Any]] | None:
         if not self.api_key:
             return None
+        # Without startDate this endpoint returns only the latest close.
+        # Match Polygon's calendar-day slack, then retain `days` trading bars.
+        end = date.today()
+        start = end - timedelta(days=int(days * 1.6))
         try:
             with httpx.Client(timeout=TIMEOUT, headers=self._headers()) as client:
-                r = client.get(f"{BASE}/tiingo/daily/{ticker}/prices", params={"resampleFreq": "daily"})
+                r = client.get(f"{BASE}/tiingo/daily/{ticker}/prices", params={
+                    "resampleFreq": "daily",
+                    "startDate": start.isoformat(),
+                    "endDate": end.isoformat(),
+                })
                 if r.status_code != 200:
                     return None
                 rows = r.json()
