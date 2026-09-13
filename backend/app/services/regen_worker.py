@@ -439,6 +439,10 @@ def execute_job(job_id: int) -> dict[str, Any]:
     log.info("regen job %d STARTING for %s (scenario=%s, run_id=%s)",
              job_id, ticker, scenario, run_id)
     try:
+        # A live worker with missing credentials otherwise persists a demo
+        # memo and marks the paid/automatic research job successful.
+        if settings.app_env.lower() == "production" and not settings.llm_enabled:
+            raise RuntimeError("Production memo generation requires a configured LLM and live data")
         _introduce_ticker(job_id, ticker)
         _append_progress(job_id, "calling_run_stock_memo")
         # FEAT-002: every LLM call the run makes is attributed to the

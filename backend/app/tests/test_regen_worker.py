@@ -241,3 +241,21 @@ def test_status_endpoint_keeps_polling_contract(_stub_graph):
     # latest_memo_at advancing past started_at is the frontend's
     # stop-polling condition.
     assert s2["latest_memo_at"] > started_at
+
+
+def test_production_job_without_llm_fails_before_generating_or_persisting(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    def forbidden(*a, **kw):
+        raise AssertionError("A misconfigured live worker must not run research")
+    monkeypatch.setattr(regen_worker, "run_stock_memo", forbidden)
+    monkeypatch.setattr(regen_worker, "_introduce_ticker", forbidden)
+    job, _ = regen_worker.enqueue("ZZNOLLM")
+    regen_worker.process_next_job()
+    with SessionLocal() as db:
+        stored = db.get(RegenJob, job["id"])
+        assert stored.status == "failed"
+        assert stored.error_type == "RuntimeError"
+        assert "configured LLM" in stored.error_message
