@@ -92,6 +92,8 @@ def persist_prices(
             "adjusted_close_basis": provenance.get("adjusted_close_basis"),
             "fetched_at": fetched,
         }
+    usable_rows_upserted = 0
+    excluded_flat_dates = []
     if records:
         with SessionLocal() as db:
             dialect = db.get_bind().dialect.name
@@ -111,9 +113,21 @@ def persist_prices(
                     index_elements=["ticker", "price_date", "source", "close_basis"], set_=update,
                 ))
             db.commit()
+            # Count actual usable persisted observations, not raw placeholders.
+            # Null incoming OHLC may have retained known stored values on upsert.
+            received = [DailyPrice.ticker == ticker, DailyPrice.source == source,
+                        DailyPrice.fetched_at == fetched]
+            usable_rows_upserted = db.scalar(select(func.count()).select_from(DailyPrice).where(*received, _usable_price()))
+            excluded_flat_dates = [d.isoformat() for d in db.execute(select(DailyPrice.price_date).where(
+                *received, _flat_zero_volume().is_(True)).order_by(DailyPrice.price_date)).scalars()]
+    if excluded_flat_dates:
+        log.warning("price received nontrading bars ticker=%s source=%s close_basis=%s dates=%s",
+                    ticker, source, provenance.get("close_basis", "provider_reported"), excluded_flat_dates)
     if rejected or duplicates:
         log.warning("price input identities ticker=%s source=%s rejected=%d:%s duplicate_dates=%d:%s", ticker, source, len(rejected), rejected, len(duplicates), duplicates)
-    return {"source": source, "rows_received": len(rows), "rows_upserted": len(records), "rejected": rejected, "duplicate_dates": duplicates}
+    return {"source": source, "rows_received": len(rows), "rows_upserted": len(records),
+            "usable_rows_upserted": usable_rows_upserted, "excluded_zero_volume_flat_dates": excluded_flat_dates,
+            "rejected": rejected, "duplicate_dates": duplicates}
 
 
 def _last_weekday(today: date) -> date:
@@ -153,12 +167,14 @@ def _source_quality(db, ticker: str, *, start: date | None, end: date, days: int
                    DailyPrice.fetched_at, _flat_zero_volume().label("placeholder")).where(*where)
     for source, basis, day, fetched, placeholder in db.execute(query):
         group = groups.setdefault((source, basis), {"source": source, "close_basis": basis,
-            "dates": set(), "excluded_zero_volume_flat_dates": [], "last_fetched_at": fetched})
-        group["last_fetched_at"] = max(group["last_fetched_at"], fetched)
+            "dates": set(), "fetched_by_date": {}, "excluded_zero_volume_flat_dates": [],
+            "last_raw_fetched_at": fetched})
+        group["last_raw_fetched_at"] = max(group["last_raw_fetched_at"], fetched)
         if placeholder:
             group["excluded_zero_volume_flat_dates"].append(day.isoformat())
         else:
             group["dates"].add(day)
+            group["fetched_by_date"][day] = fetched
     if not groups:
         return []
     # Calendar rows are evidence of sessions, never a second source of prices.
@@ -186,6 +202,8 @@ def _source_quality(db, ticker: str, *, start: date | None, end: date, days: int
         complete = False if missing else (True if calendar_available else None)
         group.update(oldest=oldest, newest=newest, row_count=len(dates),
             continuity_start=selected_start, continuity_end=newest,
+            last_fetched_at=group["fetched_by_date"].get(newest),
+            freshness_price_date=newest,
             internal_missing_benchmark_sessions=missing,
             internal_missing_benchmark_session_count=len(missing),
             selection_calendar_available=calendar_available,
@@ -196,7 +214,7 @@ def _source_quality(db, ticker: str, *, start: date | None, end: date, days: int
 
 def _quality_evidence(group: dict) -> dict:
     return {key: (value.isoformat() if isinstance(value, (date, datetime)) else value)
-            for key, value in group.items() if key != "dates"}
+            for key, value in group.items() if key not in {"dates", "fetched_by_date"}}
 
 
 def price_coverage(ticker: str, start: date, end: date | None = None) -> dict:
@@ -229,7 +247,7 @@ def price_coverage(ticker: str, start: date, end: date | None = None) -> dict:
             complete = covers_start and current and dense and not missing_sessions and (benchmark_available or ticker.upper() == "SPY")
             sources.append({**_quality_evidence(group),
                 "rows_in_requested_range": len(have), "covers_start": covers_start,
-                "fresh": datetime.utcnow() - timedelta(hours=24) <= fetched <= datetime.utcnow(),
+                "fresh": fetched is not None and datetime.utcnow() - timedelta(hours=24) <= fetched <= datetime.utcnow(),
                 "current": current, "date_bounds_covered": covers_start and current,
                 "coverage_complete": complete, "missing_benchmark_sessions": missing_sessions,
                 "missing_benchmark_session_count": len(missing_sessions),
@@ -312,7 +330,7 @@ def fetch_and_store_prices(ticker: str, days: int, *, service=None, verify_calen
                         for g in _source_quality(db, ticker, start=None, end=date.today(), days=days)}
                 own_sources = [{**s, "internal_continuity_verified": suffix_quality.get((name, basis))}
                                for s in own_sources]
-            accepted = attempt.get("rows_upserted", 0) > 0 and any(
+            accepted = attempt.get("usable_rows_upserted", 0) > 0 and any(
                 s["fresh"] and (s["coverage_complete"] if verify_calendar else s["row_count"] >= days and s["current"] and s["internal_continuity_verified"] is True)
                 for s in own_sources
             )

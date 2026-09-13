@@ -167,3 +167,69 @@ def test_normal_refresh_accepts_complete_requested_suffix_despite_older_gap(data
     assert result["refresh_complete"] is True
     # Broader backfill coverage remains distinct from the successful 30-bar read.
     assert result["coverage"]["sources"][0]["internal_continuity_verified"] is False
+
+
+@pytest.mark.parametrize("verify_calendar", [True, False])
+def test_placeholder_only_refresh_cannot_freshen_complete_stale_real_tape(database, verify_calendar):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from sqlalchemy import update
+    # End on the last known completed session. A later raw calendar-date
+    # placeholder must neither move the usable boundary nor its fetched_at.
+    end = prices._last_weekday(date.today())
+    start = end - timedelta(days=200)
+    rows = tape(start, end)
+    prices.persist_prices("SPY", rows, source="fmp")
+    prices.persist_prices("ABC", rows, source="fmp")
+    stale = datetime.utcnow() - timedelta(days=3)
+    with database() as db:
+        db.execute(update(DailyPrice).where(DailyPrice.ticker == "ABC").values(fetched_at=stale))
+        db.commit()
+    placeholder = {"date": date.today().isoformat(), "open": 100, "high": 100, "low": 100, "close": 100, "volume": 0}
+    provider = SimpleNamespace(name="fmp", get_price_history=lambda *a: [placeholder])
+    result = prices.fetch_and_store_prices("ABC", 120, service=SimpleNamespace(_live_chain=lambda _: [provider]), verify_calendar=verify_calendar)
+    attempt = result["attempts"][0]
+    assert attempt["rows_upserted"] == 1 and attempt["usable_rows_upserted"] == 0
+    assert attempt["excluded_zero_volume_flat_dates"] == [placeholder["date"]]
+    assert not result["refresh_complete"]
+    source = result["coverage"]["sources"][0]
+    assert source["coverage_complete"] and source["current"]
+    assert not source["fresh"]
+    assert source["freshness_price_date"] == end.isoformat()
+    assert source["last_fetched_at"] == stale.isoformat()
+    assert source["last_raw_fetched_at"] > source["last_fetched_at"]
+    selected = prices.read_prices("ABC", days=120)
+    assert selected[-1]["date"] == end.isoformat()
+    assert selected.selection["candidate_sources"][0]["last_fetched_at"] == stale.isoformat()
+
+
+def test_fresh_old_real_bar_cannot_certify_stale_latest_usable_bar(database):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from sqlalchemy import update
+    rows = tape(date.today() - timedelta(days=200), prices._last_weekday(date.today()))
+    prices.persist_prices("SPY", rows, source="fmp")
+    prices.persist_prices("ABC", rows, source="fmp")
+    stale = datetime.utcnow() - timedelta(days=3)
+    with database() as db:
+        db.execute(update(DailyPrice).where(DailyPrice.ticker == "ABC").values(fetched_at=stale))
+        db.commit()
+    provider = SimpleNamespace(name="fmp", get_price_history=lambda *a: rows[:1])
+    result = prices.fetch_and_store_prices("ABC", 120, service=SimpleNamespace(_live_chain=lambda _: [provider]), verify_calendar=False)
+    assert result["attempts"][0]["usable_rows_upserted"] == 1
+    assert not result["refresh_complete"]
+    source = result["coverage"]["sources"][0]
+    assert source["last_fetched_at"] == stale.isoformat()
+    assert source["freshness_price_date"] == rows[-1]["date"]
+
+
+def test_only_placeholders_have_no_usable_freshness(database):
+    rows = tape(date(2025, 1, 1), date(2025, 1, 31), volume=0)
+    report = prices.persist_prices("ABC", rows, source="fmp")
+    assert report["rows_upserted"] == len(rows)
+    assert report["usable_rows_upserted"] == 0
+    source = prices.price_coverage("ABC", date(2025, 1, 1))["sources"][0]
+    assert source["last_fetched_at"] is None and source["freshness_price_date"] is None
+    assert source["last_raw_fetched_at"] is not None and source["fresh"] is False
