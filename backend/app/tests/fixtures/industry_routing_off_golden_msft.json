@@ -37,6 +37,7 @@
    "subindustry_watch",
    "target_ticker",
    "trends",
+   "valuation_exclusions",
    "valuation_lens"
   ],
   "headline": "Diversified Software cohort, regime: Operating leverage cycle \u00b7 highly concentrated (HHI 0.25)",
@@ -66,6 +67,6 @@
    "filing:AMD",
    "filing:AVGO"
   ],
-  "summary": "Technology / Diversified Software regime read: Operating leverage cycle. Cohort of 8 peers selected on sub_industry basis. Sub-industry dynamics: Platform consolidation; AI is both a moat and a margin tailwind for incumbents. Cohort outliers: growth leader NVDA, margin leader NVDA, valuation cheapest QCOM. Secular trends: AI workload share of compute spend rising; Hyperscaler capex re-rating from cycle to secular. Watch: Seat-based saturation, AI agent disruption, RPO growth."
+  "summary": "Technology / Diversified Software regime read: Operating leverage cycle. Cohort of 8 peers selected on sector basis. Sub-industry dynamics: Platform consolidation; AI is both a moat and a margin tailwind for incumbents. Cohort outliers: growth leader NVDA, margin leader NVDA, valuation cheapest QCOM. Secular trends: AI workload share of compute spend rising; Hyperscaler capex re-rating from cycle to secular. Watch: Seat-based saturation, AI agent disruption, RPO growth."
  }
 }
