@@ -222,6 +222,46 @@ def test_sync_reports_partial_failure_without_generating_or_scoring(database, mo
         assert db.execute(select(MemoOutcome)).scalars().all() == []
 
 
+def test_committed_fundamental_refresh_invalidates_only_its_old_statement_cache(database, monkeypatch):
+    from app.models import ProviderCache
+    from app.services import fundamental_history_service as fundamentals
+    from app.services import provider_cache
+    monkeypatch.setattr(provider_cache, "SessionLocal", database[0])
+    with database[0]() as db:
+        db.add(Company(ticker="ABC", company_name="ABC", sector="Unknown", industry="Unknown"))
+        for capability, key in (("financials", "ABC"), ("financials", "OTHER"), ("prices", "ABC:260")):
+            db.add(ProviderCache(capability=capability, key=key, payload_json={"old": True}))
+        db.commit()
+    monkeypatch.setattr(backfill, "backfill_prices", lambda *args, **kwargs: {"success": True})
+    monkeypatch.setattr(fundamentals, "backfill_fundamentals", lambda *args, **kwargs: {"success": True, "committed": True, "rows_written": 1})
+    result = backfill.sync_ticker("ABC")
+    assert result["success"]
+    assert result["financial_cache_invalidation"]["rows_removed"] == 1
+    with database[0]() as db:
+        assert set(db.execute(select(ProviderCache.capability, ProviderCache.key)).all()) == {("financials", "OTHER"), ("prices", "ABC:260")}
+
+
+def test_failed_cache_invalidation_is_reported_after_committed_fundamentals(database, monkeypatch):
+    from app.services import fundamental_history_service as fundamentals
+    from app.services import provider_cache
+    with database[0]() as db:
+        db.add(Company(ticker="ABC", company_name="ABC", sector="Unknown", industry="Unknown"))
+        db.commit()
+    monkeypatch.setattr(backfill, "backfill_prices", lambda *args, **kwargs: {"success": True})
+    monkeypatch.setattr(fundamentals, "backfill_fundamentals", lambda *args, **kwargs: {"success": True, "committed": True, "rows_written": 1})
+    def fail(*args):
+        raise RuntimeError("unavailable")
+    monkeypatch.setattr(provider_cache, "invalidate", fail)
+    result = backfill.sync_ticker("ABC")
+    assert not result["success"]
+    assert result["fundamentals"]["committed"]
+    assert result["financial_cache_invalidation"]["error_type"] == "RuntimeError"
+    # A retry may skip already-stored fundamentals; cache repair still runs.
+    monkeypatch.setattr(fundamentals, "backfill_fundamentals", lambda *args, **kwargs: {"success": True, "committed": True, "rows_written": 0})
+    monkeypatch.setattr(provider_cache, "invalidate", lambda *args: 1)
+    assert backfill.sync_ticker("ABC")["financial_cache_invalidation"]["status"] == "invalidated"
+
+
 def test_superseded_import_cannot_overwrite_newer_claim(database, monkeypatch):
     from app.services import fundamental_history_service as fundamentals
     with database[0]() as db:

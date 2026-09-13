@@ -4,10 +4,10 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 
 from ..database import SessionLocal
-from ..models import Company, MarketDataSync, MemoOutcome, MemoSnapshot
+from ..models import Company, DailyPrice, FinancialPeriod, MarketDataSync, MemoOutcome, MemoSnapshot
 from .price_history_service import backfill_prices, minimum_start, price_coverage
 
 log = logging.getLogger(__name__)
@@ -61,13 +61,21 @@ def coverage_report(ticker: str | None = None) -> dict:
     targets = plan["targets"]
     if ticker:
         targets = [target for target in targets if target["ticker"] == ticker.upper()]
+    with SessionLocal() as db:
+        price_counts = dict(db.execute(select(DailyPrice.ticker, func.count(DailyPrice.id)).group_by(DailyPrice.ticker)).all())
+        fundamental_counts = dict(db.execute(select(FinancialPeriod.ticker, func.count(FinancialPeriod.id)).group_by(FinancialPeriod.ticker)).all())
     rows = []
     for target in targets:
         start = date.fromisoformat(target["requested_start"])
         prices = price_coverage(target["ticker"], start)
         fundamentals = fundamental_coverage(target["ticker"], start) if target["fundamentals_required"] else None
-        rows.append({**target, "prices": prices, "fundamentals": fundamentals})
+        rows.append({**target, "prices": prices, "fundamentals": fundamentals,
+                     "stored_price_row_count": price_counts.get(target["ticker"], 0),
+                     "stored_fundamental_row_count": fundamental_counts.get(target["ticker"], 0)})
     return {**{key: value for key, value in plan.items() if key != "targets"}, "targets": rows,
+            "stored_price_row_count": sum(row["stored_price_row_count"] for row in rows),
+            "stored_fundamental_row_count": sum(row["stored_fundamental_row_count"] for row in rows),
+            "stored_count_note": "Raw database row counts include preexisting and excluded observations; coverage is reported separately.",
             "price_coverage_complete_count": sum(row["prices"]["coverage_complete"] for row in rows),
             "price_incomplete_tickers": [row["ticker"] for row in rows if not row["prices"]["coverage_complete"]]}
 
@@ -114,7 +122,21 @@ def sync_ticker(ticker: str, *, force_refresh: bool = False) -> dict:
         except Exception as exc:
             report[kind] = {"success": False, "error_type": type(exc).__name__}
             log.warning("market data backfill failed ticker=%s stage=%s error_type=%s", ticker, kind, type(exc).__name__)
-    report["success"] = all(report[kind].get("success", False) for kind in ("prices", "fundamentals"))
+    # Cached pre-repair annual labels/values must not be re-ingested over the
+    # corrected durable facts by the other process's next ordinary consumer.
+    financials = report["fundamentals"]
+    cache = {"success": True, "status": "not_needed", "rows_removed": 0}
+    if financials.get("committed"):
+        from .provider_cache import invalidate
+        try:
+            cache = {"success": True, "status": "invalidated", "capability": "financials",
+                     "key": ticker, "rows_removed": invalidate("financials", ticker)}
+        except Exception as exc:
+            cache = {"success": False, "status": "failed", "capability": "financials",
+                     "key": ticker, "error_type": type(exc).__name__}
+        log.info("market data financial cache ticker=%s result=%s", ticker, cache)
+    report["financial_cache_invalidation"] = cache
+    report["success"] = all(report[kind].get("success", False) for kind in ("prices", "fundamentals")) and cache["success"]
     report["status"] = "complete" if report["success"] else "incomplete"
     report["completed_at"] = datetime.utcnow().isoformat()
     with SessionLocal() as db:

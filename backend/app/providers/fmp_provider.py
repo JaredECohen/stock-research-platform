@@ -27,7 +27,7 @@ TIMEOUT = 10.0
 
 
 def _to_float(v: Any) -> float | None:
-    if v in (None, "None", "", "-"):
+    if isinstance(v, bool) or v in (None, "None", "", "-"):
         return None
     try:
         return float(v)
@@ -200,19 +200,26 @@ class FMPProvider:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _period_label(date_str: str, period: str | None) -> str:
+    def _period_label(date_str: str, period: str | None, fiscal_year: Any = None) -> str:
         """Map (`fiscalDateEnding`, `period`) to a `2024Q4` / `FY2024` label."""
         if not date_str:
             return ""
+        year = str(fiscal_year or "").strip()
+        if not (len(year) == 4 and year.isdigit() and int(year) > 0 and date_str[:4].isdigit()
+                and abs(int(year) - int(date_str[:4])) <= 1):
+            year = date_str[:4]
         period_upper = (period or "").upper()
         if period_upper == "FY":
-            return f"FY{date_str[:4]}"
+            return f"FY{year}"
         if period_upper.startswith("Q") and len(period_upper) == 2:
-            return f"{date_str[:4]}{period_upper}"
+            return f"{year}{period_upper}"
         # Fall back to deriving quarter from the month.
         try:
             month = int(date_str[5:7])
             q = (month - 1) // 3 + 1
+            # With no declared fiscal quarter, preserve the existing calendar
+            # fallback; combining a fiscal year with a calendar quarter would
+            # invent an unsupported fiscal-period identity.
             return f"{date_str[:4]}Q{q}"
         except (ValueError, IndexError):
             return date_str[:4]
@@ -239,7 +246,7 @@ class FMPProvider:
     def _income_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         date_str = r.get("date") or ""
         return dict(
-            period=cls._period_label(date_str, r.get("period")),
+            period=cls._period_label(date_str, r.get("period"), r.get("fiscalYear")),
             period_end=date_str,
             currency=r.get("reportedCurrency") or "USD",
             revenue=_to_float(r.get("revenue")),
@@ -262,11 +269,13 @@ class FMPProvider:
     @classmethod
     def _balance_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         date_str = r.get("date") or ""
-        st_debt = _to_float(r.get("shortTermDebt")) or 0
-        lt_debt = _to_float(r.get("longTermDebt")) or 0
-        total_debt = (st_debt + lt_debt) or None
+        st_debt = _to_float(r.get("shortTermDebt"))
+        lt_debt = _to_float(r.get("longTermDebt"))
+        total_debt = _to_float(r.get("totalDebt"))
+        if total_debt is None and st_debt is not None and lt_debt is not None:
+            total_debt = st_debt + lt_debt
         return dict(
-            period=cls._period_label(date_str, r.get("period")),
+            period=cls._period_label(date_str, r.get("period"), r.get("fiscalYear")),
             period_end=date_str,
             currency=r.get("reportedCurrency") or "USD",
             total_assets=_to_float(r.get("totalAssets")),
@@ -274,8 +283,8 @@ class FMPProvider:
             shareholders_equity=_to_float(r.get("totalStockholdersEquity")),
             cash_and_equivalents=_to_float(r.get("cashAndCashEquivalents")),
             short_term_investments=_to_float(r.get("shortTermInvestments")),
-            short_term_debt=st_debt or None,
-            long_term_debt=lt_debt or None,
+            short_term_debt=st_debt,
+            long_term_debt=lt_debt,
             total_debt=total_debt,
             goodwill=_to_float(r.get("goodwill")),
             current_assets=_to_float(r.get("totalCurrentAssets")),
@@ -286,15 +295,18 @@ class FMPProvider:
     @classmethod
     def _cash_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         date_str = r.get("date") or ""
+        dividends = _to_float(r.get("commonDividendsPaid"))
+        if dividends is None:
+            dividends = _to_float(r.get("netDividendsPaid"))
         return dict(
-            period=cls._period_label(date_str, r.get("period")),
+            period=cls._period_label(date_str, r.get("period"), r.get("fiscalYear")),
             period_end=date_str,
             currency=r.get("reportedCurrency") or "USD",
             cash_from_operations=_to_float(r.get("operatingCashFlow")),
             capex=_to_float(r.get("capitalExpenditure")),
             free_cash_flow=_to_float(r.get("freeCashFlow")),
             depreciation_and_amortization=_to_float(r.get("depreciationAndAmortization")),
-            dividends_paid=_to_float(r.get("commonDividendsPaid")) or _to_float(r.get("netDividendsPaid")),
+            dividends_paid=dividends,
             share_repurchases=_to_float(r.get("commonStockRepurchased")),
             stock_based_compensation=_to_float(r.get("stockBasedCompensation")),
             **cls._filing_dates(r),
@@ -363,6 +375,7 @@ class FMPProvider:
                         result["_history_issues"].append({"kind": "invalid_fiscal_quarter", "statement": statement, "cadence": cadence, "period_end": row.get("date")})
                         continue
                     normalized["period"] = f"FY{year}" if cadence == "annual" else f"{year}{quarter}"
+                    normalized["fiscal_label_source"] = "provider" if row.get("fiscalYear") else "period_end_year"
                     normalized["currency"] = row.get("reportedCurrency") or ""
                     normalized["source"] = self.name
                     normalized["cadence"] = cadence

@@ -140,7 +140,7 @@ def stored_market_prices(ticker: str, start: date | None = None, end: date | Non
     from ..services.price_history_service import read_prices
     rows = read_prices(ticker, start=start, end=end, days=days)
     return {"ticker": ticker.upper(), "count": len(rows), "rows": rows, "read_only": True,
-            "selection": {"days": days, "start": start, "end": end}}
+            "selection": {"days": days, "start": start, "end": end, **getattr(rows, "selection", {})}}
 
 
 @router.get("/api/admin/market-data/backfill-status")

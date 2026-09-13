@@ -391,10 +391,10 @@ def test_stored_period_aliases_merge_once_and_conflicting_values_are_excluded(da
     assert {r["period"] for r in rows["_history_issues"][0]["rows"]} == {"2025", "FY2025"}
 
 
-def test_backfill_updates_single_alias_without_inserting_duplicate_and_repairs_null_end(database, monkeypatch):
+def test_backfill_updates_standalone_canonical_without_duplicate_and_repairs_null_end(database, monkeypatch):
     with database() as db:
         FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
-        db.add(FinancialPeriod(ticker="TEST", period="2025", period_end=None, fiscal_year=2025,
+        db.add(FinancialPeriod(ticker="TEST", period="FY2025", period_end=None, fiscal_year=2025,
                                statement="income", line_item="revenue", value=90, currency="EUR", source="live"))
         db.commit()
     providers(monkeypatch, ("fmp", payload()))
@@ -404,7 +404,7 @@ def test_backfill_updates_single_alias_without_inserting_duplicate_and_repairs_n
     with database() as db:
         rows = db.execute(select(FinancialPeriod).where(FinancialPeriod.statement == "income", FinancialPeriod.fiscal_year == 2025,
                                                        FinancialPeriod.fiscal_quarter.is_(None))).scalars().all()
-        assert len(rows) == 1 and rows[0].period == "2025" and rows[0].value == 100 and rows[0].source == "fmp"
+        assert len(rows) == 1 and rows[0].period == "FY2025" and rows[0].value == 100 and rows[0].source == "fmp"
         assert rows[0].period_end == date(2025, 12, 31)
 
 
@@ -479,3 +479,324 @@ def test_primary_fetch_freshness_is_not_hidden_by_a_fresh_optional_line(database
         db.commit()
     report = svc.fundamental_coverage("TEST", date(2024, 9, 13))
     assert not report["coverage"]["income"]["annual"]["fresh"] and not report["success"]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ({"shortTermDebt": 0, "longTermDebt": 0}, (0, 0, 0)),
+    ({"shortTermDebt": "0", "longTermDebt": "12"}, (0, 12, 12)),
+    ({"shortTermDebt": None, "longTermDebt": 12}, (None, 12, None)),
+    ({"shortTermDebt": 12}, (12, None, None)),
+    ({"shortTermDebt": True, "longTermDebt": False}, (None, None, None)),
+    ({"shortTermDebt": -5, "longTermDebt": 5}, (-5, 5, 0)),
+    ({"shortTermDebt": 0, "longTermDebt": 6210000000, "totalDebt": 6648000000}, (0, 6210000000, 6648000000)),
+    ({"shortTermDebt": 12, "longTermDebt": 4, "totalDebt": 0}, (12, 4, 0)),
+])
+def test_fmp_debt_mapping_preserves_zero_missing_and_reported_total(raw, expected):
+    row = FMPProvider._balance_row(raw)
+    assert (row["short_term_debt"], row["long_term_debt"], row["total_debt"]) == expected
+
+
+def test_fmp_zero_common_dividends_do_not_fall_through_to_other_dividends():
+    assert FMPProvider._cash_row({"commonDividendsPaid": 0, "netDividendsPaid": -12})["dividends_paid"] == 0
+    assert FMPProvider._cash_row({"netDividendsPaid": -12})["dividends_paid"] == -12
+    assert FMPProvider._cash_row({})["dividends_paid"] is None
+
+
+def test_optional_null_warnings_do_not_block_coverage_or_trigger_repeated_fetch(database, monkeypatch):
+    calls = providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    with database() as db:
+        for year in (2018, 2025):
+            db.add(FinancialPeriod(ticker="TEST", period=f"FY{year}", period_end=date(year, 12, 31), fiscal_year=year,
+                                   statement="balance", line_item="short_term_debt", value=None, currency="EUR", source="live"))
+        db.commit()
+    coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    assert coverage["success"]
+    assert len(coverage["issues"]) == 2 and all(i["kind"] == "missing_stored_optional_value" and i["id"] for i in coverage["issues"])
+    skipped = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert skipped["success"] and skipped["rows_written"] == 0 and len(calls) == 1
+    fresh = payload()
+    fresh["balance"][-1]["short_term_debt"] = 0
+    next(r for r in fresh["balance"] if r["period"] == "FY2025")["short_term_debt"] = 0
+    providers(monkeypatch, ("fmp", fresh))
+    refreshed = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert refreshed["success"]
+    assert any(i["kind"] == "missing_stored_optional_value" and i["period"] == "FY2025" and i["resolved"] for i in refreshed["issues"])
+    with database() as db:
+        old = db.execute(select(FinancialPeriod).where(FinancialPeriod.statement == "balance", FinancialPeriod.period == "FY2018")).scalar_one()
+        assert old.value is None  # Retained as unknown, never guessed to be zero.
+
+
+@pytest.mark.parametrize("line,value,currency,kind", [
+    ("total_assets", None, "EUR", "missing_stored_primary_value"),
+    ("short_term_debt", float("inf"), "EUR", "invalid_stored_value_or_currency"),
+    ("short_term_debt", 0, "", "invalid_stored_value_or_currency"),
+])
+def test_primary_missing_nonfinite_and_unidentified_currency_remain_blocking(database, monkeypatch, line, value, currency, kind):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    with database() as db:
+        row = db.execute(select(FinancialPeriod).where(FinancialPeriod.statement == "balance", FinancialPeriod.period == "FY2025")).scalar_one()
+        if line == "total_assets":
+            row.value = value
+        else:
+            db.add(FinancialPeriod(ticker="TEST", period="FY2025", period_end=date(2025, 12, 31), fiscal_year=2025,
+                                   statement="balance", line_item=line, value=value, currency=currency, source="fmp"))
+        db.commit()
+    report = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    assert not report["success"] and svc._has_blockers(report["issues"])
+    assert any(i["kind"] == kind and i["line_item"] == line for i in report["issues"])
+
+
+def test_legacy_default_currency_is_corrected_to_verified_provider_currency_with_audit(database, monkeypatch):
+    with database() as db:
+        FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
+        # Primary is absent: unrelated old USD metadata must not block adding it.
+        db.add(FinancialPeriod(ticker="TEST", period="FY2025", period_end=date(2025, 12, 31), fiscal_year=2025,
+                               statement="income", line_item="net_income", value=30, currency="USD", source="live"))
+        db.commit()
+    fresh = payload(currency="EUR")
+    next(r for r in fresh["income"] if r["period"] == "FY2025")["net_income"] = 31
+    providers(monkeypatch, ("fmp", fresh))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert report["success"]
+    upgrade = report["source_upgrades"][0]
+    assert (upgrade["old_source"], upgrade["new_source"], upgrade["old_currency"], upgrade["new_currency"], upgrade["old_value"], upgrade["new_value"]) == ("live", "fmp", "USD", "EUR", 30, 31)
+    providers(monkeypatch, ("fmp", payload(currency="USD")))
+    protected = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert not protected["success"] and protected["rows_written"] == 0
+    assert {r["currency"] for r in svc.read_stored_financials("TEST")["income"]} == {"EUR"}
+
+
+def fiscal_payload():
+    rows = payload(annual=False)
+    for statement, primary in svc.PRIMARY.items():
+        rows[statement] += [{"period": f"FY{year}", "period_end": date(year + 1, 2, 1).isoformat(), "currency": "EUR",
+                            "filing_date": date(year + 1, 3, 3).isoformat(), "fiscal_label_source": "provider", primary: 101}
+                           for year in range(2017, 2026)]
+    return rows
+
+
+def seed_shifted_legacy(database, *, with_optional=False):
+    ids = {}
+    with database() as db:
+        FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
+        for year in range(2018, 2027):
+            for statement, primary in svc.PRIMARY.items():
+                row = FinancialPeriod(ticker="TEST", period=f"FY{year}", period_end=date(year, 2, 1), fiscal_year=year,
+                    statement=statement, line_item=primary, value=100, currency="EUR", source="live",
+                    available_at=date(year, 3, 20), available_at_source="provider")
+                db.add(row)
+                db.flush()
+                ids[(statement, year)] = row.id
+        if with_optional:
+            # LULU-like partial prior import: known correct debt at FY2025,
+            # alongside old legacy FY2025 primary facts ending a year earlier.
+            db.add(FinancialPeriod(ticker="TEST", period="FY2025", period_end=date(2026, 2, 1), fiscal_year=2025,
+                statement="balance", line_item="short_term_debt", value=0, currency="EUR", source="fmp"))
+            db.add(FinancialPeriod(ticker="TEST", period="FY2026", period_end=date(2026, 2, 1), fiscal_year=2026,
+                statement="balance", line_item="short_term_debt", value=None, currency="EUR", source="live"))
+        db.commit()
+    return ids
+
+
+def test_provider_confirmed_fiscal_chain_relabels_atomically_with_ids_and_availability(database, monkeypatch):
+    ids = seed_shifted_legacy(database)
+    calls = providers(monkeypatch, ("fmp", fiscal_payload()))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert report["success"] and report["rows_relabelled"] == 27
+    assert calls[0][2] == date(2018, 2, 1) == date.fromisoformat(report["provider_requested_start"])
+    assert len(report["period_relabels"]) == 27
+    with database() as db:
+        for (_statement, year), row_id in ids.items():
+            row = db.get(FinancialPeriod, row_id)
+            assert row.period == f"FY{year - 1}" and row.period_end == date(year, 2, 1)
+            assert row.fiscal_year == year - 1 and row.value == 101 and row.source == "fmp"
+            assert row.available_at == date(year, 3, 20)
+    second = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert second["success"] and second["rows_relabelled"] == second["rows_written"] == 0 and len(calls) == 1
+
+
+def test_partial_known_rows_and_optional_null_duplicates_do_not_block_other_components(database, monkeypatch):
+    ids = seed_shifted_legacy(database, with_optional=True)
+    fresh = fiscal_payload()
+    for row in fresh["balance"]:
+        if row["period"] == "FY2025":
+            row["short_term_debt"] = 0
+    providers(monkeypatch, ("fmp", fresh))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert report["success"] and report["rows_relabelled"] == 27
+    assert any(i["kind"] == "legacy_period_relabel_optional_null" and i["period"] == "FY2026" for i in report["issues"])
+    with database() as db:
+        known = db.execute(select(FinancialPeriod).where(FinancialPeriod.period == "FY2025", FinancialPeriod.line_item == "short_term_debt")).scalar_one()
+        assert known.source == "fmp" and known.value == 0 and known.period_end == date(2026, 2, 1)
+        missing = db.execute(select(FinancialPeriod).where(FinancialPeriod.period == "FY2026", FinancialPeriod.line_item == "short_term_debt")).scalar_one()
+        assert missing.value is None and missing.source == "live"
+        assert db.get(FinancialPeriod, ids[("balance", 2025)]).period == "FY2024"
+
+
+def test_known_provider_destination_blocks_dependent_chain_without_overwrite(database, monkeypatch):
+    ids = seed_shifted_legacy(database)
+    with database() as db:
+        db.get(FinancialPeriod, ids[("income", 2024)]).source = "other_verified"
+        db.commit()
+    providers(monkeypatch, ("fmp", fiscal_payload()))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert not report["success"]
+    conflicts = [i for i in report["issues"] if i["kind"] == "legacy_period_relabel_conflict"]
+    assert {i["id"] for i in conflicts} >= {ids[("income", 2025)], ids[("income", 2026)]}
+    with database() as db:
+        known = db.get(FinancialPeriod, ids[("income", 2024)])
+        assert (known.period, known.period_end, known.source, known.value) == ("FY2024", date(2024, 2, 1), "other_verified", 100)
+        assert db.get(FinancialPeriod, ids[("income", 2025)]).period == "FY2025"
+
+
+def test_relabel_and_later_write_failure_roll_back_together(database, monkeypatch):
+    ids = seed_shifted_legacy(database)
+    providers(monkeypatch, ("fmp", fiscal_payload()))
+    monkeypatch.setattr(history_service, "_upsert_financial_period", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("failed")))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert not report["success"] and not report["committed"] and report["rows_relabelled"] == 0
+    with database() as db:
+        for (_, year), row_id in ids.items():
+            row = db.get(FinancialPeriod, row_id)
+            assert row.period == f"FY{year}" and row.source == "live" and row.value == 100
+
+
+def test_ambiguous_provider_same_end_labels_are_rejected_before_relabel(database, monkeypatch):
+    ids = seed_shifted_legacy(database)
+    fresh = fiscal_payload()
+    row = next(row for row in fresh["income"] if row["period"] == "FY2025")
+    fresh["income"].append({**row, "period": "FY2026"})
+    providers(monkeypatch, ("fmp", fresh))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert not report["success"] and any(i["kind"] == "ambiguous_provider_period_end" for i in report["issues"])
+    with database() as db:
+        row = db.get(FinancialPeriod, ids[("income", 2026)])
+        assert row.period == "FY2026" and row.source == "live" and row.value == 100
+
+
+def test_normal_fmp_statement_read_honors_reported_fiscal_year_to_prevent_recurrence(monkeypatch):
+    provider = FMPProvider()
+    calls = []
+    def fetch(path, **params):
+        calls.append((path, params))
+        return [{"date": "2026-02-01", "fiscalYear": "2025", "period": "FY", "reportedCurrency": "USD",
+                 "revenue": 10, "totalAssets": 20, "operatingCashFlow": 3}]
+    monkeypatch.setattr(provider, "_get", fetch)
+    raw = provider.get_financial_statements("HD")
+    assert len(calls) == 3 and all(params["limit"] == 8 for _, params in calls)
+    assert {row["period"] for statement in svc.LINES for row in raw[statement]} == {"FY2025"}
+    assert FMPProvider._period_label("2026-02-01", "Q4", "2025") == "2025Q4"
+    assert FMPProvider._period_label("2026-02-01", "FY", "20260201") == "FY2026"
+
+
+def test_external_session_owns_relabel_commit_and_rollback(database, monkeypatch):
+    ids = seed_shifted_legacy(database)
+    providers(monkeypatch, ("fmp", fiscal_payload()))
+    with database() as db:
+        report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True, db=db)
+        assert report["success"] and not report["committed"] and report["rows_relabelled"] == 27
+        db.rollback()
+    with database() as db:
+        assert all(db.get(FinancialPeriod, row_id).period == f"FY{year}" for (_, year), row_id in ids.items())
+
+
+def test_duplicate_legacy_destination_remains_an_explicit_read_gap(database, monkeypatch):
+    ids = seed_shifted_legacy(database)
+    with database() as db:
+        extra = FinancialPeriod(ticker="TEST", period="FY2027", period_end=date(2026, 2, 1), fiscal_year=2027,
+            statement="income", line_item="revenue", value=90, currency="EUR", source="live")
+        db.add(extra)
+        db.commit()
+        extra_id = extra.id
+    providers(monkeypatch, ("fmp", fiscal_payload()))
+    result = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert not result["success"]
+    blocked = {i["id"] for i in result["issues"] if i["kind"] == "legacy_period_relabel_conflict"}
+    assert {ids[("income", 2026)], extra_id} <= blocked
+    coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    assert not coverage["success"] and any(i["kind"] == "duplicate_stored_period_end" for i in coverage["issues"])
+    with database() as db:
+        assert db.get(FinancialPeriod, extra_id).value == 90
+        assert db.get(FinancialPeriod, ids[("income", 2026)]).value == 100
+
+
+def seed_undated_alias(database, *, source="live", canonical=False):
+    with database() as db:
+        FinancialPeriod.__table__.create(db.get_bind(), checkfirst=True)
+        row = FinancialPeriod(ticker="TEST", period="FY2023" if canonical else "2023", statement="income",
+            line_item="revenue", value=777, currency="USD", period_end=None, fiscal_year=2023,
+            fiscal_quarter=None, source=source, available_at=date(2024, 2, 1), fetched_at=datetime(2024, 3, 1))
+        db.add(row)
+        db.commit()
+        return row.id
+
+
+@pytest.mark.parametrize("existing_canonical", [False, True])
+def test_undated_legacy_alias_is_preserved_beside_confirmed_canonical_fact(database, monkeypatch, existing_canonical):
+    calls = providers(monkeypatch, ("fmp", payload()))
+    if existing_canonical:
+        svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+        with database() as db:
+            row = db.execute(select(FinancialPeriod).where(FinancialPeriod.period == "FY2023", FinancialPeriod.statement == "income")).scalar_one()
+            row.source = "live"
+            db.commit()
+    alias_id = seed_undated_alias(database)
+    before = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    assert not before["success"]
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert report["success"]
+    with database() as db:
+        alias = db.get(FinancialPeriod, alias_id)
+        assert (alias.period, alias.period_end, alias.value, alias.source, alias.currency) == ("2023", None, 777, "live", "USD")
+        assert alias.available_at == date(2024, 2, 1) and alias.fetched_at == datetime(2024, 3, 1)
+        canonical = db.execute(select(FinancialPeriod).where(FinancialPeriod.period == "FY2023", FinancialPeriod.statement == "income")).scalar_one()
+        assert canonical.id != alias_id and canonical.source == "fmp" and canonical.value == 100
+        assert canonical.period_end == date(2023, 12, 31)
+    coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    warning = next(i for i in coverage["issues"] if i["kind"] == "unusable_legacy_observation")
+    assert coverage["success"] and warning["id"] == alias_id and warning["value"] == 777
+    assert warning["usable_canonical_id"] == canonical.id and warning["usable_canonical_source"] == "fmp"
+    rows = svc.read_stored_financials("TEST")
+    annual = [r for r in rows["income"] if r["period"] == "FY2023"]
+    assert len(annual) == 1 and annual[0]["revenue"] == 100
+    n_calls = len(calls)
+    again = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert again["success"] and again["rows_written"] == 0 and len(calls) == n_calls
+
+
+def test_undated_legacy_alias_without_provider_primary_remains_blocking(database, monkeypatch):
+    alias_id = seed_undated_alias(database)
+    rows = payload()
+    rows["income"] = [r for r in rows["income"] if r["period"] != "FY2023"]
+    providers(monkeypatch, ("fmp", rows))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert not report["success"]
+    assert any(i["kind"] == "invalid_stored_period" and i["id"] == alias_id and not i.get("resolved") for i in report["issues"])
+    assert not any(i["kind"] == "unusable_legacy_observation" for i in report["issues"])
+
+
+def test_known_provider_undated_alias_is_not_discarded_to_resolve_conflict(database, monkeypatch):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    alias_id = seed_undated_alias(database, source="alpha_vantage")
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert not report["success"]
+    assert any(i["kind"] == "stored_period_alias_conflict" for i in report["issues"])
+    assert any(i["kind"] == "invalid_stored_period" and i["id"] == alias_id for i in report["issues"])
+    with database() as db:
+        assert db.get(FinancialPeriod, alias_id).value == 777
+
+
+def test_invalid_exact_canonical_occupant_in_alias_group_stays_blocking(database, monkeypatch):
+    alias_id = seed_undated_alias(database)
+    canonical_id = seed_undated_alias(database, canonical=True)
+    providers(monkeypatch, ("fmp", payload()))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert not report["success"]
+    assert any(i["kind"] == "stored_period_alias_conflict" for i in report["issues"])
+    with database() as db:
+        for row_id in (alias_id, canonical_id):
+            row = db.get(FinancialPeriod, row_id)
+            assert row.period_end is None and row.value == 777 and row.source == "live"

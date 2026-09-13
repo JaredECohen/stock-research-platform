@@ -29,6 +29,8 @@ seed the wrong security.
 """
 from __future__ import annotations
 
+from datetime import date
+
 # Separators a provider might use in place of ours, in the order we try
 # them. Hyphen first because it is what both EDGAR and FMP use for the
 # share classes in our universe today.
@@ -61,3 +63,16 @@ def symbol_variants(symbol: str) -> list[str]:
 def is_multi_class(symbol: str) -> bool:
     """True when `symbol` carries a share-class separator."""
     return len(symbol_variants(symbol)) > 1
+
+
+def market_data_symbols(symbol: str, *, on: date | None = None) -> list[str]:
+    """Resolve verified same-security renames for market data only.
+
+    Keep canonical company/memo keys intact. Acquisitions with an exchange
+    ratio are not aliases. BNY confirms unchanged CUSIP/capital structure:
+    https://www.bny.com/corporate/global/en/about-us/newsroom/press-release/bny-announces-planned-change-of-stock-ticker-symbol-to-bny-130465.html
+    """
+    variants = symbol_variants(symbol)
+    if variants and variants[0] == "BK" and (on or date.today()) >= date(2026, 5, 21):
+        return ["BNY", *variants]
+    return variants
