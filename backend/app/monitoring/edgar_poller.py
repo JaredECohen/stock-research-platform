@@ -239,6 +239,7 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     bookkeeping_errors: list[str] = []
     persist_errors: list[str] = []
     post_pass_failures: list[dict] = []
+    filing_fetch_failures: list[dict] = []
     truncated_filings: list[dict] = []
     deferred: list[str] = []
     unvisited: list[str] = []
@@ -261,6 +262,9 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
                 for f in post_pass_failures
             ]
             parts.append(f"post-pass failures={len(names)}: {', '.join(names)}")
+        if filing_fetch_failures:
+            names = [f"{f['ticker']}:{f['accession_number']}:{f['error_type']}" for f in filing_fetch_failures]
+            parts.append(f"filing fetch failures={len(names)}: {', '.join(names)}")
         return "; ".join(parts)
 
     def bounded_note() -> str:
@@ -352,8 +356,12 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
                     persisted = res.get("persisted") or {}
                     post_pass_failures.extend(persisted.get("post_pass_failures") or [])
                     truncated_filings.extend(persisted.get("truncated_filings") or [])
-                    if res.get("kind") == "persist_error" or persisted.get("persist_error"):
-                        error = persisted.get("persist_error") or {}
+                    fetch_failures = persisted.get("filing_fetch_failures") or []
+                    filing_fetch_failures.extend(fetch_failures)
+                    if res.get("kind") == "persist_error" or persisted.get("persist_error") or fetch_failures:
+                        error = persisted.get("persist_error") or (
+                            {"stage": "filing_fetch", "error_type": "IncompleteFilingBody"} if fetch_failures else {}
+                        )
                         persist_errors.append(f"{t}:{error.get('stage', 'unknown')}:{error.get('error_type', 'unknown')}")
                         continue
                 # `kind="gate_error"` means the auto-regen gate crashed

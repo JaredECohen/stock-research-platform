@@ -459,6 +459,33 @@ def test_bounded_filing_sources_are_all_named_without_alone_failing_the_pass(fak
     assert "retained=200000,observed=250000,bytes_read=500000,oversized_tokens=1" in note
 
 
+@pytest.mark.parametrize("aggregate", [False, True])
+def test_failed_filing_bodies_name_every_accession_and_keep_event_retryable(fake_index, runs, monkeypatch, caplog, aggregate):
+    ticker = f"ZZBODY{_suffix()}"
+    _prime(fake_index, [ticker])
+    fake_index[ticker].append({"type": "8-K", "accession_number": _accession(2)})
+    failures = [{"ticker": ticker, "accession_number": f"FAILED-{n}", "error_type": "FetchFailed"} for n in range(8)]
+    persisted = {"filing_fetch_failures": failures}
+    if aggregate:
+        persisted["persist_error"] = {"ticker": ticker, "stage": "filing_fetch", "error_type": "IncompleteFilingBody"}
+    monkeypatch.setattr("app.services.update_orchestrator.on_filing_event", lambda ticker: {
+        "kind": "persist_error" if aggregate else "skipped", "persisted": persisted,
+    })
+    edgar_poller.run_once([ticker])
+    note = runs[-1]["note"]
+    assert runs[-1]["success"] is False
+    assert "filing fetch failures=8" in note
+    for failure in failures:
+        identity = f"{ticker}:{failure['accession_number']}:FetchFailed"
+        assert identity in note and identity in caplog.text
+    assert _accession(2) not in edgar_poller._seen_accessions(ticker)
+    retry = []
+    monkeypatch.setattr("app.services.update_orchestrator.on_filing_event", lambda ticker: retry.append(ticker) or {"kind": "skipped"})
+    edgar_poller.run_once([ticker])
+    assert retry == [ticker]
+    assert _accession(2) in edgar_poller._seen_accessions(ticker)
+
+
 # ---------------------------------------------------------------------------
 # Bookkeeping growth
 # ---------------------------------------------------------------------------
