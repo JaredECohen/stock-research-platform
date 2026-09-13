@@ -7,7 +7,6 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.models import DailyPrice
 from app.services import price_history_service as prices
-
 from app.services.ticker_symbols import is_multi_class, market_data_symbols, symbol_variants
 
 

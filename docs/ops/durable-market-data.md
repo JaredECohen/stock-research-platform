@@ -2,6 +2,10 @@
 
 `daily_prices` stores each dated OHLCV observation independently of provider-cache expiry. Its identity is `(ticker, price_date, source, close_basis)`. Raw/provider close and separately supplied adjusted close are distinct; existing return and rating formulas are unchanged. A read selects one source and close basis for its complete series instead of splicing incompatible providers. Invalid or contradictory input does not erase a stored valid close.
 
+Flat OHLC bars with explicitly zero volume are retained as raw observations but excluded from usable prices, coverage and currentness. Their full dates and source identities appear in selection metadata and logs. Missing volume remains unknown. Selection checks continuity against observed SPY sessions within the actual requested suffix/date range; an unrelated older gap does not disqualify a healthy requested window. Without sufficient benchmark history, continuity is explicitly unverified. Provider-cache throttling remains, but a cached pre-repair tape cannot bypass the durable read filters.
+
+Verified same-security ticker changes are distinct from share-class spellings. The market-data resolver tries BNY for canonical BK after May 21, 2026, retaining BK company/memo keys and the actual provider symbol on each price row. [BNY's announcement](https://www.bny.com/corporate/global/en/about-us/newsroom/press-release/bny-announces-planned-change-of-stock-ticker-symbol-to-bny-130465.html) confirms the unchanged CUSIP and capital structure. Acquisition successors with different share terms are not treated as aliases.
+
 `financial_periods` already stores financial line items. The dedicated [fundamental backfill](durable-fundamentals-history.md) supplies annual and quarterly observations with actual provider and currency provenance. Ordinary annual valuation consumers retain their annual cadence. The store contains current reported/restated values with original availability metadata; it is not an archive of every historical statement revision.
 
 The authenticated `GET /api/admin/market-data/plan` projects company and memo metadata without loading memo bodies. It includes **every company in every tier**, SPY, and symbols required by old live memos. Each target starts at the earlier of two calendar years ago and its oldest live memo date minus seven days; SPY reaches the earliest required date across all targets. These are data imports and do not seed additional research memos.
@@ -13,6 +17,8 @@ Submit `POST /api/admin/market-data/backfill?ticker=...` for each target, starti
 `GET /api/admin/market-data/prices?ticker=...&start=YYYY-MM-DD&end=YYYY-MM-DD` reads stored observations without a provider call. Normal live price requests prefer sufficiently deep, fresh daily rows and preserve provider-cache throttling/fallback for partial responses. Historical outcome evaluation can also read the archive beyond the former 800-day response ladder. Missing archived history is repairable and counts as unavailable, while all existing outcome rows remain untouched. New outcome provenance records the observed price dates and available source/basis metadata.
 
 The existing 21 scheduled loops remain unchanged in number. This release creates no additional scheduler. Prices refresh when existing consumers request them; explicit full-universe backfill is separately authorized and paced. Coverage reports distinguish missing or stale observations from a completed import.
+
+The coverage response includes raw database price/fundamental row counts separately from usable coverage. Counts include preexisting rows and excluded observations; they are not counts of verified usable facts. Forced refresh is appropriate after a mapper correction, including for companies that previously passed coverage, because ordinary seven-day fundamental freshness can otherwise retain the old mapped values.
 
 ## Usable trades and provider-series selection
 
