@@ -95,6 +95,19 @@ def save_memo(
         # Round-trip through json to make the payload safe for SQLite's JSON
         # column even when fields contain non-serializable types like datetime.
         memo_payload: dict[str, Any] = json.loads(memo.model_dump_json())
+        from .regen_lease import LeaseLost, assert_current
+        job = assert_current(db=db, lock=True)
+        if job is not None:
+            if job.ticker != memo.ticker.upper():
+                raise LeaseLost(f"Regeneration job {job.id} cannot publish another ticker")
+            if job.memo_version is not None:
+                # The job's publication receipt makes retries idempotent even
+                # when graph return/worker completion was interrupted.
+                prior = db.execute(select(MemoSnapshot).where(
+                    MemoSnapshot.ticker == job.ticker, MemoSnapshot.version == job.memo_version,
+                )).scalar_one()
+                db.expunge(prior)
+                return prior
         version = _next_version(db, memo.ticker)
         # Coerce date → datetime for SQLite (DateTime column).
         as_of_dt = None
@@ -122,8 +135,13 @@ def save_memo(
             as_of_date=as_of_dt,
         )
         db.add(snap)
-        db.commit()
-        db.refresh(snap)
+        db.flush()
+        if job is not None:
+            job.memo_version = snap.version
+            db.flush()
+        if own:
+            db.commit()
+            db.refresh(snap)
         db.expunge(snap)
         return snap
     finally:

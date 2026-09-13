@@ -4,7 +4,8 @@ No DB, no I/O, no numpy. Two steps:
 
 1. ``pit_snapshot(rows, as_of)`` turns long-format ``financial_periods``
    rows into a point-in-time view: only rows whose ``available_at`` is on
-   or before ``as_of`` survive, grouped into annual points. ``fs-v1``
+   or before ``as_of`` survive, with a known completed period and credible
+   availability no earlier than period end, grouped into annual points. ``fs-v1``
    ingests annual statements only, so "TTM" here is the latest annual row
    that was knowable at ``as_of``; quarterly rows are ignored and counted.
 2. ``compute_features(snapshot, price_ctx, sector)`` evaluates every
@@ -29,6 +30,9 @@ module can be tested without a database)::
 
     (statement, line_item, period, period_end, fiscal_year, fiscal_quarter, value, available_at)
 
+The persistence reader appends an optional ninth metadata mapping containing
+the row ID, ticker, provider and availability provenance for exclusion audits.
+
 ``price_ctx`` is ``{"price": float | None, "price_date": date | None,
 "shares_fallback": float | None}``; ``shares_fallback`` is
 ``Company.shares_outstanding`` and is only used when the income statement
@@ -41,11 +45,12 @@ import json
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from statistics import stdev
 from typing import Any
 
 from app.finance import ratios
+from app.finance.pit_eligibility import as_date, date_exclusion_reasons, exclusion_record
 from app.finance.scorecard_spec import (
     FEATURE_SPEC,
     FeatureSpec,
@@ -88,16 +93,7 @@ def _to_date(x: Any) -> date | None:
     """Availability stamps arrive as date, datetime or ISO string; compare on
     the calendar date so a filing accepted at 16:05 on the as-of day counts
     as available that day."""
-    if x is None:
-        return None
-    if isinstance(x, datetime):
-        return x.date()
-    if isinstance(x, date):
-        return x
-    try:
-        return datetime.fromisoformat(str(x)).date()
-    except ValueError:
-        return None
+    return as_date(x)
 
 
 @dataclass(frozen=True)
@@ -130,6 +126,7 @@ class PitSnapshot:
     as_of: date
     points: tuple[AnnualPoint, ...]
     notes: dict[str, int]
+    excluded_rows: tuple[dict[str, Any], ...] = ()
 
     @property
     def latest(self) -> AnnualPoint | None:
@@ -163,6 +160,9 @@ def pit_snapshot(rows: Iterable[Sequence[Any]], as_of: date) -> PitSnapshot:
     * ``available_at`` missing → ``missing_available_at`` (excluded: we
       cannot prove it was knowable);
     * ``available_at`` after ``as_of`` → ``pit_excluded``;
+    * unknown period end → ``missing_period_end`` / ``rows_unusable``;
+    * future period end or availability before period end → ``pit_excluded``;
+      all date exclusion reasons and supplied identities are retained, uncapped;
     * ``fiscal_quarter`` set (1-4) → ``quarterly_ignored`` (fs-v1 is annual);
     * ``value`` None / non-finite → ``null_values_dropped``;
     * no fiscal year and no period_end to derive one from → ``rows_unusable``;
@@ -189,26 +189,38 @@ def pit_snapshot(rows: Iterable[Sequence[Any]], as_of: date) -> PitSnapshot:
         "null_values_dropped": 0,
         "rows_unusable": 0,
         "duplicate_rows": 0,
+        "missing_period_end": 0,
+        "available_before_period_end": 0,
+        "period_end_after_as_of": 0,
     }
     # (fiscal_year, statement, line_item) -> (available_at, period label, value)
     chosen: dict[tuple[int, str, str], tuple[date, str, float]] = {}
     period_end_by_year: dict[int, date | None] = {}
+    excluded_rows: list[dict[str, Any]] = []
 
     for row in rows:
         notes["rows_seen"] += 1
-        statement, line_item, _period, period_end, fiscal_year, fiscal_quarter, value, available_at = row
+        statement, line_item, _period, period_end, fiscal_year, fiscal_quarter, value, available_at = row[:8]
+        metadata = dict(row[8]) if len(row) > 8 and isinstance(row[8], Mapping) else {}
         if statement not in _STATEMENTS or not line_item:
             notes["rows_unusable"] += 1
             continue
+        avail = _to_date(available_at)
+        reasons = date_exclusion_reasons(period_end, available_at, as_of)
+        if reasons:
+            for reason in ("missing_available_at", "missing_period_end", "available_before_period_end", "period_end_after_as_of"):
+                if reason in reasons:
+                    notes[reason] += 1
+            if "missing_period_end" in reasons:
+                notes["rows_unusable"] += 1
+            if any(reason in reasons for reason in ("available_after_as_of", "available_before_period_end", "period_end_after_as_of")):
+                notes["pit_excluded"] += 1
+            excluded_rows.append(exclusion_record({**metadata, "statement": statement, "line_item": line_item,
+                "period": _period, "period_end": period_end, "fiscal_year": fiscal_year,
+                "fiscal_quarter": fiscal_quarter, "value": value, "available_at": available_at}, reasons, as_of))
+            continue
         if fiscal_quarter not in (None, 0):
             notes["quarterly_ignored"] += 1
-            continue
-        avail = _to_date(available_at)
-        if avail is None:
-            notes["missing_available_at"] += 1
-            continue
-        if avail > as_of:
-            notes["pit_excluded"] += 1
             continue
         if value is None or not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
             notes["null_values_dropped"] += 1
@@ -257,7 +269,8 @@ def pit_snapshot(rows: Iterable[Sequence[Any]], as_of: date) -> PitSnapshot:
         for fy, stmts in sorted(by_year.items(), key=lambda kv: kv[0], reverse=True)
     )
     notes["annual_points"] = len(points)
-    return PitSnapshot(as_of=as_of, points=points, notes=notes)
+    excluded_rows.sort(key=lambda item: json.dumps(item, sort_keys=True))
+    return PitSnapshot(as_of=as_of, points=points, notes=notes, excluded_rows=tuple(excluded_rows))
 
 
 def inputs_hash(snapshot: PitSnapshot, price_ctx: Mapping[str, Any] | None) -> str:
@@ -282,6 +295,8 @@ def inputs_hash(snapshot: PitSnapshot, price_ctx: Mapping[str, Any] | None) -> s
         "price_date": _iso(ctx.get("price_date")),
         "shares_fallback": ctx.get("shares_fallback"),
     }
+    if snapshot.excluded_rows:
+        payload["pit_exclusions"] = snapshot.excluded_rows
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
@@ -884,6 +899,7 @@ def compute_features_detailed(
             reasons[f.name] = reason or REASON_MISSING
     calc.context["flags"] = sorted(set(calc.flags))
     calc.context["pit_notes"] = dict(snapshot.notes)
+    calc.context["pit_exclusions"] = list(snapshot.excluded_rows)
     return FeatureResult(values=values, reasons=reasons, context=calc.context, applicable=applicable)
 
 

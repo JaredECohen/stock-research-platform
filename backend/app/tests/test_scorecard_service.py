@@ -18,7 +18,7 @@ import pytest
 
 from app.database import SessionLocal
 from app.finance import scorecard_spec
-from app.models import PriceMonthEnd, ScorecardScore, ScorecardVersion
+from app.models import FinancialPeriod, PriceMonthEnd, ScorecardScore, ScorecardVersion
 from app.services import scorecard_pit, scorecard_queue
 from app.services import scorecard_service as svc
 from app.tests.scorecard_helpers import REQUESTED_BY, insert_run, purge, score_rows_for_run, seed_universe
@@ -166,6 +166,38 @@ def test_identical_inputs_are_skipped_without_writing_rows():
     assert score_rows_for_run(second["id"]) == []
     # The reader still resolves the first (succeeded) run.
     assert svc.latest_score("ZSC0")["run_id"] == first["run_id"]
+
+
+def test_normal_score_execution_persists_full_invalid_date_identity_without_mutating_fact():
+    """The real stream/feature/persistence path owns the observed LULU date defect."""
+    with SessionLocal() as db:
+        row = FinancialPeriod(ticker="ZSC0", period="FY_BAD_DATE", statement="balance",
+            line_item="short_term_debt", value=298724000.0, period_end=date(2026, 2, 1),
+            fiscal_year=2025, fiscal_quarter=None, available_at=date(2025, 4, 18),
+            available_at_source="lag_rule", currency="USD", source="fmp")
+        db.add(row)
+        db.commit()
+        ident = row.id
+        before = {column.key: getattr(row, column.key) for column in FinancialPeriod.__table__.columns}
+    try:
+        out = _run()
+        assert out["status"] == scorecard_queue.STATUS_SUCCEEDED
+        assert "available_before_period_end=1" in out["note"]
+        scored = next(row for row in score_rows_for_run(out["id"]) if row.ticker == "ZSC0")
+        audit = scored.feature_raw["_context"]["pit_exclusions"]
+        excluded = next(row for row in audit if row["id"] == ident)
+        assert excluded["ticker"] == "ZSC0" and excluded["source"] == "fmp"
+        assert excluded["available_at"] == "2025-04-18" and excluded["period_end"] == "2026-02-01"
+        assert excluded["reasons"] == ["available_before_period_end"]
+        with SessionLocal() as db:
+            stored = db.get(FinancialPeriod, ident)
+            assert {column.key: getattr(stored, column.key) for column in FinancialPeriod.__table__.columns} == before
+        # Repeating a future normal execution still skips identical full inputs.
+        assert _run()["status"] == scorecard_queue.STATUS_SKIPPED
+    finally:
+        with SessionLocal() as db:
+            db.delete(db.get(FinancialPeriod, ident))
+            db.commit()
 
 
 def test_failed_run_leaves_no_score_rows(monkeypatch):

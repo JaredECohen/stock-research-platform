@@ -480,21 +480,24 @@ def test_snapshot_as_of_excludes_future_and_undated_rows_and_counts_them():
     assert snap["periods"][0]["income"] == {"revenue": 2024.0}
     assert snap["periods"][0]["balance"] == {"total_assets": 4048.0}
     assert snap["periods"][0]["cash"] == {}
-    assert snap["excluded"] == {"null_available_at": 1, "after_as_of": 2}
+    assert snap["excluded"] == {"null_available_at": 1, "after_as_of": 2, "missing_period_end": 0,
+        "available_before_period_end": 0, "period_end_after_as_of": 2}
     assert len(snap["rows"]) == 4
     assert snap["price"]["month_end"] == date(2025, 1, 31) and snap["price"]["close"] == 50.0
 
     # On the availability date itself the row is in (<=, not <).
     on_day = scorecard_pit.snapshot_as_of(T, date(2026, 2, 27))
     assert on_day["latest_period"] == "FY2025"
-    assert on_day["excluded"] == {"null_available_at": 1, "after_as_of": 0}
+    assert on_day["excluded"] == {"null_available_at": 1, "after_as_of": 0, "missing_period_end": 0,
+        "available_before_period_end": 0, "period_end_after_as_of": 0}
     assert on_day["price"]["month_end"] == date(2025, 3, 31)
 
     # Before anything was public: empty, explained, no price.
     early = scorecard_pit.snapshot_as_of(T, date(2023, 6, 30))
     assert early["periods"] == [] and early["latest_period"] is None
     assert early["data_available_at"] is None and early["price"] is None
-    assert early["excluded"] == {"null_available_at": 1, "after_as_of": 6}
+    assert early["excluded"] == {"null_available_at": 1, "after_as_of": 6, "missing_period_end": 0,
+        "available_before_period_end": 0, "period_end_after_as_of": 6}
     _clear(T)
 
 

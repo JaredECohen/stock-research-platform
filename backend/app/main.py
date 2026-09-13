@@ -203,6 +203,12 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def _startup() -> None:
+        # Fail closed before lifespan completion, even on a web-only process:
+        # enqueue/status routes also query the mapped regeneration job schema.
+        # This is DB-only and deliberately outside the best-effort seed block.
+        from .database import bootstrap_runtime_schema
+        bootstrap_runtime_schema()
+
         # One line saying which provider and which model each role actually
         # resolved to — the answer to "why did the sector agent run on
         # haiku?" without grepping env. Names and booleans only.

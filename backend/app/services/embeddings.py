@@ -70,6 +70,8 @@ def embed(texts: Sequence[str]) -> list[list[float]]:
         try:
             from openai import OpenAI
             client = OpenAI(api_key=settings.openai_api_key)
+            from .regen_lease import assert_current
+            assert_current()
             resp = client.embeddings.create(model=EMBEDDING_MODEL, input=list(texts))
             return [d.embedding for d in resp.data]
         except Exception as exc:  # pragma: no cover — fall back rather than fail

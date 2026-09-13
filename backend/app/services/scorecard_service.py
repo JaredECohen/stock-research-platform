@@ -12,9 +12,9 @@ tells cron-health whether an empty run was "nothing due" or "something
 broke". Score rows and the run's outcome commit in ONE transaction, so a
 failed run leaves no rows and a succeeded run is never missing any.
 
-Point-in-time rules honoured here, not re-derived: only rows with
-`available_at <= as_of` reach the feature engine (NULL availability is
-excluded and counted, never guessed); the price on the as-of date comes
+Point-in-time eligibility is enforced by the feature engine: period ends
+and availability must be known, completed by as_of, and mutually consistent.
+Unknown or contradictory dates are excluded and fully diagnosed; the price on the as-of date comes
 from the month-end store when the store already holds the AS-OF MONTH
 (the exact close the evaluation later joins against) and otherwise from
 the SAME 252-day cached series the rest of the app uses — no new provider
@@ -462,7 +462,9 @@ def _iter_period_rows(db: Session, tickers: list[str]) -> Iterator[tuple[str, li
     """Stream `financial_periods` grouped by ticker, in the row contract
     `scorecard_features.pit_snapshot` expects, holding one ticker's rows
     at a time. NULL availability rows are passed through so the engine
-    can count them (`missing_available_at`) rather than silently dropped."""
+    can count them (`missing_available_at`) rather than silently dropped.
+    The optional final mapping retains complete source/ID/date provenance for
+    the engine's uncapped, persisted date-exclusion diagnostics."""
     if not tickers:
         return
     stmt = (
@@ -470,6 +472,8 @@ def _iter_period_rows(db: Session, tickers: list[str]) -> Iterator[tuple[str, li
             FinancialPeriod.ticker, FinancialPeriod.statement, FinancialPeriod.line_item,
             FinancialPeriod.period, FinancialPeriod.period_end, FinancialPeriod.fiscal_year,
             FinancialPeriod.fiscal_quarter, FinancialPeriod.value, FinancialPeriod.available_at,
+            FinancialPeriod.id, FinancialPeriod.source, FinancialPeriod.currency,
+            FinancialPeriod.available_at_source, FinancialPeriod.fetched_at,
         )
         .where(FinancialPeriod.ticker.in_(tickers))
         .order_by(FinancialPeriod.ticker, FinancialPeriod.id)
@@ -483,7 +487,9 @@ def _iter_period_rows(db: Session, tickers: list[str]) -> Iterator[tuple[str, li
             if current is not None:
                 yield current, bucket
             current, bucket = t, []
-        bucket.append(tuple(row[1:]))
+        metadata = {"ticker": t, "id": row[9], "source": row[10], "currency": row[11],
+                    "available_at_source": row[12], "fetched_at": row[13]}
+        bucket.append((*tuple(row[1:9]), metadata))
     if current is not None:
         yield current, bucket
 
@@ -566,7 +572,8 @@ def _run_scorecard_inner(
         per_ticker_hash: dict[str, str] = {}
         seen: set[str] = set()
         counts = {"pit_excluded": 0, "null_available_at": 0, "no_price": 0, "no_snapshot": 0,
-                  "price_from_store": 0, "price_from_series": 0, "price_stale": 0}
+                  "price_from_store": 0, "price_from_series": 0, "price_stale": 0,
+                  "missing_period_end": 0, "available_before_period_end": 0, "period_end_after_as_of": 0}
 
         def _score_one(t: str, rows: list[tuple[Any, ...]]) -> None:
             m = by_ticker[t]
@@ -579,6 +586,8 @@ def _run_scorecard_inner(
             per_ticker_hash[t] = scorecard_features.inputs_hash(snapshot, ctx)
             counts["pit_excluded"] += snapshot.notes.get("pit_excluded", 0)
             counts["null_available_at"] += snapshot.notes.get("missing_available_at", 0)
+            for key in ("missing_period_end", "available_before_period_end", "period_end_after_as_of"):
+                counts[key] += snapshot.notes.get(key, 0)
             if ctx["price"] is None:
                 counts["no_price"] += 1
             if snapshot.latest is None:
@@ -660,6 +669,9 @@ def _run_scorecard_inner(
             f"price_store={counts['price_from_store']}", f"price_series={counts['price_from_series']}",
             f"price_stale={counts['price_stale']}",
             f"pit_excluded={counts['pit_excluded']}", f"null_available_at={counts['null_available_at']}",
+            f"missing_period_end={counts['missing_period_end']}",
+            f"available_before_period_end={counts['available_before_period_end']}",
+            f"period_end_after_as_of={counts['period_end_after_as_of']}",
             f"available_at_filled={filled.get('filled', 0)}",
             f"sector_unmatched={sum(n['sectors_unmatched'].values())}",
             f"sector_fallback_rows={sum(n['sector_fallback_feature_rows'].values())}",

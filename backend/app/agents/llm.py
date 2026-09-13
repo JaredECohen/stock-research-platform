@@ -583,6 +583,8 @@ def gemini_chat_text(
     Generate Content API. The caller is responsible for filtering grounded
     sources against any allow/block list.
     """
+    from ..services.regen_lease import assert_current
+    assert_current()
     if _breaker_open("gemini"):
         return None
     client = _gemini_client()
@@ -651,6 +653,8 @@ def gemini_chat_json(
     instruction and parses the result with the same `_extract_json` helper as
     the Anthropic branch.
     """
+    from ..services.regen_lease import assert_current
+    assert_current()
     sys_with_json = (system + "\n\nReturn ONLY valid JSON, no prose.").strip()
     return gemini_chat_text(
         prompt, system=sys_with_json, model=model,
@@ -976,6 +980,8 @@ def _call_json(
     `_model_matches_provider` for this provider — the failover hop passes
     None so it lands on the partner's own route default.
     """
+    from ..services.regen_lease import assert_current
+    assert_current()
     if provider == "anthropic":
         client = _anthropic_client()
         if client is None:
@@ -1009,6 +1015,8 @@ def _call_text(
     max_tokens: int, model: str | None,
 ) -> str | None:
     """Text twin of `_call_json`; same contract."""
+    from ..services.regen_lease import assert_current
+    assert_current()
     if provider == "anthropic":
         client = _anthropic_client()
         if client is None:
