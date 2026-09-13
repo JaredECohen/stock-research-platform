@@ -19,6 +19,7 @@ sense for live recommendations.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date as _date
 from datetime import datetime, timedelta
 from typing import Any
@@ -115,8 +116,13 @@ def _dated_close(row: dict[str, Any]) -> tuple[str, float] | None:
     if not d:
         return None
     try:
-        return d, float(row.get("close") or row.get("adjusted_close"))
-    except (TypeError, ValueError):
+        _date.fromisoformat(d)
+        value = row.get("close")
+        if value is None:
+            value = row.get("adjusted_close")
+        close = float(value)
+        return (d, close) if math.isfinite(close) and close > 0 else None
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -216,6 +222,11 @@ def _target_close(
     return None
 
 
+def _close_on_exact_date(rows: list[dict[str, Any]], target: str) -> tuple[str, float] | None:
+    hit = _dated_close_on_or_before(rows, target)
+    return hit if hit is not None and hit[0] == target else None
+
+
 def _thesis_held(rating: str, return_signed: float) -> bool | None:
     """Did the recommendation pay off?
 
@@ -313,18 +324,12 @@ def _evaluate_one(
         # the response, not about the memo, and it must not be filed under
         # the permanent bucket that deliberately keeps the loop green.
         #
-        # A full-length answer can never land here.  `window_days` is a
-        # *calendar*-day count and providers read it as bars, so a full
-        # response spans ~40% more calendar days than requested; under the
-        # other reading it spans exactly `window_days`.  Both are at least
-        # `memo age + MEMO_WINDOW_BUFFER_DAYS`, so both reach past the
-        # memo (`test_a_full_length_response_always_reaches_the_memo`
-        # pins this).  Reaching this line therefore means the provider
-        # returned *less* than was asked for.  That is usually transient —
-        # a fallback leg answering with a truncated series, e.g. Tiingo's
-        # history call, which sends no `startDate` — and where it is not,
-        # a symbol whose coverage genuinely starts later is still a
-        # provider gap an operator can act on.  Either way: an outage.
+        # A complete daily series over the requested span reaches the
+        # memo, but row count alone proves nothing: duplicate dates, gaps,
+        # and invalid prices can make even a full-length response unusable.
+        # Truncated fallback responses used to include Tiingo's latest-only
+        # request (now fixed with explicit dates). These remain provider
+        # shortfalls an operator can investigate, not a permanent memo age.
         return None, "price_history_too_short"
     baseline_date, price_at_memo = memo_hit
 
@@ -335,12 +340,11 @@ def _evaluate_one(
 
     forward_return = (price_at_target - price_at_memo) / price_at_memo
 
-    # Benchmark-relative alpha (None if the benchmark's own baseline or
-    # target close isn't available at the same dates — a shifted benchmark
-    # baseline corrupts alpha exactly the way a shifted ticker baseline
-    # corrupts the return).
-    bench_memo_hit = _baseline_close(bench_rows, generated_date)
-    bench_target_hit = _target_close(bench_rows, target_date)
+    # Alpha compares identical holding periods. Choosing the benchmark
+    # independently within a tolerance can subtract returns from different
+    # sessions when either tape has missing bars or a trading halt.
+    bench_memo_hit = _close_on_exact_date(bench_rows, baseline_date)
+    bench_target_hit = _close_on_exact_date(bench_rows, target_hit[0])
     bench_return: float | None = None
     alpha: float | None = None
     if bench_memo_hit and bench_target_hit and bench_memo_hit[1] > 0:
@@ -376,6 +380,13 @@ def _evaluate_one(
             f"benchmark_target={bench_target_hit[0]}",
         ])
         note_parts.append(f"alpha={alpha:+.2%}")
+    else:
+        note_parts.extend([
+            f"benchmark={benchmark}",
+            "alpha_unavailable=benchmark_missing_exact_dates",
+            f"benchmark_required_baseline={baseline_date}",
+            f"benchmark_required_target={target_hit[0]}",
+        ])
     if held is not None:
         note_parts.append("thesis_held" if held else "thesis_broken")
     note = ", ".join(note_parts)

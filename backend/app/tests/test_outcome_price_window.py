@@ -243,6 +243,65 @@ def test_all_four_horizons_reuse_the_actual_persistent_provider_cache(monkeypatc
     assert set(keys) == {f"{ticker}:800", f"{benchmark}:800"}
 
 
+@pytest.mark.parametrize("missing", [None, "baseline", "target"])
+def test_alpha_uses_exact_actual_ticker_dates_or_is_unavailable(missing):
+    memo_date = ANCHOR - timedelta(days=100)
+    target_date = memo_date + timedelta(days=30)
+    baseline = (memo_date + timedelta(days=2)).isoformat()
+    target = (target_date - timedelta(days=1)).isoformat()
+    ticker = f"TSTWALIGN{missing or 'OK'}".upper()
+    snap = _seed(ticker, memo_date=memo_date)
+    bench_rows = [
+        {"date": memo_date.isoformat(), "close": 200},
+        {"date": baseline, "close": 250},
+        {"date": target, "close": 275},
+        {"date": target_date.isoformat(), "close": 200},
+    ]
+    if missing:
+        absent = baseline if missing == "baseline" else target
+        bench_rows = [row for row in bench_rows if row["date"] != absent]
+    provider = _BarProvider({
+        ticker: [{"date": baseline, "close": 100}, {"date": target, "close": 110}],
+        BENCH: bench_rows,
+    })
+    with _stub(provider):
+        out, status = _evaluate(snap, 30)
+    assert status == "written"
+    assert out.forward_return == pytest.approx(0.1)
+    if missing:
+        assert out.alpha is None and out.benchmark_return is None
+        assert "alpha_unavailable=benchmark_missing_exact_dates" in out.note
+        assert f"benchmark_required_baseline={baseline}" in out.note
+        assert f"benchmark_required_target={target}" in out.note
+    else:
+        assert out.benchmark_return == pytest.approx(0.1)
+        assert out.alpha == pytest.approx(0.0)
+        assert f"benchmark_baseline={baseline}" in out.note
+        assert f"benchmark_target={target}" in out.note
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf"), 0, -1, "invalid"])
+def test_invalid_target_price_is_never_scored(bad):
+    memo_date = ANCHOR - timedelta(days=100)
+    target = (memo_date + timedelta(days=30)).isoformat()
+    snap = _seed("TSTWINVALID", memo_date=memo_date)
+    provider = _BarProvider({
+        snap.ticker: [{"date": memo_date.isoformat(), "close": 100}, {"date": target, "close": bad}],
+        BENCH: [{"date": memo_date.isoformat(), "close": 200}, {"date": target, "close": 210}],
+    })
+    with _stub(provider):
+        out, status = _evaluate(snap, 30)
+    assert out is None and status == "price_window_incomplete"
+    assert outcome_service.get_outcomes_for_snapshot(snap.id) == []
+
+
+def test_dated_close_rejects_invalid_date_and_invalid_primary_even_with_adjusted_close():
+    assert outcome_service._dated_close({"date": "not-a-date", "close": 100}) is None
+    assert outcome_service._dated_close({"date": "2026-01-02", "close": 0, "adjusted_close": 100}) is None
+    assert outcome_service._dated_close({"date": "2026-01-02", "close": float("nan"), "adjusted_close": 100}) is None
+    assert outcome_service._dated_close({"date": "2026-01-02", "adjusted_close": 100}) == ("2026-01-02", 100)
+
+
 # ---------------------------------------------------------------------------
 # Claim A — an old memo must still be scoreable
 # ---------------------------------------------------------------------------
@@ -436,15 +495,15 @@ def test_short_provider_response_is_an_outage_not_a_permanent_refusal():
     assert out is not None and out.price_at_memo == 100.0
 
 
-def test_a_full_length_response_always_reaches_the_memo():
-    """Why a short answer is the only way into `price_history_too_short`.
+def test_complete_daily_tapes_cover_the_memo_under_bar_and_calendar_sizing():
+    """Complete tapes cover the memo under either interpretation of days.
 
     `window_days` is a calendar-day count and providers read it as bars,
     so a full-length response spans ~40% more calendar days than asked
     for; read as calendar days it spans exactly that many. Both are at
     least `memo age + MEMO_WINDOW_BUFFER_DAYS`, so both reach past the
-    memo. That is what licenses classifying this branch as a provider
-    shortfall instead of adding a length heuristic on top of it.
+    memo. Actual response dates still decide coverage: gaps, duplicate
+    dates and invalid prices can invalidate a nominally full response.
     """
     for age in (1, 30, 100, 200, 364, 500, 700, 790):
         memo_date = ANCHOR - timedelta(days=age)

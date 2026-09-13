@@ -48,6 +48,10 @@ not proof that older market data does not exist. Skipped pair identifiers are
 reported in the loop note and logs. New outcomes record ticker baseline and
 target dates, requested window, and (when alpha exists) benchmark dates and
 symbol. These identify the chosen observations, not their economic validity.
+Benchmark returns require valid closes on those exact ticker observation
+dates. Missing either close preserves the directional outcome but leaves
+alpha/benchmark return unavailable, with the required dates recorded in the
+note. Non-finite and nonpositive prices cannot become scored observations.
 
 Provider verification found that the actual price chain is FMP → Tiingo →
 Polygon. FMP sends `limit=days`; Polygon requests a date interval and retains
