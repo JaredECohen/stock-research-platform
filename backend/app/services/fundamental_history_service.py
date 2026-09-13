@@ -10,6 +10,7 @@ import logging
 import math
 from datetime import UTC, date, datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
@@ -31,6 +32,9 @@ BLOCKING_ISSUES = {
     "invalid_period", "invalid_stored_period", "conflicting_stored_statement", "invalid_stored_value_or_currency",
     "missing_stored_primary_value", "invalid_coverage_period", "stored_period_alias_conflict", "refresh_incomplete",
     "coverage_gap", "stored_fetch_stale",
+    "legacy_period_relabel_conflict",
+    "ambiguous_provider_period_end",
+    "duplicate_stored_period_end",
 }
 
 
@@ -92,7 +96,22 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
                 continue
             canonical = f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}"
             groups.setdefault((row.statement, canonical), []).append(row)
+        periods_by_end: dict[tuple, set] = {}
         for (statement, period), group in groups.items():
+            for row in group:
+                periods_by_end.setdefault((statement, history._parse_period(period)[1] is not None, row.period_end), set()).add(period)
+        duplicate_keys = set()
+        for (statement, _, end), periods in periods_by_end.items():
+            if len(periods) > 1:
+                duplicate_keys.update((statement, period) for period in periods)
+                issues.append({"kind": "duplicate_stored_period_end", "ticker": ticker.strip().upper(),
+                    "statement": statement, "period_end": end.isoformat(), "periods": sorted(periods),
+                    "rows": [{"id": row.id, "period": row.period, "line_item": row.line_item,
+                              "period_end": str(row.period_end), "source": row.source}
+                             for period in sorted(periods) for row in groups[(statement, period)]]})
+        for (statement, period), group in groups.items():
+            if (statement, period) in duplicate_keys:
+                continue
             ends = {r.period_end for r in group}
             currencies = {r.currency for r in group}
             values: dict[str, set[float]] = {}
@@ -245,6 +264,7 @@ def _clean_payload(raw: dict, provider: str, symbol: str, issues: list[dict]) ->
                 continue
             item = {"period": f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}", "period_end": period_end.isoformat(),
                     "currency": currency, "source": provider,
+                    "fiscal_label_source": row.get("fiscal_label_source"),
                     "filing_date": row.get("filing_date"), "accepted_date": row.get("accepted_date")}
             for line in whitelist:
                 value = row.get(line)
@@ -287,6 +307,18 @@ def _clean_payload(raw: dict, provider: str, symbol: str, issues: list[dict]) ->
                                                 "values": {key: r.get(key) for key in sorted(conflicts)}} for index, r in enumerate(group)]})
             else:
                 clean[statement].append(combined)
+        by_end: dict[tuple, list] = {}
+        for row in clean[statement]:
+            key = (row["period_end"], history._parse_period(row["period"])[1] is not None)
+            by_end.setdefault(key, []).append(row)
+        ambiguous = [group for group in by_end.values() if len({row["period"] for row in group}) > 1]
+        rejected_periods = {row["period"] for group in ambiguous for row in group}
+        for group in ambiguous:
+            issues.append({"kind": "ambiguous_provider_period_end", "provider": provider, "symbol": symbol,
+                "statement": statement, "period_end": group[0]["period_end"],
+                "periods": [row["period"] for row in group],
+                "line_items": sorted({line for row in group for line in LINES[statement] if line in row})})
+        clean[statement] = [row for row in clean[statement] if row["period"] not in rejected_periods]
     return clean
 
 
@@ -334,6 +366,111 @@ def _fetch_financial_history(ticker: str, start: date) -> tuple[list[dict], list
     return payloads, issues, attempts
 
 
+def _relabel_legacy_periods(db: Session, ticker: str, rows: list, payloads: list[dict], report: dict) -> None:
+    """Move only provider-confirmed legacy identities, preserving every row.
+
+    The whole destination graph is validated before temporary keys are used.
+    Cycles/chains move atomically; a blocked destination blocks its dependents.
+    Inferred provider labels never authorize a migration of existing facts.
+    """
+    labels: dict[tuple, set[tuple[str, str]]] = {}
+    for payload in payloads:
+        for statement, whitelist in LINES.items():
+            for incoming in payload[statement]:
+                if incoming.get("fiscal_label_source") != "provider":
+                    continue
+                end = history._coerce_date(incoming["period_end"])
+                for line in whitelist:
+                    if line in incoming:
+                        labels.setdefault((statement, line, end), set()).add((incoming["period"], incoming["source"]))
+    by_key: dict[tuple, list] = {}
+    moves = {}
+    for row in rows:
+        fy, fq = history._parse_period(row.period)
+        canonical = (f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}") if fy else row.period
+        by_key.setdefault((canonical, row.statement, row.line_item), []).append(row)
+        if row.source not in LEGACY_SOURCES or row.period_end is None:
+            continue
+        old_quarter = fq if fy else row.fiscal_quarter
+        candidates = {(period, provider) for period, provider in labels.get((row.statement, row.line_item, row.period_end), set())
+                      if (history._parse_period(period)[1] is not None) == (old_quarter is not None)}
+        destinations = {period for period, _ in candidates}
+        if len(destinations) > 1:
+            report["issues"].append({"kind": "legacy_period_relabel_conflict", "ticker": ticker, "id": row.id,
+                "statement": row.statement, "line_item": row.line_item, "period": row.period,
+                "period_end": row.period_end.isoformat(), "reason": "ambiguous_provider_labels",
+                "candidates": [{"period": p, "provider": s} for p, s in sorted(candidates)]})
+        elif destinations and (new_period := next(iter(destinations))) != canonical:
+            moves[row.id] = {"row": row, "destination": (new_period, row.statement, row.line_item),
+                             "providers": sorted({provider for _, provider in candidates})}
+    blocked = set()
+    destination_ids: dict[tuple, list[int]] = {}
+    for row_id, move in moves.items():
+        destination_ids.setdefault(move["destination"], []).append(row_id)
+    for row_ids in destination_ids.values():
+        if len(row_ids) > 1:
+            optional_nulls = [row_id for row_id in row_ids if moves[row_id]["row"].value is None
+                              and moves[row_id]["row"].line_item != PRIMARY.get(moves[row_id]["row"].statement)]
+            blocked.update(optional_nulls)
+            populated = [row_id for row_id in row_ids if row_id not in optional_nulls]
+            if len(populated) > 1:
+                blocked.update(populated)
+    changed = True
+    while changed:
+        changed = False
+        for row_id, move in moves.items():
+            if row_id in blocked:
+                continue
+            occupants = [r for r in by_key.get(move["destination"], []) if r.id != row_id]
+            if any(r.id not in moves or r.id in blocked for r in occupants):
+                blocked.add(row_id)
+                changed = True
+    for row_id in blocked:
+        move = moves[row_id]
+        row = move["row"]
+        optional_null = row.value is None and row.line_item != PRIMARY.get(row.statement)
+        report["issues"].append({"kind": "legacy_period_relabel_optional_null" if optional_null else "legacy_period_relabel_conflict",
+            "ticker": ticker, "id": row.id, "statement": row.statement, "line_item": row.line_item,
+            "period": row.period, "period_end": row.period_end.isoformat(), "destination_period": move["destination"][0],
+            "reason": "destination_collision", "source": row.source,
+            "destination_rows": [{"id": r.id, "period": r.period, "period_end": str(r.period_end), "source": r.source}
+                                 for r in by_key.get(move["destination"], [])]})
+    approved = [move for row_id, move in moves.items() if row_id not in blocked]
+    if not approved:
+        return
+    audits = []
+    for move in approved:
+        row = move["row"]
+        fy, fq = history._parse_period(move["destination"][0])
+        audits.append({"ticker": ticker, "id": row.id, "statement": row.statement, "line_item": row.line_item,
+            "old_period": row.period, "new_period": move["destination"][0],
+            "old_fiscal_year": row.fiscal_year, "new_fiscal_year": fy,
+            "old_fiscal_quarter": row.fiscal_quarter, "new_fiscal_quarter": fq,
+            "old_source": row.source, "new_source": row.source,
+            "old_value": row.value if row.value is None or math.isfinite(row.value) else str(row.value),
+            "new_value": row.value if row.value is None or math.isfinite(row.value) else str(row.value),
+            "old_period_end": row.period_end.isoformat(), "new_period_end": row.period_end.isoformat(),
+            "currency": row.currency, "available_at_preserved": row.available_at.isoformat() if row.available_at else None,
+            "label_providers": move["providers"]})
+    # SQLite defers its physical BEGIN until a write; a SAVEPOINT after only
+    # SELECTs could otherwise become a standalone transaction and commit on
+    # release, escaping the outer backfill rollback.
+    connection = db.connection()
+    if connection.dialect.name == "sqlite" and not connection.connection.dbapi_connection.in_transaction:
+        connection.exec_driver_sql("BEGIN")
+    with db.begin_nested():
+        for move in approved:
+            move["row"].period = "~" + uuid4().hex[:15]
+        db.flush()
+        for move in approved:
+            row = move["row"]
+            row.period = move["destination"][0]
+            row.fiscal_year, row.fiscal_quarter = history._parse_period(row.period)
+        db.flush()
+    report["period_relabels"].extend(audits)
+    report["rows_relabelled"] += len(approved)
+
+
 def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = False, *, db: Session | None = None) -> dict:
     """Populate durable fundamentals only, with explicit complete/partial coverage.
 
@@ -350,6 +487,7 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
     report: dict[str, Any] = {"ticker": ticker, "requested_start": start.isoformat(), "requested_end": _today().isoformat(),
                               "rows_written": 0, "periods_received": {s: 0 for s in LINES}, "provider": [], "attempts": [], "issues": [],
                               "source_upgrades": [], "refresh_complete": False, "rows_refreshed": 0,
+                              "period_relabels": [], "rows_relabelled": 0,
                               "point_in_time": "latest_restated_values_at_original_availability", "committed": False}
     try:
         FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
@@ -359,10 +497,16 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         if not force_refresh and _complete(before) and _fresh(before) and not _has_blockers(report["issues"]):
             report.update(coverage=before, success=True, source="database", committed=own)
             return report
+        existing_dates = list(db.execute(select(FinancialPeriod.period_end).where(
+            FinancialPeriod.ticker == ticker, FinancialPeriod.source.in_(LEGACY_SOURCES),
+            FinancialPeriod.period_end.is_not(None), FinancialPeriod.period_end <= _today(),
+        )).scalars())
+        fetch_start = min([start, *existing_dates])
+        report["provider_requested_start"] = fetch_start.isoformat()
         # End the owned read transaction before spending time on provider IO.
         if own:
             db.rollback()
-        payloads, issues, attempts = _fetch_financial_history(ticker, start)
+        payloads, issues, attempts = _fetch_financial_history(ticker, fetch_start)
         report["issues"].extend(issues)
         report["attempts"] = attempts
         incoming = {s: [row for payload in payloads for row in payload[s]] for s in LINES}
@@ -372,7 +516,9 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                                      "coverage": _coverage(incoming, start, _today())})
         existing = {}
         aliases: dict[tuple[str, str, str], list] = {}
-        for r in db.execute(select(FinancialPeriod).where(FinancialPeriod.ticker == ticker)).scalars():
+        existing_rows = list(db.execute(select(FinancialPeriod).where(FinancialPeriod.ticker == ticker)).scalars())
+        _relabel_legacy_periods(db, ticker, existing_rows, payloads, report)
+        for r in existing_rows:
             fy, fq = history._parse_period(r.period)
             canonical = (f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}") if fy else r.period
             aliases.setdefault((canonical, r.statement, r.line_item), []).append(r)
@@ -481,7 +627,7 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         if own:
             db.rollback()
         log.warning("fundamentals history %s failed: %s", ticker, type(exc).__name__)
-        report.update(success=False, rows_written=0, rows_refreshed=0)
+        report.update(success=False, rows_written=0, rows_refreshed=0, rows_relabelled=0)
         report["issues"].append({"kind": "persistence_or_read_error", "error_type": type(exc).__name__})
         return report
     finally:
