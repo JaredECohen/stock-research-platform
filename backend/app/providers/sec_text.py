@@ -23,9 +23,20 @@ def decoded_bytes(chunks: Iterable[bytes], encoding: str) -> Iterator[bytes]:
     if encoding not in ("gzip", "x-gzip", "deflate"):
         raise ValueError(f"unsupported SEC content encoding: {encoding}")
     decoder = None
+    prefix = b""
     for raw in chunks:
         if decoder is None:
-            window = 31 if encoding in ("gzip", "x-gzip") else 15
+            prefix += raw
+            if encoding == "deflate" and len(prefix) < 2:
+                continue
+            raw, prefix = prefix, b""
+            if encoding in ("gzip", "x-gzip"):
+                window = 31
+            else:
+                # Some servers send raw DEFLATE despite the HTTP header's
+                # zlib-wrapper convention; HTTPX supports both forms too.
+                zlib_header = raw[0] & 15 == 8 and int.from_bytes(raw[:2], "big") % 31 == 0
+                window = 15 if zlib_header else -15
             decoder = zlib.decompressobj(window)
         pending = raw
         while pending:
@@ -102,7 +113,7 @@ class BoundedHTMLStripper(HTMLParser):
     _BLOCK_TAGS = {"p", "br", "tr", "li", "div", "h1", "h2", "h3", "h4"}
 
     def __init__(self, limit: int) -> None:
-        super().__init__(convert_charrefs=True)
+        super().__init__(convert_charrefs=False)
         self.output = TextPrefix(limit)
         self.skip_depth = 0
         self.oversized_tokens = 0
@@ -113,6 +124,15 @@ class BoundedHTMLStripper(HTMLParser):
         self._cdata_overflow = False
         self._oversized_open_tag: str | None = None
         self._markup_last = ""
+        self._numeric_base = 10
+        self._numeric_value = 0
+        self._source_index = 0
+
+    def updatepos(self, i: int, j: int) -> int:
+        # HTMLParser calls this immediately before each entity callback.
+        # Keep its bounded-buffer cursor so optional semicolons remain exact.
+        self._source_index = j
+        return super().updatepos(i, j)
 
     def handle_starttag(self, tag: str, attrs) -> None:
         self.output.append(" ")
@@ -133,22 +153,66 @@ class BoundedHTMLStripper(HTMLParser):
     def handle_decl(self, decl: str) -> None:
         self.output.append(" ")
 
+    def unknown_decl(self, data: str) -> None:
+        self.output.append(" ")
+
+    def handle_pi(self, data: str) -> None:
+        self.output.append(" ")
+
     def handle_data(self, data: str) -> None:
         if not self.skip_depth:
             # Physical HTTP chunks are not semantic boundaries: adding a
             # separator on every callback would split words at 64 KiB.
             self.output.append(data)
 
+    def handle_entityref(self, name: str) -> None:
+        end = self._source_index + len(name) + 1
+        suffix = ";" if self.rawdata[end:end + 1] == ";" else ""
+        self.handle_data(html.unescape(f"&{name}{suffix}"))
+
+    def handle_charref(self, name: str) -> None:
+        hexadecimal = name.lower().startswith("x")
+        digits = (name[1:] if hexadecimal else name).lstrip("0") or "0"
+        # Avoid Python's integer-string conversion limit. Any significant
+        # numeric reference this long is outside Unicode, regardless of radix.
+        value = 0x110000 if len(digits) > 7 else int(digits, 16 if hexadecimal else 10)
+        self.handle_data(html.unescape(f"&#{value};"))
+
     def _drain_markup(self, data: str) -> str:
-        if self._discard == "comment":
+        if self._discard in ("comment", "marked"):
             combined = self._comment_tail + data
-            end = combined.find("-->")
-            if end < 0:
-                self._comment_tail = combined[-2:]
+            pattern = r"--!?>" if self._discard == "comment" else r"\]\]>"
+            match = re.search(pattern, combined)
+            if match is None:
+                self._comment_tail = combined[-3:]
                 return ""
             self._comment_tail = ""
             self._discard = None
-            return combined[end + 3:]
+            return combined[match.end():]
+        if self._discard == "numeric":
+            digits = "0123456789abcdefABCDEF" if self._numeric_base == 16 else "0123456789"
+            for index, char in enumerate(data):
+                if char not in digits:
+                    self.handle_data(html.unescape(f"&#{self._numeric_value};"))
+                    self._discard = None
+                    return data[index + (char == ";"):]
+                self._numeric_value = min(
+                    0x110000, self._numeric_value * self._numeric_base + int(char, self._numeric_base),
+                )
+            return ""
+        if self._discard == "cdata_close":
+            for index, char in enumerate(data):
+                if char == ">":
+                    self.handle_endtag(self.cdata_elem)
+                    self.clear_cdata_mode()
+                    self._discard = None
+                    return data[index + 1:]
+                if not char.isspace():
+                    # It was script content resembling an incomplete end
+                    # tag. Keep skipping script text until a real end tag.
+                    self._discard = None
+                    return data[index:]
+            return ""
         for index, char in enumerate(data):
             if self._quote:
                 if char == self._quote:
@@ -185,17 +249,33 @@ class BoundedHTMLStripper(HTMLParser):
                 if not self._cdata_overflow:
                     self.oversized_tokens += 1
                     self._cdata_overflow = True
-                # Keep enough suffix to recognize a closing tag that
-                # straddles the next feed; all earlier content is skipped.
-                self.rawdata = pending[-128:]
+                end_tag = re.search(rf"</\s*{re.escape(self.cdata_elem)}\s*$", pending, re.IGNORECASE)
+                if end_tag:
+                    self._discard = "cdata_close"
+                else:
+                    # Keep enough suffix to recognize a closing tag that
+                    # straddles the next feed; earlier script text is skipped.
+                    self.rawdata = pending[-128:]
             elif not pending.startswith("<"):
                 # No HTML entity name can be 64 KiB long. It is literal
                 # visible text, not a reason to buffer the rest of a filing.
                 self.oversized_tokens += 1
-                self.handle_data(html.unescape(pending))
+                numeric = re.search(r"&#([xX]?)([0-9a-fA-F]+)$", pending)
+                if numeric and (numeric[1] or numeric[2].isdigit()):
+                    self.handle_data(pending[:numeric.start()])
+                    self._discard = "numeric"
+                    self._numeric_base = 16 if numeric[1] else 10
+                    self._numeric_value = 0
+                    self._drain_markup(numeric[2])
+                else:
+                    self.handle_data(html.unescape(pending))
             else:
                 self.oversized_tokens += 1
-                self._discard = "comment" if pending.startswith("<!--") else "tag"
+                self._discard = (
+                    "comment" if pending.startswith("<!--") else
+                    "marked" if pending.startswith("<![CDATA[") else "tag"
+                )
+                self.output.append(" ")
                 self._markup_last = ""
                 if self._discard == "tag":
                     match = re.match(r"<\s*(/?)\s*([a-zA-Z][\w:.-]*)", pending[:256])
@@ -211,3 +291,9 @@ class BoundedHTMLStripper(HTMLParser):
                 remainder = self._drain_markup(pending)
                 if remainder:
                     super().feed(remainder)
+
+    def close(self) -> None:
+        if self._discard == "numeric":
+            self.handle_data(html.unescape(f"&#{self._numeric_value};"))
+            self._discard = None
+        super().close()

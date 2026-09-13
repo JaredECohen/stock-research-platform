@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import gzip
 import logging
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -51,6 +52,16 @@ def test_existing_sec_fixtures_preserve_all_words_and_mapped_sections():
         assert sec._extract_sections(new)[0].keys() == sec._extract_sections(old)[0].keys()
 
 
+@pytest.mark.parametrize("size", [1, 7, 4096])
+@pytest.mark.parametrize("raw", [
+    "S&P Global", "before &foo after", "before &notit after",
+    "before &foo; after", "before &notit; after",
+    "<script>&P;</script> S&P Global &amp; earnings",
+])
+def test_optional_entity_semicolons_preserve_the_original_text(raw, size):
+    assert _parse(raw, size=size).output.text().split() == sec._strip_html(raw).split()
+
+
 @pytest.mark.parametrize("shape", ["visible", "attribute", "comment", "script", "entity", "unclosed_tag", "self_closing"])
 def test_giant_unbroken_tokens_cannot_accumulate_a_whole_body(shape):
     size = 2 * 1024 * 1024
@@ -86,6 +97,30 @@ def test_compressed_transport_cannot_expand_one_fragment_without_bound():
     pieces = list(decoded_bytes([compressed], "gzip"))
     assert max(map(len, pieces)) <= PARSER_BUFFER_CHARS
     assert b"".join(pieces) == payload
+
+
+@pytest.mark.parametrize("size", [1, 7, 4096])
+def test_raw_deflate_matches_the_original_http_client_compatibility(size):
+    payload = b"raw deflate payload" * 100
+    compressor = zlib.compressobj(wbits=-15)
+    compressed = compressor.compress(payload) + compressor.flush()
+    chunks = (compressed[i:i + size] for i in range(0, len(compressed), size))
+    assert b"".join(decoded_bytes(chunks, "deflate")) == payload
+
+
+@pytest.mark.parametrize("shape", ["comment", "numeric", "script_end", "marked"])
+def test_oversized_token_terminators_preserve_the_text_after_them(shape):
+    large = "x" * (PARSER_BUFFER_CHARS * 2 + 1)
+    raw = {
+        "comment": "<p>before</p><!--" + large + "--!><p>after</p>",
+        "numeric": "before &#" + "1" * len(large) + "; after",
+        "script_end": "before<script>" + large + "</script" + " " * len(large) + ">after",
+        "marked": "before<![CDATA[" + large + ">hiddenCDATAtail]]>after",
+    }[shape]
+    parser = _parse(raw)
+    expected = ["before", "�", "after"] if shape == "numeric" else ["before", "after"]
+    assert parser.output.text().split() == expected
+    assert parser.max_pending_chars <= PARSER_BUFFER_CHARS * 2
 
 
 def test_fetch_uses_streaming_only_and_reports_exact_truncation(monkeypatch, caplog):
