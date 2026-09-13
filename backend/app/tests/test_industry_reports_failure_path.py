@@ -108,6 +108,12 @@ def _stub_reads(universe, monkeypatch):
         )
 
     monkeypatch.setattr(ia, "default_loaders", loaders)
+    # The initial report, later attempts and leases share the simulated week.
+    # Real wall time would expire historical claims and can date the prior
+    # report after the deliberately advanced failed refresh.
+    monkeypatch.setattr(jobs, "_utcnow", lambda: SUNDAY)
+    monkeypatch.setattr(rs, "_utcnow", lambda: jobs._utcnow())
+    monkeypatch.setattr(jobs.industry_lease, "utcnow", lambda: jobs._utcnow())
     monkeypatch.setattr(settings, "enable_industry_reports", True)
     return {"cached": cached}
 
@@ -253,6 +259,7 @@ def test_one_group_failing_leaves_its_prior_edition_up_and_the_rest_of_the_week_
     # ...and the reader is told, with the reason, rather than shown a
     # week-old edition dated as if it were current.
     fresh = rs.freshness(broken, version=universe["info"])
+    assert datetime.fromisoformat(fresh["last_attempt"]["at"]) >= datetime.fromisoformat(prior["generated_at"])
     assert fresh["stale"] is True
     assert "refresh attempt failed" in fresh["stale_reason"]
     attempt = fresh["last_attempt"]
