@@ -40,8 +40,8 @@ beyond the one price series the app already caches):
    fed from the EXISTING 252-day cached series (`data_service.
    get_price_history(days=252)`; no new provider-cache key, no new calls),
    and the point-in-time read that the feature engine builds a snapshot
-   from: only rows with `available_at <= as_of`, with everything excluded
-   counted so a thin snapshot is explainable rather than silently empty.
+   from: only completed periods with credible `available_at <= as_of`.
+   Unknown and contradictory dates are excluded with full identity diagnostics.
 
 Residue that stays documented rather than fixed here: restated values are
 served at their ORIGINAL availability date (mild lookahead on the value,
@@ -61,6 +61,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import SessionLocal
+from ..finance.pit_eligibility import date_exclusion_reasons, exclusion_record
 from ..models import FilingDoc, FinancialPeriod, PriceMonthEnd
 
 log = logging.getLogger(__name__)
@@ -468,12 +469,17 @@ def snapshot_as_of(
           "latest_period": str | None,
           "data_available_at": date | None,   # max available_at used
           "price": {...} | None,              # latest month-end close <= as_of
-          "excluded": {"null_available_at": n, "after_as_of": n},
+          "excluded": {"null_available_at": n, "after_as_of": n,
+                       "missing_period_end": n, "available_before_period_end": n,
+                       "period_end_after_as_of": n},
+          "excluded_rows": [...complete original row identities and reasons...],
         }
 
     Rows whose `available_at` is NULL are excluded and counted separately
     from rows that were simply not yet public — the first is a data gap to
-    backfill, the second is the point-in-time rule working as intended.
+    backfill, the second is the point-in-time rule working as intended. Unknown
+    period ends and availability before period end are unusable provenance.
+    Counts can overlap; every excluded row and all its reasons are retained.
     """
     ticker = ticker.upper()
     as_of = _coerce_date(as_of) or as_of
@@ -485,15 +491,19 @@ def snapshot_as_of(
         rows = db.execute(
             select(FinancialPeriod).where(FinancialPeriod.ticker == ticker)
         ).scalars().all()
-        excluded_null = excluded_future = 0
+        excluded = {"null_available_at": 0, "after_as_of": 0, "missing_period_end": 0,
+                    "available_before_period_end": 0, "period_end_after_as_of": 0}
+        excluded_rows = []
         by_period: dict[str, dict[str, Any]] = {}
         flat: list[dict[str, Any]] = []
         for r in rows:
-            if r.available_at is None:
-                excluded_null += 1
-                continue
-            if r.available_at > as_of:
-                excluded_future += 1
+            reasons = date_exclusion_reasons(r.period_end, r.available_at, as_of)
+            if reasons:
+                for reason in reasons:
+                    key = {"missing_available_at": "null_available_at", "available_after_as_of": "after_as_of"}.get(reason, reason)
+                    excluded[key] += 1
+                excluded_rows.append(exclusion_record({column.key: getattr(r, column.key)
+                    for column in FinancialPeriod.__table__.columns}, reasons, as_of))
                 continue
             entry = by_period.get(r.period)
             if entry is None:
@@ -529,7 +539,8 @@ def snapshot_as_of(
             "latest_period": periods[0]["period"] if periods else None,
             "data_available_at": data_available_at,
             "price": latest_month_end_price(ticker, as_of, db=db),
-            "excluded": {"null_available_at": excluded_null, "after_as_of": excluded_future},
+            "excluded": excluded,
+            "excluded_rows": sorted(excluded_rows, key=lambda row: row["id"]),
         }
     finally:
         if own:
