@@ -18,6 +18,10 @@ The harness-neutral, durable investment-research methodology lives in
 handbook and structured map it names. Those files are the canonical local copies; matching
 copies in the ChatGPT **Investment Research** project Sources provide app access.
 
+Jared's three investment styles and screening-to-research sequence are recorded in
+[`Investment_Objectives_and_Process.md`](docs/research/Investment_Objectives_and_Process.md),
+a local addendum to that shared research protocol.
+
 ---
 
 ## What it does
