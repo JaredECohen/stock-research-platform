@@ -264,6 +264,7 @@ def get_stock_memo(
     scenario: str = "soft_landing",
     ondemand: bool = False,
     as_of: str | None = Query(None, description="YYYY-MM-DD; backtest mode"),
+    version: int | None = Query(None, ge=1, description="Exact stored memo version; never generates"),
     db: Session = Depends(get_db),
     _rate: None = Depends(rate_scope("data")),
 ) -> StockMemoOut:
@@ -295,6 +296,22 @@ def get_stock_memo(
     in-request for free.
     """
     t = ticker.upper()
+    if version is not None:
+        if as_of or ondemand:
+            raise HTTPException(status_code=422, detail="version cannot be combined with as_of or ondemand")
+        snap = memo_store.memo_version(t, version)
+        if snap is None:
+            raise HTTPException(status_code=404, detail="Stored memo version not found")
+        grant = authorize(request, "memo_view", resource=t, db=db)
+        try:
+            memo = memo_store.memo_to_pydantic(snap)
+            _stamp_snapshot_headers(response, snap)
+            response.headers["X-Memo-Source"] = "cache"
+        except Exception:
+            grant.release(db)
+            raise
+        grant.commit(db)
+        return memo
     if customer_wall_on() or not settings.memo_inline_generation_effective:
         return _memo_from_store_only(
             request, response, db, t, scenario=scenario, ondemand=ondemand, as_of=as_of,
