@@ -41,6 +41,8 @@ def test_single_existing_live_memo_is_prior_before_current_draft_is_saved(ticker
 def test_prior_is_latest_live_version_and_excludes_newer_backtest(ticker):
     _snapshot(ticker, 1, "Old prior")
     _snapshot(ticker, 2, "Latest live view")
+    assert "PRIOR MEMO (v2" in critic_agent._prior_memo_context(ticker)
+    assert "Latest live view" in critic_agent._prior_memo_context(ticker)
     _snapshot(ticker, 3, "Backtest view", as_of_date=datetime(2020, 1, 1))
     context = critic_agent._prior_memo_context(ticker)
     assert "PRIOR MEMO (v2" in context
