@@ -390,6 +390,10 @@ def cron_health_endpoint() -> dict[str, Any]:
             "age_seconds": age_seconds,
             "success": (info or {}).get("success"),
             "note": (info or {}).get("note"),
+            "reported_by": (info or {}).get("reported_by"),
+            "progress_at": (info or {}).get("progress_at"),
+            "progress_note": (info or {}).get("progress_note"),
+            "progress_success": (info or {}).get("progress_success"),
             "stale": stale,
         })
     out_loops.sort(key=lambda r: r["loop"])

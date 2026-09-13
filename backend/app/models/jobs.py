@@ -149,3 +149,8 @@ class CronLoopRun(Base):
     # anything still running in-process on the web service, which is the
     # first question to ask when cron-health looks wrong.
     reported_by: Mapped[str] = mapped_column(String(32), default="")
+    # In-flight activity is not a completed result. Nullable additions are
+    # reconciled safely onto the deployed table without changing old rows.
+    progress_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    progress_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    progress_success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
