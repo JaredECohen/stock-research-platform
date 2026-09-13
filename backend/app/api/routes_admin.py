@@ -155,6 +155,55 @@ def market_data_backfill_status(ticker: str) -> dict:
                 "completed_at": row.completed_at, "report": row.report, "read_only": True}
 
 
+class BKRepairPrepareRequest(BaseModel):
+    bad_fetched_at: datetime
+
+
+class BKRepairApplyRequest(BaseModel):
+    digest: str = Field(..., pattern=r"^[0-9a-f]{64}$")
+
+
+@router.post("/api/admin/market-data/bk-repair/plan")
+def prepare_bk_fundamental_repair(body: BKRepairPrepareRequest) -> dict:
+    """Save a reviewable BK correction plan; financial facts stay unchanged."""
+    from ..services.bk_fundamental_repair import prepare_bk_repair
+    try:
+        return prepare_bk_repair(body.bad_fetched_at)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="No eligible BK import rows were found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid repair timestamp or provider evidence.") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail="A repair is in progress or the provider evidence is incomplete.") from exc
+
+
+@router.get("/api/admin/market-data/bk-repair/{plan_id}")
+def read_bk_fundamental_repair(plan_id: str) -> dict:
+    """Read the saved before-images, planned actions and applied result."""
+    from ..services.bk_fundamental_repair import read_bk_repair_plan
+    try:
+        plan = read_bk_repair_plan(plan_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="BK repair plan not found.") from exc
+    if plan is None:
+        raise HTTPException(status_code=404, detail="BK repair plan not found.")
+    return plan
+
+
+@router.post("/api/admin/market-data/bk-repair/{plan_id}/apply")
+def apply_bk_fundamental_repair(plan_id: str, body: BKRepairApplyRequest) -> dict:
+    """Apply only the stored, digest-confirmed plan; never fetch providers."""
+    from ..services.bk_fundamental_repair import apply_bk_repair
+    try:
+        return apply_bk_repair(plan_id, body.digest)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="BK repair plan not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid BK repair plan or digest.") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail="Repair plan no longer matches the stored data or supplied digest.") from exc
+
+
 @router.get("/api/admin/abuse-telemetry")
 def abuse_telemetry_endpoint() -> dict[str, Any]:
     """FEAT-002 phase 6 — the numbers behind "is the login wall being
