@@ -391,10 +391,10 @@ def test_stored_period_aliases_merge_once_and_conflicting_values_are_excluded(da
     assert {r["period"] for r in rows["_history_issues"][0]["rows"]} == {"2025", "FY2025"}
 
 
-def test_backfill_updates_single_alias_without_inserting_duplicate_and_repairs_null_end(database, monkeypatch):
+def test_backfill_updates_standalone_canonical_without_duplicate_and_repairs_null_end(database, monkeypatch):
     with database() as db:
         FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
-        db.add(FinancialPeriod(ticker="TEST", period="2025", period_end=None, fiscal_year=2025,
+        db.add(FinancialPeriod(ticker="TEST", period="FY2025", period_end=None, fiscal_year=2025,
                                statement="income", line_item="revenue", value=90, currency="EUR", source="live"))
         db.commit()
     providers(monkeypatch, ("fmp", payload()))
@@ -404,7 +404,7 @@ def test_backfill_updates_single_alias_without_inserting_duplicate_and_repairs_n
     with database() as db:
         rows = db.execute(select(FinancialPeriod).where(FinancialPeriod.statement == "income", FinancialPeriod.fiscal_year == 2025,
                                                        FinancialPeriod.fiscal_quarter.is_(None))).scalars().all()
-        assert len(rows) == 1 and rows[0].period == "2025" and rows[0].value == 100 and rows[0].source == "fmp"
+        assert len(rows) == 1 and rows[0].period == "FY2025" and rows[0].value == 100 and rows[0].source == "fmp"
         assert rows[0].period_end == date(2025, 12, 31)
 
 
@@ -720,3 +720,83 @@ def test_duplicate_legacy_destination_remains_an_explicit_read_gap(database, mon
     with database() as db:
         assert db.get(FinancialPeriod, extra_id).value == 90
         assert db.get(FinancialPeriod, ids[("income", 2026)]).value == 100
+
+
+def seed_undated_alias(database, *, source="live", canonical=False):
+    with database() as db:
+        FinancialPeriod.__table__.create(db.get_bind(), checkfirst=True)
+        row = FinancialPeriod(ticker="TEST", period="FY2023" if canonical else "2023", statement="income",
+            line_item="revenue", value=777, currency="USD", period_end=None, fiscal_year=2023,
+            fiscal_quarter=None, source=source, available_at=date(2024, 2, 1), fetched_at=datetime(2024, 3, 1))
+        db.add(row)
+        db.commit()
+        return row.id
+
+
+@pytest.mark.parametrize("existing_canonical", [False, True])
+def test_undated_legacy_alias_is_preserved_beside_confirmed_canonical_fact(database, monkeypatch, existing_canonical):
+    calls = providers(monkeypatch, ("fmp", payload()))
+    if existing_canonical:
+        svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+        with database() as db:
+            row = db.execute(select(FinancialPeriod).where(FinancialPeriod.period == "FY2023", FinancialPeriod.statement == "income")).scalar_one()
+            row.source = "live"
+            db.commit()
+    alias_id = seed_undated_alias(database)
+    before = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    assert not before["success"]
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert report["success"]
+    with database() as db:
+        alias = db.get(FinancialPeriod, alias_id)
+        assert (alias.period, alias.period_end, alias.value, alias.source, alias.currency) == ("2023", None, 777, "live", "USD")
+        assert alias.available_at == date(2024, 2, 1) and alias.fetched_at == datetime(2024, 3, 1)
+        canonical = db.execute(select(FinancialPeriod).where(FinancialPeriod.period == "FY2023", FinancialPeriod.statement == "income")).scalar_one()
+        assert canonical.id != alias_id and canonical.source == "fmp" and canonical.value == 100
+        assert canonical.period_end == date(2023, 12, 31)
+    coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    warning = next(i for i in coverage["issues"] if i["kind"] == "unusable_legacy_observation")
+    assert coverage["success"] and warning["id"] == alias_id and warning["value"] == 777
+    assert warning["usable_canonical_id"] == canonical.id and warning["usable_canonical_source"] == "fmp"
+    rows = svc.read_stored_financials("TEST")
+    annual = [r for r in rows["income"] if r["period"] == "FY2023"]
+    assert len(annual) == 1 and annual[0]["revenue"] == 100
+    n_calls = len(calls)
+    again = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert again["success"] and again["rows_written"] == 0 and len(calls) == n_calls
+
+
+def test_undated_legacy_alias_without_provider_primary_remains_blocking(database, monkeypatch):
+    alias_id = seed_undated_alias(database)
+    rows = payload()
+    rows["income"] = [r for r in rows["income"] if r["period"] != "FY2023"]
+    providers(monkeypatch, ("fmp", rows))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert not report["success"]
+    assert any(i["kind"] == "invalid_stored_period" and i["id"] == alias_id and not i.get("resolved") for i in report["issues"])
+    assert not any(i["kind"] == "unusable_legacy_observation" for i in report["issues"])
+
+
+def test_known_provider_undated_alias_is_not_discarded_to_resolve_conflict(database, monkeypatch):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    alias_id = seed_undated_alias(database, source="alpha_vantage")
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert not report["success"]
+    assert any(i["kind"] == "stored_period_alias_conflict" for i in report["issues"])
+    assert any(i["kind"] == "invalid_stored_period" and i["id"] == alias_id for i in report["issues"])
+    with database() as db:
+        assert db.get(FinancialPeriod, alias_id).value == 777
+
+
+def test_invalid_exact_canonical_occupant_in_alias_group_stays_blocking(database, monkeypatch):
+    alias_id = seed_undated_alias(database)
+    canonical_id = seed_undated_alias(database, canonical=True)
+    providers(monkeypatch, ("fmp", payload()))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert not report["success"]
+    assert any(i["kind"] == "stored_period_alias_conflict" for i in report["issues"])
+    with database() as db:
+        for row_id in (alias_id, canonical_id):
+            row = db.get(FinancialPeriod, row_id)
+            assert row.period_end is None and row.value == 777 and row.source == "live"

@@ -56,6 +56,15 @@ def _valid_period(period: Any, period_end: Any, *, end: date) -> tuple[int | Non
     return fy, fq, d
 
 
+def _stored_period_valid(row: FinancialPeriod) -> bool:
+    fy, fq, _ = _valid_period(row.period, row.period_end, end=_today())
+    return fy is not None and (row.fiscal_year is None or row.fiscal_year == fy) and row.fiscal_quarter == fq
+
+
+def _unusable_legacy_alias(row: FinancialPeriod, canonical: str) -> bool:
+    return row.source in LEGACY_SOURCES and row.period != canonical and not _stored_period_valid(row)
+
+
 def read_stored_financials(ticker: str, *, start_date: date | None = None, cadence: str | None = None, db: Session | None = None) -> dict[str, list[dict]]:
     """Read durable rows without collapsing conflicting dates or currencies.
 
@@ -74,7 +83,10 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
         query = select(FinancialPeriod).where(FinancialPeriod.ticker == ticker.strip().upper())
         # Inspect each entire group before applying a requested date/cadence so
         # filtering cannot hide the other half of a contradictory statement.
-        rows = db.execute(query.order_by(FinancialPeriod.period_end.desc(), FinancialPeriod.period.desc())).scalars()
+        rows = list(db.execute(query.order_by(FinancialPeriod.period_end.desc(), FinancialPeriod.period.desc())).scalars())
+        confirmed = {(r.period, r.statement, r.line_item): r for r in rows
+                     if r.source not in LEGACY_SOURCES and _stored_period_valid(r)
+                     and r.value is not None and math.isfinite(r.value) and r.currency}
         groups: dict[tuple[str, str], list] = {}
         for row in rows:
             if row.source == "demo" or row.statement not in LINES:
@@ -85,7 +97,17 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
                         "currency": row.currency}
             fy, fq, d = _valid_period(row.period, row.period_end, end=_today())
             if fy is None or (row.fiscal_year is not None and row.fiscal_year != fy) or row.fiscal_quarter != fq:
-                issues.append({"kind": "invalid_stored_period", **identity})
+                parsed_fy, parsed_fq = history._parse_period(row.period)
+                canonical = (f"{parsed_fy:04d}Q{parsed_fq}" if parsed_fq else f"FY{parsed_fy:04d}") if parsed_fy else row.period
+                replacement = confirmed.get((canonical, row.statement, row.line_item))
+                if _unusable_legacy_alias(row, canonical) and replacement:
+                    issues.append({"kind": "unusable_legacy_observation", **identity,
+                        "value": row.value if row.value is None or math.isfinite(row.value) else str(row.value),
+                        "reason": "invalid_legacy_alias_excluded", "canonical_period": canonical,
+                        "usable_canonical_id": replacement.id, "usable_canonical_source": replacement.source,
+                        "usable_canonical_period_end": replacement.period_end.isoformat()})
+                else:
+                    issues.append({"kind": "invalid_stored_period", **identity})
                 continue
             if row.value is None:
                 kind = "missing_stored_primary_value" if row.line_item == PRIMARY[row.statement] else "missing_stored_optional_value"
@@ -523,14 +545,25 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
             canonical = (f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}") if fy else r.period
             aliases.setdefault((canonical, r.statement, r.line_item), []).append(r)
         blocked_keys = set()
+        incoming_keys = {(r["period"], s, line) for p in payloads for s in LINES
+                         for r in p[s] for line in LINES[s] if line in r}
         for key, group in aliases.items():
+            if key in incoming_keys:
+                # Different raw keys remain untouched. A canonical provider
+                # fact can be stored independently of unusable legacy aliases;
+                # read-time warnings become nonblocking only after it exists.
+                usable = [r for r in group if not _unusable_legacy_alias(r, key[0])]
+                if len(group) > 1 and any(r.period == key[0] and not _stored_period_valid(r) for r in usable):
+                    usable = group  # An exact-key occupant is not an excluded alias.
+                group = usable
             if len(group) > 1:
                 blocked_keys.add(key)
                 report["issues"].append({"kind": "stored_period_alias_conflict", "ticker": ticker,
                     "period": key[0], "statement": key[1], "line_item": key[2],
                     "rows": [{"id": r.id, "period": r.period, "period_end": str(r.period_end),
                               "currency": r.currency, "source": r.source} for r in group]})
-            existing[key] = group[0]
+            if group:
+                existing[key] = group[0]
         currencies: dict[tuple[str, str], set[str]] = {}
         for (period, statement, _), row in existing.items():
             if row.currency and row.source not in LEGACY_SOURCES:
