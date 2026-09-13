@@ -721,7 +721,7 @@ def test_external_session_owns_relabel_commit_and_rollback(database, monkeypatch
         assert all(db.get(FinancialPeriod, row_id).period == f"FY{year}" for (_, year), row_id in ids.items())
 
 
-def test_duplicate_legacy_destination_remains_an_explicit_read_gap(database, monkeypatch):
+def test_duplicate_legacy_destination_is_preserved_after_unique_provider_fact_is_stored(database, monkeypatch):
     ids = seed_shifted_legacy(database)
     with database() as db:
         extra = FinancialPeriod(ticker="TEST", period="FY2027", period_end=date(2026, 2, 1), fiscal_year=2027,
@@ -731,11 +731,14 @@ def test_duplicate_legacy_destination_remains_an_explicit_read_gap(database, mon
         extra_id = extra.id
     providers(monkeypatch, ("fmp", fiscal_payload()))
     result = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
-    assert not result["success"]
-    blocked = {i["id"] for i in result["issues"] if i["kind"] == "legacy_period_relabel_conflict"}
+    assert result["success"]
+    blocked = {i["id"] for i in result["issues"] if i["kind"] == "legacy_period_relabel_preserved_duplicate"}
     assert {ids[("income", 2026)], extra_id} <= blocked
     coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
-    assert not coverage["success"] and any(i["kind"] == "duplicate_stored_period_end" for i in coverage["issues"])
+    assert coverage["success"]
+    excluded = [i for i in coverage["issues"] if i["kind"] == "legacy_duplicate_observation_excluded"]
+    assert {i["id"] for i in excluded} == {ids[("income", 2026)], extra_id}
+    assert len({i["replacement"]["id"] for i in excluded}) == 1
     with database() as db:
         assert db.get(FinancialPeriod, extra_id).value == 90
         assert db.get(FinancialPeriod, ids[("income", 2026)]).value == 100

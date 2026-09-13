@@ -65,6 +65,22 @@ def _unusable_legacy_alias(row: FinancialPeriod, canonical: str) -> bool:
     return row.source in LEGACY_SOURCES and row.period != canonical and not _stored_period_valid(row)
 
 
+def _stored_observation_identity(row: FinancialPeriod) -> tuple:
+    """An observed statement line, independent of a possibly stale FY label."""
+    return (row.period_end, row.statement, row.line_item, row.fiscal_quarter is not None)
+
+
+def _stored_observation_evidence(row: FinancialPeriod) -> dict:
+    return {"id": row.id, "ticker": row.ticker, "period": row.period,
+            "fiscal_year": row.fiscal_year, "fiscal_quarter": row.fiscal_quarter,
+            "period_end": row.period_end.isoformat(), "statement": row.statement,
+            "line_item": row.line_item, "value": row.value, "source": row.source,
+            "currency": row.currency,
+            "available_at": row.available_at.isoformat() if row.available_at else None,
+            "available_at_source": row.available_at_source,
+            "fetched_at": row.fetched_at.isoformat() if row.fetched_at else None}
+
+
 def read_stored_financials(ticker: str, *, start_date: date | None = None, cadence: str | None = None, db: Session | None = None) -> dict[str, list[dict]]:
     """Read durable rows without collapsing conflicting dates or currencies.
 
@@ -87,6 +103,9 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
         confirmed = {(r.period, r.statement, r.line_item): r for r in rows
                      if r.source not in LEGACY_SOURCES and _stored_period_valid(r)
                      and r.value is not None and math.isfinite(r.value) and r.currency}
+        confirmed_observations: dict[tuple, list] = {}
+        for row in confirmed.values():
+            confirmed_observations.setdefault(_stored_observation_identity(row), []).append(row)
         groups: dict[tuple[str, str], list] = {}
         for row in rows:
             if row.source == "demo" or row.statement not in LINES:
@@ -117,6 +136,21 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
                 issues.append({"kind": "invalid_stored_value_or_currency", **identity})
                 continue
             canonical = f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}"
+            # A legacy FY label may duplicate a separately stored, dated
+            # provider fact. Exclude only this legacy line from usable reads;
+            # every stored field remains untouched, even when values differ.
+            replacements = confirmed_observations.get(_stored_observation_identity(row), [])
+            if row.source in LEGACY_SOURCES and len(replacements) == 1:
+                replacement = replacements[0]
+                replacement_fy, replacement_fq = history._parse_period(replacement.period)
+                replacement_period = (f"{replacement_fy:04d}Q{replacement_fq}" if replacement_fq
+                                      else f"FY{replacement_fy:04d}")
+                if replacement_period != canonical:
+                    issues.append({"kind": "legacy_duplicate_observation_excluded",
+                        **_stored_observation_evidence(row),
+                        "reason": "unique_named_provider_observation_under_different_fiscal_label",
+                        "replacement": _stored_observation_evidence(replacement)})
+                    continue
             groups.setdefault((row.statement, canonical), []).append(row)
         periods_by_end: dict[tuple, set] = {}
         for (statement, period), group in groups.items():
@@ -636,7 +670,21 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                             report["rows_refreshed"] += 1
         db.flush()
         after = read_stored_financials(ticker, db=db)
+        preserved_duplicates = {i["id"]: i for i in after.get("_history_issues", [])
+                                if i["kind"] == "legacy_duplicate_observation_excluded"}
         for issue in report["issues"]:
+            # A blocked relabel need not make usable history fail when the
+            # exact preserved row has a unique authoritative replacement.
+            # Ambiguous labels and all other collisions stay blocking.
+            if (issue["kind"] == "legacy_period_relabel_conflict"
+                    and issue.get("reason") == "destination_collision"
+                    and issue.get("id") in preserved_duplicates):
+                evidence = preserved_duplicates[issue["id"]]
+                issue.update(kind="legacy_period_relabel_preserved_duplicate",
+                             original_kind="legacy_period_relabel_conflict",
+                             preserved_observation={k: v for k, v in evidence.items()
+                                                    if k not in {"kind", "reason", "replacement"}},
+                             replacement=evidence["replacement"])
             if issue in stored.get("_history_issues", []) and issue not in after.get("_history_issues", []):
                 issue["resolved"] = True
         for issue in after.get("_history_issues", []):
