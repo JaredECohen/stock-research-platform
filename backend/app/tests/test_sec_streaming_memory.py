@@ -62,6 +62,19 @@ def test_optional_entity_semicolons_preserve_the_original_text(raw, size):
     assert _parse(raw, size=size).output.text().split() == sec._strip_html(raw).split()
 
 
+@pytest.mark.parametrize("size", [1, 7, 4096])
+@pytest.mark.parametrize("raw, expected", [
+    ("&amp;&unknown; &notin;&notit", "&&unknown; ∉¬it"), ("&amp", "&"), ("S&P", "S&P"),
+])
+def test_named_reference_at_eof_keeps_standard_unescape_semantics(raw, expected, size):
+    assert _parse(raw, size=size).output.text() == expected
+
+
+@pytest.mark.parametrize("digits, expected", [("1" * 10000, "�"), ("0" * 10000 + "65", "A")])
+def test_long_numeric_reference_at_eof_keeps_unescape_semantics_without_int_limit(digits, expected):
+    assert _parse("before &#" + digits).output.text() == "before " + expected
+
+
 @pytest.mark.parametrize("shape", ["visible", "attribute", "comment", "script", "entity", "unclosed_tag", "self_closing"])
 def test_giant_unbroken_tokens_cannot_accumulate_a_whole_body(shape):
     size = 2 * 1024 * 1024

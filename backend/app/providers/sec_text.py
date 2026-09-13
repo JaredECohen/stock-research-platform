@@ -170,13 +170,16 @@ class BoundedHTMLStripper(HTMLParser):
         suffix = ";" if self.rawdata[end:end + 1] == ";" else ""
         self.handle_data(html.unescape(f"&{name}{suffix}"))
 
-    def handle_charref(self, name: str) -> None:
+    @staticmethod
+    def _numeric_reference_value(name: str) -> int:
         hexadecimal = name.lower().startswith("x")
         digits = (name[1:] if hexadecimal else name).lstrip("0") or "0"
         # Avoid Python's integer-string conversion limit. Any significant
         # numeric reference this long is outside Unicode, regardless of radix.
-        value = 0x110000 if len(digits) > 7 else int(digits, 16 if hexadecimal else 10)
-        self.handle_data(html.unescape(f"&#{value};"))
+        return 0x110000 if len(digits) > 7 else int(digits, 16 if hexadecimal else 10)
+
+    def handle_charref(self, name: str) -> None:
+        self.handle_data(html.unescape(f"&#{self._numeric_reference_value(name)};"))
 
     def _drain_markup(self, data: str) -> str:
         if self._discard in ("comment", "marked"):
@@ -296,4 +299,15 @@ class BoundedHTMLStripper(HTMLParser):
         if self._discard == "numeric":
             self.handle_data(html.unescape(f"&#{self._numeric_value};"))
             self._discard = None
-        super().close()
+        # Let HTMLParser's automatic conversion handle pending EOF references
+        # (including unknown names) exactly like html.unescape. Normalize the
+        # numeric spelling first to avoid Python's decimal-int digit limit.
+        self.rawdata = re.sub(
+            r"&#([xX][0-9a-fA-F]+|[0-9]+);?",
+            lambda match: f"&#{self._numeric_reference_value(match[1])};", self.rawdata,
+        )
+        self.convert_charrefs = True
+        try:
+            super().close()
+        finally:
+            self.convert_charrefs = False
