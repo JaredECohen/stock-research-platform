@@ -238,6 +238,17 @@ def track_record_endpoint(
     )
 
 
+@router.get("/api/admin/outcome-audit")
+def outcome_audit_endpoint(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Read-only contamination triage of every stored outcome, with no cap.
+
+    Requires the admin bearer token. Unflagged rows remain unverified;
+    this does not recompute, delete, or change any outcome or metric.
+    """
+    from ..services.outcome_audit import audit_outcomes
+    return audit_outcomes(db)
+
+
 @router.post("/api/admin/evaluate-outcomes")
 def evaluate_outcomes_now(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     """Manual trigger for the daily outcome loop. Useful in dev / for
