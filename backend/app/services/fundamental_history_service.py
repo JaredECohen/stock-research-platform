@@ -26,6 +26,17 @@ LINES = {"income": history._INCOME_LINES, "balance": history._BALANCE_LINES, "ca
 PRIMARY = {"income": "revenue", "balance": "total_assets", "cash": "cash_from_operations"}
 LEGACY_SOURCES = {"", "live", "demo", "unknown"}
 REFRESH_TTL_DAYS = 7
+BLOCKING_ISSUES = {
+    "stored_value_conflict", "invalid_value", "stored_period_end_conflict", "conflicting_provider_period",
+    "invalid_period", "invalid_stored_period", "conflicting_stored_statement", "invalid_stored_value_or_currency",
+    "missing_stored_primary_value", "invalid_coverage_period", "stored_period_alias_conflict", "refresh_incomplete",
+    "coverage_gap", "stored_fetch_stale",
+}
+
+
+def _has_blockers(issues: list[dict]) -> bool:
+    """Optional NULL warnings remain observable without denying usable primary history."""
+    return any(not issue.get("resolved") and issue.get("kind") in BLOCKING_ISSUES for issue in issues)
 
 
 def _today() -> date:
@@ -66,12 +77,17 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
                 continue
             identity = {"id": row.id, "ticker": row.ticker, "statement": row.statement,
                         "period": row.period, "period_end": str(row.period_end), "line_item": row.line_item,
-                        "fiscal_year": row.fiscal_year, "fiscal_quarter": row.fiscal_quarter, "source": row.source}
+                        "fiscal_year": row.fiscal_year, "fiscal_quarter": row.fiscal_quarter, "source": row.source,
+                        "currency": row.currency}
             fy, fq, d = _valid_period(row.period, row.period_end, end=_today())
             if fy is None or (row.fiscal_year is not None and row.fiscal_year != fy) or row.fiscal_quarter != fq:
                 issues.append({"kind": "invalid_stored_period", **identity})
                 continue
-            if row.value is None or not math.isfinite(row.value) or not row.currency:
+            if row.value is None:
+                kind = "missing_stored_primary_value" if row.line_item == PRIMARY[row.statement] else "missing_stored_optional_value"
+                issues.append({"kind": kind, **identity})
+                continue
+            if not row.currency or not math.isfinite(row.value):
                 issues.append({"kind": "invalid_stored_value_or_currency", **identity})
                 continue
             canonical = f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}"
@@ -192,7 +208,7 @@ def fundamental_coverage(ticker: str, start_date: date, *, db: Session | None = 
                    for statement, buckets in coverage.items() for cadence, bucket in buckets.items()
                    if bucket["complete"] and not bucket["fresh"]])
     return {"ticker": ticker.strip().upper(), "requested_start": start.isoformat(), "requested_end": _today().isoformat(),
-            "coverage": coverage, "success": _complete(coverage) and _fresh(coverage) and not issues, "issues": issues}
+            "coverage": coverage, "success": _complete(coverage) and _fresh(coverage) and not _has_blockers(issues), "issues": issues}
 
 
 def _complete(coverage: dict) -> bool:
@@ -340,7 +356,7 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         stored = read_stored_financials(ticker, db=db)
         report["issues"].extend(stored.get("_history_issues", []))
         before = _coverage(stored, start, _today(), issues=report["issues"])
-        if not force_refresh and _complete(before) and _fresh(before) and not report["issues"]:
+        if not force_refresh and _complete(before) and _fresh(before) and not _has_blockers(report["issues"]):
             report.update(coverage=before, success=True, source="database", committed=own)
             return report
         # End the owned read transaction before spending time on provider IO.
@@ -371,7 +387,7 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
             existing[key] = group[0]
         currencies: dict[tuple[str, str], set[str]] = {}
         for (period, statement, _), row in existing.items():
-            if row.currency and row.source != "demo":
+            if row.currency and row.source not in LEGACY_SOURCES:
                 currencies.setdefault((period, statement), set()).add(row.currency)
         now = datetime.utcnow()
         for payload in payloads:
@@ -399,17 +415,20 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                                 "period": period, "line_item": line, "provider": source,
                                 "stored_currencies": sorted(other_currencies), "incoming_currency": row["currency"]})
                             continue
+                        if prior and prior.period_end is not None and prior.period_end != end:
+                            report["issues"].append({"kind": "stored_period_end_conflict", "ticker": ticker, "id": prior.id,
+                                "statement": statement, "period": period, "line_item": line, "provider": source,
+                                "stored_source": prior.source, "stored_period_end": str(prior.period_end), "incoming_period_end": str(end)})
+                            continue
+                        if prior and prior.source not in LEGACY_SOURCES and prior.currency and prior.currency != row["currency"]:
+                            report["issues"].append({"kind": "stored_value_conflict", "ticker": ticker, "id": prior.id,
+                                "statement": statement, "period": period, "line_item": line, "provider": source,
+                                "stored_source": prior.source, "stored_currency": prior.currency, "incoming_currency": row["currency"]})
+                            continue
                         if prior and prior.value is not None and math.isfinite(prior.value):
-                            if prior.period_end is not None and prior.period_end != end:
-                                report["issues"].append({"kind": "stored_period_end_conflict", "statement": statement,
-                                    "period": period, "line_item": line, "provider": source, "stored_source": prior.source,
-                                    "stored_period_end": str(prior.period_end), "incoming_period_end": str(end)})
-                                continue
                             if prior.source != source and prior.source not in LEGACY_SOURCES and prior.value == row[line] and prior.currency == row["currency"]:
                                 continue  # Corroboration does not transfer ownership of a stored fact.
-                            if (prior.currency and prior.currency != row["currency"]) or (
-                                prior.source != source and prior.source not in LEGACY_SOURCES and prior.value != row[line]
-                            ):
+                            if prior.source != source and prior.source not in LEGACY_SOURCES and prior.value != row[line]:
                                 report["issues"].append({"kind": "stored_value_conflict", "statement": statement,
                                     "period": period, "line_item": line, "provider": source, "stored_source": prior.source,
                                     "stored_currency": prior.currency, "incoming_currency": row["currency"]})
@@ -451,7 +470,7 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                 elif not bucket["fresh"]:
                     report["issues"].append({"kind": "stored_fetch_stale", "statement": statement, "cadence": cadence,
                                             "latest_primary_fetched_at": bucket["latest_primary_fetched_at"], "refresh_ttl_days": REFRESH_TTL_DAYS})
-        report["success"] = _complete(report["coverage"]) and _fresh(report["coverage"]) and not any(not i.get("resolved") and i["kind"] in {"stored_value_conflict", "invalid_value", "stored_period_end_conflict", "conflicting_provider_period", "invalid_period", "invalid_stored_period", "conflicting_stored_statement", "invalid_stored_value_or_currency", "invalid_coverage_period", "stored_period_alias_conflict", "refresh_incomplete"} for i in report["issues"])
+        report["success"] = _complete(report["coverage"]) and _fresh(report["coverage"]) and not _has_blockers(report["issues"])
         if own:
             db.commit()
             report["committed"] = True

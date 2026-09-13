@@ -27,7 +27,7 @@ TIMEOUT = 10.0
 
 
 def _to_float(v: Any) -> float | None:
-    if v in (None, "None", "", "-"):
+    if isinstance(v, bool) or v in (None, "None", "", "-"):
         return None
     try:
         return float(v)
@@ -262,9 +262,11 @@ class FMPProvider:
     @classmethod
     def _balance_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         date_str = r.get("date") or ""
-        st_debt = _to_float(r.get("shortTermDebt")) or 0
-        lt_debt = _to_float(r.get("longTermDebt")) or 0
-        total_debt = (st_debt + lt_debt) or None
+        st_debt = _to_float(r.get("shortTermDebt"))
+        lt_debt = _to_float(r.get("longTermDebt"))
+        total_debt = _to_float(r.get("totalDebt"))
+        if total_debt is None and st_debt is not None and lt_debt is not None:
+            total_debt = st_debt + lt_debt
         return dict(
             period=cls._period_label(date_str, r.get("period")),
             period_end=date_str,
@@ -274,8 +276,8 @@ class FMPProvider:
             shareholders_equity=_to_float(r.get("totalStockholdersEquity")),
             cash_and_equivalents=_to_float(r.get("cashAndCashEquivalents")),
             short_term_investments=_to_float(r.get("shortTermInvestments")),
-            short_term_debt=st_debt or None,
-            long_term_debt=lt_debt or None,
+            short_term_debt=st_debt,
+            long_term_debt=lt_debt,
             total_debt=total_debt,
             goodwill=_to_float(r.get("goodwill")),
             current_assets=_to_float(r.get("totalCurrentAssets")),
@@ -286,6 +288,9 @@ class FMPProvider:
     @classmethod
     def _cash_row(cls, r: dict[str, Any]) -> dict[str, Any]:
         date_str = r.get("date") or ""
+        dividends = _to_float(r.get("commonDividendsPaid"))
+        if dividends is None:
+            dividends = _to_float(r.get("netDividendsPaid"))
         return dict(
             period=cls._period_label(date_str, r.get("period")),
             period_end=date_str,
@@ -294,7 +299,7 @@ class FMPProvider:
             capex=_to_float(r.get("capitalExpenditure")),
             free_cash_flow=_to_float(r.get("freeCashFlow")),
             depreciation_and_amortization=_to_float(r.get("depreciationAndAmortization")),
-            dividends_paid=_to_float(r.get("commonDividendsPaid")) or _to_float(r.get("netDividendsPaid")),
+            dividends_paid=dividends,
             share_repurchases=_to_float(r.get("commonStockRepurchased")),
             stock_based_compensation=_to_float(r.get("stockBasedCompensation")),
             **cls._filing_dates(r),

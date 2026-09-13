@@ -479,3 +479,90 @@ def test_primary_fetch_freshness_is_not_hidden_by_a_fresh_optional_line(database
         db.commit()
     report = svc.fundamental_coverage("TEST", date(2024, 9, 13))
     assert not report["coverage"]["income"]["annual"]["fresh"] and not report["success"]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ({"shortTermDebt": 0, "longTermDebt": 0}, (0, 0, 0)),
+    ({"shortTermDebt": "0", "longTermDebt": "12"}, (0, 12, 12)),
+    ({"shortTermDebt": None, "longTermDebt": 12}, (None, 12, None)),
+    ({"shortTermDebt": 12}, (12, None, None)),
+    ({"shortTermDebt": True, "longTermDebt": False}, (None, None, None)),
+    ({"shortTermDebt": -5, "longTermDebt": 5}, (-5, 5, 0)),
+    ({"shortTermDebt": 0, "longTermDebt": 6210000000, "totalDebt": 6648000000}, (0, 6210000000, 6648000000)),
+    ({"shortTermDebt": 12, "longTermDebt": 4, "totalDebt": 0}, (12, 4, 0)),
+])
+def test_fmp_debt_mapping_preserves_zero_missing_and_reported_total(raw, expected):
+    row = FMPProvider._balance_row(raw)
+    assert (row["short_term_debt"], row["long_term_debt"], row["total_debt"]) == expected
+
+
+def test_fmp_zero_common_dividends_do_not_fall_through_to_other_dividends():
+    assert FMPProvider._cash_row({"commonDividendsPaid": 0, "netDividendsPaid": -12})["dividends_paid"] == 0
+    assert FMPProvider._cash_row({"netDividendsPaid": -12})["dividends_paid"] == -12
+    assert FMPProvider._cash_row({})["dividends_paid"] is None
+
+
+def test_optional_null_warnings_do_not_block_coverage_or_trigger_repeated_fetch(database, monkeypatch):
+    calls = providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    with database() as db:
+        for year in (2018, 2025):
+            db.add(FinancialPeriod(ticker="TEST", period=f"FY{year}", period_end=date(year, 12, 31), fiscal_year=year,
+                                   statement="balance", line_item="short_term_debt", value=None, currency="EUR", source="live"))
+        db.commit()
+    coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    assert coverage["success"]
+    assert len(coverage["issues"]) == 2 and all(i["kind"] == "missing_stored_optional_value" and i["id"] for i in coverage["issues"])
+    skipped = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert skipped["success"] and skipped["rows_written"] == 0 and len(calls) == 1
+    fresh = payload()
+    fresh["balance"][-1]["short_term_debt"] = 0
+    next(r for r in fresh["balance"] if r["period"] == "FY2025")["short_term_debt"] = 0
+    providers(monkeypatch, ("fmp", fresh))
+    refreshed = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert refreshed["success"]
+    assert any(i["kind"] == "missing_stored_optional_value" and i["period"] == "FY2025" and i["resolved"] for i in refreshed["issues"])
+    with database() as db:
+        old = db.execute(select(FinancialPeriod).where(FinancialPeriod.statement == "balance", FinancialPeriod.period == "FY2018")).scalar_one()
+        assert old.value is None  # Retained as unknown, never guessed to be zero.
+
+
+@pytest.mark.parametrize("line,value,currency,kind", [
+    ("total_assets", None, "EUR", "missing_stored_primary_value"),
+    ("short_term_debt", float("inf"), "EUR", "invalid_stored_value_or_currency"),
+    ("short_term_debt", 0, "", "invalid_stored_value_or_currency"),
+])
+def test_primary_missing_nonfinite_and_unidentified_currency_remain_blocking(database, monkeypatch, line, value, currency, kind):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    with database() as db:
+        row = db.execute(select(FinancialPeriod).where(FinancialPeriod.statement == "balance", FinancialPeriod.period == "FY2025")).scalar_one()
+        if line == "total_assets":
+            row.value = value
+        else:
+            db.add(FinancialPeriod(ticker="TEST", period="FY2025", period_end=date(2025, 12, 31), fiscal_year=2025,
+                                   statement="balance", line_item=line, value=value, currency=currency, source="fmp"))
+        db.commit()
+    report = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    assert not report["success"] and svc._has_blockers(report["issues"])
+    assert any(i["kind"] == kind and i["line_item"] == line for i in report["issues"])
+
+
+def test_legacy_default_currency_is_corrected_to_verified_provider_currency_with_audit(database, monkeypatch):
+    with database() as db:
+        FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
+        # Primary is absent: unrelated old USD metadata must not block adding it.
+        db.add(FinancialPeriod(ticker="TEST", period="FY2025", period_end=date(2025, 12, 31), fiscal_year=2025,
+                               statement="income", line_item="net_income", value=30, currency="USD", source="live"))
+        db.commit()
+    fresh = payload(currency="EUR")
+    next(r for r in fresh["income"] if r["period"] == "FY2025")["net_income"] = 31
+    providers(monkeypatch, ("fmp", fresh))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert report["success"]
+    upgrade = report["source_upgrades"][0]
+    assert (upgrade["old_source"], upgrade["new_source"], upgrade["old_currency"], upgrade["new_currency"], upgrade["old_value"], upgrade["new_value"]) == ("live", "fmp", "USD", "EUR", 30, 31)
+    providers(monkeypatch, ("fmp", payload(currency="USD")))
+    protected = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
+    assert not protected["success"] and protected["rows_written"] == 0
+    assert {r["currency"] for r in svc.read_stored_financials("TEST")["income"]} == {"EUR"}
