@@ -250,6 +250,7 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     if truncated_filings:
         from ..services.history_service import truncated_filing_note
         note += f"; bounded filing sources={len(truncated_filings)}: " + truncated_filing_note(truncated_filings)
+    log.info("transcripts_poller: %s", note)
     record_run("transcripts_poller", success=not any((
         gate_errors, post_pass_failures, persist_errors, poll_errors, handler_errors, fetch_failures,
     )), note=note)

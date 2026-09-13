@@ -209,6 +209,7 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
     if truncated_filings:
         from ..services.history_service import truncated_filing_note
         note += f"; bounded filing sources={len(truncated_filings)}: " + truncated_filing_note(truncated_filings)
+    log.info("history_backfill: %s", note)
     record_run("history_backfill", success=errors == 0 and not post_pass_failures and not fetch_failures, note=note)
     totals["errors"] = errors
     totals["rate_limited"] = rate_limited

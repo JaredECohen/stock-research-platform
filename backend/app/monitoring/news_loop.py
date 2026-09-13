@@ -32,9 +32,10 @@ _RUN_INTERVAL_HOURS = 1
 # How many tickers one run may cover.
 #
 # Cost math: this loop runs hourly, and `news_agent.run(force_refresh=True)`
-# makes one Gemini call per ticker (`settings.gemini_news_model`). So the
-# steady-state spend is budget x 24 calls/day — at 25, that is 600 Gemini
-# calls a day, up from 240 at the previous budget of 10.
+# can make one Gemini call per ticker when Gemini is configured. The
+# ceiling is budget x 24 calls/day — at 25, up to 600 instead of 240.
+# Actual calls depend on eligible names, throttle state and provider
+# configuration; without Gemini this uses deterministic provider news.
 #
 # The previous 10 was not a judgement about coverage. It was exactly what
 # the old arbitrary `list_tickers()[:10]` slice spent, held constant so that
@@ -120,7 +121,7 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         tickers = selection.tickers
 
     events: list[dict] = []
-    assessment_failures = 0
+    assessment_failures: list[str] = []
     agent_failures: list[str] = []
     update_failures: list[str] = []
     for t in tickers:
@@ -130,7 +131,7 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         try:
             alerts = news_agent.run(t, force_refresh=True)
         except Exception as exc:
-            log.warning("news_agent failed for %s: %s", t, exc)
+            log.warning("news_agent failed ticker=%s error_type=%s", t, type(exc).__name__)
             agent_failures.append(t)
             continue
         _record_run_for(t)
@@ -158,14 +159,14 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
                     # A dead news-impact LLM used to read as "no material
                     # news"; the handler now reports it and the note counts it.
                     if isinstance(res, dict) and res.get("reason") == "assessment_error":
-                        assessment_failures += 1
+                        assessment_failures.append(t)
             except Exception as exc:  # pragma: no cover — diagnostic only
-                log.warning("update_orchestrator failed for %s: %s", t, exc)
+                log.warning("news update failed ticker=%s error_type=%s", t, type(exc).__name__)
                 update_failures.append(t)
 
     note = f"{len(events)} material events"
     if assessment_failures:
-        note += f"; {assessment_failures} assessments failed"
+        note += f"; {len(assessment_failures)} assessments failed: " + ", ".join(assessment_failures)
     if agent_failures:
         note += f"; {len(agent_failures)} news agents failed: " + ", ".join(agent_failures)
     if update_failures:
@@ -177,7 +178,7 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     log.info("news_loop: %s", note)
     record_run(
         "news_loop",
-        success=assessment_failures == 0 and not agent_failures and not update_failures,
+        success=not assessment_failures and not agent_failures and not update_failures,
         note=note,
     )
     return events

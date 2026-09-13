@@ -23,7 +23,8 @@ def _capture(monkeypatch, module) -> list[tuple[tuple, dict[str, Any]]]:
     return calls
 
 
-def test_news_loop_counts_failed_assessments(monkeypatch):
+def test_news_loop_counts_failed_assessments(monkeypatch, caplog):
+    caplog.set_level("INFO", logger=news_loop.__name__)
     calls = _capture(monkeypatch, news_loop)
     monkeypatch.setattr(news_loop, "_last_run_for", lambda t: None)
     monkeypatch.setattr(news_loop, "_record_run_for", lambda t: None)
@@ -43,7 +44,8 @@ def test_news_loop_counts_failed_assessments(monkeypatch):
     (args, kwargs), = calls
     assert args == ("news_loop",)
     assert kwargs["success"] is False
-    assert "1 material events; 1 assessments failed" == kwargs["note"]
+    assert "1 material events; 1 assessments failed: NVDA" == kwargs["note"]
+    assert kwargs["note"] in caplog.text
 
 
 def test_news_loop_is_healthy_when_assessments_succeed(monkeypatch):
