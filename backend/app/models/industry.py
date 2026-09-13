@@ -312,8 +312,9 @@ class IndustryReportJob(Base):
     period's group reports. ``not_before`` carries the retry backoff
     (15 min × attempts); ``max_attempts`` defaults to 3 with the final
     attempt run deterministic. ``heartbeat_at`` is refreshed at each
-    waypoint so a hung job is distinguishable from a killed one. Restart
-    recovery and the 14-day ``QueueExpired`` rule live in the drainer.
+    waypoint; ``owner_token`` and ``lease_expires_at`` fence each attempt.
+    ``report_id`` / ``snapshot_id`` are atomic publication receipts. Expired
+    ownership recovery and the 14-day ``QueueExpired`` rule live in the drainer.
     """
     __tablename__ = "industry_report_jobs"
 
@@ -334,6 +335,9 @@ class IndustryReportJob(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    owner_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    snapshot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(String(24), default="weekly_cron")
     force: Mapped[bool] = mapped_column(Boolean, default=False)
     report_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

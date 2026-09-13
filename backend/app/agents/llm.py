@@ -585,6 +585,8 @@ def gemini_chat_text(
     """
     from ..services.regen_lease import assert_current
     assert_current()
+    from ..services.industry_lease import assert_current as assert_industry_current
+    assert_industry_current()
     if _breaker_open("gemini"):
         return None
     client = _gemini_client()
@@ -655,6 +657,8 @@ def gemini_chat_json(
     """
     from ..services.regen_lease import assert_current
     assert_current()
+    from ..services.industry_lease import assert_current as assert_industry_current
+    assert_industry_current()
     sys_with_json = (system + "\n\nReturn ONLY valid JSON, no prose.").strip()
     return gemini_chat_text(
         prompt, system=sys_with_json, model=model,
@@ -982,6 +986,8 @@ def _call_json(
     """
     from ..services.regen_lease import assert_current
     assert_current()
+    from ..services.industry_lease import assert_current as assert_industry_current
+    assert_industry_current()
     if provider == "anthropic":
         client = _anthropic_client()
         if client is None:
@@ -1017,6 +1023,8 @@ def _call_text(
     """Text twin of `_call_json`; same contract."""
     from ..services.regen_lease import assert_current
     assert_current()
+    from ..services.industry_lease import assert_current as assert_industry_current
+    assert_industry_current()
     if provider == "anthropic":
         client = _anthropic_client()
         if client is None:

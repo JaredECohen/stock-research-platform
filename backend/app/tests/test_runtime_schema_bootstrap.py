@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import OperationalError
 
 from app import database
-from app.models import RegenJob
+from app.models import IndustryReportJob, RegenJob
 
 
 @pytest.fixture
@@ -137,3 +137,20 @@ def test_web_schema_ready_before_seed_and_queue(old_schema, monkeypatch):
     monkeypatch.setattr("app.services.regen_worker.start_worker", lambda: consumer("queue"))
     with TestClient(create_app()):
         assert events == ["seed", "queue"]
+
+
+@pytest.mark.parametrize("column", ["owner_token", "lease_expires_at", "snapshot_id"])
+def test_industry_fence_columns_are_required_even_if_reconciliation_swallows_failure(tmp_path, monkeypatch, column):
+    engine = create_engine(f"sqlite:///{tmp_path / 'industry-schema.sqlite'}")
+    IndustryReportJob.__table__.create(engine)
+    with engine.begin() as conn:
+        conn.execute(text(f"ALTER TABLE industry_report_jobs DROP COLUMN {column}"))
+    monkeypatch.setattr(database, "engine", engine)
+    with monkeypatch.context() as patch:
+        patch.setattr(database, "reconcile_missing_columns", lambda: [])
+        with pytest.raises(OperationalError, match=column):
+            database.bootstrap_runtime_schema()
+    database.bootstrap_runtime_schema()
+    with engine.connect() as conn:
+        assert conn.execute(select(IndustryReportJob).limit(0)).all() == []
+    engine.dispose()

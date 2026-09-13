@@ -221,7 +221,21 @@ def save_report(
     if effective not in (STATUS_SUCCEEDED, STATUS_PENDING_REVIEW):
         raise ValueError(f"unknown report status {effective!r}; allowed: succeeded, pending_review")
     now = _utcnow()
+    from . import industry_lease
+
     with SessionLocal() as db:
+        job = industry_lease.assert_current(db=db, lock=True)
+        industry_lease.assert_identity(job, kind="group_report", taxonomy_version_id=info.id,
+                                       period_key=period_key, code=code)
+        if job is not None:
+            if job_id != job.id:
+                raise industry_lease.LeaseLost(f"Industry job {job.id} publication job ID differs")
+            if job.report_id is not None:
+                saved = db.get(IndustryReport, job.report_id)
+                if saved is None or saved.job_id != job.id:
+                    raise RuntimeError("Industry report publication receipt is invalid")
+                db.expunge(saved)
+                return saved
         previous = _latest_good_row(db, info.id, code)
         row = IndustryReport(
             taxonomy_version_id=info.id,
@@ -257,6 +271,9 @@ def save_report(
                 .values(is_latest_good=False, status=STATUS_SUPERSEDED)
             )
         db.add(row)
+        db.flush()
+        if job is not None:
+            job.report_id = row.id
         db.commit()
         db.refresh(row)
         db.expunge(row)

@@ -562,7 +562,19 @@ def compute_cross_snapshot(
 
 
 def _upsert(row: CrossIndustrySnapshot) -> CrossIndustrySnapshot:
+    from . import industry_lease
+
     with SessionLocal() as db:
+        job = industry_lease.assert_current(db=db, lock=True)
+        industry_lease.assert_identity(job, kind="cross_snapshot", taxonomy_version_id=row.taxonomy_version_id,
+                                       period_key=row.period_key)
+        if job is not None and job.snapshot_id is not None:
+            saved = db.get(CrossIndustrySnapshot, job.snapshot_id)
+            if saved is None or (saved.taxonomy_version_id, saved.period_key, saved.as_of) != (
+                    row.taxonomy_version_id, row.period_key, row.as_of):
+                raise RuntimeError("Industry snapshot publication receipt is invalid")
+            db.expunge(saved)
+            return saved
         existing = db.execute(
             select(CrossIndustrySnapshot).where(
                 CrossIndustrySnapshot.taxonomy_version_id == row.taxonomy_version_id,
@@ -576,11 +588,12 @@ def _upsert(row: CrossIndustrySnapshot) -> CrossIndustrySnapshot:
             existing.report_versions = row.report_versions
             existing.schema_version = row.schema_version
             existing.computed_at = row.computed_at
-            db.commit()
-            db.refresh(existing)
-            db.expunge(existing)
-            return existing
-        db.add(row)
+            row = existing
+        else:
+            db.add(row)
+        db.flush()
+        if job is not None:
+            job.snapshot_id = row.id
         db.commit()
         db.refresh(row)
         db.expunge(row)

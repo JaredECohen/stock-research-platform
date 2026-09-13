@@ -65,18 +65,19 @@ def init_db() -> None:
 def bootstrap_runtime_schema() -> None:
     """Finish DB-only setup before starting threads or accepting requests.
 
-    Generic column reconciliation is intentionally best effort. Regeneration
+    Generic column reconciliation is intentionally best effort. Queue
     ownership cannot be: a missing fence column must fail startup even when
     reconciliation logged an error and returned. Compile and execute the actual
     mapped projection without reading job payloads or contacting providers.
     """
     from sqlalchemy import select
 
-    from .models import RegenJob
+    from .models import IndustryReportJob, RegenJob
 
     init_db()
     with engine.connect() as conn:
         conn.execute(select(RegenJob).limit(0)).close()
+        conn.execute(select(IndustryReportJob).limit(0)).close()
 
 
 def reconcile_missing_columns() -> list[str]:

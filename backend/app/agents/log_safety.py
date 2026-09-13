@@ -62,19 +62,20 @@ _PATTERNS = [
 ]
 
 
-def redact(text: Any) -> str:
-    """Mask credential-shaped substrings and bound the length.
-
-    Accepts anything — callers pass exceptions, response bodies, or
-    dicts — and always returns a `str`. Never raises: a logging helper
-    that throws inside an `except` block hides the original failure.
-    """
+def redact_unbounded(text: Any) -> str:
+    """Apply the same secret masks without clipping a bounded audit artifact."""
     try:
         s = text if isinstance(text, str) else str(text)
     except Exception:  # pragma: no cover — pathological __str__
         s = f"<unprintable {type(text).__name__}>"
     for pattern, replacement in _PATTERNS:
         s = pattern.sub(replacement, s)
+    return s
+
+
+def redact(text: Any) -> str:
+    """Mask credential-shaped substrings and bound log detail; never raises."""
+    s = redact_unbounded(text)
     if len(s) > MAX_DETAIL_CHARS:
         s = s[:MAX_DETAIL_CHARS] + "…"
     return s

@@ -33,9 +33,9 @@ Three properties this file is responsible for, each of which has a test:
   the deterministic writer, which needs no LLM, and the edition is
   published labelled ``degraded`` rather than not at all.
 
-Single-replica by design, like the memo queue. The claim is still an
-atomic conditional UPDATE, so a second replica would degrade safely (each
-job runs once) rather than corrupt state.
+Rolling predecessors retain a renewable per-attempt lease. Expired work
+may be retried, but stale attempts cannot publish or update a replacement.
+Already-dispatched provider requests cannot be recalled.
 """
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ from ..config import settings
 from ..database import SessionLocal
 from ..models import IndustryReport, IndustryReportJob
 from ..monitoring import record_run
-from . import gics_registry, industry_analytics, industry_report_store, industry_snapshot
+from . import gics_registry, industry_analytics, industry_lease, industry_report_store, industry_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -200,6 +200,9 @@ def _job_dict(job: IndustryReportJob) -> dict[str, Any]:
         "source": job.source,
         "force": bool(job.force),
         "report_id": job.report_id,
+        "snapshot_id": job.snapshot_id,
+        "ownership_tracked": job.owner_token is not None,
+        "lease_expires_at": job.lease_expires_at.isoformat() if job.lease_expires_at else None,
         "error_type": job.error_type or "",
         "error_message": job.error_message or "",
         "traceback_tail": job.traceback_tail or "",
@@ -209,12 +212,12 @@ def _job_dict(job: IndustryReportJob) -> dict[str, Any]:
 
 def _append_progress(job_id: int, step: str, **extra: Any) -> None:
     """Append a waypoint to the job's trace, refreshing the heartbeat so a
-    hung job is distinguishable from a killed one. Never raises."""
+    hung job is distinguishable from a killed one. Lost ownership cancels work."""
     try:
         with SessionLocal() as db:
-            job = db.get(IndustryReportJob, job_id)
-            if job is None:
-                return
+            job = industry_lease.assert_current(db=db, lock=True)
+            if job is None or job.id != job_id:
+                raise industry_lease.LeaseLost(f"Industry job {job_id} progress has no matching claim")
             steps = list(job.progress or [])
             steps.append({"step": step, "at": _utcnow().isoformat(), **extra})
             # Reassign (don't mutate) so the JSON column change is tracked.
@@ -481,17 +484,20 @@ def heartbeat(now: datetime | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _claim(db, job_id: int, attempts: int) -> bool:
-    """The atomic half of the claim: queued→running, conditional on the row
-    still being queued. A losing racer updates 0 rows and moves on."""
+def _claim(db, job_id: int, attempts: int, *, eligible_at: datetime | None = None) -> industry_lease.IndustryClaim | None:
+    """Atomically capture immutable ownership of this queued attempt."""
+    token, now = str(uuid.uuid4()), _utcnow()
     res = db.execute(
         update(IndustryReportJob)
-        .where(IndustryReportJob.id == job_id, IndustryReportJob.status == "queued")
-        .values(status="running", started_at=_utcnow(), heartbeat_at=_utcnow(),
-                attempts=attempts + 1)
+        .where(IndustryReportJob.id == job_id, IndustryReportJob.status == "queued",
+               IndustryReportJob.attempts == attempts,
+               (IndustryReportJob.not_before.is_(None)) | (IndustryReportJob.not_before <= (eligible_at or now)))
+        .values(status="running", started_at=now, heartbeat_at=now,
+                attempts=attempts + 1, owner_token=token,
+                lease_expires_at=now + timedelta(seconds=industry_lease.LEASE_SECONDS))
     )
     db.commit()
-    return bool(res.rowcount)
+    return industry_lease.IndustryClaim(job_id, token) if res.rowcount else None
 
 
 def _group_jobs_in_flight(db, version_id: int, period_key: str, *, exclude_id: int) -> int:
@@ -506,8 +512,8 @@ def _group_jobs_in_flight(db, version_id: int, period_key: str, *, exclude_id: i
     ).scalar() or 0)
 
 
-def claim_next_job(now: datetime | None = None) -> int | None:
-    """Claim the next eligible job, in (priority, id) order. Returns its id.
+def claim_next_job(now: datetime | None = None) -> industry_lease.IndustryClaim | None:
+    """Claim the next eligible job, returning its immutable ownership receipt.
 
     Eligible means queued and past its ``not_before``. A cross_snapshot
     job whose period still has group jobs in flight is pushed out by
@@ -531,72 +537,101 @@ def claim_next_job(now: datetime | None = None) -> int | None:
             if kind == KIND_CROSS and _group_jobs_in_flight(db, version_id, period_key, exclude_id=job_id):
                 db.execute(
                     update(IndustryReportJob)
-                    .where(IndustryReportJob.id == job_id, IndustryReportJob.status == "queued")
+                    .where(IndustryReportJob.id == job_id, IndustryReportJob.status == "queued",
+                           IndustryReportJob.attempts == attempts,
+                           (IndustryReportJob.not_before.is_(None)) | (IndustryReportJob.not_before <= at))
                     .values(not_before=at + timedelta(minutes=CROSS_DEFER_MINUTES))
                 )
                 db.commit()
                 continue
-            if _claim(db, job_id, int(attempts or 0)):
-                return int(job_id)
+            claim = _claim(db, job_id, int(attempts or 0), eligible_at=at)
+            if claim is not None:
+                return claim
         return None
 
 
-def recover_orphans(now: datetime | None = None) -> dict[str, int]:
-    """Startup pass over jobs the previous process left behind.
+def _has_publication(job: IndustryReportJob) -> bool:
+    return ((job.kind == KIND_GROUP and job.report_id is not None)
+            or (job.kind == KIND_CROSS and job.snapshot_id is not None))
 
-    - ``running`` rows mean the process died mid-report (OOM kill bypasses
-      every except-block). Requeued with the retry backoff while attempts
-      remain, then failed ``WorkerRestart`` so a group that reliably kills
-      the process cannot crash-loop the service.
-    - ``queued`` rows older than ``QUEUE_MAX_AGE_DAYS`` missed their week.
-      Publishing them now would put a two-week-old "this week" on the
-      site, so they are expired ``QueueExpired`` and the next cron
-      enqueues the current period.
+
+def recover_orphans(now: datetime | None = None, *, report_legacy: bool = True) -> dict[str, Any]:
+    """Recover only expired owned attempts; never steal a rolling predecessor.
+
+    A publication receipt completes the job without repeating computation.
+    Legacy unowned running rows require independent process-death evidence.
+    Queued expiry/backoff/final deterministic attempt policies are unchanged.
     """
     at = now or _utcnow()
-    requeued = failed = expired = 0
+    requeued = failed = expired = published = 0
+    legacy = []
     with SessionLocal() as db:
         _ensure_table(db)
         for job in db.execute(
             select(IndustryReportJob).where(IndustryReportJob.status == "running")
         ).scalars().all():
-            if job.attempts < job.max_attempts:
+            if job.owner_token is None or job.lease_expires_at is None:
+                legacy.append({"id": job.id, "kind": job.kind, "code": job.industry_group_code,
+                               "period_key": job.period_key, "run_id": job.run_id,
+                               "started_at": job.started_at.isoformat() if job.started_at else None})
+                continue
+            if job.lease_expires_at > at:
+                continue
+            changed = db.execute(update(IndustryReportJob).where(
+                IndustryReportJob.id == job.id, IndustryReportJob.status == "running",
+                IndustryReportJob.owner_token == job.owner_token,
+                IndustryReportJob.lease_expires_at == job.lease_expires_at,
+                IndustryReportJob.lease_expires_at <= at,
+            ).values(owner_token=job.owner_token).execution_options(synchronize_session=False)).rowcount
+            if not changed:
+                continue
+            db.refresh(job)
+            if _has_publication(job):
+                job.status = "succeeded"
+                job.finished_at = at
+                job.error_type = job.error_message = job.traceback_tail = ""
+                job.progress = list(job.progress or []) + [
+                    {"step": "published_output_recovered", "at": at.isoformat(),
+                     "report_id": job.report_id, "snapshot_id": job.snapshot_id}]
+                published += 1
+            elif job.attempts < job.max_attempts:
                 job.status = "queued"
                 job.started_at = None
                 job.not_before = at + timedelta(minutes=BACKOFF_MINUTES * max(1, job.attempts))
                 job.progress = list(job.progress or []) + [
-                    {"step": "requeued_after_process_restart", "at": at.isoformat()}
-                ]
+                    {"step": "requeued_after_lease_expired", "at": at.isoformat()}]
                 requeued += 1
             else:
                 job.status = "failed"
                 job.finished_at = at
                 job.error_type = "WorkerRestart"
                 job.error_message = (
-                    "Process died mid-report on the final attempt (likely OOM kill or "
-                    "deploy). Not retrying automatically — the previous edition stays "
-                    "the latest good one and is flagged stale."
+                    "Execution lease expired on the final attempt without publication. "
+                    "Automatic retries exhausted; the previous edition remains available."
                 )
                 failed += 1
+            job.owner_token = job.lease_expires_at = None
         cutoff = at - timedelta(days=QUEUE_MAX_AGE_DAYS)
-        for job in db.execute(
-            select(IndustryReportJob).where(
-                IndustryReportJob.status == "queued", IndustryReportJob.enqueued_at < cutoff,
-            )
-        ).scalars().all():
-            job.status = "failed"
-            job.finished_at = at
-            job.error_type = "QueueExpired"
-            job.error_message = (
-                f"Queued for over {QUEUE_MAX_AGE_DAYS} days without being drained; "
-                "expired instead of publishing a stale week."
-            )
-            expired += 1
+        # Conditional UPDATE cannot expire a queued row claimed by another worker.
+        expired = db.execute(update(IndustryReportJob).where(
+            IndustryReportJob.status == "queued", IndustryReportJob.enqueued_at < cutoff,
+        ).values(status="failed", finished_at=at, error_type="QueueExpired", error_message=(
+            f"Queued for over {QUEUE_MAX_AGE_DAYS} days without being drained; "
+            "expired instead of publishing a stale week."
+        )).execution_options(synchronize_session=False)).rowcount
         db.commit()
-    if requeued or failed or expired:
-        log.warning("industry report recovery: %d requeued, %d failed (repeat orphan), %d expired",
-                    requeued, failed, expired)
-    return {"requeued": requeued, "failed": failed, "expired": expired}
+    if requeued or failed or expired or published:
+        log.warning("industry report recovery: %d requeued, %d failed, %d expired, %d published completions recovered",
+                    requeued, failed, expired, published)
+    if legacy and report_legacy:
+        log.warning("industry recovery deferred %d legacy unowned jobs; verify prior process death before intervention: %s",
+                    len(legacy), legacy)
+    result: dict[str, Any] = {"requeued": requeued, "failed": failed, "expired": expired}
+    if published:
+        result["published_recovered"] = published
+    if legacy:
+        result["legacy_deferred"] = legacy
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -890,87 +925,85 @@ def _run_cross_snapshot(job: dict[str, Any], info: gics_registry.VersionInfo,
     }
 
 
-def execute_job(job_id: int, *, book: ContextBook | None = None) -> dict[str, Any]:
-    """Run one claimed job to completion and record the outcome.
-
-    A failure never writes a report row: the prior edition keeps
-    ``is_latest_good`` and this row becomes the ``last_attempt`` the read
-    API shows beside it. Attempts below ``max_attempts`` go back to
-    ``queued`` with a 15-minutes-per-attempt backoff; the last one is
-    final. Catches BaseException for the same reason the memo worker does
-    — a cancellation that vanished would leave a job ``running`` forever.
-    """
-    with SessionLocal() as db:
-        row = db.get(IndustryReportJob, job_id)
-        if row is None:
-            return {}
-        job = _job_dict(row)
-    info = gics_registry.resolve_version(job["taxonomy_version_id"])
-    as_of = as_of_for_period(job["period_key"])
-    started = _utcnow()
-    _append_progress(job_id, "worker_claimed")
-    log.info("industry job %d STARTING %s %s/%s (attempt %d/%d, run_id=%s)",
-             job_id, job["kind"], job["code"] or "-", job["period_key"],
-             job["attempts"], job["max_attempts"], job["run_id"])
+def _finish_claim(claim: industry_lease.IndustryClaim, *, outcome: dict[str, Any] | None = None,
+                  error: BaseException | None = None, tb: str = "") -> dict[str, Any] | None:
+    """Finalize only this owner; an atomic publication wins over a later error."""
     try:
-        if job["kind"] == KIND_CROSS:
-            outcome = _run_cross_snapshot(job, info, as_of)
-        else:
-            ctx = (book or ContextBook()).context_for(job["period_key"], as_of, info)
-            outcome = _run_group_report(job, info, ctx, as_of)
         with SessionLocal() as db:
-            r = db.get(IndustryReportJob, job_id)
-            if r is not None:
+            r = industry_lease.assert_claim(claim, db=db, lock=True)
+            now = _utcnow()
+            if _has_publication(r):
                 r.status = "succeeded"
-                r.finished_at = _utcnow()
-                r.heartbeat_at = r.finished_at
-                r.report_id = outcome["report_id"]
-                r.error_type = ""
-                r.error_message = ""
-                db.commit()
-        _append_progress(job_id, f"job_succeeded {outcome['note']}")
-        log.info("industry job %d SUCCEEDED in %.1fs (%s)", job_id,
-                 (_utcnow() - started).total_seconds(), outcome["note"])
-    except (SystemExit, KeyboardInterrupt):  # pragma: no cover — process shutdown
-        _append_progress(job_id, "process_exit_signal")
-        raise
-    except BaseException as exc:
-        tb = traceback.format_exc()
-        _append_progress(job_id, f"exception_caught {type(exc).__name__}")
-        # `safe_exc` because a provider URL (with its key) can reach an
-        # exception string, and this text is stored and served to admins.
-        log.error("industry job %d FAILED %s %s/%s after %.1fs: %s: %s", job_id, job["kind"],
-                  job["code"] or "-", job["period_key"], (_utcnow() - started).total_seconds(),
-                  type(exc).__name__, safe_exc(exc))
-        now = _utcnow()
-        retry = job["attempts"] < job["max_attempts"]
-        with SessionLocal() as db:
-            r = db.get(IndustryReportJob, job_id)
-            if r is not None:
-                r.error_type = type(exc).__name__
-                r.error_message = redact(exc)[:_MAX_ERROR_CHARS]
-                r.traceback_tail = tb[-1500:]
-                r.heartbeat_at = now
-                if retry:
+                r.finished_at = now
+                r.error_type = r.error_message = r.traceback_tail = ""
+                note = (outcome or {}).get("note", "published output recovered")
+                step = f"job_succeeded {note}"
+            elif error is None:
+                # Never mark a reported success if its durable output was not committed.
+                raise RuntimeError("Industry job returned without a publication receipt")
+            else:
+                r.error_type = type(error).__name__
+                r.error_message = redact(error)[:_MAX_ERROR_CHARS]
+                r.traceback_tail = redact(tb)[-1500:]
+                if r.attempts < r.max_attempts:
                     r.status = "queued"
                     r.started_at = None
                     r.not_before = now + timedelta(minutes=BACKOFF_MINUTES * max(1, r.attempts))
                 else:
                     r.status = "failed"
                     r.finished_at = now
-                db.commit()
-    # A report run holds a whole period's price series plus a rendered
-    # edition; the worker is RSS-capped, so the pages go back to the OS
-    # rather than into CPython's freelists. Both paths — a job that died
-    # partway through is where the most garbage is left.
+                step = f"exception_caught {type(error).__name__}"
+            r.heartbeat_at = now
+            r.progress = (list(r.progress or []) + [{"step": step, "at": now.isoformat()}])[-_MAX_PROGRESS_ENTRIES:]
+            r.owner_token = r.lease_expires_at = None
+            db.commit()
+            return _job_dict(r)
+    except industry_lease.LeaseLost:
+        return None
+
+
+def execute_job(claim: industry_lease.IndustryClaim, *, book: ContextBook | None = None) -> dict[str, Any]:
+    """Run only the captured attempt; never adopt ownership from a replacement."""
+    if not isinstance(claim, industry_lease.IndustryClaim):
+        raise TypeError("execute_job requires the immutable claim returned by claim_next_job")
+    job_id, started, done = claim.job_id, _utcnow(), None
+    with industry_lease.claim_context(claim), industry_lease.keep_alive(claim):
+        try:
+            row = industry_lease.assert_claim(claim)
+            job = _job_dict(row)
+            if _has_publication(row):
+                done = _finish_claim(claim)
+            else:
+                info = gics_registry.resolve_version(job["taxonomy_version_id"])
+                as_of = as_of_for_period(job["period_key"])
+                _append_progress(job_id, "worker_claimed")
+                log.info("industry job %d STARTING %s %s/%s (attempt %d/%d, run_id=%s)",
+                         job_id, job["kind"], job["code"] or "-", job["period_key"],
+                         job["attempts"], job["max_attempts"], job["run_id"])
+                if job["kind"] == KIND_CROSS:
+                    outcome = _run_cross_snapshot(job, info, as_of)
+                else:
+                    ctx = (book or ContextBook()).context_for(job["period_key"], as_of, info)
+                    outcome = _run_group_report(job, info, ctx, as_of)
+                done = _finish_claim(claim, outcome=outcome)
+                if done is not None:
+                    log.info("industry job %d SUCCEEDED in %.1fs (%s)", job_id,
+                             (_utcnow() - started).total_seconds(), outcome["note"])
+        except industry_lease.LeaseLost:
+            log.warning("industry job %d attempt lost ownership; cancelled without further writes", job_id)
+        except (SystemExit, KeyboardInterrupt):  # pragma: no cover — process shutdown
+            raise
+        except BaseException as exc:
+            tb = traceback.format_exc()
+            log.error("industry job %d FAILED after %.1fs: %s: %s", job_id,
+                      (_utcnow() - started).total_seconds(), type(exc).__name__, safe_exc(exc))
+            done = _finish_claim(claim, error=exc, tb=tb)
     try:
         from . import memory_probe
         memory_probe.trim_memory(f"industry_report_job_{job_id}")
     except Exception:  # pragma: no cover — housekeeping must not fail a job
         log.debug("trim_memory failed after industry job %d", job_id, exc_info=True)
-    with SessionLocal() as db:
-        r = db.get(IndustryReportJob, job_id)
-        return _job_dict(r) if r is not None else {}
+    return done if done is not None else {"id": job_id, "status": "lease_lost", "attempt_cancelled": True}
 
 
 def process_next_job(*, book: ContextBook | None = None,
@@ -979,10 +1012,11 @@ def process_next_job(*, book: ContextBook | None = None,
     dict, or None when nothing is eligible. This is the drainer loop's
     body, exposed so tests (and the failure-path integration test) drain
     the queue deterministically instead of racing a polling thread."""
-    job_id = claim_next_job(now)
-    if job_id is None:
+    recover_orphans(now, report_legacy=False)
+    claim = claim_next_job(now)
+    if claim is None:
         return None
-    return execute_job(job_id, book=book)
+    return execute_job(claim, book=book)
 
 
 def drain(limit: int = 200, *, now: datetime | None = None) -> list[dict[str, Any]]:
@@ -1020,6 +1054,8 @@ def _worker_loop() -> None:
             # thread that says nothing is indistinguishable from a dead one.
             now = _utcnow()
             if last_beat == 0.0 or (now.timestamp() - last_beat) >= HEARTBEAT_SECONDS:
+                if last_beat != 0.0:
+                    recover_orphans(now)  # name legacy claims made during overlap after boot
                 heartbeat(now)
                 last_beat = now.timestamp()
             if process_next_job(book=book) is None:

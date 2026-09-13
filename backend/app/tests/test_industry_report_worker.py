@@ -245,8 +245,8 @@ def test_a_claim_is_exclusive_and_the_snapshot_waits_for_the_group_jobs(env):
     cross_id = result["cross_snapshot"]["job_id"]
     first = jobs.claim_next_job(now=SUNDAY)
     second = jobs.claim_next_job(now=SUNDAY)
-    assert {first, second} == set(result["job_ids"])
-    assert _job(first)["status"] == "running" and _job(first)["attempts"] == 1
+    assert {first.job_id, second.job_id} == set(result["job_ids"])
+    assert _job(first.job_id)["status"] == "running" and _job(first.job_id)["attempts"] == 1
     # Both group jobs are in flight, so the snapshot is pushed out rather
     # than computed from a half-written period.
     assert jobs.claim_next_job(now=SUNDAY) is None
@@ -255,13 +255,13 @@ def test_a_claim_is_exclusive_and_the_snapshot_waits_for_the_group_jobs(env):
     assert deferred["not_before"] == (SUNDAY + timedelta(minutes=jobs.CROSS_DEFER_MINUTES)).isoformat()
     # A second drainer trying to claim a row that is already running loses.
     with SessionLocal() as db:
-        assert jobs._claim(db, first, 1) is False
+        assert jobs._claim(db, first.job_id, 1) is None
     # Once the group jobs finish, the snapshot is claimable.
     with SessionLocal() as db:
-        for job_id in (first, second):
+        for job_id in (first.job_id, second.job_id):
             db.get(IndustryReportJob, job_id).status = "succeeded"
         db.commit()
-    assert jobs.claim_next_job(now=SUNDAY + timedelta(minutes=10)) == cross_id
+    assert jobs.claim_next_job(now=SUNDAY + timedelta(minutes=10)).job_id == cross_id
 
 
 def test_a_deferred_job_is_not_claimed_before_its_not_before(env):
@@ -270,7 +270,7 @@ def test_a_deferred_job_is_not_claimed_before_its_not_before(env):
         db.get(IndustryReportJob, job["id"]).not_before = SUNDAY + timedelta(minutes=15)
         db.commit()
     assert jobs.claim_next_job(now=SUNDAY) is None
-    assert jobs.claim_next_job(now=SUNDAY + timedelta(minutes=16)) == job["id"]
+    assert jobs.claim_next_job(now=SUNDAY + timedelta(minutes=16)).job_id == job["id"]
 
 
 # --- execution ----------------------------------------------------------------
@@ -334,6 +334,7 @@ def test_a_failure_backs_off_on_the_injected_clock_and_keeps_the_prior_edition(e
 
     clock = {"t": SUNDAY}
     monkeypatch.setattr(jobs, "_utcnow", lambda: clock["t"])
+    monkeypatch.setattr(jobs.industry_lease, "utcnow", lambda: clock["t"])
     job, _ = jobs.enqueue(code, PERIOD, version=env["info"])
     assert jobs.process_next_job(now=clock["t"])["status"] == "queued"
     first = _job(job["id"])
@@ -379,6 +380,7 @@ def test_the_final_attempt_runs_deterministic_so_a_week_never_ends_blank(env, mo
     monkeypatch.setattr(jobs.writer, "write_report", flaky)
     clock = {"t": SUNDAY}
     monkeypatch.setattr(jobs, "_utcnow", lambda: clock["t"])
+    monkeypatch.setattr(jobs.industry_lease, "utcnow", lambda: clock["t"])
     job, _ = jobs.enqueue(code, PERIOD, version=env["info"])
     for _ in range(3):
         jobs.process_next_job(now=clock["t"])
@@ -584,6 +586,9 @@ def test_recover_orphans_requeues_once_then_fails_and_expires_a_missed_week(env)
         r.status, r.attempts, r.started_at = "running", 1, now - timedelta(hours=3)
         f = db.get(IndustryReportJob, final["id"])
         f.status, f.attempts = "running", f.max_attempts
+        for owned in (r, f):
+            owned.owner_token = f"expired-{owned.id}"
+            owned.lease_expires_at = now - timedelta(seconds=1)
         s = db.get(IndustryReportJob, stale["id"])
         s.enqueued_at = now - timedelta(days=jobs.QUEUE_MAX_AGE_DAYS + 1)
         db.commit()
@@ -592,7 +597,7 @@ def test_recover_orphans_requeues_once_then_fails_and_expires_a_missed_week(env)
     requeued = _job(running["id"])
     assert requeued["status"] == "queued"
     assert requeued["not_before"] == (now + timedelta(minutes=jobs.BACKOFF_MINUTES)).isoformat()
-    assert requeued["progress"][-1]["step"] == "requeued_after_process_restart"
+    assert requeued["progress"][-1]["step"] == "requeued_after_lease_expired"
     assert _job(final["id"])["error_type"] == "WorkerRestart"
     expired = _job(stale["id"])
     assert expired["status"] == "failed" and expired["error_type"] == "QueueExpired"

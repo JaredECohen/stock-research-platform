@@ -1297,7 +1297,12 @@ def compute_group_stats(
 def _persist(row: IndustryStatSnapshot) -> IndustryStatSnapshot:
     """Insert unless an identical-input row exists for the period; either
     way return a detached row."""
+    from . import industry_lease
+
     with SessionLocal() as db:
+        job = industry_lease.assert_current(db=db, lock=True)
+        industry_lease.assert_identity(job, kind="group_report", taxonomy_version_id=row.taxonomy_version_id,
+                                       period_key=row.period_key, code=row.industry_group_code)
         existing = db.execute(
             select(IndustryStatSnapshot).where(
                 IndustryStatSnapshot.taxonomy_version_id == row.taxonomy_version_id,
