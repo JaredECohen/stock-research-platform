@@ -4,7 +4,7 @@
 
 Flat OHLC bars with explicitly zero volume are retained as raw observations but excluded from usable prices, coverage and currentness. Their full dates and source identities appear in selection metadata and logs. Missing volume remains unknown. Selection checks continuity against observed SPY sessions within the actual requested suffix/date range; an unrelated older gap does not disqualify a healthy requested window. Without sufficient benchmark history, continuity is explicitly unverified. Provider-cache throttling remains, but a cached pre-repair tape cannot bypass the durable read filters.
 
-Verified same-security ticker changes are distinct from share-class spellings. The market-data resolver tries BNY for canonical BK after May 21, 2026, retaining BK company/memo keys and the actual provider symbol on each price row. [BNY's announcement](https://www.bny.com/corporate/global/en/about-us/newsroom/press-release/bny-announces-planned-change-of-stock-ticker-symbol-to-bny-130465.html) confirms the unchanged CUSIP and capital structure. Acquisition successors with different share terms are not treated as aliases.
+Verified same-security ticker changes are distinct from share-class spellings. For **prices**, the resolver tries BNY for canonical BK after May 21, 2026, retaining BK company/memo keys and the actual provider symbol on each price row. [BNY's announcement](https://www.bny.com/corporate/global/en/about-us/newsroom/press-release/bny-announces-planned-change-of-stock-ticker-symbol-to-bny-130465.html) confirms the unchanged CUSIP and capital structure. **Fundamentals continue to request canonical BK**: a valid current price rename does not establish the identity of a provider's historical statement response. Saved BNY financial responses contain fiscal labels and values that conflict with canonical BK. Acquisition successors with different share terms are not treated as aliases.
 
 `financial_periods` already stores financial line items. The dedicated [fundamental backfill](durable-fundamentals-history.md) supplies annual and quarterly observations with actual provider and currency provenance. Ordinary annual valuation consumers retain their annual cadence. The store contains current reported/restated values with original availability metadata; it is not an archive of every historical statement revision.
 
@@ -18,9 +18,25 @@ Submit `POST /api/admin/market-data/backfill?ticker=...` for each target, starti
 
 The existing 21 scheduled loops remain unchanged in number. This release creates no additional scheduler. Prices refresh when existing consumers request them; explicit full-universe backfill is separately authorized and paced. Coverage reports distinguish missing or stale observations from a completed import.
 
-The coverage response includes raw database price/fundamental row counts separately from usable coverage. Counts include preexisting rows and excluded observations; they are not counts of verified usable facts. Forced refresh is appropriate after a mapper correction, including for companies that previously passed coverage, because ordinary seven-day fundamental freshness can otherwise retain the old mapped values.
+The coverage response includes raw database price/fundamental row counts for its returned targets separately from usable coverage. Counts include preexisting rows and excluded observations within those targets; they are not counts of verified usable facts or a physical-table total across every ticker. Reserved quarantine namespaces are not company/memo targets and are excluded from these sums. Disclose their row counts separately when reporting a total after reconciliation. Forced refresh is appropriate after a mapper correction, including for companies that previously passed coverage, because ordinary seven-day fundamental freshness can otherwise retain the old mapped values.
 
 A committed fundamental import invalidates that ticker's shared `financials` cache so an ordinary consumer cannot reuse a pre-repair annual statement. A cache invalidation failure is reported as an incomplete import, and an idempotent retry still attempts cache repair even if no financial rows need rewriting. Unrelated tickers and capabilities are preserved.
+
+## BK reviewed-plan reconciliation
+
+The workflow below documents code `881049b`. It does not establish that a production repair has been applied; retain the actual plan, apply receipt and subsequent coverage read as execution evidence. The dedicated [BK reconciliation notes](bk-fundamental-reconciliation.md) describe the data-matching rules.
+
+All three routes require the existing admin authentication:
+
+| Route | Request body | Effect |
+| --- | --- | --- |
+| `POST /api/admin/market-data/bk-repair/plan` | `{"bad_fetched_at":"<exact import timestamp>"}` | Normalize the timestamp to UTC, select only matching BK rows, fetch canonical FMP BK history once, and save a `financial_data_repairs` plan. No financial fact changes occur. |
+| `GET /api/admin/market-data/bk-repair/{plan_id}` | None | Read the saved digest, complete before/after identities, proposed actions and any applied result without provider calls. |
+| `POST /api/admin/market-data/bk-repair/{plan_id}/apply` | `{"digest":"<64 lowercase hexadecimal characters>"}` | Apply the reviewed saved plan with digest and row-version fences. No provider request occurs at apply time. |
+
+Inspect the plan's affected IDs, restoration/quarantine counts and proposed identities before applying its digest. Only rows from the exact selected BK fetch time are candidates. A unique canonical-provider match must agree on observed period end, statement, line and cadence and carry an explicit fiscal label. Unaffected destination occupants remain protected. The service checks the full saved before-images and destination row set before any mutation; a changed value, source, timestamp, row or destination rejects the plan with a conflict instead of applying stale evidence. A new plan is then required. A successful repeated apply returns the saved result without additional financial writes.
+
+Restoration and quarantine commit together with their durable audit. Restored rows retain IDs and availability metadata. Quarantine moves a row to a unique 16-character noncompany ticker beginning `~Q`, preserving all its other fields; the audit retains the complete original BK identity. No row is deleted. Normal ticker-scoped reads cannot consume those rows as BK facts, and the unscoped PIT availability pass explicitly excludes the reserved prefix. No Company, memo, snapshot or outcome row is edited by this repair. Retain the full before/after audit and report quarantine counts alongside normal coverage totals.
 
 ## Usable trades and provider-series selection
 

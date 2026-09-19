@@ -62,3 +62,15 @@ MEMORY.md
 
 # Workflow agent worktrees (created under .claude/ by the orchestration tooling)
 .claude/worktrees/
+
+# Evidence archive for the 2026-09-13 data reconciliation (docs/reviews/).
+# 43 machine-generated audit files, 41.9 MB — one of them 31 MB on its own.
+# Git history is append-only, so these cannot be removed later without a
+# rewrite; they are kept on disk and out of the repo. The exceptions below
+# are the only files anything cites: keep a new one in sync with its citation,
+# or the doc that references it ships a dead link.
+docs/reviews/*
+!docs/reviews/2026-09-13-bk-provider-comparability.json
+!docs/reviews/2026-09-13-bk-bny-price-identity.json
+!docs/reviews/2026-09-13-production-closeout.md
+!docs/reviews/2026-09-13-market-data-backfill.md
