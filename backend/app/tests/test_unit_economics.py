@@ -7,8 +7,8 @@ is made anywhere in this module — one test proves it by patching every entry
 point to raise.
 
 Costs are engineered to be checkable by hand: `claude-haiku-4-5` is priced at
-$0.50 per million input tokens (`llm_metrics.MODEL_PRICES_PER_MTOK`), so
-20,000 input tokens and no output tokens is exactly one cent.
+$1.00 per million input tokens (`llm_metrics.MODEL_PRICES_PER_MTOK`), so
+10,000 input tokens and no output tokens is exactly one cent.
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ from app.models import LLMCallLog
 from app.services import unit_economics as ue
 
 MARKER = "unit_economics_test_agent"
-MODEL = "claude-haiku-4-5"          # $0.50 / MTok in, $2.50 / MTok out
-TOKENS_PER_CENT = 20_000            # 20,000 × 0.50 / 1e6 = $0.01
+MODEL = "claude-haiku-4-5"          # $1.00 / MTok in, $5.00 / MTok out
+TOKENS_PER_CENT = 10_000            # 10,000 × 1.00 / 1e6 = $0.01
 # Far enough in the past that no other test's rows can land in the window.
 CLOCK = datetime(2019, 5, 15, 12, 0, 0)
 ADMIN_TOKEN = "admin-token-unit-economics-tests"

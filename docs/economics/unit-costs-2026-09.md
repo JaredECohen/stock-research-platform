@@ -55,9 +55,20 @@ Per action the script:
    not shared with a live worker thread.
 3. Reads `llm_metrics.cost_per_run(run_id)`: call count, tokens in/out,
    `estimate_cost_usd` (from `MODEL_PRICES_PER_MTOK`; a model missing from
-   the table falls back to the provider default — check the `models` list
-   in each sample and update the price table before trusting a figure),
+   the table falls back to the provider default — it is logged once, the
+   report names it under `fallback_priced_models`, and
+   `test_llm_prices.py` fails if a model in `Settings` has no row),
    failures, LLM duration.
+
+   **Price-table correction, 2026-09-19.** Every row was re-verified against
+   the providers' pricing pages (`PRICES_VERIFIED_ON`). Any figure produced
+   before that date used a table that was off for every routed model: Opus
+   4.7/4.8 at 3x list ($15/$75 vs $5/$25), Haiku 4.5 at half ($0.50/$2.50 vs
+   $1/$5), gpt-5.5 at 1.6x/1.07x, gpt-5.4 at 2x/1.33x, gpt-5 at 2.8x/1.4x,
+   gemini-2.5-pro at 2.8x/1.4x, gemini-2.5-flash output at half, and the
+   configured `gpt-4.1-mini` and `gemini-3.1-pro` absent (priced at the
+   $3/$12 default, 7.5x and 1.5x high on input). Re-run the script before
+   comparing against any pre-correction number.
 4. Counts provider work in the action's time window: `provider_cache` rows
    written (`fetched_at >= start` — every miss writes a row) and
    `cache_cost_logs` snapshot writes vs hits. Neither ledger records misses

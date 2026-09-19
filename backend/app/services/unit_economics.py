@@ -57,9 +57,8 @@ from ..auth import features
 from ..database import SessionLocal
 from ..models import LLMCallLog
 from .llm_metrics import (
-    MODEL_PRICES_PER_MTOK,
-    PROVIDER_PRICE_FALLBACK,
     estimate_cost_usd,
+    price_source,
 )
 
 # --- knobs ------------------------------------------------------------------
@@ -217,8 +216,17 @@ EXCLUSION_REASONS = {
 
 
 def _is_priced(provider: str, model: str) -> bool:
-    return ((model or "").lower() in MODEL_PRICES_PER_MTOK
-            or (provider or "").lower() in PROVIDER_PRICE_FALLBACK)
+    return price_source(provider, model) != "unpriced"
+
+
+# Why a figure that includes a provider-default rate is reported but not
+# trusted. Distinct from `EXCLUSION_REASONS`: the unit stays in the sample
+# (the default keeps it off $0), the report just names the model.
+FALLBACK_PRICED_REASON = (
+    "priced at the provider default because the model has no row in "
+    "llm_metrics.MODEL_PRICES_PER_MTOK — every figure that includes it is a guess; "
+    "add the model's list price and re-read"
+)
 
 
 def _scan(db: Session, *, since: datetime, until: datetime, max_rows: int,
@@ -351,14 +359,18 @@ def _units_for(op: Operation, rows: Sequence[Any],
     failed_calls = 0
     models: set[str] = set()
     unpriced_models: set[str] = set()
+    fallback_priced_models: set[str] = set()
     n_calls = 0
 
     for i, r in enumerate(mine):
         model_label = f"{r.provider or '?'}/{r.model or '?'}"
         models.add(model_label)
-        priced = _is_priced(r.provider, r.model)
+        source = price_source(r.provider, r.model)
+        priced = source != "unpriced"
         if not priced:
             unpriced_models.add(model_label)
+        elif source == "provider_default":
+            fallback_priced_models.add(model_label)
         if op.basis == BASIS_RUN_ID:
             if not r.run_id:
                 # A run-grouped call with no run_id belongs to no unit. It is
@@ -412,6 +424,7 @@ def _units_for(op: Operation, rows: Sequence[Any],
         "failed_calls": failed_calls,
         "models": sorted(models),
         "unpriced_models": sorted(unpriced_models),
+        "fallback_priced_models": sorted(fallback_priced_models),
         "excluded_units": excluded,
     }
 
@@ -494,6 +507,11 @@ def _figures(op: Operation, grouped: dict[str, Any], *, window_days: int,
         }
     if grouped["unpriced_models"]:
         out["unpriced_models"] = grouped["unpriced_models"]
+    if grouped.get("fallback_priced_models"):
+        out["fallback_priced_models"] = {
+            "models": grouped["fallback_priced_models"],
+            "reason": FALLBACK_PRICED_REASON,
+        }
     if grouped["unattributed_calls"]:
         out["unattributed_calls"] = {
             "n": grouped["unattributed_calls"],

@@ -4,14 +4,18 @@ Used by the admin endpoint and the CLI cost report. Functions return
 plain dicts so they're trivially JSON-serializable.
 
 Wave 8D: USD cost estimation. Token counts are stored at the call
-site; this module multiplies them by best-effort price-per-MTok rates
-to produce dollar figures. The price table is conservative — when a
-specific model isn't found, fall through to a per-provider default,
-then to zero. Update `MODEL_PRICES_PER_MTOK` when a provider's
-pricing changes.
+site; this module multiplies them by list price-per-MTok rates to
+produce dollar figures. `MODEL_PRICES_PER_MTOK` carries every model the
+app routes to (`test_llm_prices.py` pins that against `Settings`); a
+model outside it prices at the provider default and is logged once,
+and `unit_economics` names it, because a silent default is how the
+table drifted 3x in both directions before 2026-09-19. Update the
+table — and `PRICES_VERIFIED_ON` — when a provider's pricing changes.
 """
 from __future__ import annotations
 
+import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -21,33 +25,97 @@ from sqlalchemy.orm import Session
 from ..database import SessionLocal
 from ..models import LLMCallLog
 
-# Best-effort prices per million tokens (USD), input / output.
-# Edit when a provider's official pricing changes; not load-bearing for
-# any logic — only the cost estimate output uses these.
+log = logging.getLogger(__name__)
+
+# List prices per million tokens (USD), input / output: standard tier, and
+# the short-context (<= 200K-token prompt) rate where a provider tiers by
+# prompt length. Verified against the providers' own pricing pages on
+# PRICES_VERIFIED_ON:
+#   https://platform.claude.com/docs/en/about-claude/pricing
+#   https://developers.openai.com/api/docs/pricing   ("All models" table)
+#   https://ai.google.dev/gemini-api/docs/pricing    (paid tier)
+# Not load-bearing for any logic — only the cost estimate output uses
+# these — but `test_llm_prices.py` fails when a model named in `Settings`
+# has no row here, so a routing change cannot silently price at a default.
+PRICES_VERIFIED_ON = "2026-09-19"
 MODEL_PRICES_PER_MTOK: dict[str, tuple[float, float]] = {
     # OpenAI
-    "gpt-5":           (3.50, 14.00),
-    "gpt-5.4":         (5.00, 20.00),
-    "gpt-5.5":         (8.00, 32.00),
-    "gpt-5.5-pro":     (15.00, 60.00),
+    "gpt-5":           (1.25, 10.00),
+    "gpt-5-mini":      (0.25, 2.00),
+    "gpt-5.4":         (2.50, 15.00),
+    "gpt-5.5":         (5.00, 30.00),
+    "gpt-5.5-pro":     (30.00, 180.00),
+    "gpt-4.1-mini":    (0.40, 1.60),
     "gpt-4o-mini":     (0.15, 0.60),
-    "gpt-5-mini":      (0.50, 2.00),
     # Anthropic
-    "claude-haiku-4-5":  (0.50, 2.50),
-    "claude-opus-4-7":   (15.00, 75.00),
-    "claude-opus-4-8":   (15.00, 75.00),  # placeholder — update when pricing publishes
+    "claude-haiku-4-5":  (1.00, 5.00),
     "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-sonnet-5":   (2.00, 10.00),
+    "claude-opus-4-7":   (5.00, 25.00),
+    "claude-opus-4-8":   (5.00, 25.00),
+    "claude-opus-5":     (5.00, 25.00),
     # Google / Vertex
-    "gemini-2.5-flash":  (0.30, 1.25),
-    "gemini-2.5-pro":    (3.50, 14.00),
+    "gemini-2.5-flash":       (0.30, 2.50),
+    "gemini-2.5-pro":         (1.25, 10.00),
+    "gemini-3.1-pro":         (2.00, 12.00),
+    "gemini-3.1-pro-preview": (2.00, 12.00),
 }
 
-# Provider-level fallback (when the specific model isn't tabulated).
+# Provider-level fallback (when the specific model isn't tabulated). It keeps
+# a total from reading as $0, but it is a guess, not a price: every use is
+# logged once per model and `unit_economics` names the model in its report.
 PROVIDER_PRICE_FALLBACK: dict[str, tuple[float, float]] = {
     "openai":    (3.00, 12.00),
     "anthropic": (3.00, 15.00),
     "gemini":    (3.00, 12.00),
 }
+
+# Dated snapshot IDs — Anthropic `claude-haiku-4-5-20251001`, OpenAI
+# `gpt-5.5-2026-04-23` — are priced as their alias.
+_SNAPSHOT_SUFFIX_RE = re.compile(r"-(?:\d{8}|\d{4}-\d{2}-\d{2})$")
+
+
+def price_key(model: str) -> str:
+    """Normalise a logged model ID to its row in `MODEL_PRICES_PER_MTOK`."""
+    return _SNAPSHOT_SUFFIX_RE.sub("", (model or "").strip().lower())
+
+
+def price_source(provider: str, model: str) -> str:
+    """Where a (provider, model) pair's rate comes from: ``"model"`` (an
+    exact row), ``"provider_default"`` (the provider fallback — a guess),
+    or ``"unpriced"`` (neither; the estimate is $0)."""
+    if price_key(model) in MODEL_PRICES_PER_MTOK:
+        return "model"
+    if (provider or "").lower() in PROVIDER_PRICE_FALLBACK:
+        return "provider_default"
+    return "unpriced"
+
+
+# (provider, model) pairs already warned about, so a busy loop on one
+# unlisted model logs once, not once per call.
+_warned_models: set[tuple[str, str]] = set()
+
+
+def _rates(provider: str, model: str) -> tuple[float, float]:
+    prov = (provider or "").lower()
+    key = price_key(model)
+    source = price_source(prov, key)
+    if source == "model":
+        return MODEL_PRICES_PER_MTOK[key]
+    if (prov, key) not in _warned_models:
+        _warned_models.add((prov, key))
+        if source == "provider_default":
+            log.warning(
+                "llm_metrics: no price row for %s/%s — costing it at the %s provider "
+                "default; add the model to MODEL_PRICES_PER_MTOK",
+                prov, key or "?", prov,
+            )
+        else:
+            log.warning(
+                "llm_metrics: no price row or provider default for %s/%s — costing it at $0",
+                prov or "?", key or "?",
+            )
+    return PROVIDER_PRICE_FALLBACK.get(prov, (0.0, 0.0))
 
 
 def estimate_cost_usd(provider: str, model: str,
@@ -55,17 +123,15 @@ def estimate_cost_usd(provider: str, model: str,
                       cache_read_tokens: int = 0,
                       cache_write_tokens: int = 0) -> float:
     """Multiply tokens by per-MTok rates. Best-effort: missing prices
-    fall to provider default, then zero. Never raises.
+    fall to the provider default (logged once per model), then zero.
+    Never raises.
 
     Prompt-cache tokens are priced per provider convention: Anthropic's
     `input_tokens` excludes them (writes bill 1.25x, reads 0.1x of the
     input rate); OpenAI's `prompt_tokens` includes them (reads bill 0.5x).
     """
     prov = (provider or "").lower()
-    p_in, p_out = MODEL_PRICES_PER_MTOK.get(
-        (model or "").lower(),
-        PROVIDER_PRICE_FALLBACK.get(prov, (0.0, 0.0)),
-    )
+    p_in, p_out = _rates(prov, model)
     n_in = max(0, int(tokens_in or 0))
     n_out = max(0, int(tokens_out or 0))
     n_read = max(0, int(cache_read_tokens or 0))
