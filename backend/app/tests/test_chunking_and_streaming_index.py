@@ -283,6 +283,29 @@ def test_an_oversized_sentence_degrades_to_a_clause_not_to_nothing():
     )
 
 
+def _sentence_filling(budget: int) -> str:
+    """One unsplittable sentence just under `budget` tokens.
+
+    Built to the *measured* size rather than to a fixed clause count. A
+    clause count only lands near the budget for one tokenizer: where
+    `count_tokens` falls back to its character heuristic (no tiktoken BPE
+    cache and no egress to fetch one — the state every CI runner starts
+    in), the same 38 clauses measure 506 tokens instead of 461 and the
+    fixture stops fitting a chunk. Measuring keeps the case this test
+    exists for — a sentence that nearly fills a chunk — true under either
+    counter, instead of reporting an encoder-availability problem as a
+    failure of the carry cap.
+    """
+    clauses: list[str] = []
+    while True:
+        i = len(clauses)
+        candidate = clauses + [f"risk factor {i} with exposure of ${i},{i:03d} million"]
+        text = "The Company faces " + " ".join(candidate) + ". "
+        if emb.count_tokens(text) > budget:
+            return "The Company faces " + " ".join(clauses) + ". "
+        clauses = candidate
+
+
 def test_a_long_sentence_does_not_double_the_corpus():
     """The cost the cap exists to stop, measured end to end at the defaults.
 
@@ -293,9 +316,7 @@ def test_a_long_sentence_does_not_double_the_corpus():
     `doc_chunks` rows, and near-duplicate chunks competing with each other
     for `vector_store.search`'s top-k.
     """
-    sentence = "The Company faces " + " ".join(
-        f"risk factor {i} with exposure of ${i},{i:03d} million" for i in range(38)
-    ) + ". "
+    sentence = _sentence_filling(460)
     assert 50 < emb.count_tokens(sentence) < 500, "fixture must fit one chunk"
     doc = ("Net sales rose 12.4%. " + sentence + sentence) * 3
 
@@ -570,6 +591,14 @@ def test_dense_unsplittable_runs_respect_measured_budget_without_losing_text(uni
     assert all(emb.count_tokens(chunk) <= 500 for chunk in chunks)
 
 
+@pytest.mark.skipif(
+    emb._encoding() is None,
+    reason=(
+        "asserts a property of the real encoder: without tiktoken's cl100k_base "
+        "ranks (not cached, and the netguard blocks the fetch) count_tokens IS a "
+        "code-point heuristic, so there is nothing here to measure"
+    ),
+)
 def test_short_unicode_is_measured_in_tokens_not_code_points():
     text = "🚀" * 100
     assert len(text) <= 120 < emb.count_tokens(text)
