@@ -986,6 +986,8 @@ def _llm_call(analyst: IndustryAnalyst, facts: dict[str, dict[str, Any]], sectio
         generation["cost_usd"] = round(generation["cost_usd"] + estimate_cost_usd(
             str(usage.get("provider") or ""), str(usage.get("model") or ""),
             int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0),
+            cache_read_tokens=int(usage.get("cache_read_tokens") or 0),
+            cache_write_tokens=int(usage.get("cache_write_tokens") or 0),
         ), 6)
     return out if isinstance(out, dict) else None
 

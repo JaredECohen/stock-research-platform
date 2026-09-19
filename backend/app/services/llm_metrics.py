@@ -51,15 +51,33 @@ PROVIDER_PRICE_FALLBACK: dict[str, tuple[float, float]] = {
 
 
 def estimate_cost_usd(provider: str, model: str,
-                      tokens_in: int, tokens_out: int) -> float:
+                      tokens_in: int, tokens_out: int, *,
+                      cache_read_tokens: int = 0,
+                      cache_write_tokens: int = 0) -> float:
     """Multiply tokens by per-MTok rates. Best-effort: missing prices
-    fall to provider default, then zero. Never raises."""
+    fall to provider default, then zero. Never raises.
+
+    Prompt-cache tokens are priced per provider convention: Anthropic's
+    `input_tokens` excludes them (writes bill 1.25x, reads 0.1x of the
+    input rate); OpenAI's `prompt_tokens` includes them (reads bill 0.5x).
+    """
+    prov = (provider or "").lower()
     p_in, p_out = MODEL_PRICES_PER_MTOK.get(
         (model or "").lower(),
-        PROVIDER_PRICE_FALLBACK.get((provider or "").lower(), (0.0, 0.0)),
+        PROVIDER_PRICE_FALLBACK.get(prov, (0.0, 0.0)),
     )
-    cost_in = (max(0, int(tokens_in or 0)) / 1_000_000.0) * p_in
-    cost_out = (max(0, int(tokens_out or 0)) / 1_000_000.0) * p_out
+    n_in = max(0, int(tokens_in or 0))
+    n_out = max(0, int(tokens_out or 0))
+    n_read = max(0, int(cache_read_tokens or 0))
+    n_write = max(0, int(cache_write_tokens or 0))
+    if prov == "anthropic":
+        billed_in = n_in + 1.25 * n_write + 0.1 * n_read
+    elif prov == "openai":
+        billed_in = max(0, n_in - n_read) + 0.5 * n_read
+    else:
+        billed_in = n_in
+    cost_in = (billed_in / 1_000_000.0) * p_in
+    cost_out = (n_out / 1_000_000.0) * p_out
     return round(cost_in + cost_out, 6)
 
 
@@ -86,8 +104,12 @@ def cost_per_run(run_id: str, *, db: Session | None = None) -> dict[str, Any]:
             "model": r.model,
             "tokens_in": r.tokens_in,
             "tokens_out": r.tokens_out,
+            "cache_read_tokens": int(r.cache_read_tokens or 0),
+            "cache_write_tokens": int(r.cache_write_tokens or 0),
             "cost_usd": estimate_cost_usd(
                 r.provider, r.model, r.tokens_in, r.tokens_out,
+                cache_read_tokens=r.cache_read_tokens,
+                cache_write_tokens=r.cache_write_tokens,
             ),
             "duration_ms": r.duration_ms,
             "success": r.success,
@@ -99,6 +121,8 @@ def cost_per_run(run_id: str, *, db: Session | None = None) -> dict[str, Any]:
             "tokens_in": sum(r.tokens_in for r in rows),
             "tokens_out": sum(r.tokens_out for r in rows),
             "tokens_total": sum(r.tokens_in + r.tokens_out for r in rows),
+            "cache_read_tokens": sum(int(r.cache_read_tokens or 0) for r in rows),
+            "cache_write_tokens": sum(int(r.cache_write_tokens or 0) for r in rows),
             "cost_usd_total": round(sum(c["cost_usd"] for c in calls), 6),
             "duration_ms_total": sum(r.duration_ms for r in rows),
             "n_failures": sum(1 for r in rows if not r.success),
@@ -125,14 +149,19 @@ def cost_per_agent(*, since: datetime | None = None,
         for r in rows:
             a = agg.setdefault(r.agent_name, {
                 "n_calls": 0, "tokens_in": 0, "tokens_out": 0,
+                "cache_read_tokens": 0, "cache_write_tokens": 0,
                 "duration_ms_total": 0, "n_failures": 0, "cost_usd": 0.0,
             })
             a["n_calls"] += 1
             a["tokens_in"] += r.tokens_in
             a["tokens_out"] += r.tokens_out
+            a["cache_read_tokens"] += int(r.cache_read_tokens or 0)
+            a["cache_write_tokens"] += int(r.cache_write_tokens or 0)
             a["duration_ms_total"] += r.duration_ms
             a["cost_usd"] += estimate_cost_usd(
                 r.provider, r.model, r.tokens_in, r.tokens_out,
+                cache_read_tokens=r.cache_read_tokens,
+                cache_write_tokens=r.cache_write_tokens,
             )
             if not r.success:
                 a["n_failures"] += 1
@@ -160,13 +189,18 @@ def cost_per_provider(*, since: datetime | None = None,
         for r in rows:
             a = agg.setdefault(r.provider, {
                 "n_calls": 0, "tokens_in": 0, "tokens_out": 0,
+                "cache_read_tokens": 0, "cache_write_tokens": 0,
                 "n_failures": 0, "cost_usd": 0.0,
             })
             a["n_calls"] += 1
             a["tokens_in"] += r.tokens_in
             a["tokens_out"] += r.tokens_out
+            a["cache_read_tokens"] += int(r.cache_read_tokens or 0)
+            a["cache_write_tokens"] += int(r.cache_write_tokens or 0)
             a["cost_usd"] += estimate_cost_usd(
                 r.provider, r.model, r.tokens_in, r.tokens_out,
+                cache_read_tokens=r.cache_read_tokens,
+                cache_write_tokens=r.cache_write_tokens,
             )
             if not r.success:
                 a["n_failures"] += 1

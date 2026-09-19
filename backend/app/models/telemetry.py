@@ -33,6 +33,13 @@ class LLMCallLog(Base):
     route: Mapped[str] = mapped_column(String(16), default="")
     tokens_in: Mapped[int] = mapped_column(Integer, default=0)
     tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    # Prompt-cache tokens (2026-09). Anthropic reports them outside
+    # `input_tokens`; OpenAI inside `prompt_tokens`. `estimate_cost_usd`
+    # prices them per provider. Rows written before the columns existed
+    # read back NULL (reconcile adds the column without a server default),
+    # so consumers treat None as 0.
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     error: Mapped[str] = mapped_column(Text, default="")
