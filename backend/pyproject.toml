@@ -164,8 +164,15 @@ known-first-party = ["app"]
 #
 # `files` must list only paths that exist: mypy errors on a missing entry.
 # ---------------------------------------------------------------------------
+# mypy targets the image's 3.12, NOT the 3.11 package floor. numpy's stubs
+# use PEP 695 `type` statements, which mypy rejects under 3.11 as a *fatal*
+# syntax error — "errors prevented further checking" — so the scoped run
+# checked zero files while reporting a tidy "1 error". The floor itself is
+# guarded where it belongs and blockingly: the py311-floor job byte-compiles
+# backend/app on 3.11, and ruff's target-version keeps UP off 3.12-only
+# rewrites. Neither of those depends on this line.
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 files = [
     "app/finance",
     "app/agents/graph.py",

@@ -233,6 +233,37 @@ class BoundedHTMLStripper(HTMLParser):
                 self._markup_last = char
         return ""
 
+    # HTMLParser keeps unparsed input in `rawdata`, and since CPython
+    # 3.12.14 / 3.13.15 also in a second buffer: `feed` parks input in
+    # `_pending` and only joins it into `rawdata` once `_parse_threshold`
+    # is reached, so an unterminated token is not rescanned on every call.
+    # Bounding unfinished-token state means accounting for both. Measuring
+    # `rawdata` alone let the deferred half grow unmeasured, and let a
+    # document tail reach `goahead` *after* `close` had already rewritten
+    # `rawdata` — a 10,000-digit character reference leaked its digits into
+    # the extracted text. `_pending` is absent on older interpreters.
+
+    def _buffered_chars(self) -> int:
+        """Characters the parser still holds, across both of its buffers."""
+        return len(self.rawdata) + getattr(self, "_pending_len", 0)
+
+    def _take_buffered(self) -> str:
+        """Drain every unparsed character and let parsing resume at once.
+
+        Leaving `_parse_threshold` where CPython set it would re-park the
+        next buffer's worth of input in `_pending` unmeasured, which is
+        precisely the bound this class exists to enforce.
+        """
+        data = self.rawdata
+        pending = getattr(self, "_pending", None)
+        if pending is not None:
+            data += "".join(pending)
+            pending.clear()
+            self._pending_len = 0
+            self._parse_threshold = 1
+        self.rawdata = ""
+        return data
+
     def feed(self, data: str) -> None:
         # Bound feed size even when an HTTP transport yields one enormous
         # decoded fragment. No extra full-fragment copy is retained.
@@ -243,11 +274,11 @@ class BoundedHTMLStripper(HTMLParser):
             if not piece:
                 continue
             super().feed(piece)
-            self.max_pending_chars = max(self.max_pending_chars, len(self.rawdata))
-            if len(self.rawdata) <= PARSER_BUFFER_CHARS:
+            buffered = self._buffered_chars()
+            self.max_pending_chars = max(self.max_pending_chars, buffered)
+            if buffered <= PARSER_BUFFER_CHARS:
                 continue
-            pending = self.rawdata
-            self.rawdata = ""
+            pending = self._take_buffered()
             if self.cdata_elem:
                 if not self._cdata_overflow:
                     self.oversized_tokens += 1
@@ -302,9 +333,13 @@ class BoundedHTMLStripper(HTMLParser):
         # Let HTMLParser's automatic conversion handle pending EOF references
         # (including unknown names) exactly like html.unescape. Normalize the
         # numeric spelling first to avoid Python's decimal-int digit limit.
+        # The rewrite has to cover the deferred buffer too: `HTMLParser.close`
+        # appends it to `rawdata`, so anything left there would arrive
+        # unnormalized after this line had already run.
         self.rawdata = re.sub(
             r"&#([xX][0-9a-fA-F]+|[0-9]+);?",
-            lambda match: f"&#{self._numeric_reference_value(match[1])};", self.rawdata,
+            lambda match: f"&#{self._numeric_reference_value(match[1])};",
+            self._take_buffered(),
         )
         self.convert_charrefs = True
         try:
