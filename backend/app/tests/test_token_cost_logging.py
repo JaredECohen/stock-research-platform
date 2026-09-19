@@ -85,8 +85,8 @@ def test_cost_per_run_includes_cost_usd_total():
     out = llm_metrics.cost_per_run("run-A")
     assert out["n_calls"] == 1
     assert out["tokens_total"] == 1_500_000
-    # gpt-5: $3.50/MTok input + $14.00/MTok output → 3.50 + 7.00 = 10.50
-    assert abs(out["cost_usd_total"] - 10.50) < 1e-3
+    # gpt-5: $1.25/MTok input + $10.00/MTok output → 1.25 + 5.00 = 6.25
+    assert abs(out["cost_usd_total"] - 6.25) < 1e-3
     assert out["calls"][0]["cost_usd"] > 0
 
 
