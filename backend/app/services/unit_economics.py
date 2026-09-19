@@ -248,6 +248,7 @@ def _scan(db: Session, *, since: datetime, until: datetime, max_rows: int,
             LLMCallLog.feature, LLMCallLog.run_id, LLMCallLog.provider, LLMCallLog.model,
             LLMCallLog.tokens_in, LLMCallLog.tokens_out, LLMCallLog.success,
             LLMCallLog.generated_at,
+            LLMCallLog.cache_read_tokens, LLMCallLog.cache_write_tokens,
         )
         .where(*where)
         .order_by(LLMCallLog.generated_at.desc())
@@ -378,7 +379,10 @@ def _units_for(op: Operation, rows: Sequence[Any],
         unit.n_calls += 1
         if op.basis == BASIS_RUN_ID and key in partial_runs:
             unit.problems.add("partial_unit")
-        unit.cost_usd += estimate_cost_usd(r.provider, r.model, r.tokens_in, r.tokens_out)
+        unit.cost_usd += estimate_cost_usd(
+            r.provider, r.model, r.tokens_in, r.tokens_out,
+            cache_read_tokens=r.cache_read_tokens, cache_write_tokens=r.cache_write_tokens,
+        )
         if not priced:
             unit.problems.add("unpriced_model")
         if r.success and not (r.tokens_in or r.tokens_out):

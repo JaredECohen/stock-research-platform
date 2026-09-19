@@ -1057,14 +1057,18 @@ def _pm_synthesis(
         profile=profile,
         scorecard_block=scorecard_context.prompt_block(scorecard),
     )
-    llm_out = llm.chat_json(
-        prompts.PM_SYNTHESIS_PROMPT
-        + (("\n\n" + pm_ctx) if pm_ctx else "")
-        + "\n\nFindings:\n"
-        + json.dumps({k: v.model_dump() for k, v in findings.items()}, default=str)[: settings.max_agent_context_chars],
-        system=prompts.PM_SYSTEM, route="strong",
-        model=settings.openai_pm_model,
-    )
+    # The synthesis template is byte-stable across memos; declare it as the
+    # cached prefix so each PM call reads it instead of re-paying for it. The
+    # volatile pm_ctx / findings follow the "\n\n" join and stay uncached.
+    with llm.llm_call_context(static_prefix_chars=len(prompts.PM_SYNTHESIS_PROMPT) + 2):
+        llm_out = llm.chat_json(
+            prompts.PM_SYNTHESIS_PROMPT
+            + (("\n\n" + pm_ctx) if pm_ctx else "")
+            + "\n\nFindings:\n"
+            + json.dumps({k: v.model_dump() for k, v in findings.items()}, default=str)[: settings.max_agent_context_chars],
+            system=prompts.PM_SYSTEM, route="strong",
+            model=settings.openai_pm_model,
+        )
     if llm_out and "rating_label" in llm_out:
         return llm_out
 

@@ -340,13 +340,18 @@ class llm_call_context:
 
     def __init__(self, *, agent_name: str = "unknown", run_id: str | None = None,
                  route: str = "", user_id: int | None = None,
-                 feature: str | None = None) -> None:
+                 feature: str | None = None,
+                 static_prefix_chars: int = 0) -> None:
         # `user_id` / `feature` (FEAT-002) attribute spend to the customer
         # and product feature that caused it; the worker sets them from
         # the RegenJob row, the chat route from the request principal.
+        # `static_prefix_chars` tells `_anthropic_chat` that the first N
+        # characters of the user prompt are byte-stable across calls (a
+        # template) and may be cached; N must land right after a newline.
         self._values = {
             "agent_name": agent_name, "run_id": run_id, "route": route,
             "user_id": user_id, "feature": feature,
+            "static_prefix_chars": int(static_prefix_chars or 0),
         }
         self._token: contextvars.Token | None = None
 
@@ -381,7 +386,12 @@ def _record_usage(
     duration_ms: int = 0,
     success: bool = True,
     error: str = "",
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> None:
+    # `total_tokens` stays input + output: for Anthropic `input_tokens` is the
+    # uncached remainder, so cached tokens are priced separately rather than
+    # summed into the figure the snapshot cache treats as "spend".
     total = max(0, int(input_tokens or 0)) + max(0, int(output_tokens or 0))
     _USAGE_STATE.last = {
         "provider": provider,
@@ -389,6 +399,8 @@ def _record_usage(
         "input_tokens": int(input_tokens or 0),
         "output_tokens": int(output_tokens or 0),
         "total_tokens": total,
+        "cache_read_tokens": int(cache_read_tokens or 0),
+        "cache_write_tokens": int(cache_write_tokens or 0),
     }
     # Persist to the LLMCallLog audit table (Wave 1A). Lazy import to avoid
     # an import-time cycle (models → cache → ... ). DB failures must NEVER
@@ -408,6 +420,8 @@ def _record_usage(
                 route=ctx.get("route") or "",
                 tokens_in=int(input_tokens or 0),
                 tokens_out=int(output_tokens or 0),
+                cache_read_tokens=int(cache_read_tokens or 0),
+                cache_write_tokens=int(cache_write_tokens or 0),
                 duration_ms=int(duration_ms or 0),
                 success=bool(success),
                 error=str(error or "")[:500],
@@ -444,6 +458,47 @@ def _usage_from_anthropic(msg: Any) -> tuple[int, int]:
     if usage is None:
         return 0, 0
     return int(getattr(usage, "input_tokens", 0) or 0), int(getattr(usage, "output_tokens", 0) or 0)
+
+
+def _cache_usage_from_anthropic(msg: Any) -> tuple[int, int]:
+    """(cache_write_tokens, cache_read_tokens); both 0 when the response has none."""
+    usage = getattr(msg, "usage", None)
+    if usage is None:
+        return 0, 0
+    return (
+        int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+        int(getattr(usage, "cache_read_input_tokens", 0) or 0),
+    )
+
+
+def _cache_usage_from_openai(resp: Any) -> int:
+    """Cached prompt tokens (already counted inside `prompt_tokens`)."""
+    details = getattr(getattr(resp, "usage", None), "prompt_tokens_details", None)
+    return int(getattr(details, "cached_tokens", 0) or 0)
+
+
+def _cacheable_system(text: str) -> str | list[dict[str, Any]]:
+    """The string form is the API's shorthand for one text block, so the
+    block form with a cache marker renders byte-identically."""
+    if not settings.llm_prompt_caching_enabled:
+        return text
+    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+
+
+def _user_content(user: str) -> str | list[dict[str, Any]]:
+    """Split the user turn at the static prefix a call site declared via
+    `llm_call_context(static_prefix_chars=…)`, marking the stable head as
+    cacheable. Only splits right after a newline so the two blocks re-join
+    to the original text; otherwise the prompt goes through unchanged."""
+    if not settings.llm_prompt_caching_enabled:
+        return user
+    n = int(_CALL_CONTEXT.get().get("static_prefix_chars") or 0)
+    if 0 < n < len(user) and user[n - 1] == "\n":
+        return [
+            {"type": "text", "text": user[:n], "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": user[n:]},
+        ]
+    return user
 
 
 def _usage_from_gemini(resp: Any) -> tuple[int, int]:
@@ -798,7 +853,7 @@ def _anthropic_chat(
 ) -> Any:
     import time as _time
     t0 = _time.perf_counter()
-    in_tok = out_tok = 0
+    in_tok = out_tok = cache_w = cache_r = 0
     received_response = False
     out = None
     error = ""
@@ -807,8 +862,8 @@ def _anthropic_chat(
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "system": system or "You are a helpful assistant.",
-            "messages": [{"role": "user", "content": user}],
+            "system": _cacheable_system(system or "You are a helpful assistant."),
+            "messages": [{"role": "user", "content": _user_content(user)}],
         }
         if _anthropic_supports_custom_temp(model):
             kwargs["temperature"] = 0.3
@@ -816,6 +871,7 @@ def _anthropic_chat(
         received_response = True
         # Capture real token usage for cost accounting (Phase C) + log row (Wave 1A).
         in_tok, out_tok = _usage_from_anthropic(msg)
+        cache_w, cache_r = _cache_usage_from_anthropic(msg)
         finish_diagnostic = _safe_finish_diagnostic("anthropic", msg)
         # Concatenate text blocks
         parts = []
@@ -837,6 +893,7 @@ def _anthropic_chat(
         "anthropic", model, in_tok, out_tok,
         duration_ms=int((_time.perf_counter() - t0) * 1000),
         success=out is not None, error=error + finish_diagnostic if error else "",
+        cache_read_tokens=cache_r, cache_write_tokens=cache_w,
     )
     return out
 
@@ -878,7 +935,7 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": user + "\n\nReturn ONLY valid JSON."})
     t0 = _time.perf_counter()
-    in_tok = out_tok = 0
+    in_tok = out_tok = cache_r = 0
     received_response = False
     out = None
     error = ""
@@ -895,6 +952,7 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
         resp = client.chat.completions.create(**kwargs)
         received_response = True
         in_tok, out_tok = _usage_from_openai(resp)
+        cache_r = _cache_usage_from_openai(resp)
         finish_diagnostic = _safe_finish_diagnostic("openai", resp)
         content = resp.choices[0].message.content
         try:
@@ -911,6 +969,7 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
         "openai", model, in_tok, out_tok,
         duration_ms=int((_time.perf_counter() - t0) * 1000),
         success=out is not None, error=error + finish_diagnostic if error else "",
+        cache_read_tokens=cache_r,
     )
     return out
 
@@ -935,7 +994,8 @@ def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_to
         in_tok, out_tok = _usage_from_openai(resp)
         out = resp.choices[0].message.content
         _record_usage("openai", model, in_tok, out_tok,
-                      duration_ms=dur, success=bool(out))
+                      duration_ms=dur, success=bool(out),
+                      cache_read_tokens=_cache_usage_from_openai(resp))
         return out
     except Exception as exc:  # pragma: no cover
         dur = int((_time.perf_counter() - t0) * 1000)

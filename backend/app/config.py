@@ -96,6 +96,13 @@ class Settings(BaseSettings):
     # `/api/providers/status` reporting `degraded`.
     llm_failover_enabled: bool = True
     llm_failover_cooldown_seconds: float = 600.0
+    # Anthropic prompt caching. `_anthropic_chat` sends the system prompt as
+    # a `cache_control` block and, where a call site declares a static prefix
+    # via `llm_call_context(static_prefix_chars=…)`, splits the user content
+    # at that boundary so the repeated part is read at ~0.1x. The prompt
+    # bytes the model sees are identical either way; the flag exists so a
+    # bad cache interaction can be switched off on Render without a deploy.
+    llm_prompt_caching_enabled: bool = True
 
     # Database
     database_url: str = "sqlite:///./marketmosaic.db"
