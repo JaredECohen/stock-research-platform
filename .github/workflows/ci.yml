@@ -44,12 +44,18 @@ jobs:
         run: |
           pip install "ruff==0.12.0"
           ruff check app
-      - name: Type check (mypy, non-blocking)
+      - name: Type check (mypy)
         working-directory: backend
-        # Scoped to pyproject.toml [tool.mypy].files. Non-blocking until the
-        # scoped error count reaches zero; the count is echoed so the trend
-        # is visible on every run. Flip continue-on-error off at zero.
-        continue-on-error: true
+        # Scoped to pyproject.toml [tool.mypy].files. BLOCKING as of
+        # 2026-09-19: the scoped count reached zero, which is the condition
+        # this step was always waiting on.
+        #
+        # Read the "checked N source files" line, not just the error count. A
+        # fatal parse error in a dependency's stubs ends the run early with
+        # "errors prevented further checking" — that reports as 1 error while
+        # checking ZERO files, which is how this step spent its non-blocking
+        # life looking healthy while doing nothing. The count is echoed below
+        # for the trend; the file count is what says the check ran at all.
         run: |
           pip install "mypy==1.17.1"
           status=0
@@ -57,7 +63,7 @@ jobs:
           cat mypy.txt
           errors=$(grep -c ' error: ' mypy.txt || true)
           echo "mypy scoped error count: ${errors}"
-          echo "::notice title=mypy (non-blocking)::${errors} errors in the scoped paths"
+          echo "::notice title=mypy::${errors} errors in the scoped paths"
           exit "${status}"
       - name: Run pytest (demo mode)
         working-directory: backend

@@ -219,6 +219,12 @@ def pit_snapshot(rows: Iterable[Sequence[Any]], as_of: date) -> PitSnapshot:
                 "period": _period, "period_end": period_end, "fiscal_year": fiscal_year,
                 "fiscal_quarter": fiscal_quarter, "value": value, "available_at": available_at}, reasons, as_of))
             continue
+        # `date_exclusion_reasons` derives `missing_available_at` from the same
+        # `as_date(available_at)` that produced `avail`, so empty reasons mean it
+        # parsed. Asserted rather than assumed: if those two ever stop agreeing,
+        # this fails here instead of storing a None availability that only breaks
+        # later, in a comparison in another function.
+        assert avail is not None
         if fiscal_quarter not in (None, 0):
             notes["quarterly_ignored"] += 1
             continue
