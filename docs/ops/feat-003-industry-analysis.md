@@ -1,11 +1,16 @@
 # FEAT-003 — Industry Analysis: owner decisions and operations
 
-GICS Industry Group analysts and the weekly Industry Analysis reports ship
-**dark**: `ENABLE_INDUSTRY_REPORTS` and `ENABLE_INDUSTRY_ANALYST_ROUTING` are
-`false`, so the taxonomy imports and the classification audit runs, but no
-report is generated and the sector analyst remains the memo pipeline's
-primary. Nothing below turns on until the owner decides §1 and flips the
-flags in §4.
+The checked-in deployment configuration enables weekly Industry Analysis
+reports on the **worker** (`ENABLE_INDUSTRY_REPORTS=true`) and disables their
+generation on **web**. Taxonomy import, classification, scheduling and the
+report drainer are implemented. Confirm effective service settings and actual
+job results before treating this configuration as a live success claim.
+
+Memo analyst routing is a separate decision: `ENABLE_INDUSTRY_ANALYST_ROUTING`
+defaults to `false`, so the sector analyst remains primary until routing is
+enabled. Report access is also separate from generation; the public/Pro policy
+and `AUTH_ENABLED` behavior are described in §1. The remaining owner decisions
+and rollout checks are in §1 and §4.
 
 This file covers the API and ops surface (slice 5): the four admin
 endpoints, the read routes' access policy, the cron loops to watch, and
@@ -162,7 +167,7 @@ runs on **worker**.
 | Loop | Cadence | Healthy looks like |
 |---|---|---|
 | `industry_classification_loop` | daily, 03:40 UTC | `success=true`, note carries `taxonomy_drift=0`. `success=false` means drift, or at least one `missing` company — both are real, both are visible in the note. |
-| `industry_weekly_loop` | Sunday, 06:30 UTC | `success=true` with a note of `disabled (ENABLE_INDUSTRY_REPORTS=false)` while the feature is dark — that is the dark state, not a failure. **Known gap (slice 4):** it ticks only on Sundays and is not yet in the `weekly_loops` set in `routes_admin.cron_health_endpoint`, so cron-health calls it stale after 26 hours. Until the drainer lands (which heartbeats every 5 minutes) a stale reading here is expected, not an outage. |
+| `industry_weekly_loop` | Sunday, 06:30 UTC | Inspect the actual completion verdict and full note. Cron-health includes this loop in its weekly cadence set, so it does not apply the daily staleness threshold. If explicitly disabled, the note says `disabled (ENABLE_INDUSTRY_REPORTS=false)`; that is a configuration state, not evidence that reports ran. The separate `industry_report_worker` heartbeat reports the drainer's activity. |
 
 Both are registered in `app/monitoring/__init__.py::KNOWN_LOOPS` and run on
 the **worker** service only.
@@ -225,9 +230,11 @@ change is recorded in the slice's open issues.
 
 ## 4. Flag order at go-live
 
-Each step is a dashboard edit plus the check beside it.
+The checked-in worker configuration already enables report generation. Verify
+that state and its scheduled results before considering the remaining owner
+choices; this checklist is not an instruction to regenerate reports.
 
-1. **Worker**: `ENABLE_INDUSTRY_REPORTS=true`. At the next tick
+1. **Worker**: verify `ENABLE_INDUSTRY_REPORTS=true`. At the next tick
    `/api/admin/cron-health` should show `industry_weekly_loop` with a note
    that no longer says `disabled`. Leave it **false on web** — the drainer
    must not run in the process that serves pages.
@@ -254,7 +261,7 @@ them drops data.
 | The memo pipeline regressed after routing | `ENABLE_INDUSTRY_ANALYST_ROUTING=false` | The industry analyst stops being routed; the sector analyst is primary again. No memo data changes. |
 | The read surface must come down | `INDUSTRY_ANALYSIS_ACCESS=pro` with `AUTH_ENABLED=true` | Everything except `/api/industries/taxonomy` goes behind the wall in one edit. |
 | A bad taxonomy edition was imported and activated | `POST /api/admin/industries/taxonomy/import` with the previous `version_key` and `activate: true` | Versions are additive rows; activating the old one restores it. Reports and classifications keep pointing at the version id they were written against, so nothing is orphaned. |
-| The queue is wedged | Delete the `queued`/`running` rows for the period in `industry_report_jobs`, then re-run §2.3 | Jobs are durable rows, not in-process state; the drainer picks the new ones up on its next tick. |
+| The queue appears wedged | Inspect job status, ownership, lease expiry and publication receipts using the [industry job ownership contract](industry-job-ownership.md). Preserve job rows. | The worker recovers expired owned jobs under the existing retry policy. Legacy unowned running jobs remain deferred; any operator recovery requires verified retirement of every predecessor and explicit expected-row evidence under that contract. A healthy replacement alone does not authorize recovery. |
 
 There is no "unpublish" and no deletion path for an edition: history is the
 product. Take the surface down instead.

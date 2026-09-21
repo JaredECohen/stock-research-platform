@@ -1,0 +1,1075 @@
+{
+  "captured_at_utc": "2026-09-21T04:28:06.996541+00:00",
+  "read_only": true,
+  "source": "Authenticated application GETs, Render GETs, and local retained baseline comparisons",
+  "build": "3376a936538800b89e2987f43a0dcab9d8850650",
+  "deploys": {
+    "web": {
+      "id": "dep-danjegvavr4c73agp9k0",
+      "status": "live",
+      "finishedAt": "2026-09-20T01:32:15.920055Z"
+    },
+    "worker": {
+      "id": "dep-danjegvavr4c73agpa30",
+      "status": "live",
+      "finishedAt": "2026-09-20T01:31:37.306683Z"
+    }
+  },
+  "queues": {
+    "regen": {
+      "returned": 24,
+      "limit": 200,
+      "status_counts": {
+        "succeeded": 24
+      }
+    },
+    "industry": {
+      "count": 52,
+      "limit": 500,
+      "truncated": 0,
+      "status_counts": {
+        "succeeded": 52
+      }
+    }
+  },
+  "abbv_v7": {
+    "status": 200,
+    "headers": {
+      "x-memo-generated-at": "2026-06-02T00:18:02.516771",
+      "x-memo-source": "cache",
+      "x-memo-trigger": "incremental_patch",
+      "x-memo-version": "7"
+    },
+    "response_exactly_matches_2026_09_13_capture": true
+  },
+  "coverage": {
+    "as_of": "2026-09-21",
+    "minimum_years": 2,
+    "companies": 173,
+    "targets": 197,
+    "company_prices_complete": 170,
+    "company_price_exceptions": [
+      "ANSS",
+      "AVB",
+      "EA"
+    ],
+    "all_target_prices_complete": 171,
+    "all_target_price_exceptions": [
+      "ANSS",
+      "ASOFT1",
+      "AUDA",
+      "AUDB",
+      "AUDC",
+      "AUDN0",
+      "AUDN1",
+      "AUDN2",
+      "AUDN3",
+      "AUDN4",
+      "AVB",
+      "CHAIN",
+      "EA",
+      "RTRIP",
+      "TSTAA",
+      "TSTADM",
+      "TSTBB",
+      "TSTCAP",
+      "TSTHALF",
+      "TSTNEU",
+      "TSTNOMA",
+      "TSTONE",
+      "TSTONE2",
+      "TSTPATCH",
+      "TSTRFL",
+      "TSTSHORT"
+    ],
+    "company_fundamental_periods_complete": 172,
+    "company_fundamental_period_exceptions": [
+      "ANSS"
+    ],
+    "company_fundamental_all_six_buckets_fetch_fresh": 0,
+    "fetch_freshness_note": "Zero companies have all six annual/quarterly statement buckets within the seven-day refresh TTL; coverage and freshness are distinct.",
+    "stored_price_rows_returned_targets": 186965,
+    "stored_fundamental_rows_returned_targets": 277469,
+    "counts_note": "Raw database row counts include preexisting and excluded observations; coverage is reported separately.",
+    "pending_outcome_pairs": 59
+  },
+  "outcome_preservation": {
+    "baseline_path": "docs/reviews/2026-09-13-market-data-post-industry-audit.json",
+    "baseline_sha256": "9443ce215a457cd6d09dd34aa83add85a0456eb6c915391e3770f7f7d39cff16",
+    "baseline_rows": 710,
+    "current_rows": 711,
+    "compared_fields": [
+      "id",
+      "memo_snapshot_id",
+      "ticker",
+      "rating_at_memo",
+      "confidence_at_memo",
+      "price_at_memo",
+      "horizon_days",
+      "evaluated_at",
+      "forward_return",
+      "benchmark_return",
+      "alpha",
+      "thesis_held",
+      "note",
+      "regime_at_memo"
+    ],
+    "compared_values": 9940,
+    "changed_fields": [],
+    "missing_ids": [],
+    "new_rows": [
+      {
+        "id": 801,
+        "memo_snapshot_id": 597,
+        "ticker": "ADBE",
+        "rating_at_memo": "Very Bullish",
+        "confidence_at_memo": 65.0,
+        "price_at_memo": 197.43,
+        "horizon_days": 90,
+        "evaluated_at": "2026-09-21T02:30:41.180948Z",
+        "forward_return": 0.260801296662108,
+        "benchmark_return": 0.03831892908748877,
+        "alpha": 0.22248236757461923,
+        "thesis_held": true,
+        "note": "horizon=90d, baseline=2026-06-23, target=2026-09-18, price_window=120, return=+26.08%, price_source=fmp:provider_eod_close, benchmark_price_source=fmp:provider_eod_close, benchmark=SPY, benchmark_baseline=2026-06-23, benchmark_target=2026-09-18, alpha=+22.25%, thesis_held",
+        "regime_at_memo": "soft_landing"
+      }
+    ],
+    "truncated": false,
+    "excluded_rows": 0
+  },
+  "runtime": {
+    "mode": "retrospective read-only capture, not active continuous observation",
+    "start": "2026-09-21T02:55:00Z",
+    "end": "2026-09-21T04:25:00Z",
+    "minutes": 90,
+    "log_pages": 5,
+    "logs": 448,
+    "unique_log_ids": 448,
+    "log_pagination_complete": true,
+    "instances": [
+      "srv-d9valk942hec738ilv4g-24vpn"
+    ],
+    "error_or_restart_log_ids": [],
+    "events_in_window": [],
+    "warnings": {
+      "count": 163,
+      "by_logger": {
+        "app.services.history_service": 142,
+        "app.providers.fmp_provider": 8,
+        "app.services.price_history_service": 11,
+        "app.providers.alpha_vantage_provider": 2
+      },
+      "all_log_ids": [
+        "85c297fd-c1e0-4f97-ab67-6c6bb05256a3",
+        "40224af6-1c04-41d5-8a72-39233c64b800",
+        "cc730a44-e580-47ab-87bb-160a288a8be5",
+        "0e10d941-ddfe-4a5a-b290-0ddc09bb4eb2",
+        "57b1280d-88af-4f37-957c-9be25ef93e74",
+        "68ef70a1-1753-4c10-b90d-9297d9f72b5c",
+        "af0c9242-a39a-4f6f-a678-125873803c6a",
+        "bf154b36-d776-4c18-b1fd-1b7d34dcd26b",
+        "b1b85b3d-07fa-4537-9afd-653369a6e86a",
+        "f702bfd3-2537-494f-a4a8-97c1b621494f",
+        "8edfeb9b-4f03-4093-b7fa-f55acb54ca3c",
+        "8eab3cca-9f6c-4bc1-8c24-d4bbc2cfc642",
+        "5d760af8-618d-44c4-ae6b-d8ecafe20bdb",
+        "ccfbb691-82e3-4d1c-bdf7-ab02ec0a5998",
+        "a0f67789-0dc2-4908-9a09-3a6ba1cae158",
+        "633b60b1-2e8b-4cd2-8035-a86507d8fc11",
+        "91c9b11d-bcd2-41fd-9535-cdb33700dab4",
+        "97d3e080-ccdd-4c53-b35b-e005e6ffa22c",
+        "267a0c8c-28f4-4bfd-b87a-91eafaae75ad",
+        "5062449a-474d-44f9-b620-bbc3a4c5ad90",
+        "237a06b8-f38b-4f21-8c1b-8b04153d32ed",
+        "b871e01b-e3ee-46cf-bd18-54f672b1a751",
+        "4965634a-911c-45c1-aecd-034e010194a4",
+        "84150fdc-baac-48ce-b64d-8479fd55f924",
+        "b355e58a-f9a4-4f3c-af42-8f269eab21da",
+        "7d02ebb1-a843-411b-a432-40a197a110f2",
+        "039196cd-e533-4f58-8492-c82f8133adf6",
+        "4dde2ae6-da40-4473-a44f-98299a88f042",
+        "f665bb59-6dc9-437b-8276-093dc6c79f8b",
+        "a4e15924-150e-4434-99b7-c3eea9a312c9",
+        "9e5e4b32-cdee-461e-bce2-56ae13db0dd2",
+        "ebf8a6ca-a6e0-425c-aa36-dfa9c145b196",
+        "dca0c346-78ae-4128-8870-287ed099b7f4",
+        "a064cf1d-6663-4338-b14b-4f936799fc60",
+        "3a00d2f7-dcb8-4300-8045-80568f340ab3",
+        "4ab724db-5bd1-4d17-bfd8-af65e1832f1c",
+        "3d99c108-600e-4161-81c0-d432c9cbbcea",
+        "94ae0b3b-3a6e-48ce-ae06-911dd3a3d654",
+        "f78645e2-c2a3-41d6-9d14-ab1d5d6c0242",
+        "6ef6c9fd-8623-4d55-a06c-96c242b9592e",
+        "97f6ab36-dfc1-4a49-b8f6-beea222fc488",
+        "1e1ef163-6553-4a7a-a025-6de0d910750b",
+        "934cb6e6-94fb-4022-875e-19c31430cdfa",
+        "46a62335-d413-4cb8-bf18-a80e88a04d3a",
+        "efa2265c-5fce-450f-a900-491b353868d7",
+        "9dc59c3c-f960-47c4-9c2d-c545873db1cf",
+        "3b2c445e-41f4-4da4-9289-15cc78f9f2e8",
+        "031d2534-413f-486b-bf32-4ad4b97eb6a2",
+        "7338931b-f723-4c83-90eb-16a0f18a0522",
+        "936a0a34-1c0c-414f-99e4-9c980266187f",
+        "ce843dee-fba4-43e9-8beb-cbf0c1e9507d",
+        "9ea26b06-75f6-4f9d-bddf-b7bda05a2974",
+        "7d269987-a02d-43e8-91f6-52ce4ec60743",
+        "59245309-45f6-46c9-9818-5fe538179d07",
+        "c70af9bb-4631-4af8-a551-d72211afa932",
+        "20d63c81-d021-4109-8956-badd7ddf997e",
+        "591baf63-ea96-43b6-b8c1-d5caafcc2235",
+        "a88fb636-ec7f-4e2d-8d07-420673f4c5d8",
+        "706aac94-f391-4bfc-bef7-61652f324c2d",
+        "f1c507ec-2932-4afb-90bc-49bfb60912e7",
+        "10b65e63-1259-4b93-a552-ae09a85c2d7a",
+        "47bfaf20-8715-4908-bde6-034bda16b430",
+        "90cb5f75-8b52-4a2f-b1ed-fb4206242e89",
+        "ff3ffc64-7525-46a8-845c-87ae78450e56",
+        "435340ee-31f9-4911-8298-308ceeb2888d",
+        "92b1e0a8-549c-47e5-a9aa-84be1fec2621",
+        "5f1ff3ec-a935-4fa7-8ccf-dc01a2891be7",
+        "dac374d3-ec76-4045-b889-427cd5aa1b71",
+        "9ac6a4f2-e193-4301-81e7-4230701f7518",
+        "77354a3e-d4b4-4b07-ad2d-53a057762434",
+        "d0b7dd57-b850-4a0e-b18e-9013538ff041",
+        "d4c336ee-c0d2-4763-88d2-eefb77f98ca8",
+        "ae8cf2fb-8b1f-4b62-9ce8-b2724980be18",
+        "6dfbf969-78ef-45b4-b859-b87cfc17b124",
+        "6df6af64-4f6f-4374-a428-26427e18b64f",
+        "5b317e1e-d3a3-4aa3-9dec-1994df9aedab",
+        "a57dd91d-b1e1-4173-9c5b-dc1fdd6220f5",
+        "87387549-6f9f-459b-b494-c97fd3a68fe9",
+        "a95cc725-3e2b-4e8e-b553-5e8075962ee9",
+        "2f0db0aa-80d2-4411-92c3-a97e65cb7892",
+        "5bf96bdd-ecde-4fed-a28c-9f2770fcc775",
+        "ce147741-e2b3-4570-bc07-20718f5789e8",
+        "5aabb66e-d0b6-45aa-8d78-908d2948c1dc",
+        "81d600eb-19cc-4dbb-a9dd-2c57a74d8d18",
+        "05817ac9-2d4c-4559-9d2c-8a3f59b6d28d",
+        "a40adff1-4f87-4dbd-a3bf-661bd9cb100a",
+        "443c40d7-91e0-4bcc-8b57-eba596c5f98c",
+        "56bf6e8e-f3a0-44ec-a700-4e45b78f389e",
+        "f78da79a-befb-4739-af48-522724e9400d",
+        "12660a8d-acfd-40ce-bd0d-a6a8f1a52fce",
+        "af74beca-4349-47e3-8d28-7b5ecfef49b9",
+        "e6cde376-9221-4a4a-9998-a18f5b6af24f",
+        "56fc3aad-b858-4bda-8577-3c0133b9eab0",
+        "31fd31e7-f07c-41f9-be96-da0ff840cbb3",
+        "e580216f-77e3-435f-9c79-a12b6bfc359e",
+        "5b8e51ab-3d1f-42f9-a656-526c7f95c271",
+        "0a99375d-5f7f-4e7d-82c6-bb39e736ff76",
+        "350f6745-7941-4025-a50e-99cc6bc4430e",
+        "f6fc9ae1-fa3d-4550-87e3-51a86d268120",
+        "a22f1a96-a131-40b9-963b-4c9d51975d7b",
+        "80391cf0-ae32-47eb-a39d-df2d595e2e61",
+        "120cde00-fff4-491e-9476-03e182040255",
+        "c04520b2-19b7-426b-90e6-5ba81e1b8fda",
+        "f47b147b-ad7f-4679-b859-acbe0fa26cc9",
+        "b35c7582-6772-4c38-bdcc-2beebb756a0d",
+        "5a21b99c-fffb-4a5a-821b-65c22576504d",
+        "57d50640-cf96-41cd-8476-d728a7abe71b",
+        "47543c0a-016b-4659-b67e-e4e67ce7cbfc",
+        "3772be8f-9a07-40a2-9385-ae913a16b204",
+        "169bc7b1-0f00-4075-9aa2-337418b8c3fd",
+        "bdfb6abf-3869-4b9d-bb6e-37d70168c868",
+        "bd371a06-6037-4b7b-ab10-934740faf2d8",
+        "7b3dcb8d-9203-4a7c-8226-7b935a323584",
+        "ebf2aeb7-bc0d-44a2-afab-c626b432a5f3",
+        "c7fe225a-8af1-43ad-b1e1-443ee6dc0f82",
+        "fa0874ab-037b-4108-9bf3-cfb3cbcb42c3",
+        "23585c66-c4b0-4187-a0a3-30623f6c1617",
+        "6ff2c729-321a-4a5b-a1d9-08be3382e57a",
+        "e0931bcf-5f12-4e2a-8fc1-49d7f4ef3d51",
+        "d173363d-37ec-4a13-8616-a73b92b5b75c",
+        "be55fae0-efba-4bf1-a512-12850cfd206b",
+        "48f16a9f-7c6b-421e-9aa5-09fd91760252",
+        "27b02377-55b4-45d3-8f5e-27b8376bb84b",
+        "d0df10d0-e7f3-4235-b1fa-3af52c86f820",
+        "961031bd-b0c4-489c-bab1-a1918185b412",
+        "c5b0064e-c798-45f0-9791-cf87158eb6fc",
+        "da17adc2-e0f3-47c8-99a3-ce53868963d2",
+        "da06db10-a572-44f9-a52b-d6922d5098ae",
+        "1fd0eabb-d53f-49f4-a517-06894b6afaef",
+        "c645a6ef-da52-4d0c-af0d-5b1e220d7c08",
+        "2ab50557-5d0d-4b6b-8218-fd46b02a3f8b",
+        "cca1c59e-ce42-4563-9285-6c46a417e581",
+        "83f5cec4-7c6a-4dcd-be8f-db24585eeb55",
+        "33f39b14-8432-4830-9a96-a48107ed1aba",
+        "a57d7a89-82cc-48ec-a1b0-f83de54f3322",
+        "305e620d-d221-4c63-8fc9-b05efd13e055",
+        "f136dae5-7c50-47af-9e98-4642a93028f8",
+        "831bfa3b-778b-4f67-bec6-638e26d93757",
+        "cc7ac65c-eff3-4619-a9f1-8212d0b9d710",
+        "eab93bb0-5cbc-4976-9322-6ceefbcb6057",
+        "2d0156d1-d2bd-4d07-88de-a73d68f190a4",
+        "a5d4490a-a6c0-4126-95fb-04156c4920f9",
+        "164bffa0-1ba8-4a12-a5b3-17a4eda4a2f0",
+        "375fc350-fce5-4a31-96b6-6b148316abe9",
+        "cc1e6c9f-7201-4fde-a15a-95ac140d123b",
+        "1aa29e24-b4ad-4433-bdc2-9d6285d131aa",
+        "ac6e3d1f-a0c9-4518-8b30-63e282632549",
+        "eb9d1524-87d6-47d4-8677-72aa7880f3b5",
+        "f8adfd19-aa35-4090-ba76-0a7550c16c72",
+        "feef3d5b-13b8-4e0f-b783-30de9bbbe4c5",
+        "1ac861ca-14c6-48c4-801a-b253037f5e2c",
+        "b4e7df2a-c1dc-4ff7-8409-1066c498e6b8",
+        "8114de22-8270-4227-a5e2-e2a739b5feb7",
+        "4a654355-13fa-43bf-8ec2-437aaa02355d",
+        "f6bc61c4-bc9b-4e23-aa8f-b4d35de2d5ef",
+        "b0d5b682-ae53-40d5-84b5-a548f17daff6",
+        "f41affdd-26dd-458a-b534-b70824701334",
+        "65220b50-b4f1-404f-bb1f-710f84e77b60",
+        "3ca39858-39b2-4b9c-8789-2907b084e3ab",
+        "a2a4b0f3-6b60-4d1c-b53b-0f920e493cb1",
+        "397a8f44-b16e-46b5-9c90-3642a3da36c1",
+        "3e0ac8e5-7684-4036-b6a3-04c9c6161796",
+        "c3f3f4b0-31ae-475d-96fc-44bc09768666"
+      ],
+      "bounded_filing_source_note": "The complete history_backfill note below names all 208 bounded source identities; repeated per-ticker warnings are included in the 163 log count.",
+      "other_warnings": [
+        {
+          "timestamp": "2026-09-21T03:15:07.492079845Z",
+          "message": "2026-09-21 03:15:07,491 WARNING app.services.history_service: financial history PANW FY2026 cash.capex: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:15:07.493196125Z",
+          "message": "2026-09-21 03:15:07,493 WARNING app.services.history_service: financial history PANW FY2026 cash.free_cash_flow: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.012897972Z",
+          "message": "2026-09-21 03:16:53,012 WARNING app.services.history_service: financial history ANSS FY2019 income.ebit: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.014039753Z",
+          "message": "2026-09-21 03:16:53,013 WARNING app.services.history_service: financial history ANSS FY2019 income.ebitda: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.085842383Z",
+          "message": "2026-09-21 03:16:53,085 WARNING app.services.history_service: financial history ANSS FY2018 income.ebit: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.106631391Z",
+          "message": "2026-09-21 03:16:53,106 WARNING app.services.history_service: financial history ANSS FY2017 income.ebit: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.158757692Z",
+          "message": "2026-09-21 03:16:53,158 WARNING app.services.history_service: financial history ANSS FY2023 balance.short_term_debt: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.169238264Z",
+          "message": "2026-09-21 03:16:53,169 WARNING app.services.history_service: financial history ANSS FY2022 balance.short_term_debt: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.180097866Z",
+          "message": "2026-09-21 03:16:53,179 WARNING app.services.history_service: financial history ANSS FY2021 balance.short_term_debt: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.190489395Z",
+          "message": "2026-09-21 03:16:53,190 WARNING app.services.history_service: financial history ANSS FY2020 balance.short_term_debt: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.265945003Z",
+          "message": "2026-09-21 03:16:53,265 WARNING app.services.history_service: financial history ANSS FY2019 balance.total_debt: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.274699189Z",
+          "message": "2026-09-21 03:16:53,274 WARNING app.services.history_service: financial history ANSS FY2018 balance.short_term_debt: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.285222631Z",
+          "message": "2026-09-21 03:16:53,285 WARNING app.services.history_service: financial history ANSS FY2017 balance.short_term_debt: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.460852962Z",
+          "message": "2026-09-21 03:16:53,460 WARNING app.services.history_service: financial history ANSS FY2019 cash.capex: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.560969353Z",
+          "message": "2026-09-21 03:16:53,559 WARNING app.services.history_service: financial history ANSS FY2019 cash.dividends_paid: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.564497747Z",
+          "message": "2026-09-21 03:16:53,563 WARNING app.services.history_service: financial history ANSS FY2018 cash.capex: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:16:53.65947041Z",
+          "message": "2026-09-21 03:16:53,658 WARNING app.services.history_service: financial history ANSS FY2017 cash.capex: ignored replacement without provider identity"
+        },
+        {
+          "timestamp": "2026-09-21T03:17:13.051752671Z",
+          "message": "2026-09-21 03:17:13,051 WARNING app.providers.fmp_provider: FMP /income-statement -> 402"
+        },
+        {
+          "timestamp": "2026-09-21T03:17:13.302641145Z",
+          "message": "2026-09-21 03:17:13,299 WARNING app.providers.fmp_provider: FMP /balance-sheet-statement -> 402"
+        },
+        {
+          "timestamp": "2026-09-21T03:17:13.550954769Z",
+          "message": "2026-09-21 03:17:13,550 WARNING app.providers.fmp_provider: FMP /cash-flow-statement -> 402"
+        },
+        {
+          "timestamp": "2026-09-21T03:46:58.066010495Z",
+          "message": "2026-09-21 03:46:58,065 WARNING app.services.price_history_service: price read selection ticker=ANSS evidence={'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'internal_continuity_verified': True, 'calendar_note': 'Within-series SPY-observed session continuity; unverified when calendar coverage is unavailable. Raw placeholder rows remain stored.', 'candidate_sources': [{'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'excluded_zero_volume_flat_dates': ['2025-07-17', '2026-02-06', '2026-02-09', '2026-02-10', '2026-02-11', '2026-02-12', '2026-02-13', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-23', '2026-02-24', '2026-02-25', '2026-02-26', '2026-02-27', '2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05', '2026-03-06', '2026-03-09', '2026-03-10', '2026-03-11', '2026-03-12', '2026-03-16', '2026-03-17', '2026-03-18', '2026-03-19', '2026-03-23', '2026-03-24', '2026-03-25', '2026-03-26', '2026-03-27', '2026-03-30', '2026-03-31', '2026-04-01', '2026-04-02', '2026-04-06', '2026-04-07', '2026-04-08', '2026-04-09', '2026-04-10', '2026-04-13', '2026-04-14', '2026-04-15', '2026-04-16', '2026-04-17', '2026-04-20', '2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28', '2026-04-29', '2026-04-30', '2026-05-01', '2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-11', '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-18', '2026-05-19', '2026-05-20', '2026-05-21', '2026-05-22', '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29', '2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05', '2026-06-08', '2026-06-09', '2026-06-10', '2026-06-11', '2026-06-12', '2026-06-15', '2026-06-16', '2026-06-17', '2026-06-18', '2026-06-22', '2026-06-23', '2026-06-24', '2026-06-25', '2026-06-26', '2026-06-29', '2026-06-30', '2026-07-01', '2026-07-02', '2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09', '2026-07-10', '2026-07-13', '2026-07-14', '2026-07-15', '2026-07-16', '2026-07-17', '2026-07-20', '2026-07-21', '2026-07-22', '2026-07-23', '2026-07-24', '2026-07-27', '2026-07-28', '2026-07-29', '2026-07-30', '2026-07-31', '2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14', '2026-08-17', '2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21', '2026-08-24', '2026-08-25', '2026-08-26', '2026-08-27', '2026-08-28', '2026-08-31', '2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18'], 'last_raw_fetched_at': '2026-09-19T03:49:07.005995', 'oldest': '1999-11-01', 'newest': '2025-07-16', 'row_count': 6465, 'continuity_start': '2024-07-15', 'continuity_end': '2025-07-16', 'last_fetched_at': '2026-09-19T03:49:07.005995', 'freshness_price_date': '2025-07-16', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}, {'source': 'fmp', 'close_basis': 'provider_eod_close', 'excluded_zero_volume_flat_dates': ['2025-07-17'], 'last_raw_fetched_at': '2026-09-13T04:31:05.216649', 'oldest': '2023-07-03', 'newest': '2025-07-16', 'row_count': 511, 'continuity_start': '2024-07-15', 'continuity_end': '2025-07-16', 'last_fetched_at': '2026-09-13T04:31:05.216649', 'freshness_price_date': '2025-07-16', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}]}"
+        },
+        {
+          "timestamp": "2026-09-21T03:46:58.339625958Z",
+          "message": "2026-09-21 03:46:58,339 WARNING app.providers.fmp_provider: price_history_coverage provider=fmp ticker=ANSS requested_start=2025-08-13 requested_end=2026-09-21 first=None last=None invalid=0 completeness=unverified"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:04.765879895Z",
+          "message": "2026-09-21 03:47:04,765 WARNING app.services.price_history_service: price received nontrading bars ticker=ANSS source=alpha_vantage close_basis=raw_as_traded dates=['2025-07-17', '2026-02-06', '2026-02-09', '2026-02-10', '2026-02-11', '2026-02-12', '2026-02-13', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-23', '2026-02-24', '2026-02-25', '2026-02-26', '2026-02-27', '2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05', '2026-03-06', '2026-03-09', '2026-03-10', '2026-03-11', '2026-03-12', '2026-03-16', '2026-03-17', '2026-03-18', '2026-03-19', '2026-03-23', '2026-03-24', '2026-03-25', '2026-03-26', '2026-03-27', '2026-03-30', '2026-03-31', '2026-04-01', '2026-04-02', '2026-04-06', '2026-04-07', '2026-04-08', '2026-04-09', '2026-04-10', '2026-04-13', '2026-04-14', '2026-04-15', '2026-04-16', '2026-04-17', '2026-04-20', '2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28', '2026-04-29', '2026-04-30', '2026-05-01', '2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-11', '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-18', '2026-05-19', '2026-05-20', '2026-05-21', '2026-05-22', '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29', '2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05', '2026-06-08', '2026-06-09', '2026-06-10', '2026-06-11', '2026-06-12', '2026-06-15', '2026-06-16', '2026-06-17', '2026-06-18', '2026-06-22', '2026-06-23', '2026-06-24', '2026-06-25', '2026-06-26', '2026-06-29', '2026-06-30', '2026-07-01', '2026-07-02', '2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09', '2026-07-10', '2026-07-13', '2026-07-14', '2026-07-15', '2026-07-16', '2026-07-17', '2026-07-20', '2026-07-21', '2026-07-22', '2026-07-23', '2026-07-24', '2026-07-27', '2026-07-28', '2026-07-29', '2026-07-30', '2026-07-31', '2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14', '2026-08-17', '2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21', '2026-08-24', '2026-08-25', '2026-08-26', '2026-08-27', '2026-08-28', '2026-08-31', '2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18']"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:05.257925768Z",
+          "message": "2026-09-21 03:47:05,256 WARNING app.services.price_history_service: price history incomplete ticker=ANSS requested_start=2026-01-12 attempts=[{'provider': 'fmp', 'symbol': 'ANSS', 'source': 'fmp', 'rows_received': 0, 'rows_upserted': 0, 'usable_rows_upserted': 0, 'excluded_zero_volume_flat_dates': [], 'rejected': [], 'duplicate_dates': []}, {'provider': 'tiingo', 'symbol': 'ANSS', 'source': 'tiingo', 'rows_received': 0, 'rows_upserted': 0, 'usable_rows_upserted': 0, 'excluded_zero_volume_flat_dates': [], 'rejected': [], 'duplicate_dates': []}, {'provider': 'polygon', 'symbol': 'ANSS', 'source': 'polygon', 'rows_received': 0, 'rows_upserted': 0, 'usable_rows_upserted': 0, 'excluded_zero_volume_flat_dates': [], 'rejected': [], 'duplicate_dates': []}, {'provider': 'alpha_vantage', 'symbol': 'ANSS', 'source': 'alpha_vantage', 'rows_received': 6618, 'rows_upserted': 6618, 'usable_rows_upserted': 6465, 'excluded_zero_volume_flat_dates': ['2025-07-17', '2026-02-06', '2026-02-09', '2026-02-10', '2026-02-11', '2026-02-12', '2026-02-13', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-23', '2026-02-24', '2026-02-25', '2026-02-26', '2026-02-27', '2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05', '2026-03-06', '2026-03-09', '2026-03-10', '2026-03-11', '2026-03-12', '2026-03-16', '2026-03-17', '2026-03-18', '2026-03-19', '2026-03-23', '2026-03-24', '2026-03-25', '2026-03-26', '2026-03-27', '2026-03-30', '2026-03-31', '2026-04-01', '2026-04-02', '2026-04-06', '2026-04-07', '2026-04-08', '2026-04-09', '2026-04-10', '2026-04-13', '2026-04-14', '2026-04-15', '2026-04-16', '2026-04-17', '2026-04-20', '2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28', '2026-04-29', '2026-04-30', '2026-05-01', '2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-11', '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-18', '2026-05-19', '2026-05-20', '2026-05-21', '2026-05-22', '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29', '2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05', '2026-06-08', '2026-06-09', '2026-06-10', '2026-06-11', '2026-06-12', '2026-06-15', '2026-06-16', '2026-06-17', '2026-06-18', '2026-06-22', '2026-06-23', '2026-06-24', '2026-06-25', '2026-06-26', '2026-06-29', '2026-06-30', '2026-07-01', '2026-07-02', '2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09', '2026-07-10', '2026-07-13', '2026-07-14', '2026-07-15', '2026-07-16', '2026-07-17', '2026-07-20', '2026-07-21', '2026-07-22', '2026-07-23', '2026-07-24', '2026-07-27', '2026-07-28', '2026-07-29', '2026-07-30', '2026-07-31', '2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14', '2026-08-17', '2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21', '2026-08-24', '2026-08-25', '2026-08-26', '2026-08-27', '2026-08-28', '2026-08-31', '2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18'], 'rejected': [], 'duplicate_dates': []}]"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:05.401742591Z",
+          "message": "2026-09-21 03:47:05,401 WARNING app.services.price_history_service: price read selection ticker=ANSS evidence={'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'internal_continuity_verified': True, 'calendar_note': 'Within-series SPY-observed session continuity; unverified when calendar coverage is unavailable. Raw placeholder rows remain stored.', 'candidate_sources': [{'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'excluded_zero_volume_flat_dates': ['2025-07-17', '2026-02-06', '2026-02-09', '2026-02-10', '2026-02-11', '2026-02-12', '2026-02-13', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-23', '2026-02-24', '2026-02-25', '2026-02-26', '2026-02-27', '2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05', '2026-03-06', '2026-03-09', '2026-03-10', '2026-03-11', '2026-03-12', '2026-03-16', '2026-03-17', '2026-03-18', '2026-03-19', '2026-03-23', '2026-03-24', '2026-03-25', '2026-03-26', '2026-03-27', '2026-03-30', '2026-03-31', '2026-04-01', '2026-04-02', '2026-04-06', '2026-04-07', '2026-04-08', '2026-04-09', '2026-04-10', '2026-04-13', '2026-04-14', '2026-04-15', '2026-04-16', '2026-04-17', '2026-04-20', '2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28', '2026-04-29', '2026-04-30', '2026-05-01', '2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-11', '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-18', '2026-05-19', '2026-05-20', '2026-05-21', '2026-05-22', '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29', '2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05', '2026-06-08', '2026-06-09', '2026-06-10', '2026-06-11', '2026-06-12', '2026-06-15', '2026-06-16', '2026-06-17', '2026-06-18', '2026-06-22', '2026-06-23', '2026-06-24', '2026-06-25', '2026-06-26', '2026-06-29', '2026-06-30', '2026-07-01', '2026-07-02', '2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09', '2026-07-10', '2026-07-13', '2026-07-14', '2026-07-15', '2026-07-16', '2026-07-17', '2026-07-20', '2026-07-21', '2026-07-22', '2026-07-23', '2026-07-24', '2026-07-27', '2026-07-28', '2026-07-29', '2026-07-30', '2026-07-31', '2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14', '2026-08-17', '2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21', '2026-08-24', '2026-08-25', '2026-08-26', '2026-08-27', '2026-08-28', '2026-08-31', '2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18'], 'last_raw_fetched_at': '2026-09-21T03:46:59.801947', 'oldest': '1999-11-01', 'newest': '2025-07-16', 'row_count': 6465, 'continuity_start': '2024-07-15', 'continuity_end': '2025-07-16', 'last_fetched_at': '2026-09-21T03:46:59.801947', 'freshness_price_date': '2025-07-16', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}, {'source': 'fmp', 'close_basis': 'provider_eod_close', 'excluded_zero_volume_flat_dates': ['2025-07-17'], 'last_raw_fetched_at': '2026-09-13T04:31:05.216649', 'oldest': '2023-07-03', 'newest': '2025-07-16', 'row_count': 511, 'continuity_start': '2024-07-15', 'continuity_end': '2025-07-16', 'last_fetched_at': '2026-09-13T04:31:05.216649', 'freshness_price_date': '2025-07-16', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}]}"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:05.564513705Z",
+          "message": "2026-09-21 03:47:05,564 WARNING app.services.price_history_service: price read selection ticker=ANSS evidence={'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'internal_continuity_verified': True, 'calendar_note': 'Within-series SPY-observed session continuity; unverified when calendar coverage is unavailable. Raw placeholder rows remain stored.', 'candidate_sources': [{'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'excluded_zero_volume_flat_dates': ['2025-07-17', '2026-02-06', '2026-02-09', '2026-02-10', '2026-02-11', '2026-02-12', '2026-02-13', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-23', '2026-02-24', '2026-02-25', '2026-02-26', '2026-02-27', '2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05', '2026-03-06', '2026-03-09', '2026-03-10', '2026-03-11', '2026-03-12', '2026-03-16', '2026-03-17', '2026-03-18', '2026-03-19', '2026-03-23', '2026-03-24', '2026-03-25', '2026-03-26', '2026-03-27', '2026-03-30', '2026-03-31', '2026-04-01', '2026-04-02', '2026-04-06', '2026-04-07', '2026-04-08', '2026-04-09', '2026-04-10', '2026-04-13', '2026-04-14', '2026-04-15', '2026-04-16', '2026-04-17', '2026-04-20', '2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28', '2026-04-29', '2026-04-30', '2026-05-01', '2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-11', '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-18', '2026-05-19', '2026-05-20', '2026-05-21', '2026-05-22', '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29', '2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05', '2026-06-08', '2026-06-09', '2026-06-10', '2026-06-11', '2026-06-12', '2026-06-15', '2026-06-16', '2026-06-17', '2026-06-18', '2026-06-22', '2026-06-23', '2026-06-24', '2026-06-25', '2026-06-26', '2026-06-29', '2026-06-30', '2026-07-01', '2026-07-02', '2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09', '2026-07-10', '2026-07-13', '2026-07-14', '2026-07-15', '2026-07-16', '2026-07-17', '2026-07-20', '2026-07-21', '2026-07-22', '2026-07-23', '2026-07-24', '2026-07-27', '2026-07-28', '2026-07-29', '2026-07-30', '2026-07-31', '2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14', '2026-08-17', '2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21', '2026-08-24', '2026-08-25', '2026-08-26', '2026-08-27', '2026-08-28', '2026-08-31', '2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18'], 'last_raw_fetched_at': '2026-09-21T03:46:59.801947', 'oldest': '1999-11-01', 'newest': '2025-07-16', 'row_count': 6465, 'continuity_start': '2024-07-15', 'continuity_end': '2025-07-16', 'last_fetched_at': '2026-09-21T03:46:59.801947', 'freshness_price_date': '2025-07-16', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}, {'source': 'fmp', 'close_basis': 'provider_eod_close', 'excluded_zero_volume_flat_dates': ['2025-07-17'], 'last_raw_fetched_at': '2026-09-13T04:31:05.216649', 'oldest': '2023-07-03', 'newest': '2025-07-16', 'row_count': 511, 'continuity_start': '2024-07-15', 'continuity_end': '2025-07-16', 'last_fetched_at': '2026-09-13T04:31:05.216649', 'freshness_price_date': '2025-07-16', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}]}"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:08.074491171Z",
+          "message": "2026-09-21 03:47:08,074 WARNING app.providers.fmp_provider: price_history_coverage provider=fmp ticker=AVB requested_start=2025-08-13 requested_end=2026-09-21 first=2025-08-13 last=2026-08-24 invalid=0 completeness=unverified"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:09.506590974Z",
+          "message": "2026-09-21 03:47:09,506 WARNING app.providers.alpha_vantage_provider: price_history_coverage provider=alpha_vantage ticker=AVB requested_start=2025-08-13 requested_end=2026-09-21 first=1999-11-01 last=2026-08-17 invalid=0 completeness=unverified"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:17.022175795Z",
+          "message": "2026-09-21 03:47:17,021 WARNING app.services.price_history_service: price history incomplete ticker=AVB requested_start=2026-01-12 attempts=[{'provider': 'fmp', 'symbol': 'AVB', 'source': 'fmp', 'rows_received': 259, 'rows_upserted': 259, 'usable_rows_upserted': 259, 'excluded_zero_volume_flat_dates': [], 'rejected': [], 'duplicate_dates': []}, {'provider': 'tiingo', 'symbol': 'AVB', 'source': 'tiingo', 'rows_received': 0, 'rows_upserted': 0, 'usable_rows_upserted': 0, 'excluded_zero_volume_flat_dates': [], 'rejected': [], 'duplicate_dates': []}, {'provider': 'polygon', 'symbol': 'AVB', 'source': 'polygon', 'rows_received': 0, 'rows_upserted': 0, 'usable_rows_upserted': 0, 'excluded_zero_volume_flat_dates': [], 'rejected': [], 'duplicate_dates': []}, {'provider': 'alpha_vantage', 'symbol': 'AVB', 'source': 'alpha_vantage', 'rows_received': 6738, 'rows_upserted': 6738, 'usable_rows_upserted': 6738, 'excluded_zero_volume_flat_dates': [], 'rejected': [], 'duplicate_dates': []}]"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:28.463332139Z",
+          "message": "2026-09-21 03:47:28,463 WARNING app.providers.fmp_provider: FMP /historical-price-eod/full -> 402"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:28.463665488Z",
+          "message": "2026-09-21 03:47:28,463 WARNING app.providers.fmp_provider: FMP price history window unavailable ticker=BRK.B from=2025-08-13 to=2026-09-21"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:50.501078335Z",
+          "message": "2026-09-21 03:47:50,500 WARNING app.services.price_history_service: price read selection ticker=EA evidence={'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'internal_continuity_verified': True, 'calendar_note': 'Within-series SPY-observed session continuity; unverified when calendar coverage is unavailable. Raw placeholder rows remain stored.', 'candidate_sources': [{'source': 'fmp', 'close_basis': 'provider_eod_close', 'excluded_zero_volume_flat_dates': ['2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10'], 'last_raw_fetched_at': '2026-09-19T03:50:11.527933', 'oldest': '2023-07-03', 'newest': '2026-08-04', 'row_count': 775, 'continuity_start': '2025-08-04', 'continuity_end': '2026-08-04', 'last_fetched_at': '2026-09-19T03:50:11.527933', 'freshness_price_date': '2026-08-04', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}, {'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'excluded_zero_volume_flat_dates': [], 'last_raw_fetched_at': '2026-09-19T03:50:14.512563', 'oldest': '1999-11-01', 'newest': '2026-08-04', 'row_count': 6729, 'continuity_start': '2025-08-04', 'continuity_end': '2026-08-04', 'last_fetched_at': '2026-09-19T03:50:14.512563', 'freshness_price_date': '2026-08-04', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}]}"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:50.791942676Z",
+          "message": "2026-09-21 03:47:50,791 WARNING app.providers.fmp_provider: price_history_coverage provider=fmp ticker=EA requested_start=2025-08-13 requested_end=2026-09-21 first=2025-08-13 last=2026-08-10 invalid=0 completeness=unverified"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:50.969908834Z",
+          "message": "2026-09-21 03:47:50,969 WARNING app.services.price_history_service: price received nontrading bars ticker=EA source=fmp close_basis=provider_eod_close dates=['2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10']"
+        },
+        {
+          "timestamp": "2026-09-21T03:47:52.326001058Z",
+          "message": "2026-09-21 03:47:52,319 WARNING app.providers.alpha_vantage_provider: price_history_coverage provider=alpha_vantage ticker=EA requested_start=2025-08-13 requested_end=2026-09-21 first=1999-11-01 last=2026-08-04 invalid=0 completeness=unverified"
+        },
+        {
+          "timestamp": "2026-09-21T03:48:00.170711456Z",
+          "message": "2026-09-21 03:48:00,170 WARNING app.services.price_history_service: price history incomplete ticker=EA requested_start=2026-01-12 attempts=[{'provider': 'fmp', 'symbol': 'EA', 'source': 'fmp', 'rows_received': 249, 'rows_upserted': 249, 'usable_rows_upserted': 245, 'excluded_zero_volume_flat_dates': ['2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10'], 'rejected': [], 'duplicate_dates': []}, {'provider': 'tiingo', 'symbol': 'EA', 'source': 'tiingo', 'rows_received': 0, 'rows_upserted': 0, 'usable_rows_upserted': 0, 'excluded_zero_volume_flat_dates': [], 'rejected': [], 'duplicate_dates': []}, {'provider': 'polygon', 'symbol': 'EA', 'source': 'polygon', 'rows_received': 0, 'rows_upserted': 0, 'usable_rows_upserted': 0, 'excluded_zero_volume_flat_dates': [], 'rejected': [], 'duplicate_dates': []}, {'provider': 'alpha_vantage', 'symbol': 'EA', 'source': 'alpha_vantage', 'rows_received': 6729, 'rows_upserted': 6729, 'usable_rows_upserted': 6729, 'excluded_zero_volume_flat_dates': [], 'rejected': [], 'duplicate_dates': []}]"
+        },
+        {
+          "timestamp": "2026-09-21T03:48:00.395590879Z",
+          "message": "2026-09-21 03:48:00,395 WARNING app.services.price_history_service: price read selection ticker=EA evidence={'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'internal_continuity_verified': True, 'calendar_note': 'Within-series SPY-observed session continuity; unverified when calendar coverage is unavailable. Raw placeholder rows remain stored.', 'candidate_sources': [{'source': 'fmp', 'close_basis': 'provider_eod_close', 'excluded_zero_volume_flat_dates': ['2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10'], 'last_raw_fetched_at': '2026-09-21T03:47:50.792024', 'oldest': '2023-07-03', 'newest': '2026-08-04', 'row_count': 775, 'continuity_start': '2025-08-04', 'continuity_end': '2026-08-04', 'last_fetched_at': '2026-09-21T03:47:50.792024', 'freshness_price_date': '2026-08-04', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}, {'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'excluded_zero_volume_flat_dates': [], 'last_raw_fetched_at': '2026-09-21T03:47:52.324133', 'oldest': '1999-11-01', 'newest': '2026-08-04', 'row_count': 6729, 'continuity_start': '2025-08-04', 'continuity_end': '2026-08-04', 'last_fetched_at': '2026-09-21T03:47:52.324133', 'freshness_price_date': '2026-08-04', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}]}"
+        },
+        {
+          "timestamp": "2026-09-21T03:48:00.606016348Z",
+          "message": "2026-09-21 03:48:00,605 WARNING app.services.price_history_service: price read selection ticker=EA evidence={'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'internal_continuity_verified': True, 'calendar_note': 'Within-series SPY-observed session continuity; unverified when calendar coverage is unavailable. Raw placeholder rows remain stored.', 'candidate_sources': [{'source': 'fmp', 'close_basis': 'provider_eod_close', 'excluded_zero_volume_flat_dates': ['2026-08-05', '2026-08-06', '2026-08-07', '2026-08-10'], 'last_raw_fetched_at': '2026-09-21T03:47:50.792024', 'oldest': '2023-07-03', 'newest': '2026-08-04', 'row_count': 775, 'continuity_start': '2025-08-04', 'continuity_end': '2026-08-04', 'last_fetched_at': '2026-09-21T03:47:50.792024', 'freshness_price_date': '2026-08-04', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}, {'source': 'alpha_vantage', 'close_basis': 'raw_as_traded', 'excluded_zero_volume_flat_dates': [], 'last_raw_fetched_at': '2026-09-21T03:47:52.324133', 'oldest': '1999-11-01', 'newest': '2026-08-04', 'row_count': 6729, 'continuity_start': '2025-08-04', 'continuity_end': '2026-08-04', 'last_fetched_at': '2026-09-21T03:47:52.324133', 'freshness_price_date': '2026-08-04', 'internal_missing_benchmark_sessions': [], 'internal_missing_benchmark_session_count': 0, 'selection_calendar_available': True, 'internal_continuity_verified': True}]}"
+        }
+      ]
+    },
+    "event_page_newest": "2026-09-20T01:31:37.396231Z",
+    "event_page_oldest": "2026-09-11T17:43:44.195533Z",
+    "metric_samples": 91,
+    "max_metric_gap_seconds": 60,
+    "render_memory_min_mib": 298.69140625,
+    "render_memory_max_mib": 302.1601676940918,
+    "observed_process_rss_max_mib": 308.3,
+    "process_lifetime_highwater_mib": 337.4,
+    "metrics": {
+      "labels": [
+        {
+          "field": "instance",
+          "value": "srv-d9valk942hec738ilv4g-24vpn"
+        },
+        {
+          "field": "service",
+          "value": "srv-d9valk942hec738ilv4g"
+        },
+        {
+          "field": "resource",
+          "value": "srv-d9valk942hec738ilv4g"
+        }
+      ],
+      "unit": "bytes",
+      "values": [
+        {
+          "timestamp": "2026-09-21T02:55:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T02:56:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T02:57:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T02:58:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T02:59:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:00:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:01:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:02:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:03:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:04:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:05:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:06:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:07:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:08:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:09:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:10:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:11:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:12:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:13:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:14:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:15:00Z",
+          "value": 313200640
+        },
+        {
+          "timestamp": "2026-09-21T03:16:00Z",
+          "value": 313987070
+        },
+        {
+          "timestamp": "2026-09-21T03:17:00Z",
+          "value": 313987070
+        },
+        {
+          "timestamp": "2026-09-21T03:18:00Z",
+          "value": 314036220
+        },
+        {
+          "timestamp": "2026-09-21T03:19:00Z",
+          "value": 314241020
+        },
+        {
+          "timestamp": "2026-09-21T03:20:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:21:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:22:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:23:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:24:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:25:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:26:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:27:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:28:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:29:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:30:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:31:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:32:00Z",
+          "value": 313978880
+        },
+        {
+          "timestamp": "2026-09-21T03:33:00Z",
+          "value": 314093570
+        },
+        {
+          "timestamp": "2026-09-21T03:34:00Z",
+          "value": 314089470
+        },
+        {
+          "timestamp": "2026-09-21T03:35:00Z",
+          "value": 314089470
+        },
+        {
+          "timestamp": "2026-09-21T03:36:00Z",
+          "value": 314089470
+        },
+        {
+          "timestamp": "2026-09-21T03:37:00Z",
+          "value": 314089470
+        },
+        {
+          "timestamp": "2026-09-21T03:38:00Z",
+          "value": 314089470
+        },
+        {
+          "timestamp": "2026-09-21T03:39:00Z",
+          "value": 314089470
+        },
+        {
+          "timestamp": "2026-09-21T03:40:00Z",
+          "value": 314093570
+        },
+        {
+          "timestamp": "2026-09-21T03:41:00Z",
+          "value": 314093570
+        },
+        {
+          "timestamp": "2026-09-21T03:42:00Z",
+          "value": 314093570
+        },
+        {
+          "timestamp": "2026-09-21T03:43:00Z",
+          "value": 314093570
+        },
+        {
+          "timestamp": "2026-09-21T03:44:00Z",
+          "value": 314093570
+        },
+        {
+          "timestamp": "2026-09-21T03:45:00Z",
+          "value": 314093570
+        },
+        {
+          "timestamp": "2026-09-21T03:46:00Z",
+          "value": 314093570
+        },
+        {
+          "timestamp": "2026-09-21T03:47:00Z",
+          "value": 314093570
+        },
+        {
+          "timestamp": "2026-09-21T03:48:00Z",
+          "value": 314085380
+        },
+        {
+          "timestamp": "2026-09-21T03:49:00Z",
+          "value": 314347520
+        },
+        {
+          "timestamp": "2026-09-21T03:50:00Z",
+          "value": 314097660
+        },
+        {
+          "timestamp": "2026-09-21T03:51:00Z",
+          "value": 314310660
+        },
+        {
+          "timestamp": "2026-09-21T03:52:00Z",
+          "value": 314306560
+        },
+        {
+          "timestamp": "2026-09-21T03:53:00Z",
+          "value": 314306560
+        },
+        {
+          "timestamp": "2026-09-21T03:54:00Z",
+          "value": 314310660
+        },
+        {
+          "timestamp": "2026-09-21T03:55:00Z",
+          "value": 314306560
+        },
+        {
+          "timestamp": "2026-09-21T03:56:00Z",
+          "value": 314306560
+        },
+        {
+          "timestamp": "2026-09-21T03:57:00Z",
+          "value": 314306560
+        },
+        {
+          "timestamp": "2026-09-21T03:58:00Z",
+          "value": 314306560
+        },
+        {
+          "timestamp": "2026-09-21T03:59:00Z",
+          "value": 314306560
+        },
+        {
+          "timestamp": "2026-09-21T04:00:00Z",
+          "value": 314306560
+        },
+        {
+          "timestamp": "2026-09-21T04:01:00Z",
+          "value": 314306560
+        },
+        {
+          "timestamp": "2026-09-21T04:02:00Z",
+          "value": 314306560
+        },
+        {
+          "timestamp": "2026-09-21T04:03:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:04:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:05:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:06:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:07:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:08:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:09:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:10:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:11:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:12:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:13:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:14:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:15:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:16:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:17:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:18:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:19:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:20:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:21:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:22:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:23:00Z",
+          "value": 316837900
+        },
+        {
+          "timestamp": "2026-09-21T04:24:00Z",
+          "value": 316575740
+        },
+        {
+          "timestamp": "2026-09-21T04:25:00Z",
+          "value": 316575740
+        }
+      ]
+    },
+    "process_rss": [
+      {
+        "timestamp": "2026-09-21T02:56:50.050842408Z",
+        "rss_mib": 304.8,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:00:00.001155492Z",
+        "rss_mib": 304.8,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:00:02.665726197Z",
+        "rss_mib": 304.8,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:00:02.667178256Z",
+        "rss_mib": 304.8,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:00:05.456488646Z",
+        "rss_mib": 304.8,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:01:50.061683161Z",
+        "rss_mib": 304.8,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:06:50.066800427Z",
+        "rss_mib": 304.8,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:11:50.075271168Z",
+        "rss_mib": 304.8,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:16:50.080924632Z",
+        "rss_mib": 305.6,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:21:50.086516471Z",
+        "rss_mib": 305.6,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:26:50.093016806Z",
+        "rss_mib": 305.6,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:31:50.101976794Z",
+        "rss_mib": 305.6,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:36:50.10890839Z",
+        "rss_mib": 305.7,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:41:50.114928833Z",
+        "rss_mib": 305.7,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:46:50.23549319Z",
+        "rss_mib": 305.9,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:51:50.251266069Z",
+        "rss_mib": 306.1,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T03:56:50.257011611Z",
+        "rss_mib": 306.1,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T04:01:50.2638301Z",
+        "rss_mib": 306.1,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T04:06:50.26943471Z",
+        "rss_mib": 308.3,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T04:11:50.275347776Z",
+        "rss_mib": 308.3,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T04:16:50.280974758Z",
+        "rss_mib": 308.3,
+        "process_highwater_mib": 337.4
+      },
+      {
+        "timestamp": "2026-09-21T04:21:50.653841552Z",
+        "rss_mib": 308.3,
+        "process_highwater_mib": 337.4
+      }
+    ],
+    "completion_logs": [
+      {
+        "timestamp": "2026-09-21T03:02:20.477139051Z",
+        "message": "2026-09-21 03:02:20,476 INFO app.monitoring.edgar_poller: EDGAR pass complete: 0 new filings; polled 170/170 in-tier, skipped 3 out-of-tier"
+      },
+      {
+        "timestamp": "2026-09-21T03:32:16.475823017Z",
+        "message": "2026-09-21 03:32:16,475 INFO app.monitoring.news_loop: news_loop: 5 material events; focus 21 (pinned=9, regen_requested=2, memo_fresh=3, memo_stale=7); withheld 1 with no memo to patch (pinned_no_memo=1): BRK.B"
+      },
+      {
+        "timestamp": "2026-09-21T03:32:22.029044082Z",
+        "message": "2026-09-21 03:32:22,028 INFO app.monitoring.edgar_poller: EDGAR pass complete: 0 new filings; polled 170/170 in-tier, skipped 3 out-of-tier"
+      },
+      {
+        "timestamp": "2026-09-21T03:49:49.168288342Z",
+        "message": "2026-09-21 03:49:49,168 INFO app.services.scorecard_service: scorecard run 13 succeeded: as_of=2026-09-20 version=fs-v1 kind=scheduled universe=170 scored=169 insufficient=1 written=170 month_end=0 mean_coverage=0.979 no_price=0 no_snapshot=0 price_store=0 price_series=170 price_stale=3 pit_excluded=2 null_available_at=0 missing_period_end=256 available_before_period_end=2 period_end_after_as_of=0 available_at_filled=0 sector_unmatched=0 sector_fallback_rows=333"
+      },
+      {
+        "timestamp": "2026-09-21T04:02:18.362220724Z",
+        "message": "2026-09-21 04:02:18,362 INFO app.monitoring.edgar_poller: EDGAR pass complete: 0 new filings; polled 170/170 in-tier, skipped 3 out-of-tier"
+      }
+    ],
+    "limits": [
+      "No memo or industry generation occurred in this interval; it cannot certify maximum concurrency headroom.",
+      "The final ac31 observation from September 13 was not retained; this later interval does not reconstruct it.",
+      "The earlier 1f7f447 observation remains failed because of its ABBV news error."
+    ]
+  },
+  "loop_notes": {
+    "worker_heartbeat": {
+      "last_run_at": "2026-09-21T04:26:50.665007",
+      "success": true,
+      "note": "rss=308MB; llm=anthropic; generation_mode=live; embeddings=openai; build=3376a936538800b89e2987f43a0dcab9d8850650"
+    },
+    "news_loop": {
+      "last_run_at": "2026-09-21T03:32:16.477984",
+      "success": true,
+      "note": "5 material events; focus 21 (pinned=9, regen_requested=2, memo_fresh=3, memo_stale=7); withheld 1 with no memo to patch (pinned_no_memo=1): BRK.B"
+    },
+    "edgar_poller": {
+      "last_run_at": "2026-09-21T04:02:18.364427",
+      "success": true,
+      "note": "0 new filings; polled 170/170 in-tier, skipped 3 out-of-tier"
+    },
+    "outcome_loop": {
+      "last_run_at": "2026-09-21T02:30:41.205253",
+      "success": false,
+      "note": "evaluated=1696 due=770 written=1 existing=710 unavailable=59 no_prices=57 short_history=2 window_gap=0 unevaluable=0 reflections=0 errors=0 unavailable_pairs=TSTONE:snap=562:180d:ticker_prices_unavailable,TSTAA:snap=566:180d:ticker_prices_unavailable,TSTBB:snap=567:180d:ticker_prices_unavailable,TSTNEU:snap=568:180d:ticker_prices_unavailable,TSTRFL:snap=569:180d:ticker_prices_unavailable,TSTADM:snap=571:180d:ticker_prices_unavailable,TSTONE2:snap=563:180d:ticker_prices_unavailable,TSTSHORT:snap=570:90d:ticker_prices_unavailable,TSTSHORT:snap=570:180d:ticker_prices_unavailable,TSTHALF:snap=565:30d:ticker_prices_unavailable,TSTHALF:snap=565:90d:ticker_prices_unavailable,RTRIP:snap=223:30d:ticker_prices_unavailable,RTRIP:snap=223:90d:ticker_prices_unavailable,CHAIN:snap=224:30d:ticker_prices_unavailable,CHAIN:snap=224:90d:ticker_prices_unavailable,CHAIN:snap=225:30d:ticker_prices_unavailable,CHAIN:snap=225:90d:ticker_prices_unavailable,RTRIP:snap=239:30d:ticker_prices_unavailable,RTRIP:snap=239:90d:ticker_prices_unavailable,RTRIP:snap=411:30d:ticker_prices_unavailable,RTRIP:snap=411:90d:ticker_prices_unavailable,CHAIN:snap=412:30d:ticker_prices_unavailable,CHAIN:snap=412:90d:ticker_prices_unavailable,CHAIN:snap=413:30d:ticker_prices_unavailable,CHAIN:snap=413:90d:ticker_prices_unavailable,AUDA:snap=516:30d:price_history_too_short,AUDA:snap=516:90d:price_history_too_short,AUDB:snap=517:30d:ticker_prices_unavailable,AUDB:snap=517:90d:ticker_prices_unavailable,AUDN0:snap=519:30d:ticker_prices_unavailable,AUDN0:snap=519:90d:ticker_prices_unavailable,AUDN1:snap=520:30d:ticker_prices_unavailable,AUDN1:snap=520:90d:ticker_prices_unavailable,AUDN2:snap=521:30d:ticker_prices_unavailable,AUDN2:snap=521:90d:ticker_prices_unavailable,AUDN3:snap=522:30d:ticker_prices_unavailable,AUDN3:snap=522:90d:ticker_prices_unavailable,AUDN4:snap=523:30d:ticker_prices_unavailable,AUDN4:snap=523:90d:ticker_prices_unavailable,ASOFT1:snap=525:30d:ticker_prices_unavailable,ASOFT1:snap=525:90d:ticker_prices_unavailable,RTRIP:snap=554:30d:ticker_prices_unavailable,RTRIP:snap=554:90d:ticker_prices_unavailable,CHAIN:snap=555:30d:ticker_prices_unavailable,CHAIN:snap=555:90d:ticker_prices_unavailable,CHAIN:snap=556:30d:ticker_prices_unavailable,CHAIN:snap=556:90d:ticker_prices_unavailable,TSTPATCH:snap=577:30d:ticker_prices_unavailable,TSTPATCH:snap=577:90d:ticker_prices_unavailable,TSTPATCH:snap=578:30d:ticker_prices_unavailable,TSTPATCH:snap=578:90d:ticker_prices_unavailable,TSTNOMA:snap=579:30d:ticker_prices_unavailable,TSTNOMA:snap=579:90d:ticker_prices_unavailable,TSTCAP:snap=580:30d:ticker_prices_unavailable,TSTCAP:snap=580:90d:ticker_prices_unavailable,TSTCAP:snap=581:30d:ticker_prices_unavailable,TSTCAP:snap=581:90d:ticker_prices_unavailable,TSTCAP:snap=582:30d:ticker_prices_unavailable,TSTCAP:snap=582:90d:ticker_prices_unavailable"
+    },
+    "industry_weekly_loop": {
+      "last_run_at": "2026-09-20T06:30:03.881961",
+      "success": true,
+      "note": "period=2026-W38 as_of=2026-09-18 taxonomy=gics-2026-04 groups=25 with_constituents=23 enqueued=25 coalesced=0 skipped_published=0 over_budget=0 cross_snapshot=52 warm_fetched=3 warm_failed=0 warm_budget=150 warm_remaining_missing=0 bootstrapped_classification=0"
+    },
+    "history_backfill": {
+      "last_run_at": "2026-09-21T03:19:34.169836",
+      "success": true,
+      "note": "tickers=170 fp=0 filings=1260 transcripts=1 errors=0 cold=5; bounded filing sources=208: ORCL:0001193125-26-277521(retained=250000,observed=472496,oversized_tokens=0), OXY:0001628280-26-009059(retained=250000,observed=498875,oversized_tokens=0), PANW:0001327567-26-000023(retained=250000,observed=507012,oversized_tokens=0), PANW:0001327567-26-000015(retained=250000,observed=324882,oversized_tokens=0), PANW:0001327567-26-000005(retained=250000,observed=283082,oversized_tokens=0), PEP:0000077476-26-000007(retained=250000,observed=481700,oversized_tokens=0), PFE:0000078003-26-000095(retained=250000,observed=279555,oversized_tokens=0), PFE:0000078003-26-000026(retained=250000,observed=747444,oversized_tokens=0), PG:0000080424-26-000103(retained=250000,observed=345191,oversized_tokens=0), PLTR:0001321655-26-000041(retained=250000,observed=448914,oversized_tokens=0), PLTR:0001321655-26-000028(retained=250000,observed=436679,oversized_tokens=0), PLTR:0001321655-26-000011(retained=250000,observed=565557,oversized_tokens=0), PLTR:0001321655-25-000131(retained=250000,observed=456150,oversized_tokens=0), PLTR:0001321655-25-000106(retained=250000,observed=449520,oversized_tokens=0), PM:0001628280-26-049493(retained=250000,observed=371187,oversized_tokens=0), PYPL:0001633917-26-000082(retained=250000,observed=279929,oversized_tokens=0), PYPL:0001633917-26-000024(retained=250000,observed=539982,oversized_tokens=0), REGN:0000872589-26-000025(retained=250000,observed=367644,oversized_tokens=0), REGN:0000872589-26-000016(retained=250000,observed=349520,oversized_tokens=0), REGN:0000872589-26-000008(retained=250000,observed=615016,oversized_tokens=0), RMD:0000943819-26-000047(retained=250000,observed=516809,oversized_tokens=0), RTX:0000101829-26-000006(retained=250000,observed=609475,oversized_tokens=0), SCHW:0000316709-26-000031(retained=250000,observed=347496,oversized_tokens=0), SCHW:0000316709-26-000019(retained=250000,observed=302793,oversized_tokens=0), SHW:0000089800-26-000008(retained=250000,observed=446433,oversized_tokens=0), SLB:0001193125-26-021017(retained=250000,observed=292366,oversized_tokens=0), SMCI:0001375365-26-000022(retained=250000,observed=758062,oversized_tokens=0), SMCI:0001375365-26-000014(retained=250000,observed=254833,oversized_tokens=0), SNOW:0001640147-26-000037(retained=250000,observed=447222,oversized_tokens=0), SNOW:0001640147-26-000030(retained=250000,observed=413790,oversized_tokens=0), SNOW:0001640147-26-000008(retained=250000,observed=596034,oversized_tokens=0), SNPS:0000883241-26-000025(retained=250000,observed=274281,oversized_tokens=0), SNPS:0000883241-26-000018(retained=250000,observed=265149,oversized_tokens=0), SO:0000092122-26-000054(retained=250000,observed=563607,oversized_tokens=0), SO:0000092122-26-000034(retained=250000,observed=446098,oversized_tokens=0), SPGI:0000064040-26-000045(retained=250000,observed=268938,oversized_tokens=0), TER:0001193125-26-059002(retained=250000,observed=421843,oversized_tokens=0), TGT:0000027419-26-000016(retained=250000,observed=258678,oversized_tokens=0), TJX:0000109198-26-000008(retained=250000,observed=328401,oversized_tokens=0), TMO:0000097745-26-000018(retained=250000,observed=399058,oversized_tokens=0), TMUS:0001283699-26-000101(retained=250000,observed=252328,oversized_tokens=0), TSLA:0001628280-26-003952(retained=250000,observed=432226,oversized_tokens=0), UNH:0000731766-26-000062(retained=250000,observed=375008,oversized_tokens=0), UNP:0000100885-26-000037(retained=250000,observed=348211,oversized_tokens=0), USB:0000036104-26-000044(retained=250000,observed=437884,oversized_tokens=0), USB:0000036104-26-000024(retained=250000,observed=373393,oversized_tokens=0), USB:0000036104-26-000011(retained=250000,observed=260953,oversized_tokens=0), VRTX:0000875320-26-000056(retained=250000,observed=481291,oversized_tokens=0), VZ:0000732712-26-000046(retained=250000,observed=262328,oversized_tokens=0), WDAY:0001327811-26-000044(retained=250000,observed=274036,oversized_tokens=0), WDAY:0001327811-26-000026(retained=250000,observed=260757,oversized_tokens=0), WDAY:0001327811-26-000014(retained=250000,observed=399180,oversized_tokens=0), WFC:0000072971-26-000302(retained=250000,observed=635580,oversized_tokens=0), WFC:0000072971-26-000217(retained=250000,observed=564897,oversized_tokens=0), WMT:0000104169-26-000055(retained=250000,observed=385761,oversized_tokens=0), XOM:0000034088-26-000045(retained=250000,observed=481643,oversized_tokens=0), ZS:0001713683-26-000157(retained=250000,observed=484387,oversized_tokens=0), ZS:0001713683-26-000096(retained=250000,observed=348329,oversized_tokens=0), ZS:0001713683-26-000048(retained=250000,observed=347933,oversized_tokens=0), ZS:0001713683-25-000205(retained=250000,observed=328130,oversized_tokens=0), ZTS:0001555280-26-000011(retained=250000,observed=546202,oversized_tokens=0), ADBE:0000796343-26-000003(retained=250000,observed=373923,oversized_tokens=0), ADSK:0000769397-26-000061(retained=250000,observed=281618,oversized_tokens=0), ADSK:0000769397-26-000044(retained=250000,observed=263941,oversized_tokens=0), AIG:0000005272-26-000076(retained=250000,observed=373577,oversized_tokens=0), AIG:0000005272-26-000052(retained=250000,observed=340631,oversized_tokens=0), AIG:0000005272-26-000023(retained=250000,observed=959718,oversized_tokens=0), AMAT:0001628280-25-056742(retained=250000,observed=328031,oversized_tokens=0), AMGN:0000318154-26-000126(retained=250000,observed=296869,oversized_tokens=0), AMGN:0000318154-26-000057(retained=250000,observed=275540,oversized_tokens=0), AMGN:0000318154-26-000010(retained=250000,observed=701830,oversized_tokens=0), ANET:0001596532-26-000175(retained=250000,observed=290656,oversized_tokens=0), ANET:0001596532-26-000078(retained=250000,observed=285404,oversized_tokens=0), ANET:0001596532-26-000013(retained=250000,observed=430278,oversized_tokens=0), ANET:0001596532-25-000286(retained=250000,observed=299159,oversized_tokens=0), AXP:0000004962-26-000322(retained=250000,observed=288335,oversized_tokens=0), BA:0001628280-26-004357(retained=250000,observed=498139,oversized_tokens=0), BAC:0000070858-26-000394(retained=250000,observed=712057,oversized_tokens=0), BAC:0000070858-26-000249(retained=250000,observed=622199,oversized_tokens=0), BAC:0000070858-26-000157(retained=250000,observed=1179026,oversized_tokens=0), BIIB:0000875045-26-000075(retained=250000,observed=422694,oversized_tokens=0), BIIB:0000875045-26-000045(retained=250000,observed=344407,oversized_tokens=0), BK:0001390777-26-000086(retained=250000,observed=495383,oversized_tokens=0), BK:0001390777-26-000060(retained=250000,observed=450201,oversized_tokens=0), BLK:0001193125-26-337177(retained=250000,observed=327072,oversized_tokens=0), BLK:0001193125-26-208766(retained=250000,observed=279999,oversized_tokens=0), BLK:0001193125-26-071966(retained=250000,observed=726910,oversized_tokens=0), BMY:0000014272-26-000004(retained=250000,observed=589688,oversized_tokens=0), BRK.B:0001193125-26-341032(retained=250000,observed=256686,oversized_tokens=0), BRK.B:0001193125-26-083899(retained=250000,observed=636617,oversized_tokens=0), C:0000831001-26-000045(retained=250000,observed=917734,oversized_tokens=0), C:0000831001-26-000019(retained=250000,observed=791992,oversized_tokens=0), C:0000831001-26-000011(retained=250000,observed=1520356,oversized_tokens=0), CAT:0000018230-26-000046(retained=250000,observed=315922,oversized_tokens=0), CAT:0000018230-26-000021(retained=250000,observed=253643,oversized_tokens=0), CAT:0000018230-26-000008(retained=250000,observed=560382,oversized_tokens=0), CDNS:0000813672-26-000016(retained=250000,observed=482525,oversized_tokens=0), CI:0001739940-26-000006(retained=250000,observed=596496,oversized_tokens=0), CL:0000021665-26-000006(retained=250000,observed=382048,oversized_tokens=0), CMG:0001058090-26-000009(retained=250000,observed=254089,oversized_tokens=0), COF:0000927628-26-000089(retained=250000,observed=602925,oversized_tokens=0), COP:0001163165-26-000009(retained=250000,observed=579279,oversized_tokens=0), CRM:0001108524-26-000190(retained=250000,observed=328027,oversized_tokens=0), CRM:0001108524-26-000127(retained=250000,observed=314201,oversized_tokens=0), CRWD:0001535527-26-000031(retained=250000,observed=404537,oversized_tokens=0), CRWD:0001535527-26-000025(retained=250000,observed=371005,oversized_tokens=0), CRWD:0001535527-26-000010(retained=250000,observed=558300,oversized_tokens=0), CSCO:0000858877-26-000132(retained=250000,observed=440042,oversized_tokens=0), CSCO:0000858877-26-000078(retained=250000,observed=318773,oversized_tokens=0), CSCO:0000858877-26-000021(retained=250000,observed=313066,oversized_tokens=0), CSCO:0000858877-25-000171(retained=250000,observed=286649,oversized_tokens=0), CVS:0000064803-26-000010(retained=250000,observed=855527,oversized_tokens=0), CVX:0000093410-26-000078(retained=250000,observed=574126,oversized_tokens=0), DDOG:0001628280-26-054458(retained=250000,observed=304593,oversized_tokens=0), DDOG:0001628280-26-032328(retained=250000,observed=288871,oversized_tokens=0), DDOG:0001628280-26-008819(retained=250000,observed=412462,oversized_tokens=0), DDOG:0001561550-25-000313(retained=250000,observed=303174,oversized_tokens=0), DHR:0000313616-26-000062(retained=250000,observed=542320,oversized_tokens=0), DUK:0001326160-26-000040(retained=250000,observed=620158,oversized_tokens=0), DUK:0001326160-26-000026(retained=250000,observed=507398,oversized_tokens=0), EA:0001628280-26-033617(retained=250000,observed=323836,oversized_tokens=0), EOG:0000821189-26-000054(retained=250000,observed=452659,oversized_tokens=0), EQIX:0001101239-26-000147(retained=250000,observed=357625,oversized_tokens=0), EQIX:0001101239-26-000091(retained=250000,observed=316729,oversized_tokens=0), ETN:0001551182-26-000007(retained=250000,observed=366572,oversized_tokens=0), EW:0001099800-26-000009(retained=250000,observed=429857,oversized_tokens=0), EXC:0001109357-26-000080(retained=250000,observed=679139,oversized_tokens=0), EXC:0001109357-26-000063(retained=250000,observed=537502,oversized_tokens=0), EXC:0001109357-26-000018(retained=250000,observed=1311534,oversized_tokens=0), F:0000037996-26-000156(retained=250000,observed=250589,oversized_tokens=0), FDX:0001048911-26-000105(retained=250000,observed=599333,oversized_tokens=0), FTNT:0001262039-26-000021(retained=250000,observed=405360,oversized_tokens=0), FTNT:0001262039-26-000013(retained=250000,observed=387218,oversized_tokens=0), FTNT:0001262039-26-000007(retained=250000,observed=551038,oversized_tokens=0), FTNT:0001262039-25-000039(retained=250000,observed=400820,oversized_tokens=0), GD:0000040533-26-000006(retained=250000,observed=336813,oversized_tokens=0), GE:0000040545-26-000008(retained=250000,observed=462191,oversized_tokens=0), GILD:0000882095-26-000031(retained=250000,observed=287457,oversized_tokens=0), GILD:0000882095-26-000006(retained=250000,observed=476307,oversized_tokens=0), GM:0001467858-26-000013(retained=250000,observed=517986,oversized_tokens=0), GOOGL:0001652044-26-000071(retained=250000,observed=250628,oversized_tokens=0), GS:0000886982-26-000297(retained=250000,observed=963835,oversized_tokens=0), GS:0000886982-26-000118(retained=250000,observed=894766,oversized_tokens=0), HD:0001628280-26-019436(retained=250000,observed=366052,oversized_tokens=0), HON:0000773840-26-000124(retained=250000,observed=284768,oversized_tokens=0), IBM:0000051143-26-000078(retained=250000,observed=264644,oversized_tokens=0), ICE:0001571949-26-000011(retained=250000,observed=260936,oversized_tokens=0), ICE:0001571949-26-000004(retained=250000,observed=679499,oversized_tokens=0), IDXX:0000874716-26-000038(retained=250000,observed=517338,oversized_tokens=0), INTU:0000896878-26-000037(retained=250000,observed=461519,oversized_tokens=0), INTU:0000896878-26-000025(retained=250000,observed=297159,oversized_tokens=0), INTU:0000896878-26-000014(retained=250000,observed=297065,oversized_tokens=0), ISRG:0001035267-26-000010(retained=250000,observed=623609,oversized_tokens=0), JNJ:0000200406-26-000153(retained=250000,observed=277364,oversized_tokens=0), JNJ:0000200406-26-000016(retained=250000,observed=523331,oversized_tokens=0), JPM:0001628280-26-054343(retained=250000,observed=847842,oversized_tokens=0), KHC:0001637459-26-000054(retained=250000,observed=265330,oversized_tokens=0), KLAC:0000319201-26-000027(retained=250000,observed=500216,oversized_tokens=0), KO:0001628280-26-010047(retained=250000,observed=665257,oversized_tokens=0), LIN:0001628280-26-011430(retained=250000,observed=406111,oversized_tokens=0), LLY:0000059478-26-000013(retained=250000,observed=421885,oversized_tokens=0), LMT:0001628280-26-004195(retained=250000,observed=496087,oversized_tokens=0), LOW:0000060667-26-000029(retained=250000,observed=319299,oversized_tokens=0), LRCX:0000707549-26-000037(retained=250000,observed=376668,oversized_tokens=0), MA:0001141391-26-000013(retained=250000,observed=483281,oversized_tokens=0), MAR:0001048286-26-000007(retained=250000,observed=298313,oversized_tokens=0), MCD:0000063908-26-000035(retained=250000,observed=295727,oversized_tokens=0), MCHP:0000827054-26-000038(retained=250000,observed=303320,oversized_tokens=0), MCHP:0000827054-26-000016(retained=250000,observed=485515,oversized_tokens=0), MCHP:0000827054-26-000009(retained=250000,observed=324436,oversized_tokens=0), MCO:0001628280-26-049398(retained=250000,observed=298467,oversized_tokens=0), MCO:0001628280-26-009136(retained=250000,observed=543125,oversized_tokens=0), MDLZ:0001628280-26-005345(retained=250000,observed=485599,oversized_tokens=0), MDT:0001628280-26-044354(retained=250000,observed=572119,oversized_tokens=0), MDT:0001628280-26-011107(retained=250000,observed=259753,oversized_tokens=0), MET:0001099219-26-000050(retained=250000,observed=691252,oversized_tokens=0), MET:0001099219-26-000035(retained=250000,observed=624064,oversized_tokens=0), META:0001628280-26-050705(retained=250000,observed=420636,oversized_tokens=0), META:0001628280-26-028526(retained=250000,observed=403247,oversized_tokens=0), META:0001628280-26-003942(retained=250000,observed=539183,oversized_tokens=0), MMM:0000066740-26-000246(retained=250000,observed=273948,oversized_tokens=0), MNST:0001104659-26-020831(retained=250000,observed=444136,oversized_tokens=0), MO:0000764180-26-000094(retained=250000,observed=288919,oversized_tokens=0), MO:0000764180-26-000058(retained=250000,observed=254980,oversized_tokens=0), MO:0000764180-26-000017(retained=250000,observed=567227,oversized_tokens=0), MPWR:0001437749-26-006113(retained=250000,observed=362714,oversized_tokens=0), MRK:0000310158-26-000212(retained=250000,observed=330647,oversized_tokens=0), MRK:0001628280-26-029802(retained=250000,observed=262047,oversized_tokens=0), MRK:0000310158-26-000063(retained=250000,observed=793234,oversized_tokens=0), MRK:0000310158-25-000059(retained=250000,observed=353904,oversized_tokens=0), MRNA:0001682852-26-000033(retained=250000,observed=648392,oversized_tokens=0), MRVL:0001835632-26-000025(retained=250000,observed=332223,oversized_tokens=0), MRVL:0001835632-26-000019(retained=250000,observed=315866,oversized_tokens=0), MS:0000895421-26-000212(retained=250000,observed=564690,oversized_tokens=0), MS:0000895421-26-000121(retained=250000,observed=503335,oversized_tokens=0), MS:0000895421-26-000086(retained=250000,observed=988852,oversized_tokens=0), MS:0000895421-25-000539(retained=250000,observed=554264,oversized_tokens=0), MSFT:0001193125-26-323660(retained=250000,observed=367575,oversized_tokens=0), NEE:0000753308-26-000060(retained=250000,observed=277578,oversized_tokens=0), NEM:0001164727-26-000036(retained=250000,observed=347220,oversized_tokens=0), NEM:0001164727-26-000019(retained=250000,observed=264242,oversized_tokens=0), NEM:0001164727-26-000010(retained=250000,observed=1028073,oversized_tokens=0), NFLX:0001065280-26-000034(retained=250000,observed=311457,oversized_tokens=0), NKE:0000320187-26-000088(retained=250000,observed=422735,oversized_tokens=0), NOC:0001133421-26-000003(retained=250000,observed=417431,oversized_tokens=0), NOW:0001373715-26-000007(retained=250000,observed=374726,oversized_tokens=0), NSC:0001628280-26-006268(retained=250000,observed=338067,oversized_tokens=0), NXPI:0001413447-26-000008(retained=250000,observed=423859,oversized_tokens=0)"
+    },
+    "postmortem_loop": {
+      "last_run_at": "2026-09-21T03:00:05.461925",
+      "success": true,
+      "note": "30d due=0 written=0 already_done=0 deduped=329 skipped=0 deferred=0 memory_written=0 memory_disabled=0 memory_failed=0 memory_not_requested=0; deduped memos: NVDA#4 (rating unchanged (Bullish) vs v1), NVDA#5 (rating unchanged (Bullish) vs v2), NVDA#6 (rating unchanged (Bullish) vs v3), NVDA#7 (rating unchanged (Bullish) vs v4), NVDA#8 (rating unchanged (Bullish) vs v5), NVDA#9 (rating unchanged (Bullish) vs v6), NVDA#10 (rating unchanged (Bullish) vs v7), NVDA#11 (rating unchanged (Bullish) vs v8), MSFT#12 (rating unchanged (Bullish) vs v1), NVDA#13 (rating unchanged (Bullish) vs v9), NVDA#14 (rating unchanged (Bullish) vs v10), NVDA#15 (rating unchanged (Bullish) vs v11), NVDA#16 (rating unchanged (Bullish) vs v12), AAPL#17 (rating unchanged (Neutral) vs v1), NVDA#18 (rating unchanged (Bullish) vs v227), MSFT#19 (recent postmortem exists (2026-09-12, within 14d)), MSFT#20 (recent postmortem exists (2026-09-12, within 14d)), NVDA#21 (recent postmortem exists (2026-09-12, within 14d)), MSFT#23 (recent postmortem exists (2026-09-12, within 14d)), GOOGL#24 (recent postmortem exists (2026-09-12, within 14d)), AAPL#26 (recent postmortem exists (2026-09-12, within 14d)), AAPL#28 (recent postmortem exists (2026-09-12, within 14d)), MSFT#29 (rating unchanged (Bullish) vs v2), NVDA#32 (rating unchanged (Bullish) vs v14), NVDA#33 (rating unchanged (Bullish) vs v15), NVDA#34 (rating unchanged (Bullish) vs v16), MSFT#35 (rating unchanged (Bullish) vs v5), MSFT#36 (rating unchanged (Bullish) vs v6), MSFT#37 (rating unchanged (Bullish) vs v7), MSFT#38 (rating unchanged (Bullish) vs v8), NVDA#39 (rating unchanged (Bullish) vs v17), NVDA#40 (rating unchanged (Bullish) vs v18), NVDA#41 (rating unchanged (Bullish) vs v19), NVDA#42 (rating unchanged (Bullish) vs v20), NVDA#43 (rating unchanged (Bullish) vs v21), NVDA#44 (rating unchanged (Bullish) vs v22), NVDA#45 (rating unchanged (Bullish) vs v23), NVDA#46 (rating unchanged (Bullish) vs v24), NVDA#47 (rating unchanged (Bullish) vs v25), NVDA#48 (rating unchanged (Bullish) vs v26), NVDA#49 (rating unchanged (Bullish) vs v27), MSFT#50 (rating unchanged (Bullish) vs v9), MSFT#51 (rating unchanged (Bullish) vs v10), NVDA#52 (rating unchanged (Bullish) vs v28), NVDA#53 (rating unchanged (Bullish) vs v29), NVDA#54 (rating unchanged (Bullish) vs v30), NVDA#55 (rating unchanged (Bullish) vs v31), NVDA#59 (rating unchanged (Bullish) vs v32), NVDA#60 (rating unchanged (Bullish) vs v33), MSFT#62 (rating unchanged (Bullish) vs v11), MSFT#63 (rating unchanged (Bullish) vs v12), NVDA#74 (rating unchanged (Bullish) vs v34), NVDA#75 (rating unchanged (Bullish) vs v35), NVDA#76 (rating unchanged (Bullish) vs v36), NVDA#77 (rating unchanged (Bullish) vs v37), MSFT#78 (rating unchanged (Bullish) vs v13), NVDA#88 (rating unchanged (Bullish) vs v38), NVDA#89 (rating unchanged (Bullish) vs v39), NVDA#90 (rating unchanged (Bullish) vs v40), NVDA#91 (rating unchanged (Bullish) vs v41), NVDA#92 (rating unchanged (Bullish) vs v42), NVDA#93 (rating unchanged (Bullish) vs v43), NVDA#94 (rating unchanged (Bullish) vs v44), NVDA#95 (rating unchanged (Bullish) vs v45), NVDA#96 (rating unchanged (Bullish) vs v46), NVDA#97 (rating unchanged (Bullish) vs v47), NVDA#98 (rating unchanged (Bullish) vs v48), MSFT#99 (rating unchanged (Bullish) vs v14), NVDA#100 (rating unchanged (Bullish) vs v49), NVDA#101 (rating unchanged (Bullish) vs v50), NVDA#103 (rating unchanged (Bullish) vs v51), MSFT#104 (rating unchanged (Bullish) vs v15), MSFT#105 (rating unchanged (Bullish) vs v16), NVDA#106 (rating unchanged (Bullish) vs v52), MSFT#107 (rating unchanged (Bullish) vs v17), NVDA#123 (rating unchanged (Bullish) vs v54), NVDA#124 (rating unchanged (Bullish) vs v55), MSFT#126 (rating unchanged (Bullish) vs v18), MSFT#127 (rating unchanged (Bullish) vs v19), MSFT#128 (rating unchanged (Bullish) vs v20), NVDA#131 (rating unchanged (Bullish) vs v56), NVDA#132 (rating unchanged (Bullish) vs v57), NVDA#133 (rating unchanged (Bullish) vs v58), MSFT#134 (rating unchanged (Bullish) vs v23), MSFT#135 (rating unchanged (Bullish) vs v24), MSFT#136 (rating unchanged (Bullish) vs v25), MSFT#137 (rating unchanged (Bullish) vs v26), NVDA#138 (rating unchanged (Bullish) vs v59), NVDA#139 (rating unchanged (Bullish) vs v60), NVDA#140 (rating unchanged (Bullish) vs v61), NVDA#141 (rating unchanged (Bullish) vs v62), NVDA#142 (rating unchanged (Bullish) vs v63), NVDA#143 (rating unchanged (Bullish) vs v64), NVDA#144 (rating unchanged (Bullish) vs v65), NVDA#145 (rating unchanged (Bullish) vs v66), NVDA#146 (rating unchanged (Bullish) vs v67), NVDA#147 (rating unchanged (Bullish) vs v68), NVDA#148 (rating unchanged (Bullish) vs v69), MSFT#149 (rating unchanged (Bullish) vs v27), MSFT#150 (rating unchanged (Bullish) vs v28), NVDA#151 (rating unchanged (Bullish) vs v70), NVDA#152 (rating unchanged (Bullish) vs v71), NVDA#153 (rating unchanged (Bullish) vs v72), NVDA#154 (rating unchanged (Bullish) vs v73), MSFT#167 (rating unchanged (Bullish) vs v29), NVDA#170 (rating unchanged (Bullish) vs v75), NVDA#171 (rating unchanged (Bullish) vs v76), NVDA#172 (rating unchanged (Bullish) vs v77), MSFT#173 (rating unchanged (Bullish) vs v32), MSFT#174 (rating unchanged (Bullish) vs v33), MSFT#175 (rating unchanged (Bullish) vs v34), MSFT#176 (rating unchanged (Bullish) vs v35), NVDA#177 (rating unchanged (Bullish) vs v78), NVDA#178 (rating unchanged (Bullish) vs v79), NVDA#179 (rating unchanged (Bullish) vs v80), NVDA#180 (rating unchanged (Bullish) vs v81), NVDA#181 (rating unchanged (Bullish) vs v82), NVDA#182 (rating unchanged (Bullish) vs v83), NVDA#183 (rating unchanged (Bullish) vs v84), NVDA#184 (rating unchanged (Bullish) vs v85), NVDA#185 (rating unchanged (Bullish) vs v86), NVDA#186 (rating unchanged (Bullish) vs v87), NVDA#187 (rating unchanged (Bullish) vs v88), MSFT#188 (rating unchanged (Bullish) vs v36), MSFT#189 (rating unchanged (Bullish) vs v37), NVDA#190 (rating unchanged (Bullish) vs v89), NVDA#191 (rating unchanged (Bullish) vs v90), NVDA#192 (rating unchanged (Bullish) vs v91), NVDA#193 (rating unchanged (Bullish) vs v92), NVDA#197 (rating unchanged (Bullish) vs v93), NVDA#198 (rating unchanged (Bullish) vs v94), MSFT#200 (rating unchanged (Bullish) vs v38), MSFT#201 (rating unchanged (Bullish) vs v39), NVDA#212 (rating unchanged (Bullish) vs v95), NVDA#213 (rating unchanged (Bullish) vs v96), NVDA#214 (rating unchanged (Bullish) vs v97), NVDA#215 (rating unchanged (Bullish) vs v98), MSFT#216 (rating unchanged (Bullish) vs v40), NVDA#226 (rating unchanged (Bullish) vs v99), NVDA#227 (rating unchanged (Bullish) vs v100), MSFT#229 (rating unchanged (Bullish) vs v41), MSFT#230 (rating unchanged (Bullish) vs v42), NVDA#231 (rating unchanged (Bullish) vs v101), NVDA#232 (rating unchanged (Bullish) vs v102), MSFT#236 (rating unchanged (Bullish) vs v43), NVDA#240 (rating unchanged (Bullish) vs v103), MSFT#253 (rating unchanged (Bullish) vs v46), NVDA#256 (rating unchanged (Bullish) vs v105), NVDA#257 (rating unchanged (Bullish) vs v106), NVDA#258 (rating unchanged (Bullish) vs v107), MSFT#259 (rating unchanged (Bullish) vs v49), MSFT#260 (rating unchanged (Bullish) vs v50), MSFT#261 (rating unchanged (Bullish) vs v51), MSFT#262 (rating unchanged (Bullish) vs v52), NVDA#263 (rating unchanged (Bullish) vs v108), NVDA#264 (rating unchanged (Bullish) vs v109), NVDA#265 (rating unchanged (Bullish) vs v110), NVDA#266 (rating unchanged (Bullish) vs v111), NVDA#267 (rating unchanged (Bullish) vs v112), NVDA#268 (rating unchanged (Bullish) vs v113), NVDA#269 (rating unchanged (Bullish) vs v114), NVDA#270 (rating unchanged (Bullish) vs v115), NVDA#271 (rating unchanged (Bullish) vs v116), NVDA#272 (rating unchanged (Bullish) vs v117), NVDA#273 (rating unchanged (Bullish) vs v118), MSFT#274 (rating unchanged (Bullish) vs v53), MSFT#275 (rating unchanged (Bullish) vs v54), NVDA#276 (rating unchanged (Bullish) vs v119), NVDA#277 (rating unchanged (Bullish) vs v120), NVDA#278 (rating unchanged (Bullish) vs v121), NVDA#279 (rating unchanged (Bullish) vs v122), NVDA#290 (rating unchanged (Bullish) vs v123), NVDA#291 (rating unchanged (Bullish) vs v124), NVDA#292 (rating unchanged (Bullish) vs v125), NVDA#293 (rating unchanged (Bullish) vs v126), MSFT#294 (rating unchanged (Bullish) vs v55), NVDA#301 (rating unchanged (Bullish) vs v127), NVDA#302 (rating unchanged (Bullish) vs v128), NVDA#303 (rating unchanged (Bullish) vs v129), NVDA#304 (rating unchanged (Bullish) vs v130), NVDA#305 (rating unchanged (Bullish) vs v131), NVDA#306 (rating unchanged (Bullish) vs v132), MSFT#319 (rating unchanged (Bullish) vs v56), NVDA#322 (rating unchanged (Bullish) vs v134), MSFT#323 (rating unchanged (Bullish) vs v59), MSFT#324 (rating unchanged (Bullish) vs v60), MSFT#325 (rating unchanged (Bullish) vs v61), MSFT#326 (rating unchanged (Bullish) vs v62), NVDA#327 (rating unchanged (Bullish) vs v135), NVDA#328 (rating unchanged (Bullish) vs v136), NVDA#329 (rating unchanged (Bullish) vs v137), NVDA#330 (rating unchanged (Bullish) vs v138), NVDA#331 (rating unchanged (Bullish) vs v139), NVDA#332 (rating unchanged (Bullish) vs v140), NVDA#333 (rating unchanged (Bullish) vs v141), NVDA#334 (rating unchanged (Bullish) vs v142), NVDA#335 (rating unchanged (Bullish) vs v143), NVDA#336 (rating unchanged (Bullish) vs v144), NVDA#337 (rating unchanged (Bullish) vs v145), MSFT#338 (rating unchanged (Bullish) vs v63), MSFT#339 (rating unchanged (Bullish) vs v64), NVDA#340 (rating unchanged (Bullish) vs v146), NVDA#341 (rating unchanged (Bullish) vs v147), NVDA#342 (rating unchanged (Bullish) vs v148), NVDA#343 (rating unchanged (Bullish) vs v149), NVDA#354 (rating unchanged (Bullish) vs v150), NVDA#355 (rating unchanged (Bullish) vs v151), NVDA#356 (rating unchanged (Bullish) vs v152), NVDA#357 (rating unchanged (Bullish) vs v153), MSFT#358 (rating unchanged (Bullish) vs v65), NVDA#365 (rating unchanged (Bullish) vs v154), MSFT#369 (rating unchanged (Bullish) vs v66), NVDA#372 (rating unchanged (Bullish) vs v155), NVDA#373 (rating unchanged (Bullish) vs v156), MSFT#386 (rating unchanged (Bullish) vs v69), NVDA#389 (rating unchanged (Bullish) vs v158), MSFT#390 (rating unchanged (Bullish) vs v72), MSFT#391 (rating unchanged (Bullish) vs v73), MSFT#392 (rating unchanged (Bullish) vs v74), MSFT#393 (rating unchanged (Bullish) vs v75), NVDA#394 (rating unchanged (Bullish) vs v159), NVDA#395 (rating unchanged (Bullish) vs v160), NVDA#396 (rating unchanged (Bullish) vs v161), NVDA#397 (rating unchanged (Bullish) vs v162), NVDA#398 (rating unchanged (Bullish) vs v163), NVDA#399 (rating unchanged (Bullish) vs v164), NVDA#400 (rating unchanged (Bullish) vs v165), NVDA#401 (rating unchanged (Bullish) vs v166), NVDA#402 (rating unchanged (Bullish) vs v167), NVDA#403 (rating unchanged (Bullish) vs v168), NVDA#404 (rating unchanged (Bullish) vs v169), MSFT#405 (rating unchanged (Bullish) vs v76), MSFT#406 (rating unchanged (Bullish) vs v77), NVDA#407 (rating unchanged (Bullish) vs v170), NVDA#408 (rating unchanged (Bullish) vs v171), NVDA#409 (rating unchanged (Bullish) vs v172), NVDA#410 (rating unchanged (Bullish) vs v173), NVDA#414 (rating unchanged (Bullish) vs v174), NVDA#415 (rating unchanged (Bullish) vs v175), MSFT#417 (rating unchanged (Bullish) vs v78), MSFT#418 (rating unchanged (Bullish) vs v79), NVDA#429 (rating unchanged (Bullish) vs v176), NVDA#430 (rating unchanged (Bullish) vs v177), NVDA#431 (rating unchanged (Bullish) vs v178), NVDA#432 (rating unchanged (Bullish) vs v179), MSFT#433 (rating unchanged (Bullish) vs v80), NVDA#440 (rating unchanged (Bullish) vs v180), MSFT#453 (rating unchanged (Bullish) vs v81), NVDA#456 (rating unchanged (Bullish) vs v182), MSFT#457 (rating unchanged (Bullish) vs v84), MSFT#458 (rating unchanged (Bullish) vs v85), MSFT#459 (rating unchanged (Bullish) vs v86), MSFT#460 (rating unchanged (Bullish) vs v87), NVDA#461 (rating unchanged (Bullish) vs v183), NVDA#462 (rating unchanged (Bullish) vs v184), NVDA#463 (rating unchanged (Bullish) vs v185), NVDA#464 (rating unchanged (Bullish) vs v186), NVDA#465 (rating unchanged (Bullish) vs v187), NVDA#466 (rating unchanged (Bullish) vs v188), NVDA#467 (rating unchanged (Bullish) vs v189), NVDA#468 (rating unchanged (Bullish) vs v190), NVDA#469 (rating unchanged (Bullish) vs v191), NVDA#470 (rating unchanged (Bullish) vs v192), NVDA#471 (rating unchanged (Bullish) vs v193), MSFT#472 (rating unchanged (Bullish) vs v88), MSFT#473 (rating unchanged (Bullish) vs v89), NVDA#474 (rating unchanged (Bullish) vs v194), NVDA#475 (rating unchanged (Bullish) vs v195), NVDA#476 (rating unchanged (Bullish) vs v196), NVDA#477 (rating unchanged (Bullish) vs v197), NVDA#488 (rating unchanged (Bullish) vs v198), NVDA#489 (rating unchanged (Bullish) vs v199), NVDA#490 (rating unchanged (Bullish) vs v200), NVDA#491 (rating unchanged (Bullish) vs v201), MSFT#492 (rating unchanged (Bullish) vs v90), NVDA#499 (rating unchanged (Bullish) vs v202), NVDA#500 (rating unchanged (Bullish) vs v203), V#503 (rating unchanged (Bullish) vs v1), XOM#507 (rating unchanged (Bullish) vs v1), GOOGL#508 (rating unchanged (Bullish) vs v1), ADBE#509 (rating unchanged (Bullish) vs v1), GOOGL#510 (rating unchanged (Bullish) vs v2), ADBE#511 (rating unchanged (Bullish) vs v2), MSFT#528 (rating unchanged (Bullish) vs v91), NVDA#531 (rating unchanged (Bullish) vs v205), MSFT#533 (rating unchanged (Bullish) vs v94), MSFT#534 (rating unchanged (Bullish) vs v95), MSFT#535 (rating unchanged (Bullish) vs v96), MSFT#536 (rating unchanged (Bullish) vs v97), NVDA#537 (rating unchanged (Bullish) vs v206), NVDA#538 (rating unchanged (Bullish) vs v207), NVDA#539 (rating unchanged (Bullish) vs v208), NVDA#540 (rating unchanged (Bullish) vs v209), NVDA#541 (rating unchanged (Bullish) vs v210), NVDA#542 (rating unchanged (Bullish) vs v211), NVDA#543 (rating unchanged (Bullish) vs v212), NVDA#544 (rating unchanged (Bullish) vs v213), NVDA#545 (rating unchanged (Bullish) vs v214), NVDA#546 (rating unchanged (Bullish) vs v215), NVDA#547 (rating unchanged (Bullish) vs v216), MSFT#548 (rating unchanged (Bullish) vs v98), MSFT#549 (rating unchanged (Bullish) vs v99), NVDA#550 (rating unchanged (Bullish) vs v217), NVDA#551 (rating unchanged (Bullish) vs v218), NVDA#552 (rating unchanged (Bullish) vs v219), NVDA#553 (rating unchanged (Bullish) vs v220), NVDA#557 (rating unchanged (Bullish) vs v221), NVDA#558 (rating unchanged (Bullish) vs v222), MSFT#560 (rating unchanged (Bullish) vs v100), MSFT#561 (rating unchanged (Bullish) vs v101), NVDA#574 (rating unchanged (Bullish) vs v225), NVDA#575 (rating unchanged (Bullish) vs v226), MSFT#576 (rating unchanged (Bullish) vs v102), ADBE#583 (rating unchanged (Bullish) vs v3), ADBE#584 (rating unchanged (Bullish) vs v4), ADBE#585 (rating unchanged (Bullish) vs v5), ADBE#586 (rating unchanged (Bullish) vs v6), ABBV#588 (rating unchanged (Bullish) vs v2), ABBV#589 (rating unchanged (Bullish) vs v3), ABBV#590 (rating unchanged (Bullish) vs v4), ABBV#591 (rating unchanged (Bullish) vs v5), ABBV#592 (rating unchanged (Bullish) vs v6), AAPL#593 (recent postmortem exists (2026-09-12, within 14d)), ADBE#596 (recent postmortem exists (2026-09-12, within 14d)), ADBE#597 (rating unchanged (Very Bullish) vs v8), MSFT#598 (recent postmortem exists (2026-09-12, within 14d)), AAPL#599 (recent postmortem exists (2026-09-12, within 14d)), GOOGL#600 (rating unchanged (Neutral) vs v4), NVDA#601 (recent postmortem exists (2026-09-12, within 14d)); 90d due=0 written=0 already_done=0 deduped=325 skipped=0 deferred=0 memory_written=0 memory_disabled=0 memory_failed=0 memory_not_requested=0; deduped memos: NVDA#4 (rating unchanged (Bullish) vs v1), NVDA#5 (rating unchanged (Bullish) vs v2), NVDA#6 (rating unchanged (Bullish) vs v3), NVDA#7 (rating unchanged (Bullish) vs v4), NVDA#8 (rating unchanged (Bullish) vs v5), NVDA#9 (rating unchanged (Bullish) vs v6), NVDA#10 (rating unchanged (Bullish) vs v7), NVDA#11 (rating unchanged (Bullish) vs v8), MSFT#12 (rating unchanged (Bullish) vs v1), NVDA#13 (rating unchanged (Bullish) vs v9), NVDA#14 (rating unchanged (Bullish) vs v10), NVDA#15 (rating unchanged (Bullish) vs v11), NVDA#16 (rating unchanged (Bullish) vs v12), AAPL#17 (rating unchanged (Neutral) vs v1), NVDA#18 (rating unchanged (Bullish) vs v227), MSFT#19 (recent postmortem exists (2026-09-12, within 14d)), MSFT#20 (recent postmortem exists (2026-09-12, within 14d)), MSFT#23 (recent postmortem exists (2026-09-12, within 14d)), GOOGL#24 (recent postmortem exists (2026-09-12, within 14d)), AAPL#26 (recent postmortem exists (2026-09-12, within 14d)), AAPL#28 (recent postmortem exists (2026-09-12, within 14d)), MSFT#29 (rating unchanged (Bullish) vs v2), NVDA#32 (rating unchanged (Bullish) vs v14), NVDA#33 (rating unchanged (Bullish) vs v15), NVDA#34 (rating unchanged (Bullish) vs v16), MSFT#35 (rating unchanged (Bullish) vs v5), MSFT#36 (rating unchanged (Bullish) vs v6), MSFT#37 (rating unchanged (Bullish) vs v7), MSFT#38 (rating unchanged (Bullish) vs v8), NVDA#39 (rating unchanged (Bullish) vs v17), NVDA#40 (rating unchanged (Bullish) vs v18), NVDA#41 (rating unchanged (Bullish) vs v19), NVDA#42 (rating unchanged (Bullish) vs v20), NVDA#43 (rating unchanged (Bullish) vs v21), NVDA#44 (rating unchanged (Bullish) vs v22), NVDA#45 (rating unchanged (Bullish) vs v23), NVDA#46 (rating unchanged (Bullish) vs v24), NVDA#47 (rating unchanged (Bullish) vs v25), NVDA#48 (rating unchanged (Bullish) vs v26), NVDA#49 (rating unchanged (Bullish) vs v27), MSFT#50 (rating unchanged (Bullish) vs v9), MSFT#51 (rating unchanged (Bullish) vs v10), NVDA#52 (rating unchanged (Bullish) vs v28), NVDA#53 (rating unchanged (Bullish) vs v29), NVDA#54 (rating unchanged (Bullish) vs v30), NVDA#55 (rating unchanged (Bullish) vs v31), NVDA#59 (rating unchanged (Bullish) vs v32), NVDA#60 (rating unchanged (Bullish) vs v33), MSFT#62 (rating unchanged (Bullish) vs v11), MSFT#63 (rating unchanged (Bullish) vs v12), NVDA#74 (rating unchanged (Bullish) vs v34), NVDA#75 (rating unchanged (Bullish) vs v35), NVDA#76 (rating unchanged (Bullish) vs v36), NVDA#77 (rating unchanged (Bullish) vs v37), MSFT#78 (rating unchanged (Bullish) vs v13), NVDA#88 (rating unchanged (Bullish) vs v38), NVDA#89 (rating unchanged (Bullish) vs v39), NVDA#90 (rating unchanged (Bullish) vs v40), NVDA#91 (rating unchanged (Bullish) vs v41), NVDA#92 (rating unchanged (Bullish) vs v42), NVDA#93 (rating unchanged (Bullish) vs v43), NVDA#94 (rating unchanged (Bullish) vs v44), NVDA#95 (rating unchanged (Bullish) vs v45), NVDA#96 (rating unchanged (Bullish) vs v46), NVDA#97 (rating unchanged (Bullish) vs v47), NVDA#98 (rating unchanged (Bullish) vs v48), MSFT#99 (rating unchanged (Bullish) vs v14), NVDA#100 (rating unchanged (Bullish) vs v49), NVDA#101 (rating unchanged (Bullish) vs v50), NVDA#103 (rating unchanged (Bullish) vs v51), MSFT#104 (rating unchanged (Bullish) vs v15), MSFT#105 (rating unchanged (Bullish) vs v16), NVDA#106 (rating unchanged (Bullish) vs v52), MSFT#107 (rating unchanged (Bullish) vs v17), NVDA#123 (rating unchanged (Bullish) vs v54), NVDA#124 (rating unchanged (Bullish) vs v55), MSFT#126 (rating unchanged (Bullish) vs v18), MSFT#127 (rating unchanged (Bullish) vs v19), MSFT#128 (rating unchanged (Bullish) vs v20), NVDA#131 (rating unchanged (Bullish) vs v56), NVDA#132 (rating unchanged (Bullish) vs v57), NVDA#133 (rating unchanged (Bullish) vs v58), MSFT#134 (rating unchanged (Bullish) vs v23), MSFT#135 (rating unchanged (Bullish) vs v24), MSFT#136 (rating unchanged (Bullish) vs v25), MSFT#137 (rating unchanged (Bullish) vs v26), NVDA#138 (rating unchanged (Bullish) vs v59), NVDA#139 (rating unchanged (Bullish) vs v60), NVDA#140 (rating unchanged (Bullish) vs v61), NVDA#141 (rating unchanged (Bullish) vs v62), NVDA#142 (rating unchanged (Bullish) vs v63), NVDA#143 (rating unchanged (Bullish) vs v64), NVDA#144 (rating unchanged (Bullish) vs v65), NVDA#145 (rating unchanged (Bullish) vs v66), NVDA#146 (rating unchanged (Bullish) vs v67), NVDA#147 (rating unchanged (Bullish) vs v68), NVDA#148 (rating unchanged (Bullish) vs v69), MSFT#149 (rating unchanged (Bullish) vs v27), MSFT#150 (rating unchanged (Bullish) vs v28), NVDA#151 (rating unchanged (Bullish) vs v70), NVDA#152 (rating unchanged (Bullish) vs v71), NVDA#153 (rating unchanged (Bullish) vs v72), NVDA#154 (rating unchanged (Bullish) vs v73), MSFT#167 (rating unchanged (Bullish) vs v29), NVDA#170 (rating unchanged (Bullish) vs v75), NVDA#171 (rating unchanged (Bullish) vs v76), NVDA#172 (rating unchanged (Bullish) vs v77), MSFT#173 (rating unchanged (Bullish) vs v32), MSFT#174 (rating unchanged (Bullish) vs v33), MSFT#175 (rating unchanged (Bullish) vs v34), MSFT#176 (rating unchanged (Bullish) vs v35), NVDA#177 (rating unchanged (Bullish) vs v78), NVDA#178 (rating unchanged (Bullish) vs v79), NVDA#179 (rating unchanged (Bullish) vs v80), NVDA#180 (rating unchanged (Bullish) vs v81), NVDA#181 (rating unchanged (Bullish) vs v82), NVDA#182 (rating unchanged (Bullish) vs v83), NVDA#183 (rating unchanged (Bullish) vs v84), NVDA#184 (rating unchanged (Bullish) vs v85), NVDA#185 (rating unchanged (Bullish) vs v86), NVDA#186 (rating unchanged (Bullish) vs v87), NVDA#187 (rating unchanged (Bullish) vs v88), MSFT#188 (rating unchanged (Bullish) vs v36), MSFT#189 (rating unchanged (Bullish) vs v37), NVDA#190 (rating unchanged (Bullish) vs v89), NVDA#191 (rating unchanged (Bullish) vs v90), NVDA#192 (rating unchanged (Bullish) vs v91), NVDA#193 (rating unchanged (Bullish) vs v92), NVDA#197 (rating unchanged (Bullish) vs v93), NVDA#198 (rating unchanged (Bullish) vs v94), MSFT#200 (rating unchanged (Bullish) vs v38), MSFT#201 (rating unchanged (Bullish) vs v39), NVDA#212 (rating unchanged (Bullish) vs v95), NVDA#213 (rating unchanged (Bullish) vs v96), NVDA#214 (rating unchanged (Bullish) vs v97), NVDA#215 (rating unchanged (Bullish) vs v98), MSFT#216 (rating unchanged (Bullish) vs v40), NVDA#226 (rating unchanged (Bullish) vs v99), NVDA#227 (rating unchanged (Bullish) vs v100), MSFT#229 (rating unchanged (Bullish) vs v41), MSFT#230 (rating unchanged (Bullish) vs v42), NVDA#231 (rating unchanged (Bullish) vs v101), NVDA#232 (rating unchanged (Bullish) vs v102), MSFT#236 (rating unchanged (Bullish) vs v43), NVDA#240 (rating unchanged (Bullish) vs v103), MSFT#253 (rating unchanged (Bullish) vs v46), NVDA#256 (rating unchanged (Bullish) vs v105), NVDA#257 (rating unchanged (Bullish) vs v106), NVDA#258 (rating unchanged (Bullish) vs v107), MSFT#259 (rating unchanged (Bullish) vs v49), MSFT#260 (rating unchanged (Bullish) vs v50), MSFT#261 (rating unchanged (Bullish) vs v51), MSFT#262 (rating unchanged (Bullish) vs v52), NVDA#263 (rating unchanged (Bullish) vs v108), NVDA#264 (rating unchanged (Bullish) vs v109), NVDA#265 (rating unchanged (Bullish) vs v110), NVDA#266 (rating unchanged (Bullish) vs v111), NVDA#267 (rating unchanged (Bullish) vs v112), NVDA#268 (rating unchanged (Bullish) vs v113), NVDA#269 (rating unchanged (Bullish) vs v114), NVDA#270 (rating unchanged (Bullish) vs v115), NVDA#271 (rating unchanged (Bullish) vs v116), NVDA#272 (rating unchanged (Bullish) vs v117), NVDA#273 (rating unchanged (Bullish) vs v118), MSFT#274 (rating unchanged (Bullish) vs v53), MSFT#275 (rating unchanged (Bullish) vs v54), NVDA#276 (rating unchanged (Bullish) vs v119), NVDA#277 (rating unchanged (Bullish) vs v120), NVDA#278 (rating unchanged (Bullish) vs v121), NVDA#279 (rating unchanged (Bullish) vs v122), NVDA#290 (rating unchanged (Bullish) vs v123), NVDA#291 (rating unchanged (Bullish) vs v124), NVDA#292 (rating unchanged (Bullish) vs v125), NVDA#293 (rating unchanged (Bullish) vs v126), MSFT#294 (rating unchanged (Bullish) vs v55), NVDA#301 (rating unchanged (Bullish) vs v127), NVDA#302 (rating unchanged (Bullish) vs v128), NVDA#303 (rating unchanged (Bullish) vs v129), NVDA#304 (rating unchanged (Bullish) vs v130), NVDA#305 (rating unchanged (Bullish) vs v131), NVDA#306 (rating unchanged (Bullish) vs v132), MSFT#319 (rating unchanged (Bullish) vs v56), NVDA#322 (rating unchanged (Bullish) vs v134), MSFT#323 (rating unchanged (Bullish) vs v59), MSFT#324 (rating unchanged (Bullish) vs v60), MSFT#325 (rating unchanged (Bullish) vs v61), MSFT#326 (rating unchanged (Bullish) vs v62), NVDA#327 (rating unchanged (Bullish) vs v135), NVDA#328 (rating unchanged (Bullish) vs v136), NVDA#329 (rating unchanged (Bullish) vs v137), NVDA#330 (rating unchanged (Bullish) vs v138), NVDA#331 (rating unchanged (Bullish) vs v139), NVDA#332 (rating unchanged (Bullish) vs v140), NVDA#333 (rating unchanged (Bullish) vs v141), NVDA#334 (rating unchanged (Bullish) vs v142), NVDA#335 (rating unchanged (Bullish) vs v143), NVDA#336 (rating unchanged (Bullish) vs v144), NVDA#337 (rating unchanged (Bullish) vs v145), MSFT#338 (rating unchanged (Bullish) vs v63), MSFT#339 (rating unchanged (Bullish) vs v64), NVDA#340 (rating unchanged (Bullish) vs v146), NVDA#341 (rating unchanged (Bullish) vs v147), NVDA#342 (rating unchanged (Bullish) vs v148), NVDA#343 (rating unchanged (Bullish) vs v149), NVDA#354 (rating unchanged (Bullish) vs v150), NVDA#355 (rating unchanged (Bullish) vs v151), NVDA#356 (rating unchanged (Bullish) vs v152), NVDA#357 (rating unchanged (Bullish) vs v153), MSFT#358 (rating unchanged (Bullish) vs v65), NVDA#365 (rating unchanged (Bullish) vs v154), MSFT#369 (rating unchanged (Bullish) vs v66), NVDA#372 (rating unchanged (Bullish) vs v155), NVDA#373 (rating unchanged (Bullish) vs v156), MSFT#386 (rating unchanged (Bullish) vs v69), NVDA#389 (rating unchanged (Bullish) vs v158), MSFT#390 (rating unchanged (Bullish) vs v72), MSFT#391 (rating unchanged (Bullish) vs v73), MSFT#392 (rating unchanged (Bullish) vs v74), MSFT#393 (rating unchanged (Bullish) vs v75), NVDA#394 (rating unchanged (Bullish) vs v159), NVDA#395 (rating unchanged (Bullish) vs v160), NVDA#396 (rating unchanged (Bullish) vs v161), NVDA#397 (rating unchanged (Bullish) vs v162), NVDA#398 (rating unchanged (Bullish) vs v163), NVDA#399 (rating unchanged (Bullish) vs v164), NVDA#400 (rating unchanged (Bullish) vs v165), NVDA#401 (rating unchanged (Bullish) vs v166), NVDA#402 (rating unchanged (Bullish) vs v167), NVDA#403 (rating unchanged (Bullish) vs v168), NVDA#404 (rating unchanged (Bullish) vs v169), MSFT#405 (rating unchanged (Bullish) vs v76), MSFT#406 (rating unchanged (Bullish) vs v77), NVDA#407 (rating unchanged (Bullish) vs v170), NVDA#408 (rating unchanged (Bullish) vs v171), NVDA#409 (rating unchanged (Bullish) vs v172), NVDA#410 (rating unchanged (Bullish) vs v173), NVDA#414 (rating unchanged (Bullish) vs v174), NVDA#415 (rating unchanged (Bullish) vs v175), MSFT#417 (rating unchanged (Bullish) vs v78), MSFT#418 (rating unchanged (Bullish) vs v79), NVDA#429 (rating unchanged (Bullish) vs v176), NVDA#430 (rating unchanged (Bullish) vs v177), NVDA#431 (rating unchanged (Bullish) vs v178), NVDA#432 (rating unchanged (Bullish) vs v179), MSFT#433 (rating unchanged (Bullish) vs v80), NVDA#440 (rating unchanged (Bullish) vs v180), MSFT#453 (rating unchanged (Bullish) vs v81), NVDA#456 (rating unchanged (Bullish) vs v182), MSFT#457 (rating unchanged (Bullish) vs v84), MSFT#458 (rating unchanged (Bullish) vs v85), MSFT#459 (rating unchanged (Bullish) vs v86), MSFT#460 (rating unchanged (Bullish) vs v87), NVDA#461 (rating unchanged (Bullish) vs v183), NVDA#462 (rating unchanged (Bullish) vs v184), NVDA#463 (rating unchanged (Bullish) vs v185), NVDA#464 (rating unchanged (Bullish) vs v186), NVDA#465 (rating unchanged (Bullish) vs v187), NVDA#466 (rating unchanged (Bullish) vs v188), NVDA#467 (rating unchanged (Bullish) vs v189), NVDA#468 (rating unchanged (Bullish) vs v190), NVDA#469 (rating unchanged (Bullish) vs v191), NVDA#470 (rating unchanged (Bullish) vs v192), NVDA#471 (rating unchanged (Bullish) vs v193), MSFT#472 (rating unchanged (Bullish) vs v88), MSFT#473 (rating unchanged (Bullish) vs v89), NVDA#474 (rating unchanged (Bullish) vs v194), NVDA#475 (rating unchanged (Bullish) vs v195), NVDA#476 (rating unchanged (Bullish) vs v196), NVDA#477 (rating unchanged (Bullish) vs v197), NVDA#488 (rating unchanged (Bullish) vs v198), NVDA#489 (rating unchanged (Bullish) vs v199), NVDA#490 (rating unchanged (Bullish) vs v200), NVDA#491 (rating unchanged (Bullish) vs v201), MSFT#492 (rating unchanged (Bullish) vs v90), NVDA#499 (rating unchanged (Bullish) vs v202), NVDA#500 (rating unchanged (Bullish) vs v203), V#503 (rating unchanged (Bullish) vs v1), XOM#507 (rating unchanged (Bullish) vs v1), GOOGL#508 (rating unchanged (Bullish) vs v1), ADBE#509 (rating unchanged (Bullish) vs v1), GOOGL#510 (rating unchanged (Bullish) vs v2), ADBE#511 (rating unchanged (Bullish) vs v2), MSFT#528 (rating unchanged (Bullish) vs v91), NVDA#531 (rating unchanged (Bullish) vs v205), MSFT#533 (rating unchanged (Bullish) vs v94), MSFT#534 (rating unchanged (Bullish) vs v95), MSFT#535 (rating unchanged (Bullish) vs v96), MSFT#536 (rating unchanged (Bullish) vs v97), NVDA#537 (rating unchanged (Bullish) vs v206), NVDA#538 (rating unchanged (Bullish) vs v207), NVDA#539 (rating unchanged (Bullish) vs v208), NVDA#540 (rating unchanged (Bullish) vs v209), NVDA#541 (rating unchanged (Bullish) vs v210), NVDA#542 (rating unchanged (Bullish) vs v211), NVDA#543 (rating unchanged (Bullish) vs v212), NVDA#544 (rating unchanged (Bullish) vs v213), NVDA#545 (rating unchanged (Bullish) vs v214), NVDA#546 (rating unchanged (Bullish) vs v215), NVDA#547 (rating unchanged (Bullish) vs v216), MSFT#548 (rating unchanged (Bullish) vs v98), MSFT#549 (rating unchanged (Bullish) vs v99), NVDA#550 (rating unchanged (Bullish) vs v217), NVDA#551 (rating unchanged (Bullish) vs v218), NVDA#552 (rating unchanged (Bullish) vs v219), NVDA#553 (rating unchanged (Bullish) vs v220), NVDA#557 (rating unchanged (Bullish) vs v221), NVDA#558 (rating unchanged (Bullish) vs v222), MSFT#560 (rating unchanged (Bullish) vs v100), MSFT#561 (rating unchanged (Bullish) vs v101), NVDA#574 (rating unchanged (Bullish) vs v225), NVDA#575 (rating unchanged (Bullish) vs v226), MSFT#576 (rating unchanged (Bullish) vs v102), ADBE#583 (rating unchanged (Bullish) vs v3), ADBE#584 (rating unchanged (Bullish) vs v4), ADBE#585 (rating unchanged (Bullish) vs v5), ADBE#586 (rating unchanged (Bullish) vs v6), ABBV#587 (recent postmortem exists (2026-09-12, within 14d)), ABBV#588 (rating unchanged (Bullish) vs v2), ABBV#589 (rating unchanged (Bullish) vs v3), ABBV#590 (rating unchanged (Bullish) vs v4), ABBV#591 (rating unchanged (Bullish) vs v5), ABBV#592 (rating unchanged (Bullish) vs v6), AAPL#593 (recent postmortem exists (2026-09-12, within 14d)), ADBE#596 (recent postmortem exists (2026-09-12, within 14d)), ADBE#597 (rating unchanged (Very Bullish) vs v8)"
+    },
+    "scorecard_loop": {
+      "last_run_at": "2026-09-21T03:49:49.190216",
+      "success": true,
+      "note": "as_of=2026-09-20 daily=1 enqueued=1 claimed=1 written=170 skipped=0 failed=0 recovered=0 expired=0 gc=0 review_queued=0"
+    }
+  },
+  "local_raw_receipts": {
+    "location": ".claude/memory/closeout-2026-09-21 (gitignored)",
+    "sha256": {
+      "abbv-v7.json": "372d196a61abb2f7854cbb00f8723daddd62a4e17cae6c1dfe8afb3e6e2c934e",
+      "web-deploys.json": "bc39c3151ac3315179e698db0eb27def2983c79a8bf4f7c701ace46dcb0f7335",
+      "runtime-memory.json": "8ec7075bf0ee6aa8a9a52ad7995e22f3c2410586f6246ffd403ede9d990044b9",
+      "regen-jobs.json": "a4dbb65b23701c26723199bd452d0eedde880024761aa03f7a56a59e530fbadd",
+      "runtime-logs.json": "46359a0a141507869d07e348637518c891091505790def8e60c8a5fe8f11ff45",
+      "outcomes.json": "3011f423a3c5e55943dc52e3949fc80d3308d944b3fc57d488f64701366e13c4",
+      "health-after.json": "6fbbd7a537cdcf86aaf0c294b7704fed45e03a9a1b490e0907a03502ebdd98ba",
+      "worker-events.json": "19e85451ca24fc916b4bbcc4014415d4ee7814de2396f9e07d7bbf415ab0adb0",
+      "coverage.json": "3671748d747456cb72321e35da3d118da0ea4cd0d0cd20611400049b515f232a",
+      "worker-deploys.json": "41f7e9625e2cdd4045d7daf62f8351842e899d2389cb67a40b059ff1b21d9d47",
+      "monitoring.json": "7d8cacee6a739f810ccef81453e12c5357bd36f06f4855ca6d9b89b769aa265e",
+      "industry-jobs.json": "f68fcf2bbdb8c4cf282e1c3193b6aa9f7a6255f3c6299025bedb16bee9d1b76d",
+      "health-before.json": "cb2f71016ec365d6b0dc3c381af6fb38e77bbcc1685f6b8cceb1be8cfe222985"
+    }
+  }
+}
