@@ -2011,6 +2011,11 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
         macro_snapshot_at_memo=macro_snapshot_at_memo,
         macro_regime_at_memo=macro_regime_at_memo,
         scorecard=memo_scorecard,
+        # W2a write-time provenance: facts the payload cannot recover later.
+        # Without keys every LLM-intended section is the deterministic
+        # stand-in by design, and the presenter hides it from readers; the
+        # verdict stage adds "thesis" and "mispricing" (VerdictOutcome.apply).
+        section_provenance={"v": 1, "llm_configured": bool(settings.has_llm)},
     )
 
     # Wave 9 — surface deep-research counters on `memo.scores` so the
@@ -2207,6 +2212,10 @@ def _build_verdict(
         None,
     )
     rewrite_fired = is_anti_pattern or (stated_word is not None and stated_word != expected_word)
+    # W2a: whether the builder's text actually replaced the PM's thesis.
+    # `rewrite_fired` alone is not enough — the rewrite is rejected when it
+    # would itself be the anti-pattern, and the PM's words then stand.
+    thesis_rewritten = False
     if rewrite_fired:
         # B7 — log every rewrite with the original thesis so the
         # false-positive rate of this guard is measurable in prod logs.
@@ -2220,6 +2229,7 @@ def _build_verdict(
                 profile, findings, dcf, ticker, rating=memo.rating_label,
             )
             if rewritten and not _looks_like_anti_pattern_thesis(rewritten):
+                thesis_rewritten = rewritten != thesis
                 thesis = rewritten
         except Exception as exc:  # pragma: no cover — never break the memo
             # (b) the thesis the reader sees keeps the anti-pattern form or
@@ -2260,6 +2270,7 @@ def _build_verdict(
     # the thesis guards so `our_view` quotes the final thesis — hence the
     # draft carrying the fields decided above; `memo` itself is untouched.
     mispricing = memo.mispricing_thesis
+    mispricing_fallback = False
     if not (mispricing.consensus_view or mispricing.our_view or mispricing.gap):
         draft = memo.model_copy(
             update={"valuation_verdict": valuation_verdict, "one_sentence_thesis": thesis},
@@ -2269,6 +2280,9 @@ def _build_verdict(
         mispricing = _guarded(
             "Mispricing Fallback", _build_mispricing_fallback, draft, fallback=mispricing,
         )
+        # W2a: the card is the template only when the fallback built one; a
+        # crashed fallback leaves the (empty) PM card, which reads not_produced.
+        mispricing_fallback = bool(mispricing.consensus_view or mispricing.our_view or mispricing.gap)
 
     # Phase 6: pull through cross-sector relevance from the sector agent's
     # finding into the PM memo so users see related-name implications without
@@ -2320,6 +2334,8 @@ def _build_verdict(
         final_verdict=final_verdict,
         extra_scores=extra_scores,
         thesis_rewrite_fired=rewrite_fired,
+        thesis_rewritten=thesis_rewritten,
+        mispricing_fallback=mispricing_fallback,
         degradations=notes,
     )
 

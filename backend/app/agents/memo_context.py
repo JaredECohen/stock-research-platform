@@ -162,6 +162,12 @@ class VerdictOutcome:
     final_verdict: str
     extra_scores: dict[str, float] = field(default_factory=dict)  # cross_sector_relevance_count
     thesis_rewrite_fired: bool = False
+    # W2a write-time provenance. `thesis_rewritten`: the thesis builder's text
+    # replaced the PM's (not merely that the guard fired). `mispricing_fallback`:
+    # the mispricing card is `_build_mispricing_fallback`'s template. Neither
+    # fact is recoverable from the stored text alone.
+    thesis_rewritten: bool = False
+    mispricing_fallback: bool = False
     # Failures the stage swallowed on the reader's behalf. Returned rather
     # than recorded so the function stays pure; the orchestrator applies
     # them to the run's DegradationLog in this order.
@@ -177,6 +183,11 @@ class VerdictOutcome:
         memo.one_sentence_thesis = self.one_sentence_thesis
         memo.mispricing_thesis = self.mispricing_thesis
         memo.final_verdict = self.final_verdict
+        memo.section_provenance = {
+            **(memo.section_provenance or {}),
+            "thesis": "rewrite" if self.thesis_rewritten else "pm",
+            "mispricing": "fallback" if self.mispricing_fallback else "pm",
+        }
         if self.extra_scores and isinstance(memo.scores, dict):
             memo.scores = {**memo.scores, **self.extra_scores}
         for note in self.degradations:

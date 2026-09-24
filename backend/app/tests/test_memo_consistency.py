@@ -806,6 +806,43 @@ def test_build_verdict_soft_notes_dedupe_on_apply(monkeypatch):
     assert log.degraded_agents() == ["Thesis Builder"]
 
 
+def test_verdict_outcome_records_rewrite_and_mispricing_provenance(monkeypatch):
+    """W2a §6: the two facts no stored text can recover are written at
+    verdict time. `thesis_rewritten` is set only when the builder's text
+    actually replaced the PM's (the guard firing is not enough: a rejected
+    rewrite leaves the PM's words), and `mispricing_fallback` only when the
+    fallback built the card."""
+    # The saved anti-pattern counterexample: rewrite fires and replaces.
+    anti = "TEST Corp — Technology / Software, AI hook; DCF base case +25% suggests material upside."
+    memo = make_memo(rating_label="Bullish", one_sentence_thesis=anti,
+                     section_provenance={"v": 1, "llm_configured": True})
+    out = _verdict_for(memo)
+    assert out.thesis_rewrite_fired and out.thesis_rewritten
+    assert out.mispricing_fallback  # the PM left the card blank
+    out.apply(memo, DegradationLog())
+    assert memo.section_provenance == {
+        "v": 1, "llm_configured": True, "thesis": "rewrite", "mispricing": "fallback",
+    }
+
+    # A consistent PM thesis and a populated PM card: nothing template.
+    pm_card = MispricingThesis(consensus_view="Street sees 10%.", our_view="We see 15%.", gap="5pp.")
+    clean = make_memo(rating_label="Bullish", mispricing_thesis=pm_card,
+                      one_sentence_thesis="TEST is undervalued — cloud share gains.")
+    out = _verdict_for(clean)
+    assert not out.thesis_rewrite_fired and not out.thesis_rewritten
+    assert not out.mispricing_fallback
+    out.apply(clean, DegradationLog())
+    assert clean.section_provenance == {"thesis": "pm", "mispricing": "pm"}
+
+    # The guard fires but the rewrite is rejected (it would itself be the
+    # anti-pattern): the PM's thesis stands, so it is not a rewrite.
+    monkeypatch.setattr(graph, "_build_thesis_from_findings", lambda *a, **k: anti)
+    fired = make_memo(rating_label="Bearish", one_sentence_thesis="TEST is undervalued — great franchise.")
+    out = _verdict_for(fired)
+    assert out.thesis_rewrite_fired and not out.thesis_rewritten
+    assert out.one_sentence_thesis.startswith("TEST is undervalued — great franchise")
+
+
 # ---------------------------------------------------------------------------
 # Phase 6 — the scorecard informs the memo; it does not move the rating
 # ---------------------------------------------------------------------------

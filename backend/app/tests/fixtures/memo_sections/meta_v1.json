@@ -1,0 +1,961 @@
+{
+ "agent_influence": {
+  "comps": 1.0,
+  "earnings": -0.1673,
+  "filing": 0.0,
+  "macro": 0.4675,
+  "risk": 0.0,
+  "sector": 0.4048,
+  "technical": 0.0,
+  "valuation": -0.0984
+ },
+ "bear_case": {
+  "headline": "Synthetic bear_case headline 7 for the meta_v1 fixture.",
+  "key_points": [
+   "Synthetic bear_case point 8 for the meta_v1 fixture.",
+   "Synthetic bear_case point 9 for the meta_v1 fixture.",
+   "Synthetic bear_case point 10 for the meta_v1 fixture.",
+   "Synthetic bear_case point 11 for the meta_v1 fixture.",
+   "Synthetic bear_case point 12 for the meta_v1 fixture.",
+   "DCF driver — Synthetic driver 107: synthetic rationale for the meta_v1 fixture.",
+   "DCF driver — Synthetic driver 108: synthetic rationale for the meta_v1 fixture.",
+   "DCF driver — Synthetic driver 109: synthetic rationale for the meta_v1 fixture.",
+   "DCF bear case implies $366.08 (-44%).",
+   "Risk lens: DCF bear scenario maps explicit downside"
+  ]
+ },
+ "bull_case": {
+  "headline": "Synthetic bull_case headline 1 for the meta_v1 fixture.",
+  "key_points": [
+   "Synthetic bull_case point 2 for the meta_v1 fixture.",
+   "Synthetic bull_case point 3 for the meta_v1 fixture.",
+   "Synthetic bull_case point 4 for the meta_v1 fixture.",
+   "Synthetic bull_case point 5 for the meta_v1 fixture.",
+   "Synthetic bull_case point 6 for the meta_v1 fixture.",
+   "DCF driver — Synthetic driver 104: synthetic rationale for the meta_v1 fixture.",
+   "DCF driver — Synthetic driver 105: synthetic rationale for the meta_v1 fixture.",
+   "DCF driver — Synthetic driver 106: synthetic rationale for the meta_v1 fixture.",
+   "DCF bull case implies $1,162.68 (+79%)."
+  ]
+ },
+ "business_summary": "Synthetic business description 103 for the meta_v1 fixture.",
+ "catalysts": [
+  {
+   "detail": "Synthetic analyst point 19 for the meta_v1 fixture.",
+   "horizon": "medium_term",
+   "impact": "medium",
+   "title": "Synthetic analyst point 19 for the meta_v1 fixture."
+  },
+  {
+   "detail": "Synthetic analyst point 21 for the meta_v1 fixture.",
+   "horizon": "medium_term",
+   "impact": "medium",
+   "title": "Synthetic analyst point 21 for the meta_v1 fixture."
+  },
+  {
+   "detail": "Quarterly print expected on 2026-10-28; tone + guidance the swing factor.",
+   "horizon": "near_term",
+   "impact": "medium",
+   "title": "Next earnings: 2026-10-28"
+  }
+ ],
+ "company_name": "Meta Platforms, Inc.",
+ "comps_agent_view": {
+  "agent": "Comps Analyst",
+  "confidence": 0.7,
+  "data": {},
+  "evidence": [],
+  "headline": "META trades at a 15% EV/EBITDA discount to peers with above-peer growth.",
+  "key_points": [
+   "EV/EBITDA: target 16.1x vs peer median 19.0x.",
+   "Op margin: 41% vs peers 32%.",
+   "Growth: +22% vs peers +15%.",
+   "FCF yield: 2.8% vs peers 1.8%.",
+   "Op margin vs own 8y median 39% — +7% delta."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+  "sources": [],
+  "summary": "Peer set: GOOGL, MSFT, AMZN. Trades at a -15.0% discount to peers on EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median. Own-history context: Operating margin running above its own multi-year median."
+ },
+ "confidence_score": 70.81411764705882,
+ "dcf_initial_summary": {},
+ "dcf_pm_adjustment_headline": "",
+ "dcf_pm_adjustments": [],
+ "dcf_summary": {
+  "base_implied_price": 708.9303286367508,
+  "base_upside": 0.0939776378203954,
+  "bear_implied_price": 366.0839443044916,
+  "bear_upside": -0.4350817951260102,
+  "bull_implied_price": 1162.6842269331853,
+  "bull_upside": 0.7941827182895628,
+  "current_price": 648.03,
+  "summary": "Base case implied price $708.93 vs current $648.03 (+9.4%). Bull $1,162.68 (+79.4%) | Bear $366.08 (-43.5%). ⚠ Model warnings: 0 errors, 1 warns",
+  "terminal_growth": 0.03,
+  "tv_clamped": false,
+  "wacc": 0.0902
+ },
+ "degradation_events": [
+  {
+   "agent": "LLM provider",
+   "error_type": "ProviderFailover",
+   "message": "failed over from anthropic to openai: call_failed"
+  },
+  {
+   "agent": "Risk Committee",
+   "error_type": "CriticUnavailable",
+   "message": "Live critic unavailable; only rule-based checks were completed."
+  }
+ ],
+ "degraded_agents": [
+  "LLM provider",
+  "Risk Committee"
+ ],
+ "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+ "earnings_agent_view": {
+  "agent": "Earnings Analyst",
+  "confidence": 0.82,
+  "data": {},
+  "evidence": [],
+  "headline": "Synthetic analyst headline 26 for the meta_v1 fixture.",
+  "key_points": [
+   "Synthetic analyst point 28 for the meta_v1 fixture.",
+   "Synthetic analyst point 29 for the meta_v1 fixture.",
+   "Synthetic analyst point 30 for the meta_v1 fixture.",
+   "Synthetic analyst point 31 for the meta_v1 fixture.",
+   "Synthetic analyst point 32 for the meta_v1 fixture.",
+   "Synthetic analyst point 33 for the meta_v1 fixture.",
+   "Synthetic analyst point 34 for the meta_v1 fixture.",
+   "Synthetic analyst point 35 for the meta_v1 fixture.",
+   "Synthetic analyst point 36 for the meta_v1 fixture.",
+   "Synthetic analyst point 37 for the meta_v1 fixture."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+  "sources": [],
+  "summary": "Synthetic analyst summary 27 for the meta_v1 fixture."
+ },
+ "earnings_qoq_delta": null,
+ "extra_agent_views": {},
+ "filing_agent_view": {
+  "agent": "Filing Analyst",
+  "confidence": 0.82,
+  "data": {},
+  "evidence": [],
+  "headline": "Synthetic analyst headline 38 for the meta_v1 fixture.",
+  "key_points": [
+   "Synthetic analyst point 40 for the meta_v1 fixture.",
+   "Synthetic analyst point 41 for the meta_v1 fixture.",
+   "Synthetic analyst point 42 for the meta_v1 fixture.",
+   "Synthetic analyst point 43 for the meta_v1 fixture.",
+   "Synthetic analyst point 44 for the meta_v1 fixture.",
+   "Synthetic analyst point 45 for the meta_v1 fixture.",
+   "Synthetic analyst point 46 for the meta_v1 fixture."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+  "sources": [],
+  "summary": "Synthetic analyst summary 39 for the meta_v1 fixture."
+ },
+ "final_pm_view": "Synthetic PM view 95 for the meta_v1 fixture.",
+ "final_verdict": "PM final view: Neutral (confidence 70). Synthetic thesis 96 for the meta_v1 fixture. Cohort placement: see sector view for KPI quartile context. Cross-sector pull-through: GOOG, GOOGL, DIS. Key disagreement: Synthetic key disagreement 13 for the meta_v1 fixture. Watch items: Synthetic bear_case point 9 for the meta_v1 fixture.",
+ "forward_catalysts": [],
+ "generated_at": "2026-09-13T02:00:21.481704",
+ "generation_mode": "live",
+ "intake_decision": {
+  "rationale": "Synthetic intake rationale 64 for the meta_v1 fixture.",
+  "skipped": [
+   "technical"
+  ]
+ },
+ "key_risks": [
+  {
+   "detail": "Synthetic bear_case point 8 for the meta_v1 fixture.",
+   "severity": "medium",
+   "title": "Synthetic bear_case point 8 for the meta_v1 fixture.",
+   "type": "company"
+  },
+  {
+   "detail": "Synthetic bear_case point 9 for the meta_v1 fixture.",
+   "severity": "high",
+   "title": "Synthetic bear_case point 9 for the meta_v1 fixture.",
+   "type": "regulatory"
+  },
+  {
+   "detail": "Synthetic bear_case point 10 for the meta_v1 fixture.",
+   "severity": "medium",
+   "title": "Synthetic bear_case point 10 for the meta_v1 fixture.",
+   "type": "valuation"
+  },
+  {
+   "detail": "Synthetic bear_case point 11 for the meta_v1 fixture.",
+   "severity": "medium",
+   "title": "Synthetic bear_case point 11 for the meta_v1 fixture.",
+   "type": "valuation"
+  }
+ ],
+ "macro_regime_at_memo": "soft_landing",
+ "macro_sensitivity": {
+  "agent": "Macro Analyst",
+  "confidence": 0.72,
+  "data": {},
+  "evidence": [],
+  "headline": "Synthetic analyst headline 57 for the meta_v1 fixture.",
+  "key_points": [
+   "Synthetic analyst point 59 for the meta_v1 fixture.",
+   "Synthetic analyst point 60 for the meta_v1 fixture.",
+   "Synthetic analyst point 61 for the meta_v1 fixture.",
+   "Synthetic analyst point 62 for the meta_v1 fixture.",
+   "Synthetic analyst point 63 for the meta_v1 fixture."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+  "sources": [],
+  "summary": "Synthetic analyst summary 58 for the meta_v1 fixture."
+ },
+ "macro_snapshot_at_memo": {},
+ "mispricing_thesis": {
+  "consensus_view": "Synthetic mispricing consensus_view 97 for the meta_v1 fixture.",
+  "falsifiers": [
+   "Synthetic falsifier 100 for the meta_v1 fixture.",
+   "Synthetic falsifier 101 for the meta_v1 fixture.",
+   "Synthetic falsifier 102 for the meta_v1 fixture."
+  ],
+  "gap": "Synthetic mispricing gap 99 for the meta_v1 fixture.",
+  "our_view": "Synthetic mispricing our_view 98 for the meta_v1 fixture."
+ },
+ "one_sentence_thesis": "Synthetic thesis 96 for the meta_v1 fixture.",
+ "portfolio_fit": "In a balanced model portfolio, META fits the 'Communication Services' sleeve. With a 'Neutral' research view, sizing is governed by the user's max position size and risk level.",
+ "price_at_memo": 648.03,
+ "price_at_memo_at": "2026-09-13T02:00:21.481457",
+ "quality": null,
+ "rating_label": "Neutral",
+ "risk_committee_challenge": {
+  "advice_compliance_check": "Advice compliance was not assessed by this rule-based check.",
+  "challenges": [],
+  "overall_assessment": "Rule-based check only; no live critic review was completed. Claim accuracy, completeness, and research quality were not independently assessed.",
+  "review_mode": "rule_based",
+  "suggested_revisions": [
+   "Tag every claim with a source: filing, transcript, or ratio.",
+   "Verify the bull case is symmetric to the bear case.",
+   "If valuation is elevated, explicitly state what the market is pricing in."
+  ],
+  "underweighted_risks": [
+   "Re-emphasize the sector cohort context if quality deteriorates."
+  ],
+  "valuation_divergence_assessment": "not_assessed"
+ },
+ "round_findings": [
+  {
+   "early_exit": false,
+   "findings": {
+    "comps": {
+     "agent": "Comps Analyst",
+     "confidence": 0.7,
+     "data": {},
+     "evidence": [],
+     "headline": "META trades at a 15% EV/EBITDA discount to peers with above-peer growth.",
+     "key_points": [
+      "EV/EBITDA: target 16.1x vs peer median 19.0x.",
+      "Op margin: 41% vs peers 32%.",
+      "Growth: +22% vs peers +15%.",
+      "FCF yield: 2.8% vs peers 1.8%.",
+      "Op margin vs own 8y median 39% — +7% delta."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+     "sources": [],
+     "summary": "Peer set: GOOGL, MSFT, AMZN. Trades at a -15.0% discount to peers on EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median. Own-history context: Operating margin running above its own multi-year median."
+    },
+    "earnings": {
+     "agent": "Earnings Analyst",
+     "confidence": 0.88,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 65 for the meta_v1 fixture.",
+     "key_points": [
+      "Synthetic analyst point 67 for the meta_v1 fixture.",
+      "Synthetic analyst point 68 for the meta_v1 fixture.",
+      "Synthetic analyst point 69 for the meta_v1 fixture.",
+      "Synthetic analyst point 70 for the meta_v1 fixture.",
+      "Synthetic analyst point 71 for the meta_v1 fixture.",
+      "Synthetic analyst point 72 for the meta_v1 fixture.",
+      "Synthetic analyst point 73 for the meta_v1 fixture.",
+      "Synthetic analyst point 74 for the meta_v1 fixture.",
+      "Synthetic analyst point 75 for the meta_v1 fixture.",
+      "Synthetic analyst point 76 for the meta_v1 fixture.",
+      "Synthetic analyst point 77 for the meta_v1 fixture.",
+      "Synthetic analyst point 78 for the meta_v1 fixture.",
+      "Synthetic analyst point 79 for the meta_v1 fixture."
+     ],
+     "long_form_report": null,
+     "sources": [],
+     "summary": "Synthetic analyst summary 66 for the meta_v1 fixture."
+    },
+    "filing": {
+     "agent": "Filing Analyst",
+     "confidence": 0.78,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 80 for the meta_v1 fixture.",
+     "key_points": [
+      "Synthetic analyst point 82 for the meta_v1 fixture.",
+      "Synthetic analyst point 83 for the meta_v1 fixture.",
+      "Synthetic analyst point 84 for the meta_v1 fixture.",
+      "Synthetic analyst point 85 for the meta_v1 fixture.",
+      "Synthetic analyst point 86 for the meta_v1 fixture.",
+      "Synthetic analyst point 87 for the meta_v1 fixture.",
+      "Synthetic analyst point 88 for the meta_v1 fixture.",
+      "Synthetic analyst point 89 for the meta_v1 fixture."
+     ],
+     "long_form_report": null,
+     "sources": [],
+     "summary": "Synthetic analyst summary 81 for the meta_v1 fixture."
+    },
+    "macro": {
+     "agent": "Macro Analyst",
+     "confidence": 0.72,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 57 for the meta_v1 fixture.",
+     "key_points": [
+      "Synthetic analyst point 59 for the meta_v1 fixture.",
+      "Synthetic analyst point 60 for the meta_v1 fixture.",
+      "Synthetic analyst point 61 for the meta_v1 fixture.",
+      "Synthetic analyst point 62 for the meta_v1 fixture.",
+      "Synthetic analyst point 63 for the meta_v1 fixture."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+     "sources": [],
+     "summary": "Synthetic analyst summary 58 for the meta_v1 fixture."
+    },
+    "risk": {
+     "agent": "Risk Analyst",
+     "confidence": 0.7,
+     "data": {},
+     "evidence": [],
+     "headline": "Risk profile for META",
+     "key_points": [],
+     "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+     "sources": [],
+     "summary": "Quantitative risk profile looks moderate. 1 structured rec(s) applied to the memo (see data.recommendations)."
+    },
+    "sector": {
+     "agent": "Sector Analyst",
+     "confidence": 0.85,
+     "data": {
+      "bull_bear_analysis": {
+       "bear_case": {
+        "headline": "Synthetic bear_case headline 7 for the meta_v1 fixture.",
+        "key_points": [
+         "Synthetic bear_case point 8 for the meta_v1 fixture.",
+         "Synthetic bear_case point 9 for the meta_v1 fixture.",
+         "Synthetic bear_case point 10 for the meta_v1 fixture.",
+         "Synthetic bear_case point 11 for the meta_v1 fixture.",
+         "Synthetic bear_case point 12 for the meta_v1 fixture."
+        ]
+       },
+       "bull_case": {
+        "headline": "Synthetic bull_case headline 1 for the meta_v1 fixture.",
+        "key_points": [
+         "Synthetic bull_case point 2 for the meta_v1 fixture.",
+         "Synthetic bull_case point 3 for the meta_v1 fixture.",
+         "Synthetic bull_case point 4 for the meta_v1 fixture.",
+         "Synthetic bull_case point 5 for the meta_v1 fixture.",
+         "Synthetic bull_case point 6 for the meta_v1 fixture."
+        ]
+       },
+       "falsifiable_tests": [
+        {
+         "invalidates_side": "bull",
+         "statement": "Synthetic falsifier 15 for the meta_v1 fixture."
+        },
+        {
+         "invalidates_side": "bear",
+         "statement": "Synthetic falsifier 16 for the meta_v1 fixture."
+        }
+       ],
+       "key_disagreement": "Synthetic key disagreement 13 for the meta_v1 fixture.",
+       "sector_lean": "balanced",
+       "sector_synthesis": "Synthetic sector synthesis 14 for the meta_v1 fixture."
+      },
+      "cross_sector_relevance": [
+       "GOOG",
+       "GOOGL",
+       "DIS"
+      ],
+      "kpi_placements": {
+       "EV_EBITDA": {
+        "distribution": {
+         "max": 21.198816810368683,
+         "mean": 11.381723319976006,
+         "median": 10.795286070376207,
+         "min": 4.3713620488940625,
+         "n": 10,
+         "p25": 5.886455435858752,
+         "p75": 13.28593635675507,
+         "stdev": 5.675168755043561
+        },
+        "group": "valuation",
+        "interpretation": "richest in cohort",
+        "quartile": 4,
+        "target": 16.376314133221104
+       },
+       "FCF_yield": {
+        "distribution": {
+         "max": 0.21504203991827756,
+         "mean": 0.0831229112169169,
+         "median": 0.0639000384669595,
+         "min": 0.019270379953628625,
+         "n": 10,
+         "p25": 0.019270379953628625,
+         "p75": 0.1169266657285886,
+         "stdev": 0.062485392599477496
+        },
+        "group": "valuation",
+        "interpretation": "below-median multiple",
+        "quartile": 2,
+        "target": 0.027708288718024814
+       },
+       "PFCF": {
+        "distribution": {
+         "max": 51.893112767177136,
+         "mean": 23.058606418662063,
+         "median": 16.52038416803759,
+         "min": 4.6502535056867496,
+         "n": 10,
+         "p25": 6.386058454051607,
+         "p75": 41.912011375477974,
+         "stdev": 17.756807616643588
+        },
+        "group": "valuation",
+        "interpretation": "above-median multiple",
+        "quartile": 3,
+        "target": 36.09028367563816
+       },
+       "ROIC": {
+        "distribution": {
+         "max": 0.2521668961712825,
+         "mean": 0.1103291306838161,
+         "median": 0.07133956514756723,
+         "min": 0.006819053290689928,
+         "n": 10,
+         "p25": 0.0576622776493174,
+         "p75": 0.21823186332530572,
+         "stdev": 0.08076613717491024
+        },
+        "group": "quality",
+        "interpretation": "above median",
+        "quartile": 3,
+        "target": 0.17950279862720422
+       },
+       "operating_margin": {
+        "distribution": {
+         "max": 0.32063916829677586,
+         "mean": 0.21511040084952937,
+         "median": 0.21199169546006463,
+         "min": 0.0350975975975976,
+         "n": 10,
+         "p25": 0.1464866296002118,
+         "p75": 0.29494704605507255,
+         "stdev": 0.08314968257338966
+        },
+        "group": "quality",
+        "interpretation": "top quartile",
+        "quartile": 4,
+        "target": 0.41437855159579234
+       }
+      },
+      "macro_alignment": "positive",
+      "regime": "Mixed regime",
+      "sector": "Communication Services",
+      "sub_industry": "Internet Content & Information"
+     },
+     "evidence": [],
+     "headline": "Synthetic analyst headline 17 for the meta_v1 fixture.",
+     "key_points": [
+      "Synthetic analyst point 19 for the meta_v1 fixture.",
+      "Synthetic analyst point 20 for the meta_v1 fixture.",
+      "Synthetic analyst point 21 for the meta_v1 fixture.",
+      "Synthetic analyst point 22 for the meta_v1 fixture.",
+      "Synthetic analyst point 23 for the meta_v1 fixture.",
+      "Synthetic analyst point 24 for the meta_v1 fixture.",
+      "Synthetic analyst point 25 for the meta_v1 fixture."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+     "sources": [],
+     "summary": "Synthetic analyst summary 18 for the meta_v1 fixture."
+    },
+    "technical": {
+     "agent": "Technical Analyst",
+     "confidence": 0.0,
+     "data": {
+      "intake_rationale": "Synthetic intake rationale 64 for the meta_v1 fixture.",
+      "intake_skipped": true
+     },
+     "evidence": [],
+     "headline": "Technical Analyst — skipped per PM intake.",
+     "key_points": [],
+     "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+     "sources": [],
+     "summary": "Synthetic intake rationale 64 for the meta_v1 fixture."
+    },
+    "valuation": {
+     "agent": "Valuation Analyst",
+     "confidence": 0.62,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 47 for the meta_v1 fixture.",
+     "key_points": [
+      "Synthetic analyst point 49 for the meta_v1 fixture.",
+      "Synthetic analyst point 50 for the meta_v1 fixture.",
+      "Synthetic analyst point 51 for the meta_v1 fixture.",
+      "Synthetic analyst point 52 for the meta_v1 fixture.",
+      "Synthetic analyst point 53 for the meta_v1 fixture.",
+      "Synthetic analyst point 54 for the meta_v1 fixture.",
+      "Synthetic analyst point 55 for the meta_v1 fixture.",
+      "Synthetic analyst point 56 for the meta_v1 fixture."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+     "sources": [],
+     "summary": "Synthetic analyst summary 48 for the meta_v1 fixture."
+    }
+   },
+   "pm_questions": [],
+   "pm_rationale": "",
+   "round": 0
+  },
+  {
+   "early_exit": false,
+   "findings": {
+    "earnings": {
+     "agent": "Earnings Analyst",
+     "confidence": 0.82,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 26 for the meta_v1 fixture.",
+     "key_points": [
+      "Synthetic analyst point 28 for the meta_v1 fixture.",
+      "Synthetic analyst point 29 for the meta_v1 fixture.",
+      "Synthetic analyst point 30 for the meta_v1 fixture.",
+      "Synthetic analyst point 31 for the meta_v1 fixture.",
+      "Synthetic analyst point 32 for the meta_v1 fixture.",
+      "Synthetic analyst point 33 for the meta_v1 fixture.",
+      "Synthetic analyst point 34 for the meta_v1 fixture.",
+      "Synthetic analyst point 35 for the meta_v1 fixture.",
+      "Synthetic analyst point 36 for the meta_v1 fixture.",
+      "Synthetic analyst point 37 for the meta_v1 fixture."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+     "sources": [],
+     "summary": "Synthetic analyst summary 27 for the meta_v1 fixture."
+    },
+    "filing": {
+     "agent": "Filing Analyst",
+     "confidence": 0.82,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 38 for the meta_v1 fixture.",
+     "key_points": [
+      "Synthetic analyst point 40 for the meta_v1 fixture.",
+      "Synthetic analyst point 41 for the meta_v1 fixture.",
+      "Synthetic analyst point 42 for the meta_v1 fixture.",
+      "Synthetic analyst point 43 for the meta_v1 fixture.",
+      "Synthetic analyst point 44 for the meta_v1 fixture.",
+      "Synthetic analyst point 45 for the meta_v1 fixture.",
+      "Synthetic analyst point 46 for the meta_v1 fixture."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+     "sources": [],
+     "summary": "Synthetic analyst summary 39 for the meta_v1 fixture."
+    }
+   },
+   "pm_questions": [
+    {
+     "question": "Synthetic PM question 90 for the meta_v1 fixture.",
+     "target_agent": "earnings",
+     "why_it_matters": "Synthetic PM rationale 91 for the meta_v1 fixture."
+    },
+    {
+     "question": "Synthetic PM question 92 for the meta_v1 fixture.",
+     "target_agent": "filing",
+     "why_it_matters": "Synthetic PM rationale 93 for the meta_v1 fixture."
+    }
+   ],
+   "pm_rationale": "Synthetic PM rationale 94 for the meta_v1 fixture.",
+   "round": 1
+  }
+ ],
+ "scorecard": {
+  "as_of": "2026-09-11",
+  "categories": {
+   "capital_allocation": {
+    "coverage": 1.0,
+    "n_available": 4,
+    "n_features": 4,
+    "percentile": 15.976331360946746,
+    "score": 38.9,
+    "sector_percentile": 27.272727272727273,
+    "weight": 0.125,
+    "z": -0.556885462246523
+   },
+   "earnings_quality": {
+    "coverage": 1.0,
+    "n_available": 3,
+    "n_features": 3,
+    "percentile": 75.15527950310559,
+    "score": 58.0,
+    "sector_percentile": 72.72727272727273,
+    "weight": 0.125,
+    "z": 0.4001957262278341
+   },
+   "efficiency": {
+    "coverage": 1.0,
+    "n_available": 3,
+    "n_features": 3,
+    "percentile": 13.017751479289942,
+    "score": 33.1,
+    "sector_percentile": 9.090909090909092,
+    "weight": 0.125,
+    "z": -0.8433739183232009
+   },
+   "growth": {
+    "coverage": 1.0,
+    "n_available": 5,
+    "n_features": 5,
+    "percentile": 91.71597633136095,
+    "score": 67.2,
+    "sector_percentile": 100.0,
+    "weight": 0.125,
+    "z": 0.8584779672892353
+   },
+   "leverage": {
+    "coverage": 1.0,
+    "n_available": 4,
+    "n_features": 4,
+    "percentile": 97.26027397260275,
+    "score": 81.0,
+    "sector_percentile": 100.0,
+    "weight": 0.125,
+    "z": 1.5500656857887871
+   },
+   "profitability": {
+    "coverage": 1.0,
+    "n_available": 4,
+    "n_features": 4,
+    "percentile": 92.3076923076923,
+    "score": 71.4,
+    "sector_percentile": 100.0,
+    "weight": 0.125,
+    "z": 1.069334491428332
+   },
+   "quality": {
+    "coverage": 1.0,
+    "n_available": 4,
+    "n_features": 4,
+    "percentile": 88.16568047337279,
+    "score": 68.8,
+    "sector_percentile": 81.81818181818181,
+    "weight": 0.125,
+    "z": 0.9411537377877714
+   },
+   "valuation": {
+    "coverage": 1.0,
+    "n_available": 4,
+    "n_features": 4,
+    "percentile": 4.733727810650888,
+    "score": 32.6,
+    "sector_percentile": 27.272727272727273,
+    "weight": 0.125,
+    "z": -0.8683002622785725
+   }
+  },
+  "coverage": 1.0,
+  "data_available_at": "2026-01-29",
+  "disagreement": {
+   "dimension": "overall",
+   "direction": "narrative_below_quant",
+   "gap": -36.98,
+   "note": "Memo rates Neutral (bucket 50) vs scorecard universe percentile 87.0 (gap -37.0; coverage 100%).",
+   "severity": "watch"
+  },
+  "latest_period": "FY2025",
+  "notes": [
+   "Profile read (fs-v1): Reads as neither a compounder nor an early inflection (compounder z +0.46, inflection z +0.04; threshold z >= +0.50)."
+  ],
+  "overall_score": 56.4,
+  "overall_z": 0.31883349570920794,
+  "price_date": "2026-09-11",
+  "profiles": {
+   "compounder": 0.46344962329935363,
+   "inflection": 0.04471049126756151
+  },
+  "reconciliation": "Synthetic scorecard reconciliation 110 for the meta_v1 fixture.",
+  "run_id": "6b452870-0f31-4590-8def-06e6fefbeb5f",
+  "sector_percentile": 100.0,
+  "stale": false,
+  "top_negative": [
+   {
+    "contribution": -0.09377362080480212,
+    "family": "efficiency",
+    "feature": "capex_intensity",
+    "z": -2.250566899315251
+   },
+   {
+    "contribution": -0.0647186598863933,
+    "family": "capital_allocation",
+    "feature": "sbc_to_revenue",
+    "z": -2.0709971163645857
+   },
+   {
+    "contribution": -0.04174805921275018,
+    "family": "efficiency",
+    "feature": "opex_ratio",
+    "z": -1.0019534211060044
+   }
+  ],
+  "top_positive": [
+   {
+    "contribution": 0.08798757287607112,
+    "family": "earnings_quality",
+    "feature": "accruals_ratio",
+    "z": 2.111701749025707
+   },
+   {
+    "contribution": 0.07780658093790464,
+    "family": "leverage",
+    "feature": "current_ratio",
+    "z": 2.4898105900129486
+   },
+   {
+    "contribution": 0.06394186759195009,
+    "family": "profitability",
+    "feature": "operating_margin",
+    "z": 2.0461397629424027
+   }
+  ],
+  "universe_percentile": 86.98224852071006,
+  "version_key": "fs-v1"
+ },
+ "scores": {
+  "beat_streak": 7.0,
+  "blended_pm_score": 58.5,
+  "confidence": 70.81411764705882,
+  "cross_sector_relevance_count": 3.0,
+  "deep_research_questions": 2.0,
+  "deep_research_rounds": 1.0,
+  "evidence_quality": 95.9,
+  "factor_catalyst": 50.0,
+  "factor_earnings_momentum": 85.6,
+  "factor_growth": 50.0,
+  "factor_macro_fit": 60.0,
+  "factor_pm_score": 64.1,
+  "factor_quality": 78.1,
+  "factor_risk": 78.0,
+  "factor_valuation": 44.9,
+  "guidance_net_direction": 2.0,
+  "llm_rating_score": 50.0,
+  "llm_rating_weight": 0.4,
+  "raw_confidence": 72.0,
+  "risk_confidence": 70.0,
+  "risk_recs_applied": 1.0,
+  "sector_confidence": 85.0,
+  "valuation_confidence": 62.0
+ },
+ "section_provenance": {},
+ "sector": "Communication Services",
+ "sector_agent_view": {
+  "agent": "Sector Analyst",
+  "confidence": 0.85,
+  "data": {
+   "bull_bear_analysis": {
+    "bear_case": {
+     "headline": "Synthetic bear_case headline 7 for the meta_v1 fixture.",
+     "key_points": [
+      "Synthetic bear_case point 8 for the meta_v1 fixture.",
+      "Synthetic bear_case point 9 for the meta_v1 fixture.",
+      "Synthetic bear_case point 10 for the meta_v1 fixture.",
+      "Synthetic bear_case point 11 for the meta_v1 fixture.",
+      "Synthetic bear_case point 12 for the meta_v1 fixture."
+     ]
+    },
+    "bull_case": {
+     "headline": "Synthetic bull_case headline 1 for the meta_v1 fixture.",
+     "key_points": [
+      "Synthetic bull_case point 2 for the meta_v1 fixture.",
+      "Synthetic bull_case point 3 for the meta_v1 fixture.",
+      "Synthetic bull_case point 4 for the meta_v1 fixture.",
+      "Synthetic bull_case point 5 for the meta_v1 fixture.",
+      "Synthetic bull_case point 6 for the meta_v1 fixture."
+     ]
+    },
+    "falsifiable_tests": [
+     {
+      "invalidates_side": "bull",
+      "statement": "Synthetic falsifier 15 for the meta_v1 fixture."
+     },
+     {
+      "invalidates_side": "bear",
+      "statement": "Synthetic falsifier 16 for the meta_v1 fixture."
+     }
+    ],
+    "key_disagreement": "Synthetic key disagreement 13 for the meta_v1 fixture.",
+    "sector_lean": "balanced",
+    "sector_synthesis": "Synthetic sector synthesis 14 for the meta_v1 fixture."
+   },
+   "cross_sector_relevance": [
+    "GOOG",
+    "GOOGL",
+    "DIS"
+   ],
+   "kpi_placements": {
+    "EV_EBITDA": {
+     "distribution": {
+      "max": 21.198816810368683,
+      "mean": 11.381723319976006,
+      "median": 10.795286070376207,
+      "min": 4.3713620488940625,
+      "n": 10,
+      "p25": 5.886455435858752,
+      "p75": 13.28593635675507,
+      "stdev": 5.675168755043561
+     },
+     "group": "valuation",
+     "interpretation": "richest in cohort",
+     "quartile": 4,
+     "target": 16.376314133221104
+    },
+    "FCF_yield": {
+     "distribution": {
+      "max": 0.21504203991827756,
+      "mean": 0.0831229112169169,
+      "median": 0.0639000384669595,
+      "min": 0.019270379953628625,
+      "n": 10,
+      "p25": 0.019270379953628625,
+      "p75": 0.1169266657285886,
+      "stdev": 0.062485392599477496
+     },
+     "group": "valuation",
+     "interpretation": "below-median multiple",
+     "quartile": 2,
+     "target": 0.027708288718024814
+    },
+    "PFCF": {
+     "distribution": {
+      "max": 51.893112767177136,
+      "mean": 23.058606418662063,
+      "median": 16.52038416803759,
+      "min": 4.6502535056867496,
+      "n": 10,
+      "p25": 6.386058454051607,
+      "p75": 41.912011375477974,
+      "stdev": 17.756807616643588
+     },
+     "group": "valuation",
+     "interpretation": "above-median multiple",
+     "quartile": 3,
+     "target": 36.09028367563816
+    },
+    "ROIC": {
+     "distribution": {
+      "max": 0.2521668961712825,
+      "mean": 0.1103291306838161,
+      "median": 0.07133956514756723,
+      "min": 0.006819053290689928,
+      "n": 10,
+      "p25": 0.0576622776493174,
+      "p75": 0.21823186332530572,
+      "stdev": 0.08076613717491024
+     },
+     "group": "quality",
+     "interpretation": "above median",
+     "quartile": 3,
+     "target": 0.17950279862720422
+    },
+    "operating_margin": {
+     "distribution": {
+      "max": 0.32063916829677586,
+      "mean": 0.21511040084952937,
+      "median": 0.21199169546006463,
+      "min": 0.0350975975975976,
+      "n": 10,
+      "p25": 0.1464866296002118,
+      "p75": 0.29494704605507255,
+      "stdev": 0.08314968257338966
+     },
+     "group": "quality",
+     "interpretation": "top quartile",
+     "quartile": 4,
+     "target": 0.41437855159579234
+    }
+   },
+   "macro_alignment": "positive",
+   "regime": "Mixed regime",
+   "sector": "Communication Services",
+   "sub_industry": "Internet Content & Information"
+  },
+  "evidence": [],
+  "headline": "Synthetic analyst headline 17 for the meta_v1 fixture.",
+  "key_points": [
+   "Synthetic analyst point 19 for the meta_v1 fixture.",
+   "Synthetic analyst point 20 for the meta_v1 fixture.",
+   "Synthetic analyst point 21 for the meta_v1 fixture.",
+   "Synthetic analyst point 22 for the meta_v1 fixture.",
+   "Synthetic analyst point 23 for the meta_v1 fixture.",
+   "Synthetic analyst point 24 for the meta_v1 fixture.",
+   "Synthetic analyst point 25 for the meta_v1 fixture."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+  "sources": [],
+  "summary": "Synthetic analyst summary 18 for the meta_v1 fixture."
+ },
+ "sources_used": [],
+ "technical_agent_view": {
+  "agent": "Technical Analyst",
+  "confidence": 0.0,
+  "data": {
+   "intake_rationale": "Synthetic intake rationale 64 for the meta_v1 fixture.",
+   "intake_skipped": true
+  },
+  "evidence": [],
+  "headline": "Technical Analyst — skipped per PM intake.",
+  "key_points": [],
+  "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+  "sources": [],
+  "summary": "Synthetic intake rationale 64 for the meta_v1 fixture."
+ },
+ "thesis_breakers": [
+  {
+   "detail": "Synthetic bear_case point 9 for the meta_v1 fixture.",
+   "severity": "high",
+   "title": "Synthetic bear_case point 9 for the meta_v1 fixture.",
+   "type": "regulatory"
+  }
+ ],
+ "ticker": "META",
+ "valuation_agent_view": {
+  "agent": "Valuation Analyst",
+  "confidence": 0.62,
+  "data": {},
+  "evidence": [],
+  "headline": "Synthetic analyst headline 47 for the meta_v1 fixture.",
+  "key_points": [
+   "Synthetic analyst point 49 for the meta_v1 fixture.",
+   "Synthetic analyst point 50 for the meta_v1 fixture.",
+   "Synthetic analyst point 51 for the meta_v1 fixture.",
+   "Synthetic analyst point 52 for the meta_v1 fixture.",
+   "Synthetic analyst point 53 for the meta_v1 fixture.",
+   "Synthetic analyst point 54 for the meta_v1 fixture.",
+   "Synthetic analyst point 55 for the meta_v1 fixture.",
+   "Synthetic analyst point 56 for the meta_v1 fixture."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+  "sources": [],
+  "summary": "Synthetic analyst summary 48 for the meta_v1 fixture."
+ },
+ "valuation_verdict": {
+  "basis": "rating",
+  "comps_ev_ebitda_premium": -0.15,
+  "dcf_base_upside": 0.0939776378203954,
+  "factor_valuation": 44.9,
+  "signals": {},
+  "summary": "Net read: fairly priced (DCF base case +9% to fair value; EV/EBITDA 15% discount vs peers; quant valuation factor 45/100).",
+  "verdict": "fairly_priced"
+ }
+}

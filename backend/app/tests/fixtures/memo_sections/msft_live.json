@@ -1,0 +1,832 @@
+{
+ "agent_influence": {
+  "comps": 0.8974,
+  "earnings": 0.2778,
+  "filing": 0.0,
+  "macro": 0.2219,
+  "risk": 0.0,
+  "sector": 1.0,
+  "technical": 0.0,
+  "valuation": 0.641
+ },
+ "bear_case": {
+  "headline": "Bear case: Software - Infrastructure thesis breaks on execution.",
+  "key_points": [
+   "Execution risk on the dominant driver.",
+   "DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture.",
+   "DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+   "DCF driver — Synthetic driver 59: synthetic rationale for the msft_live fixture.",
+   "DCF bear case implies $250.11 (-49%)."
+  ]
+ },
+ "bull_case": {
+  "headline": "Bull case: durable execution against sector tailwinds.",
+  "key_points": [
+   "Quality + growth profile supports a premium versus peers.",
+   "DCF driver — Synthetic driver 54: synthetic rationale for the msft_live fixture.",
+   "DCF driver — Synthetic driver 55: synthetic rationale for the msft_live fixture.",
+   "DCF driver — Synthetic driver 56: synthetic rationale for the msft_live fixture.",
+   "DCF bull case implies $824.83 (+68%)."
+  ]
+ },
+ "business_summary": "Synthetic business description 53 for the msft_live fixture.",
+ "catalysts": [
+  {
+   "detail": "operating_margin: 46.8% vs cohort median 13.5% — top quartile",
+   "horizon": "medium_term",
+   "impact": "medium",
+   "title": "operating_margin: 46.8% vs cohort median 13.5% — top quartile"
+  },
+  {
+   "detail": "ROIC: 20.6% vs cohort median 5.7% — top quartile",
+   "horizon": "medium_term",
+   "impact": "medium",
+   "title": "ROIC: 20.6% vs cohort median 5.7% — top quartile"
+  },
+  {
+   "detail": "Quarterly print expected on 2026-10-28; tone + guidance the swing factor.",
+   "horizon": "near_term",
+   "impact": "medium",
+   "title": "Next earnings: 2026-10-28"
+  }
+ ],
+ "company_name": "Microsoft Corporation",
+ "comps_agent_view": {
+  "agent": "Comps Analyst",
+  "confidence": 0.7,
+  "data": {},
+  "evidence": [],
+  "headline": "MSFT trades in line with peers on EV/EBITDA (+2%).",
+  "key_points": [
+   "EV/EBITDA: target 19.0x vs peer median 18.6x.",
+   "Op margin: 47% vs peers 31%.",
+   "Growth: +18% vs peers +16%.",
+   "FCF yield: 1.8% vs peers 1.0%.",
+   "Op margin vs own 9y median 42% — +12% delta.",
+   "Revenue growth at 88th percentile of own 9y range."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+  "sources": [],
+  "summary": "Peer set: GOOGL, AMZN, ORCL, META. In-line with peer median EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median. Own-history context: Operating margin running above its own multi-year median. Revenue growth in the top quartile of its own 9y range."
+ },
+ "confidence_score": 61.809999999999995,
+ "dcf_initial_summary": {},
+ "dcf_pm_adjustment_headline": "",
+ "dcf_pm_adjustments": [],
+ "dcf_summary": {
+  "base_implied_price": 501.70511024507994,
+  "base_upside": 0.0204517649650767,
+  "bear_implied_price": 250.11121281062498,
+  "bear_upside": -0.49128198350325436,
+  "bull_implied_price": 824.8342786483113,
+  "bull_upside": 0.6776859120274816,
+  "current_price": 491.65,
+  "summary": "Base case implied price $501.71 vs current $491.65 (+2.0%). Bull $824.83 (+67.8%) | Bear $250.11 (-49.1%). ⚠ Model warnings: 0 errors, 1 warns",
+  "terminal_growth": 0.035,
+  "wacc": 0.08549999999999999
+ },
+ "degradation_events": [],
+ "degraded_agents": [
+  "Valuation Analyst"
+ ],
+ "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+ "earnings_agent_view": {
+  "agent": "Earnings Analyst",
+  "confidence": 0.65,
+  "data": {},
+  "evidence": [],
+  "headline": "Synthetic analyst headline 1 for the msft_live fixture.",
+  "key_points": [
+   "Synthetic analyst point 3 for the msft_live fixture.",
+   "Synthetic analyst point 4 for the msft_live fixture.",
+   "Synthetic analyst point 5 for the msft_live fixture.",
+   "Synthetic analyst point 6 for the msft_live fixture.",
+   "Synthetic analyst point 7 for the msft_live fixture.",
+   "Synthetic analyst point 8 for the msft_live fixture.",
+   "Synthetic analyst point 9 for the msft_live fixture.",
+   "Synthetic analyst point 10 for the msft_live fixture.",
+   "Synthetic analyst point 11 for the msft_live fixture.",
+   "Synthetic analyst point 12 for the msft_live fixture.",
+   "Synthetic analyst point 13 for the msft_live fixture.",
+   "Synthetic analyst point 14 for the msft_live fixture."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+  "sources": [],
+  "summary": "Synthetic analyst summary 2 for the msft_live fixture."
+ },
+ "earnings_qoq_delta": null,
+ "extra_agent_views": {},
+ "filing_agent_view": {
+  "agent": "Filing Analyst",
+  "confidence": 0.0,
+  "data": {
+   "intake_rationale": "Synthetic intake rationale 15 for the msft_live fixture.",
+   "intake_skipped": true
+  },
+  "evidence": [],
+  "headline": "Filing Analyst — skipped per PM intake.",
+  "key_points": [],
+  "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+  "sources": [],
+  "summary": "Synthetic intake rationale 15 for the msft_live fixture."
+ },
+ "final_pm_view": "Synthetic PM view 45 for the msft_live fixture.",
+ "final_verdict": "PM final view: Neutral (confidence 61). Synthetic thesis 46 for the msft_live fixture. Cohort placement: see sector view for KPI quartile context. Cross-sector pull-through: NEE, CAT. Key disagreement: Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver. Watch items: DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture., DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+ "forward_catalysts": [],
+ "generated_at": "2026-09-10T03:59:21.858840",
+ "generation_mode": "live",
+ "intake_decision": {
+  "rationale": "Synthetic intake rationale 15 for the msft_live fixture.",
+  "skipped": [
+   "filing",
+   "technical"
+  ]
+ },
+ "key_risks": [
+  {
+   "detail": "Execution risk on the dominant driver.",
+   "severity": "medium",
+   "title": "Execution risk on the dominant driver.",
+   "type": "company"
+  },
+  {
+   "detail": "DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture.",
+   "severity": "high",
+   "title": "DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture.",
+   "type": "company"
+  },
+  {
+   "detail": "DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+   "severity": "high",
+   "title": "DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+   "type": "regulatory"
+  },
+  {
+   "detail": "DCF driver — Synthetic driver 59: synthetic rationale for the msft_live fixture.",
+   "severity": "medium",
+   "title": "DCF driver — Synthetic driver 59: synthetic rationale for the msft_live fixture.",
+   "type": "valuation"
+  }
+ ],
+ "macro_regime_at_memo": "soft_landing",
+ "macro_sensitivity": {
+  "agent": "Macro Analyst",
+  "confidence": 0.75,
+  "data": {},
+  "evidence": [],
+  "headline": "Macro scenario: Soft landing",
+  "key_points": [
+   "Favored sectors: Technology, Communication Services, Industrials, Consumer Discretionary.",
+   "Pressured sectors: Energy, Defensive Staples.",
+   "Top scenario risks: Re-acceleration in inflation; Labor market crack; Credit-spread blowout."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+  "sources": [],
+  "summary": "Scenario read: Synthetic scenario narrative for the msft_live fixture."
+ },
+ "macro_snapshot_at_memo": {},
+ "mispricing_thesis": {
+  "consensus_view": "Synthetic mispricing consensus_view 47 for the msft_live fixture.",
+  "falsifiers": [
+   "Synthetic falsifier 50 for the msft_live fixture.",
+   "Synthetic falsifier 51 for the msft_live fixture.",
+   "Synthetic falsifier 52 for the msft_live fixture."
+  ],
+  "gap": "Synthetic mispricing gap 49 for the msft_live fixture.",
+  "our_view": "Synthetic mispricing our_view 48 for the msft_live fixture."
+ },
+ "one_sentence_thesis": "Synthetic thesis 46 for the msft_live fixture.",
+ "portfolio_fit": "In a balanced model portfolio, MSFT fits the 'Technology' sleeve. With a 'Neutral' research view, sizing is governed by the user's max position size and risk level.",
+ "price_at_memo": 491.65,
+ "price_at_memo_at": "2026-09-10T03:59:09.857355",
+ "quality": null,
+ "rating_label": "Neutral",
+ "risk_committee_challenge": {
+  "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
+  "challenges": [
+   "No major issues detected."
+  ],
+  "overall_assessment": "Memo is structurally sound; balance and source citations should be tightened.",
+  "review_mode": "unknown",
+  "suggested_revisions": [
+   "Tag every claim with a source: filing, transcript, or ratio.",
+   "Verify the bull case is symmetric to the bear case.",
+   "If valuation is elevated, explicitly state what the market is pricing in."
+  ],
+  "underweighted_risks": [
+   "Re-emphasize the sector cohort context if quality deteriorates."
+  ],
+  "valuation_divergence_assessment": "not_assessed"
+ },
+ "round_findings": [
+  {
+   "early_exit": false,
+   "findings": {
+    "comps": {
+     "agent": "Comps Analyst",
+     "confidence": 0.7,
+     "data": {},
+     "evidence": [],
+     "headline": "MSFT trades in line with peers on EV/EBITDA (+2%).",
+     "key_points": [
+      "EV/EBITDA: target 19.0x vs peer median 18.6x.",
+      "Op margin: 47% vs peers 31%.",
+      "Growth: +18% vs peers +16%.",
+      "FCF yield: 1.8% vs peers 1.0%.",
+      "Op margin vs own 9y median 42% — +12% delta.",
+      "Revenue growth at 88th percentile of own 9y range."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+     "sources": [],
+     "summary": "Peer set: GOOGL, AMZN, ORCL, META. In-line with peer median EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median. Own-history context: Operating margin running above its own multi-year median. Revenue growth in the top quartile of its own 9y range."
+    },
+    "earnings": {
+     "agent": "Earnings Analyst",
+     "confidence": 0.82,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 16 for the msft_live fixture.",
+     "key_points": [
+      "Synthetic analyst point 18 for the msft_live fixture.",
+      "Synthetic analyst point 19 for the msft_live fixture.",
+      "Synthetic analyst point 20 for the msft_live fixture.",
+      "Synthetic analyst point 21 for the msft_live fixture.",
+      "Synthetic analyst point 22 for the msft_live fixture.",
+      "Synthetic analyst point 23 for the msft_live fixture.",
+      "Synthetic analyst point 24 for the msft_live fixture.",
+      "Synthetic analyst point 25 for the msft_live fixture.",
+      "Synthetic analyst point 26 for the msft_live fixture.",
+      "Synthetic analyst point 27 for the msft_live fixture.",
+      "Synthetic analyst point 28 for the msft_live fixture.",
+      "Synthetic analyst point 29 for the msft_live fixture."
+     ],
+     "long_form_report": null,
+     "sources": [],
+     "summary": "Synthetic analyst summary 17 for the msft_live fixture."
+    },
+    "filing": {
+     "agent": "Filing Analyst",
+     "confidence": 0.0,
+     "data": {
+      "intake_rationale": "Synthetic intake rationale 15 for the msft_live fixture.",
+      "intake_skipped": true
+     },
+     "evidence": [],
+     "headline": "Filing Analyst — skipped per PM intake.",
+     "key_points": [],
+     "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+     "sources": [],
+     "summary": "Synthetic intake rationale 15 for the msft_live fixture."
+    },
+    "macro": {
+     "agent": "Macro Analyst",
+     "confidence": 0.75,
+     "data": {},
+     "evidence": [],
+     "headline": "Macro scenario: Soft landing",
+     "key_points": [
+      "Favored sectors: Technology, Communication Services, Industrials, Consumer Discretionary.",
+      "Pressured sectors: Energy, Defensive Staples.",
+      "Top scenario risks: Re-acceleration in inflation; Labor market crack; Credit-spread blowout."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+     "sources": [],
+     "summary": "Scenario read: Synthetic scenario narrative for the msft_live fixture."
+    },
+    "risk": {
+     "agent": "Risk Analyst",
+     "confidence": 0.7,
+     "data": {},
+     "evidence": [],
+     "headline": "Risk profile for MSFT",
+     "key_points": [],
+     "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+     "sources": [],
+     "summary": "Quantitative risk profile looks moderate."
+    },
+    "sector": {
+     "agent": "Sector Analyst",
+     "confidence": 0.78,
+     "data": {
+      "bull_bear_analysis": {
+       "bear_case": {
+        "headline": "Bear case: Software - Infrastructure thesis breaks on execution.",
+        "key_points": [
+         "Execution risk on the dominant driver."
+        ]
+       },
+       "bull_case": {
+        "headline": "Bull case: durable execution against sector tailwinds.",
+        "key_points": [
+         "Quality + growth profile supports a premium versus peers."
+        ]
+       },
+       "falsifiable_tests": [
+        {
+         "invalidates_side": "bull",
+         "statement": "Cohort revenue growth turns negative for two consecutive quarters AND target margin compresses with it."
+        },
+        {
+         "invalidates_side": "bear",
+         "statement": "Core driver re-accelerates and the target's cohort margin quartile improves."
+        }
+       ],
+       "key_disagreement": "Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver.",
+       "sector_lean": "balanced",
+       "sector_synthesis": "Cohort context for Software - Infrastructure (Operating leverage cycle regime): the bear case rests on execution; the bull case rests on execution against the dominant driver. Sector lean is balanced based on cohort placement; PM should weigh other findings."
+      },
+      "cross_sector_relevance": [
+       "NEE",
+       "CAT"
+      ],
+      "kpi_placements": {
+       "EV_EBITDA": {
+        "distribution": {
+         "max": 586.7537491163561,
+         "mean": 194.9331629612305,
+         "median": 58.25842349304482,
+         "min": 23.334647011009757,
+         "n": 7,
+         "p25": 23.334647011009757,
+         "p75": 386.96188342881544,
+         "stdev": 205.64150452323244
+        },
+        "group": "valuation",
+        "interpretation": "cheapest in cohort",
+        "quartile": 1,
+        "target": 13.873615813491776
+       },
+       "EV_Revenue": {
+        "distribution": {
+         "max": 93.84630604413505,
+         "mean": 25.352736526803486,
+         "median": 12.456956857388878,
+         "min": 8.457934437319842,
+         "n": 7,
+         "p25": 8.457934437319842,
+         "p75": 22.251137394911268,
+         "stdev": 28.251224802254068
+        },
+        "group": "valuation",
+        "interpretation": "cheapest in cohort",
+        "quartile": 1,
+        "target": 8.676011198201538
+       },
+       "FCF_yield": {
+        "distribution": {
+         "max": 0.037719304890388036,
+         "mean": 0.012357881097271829,
+         "median": 0.0164814363088624,
+         "min": -0.033165508151565506,
+         "n": 7,
+         "p25": -0.033165508151565506,
+         "p75": 0.030169550473871837,
+         "stdev": 0.0211896331278924
+        },
+        "group": "valuation",
+        "interpretation": "above-median multiple",
+        "quartile": 3,
+        "target": 0.024172860865282544
+       },
+       "PFCF": {
+        "distribution": {
+         "max": 200.51429954712745,
+         "mean": 61.37976645711324,
+         "median": 53.87833018321111,
+         "min": -30.151806974584144,
+         "n": 7,
+         "p25": -30.151806974584144,
+         "p75": 85.08559295579974,
+         "stdev": 65.8657893741086
+        },
+        "group": "valuation",
+        "interpretation": "below-median multiple",
+        "quartile": 2,
+        "target": 41.368707062564376
+       },
+       "ROIC": {
+        "distribution": {
+         "max": 0.28748888442172366,
+         "mean": 0.07843951632246475,
+         "median": 0.056658324709480415,
+         "min": -0.042378803142561386,
+         "n": 7,
+         "p25": -0.042378803142561386,
+         "p75": 0.17947315871953484,
+         "stdev": 0.10992512675571325
+        },
+        "group": "quality",
+        "interpretation": "top quartile",
+        "quartile": 4,
+        "target": 0.20564635220712557
+       },
+       "gross_margin": {
+        "distribution": {
+         "max": 0.8236651721415028,
+         "mean": 0.7576421866543537,
+         "median": 0.7687424596397835,
+         "min": 0.6519789779981591,
+         "n": 7,
+         "p25": 0.6519789779981591,
+         "p75": 0.808429907641626,
+         "stdev": 0.05216381426210185
+        },
+        "group": "quality",
+        "interpretation": "bottom quartile",
+        "quartile": 1,
+        "target": 0.6794409337058032
+       },
+       "operating_margin": {
+        "distribution": {
+         "max": 0.3159495165398041,
+         "mean": 0.15515595114052608,
+         "median": 0.1347828444396248,
+         "min": -0.06095006135696035,
+         "n": 7,
+         "p25": -0.06095006135696035,
+         "p75": 0.30847115413165477,
+         "stdev": 0.1517671398760113
+        },
+        "group": "_subindustry_extra",
+        "interpretation": "top quartile",
+        "quartile": 4,
+        "target": 0.4678081840892722
+       }
+      },
+      "macro_alignment": "favored",
+      "regime": "Operating leverage cycle",
+      "sector": "Technology",
+      "sub_industry": "Software - Infrastructure"
+     },
+     "evidence": [],
+     "headline": "Software - Infrastructure cohort, regime: Operating leverage cycle · highly concentrated (HHI 0.61)",
+     "key_points": [
+      "operating_margin: 46.8% vs cohort median 13.5% — top quartile",
+      "ROIC: 20.6% vs cohort median 5.7% — top quartile",
+      "EV_EBITDA: 13.9x vs cohort median 58.3x — cheapest in cohort",
+      "FCF_yield: 2.4% vs cohort median 1.6% — above-median multiple",
+      "PFCF: 41.4x vs cohort median 53.9x — below-median multiple",
+      "Cohort revenue growth (recent): +22.6%",
+      "Cohort op margin expanding (+30.1% multi-year)",
+      "Cohort capex intensity intensifying (+11.3% multi-year)",
+      "Cohort-wide filing themes: Competitive intensity (13), Input-cost inflation (10), Rate sensitivity (9)."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+     "sources": [],
+     "summary": "Technology / Software - Infrastructure regime read: Operating leverage cycle. Cohort of 7 peers selected on sub_industry basis. Sub-industry dynamics: Platform consolidation; AI is both a moat and a margin tailwind for incumbents. Cohort outliers: margin leader MSFT, valuation cheapest MSFT. Secular trends: AI workload share of compute spend rising; Hyperscaler capex re-rating from cycle to secular. Watch: Seat-based saturation, AI agent disruption, RPO growth."
+    },
+    "technical": {
+     "agent": "Technical Analyst",
+     "confidence": 0.0,
+     "data": {
+      "intake_rationale": "Synthetic intake rationale 15 for the msft_live fixture.",
+      "intake_skipped": true
+     },
+     "evidence": [],
+     "headline": "Technical Analyst — skipped per PM intake.",
+     "key_points": [],
+     "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+     "sources": [],
+     "summary": "Synthetic intake rationale 15 for the msft_live fixture."
+    },
+    "valuation": {
+     "agent": "Valuation Analyst",
+     "confidence": 0.62,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 30 for the msft_live fixture.",
+     "key_points": [
+      "Synthetic analyst point 32 for the msft_live fixture.",
+      "Synthetic analyst point 33 for the msft_live fixture.",
+      "Synthetic analyst point 34 for the msft_live fixture.",
+      "Synthetic analyst point 35 for the msft_live fixture.",
+      "Synthetic analyst point 36 for the msft_live fixture.",
+      "Synthetic analyst point 37 for the msft_live fixture.",
+      "Synthetic analyst point 38 for the msft_live fixture.",
+      "Synthetic analyst point 39 for the msft_live fixture."
+     ],
+     "long_form_report": null,
+     "sources": [],
+     "summary": "Synthetic analyst summary 31 for the msft_live fixture."
+    }
+   },
+   "pm_questions": [],
+   "pm_rationale": "",
+   "round": 0
+  },
+  {
+   "early_exit": false,
+   "findings": {
+    "earnings": {
+     "agent": "Earnings Analyst",
+     "confidence": 0.65,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 1 for the msft_live fixture.",
+     "key_points": [
+      "Synthetic analyst point 3 for the msft_live fixture.",
+      "Synthetic analyst point 4 for the msft_live fixture.",
+      "Synthetic analyst point 5 for the msft_live fixture.",
+      "Synthetic analyst point 6 for the msft_live fixture.",
+      "Synthetic analyst point 7 for the msft_live fixture.",
+      "Synthetic analyst point 8 for the msft_live fixture.",
+      "Synthetic analyst point 9 for the msft_live fixture.",
+      "Synthetic analyst point 10 for the msft_live fixture.",
+      "Synthetic analyst point 11 for the msft_live fixture.",
+      "Synthetic analyst point 12 for the msft_live fixture.",
+      "Synthetic analyst point 13 for the msft_live fixture.",
+      "Synthetic analyst point 14 for the msft_live fixture."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+     "sources": [],
+     "summary": "Synthetic analyst summary 2 for the msft_live fixture."
+    },
+    "valuation": {
+     "agent": "Valuation Analyst",
+     "confidence": 0.5,
+     "data": {
+      "deterministic_fallback": "Valuation LLM returned no usable output; deterministic multiples/DCF snapshot shipped instead."
+     },
+     "evidence": [],
+     "headline": "P/E 20.7x; EV/EBITDA 13.9x; FCF yield 2.4%; DCF base implies +2% vs current",
+     "key_points": [
+      "Base case implied price: $501.71",
+      "Bull case: $824.83 | Bear case: $250.11",
+      "DCF figures reflect PM-adjusted assumptions (base case +2% vs current)."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+     "sources": [],
+     "summary": "Current multiples: P/E 20.7x, EV/EBITDA 13.9x, FCF yield 2.4%, DCF base implies +2% vs current. DCF triangulates against multiples; the bull/bear range frames the discount-rate sensitivity. Valuation risk increases if terminal growth or margin assumptions slip."
+    }
+   },
+   "pm_questions": [
+    {
+     "question": "Synthetic PM question 40 for the msft_live fixture.",
+     "target_agent": "valuation",
+     "why_it_matters": "Synthetic PM rationale 41 for the msft_live fixture."
+    },
+    {
+     "question": "Synthetic PM question 42 for the msft_live fixture.",
+     "target_agent": "earnings",
+     "why_it_matters": "Synthetic PM rationale 43 for the msft_live fixture."
+    }
+   ],
+   "pm_rationale": "Synthetic PM rationale 44 for the msft_live fixture.",
+   "round": 1
+  }
+ ],
+ "scorecard": null,
+ "scores": {
+  "beat_streak": 2.0,
+  "blended_pm_score": 56.7,
+  "confidence": 61.809999999999995,
+  "cross_sector_relevance_count": 2.0,
+  "deep_research_questions": 2.0,
+  "deep_research_rounds": 1.0,
+  "evidence_quality": 95.3,
+  "factor_catalyst": 50.0,
+  "factor_earnings_momentum": 60.6,
+  "factor_growth": 50.0,
+  "factor_macro_fit": 60.0,
+  "factor_pm_score": 61.2,
+  "factor_quality": 77.3,
+  "factor_risk": 79.7,
+  "factor_valuation": 42.0,
+  "guidance_net_direction": -1.0,
+  "llm_rating_score": 50.0,
+  "llm_rating_weight": 0.4,
+  "raw_confidence": 63.0,
+  "risk_confidence": 70.0,
+  "sector_confidence": 78.0,
+  "valuation_confidence": 50.0
+ },
+ "section_provenance": {},
+ "sector": "Technology",
+ "sector_agent_view": {
+  "agent": "Sector Analyst",
+  "confidence": 0.78,
+  "data": {
+   "bull_bear_analysis": {
+    "bear_case": {
+     "headline": "Bear case: Software - Infrastructure thesis breaks on execution.",
+     "key_points": [
+      "Execution risk on the dominant driver."
+     ]
+    },
+    "bull_case": {
+     "headline": "Bull case: durable execution against sector tailwinds.",
+     "key_points": [
+      "Quality + growth profile supports a premium versus peers."
+     ]
+    },
+    "falsifiable_tests": [
+     {
+      "invalidates_side": "bull",
+      "statement": "Cohort revenue growth turns negative for two consecutive quarters AND target margin compresses with it."
+     },
+     {
+      "invalidates_side": "bear",
+      "statement": "Core driver re-accelerates and the target's cohort margin quartile improves."
+     }
+    ],
+    "key_disagreement": "Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver.",
+    "sector_lean": "balanced",
+    "sector_synthesis": "Cohort context for Software - Infrastructure (Operating leverage cycle regime): the bear case rests on execution; the bull case rests on execution against the dominant driver. Sector lean is balanced based on cohort placement; PM should weigh other findings."
+   },
+   "cross_sector_relevance": [
+    "NEE",
+    "CAT"
+   ],
+   "kpi_placements": {
+    "EV_EBITDA": {
+     "distribution": {
+      "max": 586.7537491163561,
+      "mean": 194.9331629612305,
+      "median": 58.25842349304482,
+      "min": 23.334647011009757,
+      "n": 7,
+      "p25": 23.334647011009757,
+      "p75": 386.96188342881544,
+      "stdev": 205.64150452323244
+     },
+     "group": "valuation",
+     "interpretation": "cheapest in cohort",
+     "quartile": 1,
+     "target": 13.873615813491776
+    },
+    "EV_Revenue": {
+     "distribution": {
+      "max": 93.84630604413505,
+      "mean": 25.352736526803486,
+      "median": 12.456956857388878,
+      "min": 8.457934437319842,
+      "n": 7,
+      "p25": 8.457934437319842,
+      "p75": 22.251137394911268,
+      "stdev": 28.251224802254068
+     },
+     "group": "valuation",
+     "interpretation": "cheapest in cohort",
+     "quartile": 1,
+     "target": 8.676011198201538
+    },
+    "FCF_yield": {
+     "distribution": {
+      "max": 0.037719304890388036,
+      "mean": 0.012357881097271829,
+      "median": 0.0164814363088624,
+      "min": -0.033165508151565506,
+      "n": 7,
+      "p25": -0.033165508151565506,
+      "p75": 0.030169550473871837,
+      "stdev": 0.0211896331278924
+     },
+     "group": "valuation",
+     "interpretation": "above-median multiple",
+     "quartile": 3,
+     "target": 0.024172860865282544
+    },
+    "PFCF": {
+     "distribution": {
+      "max": 200.51429954712745,
+      "mean": 61.37976645711324,
+      "median": 53.87833018321111,
+      "min": -30.151806974584144,
+      "n": 7,
+      "p25": -30.151806974584144,
+      "p75": 85.08559295579974,
+      "stdev": 65.8657893741086
+     },
+     "group": "valuation",
+     "interpretation": "below-median multiple",
+     "quartile": 2,
+     "target": 41.368707062564376
+    },
+    "ROIC": {
+     "distribution": {
+      "max": 0.28748888442172366,
+      "mean": 0.07843951632246475,
+      "median": 0.056658324709480415,
+      "min": -0.042378803142561386,
+      "n": 7,
+      "p25": -0.042378803142561386,
+      "p75": 0.17947315871953484,
+      "stdev": 0.10992512675571325
+     },
+     "group": "quality",
+     "interpretation": "top quartile",
+     "quartile": 4,
+     "target": 0.20564635220712557
+    },
+    "gross_margin": {
+     "distribution": {
+      "max": 0.8236651721415028,
+      "mean": 0.7576421866543537,
+      "median": 0.7687424596397835,
+      "min": 0.6519789779981591,
+      "n": 7,
+      "p25": 0.6519789779981591,
+      "p75": 0.808429907641626,
+      "stdev": 0.05216381426210185
+     },
+     "group": "quality",
+     "interpretation": "bottom quartile",
+     "quartile": 1,
+     "target": 0.6794409337058032
+    },
+    "operating_margin": {
+     "distribution": {
+      "max": 0.3159495165398041,
+      "mean": 0.15515595114052608,
+      "median": 0.1347828444396248,
+      "min": -0.06095006135696035,
+      "n": 7,
+      "p25": -0.06095006135696035,
+      "p75": 0.30847115413165477,
+      "stdev": 0.1517671398760113
+     },
+     "group": "_subindustry_extra",
+     "interpretation": "top quartile",
+     "quartile": 4,
+     "target": 0.4678081840892722
+    }
+   },
+   "macro_alignment": "favored",
+   "regime": "Operating leverage cycle",
+   "sector": "Technology",
+   "sub_industry": "Software - Infrastructure"
+  },
+  "evidence": [],
+  "headline": "Software - Infrastructure cohort, regime: Operating leverage cycle · highly concentrated (HHI 0.61)",
+  "key_points": [
+   "operating_margin: 46.8% vs cohort median 13.5% — top quartile",
+   "ROIC: 20.6% vs cohort median 5.7% — top quartile",
+   "EV_EBITDA: 13.9x vs cohort median 58.3x — cheapest in cohort",
+   "FCF_yield: 2.4% vs cohort median 1.6% — above-median multiple",
+   "PFCF: 41.4x vs cohort median 53.9x — below-median multiple",
+   "Cohort revenue growth (recent): +22.6%",
+   "Cohort op margin expanding (+30.1% multi-year)",
+   "Cohort capex intensity intensifying (+11.3% multi-year)",
+   "Cohort-wide filing themes: Competitive intensity (13), Input-cost inflation (10), Rate sensitivity (9)."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+  "sources": [],
+  "summary": "Technology / Software - Infrastructure regime read: Operating leverage cycle. Cohort of 7 peers selected on sub_industry basis. Sub-industry dynamics: Platform consolidation; AI is both a moat and a margin tailwind for incumbents. Cohort outliers: margin leader MSFT, valuation cheapest MSFT. Secular trends: AI workload share of compute spend rising; Hyperscaler capex re-rating from cycle to secular. Watch: Seat-based saturation, AI agent disruption, RPO growth."
+ },
+ "sources_used": [],
+ "technical_agent_view": {
+  "agent": "Technical Analyst",
+  "confidence": 0.0,
+  "data": {
+   "intake_rationale": "Synthetic intake rationale 15 for the msft_live fixture.",
+   "intake_skipped": true
+  },
+  "evidence": [],
+  "headline": "Technical Analyst — skipped per PM intake.",
+  "key_points": [],
+  "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+  "sources": [],
+  "summary": "Synthetic intake rationale 15 for the msft_live fixture."
+ },
+ "thesis_breakers": [
+  {
+   "detail": "DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture.",
+   "severity": "high",
+   "title": "DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture.",
+   "type": "company"
+  },
+  {
+   "detail": "DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+   "severity": "high",
+   "title": "DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+   "type": "regulatory"
+  }
+ ],
+ "ticker": "MSFT",
+ "valuation_agent_view": {
+  "agent": "Valuation Analyst",
+  "confidence": 0.5,
+  "data": {
+   "deterministic_fallback": "Valuation LLM returned no usable output; deterministic multiples/DCF snapshot shipped instead."
+  },
+  "evidence": [],
+  "headline": "P/E 20.7x; EV/EBITDA 13.9x; FCF yield 2.4%; DCF base implies +2% vs current",
+  "key_points": [
+   "Base case implied price: $501.71",
+   "Bull case: $824.83 | Bear case: $250.11",
+   "DCF figures reflect PM-adjusted assumptions (base case +2% vs current)."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+  "sources": [],
+  "summary": "Current multiples: P/E 20.7x, EV/EBITDA 13.9x, FCF yield 2.4%, DCF base implies +2% vs current. DCF triangulates against multiples; the bull/bear range frames the discount-rate sensitivity. Valuation risk increases if terminal growth or margin assumptions slip."
+ },
+ "valuation_verdict": {
+  "basis": "rating",
+  "comps_ev_ebitda_premium": 0.02,
+  "dcf_base_upside": 0.0204517649650767,
+  "factor_valuation": 42.0,
+  "signals": {},
+  "summary": "Net read: fairly priced (DCF base case +2% to fair value; EV/EBITDA 2% premium vs peers; quant valuation factor 42/100).",
+  "verdict": "fairly_priced"
+ }
+}

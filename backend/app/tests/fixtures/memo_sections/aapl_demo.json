@@ -1,0 +1,919 @@
+{
+ "agent_influence": {
+  "comps": 1.0,
+  "earnings": 0.0,
+  "filing": 0.0,
+  "macro": 0.4592,
+  "risk": 0.0,
+  "sector": 0.3714,
+  "technical": 0.0,
+  "valuation": 0.7143
+ },
+ "bear_case": {
+  "headline": "Bear case: Consumer Electronics thesis breaks on execution.",
+  "key_points": [
+   "Execution risk on the dominant driver.",
+   "DCF driver — Software sector — downside scenario: Deterministic software fallback: growth -300bp, margin -200bp, terminal growth -50bp, WACC +75bp.",
+   "DCF bear case implies $72.25 (-78%).",
+   "Risk lens: DCF bear scenario maps explicit downside"
+  ]
+ },
+ "bull_case": {
+  "headline": "Bull case: durable execution against sector tailwinds.",
+  "key_points": [
+   "Quality + growth profile supports a premium versus peers.",
+   "DCF driver — Software sector — upside scenario: Deterministic software fallback: growth +300bp, margin +150bp, terminal growth +50bp, WACC -50bp.",
+   "DCF bull case implies $150.20 (-55%)."
+  ]
+ },
+ "business_summary": "Synthetic business description 2 for the aapl_demo fixture.",
+ "catalysts": [
+  {
+   "detail": "operating_margin: 32.0% vs cohort median 21.7% — top quartile",
+   "horizon": "medium_term",
+   "impact": "medium",
+   "title": "operating_margin: 32.0% vs cohort median 21.7% — top quartile"
+  },
+  {
+   "detail": "ROIC: 52.0% vs cohort median 11.0% — top quartile",
+   "horizon": "medium_term",
+   "impact": "medium",
+   "title": "ROIC: 52.0% vs cohort median 11.0% — top quartile"
+  },
+  {
+   "detail": "Quarterly print expected on 2026-10-29; tone + guidance the swing factor.",
+   "horizon": "near_term",
+   "impact": "medium",
+   "title": "Next earnings: 2026-10-29"
+  }
+ ],
+ "company_name": "Apple Inc.",
+ "comps_agent_view": {
+  "agent": "Comps Analyst",
+  "confidence": 0.7,
+  "data": {},
+  "evidence": [],
+  "headline": "AAPL trades at a 73% EV/EBITDA premium to peers with below-peer growth.",
+  "key_points": [
+   "EV/EBITDA: target 32.8x vs peer median 19.0x.",
+   "Op margin: 32% vs peers 41%.",
+   "Growth: +6% vs peers +18%.",
+   "FCF yield: 2.1% vs peers 1.8%.",
+   "Op margin vs own 8y median 30% — +7% delta."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+  "sources": [],
+  "summary": "Peer set: MSFT, GOOGL, META. Trades at a +72.7% premium to peers on EV/EBITDA. Operating margin trails peer median, which weakens the case for a premium. Growth is below peer median. Own-history context: Operating margin running above its own multi-year median."
+ },
+ "confidence_score": 59.025,
+ "dcf_initial_summary": {},
+ "dcf_pm_adjustment_headline": "",
+ "dcf_pm_adjustments": [],
+ "dcf_summary": {
+  "base_implied_price": 106.1541018017187,
+  "base_upside": -0.6805185487654055,
+  "bear_implied_price": 72.25273713258797,
+  "bear_upside": -0.7825481170957715,
+  "bull_implied_price": 150.19639767314993,
+  "bull_upside": -0.5479688275404041,
+  "current_price": 332.27,
+  "summary": "Base case implied price $106.15 vs current $332.27 (-68.1%). Bull $150.20 (-54.8%) | Bear $72.25 (-78.3%)",
+  "terminal_growth": 0.025,
+  "tv_clamped": false,
+  "wacc": 0.0886
+ },
+ "degradation_events": [],
+ "degraded_agents": [],
+ "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+ "earnings_agent_view": {
+  "agent": "Earnings Analyst",
+  "confidence": 0.4,
+  "data": {},
+  "evidence": [],
+  "headline": "Earnings transcript unavailable.",
+  "key_points": [
+   "Transcript unavailable"
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+  "sources": [],
+  "summary": "No transcript on file. Re-run after the next earnings call to refresh this view."
+ },
+ "earnings_qoq_delta": null,
+ "extra_agent_views": {},
+ "filing_agent_view": {
+  "agent": "Filing Analyst",
+  "confidence": 0.6,
+  "data": {},
+  "evidence": [],
+  "headline": "AAPL 10-Q highlights",
+  "key_points": [
+   "Risk: synthetic risk factor 1.",
+   "Risk: synthetic risk factor 2.",
+   "Risk: synthetic risk factor 3."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+  "sources": [],
+  "summary": "10-Q dated 2026-07-31. Synthetic filing excerpt for the aapl_demo fixture."
+ },
+ "final_pm_view": "Research view: Bullish. AAPL is undervalued — durable execution against sector tailwinds. The market is under-pricing the durable part of the franchise; the key risk is Execution risk on the dominant driver.. Sector framing supports the cohort thesis; valuation-relative read is the main swing factor. The risk committee flagged the dominant downside scenarios; portfolio fit depends on macro view.",
+ "final_verdict": "PM final view: Bullish (confidence 59). AAPL is undervalued — durable execution against sector tailwinds. The market is under-pricing the durable part of the franchise; the key risk is Execution risk on the dominant driver.. Cohort placement: see sector view for KPI quartile context. Cross-sector pull-through: NEE, CAT. Key disagreement: Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver. Watch items: none flagged.",
+ "forward_catalysts": [],
+ "generated_at": "2026-09-12T21:32:48.960861",
+ "generation_mode": "demo",
+ "intake_decision": {},
+ "key_risks": [
+  {
+   "detail": "Execution risk on the dominant driver.",
+   "severity": "medium",
+   "title": "Execution risk on the dominant driver.",
+   "type": "company"
+  },
+  {
+   "detail": "DCF driver — Software sector — downside scenario: Deterministic software fallback: growth -300bp, margin -200bp, terminal growth -50bp, WACC +75bp.",
+   "severity": "medium",
+   "title": "DCF driver — Software sector — downside scenario: Deterministic software fallbac",
+   "type": "company"
+  }
+ ],
+ "macro_regime_at_memo": "soft_landing",
+ "macro_sensitivity": {
+  "agent": "Macro Analyst",
+  "confidence": 0.75,
+  "data": {},
+  "evidence": [],
+  "headline": "Macro scenario: Soft landing",
+  "key_points": [
+   "Favored sectors: Technology, Communication Services, Industrials, Consumer Discretionary.",
+   "Pressured sectors: Energy, Defensive Staples.",
+   "Top scenario risks: Re-acceleration in inflation; Labor market crack; Credit-spread blowout."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+  "sources": [],
+  "summary": "Scenario read: Synthetic scenario narrative for the aapl_demo fixture."
+ },
+ "macro_snapshot_at_memo": {},
+ "mispricing_thesis": {
+  "consensus_view": "The market pays a 73% EV/EBITDA premium versus peers for AAPL.",
+  "falsifiers": [
+   "Execution risk on the dominant driver.",
+   "DCF driver — Software sector — downside scenario: Deterministic software fallbac"
+  ],
+  "gap": "Our DCF base case implies -68% to fair value; the blended read calls the name undervalued.",
+  "our_view": "AAPL is undervalued — durable execution against sector tailwinds. The market is under-pricing the durable part of the franchise; the key risk is Execution risk on the dominant driver.."
+ },
+ "one_sentence_thesis": "AAPL is undervalued — durable execution against sector tailwinds. The market is under-pricing the durable part of the franchise; the key risk is Execution risk on the dominant driver..",
+ "portfolio_fit": "In a balanced model portfolio, AAPL fits the 'Technology' sleeve. With a 'Bullish' research view, sizing is governed by the user's max position size and risk level.",
+ "price_at_memo": 332.27,
+ "price_at_memo_at": "2026-09-12T21:32:48.960644",
+ "quality": null,
+ "rating_label": "Bullish",
+ "risk_committee_challenge": {
+  "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
+  "challenges": [
+   "Rating (Bullish) is one-sided — list explicit thesis-breakers and the cost of being wrong."
+  ],
+  "overall_assessment": "Memo is structurally sound; balance and source citations should be tightened.",
+  "review_mode": "unknown",
+  "suggested_revisions": [
+   "Tag every claim with a source: filing, transcript, or ratio.",
+   "Verify the bull case is symmetric to the bear case.",
+   "If valuation is elevated, explicitly state what the market is pricing in."
+  ],
+  "underweighted_risks": [
+   "Re-emphasize the sector cohort context if quality deteriorates."
+  ],
+  "valuation_divergence_assessment": "not_assessed"
+ },
+ "round_findings": [
+  {
+   "early_exit": false,
+   "findings": {
+    "comps": {
+     "agent": "Comps Analyst",
+     "confidence": 0.7,
+     "data": {},
+     "evidence": [],
+     "headline": "AAPL trades at a 73% EV/EBITDA premium to peers with below-peer growth.",
+     "key_points": [
+      "EV/EBITDA: target 32.8x vs peer median 19.0x.",
+      "Op margin: 32% vs peers 41%.",
+      "Growth: +6% vs peers +18%.",
+      "FCF yield: 2.1% vs peers 1.8%.",
+      "Op margin vs own 8y median 30% — +7% delta."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+     "sources": [],
+     "summary": "Peer set: MSFT, GOOGL, META. Trades at a +72.7% premium to peers on EV/EBITDA. Operating margin trails peer median, which weakens the case for a premium. Growth is below peer median. Own-history context: Operating margin running above its own multi-year median."
+    },
+    "earnings": {
+     "agent": "Earnings Analyst",
+     "confidence": 0.4,
+     "data": {},
+     "evidence": [],
+     "headline": "Earnings transcript unavailable.",
+     "key_points": [
+      "Transcript unavailable"
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+     "sources": [],
+     "summary": "No transcript on file. Re-run after the next earnings call to refresh this view."
+    },
+    "filing": {
+     "agent": "Filing Analyst",
+     "confidence": 0.6,
+     "data": {},
+     "evidence": [],
+     "headline": "AAPL 10-Q highlights",
+     "key_points": [
+      "Risk: synthetic risk factor 1.",
+      "Risk: synthetic risk factor 2.",
+      "Risk: synthetic risk factor 3."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+     "sources": [],
+     "summary": "10-Q dated 2026-07-31. Synthetic filing excerpt for the aapl_demo fixture."
+    },
+    "macro": {
+     "agent": "Macro Analyst",
+     "confidence": 0.75,
+     "data": {},
+     "evidence": [],
+     "headline": "Macro scenario: Soft landing",
+     "key_points": [
+      "Favored sectors: Technology, Communication Services, Industrials, Consumer Discretionary.",
+      "Pressured sectors: Energy, Defensive Staples.",
+      "Top scenario risks: Re-acceleration in inflation; Labor market crack; Credit-spread blowout."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+     "sources": [],
+     "summary": "Scenario read: Synthetic scenario narrative for the aapl_demo fixture."
+    },
+    "risk": {
+     "agent": "Risk Analyst",
+     "confidence": 0.7,
+     "data": {},
+     "evidence": [],
+     "headline": "Risk profile for AAPL",
+     "key_points": [],
+     "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+     "sources": [],
+     "summary": "Quantitative risk profile looks moderate. 1 structured rec(s) applied to the memo (see data.recommendations)."
+    },
+    "sector": {
+     "agent": "Sector Analyst",
+     "confidence": 0.78,
+     "data": {
+      "bull_bear_analysis": {
+       "bear_case": {
+        "headline": "Bear case: Consumer Electronics thesis breaks on execution.",
+        "key_points": [
+         "Execution risk on the dominant driver."
+        ]
+       },
+       "bull_case": {
+        "headline": "Bull case: durable execution against sector tailwinds.",
+        "key_points": [
+         "Quality + growth profile supports a premium versus peers."
+        ]
+       },
+       "falsifiable_tests": [
+        {
+         "invalidates_side": "bull",
+         "statement": "Cohort revenue growth turns negative for two consecutive quarters AND target margin compresses with it."
+        },
+        {
+         "invalidates_side": "bear",
+         "statement": "Core driver re-accelerates and the target's cohort margin quartile improves."
+        }
+       ],
+       "key_disagreement": "Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver.",
+       "sector_lean": "balanced",
+       "sector_synthesis": "Cohort context for Consumer Electronics (Operating leverage cycle regime): the bear case rests on execution; the bull case rests on execution against the dominant driver. Sector lean is balanced based on cohort placement; PM should weigh other findings."
+      },
+      "cross_sector_relevance": [
+       "NEE",
+       "CAT"
+      ],
+      "kpi_placements": {
+       "EV_EBITDA": {
+        "distribution": {
+         "max": 586.7537491163561,
+         "mean": 59.62634425266264,
+         "median": 27.63425572482304,
+         "min": -59.960959093179355,
+         "n": 47,
+         "p25": 15.494785859959212,
+         "p75": 50.62204297977761,
+         "stdev": 106.02548943893377
+        },
+        "group": "valuation",
+        "interpretation": "below-median multiple",
+        "quartile": 2,
+        "target": 26.969935053694947
+       },
+       "EV_Revenue": {
+        "distribution": {
+         "max": 93.84630604413505,
+         "mean": 12.726499445711514,
+         "median": 9.606854993778985,
+         "min": 0.4825473782502308,
+         "n": 47,
+         "p25": 5.093907284768212,
+         "p75": 15.216781038531654,
+         "stdev": 13.972812196095866
+        },
+        "group": "valuation",
+        "interpretation": "below-median multiple",
+        "quartile": 2,
+        "target": 9.359807406268247
+       },
+       "FCF_yield": {
+        "distribution": {
+         "max": 0.11276632466736083,
+         "mean": 0.021245613089389593,
+         "median": 0.022229507488539673,
+         "min": -0.3949859417300986,
+         "n": 47,
+         "p25": 0.014877106930310434,
+         "p75": 0.041914626384264034,
+         "stdev": 0.06699167096166667
+        },
+        "group": "valuation",
+        "interpretation": "above-median multiple",
+        "quartile": 3,
+        "target": 0.02586374077814872
+       },
+       "PFCF": {
+        "distribution": {
+         "max": 200.51429954712745,
+         "mean": 45.12568073647043,
+         "median": 39.18250658844345,
+         "min": -35.51974136189129,
+         "n": 47,
+         "p25": 16.524082459488657,
+         "p75": 60.584867460622355,
+         "stdev": 41.372168284195055
+        },
+        "group": "valuation",
+        "interpretation": "below-median multiple",
+        "quartile": 2,
+        "target": 38.66416728259439
+       },
+       "ROIC": {
+        "distribution": {
+         "max": 0.6288038473944232,
+         "mean": 0.13426932426952987,
+         "median": 0.1103192909714571,
+         "min": -0.3014797909924414,
+         "n": 47,
+         "p25": 0.059470850624440914,
+         "p75": 0.18449990030375815,
+         "stdev": 0.13925977529177092
+        },
+        "group": "quality",
+        "interpretation": "top quartile",
+        "quartile": 4,
+        "target": 0.5196842110031786
+       },
+       "gross_margin": {
+        "distribution": {
+         "max": 0.9247967479674797,
+         "mean": 0.6247815491900622,
+         "median": 0.6405609780472368,
+         "min": 0.10821604097086886,
+         "n": 47,
+         "p25": 0.5046900724797688,
+         "p75": 0.7753426720891701,
+         "stdev": 0.18656553874406376
+        },
+        "group": "_subindustry_extra",
+        "interpretation": "bottom quartile",
+        "quartile": 1,
+        "target": 0.4690516410716045
+       },
+       "operating_margin": {
+        "distribution": {
+         "max": 0.6038168363141272,
+         "mean": 0.21744584751044008,
+         "median": 0.21736670319721732,
+         "min": -0.3064008423666712,
+         "n": 47,
+         "p25": 0.12469559995996932,
+         "p75": 0.311469900744965,
+         "stdev": 0.16019961555068035
+        },
+        "group": "quality",
+        "interpretation": "top quartile",
+        "quartile": 4,
+        "target": 0.31970799762591884
+       }
+      },
+      "macro_alignment": "favored",
+      "regime": "Operating leverage cycle",
+      "sector": "Technology",
+      "sub_industry": "Consumer Electronics"
+     },
+     "evidence": [],
+     "headline": "Consumer Electronics cohort, regime: Operating leverage cycle · highly concentrated (HHI 0.45)",
+     "key_points": [
+      "operating_margin: 32.0% vs cohort median 21.7% — top quartile",
+      "ROIC: 52.0% vs cohort median 11.0% — top quartile",
+      "EV_EBITDA: 27.0x vs cohort median 27.6x — below-median multiple",
+      "FCF_yield: 2.6% vs cohort median 2.2% — above-median multiple",
+      "PFCF: 38.7x vs cohort median 39.2x — below-median multiple",
+      "Cohort revenue growth (recent): +19.8%",
+      "Cohort op margin expanding (+13.1% multi-year)",
+      "Cohort capex intensity intensifying (+1.8% multi-year)",
+      "Cohort-wide filing themes: Regulatory pressure (75), Competitive intensity (64), Supply chain risk (59)."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+     "sources": [],
+     "summary": "Technology / Consumer Electronics regime read: Operating leverage cycle. Cohort of 47 peers selected on sub_industry basis. Sub-industry dynamics: Hardware mature; services drive incremental margin. Cohort outliers: margin leader NVDA, valuation cheapest SNOW. Secular trends: AI workload share of compute spend rising; Hyperscaler capex re-rating from cycle to secular. Watch: Replacement cycle, services attach rate, China demand."
+    },
+    "technical": {
+     "agent": "Technical Analyst",
+     "confidence": 0.6,
+     "data": {
+      "signals": {
+       "bb_lower": 301.77904691190815,
+       "bb_middle": 316.626,
+       "bb_position": 1.0,
+       "bb_upper": 331.4729530880918,
+       "ema_10": 322.0457457737557,
+       "ema_20": 319.0339743348462,
+       "high_52w": 340.08,
+       "last_date": "2026-09-11",
+       "last_price": 332.27,
+       "low_52w": 230.03,
+       "macd_histogram": 1.3247182451761348,
+       "macd_line": 3.2269647646178328,
+       "macd_signal": 1.902246519441698,
+       "momentum": "positive",
+       "notes": [
+        "Golden-cross alignment (SMA50 above SMA200).",
+        "Price hugging upper Bollinger band."
+       ],
+       "position_52w": 0.9290322580645161,
+       "rsi_14": 62.789033440224486,
+       "sma_200": 284.9536,
+       "sma_50": 317.9742,
+       "sma_50_above_200": true,
+       "trend": "up",
+       "vwma_20": 317.3610741057963
+      }
+     },
+     "evidence": [],
+     "headline": "AAPL: up trend · positive momentum · 93% of 52w range",
+     "key_points": [
+      "Golden-cross alignment (SMA50 above SMA200).",
+      "Price hugging upper Bollinger band."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+     "sources": [],
+     "summary": "SMA50 (317.97) is above SMA200 (284.95) — last close 332.27. RSI(14) at 63. MACD histogram +1.32 (expanding). Bollinger position 100% within band. Technical signals are positioning context for the fundamental thesis, not a standalone trade signal."
+    },
+    "valuation": {
+     "agent": "Valuation Analyst",
+     "confidence": 0.5,
+     "data": {
+      "deterministic_fallback": "Valuation LLM returned no usable output; deterministic multiples/DCF snapshot shipped instead."
+     },
+     "evidence": [],
+     "headline": "P/E 34.1x; EV/EBITDA 27.0x; FCF yield 2.6%; DCF base implies -68% vs current",
+     "key_points": [
+      "Base case implied price: $106.15",
+      "Bull case: $150.20 | Bear case: $72.25",
+      "Valuation is elevated on EV/EBITDA — rate-sensitive."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+     "sources": [],
+     "summary": "Current multiples: P/E 34.1x, EV/EBITDA 27.0x, FCF yield 2.6%, DCF base implies -68% vs current. DCF triangulates against multiples; the bull/bear range frames the discount-rate sensitivity. Valuation risk increases if terminal growth or margin assumptions slip."
+    }
+   },
+   "pm_questions": [],
+   "pm_rationale": "",
+   "round": 0
+  },
+  {
+   "early_exit": true,
+   "findings": {},
+   "pm_questions": [],
+   "pm_rationale": "Synthetic PM rationale 1 for the aapl_demo fixture.",
+   "round": 1
+  }
+ ],
+ "scorecard": {
+  "as_of": "2026-09-11",
+  "categories": {
+   "capital_allocation": {
+    "coverage": 1.0,
+    "n_available": 4,
+    "n_features": 4,
+    "percentile": 89.94082840236686,
+    "score": 63.6,
+    "sector_percentile": 91.30434782608695,
+    "weight": 0.125,
+    "z": 0.6779840506936177
+   },
+   "earnings_quality": {
+    "coverage": 1.0,
+    "n_available": 3,
+    "n_features": 3,
+    "percentile": 16.149068322981368,
+    "score": 35.0,
+    "sector_percentile": 17.073170731707318,
+    "weight": 0.125,
+    "z": -0.747687623872005
+   },
+   "efficiency": {
+    "coverage": 1.0,
+    "n_available": 3,
+    "n_features": 3,
+    "percentile": 91.12426035502959,
+    "score": 71.2,
+    "sector_percentile": 91.30434782608695,
+    "weight": 0.125,
+    "z": 1.0622705320539267
+   },
+   "growth": {
+    "coverage": 1.0,
+    "n_available": 5,
+    "n_features": 5,
+    "percentile": 15.384615384615385,
+    "score": 38.4,
+    "sector_percentile": 17.391304347826086,
+    "weight": 0.125,
+    "z": -0.58180745028563
+   },
+   "leverage": {
+    "coverage": 0.75,
+    "n_available": 3,
+    "n_features": 4,
+    "percentile": 13.698630136986301,
+    "score": 32.8,
+    "sector_percentile": 16.27906976744186,
+    "weight": 0.125,
+    "z": -0.8613135899990269
+   },
+   "profitability": {
+    "coverage": 1.0,
+    "n_available": 4,
+    "n_features": 4,
+    "percentile": 44.37869822485207,
+    "score": 47.6,
+    "sector_percentile": 45.65217391304348,
+    "weight": 0.125,
+    "z": -0.12059666781017901
+   },
+   "quality": {
+    "coverage": 1.0,
+    "n_available": 4,
+    "n_features": 4,
+    "percentile": 98.81656804733728,
+    "score": 88.6,
+    "sector_percentile": 100.0,
+    "weight": 0.125,
+    "z": 1.9282893077162417
+   },
+   "valuation": {
+    "coverage": 1.0,
+    "n_available": 4,
+    "n_features": 4,
+    "percentile": 52.662721893491124,
+    "score": 46.4,
+    "sector_percentile": 63.04347826086956,
+    "weight": 0.125,
+    "z": -0.18023751001803487
+   }
+  },
+  "coverage": 0.967741935483871,
+  "data_available_at": "2025-10-31",
+  "disagreement": null,
+  "latest_period": "FY2025",
+  "notes": [
+   "Profile read (fs-v1): Reads as neither a compounder nor an early inflection (compounder z +0.43, inflection z -0.39; threshold z >= +0.50)."
+  ],
+  "overall_score": 52.9,
+  "overall_z": 0.1471126310598638,
+  "price_date": "2026-09-11",
+  "profiles": {
+   "compounder": 0.43449726668191885,
+   "inflection": -0.3876513126162095
+  },
+  "reconciliation": "",
+  "run_id": "6b452870-0f31-4590-8def-06e6fefbeb5f",
+  "sector_percentile": 73.91304347826087,
+  "stale": false,
+  "top_negative": [
+   {
+    "contribution": -0.05711934194403953,
+    "family": "leverage",
+    "feature": "debt_to_equity",
+    "z": -1.3708642066569487
+   },
+   {
+    "contribution": -0.04632264478144308,
+    "family": "leverage",
+    "feature": "current_ratio",
+    "z": -1.111743474754634
+   },
+   {
+    "contribution": -0.044608814940614555,
+    "family": "earnings_quality",
+    "feature": "accruals_ratio",
+    "z": -1.0706115585747493
+   }
+  ],
+  "top_positive": [
+   {
+    "contribution": 0.09375,
+    "family": "quality",
+    "feature": "roe",
+    "z": 3.0
+   },
+   {
+    "contribution": 0.07681699341552677,
+    "family": "quality",
+    "feature": "roic",
+    "z": 2.4581437892968565
+   },
+   {
+    "contribution": 0.07139282381302643,
+    "family": "efficiency",
+    "feature": "asset_turnover",
+    "z": 1.7134277715126345
+   }
+  ],
+  "universe_percentile": 70.41420118343196,
+  "version_key": "fs-v1"
+ },
+ "scores": {
+  "beat_streak": 1.0,
+  "blended_pm_score": 62.4,
+  "confidence": 59.025,
+  "cross_sector_relevance_count": 2.0,
+  "deep_research_questions": 0.0,
+  "deep_research_rounds": 1.0,
+  "evidence_quality": 95.9,
+  "factor_catalyst": 50.0,
+  "factor_earnings_momentum": 55.4,
+  "factor_growth": 50.0,
+  "factor_macro_fit": 60.0,
+  "factor_pm_score": 57.3,
+  "factor_quality": 70.8,
+  "factor_risk": 80.6,
+  "factor_valuation": 30.3,
+  "guidance_net_direction": 0.0,
+  "llm_rating_score": 70.0,
+  "llm_rating_weight": 0.4,
+  "raw_confidence": 60.0,
+  "risk_confidence": 70.0,
+  "risk_recs_applied": 1.0,
+  "sector_confidence": 78.0,
+  "valuation_confidence": 50.0
+ },
+ "section_provenance": {},
+ "sector": "Technology",
+ "sector_agent_view": {
+  "agent": "Sector Analyst",
+  "confidence": 0.78,
+  "data": {
+   "bull_bear_analysis": {
+    "bear_case": {
+     "headline": "Bear case: Consumer Electronics thesis breaks on execution.",
+     "key_points": [
+      "Execution risk on the dominant driver."
+     ]
+    },
+    "bull_case": {
+     "headline": "Bull case: durable execution against sector tailwinds.",
+     "key_points": [
+      "Quality + growth profile supports a premium versus peers."
+     ]
+    },
+    "falsifiable_tests": [
+     {
+      "invalidates_side": "bull",
+      "statement": "Cohort revenue growth turns negative for two consecutive quarters AND target margin compresses with it."
+     },
+     {
+      "invalidates_side": "bear",
+      "statement": "Core driver re-accelerates and the target's cohort margin quartile improves."
+     }
+    ],
+    "key_disagreement": "Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver.",
+    "sector_lean": "balanced",
+    "sector_synthesis": "Cohort context for Consumer Electronics (Operating leverage cycle regime): the bear case rests on execution; the bull case rests on execution against the dominant driver. Sector lean is balanced based on cohort placement; PM should weigh other findings."
+   },
+   "cross_sector_relevance": [
+    "NEE",
+    "CAT"
+   ],
+   "kpi_placements": {
+    "EV_EBITDA": {
+     "distribution": {
+      "max": 586.7537491163561,
+      "mean": 59.62634425266264,
+      "median": 27.63425572482304,
+      "min": -59.960959093179355,
+      "n": 47,
+      "p25": 15.494785859959212,
+      "p75": 50.62204297977761,
+      "stdev": 106.02548943893377
+     },
+     "group": "valuation",
+     "interpretation": "below-median multiple",
+     "quartile": 2,
+     "target": 26.969935053694947
+    },
+    "EV_Revenue": {
+     "distribution": {
+      "max": 93.84630604413505,
+      "mean": 12.726499445711514,
+      "median": 9.606854993778985,
+      "min": 0.4825473782502308,
+      "n": 47,
+      "p25": 5.093907284768212,
+      "p75": 15.216781038531654,
+      "stdev": 13.972812196095866
+     },
+     "group": "valuation",
+     "interpretation": "below-median multiple",
+     "quartile": 2,
+     "target": 9.359807406268247
+    },
+    "FCF_yield": {
+     "distribution": {
+      "max": 0.11276632466736083,
+      "mean": 0.021245613089389593,
+      "median": 0.022229507488539673,
+      "min": -0.3949859417300986,
+      "n": 47,
+      "p25": 0.014877106930310434,
+      "p75": 0.041914626384264034,
+      "stdev": 0.06699167096166667
+     },
+     "group": "valuation",
+     "interpretation": "above-median multiple",
+     "quartile": 3,
+     "target": 0.02586374077814872
+    },
+    "PFCF": {
+     "distribution": {
+      "max": 200.51429954712745,
+      "mean": 45.12568073647043,
+      "median": 39.18250658844345,
+      "min": -35.51974136189129,
+      "n": 47,
+      "p25": 16.524082459488657,
+      "p75": 60.584867460622355,
+      "stdev": 41.372168284195055
+     },
+     "group": "valuation",
+     "interpretation": "below-median multiple",
+     "quartile": 2,
+     "target": 38.66416728259439
+    },
+    "ROIC": {
+     "distribution": {
+      "max": 0.6288038473944232,
+      "mean": 0.13426932426952987,
+      "median": 0.1103192909714571,
+      "min": -0.3014797909924414,
+      "n": 47,
+      "p25": 0.059470850624440914,
+      "p75": 0.18449990030375815,
+      "stdev": 0.13925977529177092
+     },
+     "group": "quality",
+     "interpretation": "top quartile",
+     "quartile": 4,
+     "target": 0.5196842110031786
+    },
+    "gross_margin": {
+     "distribution": {
+      "max": 0.9247967479674797,
+      "mean": 0.6247815491900622,
+      "median": 0.6405609780472368,
+      "min": 0.10821604097086886,
+      "n": 47,
+      "p25": 0.5046900724797688,
+      "p75": 0.7753426720891701,
+      "stdev": 0.18656553874406376
+     },
+     "group": "_subindustry_extra",
+     "interpretation": "bottom quartile",
+     "quartile": 1,
+     "target": 0.4690516410716045
+    },
+    "operating_margin": {
+     "distribution": {
+      "max": 0.6038168363141272,
+      "mean": 0.21744584751044008,
+      "median": 0.21736670319721732,
+      "min": -0.3064008423666712,
+      "n": 47,
+      "p25": 0.12469559995996932,
+      "p75": 0.311469900744965,
+      "stdev": 0.16019961555068035
+     },
+     "group": "quality",
+     "interpretation": "top quartile",
+     "quartile": 4,
+     "target": 0.31970799762591884
+    }
+   },
+   "macro_alignment": "favored",
+   "regime": "Operating leverage cycle",
+   "sector": "Technology",
+   "sub_industry": "Consumer Electronics"
+  },
+  "evidence": [],
+  "headline": "Consumer Electronics cohort, regime: Operating leverage cycle · highly concentrated (HHI 0.45)",
+  "key_points": [
+   "operating_margin: 32.0% vs cohort median 21.7% — top quartile",
+   "ROIC: 52.0% vs cohort median 11.0% — top quartile",
+   "EV_EBITDA: 27.0x vs cohort median 27.6x — below-median multiple",
+   "FCF_yield: 2.6% vs cohort median 2.2% — above-median multiple",
+   "PFCF: 38.7x vs cohort median 39.2x — below-median multiple",
+   "Cohort revenue growth (recent): +19.8%",
+   "Cohort op margin expanding (+13.1% multi-year)",
+   "Cohort capex intensity intensifying (+1.8% multi-year)",
+   "Cohort-wide filing themes: Regulatory pressure (75), Competitive intensity (64), Supply chain risk (59)."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+  "sources": [],
+  "summary": "Technology / Consumer Electronics regime read: Operating leverage cycle. Cohort of 47 peers selected on sub_industry basis. Sub-industry dynamics: Hardware mature; services drive incremental margin. Cohort outliers: margin leader NVDA, valuation cheapest SNOW. Secular trends: AI workload share of compute spend rising; Hyperscaler capex re-rating from cycle to secular. Watch: Replacement cycle, services attach rate, China demand."
+ },
+ "sources_used": [],
+ "technical_agent_view": {
+  "agent": "Technical Analyst",
+  "confidence": 0.6,
+  "data": {
+   "signals": {
+    "bb_lower": 301.77904691190815,
+    "bb_middle": 316.626,
+    "bb_position": 1.0,
+    "bb_upper": 331.4729530880918,
+    "ema_10": 322.0457457737557,
+    "ema_20": 319.0339743348462,
+    "high_52w": 340.08,
+    "last_date": "2026-09-11",
+    "last_price": 332.27,
+    "low_52w": 230.03,
+    "macd_histogram": 1.3247182451761348,
+    "macd_line": 3.2269647646178328,
+    "macd_signal": 1.902246519441698,
+    "momentum": "positive",
+    "notes": [
+     "Golden-cross alignment (SMA50 above SMA200).",
+     "Price hugging upper Bollinger band."
+    ],
+    "position_52w": 0.9290322580645161,
+    "rsi_14": 62.789033440224486,
+    "sma_200": 284.9536,
+    "sma_50": 317.9742,
+    "sma_50_above_200": true,
+    "trend": "up",
+    "vwma_20": 317.3610741057963
+   }
+  },
+  "evidence": [],
+  "headline": "AAPL: up trend · positive momentum · 93% of 52w range",
+  "key_points": [
+   "Golden-cross alignment (SMA50 above SMA200).",
+   "Price hugging upper Bollinger band."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+  "sources": [],
+  "summary": "SMA50 (317.97) is above SMA200 (284.95) — last close 332.27. RSI(14) at 63. MACD histogram +1.32 (expanding). Bollinger position 100% within band. Technical signals are positioning context for the fundamental thesis, not a standalone trade signal."
+ },
+ "thesis_breakers": [],
+ "ticker": "AAPL",
+ "valuation_agent_view": {
+  "agent": "Valuation Analyst",
+  "confidence": 0.5,
+  "data": {
+   "deterministic_fallback": "Valuation LLM returned no usable output; deterministic multiples/DCF snapshot shipped instead."
+  },
+  "evidence": [],
+  "headline": "P/E 34.1x; EV/EBITDA 27.0x; FCF yield 2.6%; DCF base implies -68% vs current",
+  "key_points": [
+   "Base case implied price: $106.15",
+   "Bull case: $150.20 | Bear case: $72.25",
+   "Valuation is elevated on EV/EBITDA — rate-sensitive."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+  "sources": [],
+  "summary": "Current multiples: P/E 34.1x, EV/EBITDA 27.0x, FCF yield 2.6%, DCF base implies -68% vs current. DCF triangulates against multiples; the bull/bear range frames the discount-rate sensitivity. Valuation risk increases if terminal growth or margin assumptions slip."
+ },
+ "valuation_verdict": {
+  "basis": "rating",
+  "comps_ev_ebitda_premium": 0.727,
+  "dcf_base_upside": -0.6805185487654055,
+  "factor_valuation": 30.3,
+  "signals": {},
+  "summary": "Net read: undervalued (DCF base case -68% to fair value; EV/EBITDA 73% premium vs peers; quant valuation factor 30/100).",
+  "verdict": "undervalued"
+ }
+}

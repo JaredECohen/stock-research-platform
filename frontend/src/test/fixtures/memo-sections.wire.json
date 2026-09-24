@@ -1,0 +1,4866 @@
+{
+ "memos": {
+  "aapl_demo": {
+   "agent_influence": {
+    "comps": 1.0,
+    "earnings": 0.0,
+    "filing": 0.0,
+    "macro": 0.4592,
+    "risk": 0.0,
+    "sector": 0.3714,
+    "technical": 0.0,
+    "valuation": 0.7143
+   },
+   "bear_case": {
+    "headline": "Unavailable in this version.",
+    "key_points": [
+     "DCF bear case implies $72.25 (-78%).",
+     "Risk lens: DCF bear scenario maps explicit downside"
+    ]
+   },
+   "bull_case": {
+    "headline": "Unavailable in this version.",
+    "key_points": [
+     "DCF bull case implies $150.20 (-55%)."
+    ]
+   },
+   "business_summary": "Synthetic business description 2 for the aapl_demo fixture.",
+   "catalysts": [
+    {
+     "detail": "Quarterly print expected on 2026-10-29; tone + guidance the swing factor.",
+     "horizon": "near_term",
+     "impact": "medium",
+     "title": "Next earnings: 2026-10-29"
+    }
+   ],
+   "company_name": "Apple Inc.",
+   "comps_agent_view": {
+    "agent": "Comps Analyst",
+    "confidence": 0.7,
+    "data": {},
+    "evidence": [],
+    "headline": "AAPL trades at a 73% EV/EBITDA premium to peers with below-peer growth.",
+    "key_points": [
+     "EV/EBITDA: target 32.8x vs peer median 19.0x.",
+     "Op margin: 32% vs peers 41%.",
+     "Growth: +6% vs peers +18%.",
+     "FCF yield: 2.1% vs peers 1.8%.",
+     "Op margin vs own 8y median 30% — +7% delta."
+    ],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Peer set: MSFT, GOOGL, META. Trades at a +72.7% premium to peers on EV/EBITDA. Operating margin trails peer median, which weakens the case for a premium. Growth is below peer median. Own-history context: Operating margin running above its own multi-year median."
+   },
+   "confidence_score": 59.025,
+   "dcf_initial_summary": {},
+   "dcf_pm_adjustment_headline": "",
+   "dcf_pm_adjustments": [],
+   "dcf_summary": {
+    "base_implied_price": 106.1541018017187,
+    "base_upside": -0.6805185487654055,
+    "bear_implied_price": 72.25273713258797,
+    "bear_upside": -0.7825481170957715,
+    "bull_implied_price": 150.19639767314993,
+    "bull_upside": -0.5479688275404041,
+    "current_price": 332.27,
+    "summary": "Base case implied price $106.15 vs current $332.27 (-68.1%). Bull $150.20 (-54.8%) | Bear $72.25 (-78.3%)",
+    "terminal_growth": 0.025,
+    "tv_clamped": false,
+    "wacc": 0.0886
+   },
+   "degradation_events": [],
+   "degraded_agents": [],
+   "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+   "earnings_agent_view": {
+    "agent": "Earnings Analyst",
+    "confidence": 0.4,
+    "data": {},
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "earnings_qoq_delta": null,
+   "extra_agent_views": {},
+   "filing_agent_view": {
+    "agent": "Filing Analyst",
+    "confidence": 0.6,
+    "data": {},
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "final_pm_view": "Unavailable in this version.",
+   "final_verdict": "Unavailable in this version.",
+   "forward_catalysts": [],
+   "generated_at": "2026-09-12T21:32:48.960861",
+   "generation_mode": "demo",
+   "intake_decision": {},
+   "key_risks": [],
+   "macro_regime_at_memo": "soft_landing",
+   "macro_sensitivity": {
+    "agent": "Macro Analyst",
+    "confidence": 0.75,
+    "data": {},
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "macro_snapshot_at_memo": {},
+   "mispricing_thesis": {
+    "consensus_view": "Unavailable in this version.",
+    "falsifiers": [],
+    "gap": "Unavailable in this version.",
+    "our_view": "Unavailable in this version."
+   },
+   "one_sentence_thesis": "Unavailable in this version.",
+   "portfolio_fit": "Unavailable in this version.",
+   "price_at_memo": 332.27,
+   "price_at_memo_at": "2026-09-12T21:32:48.960644",
+   "quality": null,
+   "rating_label": "Bullish",
+   "risk_committee_challenge": {
+    "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
+    "challenges": [],
+    "overall_assessment": "Unavailable in this version.",
+    "review_mode": "unknown",
+    "suggested_revisions": [],
+    "underweighted_risks": [],
+    "valuation_divergence_assessment": "not_assessed"
+   },
+   "round_findings": [
+    {
+     "early_exit": false,
+     "findings": {
+      "comps": {
+       "agent": "Comps Analyst",
+       "confidence": 0.7,
+       "data": {},
+       "evidence": [],
+       "headline": "AAPL trades at a 73% EV/EBITDA premium to peers with below-peer growth.",
+       "key_points": [
+        "EV/EBITDA: target 32.8x vs peer median 19.0x.",
+        "Op margin: 32% vs peers 41%.",
+        "Growth: +6% vs peers +18%.",
+        "FCF yield: 2.1% vs peers 1.8%.",
+        "Op margin vs own 8y median 30% — +7% delta."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+       "sources": [],
+       "summary": "Peer set: MSFT, GOOGL, META. Trades at a +72.7% premium to peers on EV/EBITDA. Operating margin trails peer median, which weakens the case for a premium. Growth is below peer median. Own-history context: Operating margin running above its own multi-year median."
+      },
+      "earnings": {
+       "agent": "Earnings Analyst",
+       "confidence": 0.4,
+       "data": {},
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "filing": {
+       "agent": "Filing Analyst",
+       "confidence": 0.6,
+       "data": {},
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "macro": {
+       "agent": "Macro Analyst",
+       "confidence": 0.75,
+       "data": {},
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "risk": {
+       "agent": "Risk Analyst",
+       "confidence": 0.7,
+       "data": {},
+       "evidence": [],
+       "headline": "Risk profile for AAPL",
+       "key_points": [],
+       "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+       "sources": [],
+       "summary": "Quantitative risk profile looks moderate. 1 structured rec(s) applied to the memo (see data.recommendations)."
+      },
+      "sector": {
+       "agent": "Sector Analyst",
+       "confidence": 0.78,
+       "data": {
+        "kpi_placements": {
+         "EV_EBITDA": {
+          "distribution": {
+           "max": 586.7537491163561,
+           "mean": 59.62634425266264,
+           "median": 27.63425572482304,
+           "min": -59.960959093179355,
+           "n": 47,
+           "p25": 15.494785859959212,
+           "p75": 50.62204297977761,
+           "stdev": 106.02548943893377
+          },
+          "group": "valuation",
+          "interpretation": "below-median multiple",
+          "quartile": 2,
+          "target": 26.969935053694947
+         },
+         "EV_Revenue": {
+          "distribution": {
+           "max": 93.84630604413505,
+           "mean": 12.726499445711514,
+           "median": 9.606854993778985,
+           "min": 0.4825473782502308,
+           "n": 47,
+           "p25": 5.093907284768212,
+           "p75": 15.216781038531654,
+           "stdev": 13.972812196095866
+          },
+          "group": "valuation",
+          "interpretation": "below-median multiple",
+          "quartile": 2,
+          "target": 9.359807406268247
+         },
+         "FCF_yield": {
+          "distribution": {
+           "max": 0.11276632466736083,
+           "mean": 0.021245613089389593,
+           "median": 0.022229507488539673,
+           "min": -0.3949859417300986,
+           "n": 47,
+           "p25": 0.014877106930310434,
+           "p75": 0.041914626384264034,
+           "stdev": 0.06699167096166667
+          },
+          "group": "valuation",
+          "interpretation": "above-median multiple",
+          "quartile": 3,
+          "target": 0.02586374077814872
+         },
+         "PFCF": {
+          "distribution": {
+           "max": 200.51429954712745,
+           "mean": 45.12568073647043,
+           "median": 39.18250658844345,
+           "min": -35.51974136189129,
+           "n": 47,
+           "p25": 16.524082459488657,
+           "p75": 60.584867460622355,
+           "stdev": 41.372168284195055
+          },
+          "group": "valuation",
+          "interpretation": "below-median multiple",
+          "quartile": 2,
+          "target": 38.66416728259439
+         },
+         "ROIC": {
+          "distribution": {
+           "max": 0.6288038473944232,
+           "mean": 0.13426932426952987,
+           "median": 0.1103192909714571,
+           "min": -0.3014797909924414,
+           "n": 47,
+           "p25": 0.059470850624440914,
+           "p75": 0.18449990030375815,
+           "stdev": 0.13925977529177092
+          },
+          "group": "quality",
+          "interpretation": "top quartile",
+          "quartile": 4,
+          "target": 0.5196842110031786
+         },
+         "gross_margin": {
+          "distribution": {
+           "max": 0.9247967479674797,
+           "mean": 0.6247815491900622,
+           "median": 0.6405609780472368,
+           "min": 0.10821604097086886,
+           "n": 47,
+           "p25": 0.5046900724797688,
+           "p75": 0.7753426720891701,
+           "stdev": 0.18656553874406376
+          },
+          "group": "_subindustry_extra",
+          "interpretation": "bottom quartile",
+          "quartile": 1,
+          "target": 0.4690516410716045
+         },
+         "operating_margin": {
+          "distribution": {
+           "max": 0.6038168363141272,
+           "mean": 0.21744584751044008,
+           "median": 0.21736670319721732,
+           "min": -0.3064008423666712,
+           "n": 47,
+           "p25": 0.12469559995996932,
+           "p75": 0.311469900744965,
+           "stdev": 0.16019961555068035
+          },
+          "group": "quality",
+          "interpretation": "top quartile",
+          "quartile": 4,
+          "target": 0.31970799762591884
+         }
+        },
+        "macro_alignment": "favored",
+        "regime": "Operating leverage cycle",
+        "sector": "Technology",
+        "sub_industry": "Consumer Electronics"
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "technical": {
+       "agent": "Technical Analyst",
+       "confidence": 0.6,
+       "data": {
+        "signals": {
+         "bb_lower": 301.77904691190815,
+         "bb_middle": 316.626,
+         "bb_position": 1.0,
+         "bb_upper": 331.4729530880918,
+         "ema_10": 322.0457457737557,
+         "ema_20": 319.0339743348462,
+         "high_52w": 340.08,
+         "last_date": "2026-09-11",
+         "last_price": 332.27,
+         "low_52w": 230.03,
+         "macd_histogram": 1.3247182451761348,
+         "macd_line": 3.2269647646178328,
+         "macd_signal": 1.902246519441698,
+         "momentum": "positive",
+         "notes": [
+          "Golden-cross alignment (SMA50 above SMA200).",
+          "Price hugging upper Bollinger band."
+         ],
+         "position_52w": 0.9290322580645161,
+         "rsi_14": 62.789033440224486,
+         "sma_200": 284.9536,
+         "sma_50": 317.9742,
+         "sma_50_above_200": true,
+         "trend": "up",
+         "vwma_20": 317.3610741057963
+        }
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "valuation": {
+       "agent": "Valuation Analyst",
+       "confidence": 0.5,
+       "data": {
+        "deterministic_fallback": "Valuation LLM returned no usable output; deterministic multiples/DCF snapshot shipped instead."
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      }
+     },
+     "pm_questions": [],
+     "pm_rationale": "",
+     "round": 0
+    },
+    {
+     "early_exit": true,
+     "findings": {},
+     "pm_questions": [],
+     "pm_rationale": "Synthetic PM rationale 1 for the aapl_demo fixture.",
+     "round": 1
+    }
+   ],
+   "scorecard": {
+    "as_of": "2026-09-11",
+    "categories": {
+     "capital_allocation": {
+      "coverage": 1.0,
+      "n_available": 4,
+      "n_features": 4,
+      "percentile": 89.94082840236686,
+      "score": 63.6,
+      "sector_percentile": 91.30434782608695,
+      "weight": 0.125,
+      "z": 0.6779840506936177
+     },
+     "earnings_quality": {
+      "coverage": 1.0,
+      "n_available": 3,
+      "n_features": 3,
+      "percentile": 16.149068322981368,
+      "score": 35.0,
+      "sector_percentile": 17.073170731707318,
+      "weight": 0.125,
+      "z": -0.747687623872005
+     },
+     "efficiency": {
+      "coverage": 1.0,
+      "n_available": 3,
+      "n_features": 3,
+      "percentile": 91.12426035502959,
+      "score": 71.2,
+      "sector_percentile": 91.30434782608695,
+      "weight": 0.125,
+      "z": 1.0622705320539267
+     },
+     "growth": {
+      "coverage": 1.0,
+      "n_available": 5,
+      "n_features": 5,
+      "percentile": 15.384615384615385,
+      "score": 38.4,
+      "sector_percentile": 17.391304347826086,
+      "weight": 0.125,
+      "z": -0.58180745028563
+     },
+     "leverage": {
+      "coverage": 0.75,
+      "n_available": 3,
+      "n_features": 4,
+      "percentile": 13.698630136986301,
+      "score": 32.8,
+      "sector_percentile": 16.27906976744186,
+      "weight": 0.125,
+      "z": -0.8613135899990269
+     },
+     "profitability": {
+      "coverage": 1.0,
+      "n_available": 4,
+      "n_features": 4,
+      "percentile": 44.37869822485207,
+      "score": 47.6,
+      "sector_percentile": 45.65217391304348,
+      "weight": 0.125,
+      "z": -0.12059666781017901
+     },
+     "quality": {
+      "coverage": 1.0,
+      "n_available": 4,
+      "n_features": 4,
+      "percentile": 98.81656804733728,
+      "score": 88.6,
+      "sector_percentile": 100.0,
+      "weight": 0.125,
+      "z": 1.9282893077162417
+     },
+     "valuation": {
+      "coverage": 1.0,
+      "n_available": 4,
+      "n_features": 4,
+      "percentile": 52.662721893491124,
+      "score": 46.4,
+      "sector_percentile": 63.04347826086956,
+      "weight": 0.125,
+      "z": -0.18023751001803487
+     }
+    },
+    "coverage": 0.967741935483871,
+    "data_available_at": "2025-10-31",
+    "disagreement": null,
+    "latest_period": "FY2025",
+    "notes": [
+     "Profile read (fs-v1): Reads as neither a compounder nor an early inflection (compounder z +0.43, inflection z -0.39; threshold z >= +0.50)."
+    ],
+    "overall_score": 52.9,
+    "overall_z": 0.1471126310598638,
+    "price_date": "2026-09-11",
+    "profiles": {
+     "compounder": 0.43449726668191885,
+     "inflection": -0.3876513126162095
+    },
+    "reconciliation": "",
+    "run_id": "6b452870-0f31-4590-8def-06e6fefbeb5f",
+    "sector_percentile": 73.91304347826087,
+    "stale": false,
+    "top_negative": [
+     {
+      "contribution": -0.05711934194403953,
+      "family": "leverage",
+      "feature": "debt_to_equity",
+      "z": -1.3708642066569487
+     },
+     {
+      "contribution": -0.04632264478144308,
+      "family": "leverage",
+      "feature": "current_ratio",
+      "z": -1.111743474754634
+     },
+     {
+      "contribution": -0.044608814940614555,
+      "family": "earnings_quality",
+      "feature": "accruals_ratio",
+      "z": -1.0706115585747493
+     }
+    ],
+    "top_positive": [
+     {
+      "contribution": 0.09375,
+      "family": "quality",
+      "feature": "roe",
+      "z": 3.0
+     },
+     {
+      "contribution": 0.07681699341552677,
+      "family": "quality",
+      "feature": "roic",
+      "z": 2.4581437892968565
+     },
+     {
+      "contribution": 0.07139282381302643,
+      "family": "efficiency",
+      "feature": "asset_turnover",
+      "z": 1.7134277715126345
+     }
+    ],
+    "universe_percentile": 70.41420118343196,
+    "version_key": "fs-v1"
+   },
+   "scores": {
+    "beat_streak": 1.0,
+    "blended_pm_score": 62.4,
+    "confidence": 59.025,
+    "cross_sector_relevance_count": 2.0,
+    "deep_research_questions": 0.0,
+    "deep_research_rounds": 1.0,
+    "evidence_quality": 95.9,
+    "factor_catalyst": 50.0,
+    "factor_earnings_momentum": 55.4,
+    "factor_growth": 50.0,
+    "factor_macro_fit": 60.0,
+    "factor_pm_score": 57.3,
+    "factor_quality": 70.8,
+    "factor_risk": 80.6,
+    "factor_valuation": 30.3,
+    "guidance_net_direction": 0.0,
+    "llm_rating_score": 70.0,
+    "llm_rating_weight": 0.4,
+    "raw_confidence": 60.0,
+    "risk_confidence": 70.0,
+    "risk_recs_applied": 1.0,
+    "sector_confidence": 78.0,
+    "valuation_confidence": 50.0
+   },
+   "section_availability": {
+    "bear_case": {
+     "basis": [
+      "fragments:template"
+     ],
+     "headline_hidden": true,
+     "hidden_items": 2,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "bull_case": {
+     "basis": [
+      "fragments:template"
+     ],
+     "headline_hidden": true,
+     "hidden_items": 2,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "business_summary": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "catalysts": {
+     "basis": [
+      "derived:hidden_findings"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 2,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "comps_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "comps_agent_view.long_form_report": {
+     "basis": [
+      "long_form:no_analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "confidence_score": {
+     "basis": [
+      "signature:pm_view_tail"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "dcf_summary": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "earnings_agent_view": {
+     "basis": [
+      "signature:earnings_no_transcript"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "no_source_data",
+     "status": "unavailable"
+    },
+    "earnings_qoq_delta": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "filing_agent_view": {
+     "basis": [
+      "signature:filing_det_pair"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "final_pm_view": {
+     "basis": [
+      "signature:pm_view_tail"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "final_verdict": {
+     "basis": [
+      "derived:thesis_or_confidence"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "derived_from_hidden",
+     "status": "unavailable"
+    },
+    "forward_catalysts": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "key_risks": {
+     "basis": [
+      "derived:bear_case"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 2,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "macro_sensitivity": {
+     "basis": [
+      "signature:macro_det_pair"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "mispricing_thesis": {
+     "basis": [
+      "signature:mispricing_gap_dcf",
+      "legacy:our_view"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "one_sentence_thesis": {
+     "basis": [
+      "signature:pm_view_tail"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "portfolio_fit": {
+     "basis": [
+      "producer:graph._portfolio_fit"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_always",
+     "status": "unavailable"
+    },
+    "rating_label": {
+     "basis": [
+      "signature:pm_view_tail"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "pm_view_unavailable",
+     "status": "degraded"
+    },
+    "risk_committee_challenge": {
+     "basis": [
+      "signature:critic_legacy_rule_based"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "critic_not_run",
+     "status": "unavailable"
+    },
+    "round_findings": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "scorecard": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "sector_agent_view": {
+     "basis": [
+      "signature:sector_det_summary"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "sector_synthesis": {
+     "basis": [
+      "derived:sector_agent_view",
+      "signature:bb_key_disagreement"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "derived_from_hidden",
+     "status": "unavailable"
+    },
+    "technical_agent_view": {
+     "basis": [
+      "signature:technical_det_tail"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "thesis_breakers": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "valuation_agent_view": {
+     "basis": [
+      "flag:deterministic_fallback"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "valuation_verdict": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    }
+   },
+   "section_provenance": {},
+   "sector": "Technology",
+   "sector_agent_view": {
+    "agent": "Sector Analyst",
+    "confidence": 0.78,
+    "data": {
+     "kpi_placements": {
+      "EV_EBITDA": {
+       "distribution": {
+        "max": 586.7537491163561,
+        "mean": 59.62634425266264,
+        "median": 27.63425572482304,
+        "min": -59.960959093179355,
+        "n": 47,
+        "p25": 15.494785859959212,
+        "p75": 50.62204297977761,
+        "stdev": 106.02548943893377
+       },
+       "group": "valuation",
+       "interpretation": "below-median multiple",
+       "quartile": 2,
+       "target": 26.969935053694947
+      },
+      "EV_Revenue": {
+       "distribution": {
+        "max": 93.84630604413505,
+        "mean": 12.726499445711514,
+        "median": 9.606854993778985,
+        "min": 0.4825473782502308,
+        "n": 47,
+        "p25": 5.093907284768212,
+        "p75": 15.216781038531654,
+        "stdev": 13.972812196095866
+       },
+       "group": "valuation",
+       "interpretation": "below-median multiple",
+       "quartile": 2,
+       "target": 9.359807406268247
+      },
+      "FCF_yield": {
+       "distribution": {
+        "max": 0.11276632466736083,
+        "mean": 0.021245613089389593,
+        "median": 0.022229507488539673,
+        "min": -0.3949859417300986,
+        "n": 47,
+        "p25": 0.014877106930310434,
+        "p75": 0.041914626384264034,
+        "stdev": 0.06699167096166667
+       },
+       "group": "valuation",
+       "interpretation": "above-median multiple",
+       "quartile": 3,
+       "target": 0.02586374077814872
+      },
+      "PFCF": {
+       "distribution": {
+        "max": 200.51429954712745,
+        "mean": 45.12568073647043,
+        "median": 39.18250658844345,
+        "min": -35.51974136189129,
+        "n": 47,
+        "p25": 16.524082459488657,
+        "p75": 60.584867460622355,
+        "stdev": 41.372168284195055
+       },
+       "group": "valuation",
+       "interpretation": "below-median multiple",
+       "quartile": 2,
+       "target": 38.66416728259439
+      },
+      "ROIC": {
+       "distribution": {
+        "max": 0.6288038473944232,
+        "mean": 0.13426932426952987,
+        "median": 0.1103192909714571,
+        "min": -0.3014797909924414,
+        "n": 47,
+        "p25": 0.059470850624440914,
+        "p75": 0.18449990030375815,
+        "stdev": 0.13925977529177092
+       },
+       "group": "quality",
+       "interpretation": "top quartile",
+       "quartile": 4,
+       "target": 0.5196842110031786
+      },
+      "gross_margin": {
+       "distribution": {
+        "max": 0.9247967479674797,
+        "mean": 0.6247815491900622,
+        "median": 0.6405609780472368,
+        "min": 0.10821604097086886,
+        "n": 47,
+        "p25": 0.5046900724797688,
+        "p75": 0.7753426720891701,
+        "stdev": 0.18656553874406376
+       },
+       "group": "_subindustry_extra",
+       "interpretation": "bottom quartile",
+       "quartile": 1,
+       "target": 0.4690516410716045
+      },
+      "operating_margin": {
+       "distribution": {
+        "max": 0.6038168363141272,
+        "mean": 0.21744584751044008,
+        "median": 0.21736670319721732,
+        "min": -0.3064008423666712,
+        "n": 47,
+        "p25": 0.12469559995996932,
+        "p75": 0.311469900744965,
+        "stdev": 0.16019961555068035
+       },
+       "group": "quality",
+       "interpretation": "top quartile",
+       "quartile": 4,
+       "target": 0.31970799762591884
+      }
+     },
+     "macro_alignment": "favored",
+     "regime": "Operating leverage cycle",
+     "sector": "Technology",
+     "sub_industry": "Consumer Electronics"
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "sources_used": [],
+   "technical_agent_view": {
+    "agent": "Technical Analyst",
+    "confidence": 0.6,
+    "data": {
+     "signals": {
+      "bb_lower": 301.77904691190815,
+      "bb_middle": 316.626,
+      "bb_position": 1.0,
+      "bb_upper": 331.4729530880918,
+      "ema_10": 322.0457457737557,
+      "ema_20": 319.0339743348462,
+      "high_52w": 340.08,
+      "last_date": "2026-09-11",
+      "last_price": 332.27,
+      "low_52w": 230.03,
+      "macd_histogram": 1.3247182451761348,
+      "macd_line": 3.2269647646178328,
+      "macd_signal": 1.902246519441698,
+      "momentum": "positive",
+      "notes": [
+       "Golden-cross alignment (SMA50 above SMA200).",
+       "Price hugging upper Bollinger band."
+      ],
+      "position_52w": 0.9290322580645161,
+      "rsi_14": 62.789033440224486,
+      "sma_200": 284.9536,
+      "sma_50": 317.9742,
+      "sma_50_above_200": true,
+      "trend": "up",
+      "vwma_20": 317.3610741057963
+     }
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "thesis_breakers": [],
+   "ticker": "AAPL",
+   "valuation_agent_view": {
+    "agent": "Valuation Analyst",
+    "confidence": 0.5,
+    "data": {
+     "deterministic_fallback": "Valuation LLM returned no usable output; deterministic multiples/DCF snapshot shipped instead."
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "valuation_verdict": {
+    "basis": "rating",
+    "comps_ev_ebitda_premium": 0.727,
+    "dcf_base_upside": -0.6805185487654055,
+    "factor_valuation": 30.3,
+    "signals": {},
+    "summary": "Net read: undervalued (DCF base case -68% to fair value; EV/EBITDA 73% premium vs peers; quant valuation factor 30/100).",
+    "verdict": "undervalued"
+   }
+  },
+  "abbv_v7_patch": {
+   "agent_influence": {
+    "comps": 0.0,
+    "earnings": 0.0,
+    "filing": 0.0,
+    "macro": 0.9615,
+    "risk": 0.0,
+    "sector": 1.0,
+    "technical": 0.0,
+    "valuation": 0.8974
+   },
+   "bear_case": {
+    "headline": "Unavailable in this version.",
+    "key_points": [
+     "DCF bear case implies $191.95 (-8%)."
+    ]
+   },
+   "bull_case": {
+    "headline": "",
+    "key_points": [
+     "Synthetic bull_case point 4 for the abbv_v7_patch fixture."
+    ]
+   },
+   "business_summary": "Synthetic business description 3 for the abbv_v7_patch fixture.",
+   "catalysts": [
+    {
+     "detail": "Quarterly print expected on 2026-07-30; tone + guidance the swing factor.",
+     "horizon": "near_term",
+     "impact": "medium",
+     "title": "Next earnings: 2026-07-30"
+    }
+   ],
+   "company_name": "AbbVie Inc.",
+   "comps_agent_view": {
+    "agent": "Comps Analyst",
+    "confidence": 0.4,
+    "data": {},
+    "evidence": [],
+    "headline": "Insufficient peer data for comps.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "No peer set defined for this ticker in the demo dataset."
+   },
+   "confidence_score": 90.0,
+   "dcf_initial_summary": {},
+   "dcf_pm_adjustment_headline": "",
+   "dcf_pm_adjustments": [],
+   "dcf_summary": {
+    "base_implied_price": 376.32060163226555,
+    "base_upside": 0.8057610443006984,
+    "bear_implied_price": 191.9486818410967,
+    "bear_upside": -0.07894106602160901,
+    "bull_implied_price": 674.188219704252,
+    "bull_upside": 2.235068232745931,
+    "current_price": 208.4,
+    "summary": "Base case implied price $376.32 vs current $208.40 (+80.6%). Bull $674.19 (+223.5%) | Bear $191.95 (-7.9%). ⚠ Model warnings: 0 errors, 1 warns",
+    "terminal_growth": 0.025,
+    "wacc": 0.06
+   },
+   "degradation_events": [
+    {
+     "agent": "Stored memo compatibility",
+     "error_type": "LegacyCaseShape",
+     "field": "bull_case",
+     "message": "bull_case was a legacy list; exact points retained, headline unavailable.",
+     "original_value": [
+      {
+       "key_point": "Synthetic bull_case point 4 for the abbv_v7_patch fixture."
+      }
+     ],
+     "source_snapshot_id": 592,
+     "source_snapshot_ticker": "ABBV",
+     "source_snapshot_version": 7
+    }
+   ],
+   "degraded_agents": [
+    "Stored memo compatibility"
+   ],
+   "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+   "earnings_agent_view": {
+    "agent": "Earnings Analyst",
+    "confidence": 0.4,
+    "data": {},
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "earnings_qoq_delta": null,
+   "extra_agent_views": {},
+   "filing_agent_view": {
+    "agent": "Filing Analyst",
+    "confidence": 0.6,
+    "data": {},
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "final_pm_view": "Research view: Bullish. Synthetic PM view 2 for the abbv_v7_patch fixture.",
+   "final_verdict": "Unavailable in this version.",
+   "forward_catalysts": [],
+   "generated_at": "2026-05-18T19:32:41.059274",
+   "generation_mode": "demo",
+   "intake_decision": {},
+   "key_risks": [],
+   "macro_regime_at_memo": "soft_landing",
+   "macro_sensitivity": {
+    "agent": "Macro Analyst",
+    "confidence": 0.75,
+    "data": {},
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "macro_snapshot_at_memo": {},
+   "mispricing_thesis": {
+    "consensus_view": "",
+    "falsifiers": [],
+    "gap": "",
+    "our_view": ""
+   },
+   "one_sentence_thesis": "Unavailable in this version.",
+   "portfolio_fit": "Unavailable in this version.",
+   "price_at_memo": 208.4,
+   "price_at_memo_at": "2026-05-18T19:32:41.059049",
+   "quality": null,
+   "rating_label": "Bullish",
+   "risk_committee_challenge": {
+    "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
+    "challenges": [],
+    "overall_assessment": "Unavailable in this version.",
+    "review_mode": "unknown",
+    "suggested_revisions": [],
+    "underweighted_risks": [],
+    "valuation_divergence_assessment": "not_assessed"
+   },
+   "round_findings": [
+    {
+     "early_exit": false,
+     "findings": {
+      "comps": {
+       "agent": "Comps Analyst",
+       "confidence": 0.4,
+       "data": {},
+       "evidence": [],
+       "headline": "Insufficient peer data for comps.",
+       "key_points": [],
+       "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+       "sources": [],
+       "summary": "No peer set defined for this ticker in the demo dataset."
+      },
+      "earnings": {
+       "agent": "Earnings Analyst",
+       "confidence": 0.4,
+       "data": {},
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "filing": {
+       "agent": "Filing Analyst",
+       "confidence": 0.6,
+       "data": {},
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "macro": {
+       "agent": "Macro Analyst",
+       "confidence": 0.75,
+       "data": {},
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "risk": {
+       "agent": "Risk Analyst",
+       "confidence": 0.7,
+       "data": {},
+       "evidence": [],
+       "headline": "Risk profile for ABBV",
+       "key_points": [],
+       "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+       "sources": [],
+       "summary": "Leverage at 3.6x debt/EBITDA is elevated. 1 structured rec(s) applied to the memo (see data.recommendations)."
+      },
+      "sector": {
+       "agent": "Sector Analyst",
+       "confidence": 0.78,
+       "data": {
+        "kpi_placements": {
+         "EV_EBITDA": {
+          "distribution": {
+           "max": 35.80995433787339,
+           "mean": 16.0750751919689,
+           "median": 13.763559823794383,
+           "min": 10.108046751460984,
+           "n": 7,
+           "p25": 10.108046751460984,
+           "p75": 15.685449168207024,
+           "stdev": 8.272401922897142
+          },
+          "group": "valuation",
+          "interpretation": "richest in cohort",
+          "quartile": 4,
+          "target": 26.69696341709683
+         },
+         "PE": {
+          "distribution": {
+           "max": 46.760866416323054,
+           "mean": 22.08481875684514,
+           "median": 18.211158185328184,
+           "min": 14.427551221650049,
+           "n": 7,
+           "p25": 14.427551221650049,
+           "p75": 22.836568538451566,
+           "stdev": 10.371360622238026
+          },
+          "group": "valuation",
+          "interpretation": "richest in cohort",
+          "quartile": 4,
+          "target": 96.26165832465689
+         },
+         "ROIC": {
+          "distribution": {
+           "max": 0.3019606547698144,
+           "mean": 0.1711768774098951,
+           "median": 0.13901429864932868,
+           "min": 0.08838314439482423,
+           "n": 7,
+           "p25": 0.08838314439482423,
+           "p75": 0.2174472996210169,
+           "stdev": 0.06546038555790791
+          },
+          "group": "quality",
+          "interpretation": "bottom quartile",
+          "quartile": 1,
+          "target": 0.12966703469481794
+         },
+         "operating_margin": {
+          "distribution": {
+           "max": 0.45560686724251676,
+           "mean": 0.3273033584546572,
+           "median": 0.29057456247788577,
+           "min": 0.2466801962319628,
+           "n": 7,
+           "p25": 0.2466801962319628,
+           "p75": 0.4013517644261794,
+           "stdev": 0.07382025590340595
+          },
+          "group": "quality",
+          "interpretation": "above median",
+          "quartile": 3,
+          "target": 0.32849901896664485
+         }
+        },
+        "macro_alignment": "neutral",
+        "regime": "Mixed regime",
+        "sector": "Healthcare",
+        "sub_industry": "Drug Manufacturers - General"
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "technical": {
+       "agent": "Technical Analyst",
+       "confidence": 0.6,
+       "data": {
+        "signals": {
+         "bb_lower": 196.25358384466367,
+         "bb_middle": 204.73499999999999,
+         "bb_position": 0.7325672934653675,
+         "bb_upper": 213.2164161553363,
+         "ema_10": 207.36654505873366,
+         "ema_20": 206.7682893802695,
+         "high_52w": 244.38,
+         "last_date": "2026-05-18",
+         "last_price": 208.68,
+         "low_52w": 181.8,
+         "macd_histogram": 1.0898748813743047,
+         "macd_line": -0.05829055793952875,
+         "macd_signal": -1.1481654393138334,
+         "momentum": "positive",
+         "notes": [
+          "Death-cross alignment (SMA50 below SMA200)."
+         ],
+         "position_52w": 0.4295302013422819,
+         "rsi_14": 52.41838679819014,
+         "sma_200": 218.88389999999998,
+         "sma_50": 209.3244,
+         "sma_50_above_200": false,
+         "trend": "down",
+         "vwma_20": 204.49133447648325
+        }
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "valuation": {
+       "agent": "Valuation Analyst",
+       "confidence": 0.7,
+       "data": {},
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      }
+     },
+     "pm_questions": [],
+     "pm_rationale": "",
+     "round": 0
+    },
+    {
+     "early_exit": true,
+     "findings": {},
+     "pm_questions": [],
+     "pm_rationale": "Synthetic PM rationale 1 for the abbv_v7_patch fixture.",
+     "round": 1
+    }
+   ],
+   "scorecard": null,
+   "scores": {
+    "blended_pm_score": 52.2,
+    "confidence": 54.60714285714286,
+    "cross_sector_relevance_count": 2.0,
+    "deep_research_questions": 0.0,
+    "deep_research_rounds": 1.0,
+    "evidence_quality": 98.2,
+    "factor_catalyst": 50.0,
+    "factor_earnings_momentum": 50.0,
+    "factor_growth": 50.0,
+    "factor_macro_fit": 60.0,
+    "factor_pm_score": 53.6,
+    "factor_quality": 60.0,
+    "factor_risk": 43.8,
+    "factor_valuation": 51.2,
+    "llm_rating_score": 50.0,
+    "llm_rating_weight": 0.4,
+    "raw_confidence": 55.0,
+    "risk_confidence": 70.0,
+    "risk_recs_applied": 1.0,
+    "sector_confidence": 78.0,
+    "valuation_confidence": 70.0
+   },
+   "section_availability": {
+    "bear_case": {
+     "basis": [
+      "fragments:template"
+     ],
+     "headline_hidden": true,
+     "hidden_items": 2,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "bull_case": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "business_summary": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "catalysts": {
+     "basis": [
+      "derived:hidden_findings"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 2,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "comps_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "comps_agent_view.long_form_report": {
+     "basis": [
+      "long_form:no_analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "confidence_score": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "dcf_summary": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "earnings_agent_view": {
+     "basis": [
+      "signature:earnings_det_headline"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "earnings_qoq_delta": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "filing_agent_view": {
+     "basis": [
+      "signature:filing_det_pair"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "final_pm_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "final_verdict": {
+     "basis": [
+      "derived:thesis_or_confidence"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "derived_from_hidden",
+     "status": "unavailable"
+    },
+    "forward_catalysts": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "key_risks": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "macro_sensitivity": {
+     "basis": [
+      "signature:macro_det_pair"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "mispricing_thesis": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "one_sentence_thesis": {
+     "basis": [
+      "fragment:template"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "derived_from_hidden",
+     "status": "unavailable"
+    },
+    "portfolio_fit": {
+     "basis": [
+      "producer:graph._portfolio_fit"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_always",
+     "status": "unavailable"
+    },
+    "rating_label": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "risk_committee_challenge": {
+     "basis": [
+      "signature:critic_legacy_rule_based"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "critic_not_run",
+     "status": "unavailable"
+    },
+    "round_findings": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "scorecard": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "sector_agent_view": {
+     "basis": [
+      "signature:sector_det_summary"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "sector_synthesis": {
+     "basis": [
+      "derived:sector_agent_view",
+      "signature:bb_key_disagreement"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "derived_from_hidden",
+     "status": "unavailable"
+    },
+    "technical_agent_view": {
+     "basis": [
+      "signature:technical_det_tail"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "thesis_breakers": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "valuation_agent_view": {
+     "basis": [
+      "signature:valuation_det_summary"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "valuation_verdict": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    }
+   },
+   "section_provenance": {},
+   "sector": "Healthcare",
+   "sector_agent_view": {
+    "agent": "Sector Analyst",
+    "confidence": 0.78,
+    "data": {
+     "kpi_placements": {
+      "EV_EBITDA": {
+       "distribution": {
+        "max": 35.80995433787339,
+        "mean": 16.0750751919689,
+        "median": 13.763559823794383,
+        "min": 10.108046751460984,
+        "n": 7,
+        "p25": 10.108046751460984,
+        "p75": 15.685449168207024,
+        "stdev": 8.272401922897142
+       },
+       "group": "valuation",
+       "interpretation": "richest in cohort",
+       "quartile": 4,
+       "target": 26.69696341709683
+      },
+      "PE": {
+       "distribution": {
+        "max": 46.760866416323054,
+        "mean": 22.08481875684514,
+        "median": 18.211158185328184,
+        "min": 14.427551221650049,
+        "n": 7,
+        "p25": 14.427551221650049,
+        "p75": 22.836568538451566,
+        "stdev": 10.371360622238026
+       },
+       "group": "valuation",
+       "interpretation": "richest in cohort",
+       "quartile": 4,
+       "target": 96.26165832465689
+      },
+      "ROIC": {
+       "distribution": {
+        "max": 0.3019606547698144,
+        "mean": 0.1711768774098951,
+        "median": 0.13901429864932868,
+        "min": 0.08838314439482423,
+        "n": 7,
+        "p25": 0.08838314439482423,
+        "p75": 0.2174472996210169,
+        "stdev": 0.06546038555790791
+       },
+       "group": "quality",
+       "interpretation": "bottom quartile",
+       "quartile": 1,
+       "target": 0.12966703469481794
+      },
+      "operating_margin": {
+       "distribution": {
+        "max": 0.45560686724251676,
+        "mean": 0.3273033584546572,
+        "median": 0.29057456247788577,
+        "min": 0.2466801962319628,
+        "n": 7,
+        "p25": 0.2466801962319628,
+        "p75": 0.4013517644261794,
+        "stdev": 0.07382025590340595
+       },
+       "group": "quality",
+       "interpretation": "above median",
+       "quartile": 3,
+       "target": 0.32849901896664485
+      }
+     },
+     "macro_alignment": "neutral",
+     "regime": "Mixed regime",
+     "sector": "Healthcare",
+     "sub_industry": "Drug Manufacturers - General"
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "sources_used": [],
+   "technical_agent_view": {
+    "agent": "Technical Analyst",
+    "confidence": 0.6,
+    "data": {
+     "signals": {
+      "bb_lower": 196.25358384466367,
+      "bb_middle": 204.73499999999999,
+      "bb_position": 0.7325672934653675,
+      "bb_upper": 213.2164161553363,
+      "ema_10": 207.36654505873366,
+      "ema_20": 206.7682893802695,
+      "high_52w": 244.38,
+      "last_date": "2026-05-18",
+      "last_price": 208.68,
+      "low_52w": 181.8,
+      "macd_histogram": 1.0898748813743047,
+      "macd_line": -0.05829055793952875,
+      "macd_signal": -1.1481654393138334,
+      "momentum": "positive",
+      "notes": [
+       "Death-cross alignment (SMA50 below SMA200)."
+      ],
+      "position_52w": 0.4295302013422819,
+      "rsi_14": 52.41838679819014,
+      "sma_200": 218.88389999999998,
+      "sma_50": 209.3244,
+      "sma_50_above_200": false,
+      "trend": "down",
+      "vwma_20": 204.49133447648325
+     }
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "thesis_breakers": [],
+   "ticker": "ABBV",
+   "valuation_agent_view": {
+    "agent": "Valuation Analyst",
+    "confidence": 0.7,
+    "data": {},
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "valuation_verdict": {
+    "basis": "rating",
+    "comps_ev_ebitda_premium": null,
+    "dcf_base_upside": null,
+    "factor_valuation": null,
+    "signals": {},
+    "summary": "",
+    "verdict": "fairly_priced"
+   }
+  },
+  "googl_live_prepflag": {
+   "agent_influence": {
+    "comps": 1.0,
+    "earnings": 0.419,
+    "filing": 0.3429,
+    "macro": 0.2057,
+    "risk": 0.0,
+    "sector": 0.3714,
+    "technical": 0.0,
+    "valuation": -0.2905
+   },
+   "bear_case": {
+    "headline": "Unavailable in this version.",
+    "key_points": [
+     "DCF driver — Synthetic driver 70: synthetic rationale for the googl_live_prepflag fixture.",
+     "DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepflag fixture.",
+     "DCF driver — Synthetic driver 72: synthetic rationale for the googl_live_prepflag fixture.",
+     "DCF bear case implies $89.52 (-73%).",
+     "Risk lens: Low FCF yield (1.9%) reduces downside support"
+    ]
+   },
+   "bull_case": {
+    "headline": "Unavailable in this version.",
+    "key_points": [
+     "DCF driver — Synthetic driver 67: synthetic rationale for the googl_live_prepflag fixture.",
+     "DCF driver — Synthetic driver 68: synthetic rationale for the googl_live_prepflag fixture.",
+     "DCF driver — Synthetic driver 69: synthetic rationale for the googl_live_prepflag fixture.",
+     "DCF bull case implies $245.66 (-26%)."
+    ]
+   },
+   "business_summary": "Synthetic business description 66 for the googl_live_prepflag fixture.",
+   "catalysts": [
+    {
+     "detail": "Quarterly print expected on 2026-10-28; tone + guidance the swing factor.",
+     "horizon": "near_term",
+     "impact": "medium",
+     "title": "Next earnings: 2026-10-28"
+    }
+   ],
+   "company_name": "Alphabet Inc.",
+   "comps_agent_view": {
+    "agent": "Comps Analyst",
+    "confidence": 0.7,
+    "data": {},
+    "evidence": [],
+    "headline": "GOOGL trades at a 44% EV/EBITDA premium to peers with below-peer growth.",
+    "key_points": [
+     "EV/EBITDA: target 27.4x vs peer median 19.0x.",
+     "Op margin: 32% vs peers 41%.",
+     "Growth: +15% vs peers +18%.",
+     "FCF yield: 1.7% vs peers 1.8%.",
+     "Op margin vs own 8y median 27% — +19% delta."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the googl_live_prepflag fixture.",
+    "sources": [],
+    "summary": "Peer set: META, MSFT, AMZN. Trades at a +44.4% premium to peers on EV/EBITDA. Operating margin trails peer median, which weakens the case for a premium. Growth is below peer median. Own-history context: Operating margin running above its own multi-year median."
+   },
+   "confidence_score": 59.01176470588235,
+   "dcf_initial_summary": {},
+   "dcf_pm_adjustment_headline": "",
+   "dcf_pm_adjustments": [],
+   "dcf_summary": {
+    "base_implied_price": 153.1921511550129,
+    "base_upside": -0.536693932693141,
+    "bear_implied_price": 89.52190230094607,
+    "bear_upside": -0.7292547941903944,
+    "bull_implied_price": 245.6576038997659,
+    "bull_upside": -0.2570464119166312,
+    "current_price": 330.65,
+    "summary": "Base case implied price $153.19 vs current $330.65 (-53.7%). Bull $245.66 (-25.7%) | Bear $89.52 (-72.9%). ⚠ Model warnings: 0 errors, 1 warns",
+    "terminal_growth": 0.035,
+    "wacc": 0.0952
+   },
+   "degradation_events": [],
+   "degraded_agents": [],
+   "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+   "earnings_agent_view": {
+    "agent": "Earnings Analyst",
+    "confidence": 0.88,
+    "data": {},
+    "evidence": [],
+    "headline": "Synthetic analyst headline 1 for the googl_live_prepflag fixture.",
+    "key_points": [
+     "Synthetic analyst point 3 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 4 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 5 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 6 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 7 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 8 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 9 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 10 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 11 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 12 for the googl_live_prepflag fixture."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the googl_live_prepflag fixture.",
+    "sources": [],
+    "summary": "Synthetic analyst summary 2 for the googl_live_prepflag fixture."
+   },
+   "earnings_qoq_delta": null,
+   "extra_agent_views": {},
+   "filing_agent_view": {
+    "agent": "Filing Analyst",
+    "confidence": 0.72,
+    "data": {},
+    "evidence": [],
+    "headline": "Synthetic analyst headline 13 for the googl_live_prepflag fixture.",
+    "key_points": [
+     "Synthetic analyst point 15 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 16 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 17 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 18 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 19 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 20 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 21 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 22 for the googl_live_prepflag fixture."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the googl_live_prepflag fixture.",
+    "sources": [],
+    "summary": "Synthetic analyst summary 14 for the googl_live_prepflag fixture."
+   },
+   "final_pm_view": "Unavailable in this version.",
+   "final_verdict": "Unavailable in this version.",
+   "forward_catalysts": [],
+   "generated_at": "2026-09-10T04:06:34.355889",
+   "generation_mode": "live",
+   "intake_decision": {
+    "rationale": "Synthetic intake rationale 40 for the googl_live_prepflag fixture.",
+    "skipped": [
+     "technical"
+    ]
+   },
+   "key_risks": [
+    {
+     "detail": "DCF driver — Synthetic driver 70: synthetic rationale for the googl_live_prepflag fixture.",
+     "severity": "medium",
+     "title": "DCF driver — Synthetic driver 70: synthetic rationale for the googl_live_prepfla",
+     "type": "valuation"
+    },
+    {
+     "detail": "DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepflag fixture.",
+     "severity": "high",
+     "title": "DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepfla",
+     "type": "regulatory"
+    },
+    {
+     "detail": "DCF driver — Synthetic driver 72: synthetic rationale for the googl_live_prepflag fixture.",
+     "severity": "medium",
+     "title": "DCF driver — Synthetic driver 72: synthetic rationale for the googl_live_prepfla",
+     "type": "company"
+    }
+   ],
+   "macro_regime_at_memo": "soft_landing",
+   "macro_sensitivity": {
+    "agent": "Macro Analyst",
+    "confidence": 0.72,
+    "data": {},
+    "evidence": [],
+    "headline": "Synthetic analyst headline 33 for the googl_live_prepflag fixture.",
+    "key_points": [
+     "Synthetic analyst point 35 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 36 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 37 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 38 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 39 for the googl_live_prepflag fixture."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the googl_live_prepflag fixture.",
+    "sources": [],
+    "summary": "Synthetic analyst summary 34 for the googl_live_prepflag fixture."
+   },
+   "macro_snapshot_at_memo": {},
+   "mispricing_thesis": {
+    "consensus_view": "Unavailable in this version.",
+    "falsifiers": [],
+    "gap": "Unavailable in this version.",
+    "our_view": "Unavailable in this version."
+   },
+   "one_sentence_thesis": "Unavailable in this version.",
+   "portfolio_fit": "Unavailable in this version.",
+   "price_at_memo": 330.65,
+   "price_at_memo_at": "2026-09-10T04:06:22.071358",
+   "quality": null,
+   "rating_label": "Bullish",
+   "risk_committee_challenge": {
+    "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
+    "challenges": [],
+    "overall_assessment": "Unavailable in this version.",
+    "review_mode": "unknown",
+    "suggested_revisions": [],
+    "underweighted_risks": [],
+    "valuation_divergence_assessment": "not_assessed"
+   },
+   "round_findings": [
+    {
+     "early_exit": false,
+     "findings": {
+      "comps": {
+       "agent": "Comps Analyst",
+       "confidence": 0.7,
+       "data": {},
+       "evidence": [],
+       "headline": "GOOGL trades at a 44% EV/EBITDA premium to peers with below-peer growth.",
+       "key_points": [
+        "EV/EBITDA: target 27.4x vs peer median 19.0x.",
+        "Op margin: 32% vs peers 41%.",
+        "Growth: +15% vs peers +18%.",
+        "FCF yield: 1.7% vs peers 1.8%.",
+        "Op margin vs own 8y median 27% — +19% delta."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "sources": [],
+       "summary": "Peer set: META, MSFT, AMZN. Trades at a +44.4% premium to peers on EV/EBITDA. Operating margin trails peer median, which weakens the case for a premium. Growth is below peer median. Own-history context: Operating margin running above its own multi-year median."
+      },
+      "earnings": {
+       "agent": "Earnings Analyst",
+       "confidence": 0.88,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 1 for the googl_live_prepflag fixture.",
+       "key_points": [
+        "Synthetic analyst point 3 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 4 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 5 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 6 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 7 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 8 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 9 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 10 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 11 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 12 for the googl_live_prepflag fixture."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "sources": [],
+       "summary": "Synthetic analyst summary 2 for the googl_live_prepflag fixture."
+      },
+      "filing": {
+       "agent": "Filing Analyst",
+       "confidence": 0.87,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 41 for the googl_live_prepflag fixture.",
+       "key_points": [
+        "Synthetic analyst point 43 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 44 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 45 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 46 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 47 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 48 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 49 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 50 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 51 for the googl_live_prepflag fixture."
+       ],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Synthetic analyst summary 42 for the googl_live_prepflag fixture."
+      },
+      "macro": {
+       "agent": "Macro Analyst",
+       "confidence": 0.72,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 33 for the googl_live_prepflag fixture.",
+       "key_points": [
+        "Synthetic analyst point 35 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 36 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 37 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 38 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 39 for the googl_live_prepflag fixture."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "sources": [],
+       "summary": "Synthetic analyst summary 34 for the googl_live_prepflag fixture."
+      },
+      "risk": {
+       "agent": "Risk Analyst",
+       "confidence": 0.7,
+       "data": {},
+       "evidence": [],
+       "headline": "Risk profile for GOOGL",
+       "key_points": [],
+       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "sources": [],
+       "summary": "Low FCF yield reduces downside support. 1 structured rec(s) applied to the memo (see data.recommendations)."
+      },
+      "sector": {
+       "agent": "Sector Analyst",
+       "confidence": 0.78,
+       "data": {
+        "kpi_placements": {
+         "EV_EBITDA": {
+          "distribution": {
+           "max": 21.198816810368683,
+           "mean": 10.899473052261246,
+           "median": 10.795286070376207,
+           "min": 4.3713620488940625,
+           "n": 10,
+           "p25": 5.886455435858752,
+           "p75": 13.28593635675507,
+           "stdev": 4.983175328721229
+          },
+          "group": "valuation",
+          "interpretation": "richest in cohort",
+          "quartile": 4,
+          "target": 21.14517592889794
+         },
+         "FCF_yield": {
+          "distribution": {
+           "max": 0.21504203991827756,
+           "mean": 0.08396670209335652,
+           "median": 0.0639000384669595,
+           "min": 0.019270379953628625,
+           "n": 10,
+           "p25": 0.02385950869886153,
+           "p75": 0.1169266657285886,
+           "stdev": 0.06166908276490113
+          },
+          "group": "valuation",
+          "interpretation": "cheapest in cohort",
+          "quartile": 1,
+          "target": 0.019319633320922246
+         },
+         "PFCF": {
+          "distribution": {
+           "max": 51.893112767177136,
+           "mean": 21.478323509508165,
+           "median": 16.52038416803759,
+           "min": 4.6502535056867496,
+           "n": 10,
+           "p25": 6.386058454051607,
+           "p75": 36.09028367563816,
+           "stdev": 15.704983547851015
+          },
+          "group": "valuation",
+          "interpretation": "richest in cohort",
+          "quartile": 4,
+          "target": 51.76081674992493
+         },
+         "ROIC": {
+          "distribution": {
+           "max": 0.2521668961712825,
+           "mean": 0.10645622421400594,
+           "median": 0.07133956514756723,
+           "min": 0.006819053290689928,
+           "n": 10,
+           "p25": 0.0576622776493174,
+           "p75": 0.17950279862720422,
+           "stdev": 0.07630445053964188
+          },
+          "group": "quality",
+          "interpretation": "top quartile",
+          "quartile": 4,
+          "target": 0.21801897891560507
+         },
+         "operating_margin": {
+          "distribution": {
+           "max": 0.41437855159579234,
+           "mean": 0.22448433917943103,
+           "median": 0.21199169546006463,
+           "min": 0.0350975975975976,
+           "n": 10,
+           "p25": 0.1464866296002118,
+           "p75": 0.29494704605507255,
+           "stdev": 0.09840298017099226
+          },
+          "group": "quality",
+          "interpretation": "top quartile",
+          "quartile": 4,
+          "target": 0.32032638592380025
+         }
+        },
+        "macro_alignment": "neutral",
+        "regime": "Mixed regime",
+        "sector": "Communication Services",
+        "sub_industry": "Internet Content & Information"
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "technical": {
+       "agent": "Technical Analyst",
+       "confidence": 0.0,
+       "data": {
+        "intake_rationale": "Synthetic intake rationale 40 for the googl_live_prepflag fixture.",
+        "intake_skipped": true
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "valuation": {
+       "agent": "Valuation Analyst",
+       "confidence": 0.55,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 52 for the googl_live_prepflag fixture.",
+       "key_points": [
+        "Synthetic analyst point 54 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 55 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 56 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 57 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 58 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 59 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 60 for the googl_live_prepflag fixture."
+       ],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Synthetic analyst summary 53 for the googl_live_prepflag fixture."
+      }
+     },
+     "pm_questions": [],
+     "pm_rationale": "",
+     "round": 0
+    },
+    {
+     "early_exit": false,
+     "findings": {
+      "filing": {
+       "agent": "Filing Analyst",
+       "confidence": 0.72,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 13 for the googl_live_prepflag fixture.",
+       "key_points": [
+        "Synthetic analyst point 15 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 16 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 17 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 18 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 19 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 20 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 21 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 22 for the googl_live_prepflag fixture."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "sources": [],
+       "summary": "Synthetic analyst summary 14 for the googl_live_prepflag fixture."
+      },
+      "valuation": {
+       "agent": "Valuation Analyst",
+       "confidence": 0.61,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 23 for the googl_live_prepflag fixture.",
+       "key_points": [
+        "Synthetic analyst point 25 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 26 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 27 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 28 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 29 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 30 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 31 for the googl_live_prepflag fixture.",
+        "Synthetic analyst point 32 for the googl_live_prepflag fixture."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "sources": [],
+       "summary": "Synthetic analyst summary 24 for the googl_live_prepflag fixture."
+      }
+     },
+     "pm_questions": [
+      {
+       "question": "Synthetic PM question 61 for the googl_live_prepflag fixture.",
+       "target_agent": "valuation",
+       "why_it_matters": "Synthetic PM rationale 62 for the googl_live_prepflag fixture."
+      },
+      {
+       "question": "Synthetic PM question 63 for the googl_live_prepflag fixture.",
+       "target_agent": "filing",
+       "why_it_matters": "Synthetic PM rationale 64 for the googl_live_prepflag fixture."
+      }
+     ],
+     "pm_rationale": "Synthetic PM rationale 65 for the googl_live_prepflag fixture.",
+     "round": 1
+    }
+   ],
+   "scorecard": null,
+   "scores": {
+    "beat_streak": 4.0,
+    "blended_pm_score": 61.9,
+    "confidence": 59.01176470588235,
+    "deep_research_questions": 2.0,
+    "deep_research_rounds": 1.0,
+    "evidence_quality": 95.9,
+    "factor_catalyst": 50.0,
+    "factor_earnings_momentum": 74.0,
+    "factor_growth": 50.0,
+    "factor_macro_fit": 60.0,
+    "factor_pm_score": 56.5,
+    "factor_quality": 63.2,
+    "factor_risk": 80.6,
+    "factor_valuation": 25.1,
+    "guidance_net_direction": 0.0,
+    "llm_rating_score": 70.0,
+    "llm_rating_weight": 0.4,
+    "raw_confidence": 60.0,
+    "risk_confidence": 70.0,
+    "risk_recs_applied": 1.0,
+    "sector_confidence": 78.0,
+    "valuation_confidence": 61.0
+   },
+   "section_availability": {
+    "bear_case": {
+     "basis": [
+      "fragments:template"
+     ],
+     "headline_hidden": true,
+     "hidden_items": 1,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "bull_case": {
+     "basis": [
+      "fragments:template"
+     ],
+     "headline_hidden": true,
+     "hidden_items": 1,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "business_summary": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "catalysts": {
+     "basis": [
+      "derived:hidden_findings"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 2,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "comps_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "comps_agent_view.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "confidence_score": {
+     "basis": [
+      "signature:pm_view_tail"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "dcf_summary": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "earnings_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "earnings_agent_view.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "earnings_qoq_delta": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "filing_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "filing_agent_view.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "final_pm_view": {
+     "basis": [
+      "signature:pm_view_tail"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "final_verdict": {
+     "basis": [
+      "derived:thesis_or_confidence"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "derived_from_hidden",
+     "status": "unavailable"
+    },
+    "forward_catalysts": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "key_risks": {
+     "basis": [
+      "derived:bear_case"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 1,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "macro_sensitivity": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "macro_sensitivity.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "mispricing_thesis": {
+     "basis": [
+      "signature:mispricing_gap_dcf",
+      "legacy:our_view"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "one_sentence_thesis": {
+     "basis": [
+      "signature:pm_view_tail"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "portfolio_fit": {
+     "basis": [
+      "producer:graph._portfolio_fit"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_always",
+     "status": "unavailable"
+    },
+    "rating_label": {
+     "basis": [
+      "signature:pm_view_tail"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "pm_view_unavailable",
+     "status": "degraded"
+    },
+    "risk_committee_challenge": {
+     "basis": [
+      "signature:critic_legacy_rule_based"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "critic_not_run",
+     "status": "unavailable"
+    },
+    "round_findings": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "scorecard": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "sector_agent_view": {
+     "basis": [
+      "signature:sector_det_summary"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "sector_synthesis": {
+     "basis": [
+      "derived:sector_agent_view",
+      "signature:bb_key_disagreement"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "derived_from_hidden",
+     "status": "unavailable"
+    },
+    "technical_agent_view": {
+     "basis": [
+      "flag:intake_skipped"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "skipped_by_intake",
+     "status": "unavailable"
+    },
+    "thesis_breakers": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "valuation_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "valuation_agent_view.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "valuation_verdict": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    }
+   },
+   "section_provenance": {},
+   "sector": "Communication Services",
+   "sector_agent_view": {
+    "agent": "Sector Analyst",
+    "confidence": 0.78,
+    "data": {
+     "kpi_placements": {
+      "EV_EBITDA": {
+       "distribution": {
+        "max": 21.198816810368683,
+        "mean": 10.899473052261246,
+        "median": 10.795286070376207,
+        "min": 4.3713620488940625,
+        "n": 10,
+        "p25": 5.886455435858752,
+        "p75": 13.28593635675507,
+        "stdev": 4.983175328721229
+       },
+       "group": "valuation",
+       "interpretation": "richest in cohort",
+       "quartile": 4,
+       "target": 21.14517592889794
+      },
+      "FCF_yield": {
+       "distribution": {
+        "max": 0.21504203991827756,
+        "mean": 0.08396670209335652,
+        "median": 0.0639000384669595,
+        "min": 0.019270379953628625,
+        "n": 10,
+        "p25": 0.02385950869886153,
+        "p75": 0.1169266657285886,
+        "stdev": 0.06166908276490113
+       },
+       "group": "valuation",
+       "interpretation": "cheapest in cohort",
+       "quartile": 1,
+       "target": 0.019319633320922246
+      },
+      "PFCF": {
+       "distribution": {
+        "max": 51.893112767177136,
+        "mean": 21.478323509508165,
+        "median": 16.52038416803759,
+        "min": 4.6502535056867496,
+        "n": 10,
+        "p25": 6.386058454051607,
+        "p75": 36.09028367563816,
+        "stdev": 15.704983547851015
+       },
+       "group": "valuation",
+       "interpretation": "richest in cohort",
+       "quartile": 4,
+       "target": 51.76081674992493
+      },
+      "ROIC": {
+       "distribution": {
+        "max": 0.2521668961712825,
+        "mean": 0.10645622421400594,
+        "median": 0.07133956514756723,
+        "min": 0.006819053290689928,
+        "n": 10,
+        "p25": 0.0576622776493174,
+        "p75": 0.17950279862720422,
+        "stdev": 0.07630445053964188
+       },
+       "group": "quality",
+       "interpretation": "top quartile",
+       "quartile": 4,
+       "target": 0.21801897891560507
+      },
+      "operating_margin": {
+       "distribution": {
+        "max": 0.41437855159579234,
+        "mean": 0.22448433917943103,
+        "median": 0.21199169546006463,
+        "min": 0.0350975975975976,
+        "n": 10,
+        "p25": 0.1464866296002118,
+        "p75": 0.29494704605507255,
+        "stdev": 0.09840298017099226
+       },
+       "group": "quality",
+       "interpretation": "top quartile",
+       "quartile": 4,
+       "target": 0.32032638592380025
+      }
+     },
+     "macro_alignment": "neutral",
+     "regime": "Mixed regime",
+     "sector": "Communication Services",
+     "sub_industry": "Internet Content & Information"
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "sources_used": [],
+   "technical_agent_view": {
+    "agent": "Technical Analyst",
+    "confidence": 0.0,
+    "data": {
+     "intake_rationale": "Synthetic intake rationale 40 for the googl_live_prepflag fixture.",
+     "intake_skipped": true
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "thesis_breakers": [
+    {
+     "detail": "DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepflag fixture.",
+     "severity": "high",
+     "title": "DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepfla",
+     "type": "regulatory"
+    }
+   ],
+   "ticker": "GOOGL",
+   "valuation_agent_view": {
+    "agent": "Valuation Analyst",
+    "confidence": 0.61,
+    "data": {},
+    "evidence": [],
+    "headline": "Synthetic analyst headline 23 for the googl_live_prepflag fixture.",
+    "key_points": [
+     "Synthetic analyst point 25 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 26 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 27 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 28 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 29 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 30 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 31 for the googl_live_prepflag fixture.",
+     "Synthetic analyst point 32 for the googl_live_prepflag fixture."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the googl_live_prepflag fixture.",
+    "sources": [],
+    "summary": "Synthetic analyst summary 24 for the googl_live_prepflag fixture."
+   },
+   "valuation_verdict": {
+    "basis": "rating",
+    "comps_ev_ebitda_premium": 0.444,
+    "dcf_base_upside": -0.536693932693141,
+    "factor_valuation": 25.1,
+    "signals": {},
+    "summary": "Net read: undervalued (DCF base case -54% to fair value; EV/EBITDA 44% premium vs peers; quant valuation factor 25/100).",
+    "verdict": "undervalued"
+   }
+  },
+  "meta_v1": {
+   "agent_influence": {
+    "comps": 1.0,
+    "earnings": -0.1673,
+    "filing": 0.0,
+    "macro": 0.4675,
+    "risk": 0.0,
+    "sector": 0.4048,
+    "technical": 0.0,
+    "valuation": -0.0984
+   },
+   "bear_case": {
+    "headline": "Synthetic bear_case headline 7 for the meta_v1 fixture.",
+    "key_points": [
+     "Synthetic bear_case point 8 for the meta_v1 fixture.",
+     "Synthetic bear_case point 9 for the meta_v1 fixture.",
+     "Synthetic bear_case point 10 for the meta_v1 fixture.",
+     "Synthetic bear_case point 11 for the meta_v1 fixture.",
+     "Synthetic bear_case point 12 for the meta_v1 fixture.",
+     "DCF driver — Synthetic driver 107: synthetic rationale for the meta_v1 fixture.",
+     "DCF driver — Synthetic driver 108: synthetic rationale for the meta_v1 fixture.",
+     "DCF driver — Synthetic driver 109: synthetic rationale for the meta_v1 fixture.",
+     "DCF bear case implies $366.08 (-44%).",
+     "Risk lens: DCF bear scenario maps explicit downside"
+    ]
+   },
+   "bull_case": {
+    "headline": "Synthetic bull_case headline 1 for the meta_v1 fixture.",
+    "key_points": [
+     "Synthetic bull_case point 2 for the meta_v1 fixture.",
+     "Synthetic bull_case point 3 for the meta_v1 fixture.",
+     "Synthetic bull_case point 4 for the meta_v1 fixture.",
+     "Synthetic bull_case point 5 for the meta_v1 fixture.",
+     "Synthetic bull_case point 6 for the meta_v1 fixture.",
+     "DCF driver — Synthetic driver 104: synthetic rationale for the meta_v1 fixture.",
+     "DCF driver — Synthetic driver 105: synthetic rationale for the meta_v1 fixture.",
+     "DCF driver — Synthetic driver 106: synthetic rationale for the meta_v1 fixture.",
+     "DCF bull case implies $1,162.68 (+79%)."
+    ]
+   },
+   "business_summary": "Synthetic business description 103 for the meta_v1 fixture.",
+   "catalysts": [
+    {
+     "detail": "Synthetic analyst point 19 for the meta_v1 fixture.",
+     "horizon": "medium_term",
+     "impact": "medium",
+     "title": "Synthetic analyst point 19 for the meta_v1 fixture."
+    },
+    {
+     "detail": "Synthetic analyst point 21 for the meta_v1 fixture.",
+     "horizon": "medium_term",
+     "impact": "medium",
+     "title": "Synthetic analyst point 21 for the meta_v1 fixture."
+    },
+    {
+     "detail": "Quarterly print expected on 2026-10-28; tone + guidance the swing factor.",
+     "horizon": "near_term",
+     "impact": "medium",
+     "title": "Next earnings: 2026-10-28"
+    }
+   ],
+   "company_name": "Meta Platforms, Inc.",
+   "comps_agent_view": {
+    "agent": "Comps Analyst",
+    "confidence": 0.7,
+    "data": {},
+    "evidence": [],
+    "headline": "META trades at a 15% EV/EBITDA discount to peers with above-peer growth.",
+    "key_points": [
+     "EV/EBITDA: target 16.1x vs peer median 19.0x.",
+     "Op margin: 41% vs peers 32%.",
+     "Growth: +22% vs peers +15%.",
+     "FCF yield: 2.8% vs peers 1.8%.",
+     "Op margin vs own 8y median 39% — +7% delta."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
+    "sources": [],
+    "summary": "Peer set: GOOGL, MSFT, AMZN. Trades at a -15.0% discount to peers on EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median. Own-history context: Operating margin running above its own multi-year median."
+   },
+   "confidence_score": 70.81411764705882,
+   "dcf_initial_summary": {},
+   "dcf_pm_adjustment_headline": "",
+   "dcf_pm_adjustments": [],
+   "dcf_summary": {
+    "base_implied_price": 708.9303286367508,
+    "base_upside": 0.0939776378203954,
+    "bear_implied_price": 366.0839443044916,
+    "bear_upside": -0.4350817951260102,
+    "bull_implied_price": 1162.6842269331853,
+    "bull_upside": 0.7941827182895628,
+    "current_price": 648.03,
+    "summary": "Base case implied price $708.93 vs current $648.03 (+9.4%). Bull $1,162.68 (+79.4%) | Bear $366.08 (-43.5%). ⚠ Model warnings: 0 errors, 1 warns",
+    "terminal_growth": 0.03,
+    "tv_clamped": false,
+    "wacc": 0.0902
+   },
+   "degradation_events": [
+    {
+     "agent": "LLM provider",
+     "error_type": "ProviderFailover",
+     "message": "failed over from anthropic to openai: call_failed"
+    },
+    {
+     "agent": "Risk Committee",
+     "error_type": "CriticUnavailable",
+     "message": "Live critic unavailable; only rule-based checks were completed."
+    }
+   ],
+   "degraded_agents": [
+    "LLM provider",
+    "Risk Committee"
+   ],
+   "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+   "earnings_agent_view": {
+    "agent": "Earnings Analyst",
+    "confidence": 0.82,
+    "data": {},
+    "evidence": [],
+    "headline": "Synthetic analyst headline 26 for the meta_v1 fixture.",
+    "key_points": [
+     "Synthetic analyst point 28 for the meta_v1 fixture.",
+     "Synthetic analyst point 29 for the meta_v1 fixture.",
+     "Synthetic analyst point 30 for the meta_v1 fixture.",
+     "Synthetic analyst point 31 for the meta_v1 fixture.",
+     "Synthetic analyst point 32 for the meta_v1 fixture.",
+     "Synthetic analyst point 33 for the meta_v1 fixture.",
+     "Synthetic analyst point 34 for the meta_v1 fixture.",
+     "Synthetic analyst point 35 for the meta_v1 fixture.",
+     "Synthetic analyst point 36 for the meta_v1 fixture.",
+     "Synthetic analyst point 37 for the meta_v1 fixture."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
+    "sources": [],
+    "summary": "Synthetic analyst summary 27 for the meta_v1 fixture."
+   },
+   "earnings_qoq_delta": null,
+   "extra_agent_views": {},
+   "filing_agent_view": {
+    "agent": "Filing Analyst",
+    "confidence": 0.82,
+    "data": {},
+    "evidence": [],
+    "headline": "Synthetic analyst headline 38 for the meta_v1 fixture.",
+    "key_points": [
+     "Synthetic analyst point 40 for the meta_v1 fixture.",
+     "Synthetic analyst point 41 for the meta_v1 fixture.",
+     "Synthetic analyst point 42 for the meta_v1 fixture.",
+     "Synthetic analyst point 43 for the meta_v1 fixture.",
+     "Synthetic analyst point 44 for the meta_v1 fixture.",
+     "Synthetic analyst point 45 for the meta_v1 fixture.",
+     "Synthetic analyst point 46 for the meta_v1 fixture."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
+    "sources": [],
+    "summary": "Synthetic analyst summary 39 for the meta_v1 fixture."
+   },
+   "final_pm_view": "Synthetic PM view 95 for the meta_v1 fixture.",
+   "final_verdict": "PM final view: Neutral (confidence 70). Synthetic thesis 96 for the meta_v1 fixture. Cohort placement: see sector view for KPI quartile context. Cross-sector pull-through: GOOG, GOOGL, DIS. Key disagreement: Synthetic key disagreement 13 for the meta_v1 fixture. Watch items: Synthetic bear_case point 9 for the meta_v1 fixture.",
+   "forward_catalysts": [],
+   "generated_at": "2026-09-13T02:00:21.481704",
+   "generation_mode": "live",
+   "intake_decision": {
+    "rationale": "Synthetic intake rationale 64 for the meta_v1 fixture.",
+    "skipped": [
+     "technical"
+    ]
+   },
+   "key_risks": [
+    {
+     "detail": "Synthetic bear_case point 8 for the meta_v1 fixture.",
+     "severity": "medium",
+     "title": "Synthetic bear_case point 8 for the meta_v1 fixture.",
+     "type": "company"
+    },
+    {
+     "detail": "Synthetic bear_case point 9 for the meta_v1 fixture.",
+     "severity": "high",
+     "title": "Synthetic bear_case point 9 for the meta_v1 fixture.",
+     "type": "regulatory"
+    },
+    {
+     "detail": "Synthetic bear_case point 10 for the meta_v1 fixture.",
+     "severity": "medium",
+     "title": "Synthetic bear_case point 10 for the meta_v1 fixture.",
+     "type": "valuation"
+    },
+    {
+     "detail": "Synthetic bear_case point 11 for the meta_v1 fixture.",
+     "severity": "medium",
+     "title": "Synthetic bear_case point 11 for the meta_v1 fixture.",
+     "type": "valuation"
+    }
+   ],
+   "macro_regime_at_memo": "soft_landing",
+   "macro_sensitivity": {
+    "agent": "Macro Analyst",
+    "confidence": 0.72,
+    "data": {},
+    "evidence": [],
+    "headline": "Synthetic analyst headline 57 for the meta_v1 fixture.",
+    "key_points": [
+     "Synthetic analyst point 59 for the meta_v1 fixture.",
+     "Synthetic analyst point 60 for the meta_v1 fixture.",
+     "Synthetic analyst point 61 for the meta_v1 fixture.",
+     "Synthetic analyst point 62 for the meta_v1 fixture.",
+     "Synthetic analyst point 63 for the meta_v1 fixture."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
+    "sources": [],
+    "summary": "Synthetic analyst summary 58 for the meta_v1 fixture."
+   },
+   "macro_snapshot_at_memo": {},
+   "mispricing_thesis": {
+    "consensus_view": "Synthetic mispricing consensus_view 97 for the meta_v1 fixture.",
+    "falsifiers": [
+     "Synthetic falsifier 100 for the meta_v1 fixture.",
+     "Synthetic falsifier 101 for the meta_v1 fixture.",
+     "Synthetic falsifier 102 for the meta_v1 fixture."
+    ],
+    "gap": "Synthetic mispricing gap 99 for the meta_v1 fixture.",
+    "our_view": "Synthetic mispricing our_view 98 for the meta_v1 fixture."
+   },
+   "one_sentence_thesis": "Synthetic thesis 96 for the meta_v1 fixture.",
+   "portfolio_fit": "Unavailable in this version.",
+   "price_at_memo": 648.03,
+   "price_at_memo_at": "2026-09-13T02:00:21.481457",
+   "quality": null,
+   "rating_label": "Neutral",
+   "risk_committee_challenge": {
+    "advice_compliance_check": "Advice compliance was not assessed by this rule-based check.",
+    "challenges": [],
+    "overall_assessment": "Unavailable in this version.",
+    "review_mode": "rule_based",
+    "suggested_revisions": [],
+    "underweighted_risks": [],
+    "valuation_divergence_assessment": "not_assessed"
+   },
+   "round_findings": [
+    {
+     "early_exit": false,
+     "findings": {
+      "comps": {
+       "agent": "Comps Analyst",
+       "confidence": 0.7,
+       "data": {},
+       "evidence": [],
+       "headline": "META trades at a 15% EV/EBITDA discount to peers with above-peer growth.",
+       "key_points": [
+        "EV/EBITDA: target 16.1x vs peer median 19.0x.",
+        "Op margin: 41% vs peers 32%.",
+        "Growth: +22% vs peers +15%.",
+        "FCF yield: 2.8% vs peers 1.8%.",
+        "Op margin vs own 8y median 39% — +7% delta."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "sources": [],
+       "summary": "Peer set: GOOGL, MSFT, AMZN. Trades at a -15.0% discount to peers on EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median. Own-history context: Operating margin running above its own multi-year median."
+      },
+      "earnings": {
+       "agent": "Earnings Analyst",
+       "confidence": 0.88,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 65 for the meta_v1 fixture.",
+       "key_points": [
+        "Synthetic analyst point 67 for the meta_v1 fixture.",
+        "Synthetic analyst point 68 for the meta_v1 fixture.",
+        "Synthetic analyst point 69 for the meta_v1 fixture.",
+        "Synthetic analyst point 70 for the meta_v1 fixture.",
+        "Synthetic analyst point 71 for the meta_v1 fixture.",
+        "Synthetic analyst point 72 for the meta_v1 fixture.",
+        "Synthetic analyst point 73 for the meta_v1 fixture.",
+        "Synthetic analyst point 74 for the meta_v1 fixture.",
+        "Synthetic analyst point 75 for the meta_v1 fixture.",
+        "Synthetic analyst point 76 for the meta_v1 fixture.",
+        "Synthetic analyst point 77 for the meta_v1 fixture.",
+        "Synthetic analyst point 78 for the meta_v1 fixture.",
+        "Synthetic analyst point 79 for the meta_v1 fixture."
+       ],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Synthetic analyst summary 66 for the meta_v1 fixture."
+      },
+      "filing": {
+       "agent": "Filing Analyst",
+       "confidence": 0.78,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 80 for the meta_v1 fixture.",
+       "key_points": [
+        "Synthetic analyst point 82 for the meta_v1 fixture.",
+        "Synthetic analyst point 83 for the meta_v1 fixture.",
+        "Synthetic analyst point 84 for the meta_v1 fixture.",
+        "Synthetic analyst point 85 for the meta_v1 fixture.",
+        "Synthetic analyst point 86 for the meta_v1 fixture.",
+        "Synthetic analyst point 87 for the meta_v1 fixture.",
+        "Synthetic analyst point 88 for the meta_v1 fixture.",
+        "Synthetic analyst point 89 for the meta_v1 fixture."
+       ],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Synthetic analyst summary 81 for the meta_v1 fixture."
+      },
+      "macro": {
+       "agent": "Macro Analyst",
+       "confidence": 0.72,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 57 for the meta_v1 fixture.",
+       "key_points": [
+        "Synthetic analyst point 59 for the meta_v1 fixture.",
+        "Synthetic analyst point 60 for the meta_v1 fixture.",
+        "Synthetic analyst point 61 for the meta_v1 fixture.",
+        "Synthetic analyst point 62 for the meta_v1 fixture.",
+        "Synthetic analyst point 63 for the meta_v1 fixture."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "sources": [],
+       "summary": "Synthetic analyst summary 58 for the meta_v1 fixture."
+      },
+      "risk": {
+       "agent": "Risk Analyst",
+       "confidence": 0.7,
+       "data": {},
+       "evidence": [],
+       "headline": "Risk profile for META",
+       "key_points": [],
+       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "sources": [],
+       "summary": "Quantitative risk profile looks moderate. 1 structured rec(s) applied to the memo (see data.recommendations)."
+      },
+      "sector": {
+       "agent": "Sector Analyst",
+       "confidence": 0.85,
+       "data": {
+        "bull_bear_analysis": {
+         "bear_case": {
+          "headline": "Synthetic bear_case headline 7 for the meta_v1 fixture.",
+          "key_points": [
+           "Synthetic bear_case point 8 for the meta_v1 fixture.",
+           "Synthetic bear_case point 9 for the meta_v1 fixture.",
+           "Synthetic bear_case point 10 for the meta_v1 fixture.",
+           "Synthetic bear_case point 11 for the meta_v1 fixture.",
+           "Synthetic bear_case point 12 for the meta_v1 fixture."
+          ]
+         },
+         "bull_case": {
+          "headline": "Synthetic bull_case headline 1 for the meta_v1 fixture.",
+          "key_points": [
+           "Synthetic bull_case point 2 for the meta_v1 fixture.",
+           "Synthetic bull_case point 3 for the meta_v1 fixture.",
+           "Synthetic bull_case point 4 for the meta_v1 fixture.",
+           "Synthetic bull_case point 5 for the meta_v1 fixture.",
+           "Synthetic bull_case point 6 for the meta_v1 fixture."
+          ]
+         },
+         "falsifiable_tests": [
+          {
+           "invalidates_side": "bull",
+           "statement": "Synthetic falsifier 15 for the meta_v1 fixture."
+          },
+          {
+           "invalidates_side": "bear",
+           "statement": "Synthetic falsifier 16 for the meta_v1 fixture."
+          }
+         ],
+         "key_disagreement": "Synthetic key disagreement 13 for the meta_v1 fixture.",
+         "sector_lean": "balanced",
+         "sector_synthesis": "Synthetic sector synthesis 14 for the meta_v1 fixture."
+        },
+        "cross_sector_relevance": [
+         "GOOG",
+         "GOOGL",
+         "DIS"
+        ],
+        "kpi_placements": {
+         "EV_EBITDA": {
+          "distribution": {
+           "max": 21.198816810368683,
+           "mean": 11.381723319976006,
+           "median": 10.795286070376207,
+           "min": 4.3713620488940625,
+           "n": 10,
+           "p25": 5.886455435858752,
+           "p75": 13.28593635675507,
+           "stdev": 5.675168755043561
+          },
+          "group": "valuation",
+          "interpretation": "richest in cohort",
+          "quartile": 4,
+          "target": 16.376314133221104
+         },
+         "FCF_yield": {
+          "distribution": {
+           "max": 0.21504203991827756,
+           "mean": 0.0831229112169169,
+           "median": 0.0639000384669595,
+           "min": 0.019270379953628625,
+           "n": 10,
+           "p25": 0.019270379953628625,
+           "p75": 0.1169266657285886,
+           "stdev": 0.062485392599477496
+          },
+          "group": "valuation",
+          "interpretation": "below-median multiple",
+          "quartile": 2,
+          "target": 0.027708288718024814
+         },
+         "PFCF": {
+          "distribution": {
+           "max": 51.893112767177136,
+           "mean": 23.058606418662063,
+           "median": 16.52038416803759,
+           "min": 4.6502535056867496,
+           "n": 10,
+           "p25": 6.386058454051607,
+           "p75": 41.912011375477974,
+           "stdev": 17.756807616643588
+          },
+          "group": "valuation",
+          "interpretation": "above-median multiple",
+          "quartile": 3,
+          "target": 36.09028367563816
+         },
+         "ROIC": {
+          "distribution": {
+           "max": 0.2521668961712825,
+           "mean": 0.1103291306838161,
+           "median": 0.07133956514756723,
+           "min": 0.006819053290689928,
+           "n": 10,
+           "p25": 0.0576622776493174,
+           "p75": 0.21823186332530572,
+           "stdev": 0.08076613717491024
+          },
+          "group": "quality",
+          "interpretation": "above median",
+          "quartile": 3,
+          "target": 0.17950279862720422
+         },
+         "operating_margin": {
+          "distribution": {
+           "max": 0.32063916829677586,
+           "mean": 0.21511040084952937,
+           "median": 0.21199169546006463,
+           "min": 0.0350975975975976,
+           "n": 10,
+           "p25": 0.1464866296002118,
+           "p75": 0.29494704605507255,
+           "stdev": 0.08314968257338966
+          },
+          "group": "quality",
+          "interpretation": "top quartile",
+          "quartile": 4,
+          "target": 0.41437855159579234
+         }
+        },
+        "macro_alignment": "positive",
+        "regime": "Mixed regime",
+        "sector": "Communication Services",
+        "sub_industry": "Internet Content & Information"
+       },
+       "evidence": [],
+       "headline": "Synthetic analyst headline 17 for the meta_v1 fixture.",
+       "key_points": [
+        "Synthetic analyst point 19 for the meta_v1 fixture.",
+        "Synthetic analyst point 20 for the meta_v1 fixture.",
+        "Synthetic analyst point 21 for the meta_v1 fixture.",
+        "Synthetic analyst point 22 for the meta_v1 fixture.",
+        "Synthetic analyst point 23 for the meta_v1 fixture.",
+        "Synthetic analyst point 24 for the meta_v1 fixture.",
+        "Synthetic analyst point 25 for the meta_v1 fixture."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "sources": [],
+       "summary": "Synthetic analyst summary 18 for the meta_v1 fixture."
+      },
+      "technical": {
+       "agent": "Technical Analyst",
+       "confidence": 0.0,
+       "data": {
+        "intake_rationale": "Synthetic intake rationale 64 for the meta_v1 fixture.",
+        "intake_skipped": true
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "valuation": {
+       "agent": "Valuation Analyst",
+       "confidence": 0.62,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 47 for the meta_v1 fixture.",
+       "key_points": [
+        "Synthetic analyst point 49 for the meta_v1 fixture.",
+        "Synthetic analyst point 50 for the meta_v1 fixture.",
+        "Synthetic analyst point 51 for the meta_v1 fixture.",
+        "Synthetic analyst point 52 for the meta_v1 fixture.",
+        "Synthetic analyst point 53 for the meta_v1 fixture.",
+        "Synthetic analyst point 54 for the meta_v1 fixture.",
+        "Synthetic analyst point 55 for the meta_v1 fixture.",
+        "Synthetic analyst point 56 for the meta_v1 fixture."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "sources": [],
+       "summary": "Synthetic analyst summary 48 for the meta_v1 fixture."
+      }
+     },
+     "pm_questions": [],
+     "pm_rationale": "",
+     "round": 0
+    },
+    {
+     "early_exit": false,
+     "findings": {
+      "earnings": {
+       "agent": "Earnings Analyst",
+       "confidence": 0.82,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 26 for the meta_v1 fixture.",
+       "key_points": [
+        "Synthetic analyst point 28 for the meta_v1 fixture.",
+        "Synthetic analyst point 29 for the meta_v1 fixture.",
+        "Synthetic analyst point 30 for the meta_v1 fixture.",
+        "Synthetic analyst point 31 for the meta_v1 fixture.",
+        "Synthetic analyst point 32 for the meta_v1 fixture.",
+        "Synthetic analyst point 33 for the meta_v1 fixture.",
+        "Synthetic analyst point 34 for the meta_v1 fixture.",
+        "Synthetic analyst point 35 for the meta_v1 fixture.",
+        "Synthetic analyst point 36 for the meta_v1 fixture.",
+        "Synthetic analyst point 37 for the meta_v1 fixture."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "sources": [],
+       "summary": "Synthetic analyst summary 27 for the meta_v1 fixture."
+      },
+      "filing": {
+       "agent": "Filing Analyst",
+       "confidence": 0.82,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 38 for the meta_v1 fixture.",
+       "key_points": [
+        "Synthetic analyst point 40 for the meta_v1 fixture.",
+        "Synthetic analyst point 41 for the meta_v1 fixture.",
+        "Synthetic analyst point 42 for the meta_v1 fixture.",
+        "Synthetic analyst point 43 for the meta_v1 fixture.",
+        "Synthetic analyst point 44 for the meta_v1 fixture.",
+        "Synthetic analyst point 45 for the meta_v1 fixture.",
+        "Synthetic analyst point 46 for the meta_v1 fixture."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "sources": [],
+       "summary": "Synthetic analyst summary 39 for the meta_v1 fixture."
+      }
+     },
+     "pm_questions": [
+      {
+       "question": "Synthetic PM question 90 for the meta_v1 fixture.",
+       "target_agent": "earnings",
+       "why_it_matters": "Synthetic PM rationale 91 for the meta_v1 fixture."
+      },
+      {
+       "question": "Synthetic PM question 92 for the meta_v1 fixture.",
+       "target_agent": "filing",
+       "why_it_matters": "Synthetic PM rationale 93 for the meta_v1 fixture."
+      }
+     ],
+     "pm_rationale": "Synthetic PM rationale 94 for the meta_v1 fixture.",
+     "round": 1
+    }
+   ],
+   "scorecard": {
+    "as_of": "2026-09-11",
+    "categories": {
+     "capital_allocation": {
+      "coverage": 1.0,
+      "n_available": 4,
+      "n_features": 4,
+      "percentile": 15.976331360946746,
+      "score": 38.9,
+      "sector_percentile": 27.272727272727273,
+      "weight": 0.125,
+      "z": -0.556885462246523
+     },
+     "earnings_quality": {
+      "coverage": 1.0,
+      "n_available": 3,
+      "n_features": 3,
+      "percentile": 75.15527950310559,
+      "score": 58.0,
+      "sector_percentile": 72.72727272727273,
+      "weight": 0.125,
+      "z": 0.4001957262278341
+     },
+     "efficiency": {
+      "coverage": 1.0,
+      "n_available": 3,
+      "n_features": 3,
+      "percentile": 13.017751479289942,
+      "score": 33.1,
+      "sector_percentile": 9.090909090909092,
+      "weight": 0.125,
+      "z": -0.8433739183232009
+     },
+     "growth": {
+      "coverage": 1.0,
+      "n_available": 5,
+      "n_features": 5,
+      "percentile": 91.71597633136095,
+      "score": 67.2,
+      "sector_percentile": 100.0,
+      "weight": 0.125,
+      "z": 0.8584779672892353
+     },
+     "leverage": {
+      "coverage": 1.0,
+      "n_available": 4,
+      "n_features": 4,
+      "percentile": 97.26027397260275,
+      "score": 81.0,
+      "sector_percentile": 100.0,
+      "weight": 0.125,
+      "z": 1.5500656857887871
+     },
+     "profitability": {
+      "coverage": 1.0,
+      "n_available": 4,
+      "n_features": 4,
+      "percentile": 92.3076923076923,
+      "score": 71.4,
+      "sector_percentile": 100.0,
+      "weight": 0.125,
+      "z": 1.069334491428332
+     },
+     "quality": {
+      "coverage": 1.0,
+      "n_available": 4,
+      "n_features": 4,
+      "percentile": 88.16568047337279,
+      "score": 68.8,
+      "sector_percentile": 81.81818181818181,
+      "weight": 0.125,
+      "z": 0.9411537377877714
+     },
+     "valuation": {
+      "coverage": 1.0,
+      "n_available": 4,
+      "n_features": 4,
+      "percentile": 4.733727810650888,
+      "score": 32.6,
+      "sector_percentile": 27.272727272727273,
+      "weight": 0.125,
+      "z": -0.8683002622785725
+     }
+    },
+    "coverage": 1.0,
+    "data_available_at": "2026-01-29",
+    "disagreement": {
+     "dimension": "overall",
+     "direction": "narrative_below_quant",
+     "gap": -36.98,
+     "note": "Memo rates Neutral (bucket 50) vs scorecard universe percentile 87.0 (gap -37.0; coverage 100%).",
+     "severity": "watch"
+    },
+    "latest_period": "FY2025",
+    "notes": [
+     "Profile read (fs-v1): Reads as neither a compounder nor an early inflection (compounder z +0.46, inflection z +0.04; threshold z >= +0.50)."
+    ],
+    "overall_score": 56.4,
+    "overall_z": 0.31883349570920794,
+    "price_date": "2026-09-11",
+    "profiles": {
+     "compounder": 0.46344962329935363,
+     "inflection": 0.04471049126756151
+    },
+    "reconciliation": "Synthetic scorecard reconciliation 110 for the meta_v1 fixture.",
+    "run_id": "6b452870-0f31-4590-8def-06e6fefbeb5f",
+    "sector_percentile": 100.0,
+    "stale": false,
+    "top_negative": [
+     {
+      "contribution": -0.09377362080480212,
+      "family": "efficiency",
+      "feature": "capex_intensity",
+      "z": -2.250566899315251
+     },
+     {
+      "contribution": -0.0647186598863933,
+      "family": "capital_allocation",
+      "feature": "sbc_to_revenue",
+      "z": -2.0709971163645857
+     },
+     {
+      "contribution": -0.04174805921275018,
+      "family": "efficiency",
+      "feature": "opex_ratio",
+      "z": -1.0019534211060044
+     }
+    ],
+    "top_positive": [
+     {
+      "contribution": 0.08798757287607112,
+      "family": "earnings_quality",
+      "feature": "accruals_ratio",
+      "z": 2.111701749025707
+     },
+     {
+      "contribution": 0.07780658093790464,
+      "family": "leverage",
+      "feature": "current_ratio",
+      "z": 2.4898105900129486
+     },
+     {
+      "contribution": 0.06394186759195009,
+      "family": "profitability",
+      "feature": "operating_margin",
+      "z": 2.0461397629424027
+     }
+    ],
+    "universe_percentile": 86.98224852071006,
+    "version_key": "fs-v1"
+   },
+   "scores": {
+    "beat_streak": 7.0,
+    "blended_pm_score": 58.5,
+    "confidence": 70.81411764705882,
+    "cross_sector_relevance_count": 3.0,
+    "deep_research_questions": 2.0,
+    "deep_research_rounds": 1.0,
+    "evidence_quality": 95.9,
+    "factor_catalyst": 50.0,
+    "factor_earnings_momentum": 85.6,
+    "factor_growth": 50.0,
+    "factor_macro_fit": 60.0,
+    "factor_pm_score": 64.1,
+    "factor_quality": 78.1,
+    "factor_risk": 78.0,
+    "factor_valuation": 44.9,
+    "guidance_net_direction": 2.0,
+    "llm_rating_score": 50.0,
+    "llm_rating_weight": 0.4,
+    "raw_confidence": 72.0,
+    "risk_confidence": 70.0,
+    "risk_recs_applied": 1.0,
+    "sector_confidence": 85.0,
+    "valuation_confidence": 62.0
+   },
+   "section_availability": {
+    "bear_case": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "bull_case": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "business_summary": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "catalysts": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "comps_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "comps_agent_view.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "confidence_score": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "dcf_summary": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "earnings_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "earnings_agent_view.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "earnings_qoq_delta": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "filing_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "filing_agent_view.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "final_pm_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "final_verdict": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "forward_catalysts": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "key_risks": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "macro_sensitivity": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "macro_sensitivity.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "mispricing_thesis": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "one_sentence_thesis": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "portfolio_fit": {
+     "basis": [
+      "producer:graph._portfolio_fit"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_always",
+     "status": "unavailable"
+    },
+    "rating_label": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "risk_committee_challenge": {
+     "basis": [
+      "review_mode:rule_based"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "critic_not_run",
+     "status": "unavailable"
+    },
+    "round_findings": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "scorecard": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "sector_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "sector_agent_view.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "sector_synthesis": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "technical_agent_view": {
+     "basis": [
+      "flag:intake_skipped"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "skipped_by_intake",
+     "status": "unavailable"
+    },
+    "thesis_breakers": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "valuation_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "valuation_agent_view.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "valuation_verdict": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    }
+   },
+   "section_provenance": {},
+   "sector": "Communication Services",
+   "sector_agent_view": {
+    "agent": "Sector Analyst",
+    "confidence": 0.85,
+    "data": {
+     "bull_bear_analysis": {
+      "bear_case": {
+       "headline": "Synthetic bear_case headline 7 for the meta_v1 fixture.",
+       "key_points": [
+        "Synthetic bear_case point 8 for the meta_v1 fixture.",
+        "Synthetic bear_case point 9 for the meta_v1 fixture.",
+        "Synthetic bear_case point 10 for the meta_v1 fixture.",
+        "Synthetic bear_case point 11 for the meta_v1 fixture.",
+        "Synthetic bear_case point 12 for the meta_v1 fixture."
+       ]
+      },
+      "bull_case": {
+       "headline": "Synthetic bull_case headline 1 for the meta_v1 fixture.",
+       "key_points": [
+        "Synthetic bull_case point 2 for the meta_v1 fixture.",
+        "Synthetic bull_case point 3 for the meta_v1 fixture.",
+        "Synthetic bull_case point 4 for the meta_v1 fixture.",
+        "Synthetic bull_case point 5 for the meta_v1 fixture.",
+        "Synthetic bull_case point 6 for the meta_v1 fixture."
+       ]
+      },
+      "falsifiable_tests": [
+       {
+        "invalidates_side": "bull",
+        "statement": "Synthetic falsifier 15 for the meta_v1 fixture."
+       },
+       {
+        "invalidates_side": "bear",
+        "statement": "Synthetic falsifier 16 for the meta_v1 fixture."
+       }
+      ],
+      "key_disagreement": "Synthetic key disagreement 13 for the meta_v1 fixture.",
+      "sector_lean": "balanced",
+      "sector_synthesis": "Synthetic sector synthesis 14 for the meta_v1 fixture."
+     },
+     "cross_sector_relevance": [
+      "GOOG",
+      "GOOGL",
+      "DIS"
+     ],
+     "kpi_placements": {
+      "EV_EBITDA": {
+       "distribution": {
+        "max": 21.198816810368683,
+        "mean": 11.381723319976006,
+        "median": 10.795286070376207,
+        "min": 4.3713620488940625,
+        "n": 10,
+        "p25": 5.886455435858752,
+        "p75": 13.28593635675507,
+        "stdev": 5.675168755043561
+       },
+       "group": "valuation",
+       "interpretation": "richest in cohort",
+       "quartile": 4,
+       "target": 16.376314133221104
+      },
+      "FCF_yield": {
+       "distribution": {
+        "max": 0.21504203991827756,
+        "mean": 0.0831229112169169,
+        "median": 0.0639000384669595,
+        "min": 0.019270379953628625,
+        "n": 10,
+        "p25": 0.019270379953628625,
+        "p75": 0.1169266657285886,
+        "stdev": 0.062485392599477496
+       },
+       "group": "valuation",
+       "interpretation": "below-median multiple",
+       "quartile": 2,
+       "target": 0.027708288718024814
+      },
+      "PFCF": {
+       "distribution": {
+        "max": 51.893112767177136,
+        "mean": 23.058606418662063,
+        "median": 16.52038416803759,
+        "min": 4.6502535056867496,
+        "n": 10,
+        "p25": 6.386058454051607,
+        "p75": 41.912011375477974,
+        "stdev": 17.756807616643588
+       },
+       "group": "valuation",
+       "interpretation": "above-median multiple",
+       "quartile": 3,
+       "target": 36.09028367563816
+      },
+      "ROIC": {
+       "distribution": {
+        "max": 0.2521668961712825,
+        "mean": 0.1103291306838161,
+        "median": 0.07133956514756723,
+        "min": 0.006819053290689928,
+        "n": 10,
+        "p25": 0.0576622776493174,
+        "p75": 0.21823186332530572,
+        "stdev": 0.08076613717491024
+       },
+       "group": "quality",
+       "interpretation": "above median",
+       "quartile": 3,
+       "target": 0.17950279862720422
+      },
+      "operating_margin": {
+       "distribution": {
+        "max": 0.32063916829677586,
+        "mean": 0.21511040084952937,
+        "median": 0.21199169546006463,
+        "min": 0.0350975975975976,
+        "n": 10,
+        "p25": 0.1464866296002118,
+        "p75": 0.29494704605507255,
+        "stdev": 0.08314968257338966
+       },
+       "group": "quality",
+       "interpretation": "top quartile",
+       "quartile": 4,
+       "target": 0.41437855159579234
+      }
+     },
+     "macro_alignment": "positive",
+     "regime": "Mixed regime",
+     "sector": "Communication Services",
+     "sub_industry": "Internet Content & Information"
+    },
+    "evidence": [],
+    "headline": "Synthetic analyst headline 17 for the meta_v1 fixture.",
+    "key_points": [
+     "Synthetic analyst point 19 for the meta_v1 fixture.",
+     "Synthetic analyst point 20 for the meta_v1 fixture.",
+     "Synthetic analyst point 21 for the meta_v1 fixture.",
+     "Synthetic analyst point 22 for the meta_v1 fixture.",
+     "Synthetic analyst point 23 for the meta_v1 fixture.",
+     "Synthetic analyst point 24 for the meta_v1 fixture.",
+     "Synthetic analyst point 25 for the meta_v1 fixture."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
+    "sources": [],
+    "summary": "Synthetic analyst summary 18 for the meta_v1 fixture."
+   },
+   "sources_used": [],
+   "technical_agent_view": {
+    "agent": "Technical Analyst",
+    "confidence": 0.0,
+    "data": {
+     "intake_rationale": "Synthetic intake rationale 64 for the meta_v1 fixture.",
+     "intake_skipped": true
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "thesis_breakers": [
+    {
+     "detail": "Synthetic bear_case point 9 for the meta_v1 fixture.",
+     "severity": "high",
+     "title": "Synthetic bear_case point 9 for the meta_v1 fixture.",
+     "type": "regulatory"
+    }
+   ],
+   "ticker": "META",
+   "valuation_agent_view": {
+    "agent": "Valuation Analyst",
+    "confidence": 0.62,
+    "data": {},
+    "evidence": [],
+    "headline": "Synthetic analyst headline 47 for the meta_v1 fixture.",
+    "key_points": [
+     "Synthetic analyst point 49 for the meta_v1 fixture.",
+     "Synthetic analyst point 50 for the meta_v1 fixture.",
+     "Synthetic analyst point 51 for the meta_v1 fixture.",
+     "Synthetic analyst point 52 for the meta_v1 fixture.",
+     "Synthetic analyst point 53 for the meta_v1 fixture.",
+     "Synthetic analyst point 54 for the meta_v1 fixture.",
+     "Synthetic analyst point 55 for the meta_v1 fixture.",
+     "Synthetic analyst point 56 for the meta_v1 fixture."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
+    "sources": [],
+    "summary": "Synthetic analyst summary 48 for the meta_v1 fixture."
+   },
+   "valuation_verdict": {
+    "basis": "rating",
+    "comps_ev_ebitda_premium": -0.15,
+    "dcf_base_upside": 0.0939776378203954,
+    "factor_valuation": 44.9,
+    "signals": {},
+    "summary": "Net read: fairly priced (DCF base case +9% to fair value; EV/EBITDA 15% discount vs peers; quant valuation factor 45/100).",
+    "verdict": "fairly_priced"
+   }
+  },
+  "msft_live": {
+   "agent_influence": {
+    "comps": 0.8974,
+    "earnings": 0.2778,
+    "filing": 0.0,
+    "macro": 0.2219,
+    "risk": 0.0,
+    "sector": 1.0,
+    "technical": 0.0,
+    "valuation": 0.641
+   },
+   "bear_case": {
+    "headline": "Unavailable in this version.",
+    "key_points": [
+     "DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture.",
+     "DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+     "DCF driver — Synthetic driver 59: synthetic rationale for the msft_live fixture.",
+     "DCF bear case implies $250.11 (-49%)."
+    ]
+   },
+   "bull_case": {
+    "headline": "Unavailable in this version.",
+    "key_points": [
+     "DCF driver — Synthetic driver 54: synthetic rationale for the msft_live fixture.",
+     "DCF driver — Synthetic driver 55: synthetic rationale for the msft_live fixture.",
+     "DCF driver — Synthetic driver 56: synthetic rationale for the msft_live fixture.",
+     "DCF bull case implies $824.83 (+68%)."
+    ]
+   },
+   "business_summary": "Synthetic business description 53 for the msft_live fixture.",
+   "catalysts": [
+    {
+     "detail": "Quarterly print expected on 2026-10-28; tone + guidance the swing factor.",
+     "horizon": "near_term",
+     "impact": "medium",
+     "title": "Next earnings: 2026-10-28"
+    }
+   ],
+   "company_name": "Microsoft Corporation",
+   "comps_agent_view": {
+    "agent": "Comps Analyst",
+    "confidence": 0.7,
+    "data": {},
+    "evidence": [],
+    "headline": "MSFT trades in line with peers on EV/EBITDA (+2%).",
+    "key_points": [
+     "EV/EBITDA: target 19.0x vs peer median 18.6x.",
+     "Op margin: 47% vs peers 31%.",
+     "Growth: +18% vs peers +16%.",
+     "FCF yield: 1.8% vs peers 1.0%.",
+     "Op margin vs own 9y median 42% — +12% delta.",
+     "Revenue growth at 88th percentile of own 9y range."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the msft_live fixture.",
+    "sources": [],
+    "summary": "Peer set: GOOGL, AMZN, ORCL, META. In-line with peer median EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median. Own-history context: Operating margin running above its own multi-year median. Revenue growth in the top quartile of its own 9y range."
+   },
+   "confidence_score": 61.809999999999995,
+   "dcf_initial_summary": {},
+   "dcf_pm_adjustment_headline": "",
+   "dcf_pm_adjustments": [],
+   "dcf_summary": {
+    "base_implied_price": 501.70511024507994,
+    "base_upside": 0.0204517649650767,
+    "bear_implied_price": 250.11121281062498,
+    "bear_upside": -0.49128198350325436,
+    "bull_implied_price": 824.8342786483113,
+    "bull_upside": 0.6776859120274816,
+    "current_price": 491.65,
+    "summary": "Base case implied price $501.71 vs current $491.65 (+2.0%). Bull $824.83 (+67.8%) | Bear $250.11 (-49.1%). ⚠ Model warnings: 0 errors, 1 warns",
+    "terminal_growth": 0.035,
+    "wacc": 0.08549999999999999
+   },
+   "degradation_events": [],
+   "degraded_agents": [
+    "Valuation Analyst"
+   ],
+   "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+   "earnings_agent_view": {
+    "agent": "Earnings Analyst",
+    "confidence": 0.65,
+    "data": {},
+    "evidence": [],
+    "headline": "Synthetic analyst headline 1 for the msft_live fixture.",
+    "key_points": [
+     "Synthetic analyst point 3 for the msft_live fixture.",
+     "Synthetic analyst point 4 for the msft_live fixture.",
+     "Synthetic analyst point 5 for the msft_live fixture.",
+     "Synthetic analyst point 6 for the msft_live fixture.",
+     "Synthetic analyst point 7 for the msft_live fixture.",
+     "Synthetic analyst point 8 for the msft_live fixture.",
+     "Synthetic analyst point 9 for the msft_live fixture.",
+     "Synthetic analyst point 10 for the msft_live fixture.",
+     "Synthetic analyst point 11 for the msft_live fixture.",
+     "Synthetic analyst point 12 for the msft_live fixture.",
+     "Synthetic analyst point 13 for the msft_live fixture.",
+     "Synthetic analyst point 14 for the msft_live fixture."
+    ],
+    "long_form_report": "Synthetic analyst expansion for the msft_live fixture.",
+    "sources": [],
+    "summary": "Synthetic analyst summary 2 for the msft_live fixture."
+   },
+   "earnings_qoq_delta": null,
+   "extra_agent_views": {},
+   "filing_agent_view": {
+    "agent": "Filing Analyst",
+    "confidence": 0.0,
+    "data": {
+     "intake_rationale": "Synthetic intake rationale 15 for the msft_live fixture.",
+     "intake_skipped": true
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "final_pm_view": "Synthetic PM view 45 for the msft_live fixture.",
+   "final_verdict": "PM final view: Neutral (confidence 61). Synthetic thesis 46 for the msft_live fixture. Watch items: DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture., DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+   "forward_catalysts": [],
+   "generated_at": "2026-09-10T03:59:21.858840",
+   "generation_mode": "live",
+   "intake_decision": {
+    "rationale": "Synthetic intake rationale 15 for the msft_live fixture.",
+    "skipped": [
+     "filing",
+     "technical"
+    ]
+   },
+   "key_risks": [
+    {
+     "detail": "DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture.",
+     "severity": "high",
+     "title": "DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture.",
+     "type": "company"
+    },
+    {
+     "detail": "DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+     "severity": "high",
+     "title": "DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+     "type": "regulatory"
+    },
+    {
+     "detail": "DCF driver — Synthetic driver 59: synthetic rationale for the msft_live fixture.",
+     "severity": "medium",
+     "title": "DCF driver — Synthetic driver 59: synthetic rationale for the msft_live fixture.",
+     "type": "valuation"
+    }
+   ],
+   "macro_regime_at_memo": "soft_landing",
+   "macro_sensitivity": {
+    "agent": "Macro Analyst",
+    "confidence": 0.75,
+    "data": {},
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "macro_snapshot_at_memo": {},
+   "mispricing_thesis": {
+    "consensus_view": "Synthetic mispricing consensus_view 47 for the msft_live fixture.",
+    "falsifiers": [
+     "Synthetic falsifier 50 for the msft_live fixture.",
+     "Synthetic falsifier 51 for the msft_live fixture.",
+     "Synthetic falsifier 52 for the msft_live fixture."
+    ],
+    "gap": "Synthetic mispricing gap 49 for the msft_live fixture.",
+    "our_view": "Synthetic mispricing our_view 48 for the msft_live fixture."
+   },
+   "one_sentence_thesis": "Synthetic thesis 46 for the msft_live fixture.",
+   "portfolio_fit": "Unavailable in this version.",
+   "price_at_memo": 491.65,
+   "price_at_memo_at": "2026-09-10T03:59:09.857355",
+   "quality": null,
+   "rating_label": "Neutral",
+   "risk_committee_challenge": {
+    "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
+    "challenges": [],
+    "overall_assessment": "Unavailable in this version.",
+    "review_mode": "unknown",
+    "suggested_revisions": [],
+    "underweighted_risks": [],
+    "valuation_divergence_assessment": "not_assessed"
+   },
+   "round_findings": [
+    {
+     "early_exit": false,
+     "findings": {
+      "comps": {
+       "agent": "Comps Analyst",
+       "confidence": 0.7,
+       "data": {},
+       "evidence": [],
+       "headline": "MSFT trades in line with peers on EV/EBITDA (+2%).",
+       "key_points": [
+        "EV/EBITDA: target 19.0x vs peer median 18.6x.",
+        "Op margin: 47% vs peers 31%.",
+        "Growth: +18% vs peers +16%.",
+        "FCF yield: 1.8% vs peers 1.0%.",
+        "Op margin vs own 9y median 42% — +12% delta.",
+        "Revenue growth at 88th percentile of own 9y range."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+       "sources": [],
+       "summary": "Peer set: GOOGL, AMZN, ORCL, META. In-line with peer median EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median. Own-history context: Operating margin running above its own multi-year median. Revenue growth in the top quartile of its own 9y range."
+      },
+      "earnings": {
+       "agent": "Earnings Analyst",
+       "confidence": 0.82,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 16 for the msft_live fixture.",
+       "key_points": [
+        "Synthetic analyst point 18 for the msft_live fixture.",
+        "Synthetic analyst point 19 for the msft_live fixture.",
+        "Synthetic analyst point 20 for the msft_live fixture.",
+        "Synthetic analyst point 21 for the msft_live fixture.",
+        "Synthetic analyst point 22 for the msft_live fixture.",
+        "Synthetic analyst point 23 for the msft_live fixture.",
+        "Synthetic analyst point 24 for the msft_live fixture.",
+        "Synthetic analyst point 25 for the msft_live fixture.",
+        "Synthetic analyst point 26 for the msft_live fixture.",
+        "Synthetic analyst point 27 for the msft_live fixture.",
+        "Synthetic analyst point 28 for the msft_live fixture.",
+        "Synthetic analyst point 29 for the msft_live fixture."
+       ],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Synthetic analyst summary 17 for the msft_live fixture."
+      },
+      "filing": {
+       "agent": "Filing Analyst",
+       "confidence": 0.0,
+       "data": {
+        "intake_rationale": "Synthetic intake rationale 15 for the msft_live fixture.",
+        "intake_skipped": true
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "macro": {
+       "agent": "Macro Analyst",
+       "confidence": 0.75,
+       "data": {},
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "risk": {
+       "agent": "Risk Analyst",
+       "confidence": 0.7,
+       "data": {},
+       "evidence": [],
+       "headline": "Risk profile for MSFT",
+       "key_points": [],
+       "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+       "sources": [],
+       "summary": "Quantitative risk profile looks moderate."
+      },
+      "sector": {
+       "agent": "Sector Analyst",
+       "confidence": 0.78,
+       "data": {
+        "kpi_placements": {
+         "EV_EBITDA": {
+          "distribution": {
+           "max": 586.7537491163561,
+           "mean": 194.9331629612305,
+           "median": 58.25842349304482,
+           "min": 23.334647011009757,
+           "n": 7,
+           "p25": 23.334647011009757,
+           "p75": 386.96188342881544,
+           "stdev": 205.64150452323244
+          },
+          "group": "valuation",
+          "interpretation": "cheapest in cohort",
+          "quartile": 1,
+          "target": 13.873615813491776
+         },
+         "EV_Revenue": {
+          "distribution": {
+           "max": 93.84630604413505,
+           "mean": 25.352736526803486,
+           "median": 12.456956857388878,
+           "min": 8.457934437319842,
+           "n": 7,
+           "p25": 8.457934437319842,
+           "p75": 22.251137394911268,
+           "stdev": 28.251224802254068
+          },
+          "group": "valuation",
+          "interpretation": "cheapest in cohort",
+          "quartile": 1,
+          "target": 8.676011198201538
+         },
+         "FCF_yield": {
+          "distribution": {
+           "max": 0.037719304890388036,
+           "mean": 0.012357881097271829,
+           "median": 0.0164814363088624,
+           "min": -0.033165508151565506,
+           "n": 7,
+           "p25": -0.033165508151565506,
+           "p75": 0.030169550473871837,
+           "stdev": 0.0211896331278924
+          },
+          "group": "valuation",
+          "interpretation": "above-median multiple",
+          "quartile": 3,
+          "target": 0.024172860865282544
+         },
+         "PFCF": {
+          "distribution": {
+           "max": 200.51429954712745,
+           "mean": 61.37976645711324,
+           "median": 53.87833018321111,
+           "min": -30.151806974584144,
+           "n": 7,
+           "p25": -30.151806974584144,
+           "p75": 85.08559295579974,
+           "stdev": 65.8657893741086
+          },
+          "group": "valuation",
+          "interpretation": "below-median multiple",
+          "quartile": 2,
+          "target": 41.368707062564376
+         },
+         "ROIC": {
+          "distribution": {
+           "max": 0.28748888442172366,
+           "mean": 0.07843951632246475,
+           "median": 0.056658324709480415,
+           "min": -0.042378803142561386,
+           "n": 7,
+           "p25": -0.042378803142561386,
+           "p75": 0.17947315871953484,
+           "stdev": 0.10992512675571325
+          },
+          "group": "quality",
+          "interpretation": "top quartile",
+          "quartile": 4,
+          "target": 0.20564635220712557
+         },
+         "gross_margin": {
+          "distribution": {
+           "max": 0.8236651721415028,
+           "mean": 0.7576421866543537,
+           "median": 0.7687424596397835,
+           "min": 0.6519789779981591,
+           "n": 7,
+           "p25": 0.6519789779981591,
+           "p75": 0.808429907641626,
+           "stdev": 0.05216381426210185
+          },
+          "group": "quality",
+          "interpretation": "bottom quartile",
+          "quartile": 1,
+          "target": 0.6794409337058032
+         },
+         "operating_margin": {
+          "distribution": {
+           "max": 0.3159495165398041,
+           "mean": 0.15515595114052608,
+           "median": 0.1347828444396248,
+           "min": -0.06095006135696035,
+           "n": 7,
+           "p25": -0.06095006135696035,
+           "p75": 0.30847115413165477,
+           "stdev": 0.1517671398760113
+          },
+          "group": "_subindustry_extra",
+          "interpretation": "top quartile",
+          "quartile": 4,
+          "target": 0.4678081840892722
+         }
+        },
+        "macro_alignment": "favored",
+        "regime": "Operating leverage cycle",
+        "sector": "Technology",
+        "sub_industry": "Software - Infrastructure"
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "technical": {
+       "agent": "Technical Analyst",
+       "confidence": 0.0,
+       "data": {
+        "intake_rationale": "Synthetic intake rationale 15 for the msft_live fixture.",
+        "intake_skipped": true
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      },
+      "valuation": {
+       "agent": "Valuation Analyst",
+       "confidence": 0.62,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 30 for the msft_live fixture.",
+       "key_points": [
+        "Synthetic analyst point 32 for the msft_live fixture.",
+        "Synthetic analyst point 33 for the msft_live fixture.",
+        "Synthetic analyst point 34 for the msft_live fixture.",
+        "Synthetic analyst point 35 for the msft_live fixture.",
+        "Synthetic analyst point 36 for the msft_live fixture.",
+        "Synthetic analyst point 37 for the msft_live fixture.",
+        "Synthetic analyst point 38 for the msft_live fixture.",
+        "Synthetic analyst point 39 for the msft_live fixture."
+       ],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Synthetic analyst summary 31 for the msft_live fixture."
+      }
+     },
+     "pm_questions": [],
+     "pm_rationale": "",
+     "round": 0
+    },
+    {
+     "early_exit": false,
+     "findings": {
+      "earnings": {
+       "agent": "Earnings Analyst",
+       "confidence": 0.65,
+       "data": {},
+       "evidence": [],
+       "headline": "Synthetic analyst headline 1 for the msft_live fixture.",
+       "key_points": [
+        "Synthetic analyst point 3 for the msft_live fixture.",
+        "Synthetic analyst point 4 for the msft_live fixture.",
+        "Synthetic analyst point 5 for the msft_live fixture.",
+        "Synthetic analyst point 6 for the msft_live fixture.",
+        "Synthetic analyst point 7 for the msft_live fixture.",
+        "Synthetic analyst point 8 for the msft_live fixture.",
+        "Synthetic analyst point 9 for the msft_live fixture.",
+        "Synthetic analyst point 10 for the msft_live fixture.",
+        "Synthetic analyst point 11 for the msft_live fixture.",
+        "Synthetic analyst point 12 for the msft_live fixture.",
+        "Synthetic analyst point 13 for the msft_live fixture.",
+        "Synthetic analyst point 14 for the msft_live fixture."
+       ],
+       "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+       "sources": [],
+       "summary": "Synthetic analyst summary 2 for the msft_live fixture."
+      },
+      "valuation": {
+       "agent": "Valuation Analyst",
+       "confidence": 0.5,
+       "data": {
+        "deterministic_fallback": "Valuation LLM returned no usable output; deterministic multiples/DCF snapshot shipped instead."
+       },
+       "evidence": [],
+       "headline": "Unavailable in this version.",
+       "key_points": [],
+       "long_form_report": null,
+       "sources": [],
+       "summary": "Unavailable in this version."
+      }
+     },
+     "pm_questions": [
+      {
+       "question": "Synthetic PM question 40 for the msft_live fixture.",
+       "target_agent": "valuation",
+       "why_it_matters": "Synthetic PM rationale 41 for the msft_live fixture."
+      },
+      {
+       "question": "Synthetic PM question 42 for the msft_live fixture.",
+       "target_agent": "earnings",
+       "why_it_matters": "Synthetic PM rationale 43 for the msft_live fixture."
+      }
+     ],
+     "pm_rationale": "Synthetic PM rationale 44 for the msft_live fixture.",
+     "round": 1
+    }
+   ],
+   "scorecard": null,
+   "scores": {
+    "beat_streak": 2.0,
+    "blended_pm_score": 56.7,
+    "confidence": 61.809999999999995,
+    "cross_sector_relevance_count": 2.0,
+    "deep_research_questions": 2.0,
+    "deep_research_rounds": 1.0,
+    "evidence_quality": 95.3,
+    "factor_catalyst": 50.0,
+    "factor_earnings_momentum": 60.6,
+    "factor_growth": 50.0,
+    "factor_macro_fit": 60.0,
+    "factor_pm_score": 61.2,
+    "factor_quality": 77.3,
+    "factor_risk": 79.7,
+    "factor_valuation": 42.0,
+    "guidance_net_direction": -1.0,
+    "llm_rating_score": 50.0,
+    "llm_rating_weight": 0.4,
+    "raw_confidence": 63.0,
+    "risk_confidence": 70.0,
+    "sector_confidence": 78.0,
+    "valuation_confidence": 50.0
+   },
+   "section_availability": {
+    "bear_case": {
+     "basis": [
+      "fragments:template"
+     ],
+     "headline_hidden": true,
+     "hidden_items": 1,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "bull_case": {
+     "basis": [
+      "fragments:template"
+     ],
+     "headline_hidden": true,
+     "hidden_items": 1,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "business_summary": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "catalysts": {
+     "basis": [
+      "derived:hidden_findings"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 2,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "comps_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "comps_agent_view.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "confidence_score": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "dcf_summary": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "earnings_agent_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "earnings_agent_view.long_form_report": {
+     "basis": [
+      "long_form:analyst_expansion"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "earnings_qoq_delta": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "filing_agent_view": {
+     "basis": [
+      "flag:intake_skipped"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "skipped_by_intake",
+     "status": "unavailable"
+    },
+    "final_pm_view": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "final_verdict": {
+     "basis": [
+      "stripped:key_disagreement",
+      "stripped:cohort_pointer",
+      "stripped:cross_sector"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "forward_catalysts": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "key_risks": {
+     "basis": [
+      "derived:bear_case"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 1,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "macro_sensitivity": {
+     "basis": [
+      "signature:macro_det_pair"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "mispricing_thesis": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "one_sentence_thesis": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "portfolio_fit": {
+     "basis": [
+      "producer:graph._portfolio_fit"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_always",
+     "status": "unavailable"
+    },
+    "rating_label": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "risk_committee_challenge": {
+     "basis": [
+      "signature:critic_legacy_rule_based"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "critic_not_run",
+     "status": "unavailable"
+    },
+    "round_findings": {
+     "basis": [
+      "rounds:hidden_findings"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 1,
+     "reason": "partial_template",
+     "status": "degraded"
+    },
+    "scorecard": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
+    "sector_agent_view": {
+     "basis": [
+      "signature:sector_det_summary"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "sector_synthesis": {
+     "basis": [
+      "derived:sector_agent_view",
+      "signature:bb_key_disagreement"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "derived_from_hidden",
+     "status": "unavailable"
+    },
+    "technical_agent_view": {
+     "basis": [
+      "flag:intake_skipped"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "skipped_by_intake",
+     "status": "unavailable"
+    },
+    "thesis_breakers": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    },
+    "valuation_agent_view": {
+     "basis": [
+      "flag:deterministic_fallback"
+     ],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "template_fallback",
+     "status": "unavailable"
+    },
+    "valuation_verdict": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": null,
+     "status": "available"
+    }
+   },
+   "section_provenance": {},
+   "sector": "Technology",
+   "sector_agent_view": {
+    "agent": "Sector Analyst",
+    "confidence": 0.78,
+    "data": {
+     "kpi_placements": {
+      "EV_EBITDA": {
+       "distribution": {
+        "max": 586.7537491163561,
+        "mean": 194.9331629612305,
+        "median": 58.25842349304482,
+        "min": 23.334647011009757,
+        "n": 7,
+        "p25": 23.334647011009757,
+        "p75": 386.96188342881544,
+        "stdev": 205.64150452323244
+       },
+       "group": "valuation",
+       "interpretation": "cheapest in cohort",
+       "quartile": 1,
+       "target": 13.873615813491776
+      },
+      "EV_Revenue": {
+       "distribution": {
+        "max": 93.84630604413505,
+        "mean": 25.352736526803486,
+        "median": 12.456956857388878,
+        "min": 8.457934437319842,
+        "n": 7,
+        "p25": 8.457934437319842,
+        "p75": 22.251137394911268,
+        "stdev": 28.251224802254068
+       },
+       "group": "valuation",
+       "interpretation": "cheapest in cohort",
+       "quartile": 1,
+       "target": 8.676011198201538
+      },
+      "FCF_yield": {
+       "distribution": {
+        "max": 0.037719304890388036,
+        "mean": 0.012357881097271829,
+        "median": 0.0164814363088624,
+        "min": -0.033165508151565506,
+        "n": 7,
+        "p25": -0.033165508151565506,
+        "p75": 0.030169550473871837,
+        "stdev": 0.0211896331278924
+       },
+       "group": "valuation",
+       "interpretation": "above-median multiple",
+       "quartile": 3,
+       "target": 0.024172860865282544
+      },
+      "PFCF": {
+       "distribution": {
+        "max": 200.51429954712745,
+        "mean": 61.37976645711324,
+        "median": 53.87833018321111,
+        "min": -30.151806974584144,
+        "n": 7,
+        "p25": -30.151806974584144,
+        "p75": 85.08559295579974,
+        "stdev": 65.8657893741086
+       },
+       "group": "valuation",
+       "interpretation": "below-median multiple",
+       "quartile": 2,
+       "target": 41.368707062564376
+      },
+      "ROIC": {
+       "distribution": {
+        "max": 0.28748888442172366,
+        "mean": 0.07843951632246475,
+        "median": 0.056658324709480415,
+        "min": -0.042378803142561386,
+        "n": 7,
+        "p25": -0.042378803142561386,
+        "p75": 0.17947315871953484,
+        "stdev": 0.10992512675571325
+       },
+       "group": "quality",
+       "interpretation": "top quartile",
+       "quartile": 4,
+       "target": 0.20564635220712557
+      },
+      "gross_margin": {
+       "distribution": {
+        "max": 0.8236651721415028,
+        "mean": 0.7576421866543537,
+        "median": 0.7687424596397835,
+        "min": 0.6519789779981591,
+        "n": 7,
+        "p25": 0.6519789779981591,
+        "p75": 0.808429907641626,
+        "stdev": 0.05216381426210185
+       },
+       "group": "quality",
+       "interpretation": "bottom quartile",
+       "quartile": 1,
+       "target": 0.6794409337058032
+      },
+      "operating_margin": {
+       "distribution": {
+        "max": 0.3159495165398041,
+        "mean": 0.15515595114052608,
+        "median": 0.1347828444396248,
+        "min": -0.06095006135696035,
+        "n": 7,
+        "p25": -0.06095006135696035,
+        "p75": 0.30847115413165477,
+        "stdev": 0.1517671398760113
+       },
+       "group": "_subindustry_extra",
+       "interpretation": "top quartile",
+       "quartile": 4,
+       "target": 0.4678081840892722
+      }
+     },
+     "macro_alignment": "favored",
+     "regime": "Operating leverage cycle",
+     "sector": "Technology",
+     "sub_industry": "Software - Infrastructure"
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "sources_used": [],
+   "technical_agent_view": {
+    "agent": "Technical Analyst",
+    "confidence": 0.0,
+    "data": {
+     "intake_rationale": "Synthetic intake rationale 15 for the msft_live fixture.",
+     "intake_skipped": true
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "thesis_breakers": [
+    {
+     "detail": "DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture.",
+     "severity": "high",
+     "title": "DCF driver — Synthetic driver 57: synthetic rationale for the msft_live fixture.",
+     "type": "company"
+    },
+    {
+     "detail": "DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+     "severity": "high",
+     "title": "DCF driver — Synthetic driver 58: synthetic rationale for the msft_live fixture.",
+     "type": "regulatory"
+    }
+   ],
+   "ticker": "MSFT",
+   "valuation_agent_view": {
+    "agent": "Valuation Analyst",
+    "confidence": 0.5,
+    "data": {
+     "deterministic_fallback": "Valuation LLM returned no usable output; deterministic multiples/DCF snapshot shipped instead."
+    },
+    "evidence": [],
+    "headline": "Unavailable in this version.",
+    "key_points": [],
+    "long_form_report": null,
+    "sources": [],
+    "summary": "Unavailable in this version."
+   },
+   "valuation_verdict": {
+    "basis": "rating",
+    "comps_ev_ebitda_premium": 0.02,
+    "dcf_base_upside": 0.0204517649650767,
+    "factor_valuation": 42.0,
+    "signals": {},
+    "summary": "Net read: fairly priced (DCF base case +2% to fair value; EV/EBITDA 2% premium vs peers; quant valuation factor 42/100).",
+    "verdict": "fairly_priced"
+   }
+  }
+ },
+ "presentation_version": 1
+}
