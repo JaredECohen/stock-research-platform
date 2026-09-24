@@ -37,7 +37,7 @@ def _require_key(name: str, attr: str) -> str:
     return val
 
 
-def test_regen_queue_end_to_end(live_settings):
+def test_regen_queue_end_to_end(live_settings, monkeypatch):
     _require_key("FMP_API_KEY", "fmp_api_key")
     if not settings.has_llm:
         pytest.skip("no LLM key configured (OPENAI_API_KEY / ANTHROPIC_API_KEY)")
@@ -46,9 +46,17 @@ def test_regen_queue_end_to_end(live_settings):
 
     from app.database import init_db
     from app.main import app
-    from app.services import regen_worker
+    from app.services import gics_registry, memo_sections, regen_worker
 
     init_db()
+    # Production routes the Industry Group Analyst (render.yaml, both
+    # services; nightly-live.yml sets the same env). Pinned here as well so
+    # a local live run exercises the production roster too. Production's
+    # classification loop keeps a taxonomy active; this fresh database needs
+    # it imported (bundled JSON, no network) so the symbol's introduction
+    # classifies it and the memo has a group to route to.
+    monkeypatch.setattr(settings, "enable_industry_analyst_routing", True)
+    assert gics_registry.ensure_taxonomy(activate=True) is not None
     c = TestClient(app)
 
     # 1. Enqueue via the public endpoint, exactly as the frontend does.
@@ -90,3 +98,15 @@ def test_regen_queue_end_to_end(live_settings):
     m = c.get(f"/api/stocks/{SMOKE_TICKER}/memo")
     assert m.status_code == 200
     assert int(m.headers["X-Memo-Version"]) == done["memo_version"]
+
+    # 5. The routed Industry Group read landed as an analyst's read: a
+    # model answer, not the deterministic mandate stand-in (which the
+    # presenter would also blank). The first place a truncated or
+    # malformed analyst response would show before production does.
+    memo = m.json()
+    ig = (memo.get("extra_agent_views") or {}).get("industry_group")
+    assert ig is not None, (
+        f"no routed industry read; degradations: {memo.get('degradation_events')}"
+    )
+    assert not (ig.get("data") or {}).get("deterministic_fallback"), ig["data"]["deterministic_fallback"]
+    assert ig.get("headline") != memo_sections.UNAVAILABLE_TEXT
