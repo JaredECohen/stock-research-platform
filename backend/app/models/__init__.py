@@ -50,7 +50,7 @@ from .industry import (
     TaxonomyVersion,
 )
 from .jobs import CatalystEvent, CronLoopRun, RegenJob, ThemeExposure
-from .market_data import DailyPrice, FinancialDataRepair, MarketDataSync
+from .market_data import DailyPrice, FinancialDataRepair, FundamentalRefreshState, MarketDataSync
 from .memo import (
     MemoOutcome,
     MemoOutcomeEligibility,
@@ -97,6 +97,7 @@ __all__ = [
     "DailyPrice",
     "MarketDataSync",
     "FinancialDataRepair",
+    "FundamentalRefreshState",
     "FilingDoc",
     "EarningsTranscript",
     "DocChunk",

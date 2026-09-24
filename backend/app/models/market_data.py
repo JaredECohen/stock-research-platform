@@ -56,3 +56,53 @@ class FinancialDataRepair(Base):
     applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     plan: Mapped[dict] = mapped_column(JSON, default=dict)
     result: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class FundamentalRefreshState(Base):
+    """What each issuer has reported, and when we next ask FMP for it (FIX-005).
+
+    Owner decision 2026-09-24: fundamentals load as often as they change. The
+    trigger is the filing EDGAR lists, not a timer. The row is shared by the
+    web process (first-contact requests, admin sync) and the worker (poller,
+    nightly drain, regen pull-through), so it is the only place this state
+    may live. Every writer of the scheduling fields does a compare-and-set on
+    `row_version` and re-reads on conflict, so a filing observed while a
+    drain is recording its result is never lost.
+    """
+    __tablename__ = "fundamental_refresh_state"
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    # Newest period of report EDGAR lists (`reportDate`) per cadence.
+    filed_quarter_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    filed_quarter_form: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    filed_quarter_accession: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    filed_quarter_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    quarter_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    filed_annual_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    filed_annual_form: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    filed_annual_accession: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    filed_annual_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    annual_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_amendment_accession: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Evidence only: a 25/25-NSE can delist one class of notes while the
+    # issuer keeps filing, so these never end the reporting expectation.
+    # Only the evidence-backed `KNOWN_REPORTING_ENDED` registry does.
+    last_deregistration_form: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    last_deregistration_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Scheduling (see services/fundamental_refresh.py).
+    status: Mapped[str] = mapped_column(String(16), default="idle")
+    trigger: Mapped[str] = mapped_column(String(24), default="")
+    due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    first_due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    stuck_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # The nightly loop fails once per stuck episode: set when it has done so.
+    stuck_reported_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_calendar_check_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_result: Mapped[dict] = mapped_column(JSON, default=dict)
+    row_version: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
