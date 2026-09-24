@@ -547,7 +547,12 @@ def _build_memo(ticker: str, db: Session) -> tuple[dict[str, Any] | None, str | 
     snap = latest_memo(ticker, db=db)
     if snap is None:
         return None, None, ["memo: no stored memo"]
-    memo = memo_to_pydantic(snap).model_dump(mode="json")
+    # `section_availability` is the read-time presenter map (W2a) and is never
+    # stored, here any more than in memo_snapshots. The W2a serve path tells a
+    # sample row built before presentation existed by that key being ABSENT,
+    # so dumping the schema's empty default would make an unpresented row look
+    # already presented and serve template-filled sections publicly.
+    memo = memo_to_pydantic(snap).model_dump(mode="json", exclude={"section_availability"})
     return strip_for_public(memo), f"memo_snapshot:{snap.id}", []
 
 

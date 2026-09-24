@@ -135,6 +135,8 @@ def save_memo(
         # The exclude is a backstop behind the refusal above: the stored row
         # never carries the read-time map, even an empty one, so there is
         # no stored value for a reader to mistake for the current verdict.
+        # public_samples._build_memo is the other store of a memo dump and
+        # applies the same exclude.
         memo_payload: dict[str, Any] = json.loads(
             memo.model_dump_json(exclude={"section_availability"})
         )
