@@ -26,6 +26,7 @@ from app.models import CrossIndustrySnapshot, IndustryReport
 from app.services import gics_registry as reg
 from app.services import industry_analytics as ia
 from app.services import industry_classification as ic
+from app.services import industry_labels as il
 from app.services import industry_report_store as rs
 from app.services import industry_snapshot as isn
 from app.tests.fixtures.demo_dataset import COMPANY_PROFILES
@@ -106,7 +107,7 @@ def test_block_appears_with_a_snapshot_and_stays_within_budget(clean):
     assert block.startswith("## Cross-industry snapshot")
     rendered = block.split("\n\n")[1]
     assert len(rendered) <= isn.PM_BLOCK_MAX_CHARS
-    assert f"Industry group {nvda}: no published Industry Analysis edition yet." in block
+    assert f"Industry group {il.label(nvda)}: no published Industry Analysis edition yet." in block
     assert "scenario input, not recommendations" in block
     ctx = pm_context.build_pm_context(ticker="NVDA", sector="Technology")
     assert "## Cross-industry snapshot" in ctx
@@ -128,7 +129,7 @@ def test_block_quotes_the_own_groups_edition_and_names_linked_and_unmapped(clean
         }},
     )
     block = pm_context.industry_context_block(ticker="NVDA", tickers=["ZZNOPE"])
-    assert f"Industry group {nvda} — edition v1 {PERIOD} (degraded edition: cross_industry:snapshot:none_yet)" in block
+    assert f"Industry group {il.label(nvda)} — edition of {PERIOD} (degraded edition: cross_industry:snapshot:none_yet)" in block
     assert "Analyst view: Capacity additions" in block and "What changed: Breadth narrowed." in block
     assert "No industry-group mapping for: ZZNOPE (unclassified)" in block
     if isn.linked_group_codes(nvda):
@@ -169,14 +170,14 @@ def test_chat_tool_answers_for_a_portfolio_of_tickers_from_stored_artifacts_only
     monkeypatch.setattr(data_service.DataService, "get_price_history", _boom)
 
     out = tools["get_industry_context"](tickers=["NVDA", "jpm", "ZZNOPE"])
-    assert out["status"] == "ok" and out["taxonomy_version"] == clean.version_key
-    assert out["by_ticker"] == {"NVDA": {"code": nvda, "state": "mapped"}, "JPM": {"code": jpm, "state": "mapped"}}
+    assert out["status"] == "ok" and out["taxonomy_version"] == il.public_version_key(clean.version_key)
+    assert out["by_ticker"] == {"NVDA": {"code": il.slug(nvda), "state": "mapped"}, "JPM": {"code": il.slug(jpm), "state": "mapped"}}
     assert out["unmapped_tickers"] == [{"ticker": "ZZNOPE", "state": "unclassified"}]
     assert out["snapshot"]["period_key"] == PERIOD and out["snapshot"]["macro_regime"] == "Soft landing"
     by_code = {g["code"]: g for g in out["groups"]}
-    assert by_code[nvda]["relation"] == "own" and by_code[nvda]["snapshot_row"]["ret_1m_ew"] == 0.04
-    assert by_code[nvda]["report"] is None
-    assert by_code[jpm]["report"]["analyst_view"] == "Banks steady." and by_code[jpm]["report"]["version"] == 1
+    assert by_code[il.slug(nvda)]["relation"] == "own" and by_code[il.slug(nvda)]["snapshot_row"]["ret_1m_ew"] == 0.04
+    assert by_code[il.slug(nvda)]["report"] is None
+    assert by_code[il.slug(jpm)]["report"]["analyst_view"] == "Banks steady." and by_code[il.slug(jpm)]["report"]["version"] == 1
     linked = [g for g in out["groups"] if g["relation"] == "linked"]
     # Linked groups had no stats this period: the snapshot names them as
     # such rather than carrying numbers for them.
@@ -184,8 +185,12 @@ def test_chat_tool_answers_for_a_portfolio_of_tickers_from_stored_artifacts_only
     assert "scenarios, not recommendations" in out["note"] and out["mapping_caveat"]
 
     explicit = tools["get_industry_context"](code=jpm)
-    assert explicit["code"] == {"code": jpm, "name": reg.group(jpm, version=clean).name}
+    assert explicit["code"] == {"code": il.slug(jpm), "name": il.label(jpm)}
     assert [g["relation"] for g in explicit["groups"]] == ["requested"]
+    # The answer names groups by slug, so the model's follow-up passes a
+    # slug back: it must resolve to the same group.
+    by_slug = tools["get_industry_context"](code=il.slug(jpm))
+    assert by_slug["code"] == explicit["code"] and [g["code"] for g in by_slug["groups"]] == [il.slug(jpm)]
     bad = tools["get_industry_context"](tickers=[], code="9999")
     assert "not found" in bad["code"]["error"] and bad["groups"] == []
 
@@ -288,12 +293,12 @@ def test_pm_reads_analyst_editions_only(clean, tools):
 
     block = pm_context.industry_context_block(ticker="NVDA", tickers=["JPM"])
     assert "TEMPLATE VIEW" not in block
-    assert f"Industry group {nvda}: no published Industry Analysis edition yet." in block
-    assert f"Industry group {jpm} — edition v1 2026-W35" in block and "Analyst view." in block
+    assert f"Industry group {il.label(nvda)}: no published Industry Analysis edition yet." in block
+    assert f"Industry group {il.label(jpm)} — edition of 2026-W35" in block and "Analyst view." in block
     out = tools["get_industry_context"](tickers=["NVDA", "JPM"])
     by_code = {g["code"]: g for g in out["groups"]}
-    assert by_code[nvda]["report"] is None
-    assert by_code[jpm]["report"]["version"] == 1 and "TEMPLATE" not in str(out)
+    assert by_code[il.slug(nvda)]["report"] is None
+    assert by_code[il.slug(jpm)]["report"]["version"] == 1 and "TEMPLATE" not in str(out)
 
 
 def test_diff_and_pm_excerpt_hide_template_what_changed(clean):

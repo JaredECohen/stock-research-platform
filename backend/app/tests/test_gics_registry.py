@@ -362,7 +362,11 @@ def test_node_lookups_by_code_length(bundled):
     assert reg.node("abcd") is None
     assert reg.node("99999999") is None
     assert reg.children(sub.code[:6]) == reg.sub_industries_of(sub.code[:6])
-    assert sub.as_dict()["display"] == f"{sub.name} ({sub.code})"
+    # The default display mode is our own labels (a sub-industry displays as
+    # the group it rolls up to); the code-and-name form is admin-only.
+    from app.services import industry_labels as il
+
+    assert sub.as_dict()["display"] == il.label(sub.code[:4])
 
 
 def test_retired_sub_industries_are_inactive_nodes(bundled):
@@ -391,7 +395,8 @@ def test_tree_nests_four_levels_with_attribution(bundled):
     assert version["key"] == bundled.version_key and version["is_active"] is True
     assert "MSCI" in version["attribution"] and "S&P" in version["attribution"]
     assert version["mapping_caveat"] == reg.MAPPING_CAVEAT
-    assert version["display_mode"] == "codes_and_names"
+    # The default flipped to our own labels (owner decision 2026-09-24).
+    assert version["display_mode"] == "internal_labels"
 
     sectors = tree["sectors"]
     assert len(sectors) == reg.counts()["sector"]
@@ -413,12 +418,17 @@ def _node(code: str, name: str) -> reg.NodeInfo:
 
 
 def test_display_mode_is_validated(monkeypatch):
-    assert reg.display_mode() == "codes_and_names"
-    monkeypatch.setattr(reg.settings, "gics_display_mode", "internal_labels")
+    """The default is our own labels, and an unknown value fails CLOSED to
+    them: a typo in the environment must not put licensed names back."""
+    from app.services import industry_labels as il
+
     assert reg.display_mode() == "internal_labels"
-    monkeypatch.setattr(reg.settings, "gics_display_mode", "bogus")
+    monkeypatch.setattr(reg.settings, "gics_display_mode", "codes_and_names")
     assert reg.display_mode() == "codes_and_names"
     assert reg.display(_node("4530", "Semis")) == "Semis (4530)"
+    monkeypatch.setattr(reg.settings, "gics_display_mode", "bogus")
+    assert reg.display_mode() == "internal_labels"
+    assert reg.display(_node("4530", "Semis")) == il.label("4530")
 
 
 def test_internal_labels_mode_displays_our_label_and_names_no_lower_level(monkeypatch):
@@ -438,6 +448,7 @@ def test_codes_and_names_mode_warns_once_per_process(monkeypatch, caplog):
     """The code-and-name rendering carries licensed names; it still works
     (admin/internal) but says so — once, not once per row."""
     monkeypatch.setattr(reg, "_CODES_AND_NAMES_WARNED", False)
+    monkeypatch.setattr(reg.settings, "gics_display_mode", "codes_and_names")
     with caplog.at_level("WARNING", logger=reg.log.name):
         assert reg.display(_node("4530", "Semis")) == "Semis (4530)"
         reg.display(_node("4510", "Soft"))
