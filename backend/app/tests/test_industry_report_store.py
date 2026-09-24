@@ -492,6 +492,63 @@ def test_freshness_in_progress_is_not_stale(code, _taxonomy, monkeypatch):
     assert rs.display_block(rs.latest_good(code, version=_taxonomy), fresh)["not_updated"] is None
 
 
+def test_an_older_version_opened_explicitly_is_never_marked_not_updated(code, _taxonomy, monkeypatch):
+    """v1 (W35) was superseded by a PUBLISHED v2 (W36); W37 came out
+    withheld. The banner belongs on v2 — on v1 it would say W35 was left
+    standing because W37 failed, when W36 is on the site."""
+    monkeypatch.setattr(rs, "_utcnow", lambda: AS_OF + timedelta(days=3))
+    _save(code=code, period_key="2026-W35", as_of=AS_OF, payload=_payload("a"), version=_taxonomy)
+    _save(code=code, period_key="2026-W36", as_of=AS_OF, payload=_payload("b"), version=_taxonomy)
+    template = rs.save_report(code=code, period_key="2026-W37", as_of=AS_OF, payload=_payload("t"),
+                              version=_taxonomy, generation=TEMPLATE)
+    _attempt(code, _taxonomy.id, period_key="2026-W37", status="succeeded", at=AS_OF + timedelta(days=2),
+             report_id=template.id)
+    old = rs.get(code, "1", version=_taxonomy)
+    assert old["is_latest_good"] is False
+    fresh = rs.freshness(code, version=_taxonomy, report=old)
+    assert fresh["not_updated"] is None and "not_updated" not in fresh["stale_codes"]
+    assert "not updated this week" not in (fresh["stale_reason"] or "")
+    # The latest edition still carries it.
+    assert rs.freshness(code, version=_taxonomy)["not_updated"] == {
+        "period_key": "2026-W37", "outcome": "withheld_template"}
+
+
+def test_a_queued_later_week_does_not_hide_a_withheld_one(code, _taxonomy, monkeypatch):
+    """W37 finished withheld, W38 is queued (retry backoff): the page must
+    still say W37 was not updated, as the picker pointer does."""
+    monkeypatch.setattr(rs, "_utcnow", lambda: AS_OF + timedelta(days=3))
+    _save(code=code, period_key="2026-W36", as_of=AS_OF, payload=_payload("a"), version=_taxonomy)
+    template = rs.save_report(code=code, period_key="2026-W37", as_of=AS_OF, payload=_payload("t"),
+                              version=_taxonomy, generation=TEMPLATE)
+    _attempt(code, _taxonomy.id, period_key="2026-W37", status="succeeded", at=AS_OF + timedelta(days=2),
+             report_id=template.id)
+    _attempt(code, _taxonomy.id, period_key="2026-W38", status="queued", at=AS_OF + timedelta(days=9))
+    fresh = rs.freshness(code, version=_taxonomy)
+    assert fresh["not_updated"] == {"period_key": "2026-W37", "outcome": "withheld_template"}
+    assert "not_updated" in fresh["stale_codes"]
+    assert rs.last_attempted_periods([code], version=_taxonomy) == {code: "2026-W37"}
+    display = rs.display_block(rs.latest_good(code, version=_taxonomy), fresh)
+    assert display["not_updated"] == {"period_key": "2026-W37", "outcome": "withheld_template"}
+
+
+@pytest.mark.parametrize("status", ["succeeded", "failed"])
+def test_a_same_week_attempt_is_not_not_updated(code, _taxonomy, monkeypatch, status):
+    """W37's analyst edition is up; an admin re-run of W37 then ended
+    withheld (or failed). W37 WAS updated — the banner is only for a LATER
+    week, never over the week's own analyst edition."""
+    monkeypatch.setattr(rs, "_utcnow", lambda: AS_OF + timedelta(days=3))
+    _save(code=code, period_key="2026-W37", as_of=AS_OF, payload=_payload("a"), version=_taxonomy)
+    report_id = None
+    if status == "succeeded":
+        report_id = rs.save_report(code=code, period_key="2026-W37", as_of=AS_OF, payload=_payload("t"),
+                                   version=_taxonomy, generation=TEMPLATE).id
+    _attempt(code, _taxonomy.id, period_key="2026-W37", status=status, at=AS_OF + timedelta(days=2),
+             report_id=report_id, error_type="" if report_id else "RuntimeError")
+    fresh = rs.freshness(code, version=_taxonomy)
+    assert fresh["not_updated"] is None
+    assert "not_updated" not in fresh["stale_codes"]
+
+
 def test_public_attempt_never_quotes_rejected_model_prose():
     raw = {"job_id": 1, "status": "queued", "outcome": "in_progress", "error_type": "ReportRejected",
            "error_message": "3 validation problem(s): drivers: unsupported causal claim 'The model said so'",

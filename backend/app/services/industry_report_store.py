@@ -808,22 +808,45 @@ def last_attempt(code: str, *, version: VersionInfo | str | int | None = None) -
                 IndustryReportJob.kind == "group_report",
             ).order_by(IndustryReportJob.id.desc())
         ).scalars().first()
-        if job is None:
-            return None
-        at = job.finished_at or job.started_at or job.enqueued_at
-        return {
-            "job_id": job.id,
-            "status": job.status,
-            "outcome": _attempt_outcome(db, job),
-            "at": at.isoformat() if at else None,
-            "period_key": job.period_key,
-            "attempts": job.attempts,
-            "max_attempts": job.max_attempts,
-            "error_type": job.error_type or "",
-            "error_message": (job.error_message or "")[:500],
-            "report_id": job.report_id,
-            "source": job.source,
-        }
+        return _attempt_dict(db, job) if job is not None else None
+
+
+def _newest_finished_attempt_after(code: str, period_key: str, *,
+                                   version: VersionInfo | str | int | None = None) -> dict[str, Any] | None:
+    """The FINISHED group-report attempt with the newest period later than
+    ``period_key`` — the same "newest finished week" ``last_attempted_periods``
+    gives the picker pointer, so the page and the pointer agree. Newest by
+    period, not by job id: an admin re-run of an OLD week must not hide a
+    newer week that came out withheld."""
+    info = gics_registry.resolve_version(version)
+    with SessionLocal() as db:
+        job = db.execute(
+            select(IndustryReportJob).where(
+                IndustryReportJob.taxonomy_version_id == info.id,
+                IndustryReportJob.industry_group_code == str(code),
+                IndustryReportJob.kind == "group_report",
+                IndustryReportJob.status.in_(("succeeded", "failed")),
+                IndustryReportJob.period_key > str(period_key or ""),
+            ).order_by(IndustryReportJob.period_key.desc(), IndustryReportJob.id.desc())
+        ).scalars().first()
+        return _attempt_dict(db, job) if job is not None else None
+
+
+def _attempt_dict(db, job: IndustryReportJob) -> dict[str, Any]:
+    at = job.finished_at or job.started_at or job.enqueued_at
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "outcome": _attempt_outcome(db, job),
+        "at": at.isoformat() if at else None,
+        "period_key": job.period_key,
+        "attempts": job.attempts,
+        "max_attempts": job.max_attempts,
+        "error_type": job.error_type or "",
+        "error_message": (job.error_message or "")[:500],
+        "report_id": job.report_id,
+        "source": job.source,
+    }
 
 
 def public_attempt(attempt: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -906,20 +929,33 @@ def freshness(code: str, *, version: VersionInfo | str | int | None = None,
             reasons.append(f"latest refresh attempt failed ({attempt.get('error_type') or 'error'})")
             stale_codes.append("refresh_failed")
     not_updated: dict[str, Any] | None = None
+    edition_period = str(edition.get("period_key") or "")
+    # Only the edition a reader gets by default can be "not updated": an
+    # older version opened on purpose was superseded by a PUBLISHED week,
+    # and a banner saying a later week failed would misstate its history.
+    # The week named is the newest FINISHED attempt after this edition's
+    # (as the picker pointer computes it), so a retry still queued for a
+    # later week cannot hide a week that already came out withheld.
     # ISO-week keys ("2026-W39") order lexicographically, year turns included.
-    if attempt is not None and str(attempt.get("period_key") or "") > str(edition.get("period_key") or ""):
-        outcome = attempt.get("outcome")
+    newer: dict[str, Any] | None = None
+    if bool(edition.get("is_latest_good", True)):
+        newer = _newest_finished_attempt_after(code, edition_period, version=version)
+        if newer is None and attempt is not None and attempt.get("outcome") == "in_progress" \
+                and str(attempt.get("period_key") or "") > edition_period:
+            newer = attempt
+    if newer is not None:
+        outcome = newer.get("outcome")
         if outcome in ("withheld_template", "failed", "in_progress"):
-            not_updated = {"period_key": attempt["period_key"], "outcome": outcome}
+            not_updated = {"period_key": newer["period_key"], "outcome": outcome}
         if outcome == "withheld_template":
             reasons.append(
-                f"not updated this week: the {attempt['period_key']} refresh produced no validated "
+                f"not updated this week: the {newer['period_key']} refresh produced no validated "
                 "analyst edition"
             )
             stale_codes.append("not_updated")
         elif outcome == "failed":
             if "refresh_failed" not in stale_codes:
-                reasons.append(f"latest refresh attempt failed ({attempt.get('error_type') or 'error'})")
+                reasons.append(f"latest refresh attempt failed ({newer.get('error_type') or 'error'})")
                 stale_codes.append("refresh_failed")
             stale_codes.append("not_updated")
     return {
