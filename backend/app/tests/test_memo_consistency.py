@@ -71,6 +71,164 @@ def test_refresh_dcf_references_noops_when_unchanged():
 
 
 # ---------------------------------------------------------------------------
+# FIX-008 — DCF-derived arithmetic is recomputed, not left from the old model
+# ---------------------------------------------------------------------------
+
+def _with_scenarios(dcf: DCFResult, *, current: float | None, **scenarios) -> DCFResult:
+    """Copy `dcf` with (implied_price, upside) set per named scenario."""
+    data = dcf.model_dump()
+    data["current_price"] = current
+    for name, (price, upside) in scenarios.items():
+        data[name]["implied_share_price"] = price
+        data[name]["upside_pct"] = upside
+    return DCFResult(**data)
+
+
+# The saved META v1 memo (docs/reviews/2026-09-13-META-v1.json): the
+# valuation analyst wrote against dcf_initial_summary, the PM DCF Adjuster
+# shipped dcf_summary.
+def _meta_initial_and_final() -> tuple[DCFResult, DCFResult]:
+    dcf = build_dcf("NVDA")
+    initial = _with_scenarios(
+        dcf, current=648.03,
+        base=(794.9500804392044, 0.22671802299153498),
+        bull=(1454.9509556865448, 1.2451907406856857),
+        bear=(373.3253526686917, -0.42390729955605183),
+    )
+    final = _with_scenarios(
+        dcf, current=648.03,
+        base=(708.9303286367508, 0.0939776378203954),
+        bull=(1162.6842269331853, 0.7941827182895628),
+        bear=(366.0839443044916, -0.4350817951260102),
+    )
+    return initial, final
+
+
+_META_KP0 = (
+    "Base DCF $794.95 (+22.7%); bull $1,454.95 (+124.5%); bear $373.33 (-42.4%). "
+    "The 3.9x bull/bear ratio is the tell — this is a terminal-growth-fragile name."
+)
+
+
+def test_refresh_recomputes_bull_bear_ratio_meta_counterexample():
+    """META v1 kept "3.9x" (1,454.95 / 373.33) beside final prices whose
+    ratio is 3.176x. The ratio must come from the final model."""
+    initial, final = _meta_initial_and_final()
+    finding = AgentFinding(agent="Valuation Analyst", headline="h", summary="s",
+                           key_points=[_META_KP0], confidence=0.7)
+    _refresh_dcf_references(finding, initial, final)
+    kp = finding.key_points[0]
+    assert kp.startswith(
+        "Base DCF $708.93 (+9.4%); bull $1,162.68 (+79.4%); bear $366.08 (-43.5%). "
+        "The 3.2x bull/bear ratio"
+    )
+    assert "3.9x" not in kp
+
+
+def test_refresh_rewrites_long_form_report():
+    """The drill-down is rendered before the PM adjustment; it must not
+    keep the initial model's numbers while the card shows the final ones."""
+    initial, final = _meta_initial_and_final()
+    long_form = (
+        "**META screens cheap on our DCF (+22.7% base)**\n\n"
+        "### Key points\n- " + _META_KP0 + "\n\n"
+        "The 3.9x bull-to-bear spread ($373–$1,455) underscores fragility; "
+        "27.5x earnings, 16.4x EV/EBITDA."
+    )
+    finding = AgentFinding(agent="Valuation Analyst", headline="h", summary="s",
+                           key_points=[], confidence=0.7, long_form_report=long_form)
+    _refresh_dcf_references(finding, initial, final)
+    out = finding.long_form_report or ""
+    assert "(+9.4% base)" in out
+    assert "The 3.2x bull/bear ratio" in out
+    assert "3.2x bull-to-bear spread ($366–$1,163)" in out
+    assert "27.5x earnings, 16.4x EV/EBITDA" in out
+    for stale in ("3.9x", "$794.95", "+22.7%", "$1,454.95", "$373", "$1,455"):
+        assert stale not in out
+
+
+def test_refresh_ratio_ambiguity_guard_and_precision():
+    """Only a multiple tied to bull/bear wording AND equal to the old ratio
+    at its printed precision is rewritten, at that same precision."""
+    initial, final = _meta_initial_and_final()
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary=("A bull/bear ratio of 3.90x. Trades at 3.9x EV/Revenue, "
+                 "27.5x earnings; a peer's 4.4x bull/bear ratio; 13.9x bull/bear."),
+    )
+    _refresh_dcf_references(finding, initial, final)
+    assert finding.summary == (
+        "A bull/bear ratio of 3.18x. Trades at 3.9x EV/Revenue, "
+        "27.5x earnings; a peer's 4.4x bull/bear ratio; 13.9x bull/bear."
+    )
+
+
+def test_refresh_is_single_pass_without_cascades():
+    """A new value equal to another scenario's old value must not be
+    rewritten a second time, and a figure must not match inside a longer
+    number ("9.0%" in "19.0%", "$109" in "$109.50")."""
+    dcf = build_dcf("NVDA")
+    old = _with_scenarios(dcf, current=100.0, base=(109.0, 0.09),
+                          bull=(117.0, 0.17), bear=(80.0, -0.20))
+    new = _with_scenarios(dcf, current=100.0, base=(117.0, 0.17),
+                          bull=(130.0, 0.30), bear=(80.0, -0.20))
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="Base +9%, bull +17%", confidence=0.7,
+        summary="Base $109.00, bull $117.00; margin 19.0%; peer at $109.50.",
+        key_points=[],
+    )
+    _refresh_dcf_references(finding, old, new)
+    assert finding.headline == "Base +17%, bull +30%"
+    assert finding.summary == "Base $117.00, bull $130.00; margin 19.0%; peer at $109.50."
+
+
+def test_refresh_recomputes_worded_downside_and_upside():
+    """Unsigned magnitudes are DCF figures only when "downside"/"upside"
+    follows; the same digits elsewhere are left alone."""
+    dcf = build_dcf("NVDA")
+    old = _with_scenarios(dcf, current=100.0, base=(137.0, -0.63),
+                          bull=(122.0, 0.22), bear=(20.0, -0.80))
+    new = _with_scenarios(dcf, current=100.0, base=(155.0, -0.55),
+                          bull=(118.0, 0.18), bear=(20.0, -0.80))
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary="A 63% downside and 63.0% downside; bull 22% upside; 63% of revenue.",
+    )
+    _refresh_dcf_references(finding, old, new)
+    assert finding.summary == (
+        "A 55% downside and 55.0% downside; bull 18% upside; 63% of revenue."
+    )
+
+
+def test_refresh_ratio_left_alone_when_a_side_is_unpriced():
+    """Guard (passes before and after FIX-008): no ratio exists for a None
+    price, and nothing is invented for it — matching the pct/USD contract."""
+    initial, final = _meta_initial_and_final()
+    unpriced_bear = _with_scenarios(final, current=648.03, bear=(None, None))
+    finding = AgentFinding(agent="Valuation Analyst", headline="h", summary="s",
+                           key_points=[_META_KP0], confidence=0.7)
+    _refresh_dcf_references(finding, initial, unpriced_bear)
+    assert "3.9x bull/bear ratio" in finding.key_points[0]
+    assert "$708.93" in finding.key_points[0]
+    finding2 = AgentFinding(agent="Valuation Analyst", headline="h", summary="s",
+                            key_points=["The 3.9x bull/bear ratio"], confidence=0.7)
+    _refresh_dcf_references(finding2, unpriced_bear, initial)
+    assert finding2.key_points[0] == "The 3.9x bull/bear ratio"
+
+
+def test_refresh_noops_on_equal_copies():
+    """Guard (passes before and after FIX-008): an equal-valued copy (not
+    the same object) changes nothing and appends no note."""
+    initial, _ = _meta_initial_and_final()
+    finding = AgentFinding(agent="Valuation Analyst", headline="h", summary="s",
+                           key_points=[_META_KP0], confidence=0.7,
+                           long_form_report=_META_KP0)
+    _refresh_dcf_references(finding, initial, initial.model_copy(deep=True))
+    assert finding.key_points == [_META_KP0]
+    assert finding.long_form_report == _META_KP0
+
+
+# ---------------------------------------------------------------------------
 # Theme 1 — reconciled valuation verdict
 # ---------------------------------------------------------------------------
 
