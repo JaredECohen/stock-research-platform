@@ -62,6 +62,10 @@ _CASH_LINES = (
 )
 
 
+# Sources that carry no provider identity (`ds.mode()` writes and old rows).
+LEGACY_SOURCES = frozenset({"live", "unknown", "demo", ""})
+
+
 def _ensure_tables(db: Session) -> None:
     """Lazy-create the three Wave 2 tables. Mirrors the pattern in
     cache/snapshots.py so direct importers (tests, scripts) work without
@@ -115,6 +119,7 @@ def _upsert_financial_period(
     fetched_at: datetime | None = None,
     currency: str | None = None,
     existing_rows: dict | None = None,
+    refusals: list[dict[str, Any]] | None = None,
 ) -> bool:
     """Insert-or-update one row. Returns True if an actual write happened.
 
@@ -123,6 +128,11 @@ def _upsert_financial_period(
     A same-provider restatement updates the value at its original availability
     date. This retains existing latest-restated semantics; it is not a revision
     ledger and must not be described as as-originally-reported data.
+
+    A row that already carries `available_at` never has its `period_end`
+    changed (FIX-006 root cause: LULU rows ended up with availability before
+    their period end because a later write moved the end under an INSERT-only
+    date). The refusal is logged and appended to `refusals` when given.
     """
     if value is None or not math.isfinite(value):
         return False  # Missing/bad refresh data must not erase a usable history value.
@@ -137,9 +147,21 @@ def _upsert_financial_period(
     ).scalar_one_or_none()
     now = fetched_at or datetime.utcnow()
     if existing is not None:
+        if (existing.available_at is not None and existing.period_end is not None
+                and period_end != existing.period_end):
+            refusal = {"kind": "period_end_change_refused", "ticker": ticker, "id": existing.id,
+                       "period": period, "statement": statement, "line_item": line_item,
+                       "stored_period_end": existing.period_end.isoformat(),
+                       "incoming_period_end": period_end.isoformat() if period_end else None,
+                       "available_at": existing.available_at.isoformat(), "source": source}
+            log.warning("financial history %s %s %s.%s: refused period_end change %s -> %s under available_at %s",
+                        ticker, period, statement, line_item, existing.period_end, period_end, existing.available_at)
+            if refusals is not None:
+                refusals.append(refusal)
+            return False
         # Exact comparison avoids rewrites when all stored facts are unchanged.
         new_currency = currency or existing.currency
-        legacy = {"live", "unknown", "demo", ""}
+        legacy = LEGACY_SOURCES
         if source in legacy and existing.source not in legacy and (
             existing.value != value or existing.currency != new_currency
         ):
@@ -558,10 +580,28 @@ def post_pass_failure_note(failures: list[dict[str, Any]]) -> str:
 # each and every filing it newly inserts fires `filing_memory.post_pass`
 # (embeddings plus an LLM diff); `transcripts` costs four AlphaVantage
 # requests. The third read, `get_financial_statements`, is deliberately NOT
-# in this list: it is one JSON response with no bodies and no LLM behind it,
-# and it is the only thing that ever refreshes fundamentals, so slowing it
-# down would trade a cost problem for a correctness one.
+# in this list: it is one JSON response with no bodies and no LLM behind it.
+# It is also no longer how provider-owned tickers are refreshed: once a
+# ticker has durable rows from a named provider, `backfill_ticker` skips it
+# entirely and `fundamental_history_service.backfill_fundamentals` (FMP
+# primary, provider-identified, quarantine-audited) owns that history.
 _BUDGETED_BACKFILL_CAPABILITIES = ("filings", "transcripts")
+
+
+def provider_owned_fundamentals(ticker: str, *, db: Session | None = None) -> bool:
+    """True when the ticker already has durable rows from a named provider."""
+    own = db is None
+    if own:
+        db = SessionLocal()
+    try:
+        FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
+        return db.execute(select(FinancialPeriod.id).where(
+            FinancialPeriod.ticker == ticker.upper(),
+            FinancialPeriod.source.not_in(LEGACY_SOURCES),
+        ).limit(1)).first() is not None
+    finally:
+        if own:
+            db.close()
 
 
 def backfill_hits_provider(ticker: str) -> bool:
@@ -604,7 +644,12 @@ def backfill_ticker(
     from .data_service import get_data_service
     ticker = ticker.upper()
     ds = get_data_service()
-    statements = ds.get_financial_statements(ticker) or {}
+    # FIX-006: the anonymous, cache-backed annual read cannot say which
+    # provider answered or whether a cache did, so it must never touch
+    # provider-owned history (it would add unidentified `live` rows beside
+    # FMP's). First-contact and demo tickers keep the legacy ingest.
+    durable = provider_owned_fundamentals(ticker, db=db)
+    statements = {} if durable else (ds.get_financial_statements(ticker) or {})
     filings = ds.get_filings(ticker, prefer_cached=prefer_cached) or []
     transcripts = ds.get_earnings_transcripts(
         ticker, prefer_cached=prefer_cached,
@@ -644,6 +689,8 @@ def backfill_ticker(
             "filings": n_filings,
             "transcripts": n_tx,
         }
+        if durable:
+            result["fundamentals"] = "durable"
         failures = run_ingest_post_passes(filing_ids, transcript_ids)
         if failures:
             result["post_pass_failures"] = failures
