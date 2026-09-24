@@ -167,12 +167,20 @@ export interface RiskItem {
   type: "company" | "valuation" | "macro" | "regulatory" | "thesis_breaker";
 }
 
+export type DivergenceAssessment = "supported" | "unsupported" | "not_assessed";
+
 export interface CriticReview {
   overall_assessment: string;
+  // Whether a live critic produced this review. Old stored reviews carry
+  // "unknown" (the backend never relabels them as live).
+  review_mode?: "unknown" | "pending" | "live" | "rule_based" | "unavailable";
   challenges: string[];
   underweighted_risks: string[];
   suggested_revisions: string[];
   advice_compliance_check: string;
+  // W2b 7(b): the critic's read of a rating that diverges from the
+  // valuation evidence. "not_assessed" on every memo that pre-dates it.
+  valuation_divergence_assessment?: DivergenceAssessment;
 }
 
 export interface DCFAssumptions {
@@ -430,11 +438,130 @@ export interface MispricingThesis {
 // Single reconciled valuation call. The one place that answers "cheap or
 // expensive?" — the thesis, valuation card, and rating all agree with it.
 export interface ValuationVerdict {
-  verdict: "undervalued" | "fairly_priced" | "overvalued";
+  // "mixed" (opposing evidence) is accepted by the contract before any
+  // writer emits it; render it rather than assuming three values.
+  verdict: "undervalued" | "fairly_priced" | "overvalued" | "mixed";
+  // "rating" for every memo stored before W2b (the verdict was derived
+  // from the rating); "evidence" once the verdict is computed independently.
+  basis?: "rating" | "evidence";
+  signals?: Record<string, unknown>;
   dcf_base_upside?: number | null;
   comps_ev_ebitda_premium?: number | null;
   factor_valuation?: number | null;
   summary: string;
+}
+
+// ---------------------------------------------------------------------------
+// Memo contract C1 (mirrors backend `schemas/memo.py`): W2a section
+// availability and the W2b quality record. Every one of these is optional
+// on the memo, because stored memos that pre-date the contract lack them.
+// ---------------------------------------------------------------------------
+
+export type SectionStatus = "available" | "degraded" | "unavailable";
+
+export type SectionReason =
+  | "template_fallback"
+  | "template_always"
+  | "derived_from_hidden"
+  | "skipped_by_intake"
+  | "critic_not_run"
+  | "rule_based"
+  | "llm_patched"
+  | "reduced_inputs"
+  | "not_produced"
+  | "unclassified"
+  | "agent_failed"
+  | "no_source_data"
+  | "pm_view_unavailable"
+  | "partial_template"
+  | "follow_up_unanswered"
+  | "templated_scenarios";
+
+// Read-time verdict on one memo section. Computed by the backend presenter
+// on every read; never stored.
+export interface SectionAvailability {
+  status: SectionStatus;
+  reason: SectionReason | null;
+  hidden_items: number;
+  headline_hidden: boolean;
+  basis: string[];
+}
+
+export type NumberClaimStatus =
+  | "traced"
+  | "weak"
+  | "untraceable"
+  | "mis_anchored"
+  | "assumption"
+  | "threshold"
+  | "unchecked";
+
+// One figure in memo prose. `start`/`end` index into the field's text and
+// `raw` is the exact slice, so a renderer can skip a stale offset.
+export interface NumberClaim {
+  field: string;
+  start: number;
+  end: number;
+  raw: string;
+  value: number | null;
+  unit: string;
+  status: NumberClaimStatus;
+  source_refs: string[];
+}
+
+export interface WithheldItem {
+  field: string;
+  index: number;
+  text: string;
+  claims: NumberClaim[];
+}
+
+export interface NumberCheck {
+  checked: boolean;
+  method_version: string;
+  counts: Record<string, number>;
+  claims: NumberClaim[];
+  withheld: WithheldItem[];
+  lists_not_withheld: string[];
+  unchecked_fields: string[];
+  sources_cited: string[];
+  primary_kinds_cited: string[];
+  assumptions: Array<Record<string, unknown>>;
+  notes: string[];
+}
+
+export interface RatingReconciliation {
+  outcome: "not_applicable" | "consistent" | "accepted" | "downgraded";
+  pm_rating: string;
+  pm_confidence: number | null;
+  blended_rating: string;
+  final_rating: string;
+  valuation_verdict: string;
+  divergence: boolean;
+  reason: string;
+  reason_checks: Record<string, boolean>;
+  critic_assessment: DivergenceAssessment;
+  note: string;
+}
+
+export interface ConfidenceCap {
+  code: string;
+  cap: number;
+  detail: string;
+}
+
+export interface ConfidenceAssessment {
+  raw: number;
+  final: number;
+  caps: ConfidenceCap[];
+  binding: string | null;
+}
+
+export interface MemoQuality {
+  v: number;
+  number_check: NumberCheck | null;
+  rating_reconciliation: RatingReconciliation | null;
+  confidence: ConfidenceAssessment | null;
 }
 
 export interface StockMemoOut {
@@ -448,6 +575,10 @@ export interface StockMemoOut {
   // Optional: memos predating these fields won't carry them.
   mispricing_thesis?: MispricingThesis;
   valuation_verdict?: ValuationVerdict;
+  // Wave 10 — memo-time quote, frozen at creation so a later live price can
+  // be shown as drift since the memo. Null when the run had no quote.
+  price_at_memo?: number | null;
+  price_at_memo_at?: string | null;
   business_summary: string;
   sector_agent_view: AgentFinding;
   earnings_agent_view: AgentFinding;
@@ -500,6 +631,14 @@ export interface StockMemoOut {
   // view hides its Scorecard section in both cases. Informs the memo
   // only — it does not move the rating.
   scorecard?: ScorecardSummary | null;
+  // W2a write-time facts, e.g. {v, llm_configured, thesis, mispricing}.
+  section_provenance?: Record<string, unknown>;
+  // W2a read-time map keyed by section key. Absent or empty means every
+  // section is available.
+  section_availability?: Record<string, SectionAvailability>;
+  // W2b research-quality record. Null or absent on memos that pre-date it;
+  // render nothing new in that case.
+  quality?: MemoQuality | null;
   disclaimer: string;
 }
 

@@ -135,6 +135,10 @@ export function makeMemo(overrides: Partial<StockMemoOut> = {}): StockMemoOut {
     // `undefined` for a memo that pre-dates the field, `null` for a run
     // with no row for the ticker — the section hides in both cases.
     scorecard: makeSummary(),
+    // W2a: the presenter's read-time map. Empty = every section available,
+    // which is what every test written before the map existed assumes.
+    // `quality` stays absent: the baseline is the pre-W2b (legacy) memo.
+    section_availability: {},
     disclaimer: "Research and education only. Not investment advice.",
     ...overrides,
   };
