@@ -28,6 +28,17 @@ PROMPTS = [
 
 
 def main() -> int:
+    # The lifespan seeds the demo universe and every prompt below writes
+    # memo/chat rows: pointed at a shared database this plants demo data
+    # there, the same leak that put fixture tickers in production (FIX-003).
+    from app.config import settings
+    from app.tests.dbguard import refusal
+
+    reason = refusal(settings.database_url)
+    if reason:
+        print(f"smoke_test: {reason}", file=sys.stderr)
+        return 2
+
     # Use TestClient as a context manager so the app's startup event fires
     # (`run_full_seed` -> init_db + seed demo universe). A bare
     # `TestClient(app)` skips lifespan/startup, leaving the DB tableless —
