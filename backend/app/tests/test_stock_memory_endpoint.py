@@ -52,6 +52,47 @@ def test_stock_memory_endpoint_returns_entries_with_structured_facts(
     assert "guidance_changes" in sources[0]["facts"]
 
 
+def test_memory_trail_suppresses_template_reflection(tmp_path, monkeypatch):
+    """W2a (critique delta 3): the memory trail is a memo exit too. An entry
+    the no-LLM reflection branch wrote, or one quoting a section the latest
+    memo hides, is left out of the response; the file is untouched."""
+    import json
+    from pathlib import Path
+
+    from app.agents import reflection_agent
+    from app.config import settings
+    from app.schemas import StockMemoOut
+    from app.services import memo_store
+    from app.tests.gating_helpers import purge_memos
+
+    monkeypatch.setattr(settings, "memory_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    raw = json.loads((Path(__file__).parent / "fixtures" / "memo_sections"
+                      / "googl_live_prepflag.json").read_text())
+    memo = StockMemoOut.model_validate(raw).model_copy(update={"ticker": "ZZMEMR"})
+    purge_memos("ZZMEMR")
+    memo_store.save_memo(memo)
+    try:
+        template = reflection_agent._compose_company_entry(memo, [{"label": "new filing"}])
+        quoting = ("**Trigger:** new filing\n\n**Observation:** The call was "
+                   + memo.one_sentence_thesis + "\n\n**Watch next:** margins.")
+        real = "**Trigger:** earnings\n\n**Observation:** Cloud grew faster than the model assumed."
+        cm = CompanyMemory.for_ticker("ZZMEMR")
+        for i, body in enumerate((template, quoting, real)):
+            cm.append_entry(MemoryEntry(date=f"2026-09-0{i + 1}", trigger="t", body=body))
+        cm.save()
+        before = cm.path.read_text()
+
+        body = TestClient(app).get("/api/stocks/ZZMEMR/memory").json()
+        assert body["entry_count"] == 3
+        assert body["suppressed_count"] == 2
+        assert [e["body"] for e in body["entries"]] == [real]
+        assert cm.path.read_text() == before
+    finally:
+        purge_memos("ZZMEMR")
+
+
 def test_stock_memory_endpoint_empty_for_unknown_ticker(tmp_path, monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "memory_dir", str(tmp_path))

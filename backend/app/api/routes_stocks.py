@@ -18,7 +18,7 @@ from ..models import Company
 from ..rate_limit import LIMITS, limiter
 from ..schemas import CompanyOut, StockMemoOut
 from ..seed_universe import ensure_company_in_universe
-from ..services import memo_store, regen_worker
+from ..services import memo_sections, memo_store, regen_worker
 from ..services.data_service import get_data_service
 from ..services.fundamentals_service import get_full_financials
 from ..services.history_service import backfill_ticker
@@ -183,8 +183,11 @@ def _stamp_snapshot_headers(response: Response, snap: Any) -> None:
 
 
 def _memo_or_unreadable(snap: Any) -> StockMemoOut:
-    """`memo_to_pydantic`, answering a stored snapshot that no longer
-    validates with a structured 422 instead of an ASGI 500 (FIX-004).
+    """The presented memo (`memo_store.present_snapshot`, W2a: template-filled
+    sections read "Unavailable in this version."), answering a stored
+    snapshot that no longer validates with a structured 422 instead of an
+    ASGI 500 (FIX-004). Every stored-memo branch of `GET /memo` — version,
+    cache and store-only — goes through here.
 
     422, not 409: the Research page turns every 409 into the "Analyze
     this stock" gate, which would regenerate (or charge a research run)
@@ -192,7 +195,7 @@ def _memo_or_unreadable(snap: Any) -> StockMemoOut:
     not touched; the log names it without quoting it (no exc_info: the
     chained ValidationError carries stored text)."""
     try:
-        return memo_store.memo_to_pydantic(snap)
+        return memo_store.present_snapshot(snap)
     except memo_store.StoredMemoUnreadable as exc:
         log.error(
             "stored memo unreadable ticker=%s version=%s snapshot_id=%s fields=%s",
@@ -400,7 +403,9 @@ def get_stock_memo(
         response.headers["X-Memo-Generated-At"] = fresh.generated_at.isoformat()
         if fresh.as_of_date:
             response.headers["X-Memo-As-Of"] = fresh.as_of_date.date().isoformat() if hasattr(fresh.as_of_date, "date") else str(fresh.as_of_date)
-    return memo
+    # W2a: the fresh run is presented like a stored read. A run is never a
+    # news patch, so there is no chain to resolve.
+    return memo_sections.present_memo(memo)
 
 
 @router.get("/api/stocks/{ticker}/memory")
@@ -419,11 +424,23 @@ def get_stock_memory(
     from ..memory import CompanyMemory
     from ..memory.longterm import company_memory_path
     cm = CompanyMemory.for_ticker(ticker.upper())
-    entries = list(cm.entries[-limit:])
+    # W2a (critique delta 3): the trail is a memo exit too. An entry the
+    # no-LLM reflection branch wrote restates the memo in a fixed frame, and
+    # an entry quoting a section the latest memo hides would re-publish the
+    # template text the memo page withholds; both are left out of the
+    # response (the file is untouched) and counted.
+    hidden = _hidden_memo_texts(ticker.upper())
+    shown = [
+        e for e in cm.entries
+        if not memo_sections.is_reflection_template(e.body)
+        and not any(probe in (e.body or "") for probe in hidden)
+    ]
+    entries = list(shown[-limit:])
     return {
         "ticker": ticker.upper(),
         "path": str(company_memory_path(ticker.upper())),
         "entry_count": len(cm.entries),
+        "suppressed_count": len(cm.entries) - len(shown),
         "historical_context": cm.historical_context or "",
         "entries": [
             {
@@ -437,10 +454,39 @@ def get_stock_memory(
     }
 
 
+def _hidden_memo_texts(ticker: str) -> list[str]:
+    """Probes for the prose the latest memo hides: the first 80 characters
+    of each unavailable prose section's stored text (the reflection writer
+    truncates what it quotes, so a prefix is what an entry can contain).
+    Empty when there is no readable memo — the template filter still runs."""
+    snap = memo_store.latest_memo(ticker)
+    if snap is None:
+        return []
+    try:
+        raw = memo_store.memo_to_pydantic(snap)
+        presented = memo_store.present_snapshot(snap)
+    except memo_store.StoredMemoUnreadable:
+        return []
+    texts: list[str] = []
+    for key, entry in presented.section_availability.items():
+        if entry.status != "unavailable" or entry.reason == "not_produced":
+            continue
+        if key in ("final_pm_view", "one_sentence_thesis", "final_verdict"):
+            texts.append(getattr(raw, key) or "")
+        elif key == "mispricing_thesis":
+            texts.extend([raw.mispricing_thesis.our_view, raw.mispricing_thesis.gap])
+        elif key.endswith("_view") or key == "macro_sensitivity" or key.startswith("extra_agent_views."):
+            finding = (raw.extra_agent_views.get(key.split(".", 1)[1]) if key.startswith("extra_agent_views.")
+                       else getattr(raw, key, None))
+            if finding is not None:
+                texts.extend([finding.headline, finding.summary])
+    return [t.strip()[:80] for t in texts if t and len(t.strip()) >= 40]
+
+
 @router.get("/api/stocks/{ticker}/memos")
 def get_stock_memo_history(
     ticker: str,
-    limit: int = 25,
+    limit: int = Query(25, ge=1, le=50),
     _rate: None = Depends(rate_scope("data")),
     _grant: Grant = Depends(require_feature("memo_history")),
 ) -> list[dict[str, Any]]:
@@ -449,20 +495,43 @@ def get_stock_memo_history(
     Returns the metadata only (version / trigger / parent_version /
     revision_log / generated_at). Use `?version=N` on the singular memo
     endpoint to fetch a specific version's full body.
+
+    W2a: each row's confidence is the presented one — `null` with
+    `confidence_available: false` when that version's confidence is hidden
+    (a template PM view), the number with `true` otherwise, and the raw
+    number with `null` when the stored row no longer validates. `limit` is
+    bounded (1..50) because every row is now validated and presented; the
+    patch-chain walk shares one session and one memo across the rows.
     """
     rows = memo_store.memo_history(ticker.upper(), limit=limit)
-    return [
-        {
-            "version": r.version,
-            "trigger": r.trigger,
-            "parent_version": r.parent_version,
-            "generated_at": r.generated_at.isoformat(),
-            "revision_log": r.revision_log,
-            "rating_label": (r.memo_json or {}).get("rating_label"),
-            "confidence_score": (r.memo_json or {}).get("confidence_score"),
-        }
-        for r in rows
-    ]
+    cache: memo_store.ChainCache = {
+        (r.ticker, r.version): (r.trigger, r.parent_version, r.revision_log) for r in rows
+    }
+    with SessionLocal() as db:
+        return [_history_row(r, db, cache) for r in rows]
+
+
+def _history_row(r: Any, db: Session, cache: memo_store.ChainCache) -> dict[str, Any]:
+    raw = r.memo_json or {}
+    row: dict[str, Any] = {
+        "version": r.version,
+        "trigger": r.trigger,
+        "parent_version": r.parent_version,
+        "generated_at": r.generated_at.isoformat(),
+        "revision_log": r.revision_log,
+        "rating_label": raw.get("rating_label") if isinstance(raw, dict) else None,
+        "confidence_score": raw.get("confidence_score") if isinstance(raw, dict) else None,
+        "confidence_available": None,
+    }
+    try:
+        presented = memo_store.present_snapshot(r, db=db, cache=cache)
+    except memo_store.StoredMemoUnreadable:
+        return row
+    hidden = memo_sections.is_hidden(presented, "confidence_score")
+    row["rating_label"] = presented.rating_label
+    row["confidence_score"] = None if hidden else presented.confidence_score
+    row["confidence_available"] = not hidden
+    return row
 
 
 def _analyze_payload(t: str, job: dict[str, Any], created: bool, *, charged: bool) -> dict[str, Any]:
@@ -586,7 +655,8 @@ def analyze_stock(
         response.status_code = 200
         # FastAPI's response_model coercion is bypassed because we
         # declared the return type as Dict; serialize via model_dump.
-        return memo.model_dump()
+        # Presented (W2a) like every other exit that serves a memo.
+        return memo_sections.present_memo(memo).model_dump()
 
     # Async path. `enqueue` coalesces duplicate requests against the
     # same ticker so a frantic-click double-fire doesn't queue two

@@ -171,9 +171,15 @@ def test_readable_dict_memo_unaffected(monkeypatch, caplog):
     assert not [rec for rec in caplog.records if rec.levelno >= logging.ERROR]
 
 
-def test_abbv_v7_legacy_shape_still_served_exactly(monkeypatch, caplog):
-    # Behaviour-preservation pin (owner requirement: ABBV v7 byte-identical).
-    # Passes before and after FIX-004's residual by design.
+def test_abbv_v7_legacy_shape_served_presented_store_untouched(monkeypatch, caplog):
+    # Was a byte-identical readback pin (2026-09-21: "response equals the
+    # saved Sep-13 body"). Owner decision 2 (2026-09-24) supersedes it on
+    # purpose: the response is now the PRESENTED memo — the template bear
+    # case (the sector fallback's headline and quartile line, and the
+    # self-labelled deterministic DCF driver) reads "Unavailable in this
+    # version." — while the stored row stays byte-identical, which is the
+    # part of the original requirement that still holds.
+    from app.services.memo_sections import UNAVAILABLE_TEXT
     grants = _route_setup(monkeypatch, "version")
     ticker = "ZZABBV"
     legacy = [{"key_point": LINZESS}]
@@ -186,7 +192,12 @@ def test_abbv_v7_legacy_shape_still_served_exactly(monkeypatch, caplog):
     assert r.headers["X-Memo-Source"] == "cache"
     body = r.json()
     assert body["bull_case"] == {"headline": "", "key_points": [LINZESS]}
-    assert body["bear_case"] == ABBV_BEAR
+    assert body["bear_case"] == {"headline": UNAVAILABLE_TEXT,
+                                 "key_points": [ABBV_BEAR["key_points"][2]]}
+    bear = body["section_availability"]["bear_case"]
+    assert (bear["status"], bear["reason"], bear["hidden_items"], bear["headline_hidden"]) == (
+        "unavailable", "template_fallback", 2, True)
+    assert body["section_availability"]["bull_case"]["status"] == "available"
     assert body["degraded_agents"] == ["Stored memo compatibility"]
     assert body["degradation_events"] == [{
         "agent": "Stored memo compatibility", "error_type": "LegacyCaseShape",
