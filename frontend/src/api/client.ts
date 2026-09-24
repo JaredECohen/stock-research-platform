@@ -48,6 +48,7 @@ import type {
   UsageResponse,
 } from "@/types";
 import { SCORECARD_EXPORT_CONTRACT, SCORECARD_FAMILIES } from "@/types/scorecard";
+import type { TrackRecordOut } from "@/types/trackRecord";
 import { getSessionId, logEvent } from "@/lib/logger";
 import { getAnonId } from "@/lib/analytics";
 
@@ -817,16 +818,7 @@ export const api = {
     if (params?.horizon_days) q.set("horizon_days", String(params.horizon_days));
     if (params?.ticker) q.set("ticker", params.ticker);
     if (params?.sector) q.set("sector", params.sector);
-    return request<{
-      horizon_days: number;
-      total: number;
-      directional_evaluations: number;
-      thesis_hit_rate: number | null;
-      avg_forward_return: number;
-      avg_alpha: number | null;
-      ticker_filter: string | null;
-      sector_filter: string | null;
-    }>(`/api/admin/track-record?${q.toString()}`);
+    return request<TrackRecordOut>(`/api/admin/track-record?${q.toString()}`);
   },
 
   dcfVersionHistory: (ticker: string, limit = 25) =>
