@@ -244,7 +244,11 @@ class Settings(BaseSettings):
     # mirror) to Neutral unless the PM stated a substantive reason;
     # "record" computes and stores the same reconciliation but publishes
     # the blended rating unchanged — an env flip on the worker instead of a
-    # redeploy if the rule misbehaves. Anything else fails validation at
+    # redeploy if the rule misbehaves. Record mode leaves published output
+    # untouched by 7(b): an unenforced ("downgraded" but not applied)
+    # divergence carries no confidence cap either, because the
+    # `divergence_unreviewed` cap is only for a reason 7(b) ACCEPTED without
+    # a live critic's review. Anything else fails validation at
     # boot rather than silently meaning one of the two. A `str` with a
     # validator, not a `Literal`: the image-defaults test loads this module
     # outside `sys.modules`, where a postponed `Literal` annotation cannot

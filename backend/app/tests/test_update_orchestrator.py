@@ -383,7 +383,8 @@ def test_patch_cannot_raise_confidence_or_publish_divergence(monkeypatch):
     # Lowering is allowed ...
     _patch_with("TSTGUARD", {"confidence_score": 40.0})
     m = memo_store.memo_to_pydantic(memo_store.latest_memo("TSTGUARD"))
-    assert m.confidence_score == 40.0 == m.quality.confidence.final
+    # All three places move together (scores is where the fixture's 50 would linger).
+    assert m.confidence_score == 40.0 == m.scores["confidence"] == m.quality.confidence.final
     # ... and a later rise is held at the LAST FULL RUN's value (50), not
     # at the lowered patch value, and never above it.
     _patch_with("TSTGUARD", {"confidence_score": 55.0})

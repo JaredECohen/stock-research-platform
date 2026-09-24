@@ -683,11 +683,25 @@ CORE_SECTIONS: tuple[str, ...] = (
 # filing / transcript caps cover those, and an unmapped industry group is
 # simply not applicable.
 _TEMPLATE_REASONS = frozenset({"template_fallback", "agent_failed"})
+# The basis `memo_sections` records when it could not classify a section.
+UNCLASSIFIED = "unclassified"
 
 
 def template_filled(av: Mapping[str, SectionAvailability]) -> tuple[bool, list[str]]:
     """(PM synthesis template-filled?, CORE sections template-filled) from
-    the W2a presenter's `compute_availability` map (contract C2)."""
+    the W2a presenter's `compute_availability` map (contract C2).
+
+    Raises when the PM view or a CORE section is `unclassified`: the
+    presenter maps a classifier crash to "available" so a reader's page
+    never 500s, but for the caps that would read "no template" and drop
+    `pm_template` / `template_sections` silently. Raising lets the quality
+    stage's fallback cap the memo and put "Memo Quality" on the banner."""
+    unclassified = [
+        key for key in ("final_pm_view", *CORE_SECTIONS)
+        if (entry := av.get(key)) is not None and UNCLASSIFIED in (entry.basis or [])
+    ]
+    if unclassified:
+        raise ValueError(f"section availability unclassified for: {', '.join(unclassified)}")
     pm = av.get("final_pm_view")
     pm_template = pm is not None and pm.status == "unavailable"
     sections = [

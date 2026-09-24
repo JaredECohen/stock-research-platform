@@ -189,3 +189,100 @@ def test_quality_stage_crash_still_caps(monkeypatch):
     _agrees(memo)
     assert memo.quality.confidence.caps[0].code == "quality_check_failed"
     assert memo.confidence_score <= memo_quality.CAP_TEMPLATE_SECTIONS[3]
+
+
+# ---------------------------------------------------------------------------
+# Stage wiring (`graph._assess_quality`) on fixture memos
+# ---------------------------------------------------------------------------
+
+def test_template_caps_fail_closed_when_the_classifier_crashes():
+    """The presenter maps a classifier crash to "available / unclassified"
+    so a reader's page never 500s. Read as "no template", that silently
+    dropped pm_template and template_sections; the caps must refuse it."""
+    from app.services import memo_sections
+    unclassified = {k: memo_sections._av("available", None, ["unclassified"])
+                    for k in memo_sections.SECTION_KEYS}
+    with pytest.raises(ValueError, match="unclassified"):
+        memo_quality.template_filled(unclassified)
+    # A non-core section the classifier could not read does not block the caps.
+    av = compute_availability(_llm_memo())
+    av["technical_agent_view"] = memo_sections._av("available", None, ["unclassified"])
+    assert memo_quality.template_filled(av) == (False, [])
+
+
+def test_classifier_crash_ships_the_fallback_cap_and_banner(monkeypatch):
+    """Demo NVDA with the W2a classifier crashing: the quality stage falls
+    back (cap 45, "Memo Quality" on the banner) instead of dropping the
+    template caps and shipping the PM's number as "earned"."""
+    from app.services import memo_sections
+
+    def boom(*a, **k):
+        raise RuntimeError("classifier exploded")
+
+    monkeypatch.setattr(memo_sections, "_classify", boom)
+    memo = graph.run_stock_memo("NVDA")
+    assert "Memo Quality" in memo.degraded_agents
+    _agrees(memo)
+    assert [c.code for c in memo.quality.confidence.caps] == ["quality_check_failed"]
+    assert memo.confidence_score <= memo_quality.CAP_TEMPLATE_SECTIONS[3]
+
+
+def _quality_inputs(*, filings=("10-K",), transcript="call", filing_data=None):
+    from types import SimpleNamespace
+
+    from app.tests.factories import make_findings
+    findings = make_findings()
+    if filing_data is not None:
+        findings["filing"] = make_finding("Filing Analyst", data=filing_data)
+    inputs = SimpleNamespace(transcript=transcript, filings=list(filings))
+    return inputs, SimpleNamespace(findings=findings)
+
+
+def _divergent_memo(*, rating: str, outcome: str, assessment: str = "not_assessed"):
+    from app.schemas import CriticReview, MemoQuality, RatingReconciliation
+    vv = memo_quality.valuation_evidence_verdict(
+        family_pct=None, family_coverage=None, comps_premium=0.44, dcf_initial_upside=-0.54)
+    assert vv.verdict == "overvalued"
+    return _llm_memo(
+        rating_label=rating, confidence_score=90.0, valuation_verdict=vv,
+        risk_committee_challenge=CriticReview(overall_assessment="x", review_mode="live",
+                                              valuation_divergence_assessment=assessment),
+        quality=MemoQuality(rating_reconciliation=RatingReconciliation(
+            outcome=outcome, pm_rating=rating, blended_rating="Bullish",
+            final_rating=rating, valuation_verdict="overvalued", divergence=True,
+            critic_assessment=assessment)),
+    )
+
+
+@pytest.mark.parametrize("rating, outcome, assessment, capped", [
+    # Accepted on a reason no live critic assessed: the cap applies.
+    ("Bullish", "accepted", "not_assessed", True),
+    # Accepted and the live critic supported it: independently reviewed.
+    ("Bullish", "accepted", "supported", False),
+    # Downgraded to Neutral: no divergence ships.
+    ("Neutral", "downgraded", "not_assessed", False),
+    # Record mode: downgraded but not applied. The kill switch leaves
+    # confidence alone too, and "a reason no live critic reviewed" would
+    # misdescribe a missing or critic-rejected reason.
+    ("Bullish", "downgraded", "not_assessed", False),
+    ("Bullish", "downgraded", "unsupported", False),
+])
+def test_divergence_unreviewed_cap_wiring(rating, outcome, assessment, capped):
+    memo = _divergent_memo(rating=rating, outcome=outcome, assessment=assessment)
+    inputs, analysts = _quality_inputs()
+    codes = {c.code for c in graph._assess_quality(memo, inputs, analysts).confidence.caps}
+    assert ("divergence_unreviewed" in codes) is capped, codes
+
+
+@pytest.mark.parametrize("filings, filing_data, capped", [
+    (("10-K",), None, False),
+    ((), None, True),                          # no filing at all
+    (("10-K",), {"intake_skipped": True}, True),  # intake skipped the filing analyst
+])
+def test_no_filing_review_cap_wiring(filings, filing_data, capped):
+    memo = _divergent_memo(rating="Neutral", outcome="consistent")
+    inputs, analysts = _quality_inputs(filings=filings, filing_data=filing_data)
+    caps = {c.code: c.cap for c in graph._assess_quality(memo, inputs, analysts).confidence.caps}
+    assert ("no_filing_review" in caps) is capped, caps
+    if capped:
+        assert caps["no_filing_review"] == 75.0

@@ -2490,8 +2490,11 @@ def _assess_quality(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRou
     returned `QualityOutcome`. Template-filled sections come from the W2a
     presenter's `compute_availability` (contract C2) so the caps and the
     "unavailable in this version" placeholders can never disagree about
-    which section was a template. The number-to-source caps arrive with
-    that check (S15) and are skipped while it has not run.
+    which section was a template. A section that map could not classify
+    raises (`memo_quality.template_filled`), so `_quality_fallback` caps
+    the memo instead of the template caps silently dropping out. The
+    number-to-source caps arrive with that check (S15) and are skipped
+    while it has not run.
     """
     from ..services.memo_sections import compute_availability
 
@@ -2501,8 +2504,13 @@ def _assess_quality(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRou
         filing is not None and isinstance(filing.data, dict) and filing.data.get("intake_skipped")
     )
     rec = memo.quality.rating_reconciliation if memo.quality is not None else None
+    # Only a divergence 7(b) ACCEPTED on a reason no live critic supported.
+    # A downgraded one no longer diverges in enforce mode; in record mode it
+    # still does, but the kill switch must leave published output (rating
+    # AND confidence) as if 7(b) were off, and "a reason no live critic
+    # reviewed" would misdescribe a missing or critic-rejected reason.
     divergence_unreviewed = (
-        rec is not None and rec.divergence
+        rec is not None and rec.divergence and rec.outcome == "accepted"
         and memo_quality.diverges(memo.rating_label, memo.valuation_verdict.verdict)
         and rec.critic_assessment != "supported"
     )
