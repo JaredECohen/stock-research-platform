@@ -434,7 +434,8 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
        our label (case-sensitive);
     f. the internal taxonomy key → the public key; any remaining "GICS" is
        dropped before a noun ("the GICS sector" → "the sector") and
-       otherwise read as "industry".
+       otherwise read as "industry", after which rule c's prefix form runs
+       once more ("GICS 4010" → "industry 4010" → "industry <label>").
 
     Years (``19xx``/``20xx``) and numbers followed by ``%``, ``.d``, ``,d``
     or a hyphenated word are never altered by the contextual rules (b,
@@ -470,6 +471,13 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
     if "gics" in out.lower():
         out = _BRAND_BEFORE_WORD_RE.sub("", out)
         out = _BRAND_RE.sub("industry", out)
+        # The brand used as a prefix ("GICS 4010 rerates", "GICS® 4510")
+        # becomes "industry <code>" only here, after rule c already ran, so
+        # the code survived next to our own noun. Run the prefix rule once
+        # more over what the brand rewrite produced; its year, unit and
+        # length guards apply unchanged ("GICS 2030 targets" keeps its year).
+        if any(ch.isdigit() for ch in out):
+            out = _PREFIX_RE.sub(lambda m: _prefix_sub(m, labels), out)
     if out != text:
         # Only a string this function changed is tidied, so a caller's own
         # spacing survives untouched text.

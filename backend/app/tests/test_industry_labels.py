@@ -192,6 +192,12 @@ SCRUB_TABLE = [
     # the brand and the internal key
     ("the GICS® sector", "the sector"),
     ("GICS industry group 4530", f"industry group {_C}"),
+    # REGRESSION (S13 whole-memo walk): the brand as the code's own prefix
+    # was rewritten to "industry" AFTER the prefix rule ran, so the code
+    # stayed on the page next to our noun ("industry 4010 rerates").
+    ("GICS 4010 rerates", f"industry {_B} rerates"),
+    ("the GICS® 4530 group", f"the industry {_C} group"),
+    ("GICS 2030 targets", "industry 2030 targets"),
     ("taxonomy gics-2026-04", "taxonomy mm-2026-04"),
     # ordinary English is left alone — a count or a year before a name is
     # not a code
