@@ -235,3 +235,59 @@ def test_audit_reports_eligibility_without_filtering(db):
         "candidate", "indeterminate", "not_flagged", "late_evaluation_candidates", "missing_snapshot",
         "recorded_baseline_outside_tolerance", "without_baseline_metadata",
     }
+
+
+def test_dev_copy_receipt_matches_missing_and_ignores_inherited_patches(db):
+    """The post-deploy receipt: the directly classified dev-copy set equals
+    the enumerated 300 snapshots / 600 rows; a snapshot whose outcomes are
+    absent is named as missing; a patch that INHERITS the dev-copy reason is
+    neither observed nor unexpected (it is outside the 300/600 count)."""
+    from sqlalchemy import delete
+
+    from app.services import outcome_eligibility
+    from app.services.outcome_eligibility_evidence import DEV_COPY_SNAPSHOTS
+    from app.tests.eligibility_helpers import add_outcome, add_snapshot
+
+    snaps = {}
+    for sid, ticker, generated in DEV_COPY_SNAPSHOTS:
+        at = datetime.fromisoformat(generated)
+        snap = add_snapshot(db, id=sid, ticker=ticker, version=sid, generated_at=at, mode="demo",
+                            memo_generated_at=generated)
+        for horizon in (30, 90):
+            add_outcome(db, snap, horizon=horizon, forward_return=0.1, alpha=0.02)
+        snaps[sid] = snap
+    parent_id, parent_ticker, _ = DEV_COPY_SNAPSHOTS[0]
+    patch = add_snapshot(db, id=900, ticker=parent_ticker, version=100000, parent_version=parent_id,
+                         trigger="incremental_patch", generated_at=datetime(2026, 6, 20), mode="live")
+    add_outcome(db, patch, horizon=30, forward_return=0.1, alpha=0.02)
+    db.commit()
+    summary = outcome_eligibility.classify_pending(db=db)
+    assert summary["by_reason"] == {outcome_eligibility.REASON_DEV_COPY: 301}
+
+    check = audit_outcomes(db)["track_record_eligibility"]["dev_copy_set"]
+    assert check == {
+        "expected_snapshots": 300, "observed_snapshots": 300, "observed_rows": 600,
+        "matches": True, "missing_snapshot_ids": [], "unexpected_snapshot_ids": [],
+    }
+    rows = {row["memo_snapshot_id"]: row for row in audit_outcomes(db)["rows"]}
+    assert rows[patch.id]["eligibility_inherited_from"] == parent_id
+
+    # A superset is not a match: one extra direct dev-copy row on top of the
+    # full set (only a hand-written ledger row can do this; the sweep refuses).
+    from app.tests.eligibility_helpers import mark
+    extra = add_snapshot(db, id=901, ticker="EXTRA", generated_at=datetime(2026, 5, 4), mode="demo")
+    add_outcome(db, extra, horizon=30, forward_return=0.1, alpha=0.02)
+    db.commit()
+    mark(db, extra.id, eligible=False, reason=outcome_eligibility.REASON_DEV_COPY)
+    check = audit_outcomes(db)["track_record_eligibility"]["dev_copy_set"]
+    assert check["matches"] is False and check["unexpected_snapshot_ids"] == [extra.id]
+    db.execute(delete(MemoOutcome).where(MemoOutcome.memo_snapshot_id == extra.id))
+
+    dropped = DEV_COPY_SNAPSHOTS[-1][0]
+    db.execute(delete(MemoOutcome).where(MemoOutcome.memo_snapshot_id == dropped))
+    db.commit()
+    check = audit_outcomes(db)["track_record_eligibility"]["dev_copy_set"]
+    assert check["matches"] is False
+    assert (check["observed_snapshots"], check["observed_rows"]) == (299, 598)
+    assert check["missing_snapshot_ids"] == [dropped]
+    assert check["unexpected_snapshot_ids"] == []
