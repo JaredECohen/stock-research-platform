@@ -21,6 +21,12 @@ type Row = {
   revision_log: RevisionLogEntry[];
   rating_label: string | null;
   confidence_score: number | null;
+  // W2a: false when the presenter hid this version's confidence (its PM
+  // view was a template) — `confidence_score` is then null and the row
+  // says "confidence n/a" rather than dropping it silently. null when the
+  // stored row no longer validates (the raw number is shown); absent on
+  // servers that pre-date the field.
+  confidence_available?: boolean | null;
 };
 
 const TRIGGER_BADGE: Record<string, string> = {
@@ -108,9 +114,11 @@ export default function MemoVersionTimeline({ ticker }: { ticker: string }) {
                 {r.rating_label && (
                   <span className="text-[10px] text-slate-300">
                     {r.rating_label}
-                    {r.confidence_score !== null
-                      ? ` · ${Math.round(r.confidence_score)}`
-                      : ""}
+                    {r.confidence_available === false
+                      ? " · confidence n/a"
+                      : r.confidence_score != null
+                        ? ` · ${Math.round(r.confidence_score)}`
+                        : ""}
                   </span>
                 )}
               </div>

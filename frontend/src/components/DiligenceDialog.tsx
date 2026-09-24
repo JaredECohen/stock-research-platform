@@ -3,9 +3,16 @@
 // already visible in the main agent grid; this panel surfaces ONLY the
 // PM's follow-up rounds — the dig-deeper questions and the specialist's
 // new view in response.
+//
+// W2a: the memo presenter blanks a follow-up answer that a template wrote
+// (a re-fire that fell back, an intake skip) — its prose reads "Unavailable
+// in this version." That answer renders as the placeholder, and its
+// confidence is hidden with it: the number belongs to the template.
 
 import { useState } from "react";
 import type { RoundFindings } from "../types";
+import { isBlankedFinding } from "@/lib/memoSections";
+import UnavailableSection from "./UnavailableSection";
 
 const TARGET_LABEL: Record<string, string> = {
   sector: "Sector Analyst",
@@ -107,6 +114,7 @@ function RoundBlock({ round }: { round: RoundFindings }) {
               answerHeadline={finding?.headline}
               answerKeyPoints={finding?.key_points}
               answerConfidence={finding?.confidence}
+              answerHidden={isBlankedFinding(finding)}
             />
           );
         })}
@@ -123,6 +131,7 @@ function QuestionBlock({
   answerHeadline,
   answerKeyPoints,
   answerConfidence,
+  answerHidden = false,
 }: {
   targetAgent: string;
   question: string;
@@ -131,10 +140,16 @@ function QuestionBlock({
   answerHeadline?: string;
   answerKeyPoints?: string[];
   answerConfidence?: number;
+  answerHidden?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const label = TARGET_LABEL[targetAgent] ?? targetAgent;
   const hasAnswer = !!answer;
+  const toggleLabel = !hasAnswer
+    ? "no answer"
+    : answerHidden
+      ? open ? "hide" : "answer unavailable"
+      : open ? "hide" : "show answer";
 
   return (
     <div className="rounded bg-ink-800/40 border border-ink-700/60">
@@ -158,10 +173,22 @@ function QuestionBlock({
           )}
         </div>
         <div className="text-[11px] text-slate-500 shrink-0 mt-1">
-          {hasAnswer ? (open ? "hide" : "show answer") : "no answer"}
+          {toggleLabel}
         </div>
       </button>
-      {open && hasAnswer && (
+      {open && hasAnswer && answerHidden && (
+        <div className="px-3 pb-3 border-t border-ink-700/60 pt-2">
+          {/* A round finding has no map entry of its own (the
+              `round_findings` key only counts them), so the reason is the
+              general one rather than a per-finding code. */}
+          <UnavailableSection
+            variant="inline"
+            section="round_findings"
+            reasonLine="The specialist's answer to this follow-up was not written by an analyst in this run."
+          />
+        </div>
+      )}
+      {open && hasAnswer && !answerHidden && (
         <div className="px-3 pb-3 border-t border-ink-700/60 pt-2 text-sm text-slate-300 space-y-2">
           {answerHeadline && (
             <div className="text-slate-100 font-medium">{answerHeadline}</div>

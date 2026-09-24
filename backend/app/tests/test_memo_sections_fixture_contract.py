@@ -9,8 +9,10 @@ minimized memo fixtures, serialized as the API serializes a memo
 from __future__ import annotations
 
 import json
+import re
 
 from app.scripts import capture_memo_sections_fixture as capture
+from app.services.memo_sections import SIG
 
 
 def test_frontend_fixture_is_presenter_output():
@@ -33,3 +35,13 @@ def test_frontend_fixture_carries_every_scenario():
     for name, memo in payload["memos"].items():
         assert memo["section_availability"], name
         assert "Unavailable in this version." in json.dumps(memo) or name == "meta_v1", name
+
+
+def test_frontend_pm_tail_constant_is_the_backend_signature():
+    """The renderer tests assert the PDF/card never print `PM_TEMPLATE_TAIL`;
+    a hand-copied string that drifted from the signature would make that
+    assertion check for text the presenter no longer matches."""
+    loader = capture.FRONTEND_FIXTURE.parent / "memoSections.ts"
+    m = re.search(r'export const PM_TEMPLATE_TAIL =\s*"([^"]+)";', loader.read_text())
+    assert m, f"PM_TEMPLATE_TAIL not found in {loader}"
+    assert m.group(1) == SIG["pm_view_tail"].text
