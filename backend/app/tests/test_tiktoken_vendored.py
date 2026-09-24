@@ -19,6 +19,8 @@ import hashlib
 import inspect
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -91,18 +93,38 @@ def test_file_named_by_tiktoken_cache_key():
 
 
 def test_gitattributes_keeps_the_ranks_byte_exact():
-    """`-text` is what stops a checkout from rewriting line endings in the file."""
+    """`-text` is what stops a checkout from rewriting line endings in the file.
+
+    The rule's presence is not enough: the last matching line in
+    .gitattributes wins, so a `* text=auto` appended below it would silently
+    re-enable conversion. Ask git for the attribute it actually applies.
+    With `text` unset git ignores `eol` too, so `unset` is the whole answer.
+    """
     lines = (REPO_ROOT / ".gitattributes").read_text().splitlines()
     rule = [ln.split() for ln in lines if ln.strip().startswith("backend/app/data/tiktoken/")]
     assert rule and "-text" in rule[0], f".gitattributes has no -text rule for the ranks: {rule}"
 
+    git = shutil.which("git")
+    if git is None or not (REPO_ROOT / ".git").exists():
+        pytest.skip("no git checkout to ask for the effective attribute")
+    out = subprocess.run(
+        [git, "check-attr", "text", "--", str(VENDORED.relative_to(REPO_ROOT))],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert out.endswith(": text: unset"), (
+        f"git applies {out!r} to the vendored ranks; a later .gitattributes line "
+        "overrides the -text rule, so a checkout may rewrite the bytes"
+    )
 
-def test_encoder_loads_offline_under_netguard(monkeypatch, request):
-    """From a cold process state, with no cache dir configured, and no network.
 
-    The fetch is blocked twice over: the netguard refuses sockets, and
-    `read_file` (tiktoken's only network path) is replaced so the test still
-    means something under MM_ALLOW_NETWORK=1.
+@pytest.fixture
+def cold_tiktoken(monkeypatch, request, tmp_path):
+    """No loaded encodings, no cache dir configured, and no way to fetch.
+
+    `DATA_GYM_CACHE_DIR` points tiktoken's fallback cache at an empty dir, so
+    a warm `<tmp>/data-gym-cache` on a dev machine cannot satisfy the load:
+    only the vendored file can. `read_file` (tiktoken's only network path) is
+    replaced so a fetch fails even under MM_ALLOW_NETWORK=1.
     """
     import tiktoken.load
     import tiktoken.registry
@@ -111,6 +133,7 @@ def test_encoder_loads_offline_under_netguard(monkeypatch, request):
     # including removing the variable `_encoding()` is about to set.
     monkeypatch.setenv("TIKTOKEN_CACHE_DIR", "placeholder")
     monkeypatch.delenv("TIKTOKEN_CACHE_DIR")
+    monkeypatch.setenv("DATA_GYM_CACHE_DIR", str(tmp_path / "cold-cache"))
     monkeypatch.setattr(tiktoken.registry, "ENCODINGS", {})
 
     def _no_fetch(blobpath):
@@ -119,6 +142,14 @@ def test_encoder_loads_offline_under_netguard(monkeypatch, request):
     monkeypatch.setattr(tiktoken.load, "read_file", _no_fetch)
     emb._encoding.cache_clear()
     request.addfinalizer(emb._encoding.cache_clear)
+
+
+def test_encoder_loads_offline_under_netguard(cold_tiktoken, request):
+    """From a cold process state, with no cache dir configured, and no network.
+
+    The fetch is blocked twice over: the netguard refuses sockets, and the
+    `cold_tiktoken` fixture replaces `read_file`.
+    """
     before = netguard.hits().get(request.node.nodeid, [])
 
     enc = emb._encoding()
@@ -146,8 +177,29 @@ def test_a_missing_vendored_file_leaves_tiktoken_defaults_alone(monkeypatch, tmp
 
 
 @pytest.mark.parametrize("text", ["Revenue rose 12.4% to $394,328 million.", "營業收入", "🚀"])
-def test_count_tokens_is_the_real_encoder(text):
+def test_count_tokens_is_the_real_encoder(cold_tiktoken, text):
     """With the ranks vendored, count_tokens is exact, never the heuristic."""
     enc = emb._encoding()
     assert enc is not None, "vendored cl100k_base failed to load"
     assert emb.count_tokens(text) == len(enc.encode(text, disallowed_special=()))
+
+
+def test_an_unreadable_vendored_dir_does_not_escape_encoding(cold_tiktoken, monkeypatch):
+    """`_encoding()` never raises, and neither may the cache redirect before it.
+
+    `Path.is_file` swallows only "not there" errors; EACCES on the directory
+    escapes it, and `lru_cache` does not cache exceptions, so every
+    `count_tokens` call inside a filing index would raise again. Cold, so
+    the fallback cannot fetch: the expected outcome is the heuristic.
+    """
+
+    class _Unreadable:
+        def is_file(self) -> bool:
+            raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(emb, "VENDORED_TIKTOKEN_FILE", _Unreadable())
+
+    emb._use_vendored_tiktoken_cache()
+    assert "TIKTOKEN_CACHE_DIR" not in os.environ
+    assert emb._encoding() is None
+    assert emb.count_tokens("hello world") > 0

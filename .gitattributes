@@ -3,5 +3,8 @@
 # mismatch, DELETES the cache file and re-fetches it over the network. Any
 # end-of-line normalisation (core.autocrlf, a `* text=auto` rule added later)
 # would change the hash, so opt the directory out of text handling entirely.
+# In .gitattributes the LAST matching line wins, so a broad `* text=auto`
+# must go ABOVE this rule; `test_tiktoken_vendored` asks git for the
+# effective attribute (`git check-attr`) and fails if it is not `unset`.
 # `-diff` keeps a 1.6 MB rank table out of `git diff` / `git log -p`.
 backend/app/data/tiktoken/* -text -diff

@@ -160,8 +160,17 @@ def _use_vendored_tiktoken_cache() -> None:
     A missing file changes nothing, so a checkout without it behaves exactly
     as before (download, or the heuristic). Only `embeddings` uses tiktoken
     in this app, so redirecting the process-wide cache touches nothing else.
+
+    Never raises: `_encoding()` promises that, and `Path.is_file` still
+    raises on errors other than "not there" (EACCES on the directory, EIO).
+    An unreadable vendored dir is treated like a missing one.
     """
-    if VENDORED_TIKTOKEN_FILE.is_file():
+    try:
+        present = VENDORED_TIKTOKEN_FILE.is_file()
+    except OSError as exc:
+        log.warning("vendored tiktoken ranks unreadable (%s); using tiktoken defaults", exc)
+        return
+    if present:
         os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(VENDORED_TIKTOKEN_DIR))
 
 
