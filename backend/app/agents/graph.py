@@ -153,9 +153,17 @@ _RATIO_AFTER_BULL_BEAR = re.compile(
 )
 # A formatted DCF figure must stand alone in the prose: "9.4%" is not the
 # tail of "19.4%", and "$373" is not the head of "$373.50" or "$3,730".
-_FIGURE_LEAD = r"(?<![\d.,])"
+# The lead guard applies only to a figure that starts with a digit; one
+# led by "$" or a sign is already delimited, even straight after a comma
+# ("+9.4%,-43.5%").
+_FIGURE_LEAD = r"(?:(?=\d)(?<![\d.,])|(?!\d))"
 _FIGURE_TAIL = r"(?!\d|[.,]\d)"
-_UPDOWN_WORD = re.compile(r"\s+(upside|downside)\b", re.IGNORECASE)
+_UPDOWN_WORD = r"(?:(?P<ws>\s+)(?P<word>(?i:upside|downside))\b)?"
+# An integer magnitude ("23% upside") is too common a phrase to trust on
+# its own; it counts as a DCF figure only inside a clause that names a
+# scenario (or quotes an old DCF price, checked separately).
+_CLAUSE_BREAK = re.compile(r"[;\n]|[.!?](?=\s)")
+_DCF_CLAUSE_WORD = re.compile(r"\b(?:base|bull|bear|dcf)\b", re.IGNORECASE)
 
 
 def _bull_bear_ratio(d: DCFResult) -> float | None:
@@ -191,6 +199,9 @@ def _refresh_dcf_references(
     Substitution is one pass, so a new value equal to another scenario's
     old value is not rewritten twice, and a formatted string that two
     scenarios share with different new values is left alone as ambiguous.
+    A worded magnitude whose scenario changed sign is rebuilt whole from
+    the new value ("22.0% upside" -> "5.0% downside"), and an integer one
+    ("23% upside") is trusted only in a clause about the DCF.
     """
     if finding is None or old is None or new is None or old is new:
         return
@@ -216,7 +227,8 @@ def _refresh_dcf_references(
 
     def _magnitude_strs(x: float | None) -> tuple[str, ...]:
         # Unsigned "63% downside" / "22% upside": the magnitude is only a
-        # DCF figure when the direction word follows it.
+        # DCF figure when the direction word follows it, and the integer
+        # form only inside a clause about the DCF (_in_dcf_clause).
         if x is None:
             return ()
         return (f"{abs(x) * 100:.0f}%", f"{abs(x) * 100:.1f}%")
@@ -229,47 +241,72 @@ def _refresh_dcf_references(
     # Every old string collects every new string it maps to; only a
     # one-to-one mapping to a different string is substituted.
     targets: dict[str, set[str]] = {}
-    worded_targets: dict[tuple[str, str], set[str]] = {}
-    flipped: set[tuple[str, str]] = set()
+    worded_targets: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    old_prices: set[str] = set()
     for o_s, n_s in ((old.base, new.base), (old.bull, new.bull), (old.bear, new.bear)):
         if o_s is None or n_s is None:
             continue
+        old_prices.update(_usd_strs(o_s.implied_share_price))
+        # Settle this scenario's own mapping first, first form winning: a
+        # negative's one-decimal form IS its signed form ("-5.0%"), and
+        # when the new value is positive the two new forms differ ("+3.2%"
+        # vs "3.2%"). That is one figure, not two scenarios disagreeing,
+        # so it must not reach the cross-scenario ambiguity check below.
         # zip() stops at the shorter tuple, so a None on either side yields
         # no pairs for that field rather than a half-substituted memo.
+        own: dict[str, str] = {}
         for o_str, n_str in zip(_pct_strs(o_s.upside_pct), _pct_strs(n_s.upside_pct)):
-            targets.setdefault(o_str, set()).add(n_str)
+            own.setdefault(o_str, n_str)
         for o_str, n_str in zip(_usd_strs(o_s.implied_share_price),
                                 _usd_strs(n_s.implied_share_price)):
+            own.setdefault(o_str, n_str)
+        for o_str, n_str in own.items():
             targets.setdefault(o_str, set()).add(n_str)
         o_dir, n_dir = _direction(o_s.upside_pct), _direction(n_s.upside_pct)
         if o_dir is None or n_dir is None:
             continue
+        # A worded figure carries its direction: when the adjustment flips
+        # the scenario's sign, "22.0% upside" becomes "5.0% downside", both
+        # halves taken from the new value, so neither the old magnitude nor
+        # an inverted direction survives.
         for o_str, n_str in zip(_magnitude_strs(o_s.upside_pct),
                                 _magnitude_strs(n_s.upside_pct)):
-            if o_dir == n_dir:
-                worded_targets.setdefault((o_str, o_dir), set()).add(n_str)
-            else:
-                # "63% downside" cannot become an upside by arithmetic;
-                # that is a rewording, so the prose is left as written.
-                flipped.add((o_str, o_dir))
+            worded_targets.setdefault((o_str, o_dir), set()).add((n_str, n_dir))
     subs = {k: next(iter(v)) for k, v in targets.items() if len(v) == 1 and k not in v}
     worded = {k: next(iter(v)) for k, v in worded_targets.items()
-              if len(v) == 1 and k[0] not in v}
+              if len(v) == 1 and k not in v}
     old_ratio, new_ratio = _bull_bear_ratio(old), _bull_bear_ratio(new)
     if not subs and not worded and (
         old_ratio is None or new_ratio is None or old_ratio == new_ratio
     ):
         return
 
-    tokens = set(subs) | {tok for tok, _ in worded} | {tok for tok, _ in flipped}
+    def _alternation(strs: set[str]) -> str:
+        return "|".join(re.escape(t) for t in sorted(strs, key=len, reverse=True))
+
+    tokens = set(subs) | {tok for tok, _ in worded}
     figure_re = (
-        re.compile(
-            _FIGURE_LEAD + "(?:"
-            + "|".join(re.escape(t) for t in sorted(tokens, key=len, reverse=True))
-            + ")" + _FIGURE_TAIL
-        )
+        re.compile(_FIGURE_LEAD + "(?P<tok>" + _alternation(tokens) + ")"
+                   + _FIGURE_TAIL + _UPDOWN_WORD)
         if tokens else None
     )
+    old_price_re = (
+        re.compile(_FIGURE_LEAD + "(?:" + _alternation(old_prices) + ")" + _FIGURE_TAIL)
+        if old_prices else None
+    )
+
+    def _in_dcf_clause(m: re.Match[str]) -> bool:
+        text, lo, hi = m.string, 0, len(m.string)
+        for brk in _CLAUSE_BREAK.finditer(text):
+            if brk.end() <= m.start():
+                lo = brk.end()
+            elif brk.start() >= m.end():
+                hi = brk.start()
+                break
+        clause = text[lo:hi]
+        return bool(_DCF_CLAUSE_WORD.search(clause)) or bool(
+            old_price_re is not None and old_price_re.search(clause)
+        )
 
     def _ratio_repl(m: re.Match[str]) -> str:
         num = m["num"]
@@ -282,17 +319,20 @@ def _refresh_dcf_references(
         return text[:at] + f"{new_ratio:.{places}f}" + text[at + len(num):]
 
     def _figure_repl(m: re.Match[str]) -> str:
-        token = m.group(0)
-        word = _UPDOWN_WORD.match(m.string, m.end())
-        if word is not None:
-            key = (token, word.group(1).lower())
-            if key in worded:
-                return worded[key]
-            if key in flipped:
-                log.info("DCF refresh left %r as written: the PM adjustment "
-                         "flipped that scenario's sign", f"{token} {key[1]}")
-                return token
-        return subs.get(token, token)
+        token, ws, word = m["tok"], m["ws"] or "", m["word"]
+        if word is None:
+            return subs.get(token, token)
+        hit = worded.get((token, word.lower()))
+        # The one-decimal magnitude is specific enough to trust anywhere;
+        # the integer one only in a clause about the DCF (see above).
+        if hit is not None and ("." in token or _in_dcf_clause(m)):
+            n_tok, n_dir = hit
+            if n_dir != word.lower():
+                log.info("DCF refresh rewrote %r as %r: the PM adjustment "
+                         "flipped that scenario's sign", f"{token} {word}",
+                         f"{n_tok} {n_dir}")
+            return n_tok + ws + (n_dir.capitalize() if word[:1].isupper() else n_dir)
+        return subs.get(token, token) + ws + word
 
     def _sub(text: str) -> str:
         # Ratios first, identified against the untouched prose; they end in

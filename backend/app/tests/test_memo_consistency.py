@@ -192,11 +192,112 @@ def test_refresh_recomputes_worded_downside_and_upside():
                           bull=(118.0, 0.18), bear=(20.0, -0.80))
     finding = AgentFinding(
         agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
-        summary="A 63% downside and 63.0% downside; bull 22% upside; 63% of revenue.",
+        summary="Base: 63% downside and 63.0% downside; bull 22% upside; 63% of revenue.",
     )
     _refresh_dcf_references(finding, old, new)
     assert finding.summary == (
-        "A 55% downside and 55.0% downside; bull 18% upside; 63% of revenue."
+        "Base: 55% downside and 55.0% downside; bull 18% upside; 63% of revenue."
+    )
+
+
+def test_refresh_integer_magnitude_needs_a_dcf_clause():
+    """An integer "N% upside" is a DCF figure only in a clause that names a
+    scenario or an old DCF price; the Street's target or a drawdown that
+    happens to share the digits is left alone."""
+    initial, final = _meta_initial_and_final()
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary=("The Street's $800 target implies 23% upside; a 42% downside "
+                 "to the 2022 low. Base case: 23% upside. Bear at $373 is a 42% downside."),
+    )
+    _refresh_dcf_references(finding, initial, final)
+    assert finding.summary == (
+        "The Street's $800 target implies 23% upside; a 42% downside "
+        "to the 2022 low. Base case: 9% upside. Bear at $366 is a 44% downside."
+    )
+
+
+def test_refresh_negative_to_positive_flip_keeps_the_signed_form():
+    """A scenario that crosses zero upward: "-5.0%" is both the signed and
+    the one-decimal form of the old base, so it must map to the signed new
+    figure, not be dropped as ambiguous and left beside the new price."""
+    dcf = build_dcf("NVDA")
+    old = _with_scenarios(dcf, current=100.0, base=(95.0, -0.05),
+                          bull=(140.0, 0.40), bear=(70.0, -0.30))
+    new = _with_scenarios(dcf, current=100.0, base=(103.2, 0.032),
+                          bull=(145.0, 0.45), bear=(102.0, 0.02))
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="DCF base -5.0% vs spot", key_points=[],
+        confidence=0.7,
+        summary=("Base case implied price $95.00 vs current $100.00 (-5.0%). "
+                 "Bull $140.00 (+40.0%) | Bear $70.00 (-30.0%)."),
+    )
+    _refresh_dcf_references(finding, old, new)
+    assert finding.headline == "DCF base +3.2% vs spot"
+    assert finding.summary == (
+        "Base case implied price $103.20 vs current $100.00 (+3.2%). "
+        "Bull $145.00 (+45.0%) | Bear $102.00 (+2.0%)."
+    )
+
+
+def test_refresh_sign_flip_rewrites_magnitude_and_direction():
+    """A scenario whose sign the PM adjustment flipped: the worded figure is
+    rebuilt from the new value, direction word included, so neither the old
+    model's magnitude nor an inverted direction survives."""
+    dcf = build_dcf("NVDA")
+    old = _with_scenarios(dcf, current=100.0, base=(37.0, -0.63),
+                          bull=(122.0, 0.22), bear=(20.0, -0.80))
+    new = _with_scenarios(dcf, current=100.0, base=(110.0, 0.10),
+                          bull=(95.0, -0.05), bear=(20.0, -0.80))
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary=("Base implies a 63% downside; bull 22.0% upside. "
+                 "If rates fall, the bull case's 22.0% Upside evaporates. "
+                 "Bull $122.00 (+22.0%); bull 22% upside."),
+    )
+    _refresh_dcf_references(finding, old, new)
+    assert finding.summary == (
+        "Base implies a 10% upside; bull 5.0% downside. "
+        "If rates fall, the bull case's 5.0% Downside evaporates. "
+        "Bull $95.00 (-5.0%); bull 5% downside."
+    )
+    for wrong in ("63%", "22.0%", "22%", "10% downside", "-5.0% upside", "5.0% upside"):
+        assert wrong not in finding.summary
+
+
+def test_refresh_rewrites_figures_after_a_comma():
+    """The standalone guard only matters for digit-led figures; a "$" or
+    signed figure right after a comma is still a DCF figure."""
+    initial, final = _meta_initial_and_final()
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary="Base/bull/bear: +22.7%,+124.5%,-42.4% ($794.95,$1,454.95,$373.33).",
+    )
+    _refresh_dcf_references(finding, initial, final)
+    assert finding.summary == (
+        "Base/bull/bear: +9.4%,+79.4%,-43.5% ($708.93,$1,162.68,$366.08)."
+    )
+
+
+@pytest.mark.parametrize("swap", [False, True])
+def test_refresh_leaves_a_string_two_scenarios_share(swap):
+    """Two old scenarios that print the same string but move to different
+    new values: which one the prose meant is unknowable, so it is left as
+    written (in either scenario order), while unshared figures still move."""
+    dcf = build_dcf("NVDA")
+    a, b = (1454.6, 0.101), (1455.2, 0.099)
+    na, nb = (708.93, 0.05), (1162.68, 0.20)
+    if swap:
+        a, b, na, nb = b, a, nb, na
+    old = _with_scenarios(dcf, current=1322.0, base=a, bull=b, bear=(900.0, -0.32))
+    new = _with_scenarios(dcf, current=1322.0, base=na, bull=nb, bear=(880.0, -0.33))
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary="Fair value near $1,455 (+10%) on both base and bull; bear $900.00.",
+    )
+    _refresh_dcf_references(finding, old, new)
+    assert finding.summary == (
+        "Fair value near $1,455 (+10%) on both base and bull; bear $880.00."
     )
 
 
