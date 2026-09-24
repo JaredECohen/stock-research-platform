@@ -127,3 +127,20 @@ def test_quotes_route_has_a_customer_policy():
     sample pages, never draw on the quote quota."""
     rows = {(m, p): pol for m, p, pol in policy.ROUTES}
     assert rows[("GET", "/api/quotes")].level == policy.AUTHENTICATED
+
+
+def test_quotes_calendar_unavailable_is_503(known, monkeypatch):
+    """tzdata missing from the image: a named 503 the chip can ignore, not a
+    500 with a traceback, and no provider is called first."""
+    from app.finance import market_calendar
+
+    def unavailable(*_a, **_k):
+        raise market_calendar.CalendarUnavailable("no tzdata")
+
+    calls: list[str] = []
+    monkeypatch.setattr(market_calendar, "market_state", unavailable)
+    monkeypatch.setattr(quote_service, "_fetch_one", lambda t, _ds: calls.append(t) or (None, None))
+    resp = client.get(f"/api/quotes?tickers={known[0]}")
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["detail"] == "market calendar unavailable"
+    assert calls == []

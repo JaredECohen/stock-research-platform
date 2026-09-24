@@ -24,7 +24,10 @@ rather than silently old, in this order:
   still applies) or, with the market closed, when it came from the most
   recent session (after the close nothing newer exists, so a 15:55 quote is
   still the right answer at 18:00). Every stale serve and refusal goes to
-  the shared `cache_cost_logs` ledger, like `cached_call`'s.
+  the shared `cache_cost_logs` ledger, like `cached_call`'s. With the
+  market closed, an intraday row loses to a stored close of its own
+  session or later: the close is newer information than any intraday
+  print, so a 10:00 quote is never shown at 20:00 over that day's close.
 * `eod_close`: the last close from the durable store, read DB-only. This
   fallback never calls a provider.
 * `unavailable`: neither exists (or the ticker is unknown).
@@ -34,8 +37,17 @@ cache write, whatever N is. Unknown tickers never reach a provider, so an
 anonymous caller cannot spend the FMP quota on arbitrary strings. Provider
 work per call is bounded: one FMP `/batch-quote` call for the plain symbols,
 then at most `MAX_PROVIDER_FETCHES_PER_CALL` per-symbol calls inside a
-`PER_REQUEST_BUDGET_SECONDS` wall-clock budget; the rest are served stale
-or EOD with `reason="refresh_deferred"`.
+`PER_REQUEST_BUDGET_SECONDS` wall-clock budget counted from before the
+batch call; the rest are served stale or EOD with
+`reason="refresh_deferred"`. The budget is soft: it stops new per-symbol
+calls from starting, and a call already in flight runs to its providers'
+own timeouts.
+
+Internal price consumers (`DataService.get_quote` -> `get_current_price`,
+which feeds `price_at_memo` and the DCF `current_price`) take a quote only
+when `usable_as_current` says so: live, or stale by no more than the
+15-minute policy. No quote older than ~15 minutes is ever used unlabelled
+as the current price; the labelled chip is the only reader of older rows.
 
 Inside a memo run (`safe_runner.in_memo_run()`, contract C6) any cached
 quote older than 60 s is refetched even when the calendar calls it fresh,
@@ -69,8 +81,9 @@ MAX_TICKERS_PER_REQUEST = 50
 # one more). A 50-symbol cold list must not become a 50-call burst against
 # a 300/min plan.
 MAX_PROVIDER_FETCHES_PER_CALL = 10
-# Wall-clock budget for the per-symbol fallback: a slow provider must not
-# hold a page request for 10 x 10 s timeouts.
+# Wall-clock budget for provider work in one call, the batch included: a
+# slow provider must not hold a page request for 10 x 10 s timeouts. Soft:
+# checked before each per-symbol call starts.
 PER_REQUEST_BUDGET_SECONDS = 20.0
 
 CAPABILITY = "quote"
@@ -192,8 +205,34 @@ def _servable_stale(fetched_at: datetime, now: datetime, state: cal.MarketState)
     if age <= provider_cache.max_stale_seconds(CAPABILITY):
         return True
     # After the close nothing newer than the last session's prints exists,
-    # so that session's row stays the right answer until the next open.
+    # so that session's row stays the right answer until the next open
+    # (unless its close is already stored: `_superseding_close`).
     return not state.is_open and _aware(fetched_at) >= state.session_open_utc
+
+
+def _parse_iso(value: str) -> datetime:
+    """Naive UTC from one of this module's ISO-8601 `...Z` strings."""
+    return _naive(datetime.fromisoformat(value.replace("Z", "+00:00")))
+
+
+def usable_as_current(quote: Quote, now: datetime | None = None) -> bool:
+    """May an internal caller use `quote["price"]` as the current price, unlabelled?
+
+    `live` rows, yes. A `stale` row only while it is no older than the
+    15-minute policy, which happens only under a tighter floor (the 60 s
+    memo floor or a forced refresh) that expired it early. Anything older,
+    and every stored close, is left to the caller's own close fallback:
+    `get_current_price` feeds `price_at_memo` and the DCF `current_price`,
+    which carry no source label, so an hours-old intraday quote must never
+    reach them (owner default: no quote older than ~15 min is ever served
+    as current). The labelled `/api/quotes` chip still shows older rows.
+    """
+    if quote["source"] == "live":
+        return True
+    if quote["source"] != "stale" or not quote["fetched_at"]:
+        return False
+    age = ((now or _now()) - _parse_iso(quote["fetched_at"])).total_seconds()
+    return age <= QUOTE_TTL_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +416,9 @@ def _fetch(to_fetch: list[str], ds: Any) -> tuple[dict[str, dict[str, Any]], set
     """Provider payloads for `to_fetch` (each tagged with its provider), and
     the symbols deferred by the per-call bounds."""
     fetched: dict[str, dict[str, Any]] = {}
+    # The budget clock starts before the batch: a batch call that hung for
+    # its full timeout has already spent the request's patience.
+    started = _monotonic()
     # Share-class symbols stay out of the batch: FMP spells BRK.B as BRK-B,
     # and its 402s in the 2026-09-21 window were all the dotted spelling. A
     # refusal of a batch holding one could be the symbol, not the plan, and
@@ -398,7 +440,6 @@ def _fetch(to_fetch: list[str], ds: Any) -> tuple[dict[str, dict[str, Any]], set
 
     deferred: set[str] = set()
     calls = 0
-    started = _monotonic()
     for ticker in to_fetch:
         if ticker in fetched:
             continue
@@ -424,6 +465,30 @@ def _known_tickers(keys: list[str]) -> set[str]:
         return set(db.execute(select(Company.ticker).where(Company.ticker.in_(keys))).scalars())
 
 
+def _superseding_close(
+    ticker: str, fetched_at: datetime, state: cal.MarketState,
+) -> dict[str, Any] | None:
+    """The stored close that is newer information than an intraday row, if any.
+
+    Only with the market closed (no close of today can exist while it is
+    open), and only for a row fetched before its own session's close had
+    settled: a post-close print already IS the close. The row loses to a
+    stored close dated on or after its ET session date. DB-only.
+    """
+    if state.is_open:
+        return None
+    day = cal.et_date(fetched_at)
+    bounds = cal.session_bounds(day)
+    if bounds is None:  # fetched on a weekend/holiday: it carries the last close already
+        return None
+    if _aware(fetched_at) >= bounds[1] + timedelta(seconds=CLOSE_SETTLE_SECONDS):
+        return None
+    close = _stored_close(ticker)
+    if close is None or str(close["date"])[:10] < day.isoformat():
+        return None
+    return close
+
+
 def _resolve_miss(
     ticker: str, row: tuple[Any, datetime] | None, *, now: datetime,
     state: cal.MarketState, reason: str, resolve_eod: bool,
@@ -432,6 +497,16 @@ def _resolve_miss(
         payload, fetched_at = row
         age = int((now - fetched_at).total_seconds())
         if _servable_stale(fetched_at, now, state):
+            # Internal callers (resolve_eod=False) never take a row this old
+            # (`usable_as_current`) and have their own close fallback, so
+            # the durable read is spent only on the labelled path.
+            close = _superseding_close(ticker, fetched_at, state) if resolve_eod else None
+            if close is not None:
+                log.info(
+                    "quote provider miss; stored close %s supersedes the intraday row ticker=%s",
+                    str(close["date"])[:10], ticker,
+                )
+                return _eod_quote(ticker, close, reason)
             log.warning(
                 "quote provider miss, serving stale row ticker=%s age_seconds=%d reason=%s",
                 ticker, age, reason,

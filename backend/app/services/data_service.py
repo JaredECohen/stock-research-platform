@@ -539,7 +539,11 @@ class DataService:
 
         None when the source is `unavailable` or `eod_close`: this method
         has always meant a provider quote, and `get_current_price` keeps its
-        own close fallback. None, too, under an as-of backtest (historical
+        own close fallback. None for a `stale` row older than the 15-minute
+        policy (`quote_service.usable_as_current`): its callers use the
+        price unlabelled as the current price (`price_at_memo`, the DCF
+        `current_price`, the Research profile overlay), and an hours-old
+        intraday quote must lose to the stored close there. None, too, under an as-of backtest (historical
         runs read closes, never live quotes), for a malformed ticker, and
         when the exchange calendar cannot load (tzdata missing): a quote is
         an overlay, so its failure must degrade the caller to the close
@@ -561,7 +565,7 @@ class DataService:
         except CalendarUnavailable as exc:
             log.warning("quote skipped, exchange calendar unavailable: %s", exc)
             return None
-        if not quote or quote["source"] in ("unavailable", "eod_close"):
+        if not quote or not quote_service.usable_as_current(quote):
             return None
         return dict(quote)
 

@@ -463,3 +463,243 @@ def test_quote_rows_are_only_quote_rows(clock, cache_ds, providers):
     with SessionLocal() as db:
         assert db.execute(select(DailyPrice).where(DailyPrice.ticker == name)).first() is None
         assert db.execute(select(ProviderCache).where(ProviderCache.key == name)).scalar_one().capability == "quote"
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: stored close beats an old intraday row; internal callers
+# never take an old stale quote as the current price
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def durable_closes(cache_ds, monkeypatch):
+    """`get_price_history` as production's live mode answers it: the durable
+    `daily_prices` rows (demo mode would read the absent fixture chain).
+    DB-only, so `get_current_price`'s close fallback is the real one."""
+    monkeypatch.setattr(
+        cache_ds, "get_price_history",
+        lambda ticker, days=252, **_k: price_history_service.read_prices(ticker, days=days) or None,
+    )
+    return cache_ds
+
+
+def test_after_close_stored_close_supersedes_intraday_row(clock, durable_closes, providers):
+    """A 10:00 quote must not be shown at 20:00 over that day's stored close,
+    and must never become `price_at_memo` / the DCF `current_price`."""
+    name = tickers(1)[0]
+    seed_row(clock, name, et(2026, 9, 22, 10, 0), price=50.0)
+    _store_close(name, "2026-09-22", 55.0)
+    clock.now = et(2026, 9, 22, 20, 0)
+    got = quote_service.get_quotes([name])[name]
+    assert (got["source"], got["price"]) == ("eod_close", 55.0)
+    assert got["as_of"] == z(et(2026, 9, 22, 16, 0))
+    assert durable_closes.get_quote(name) is None
+    assert get_current_price(name) == 55.0
+    # Next morning, pre-open: still the close, not Tuesday's 10:00 print.
+    clock.now = et(2026, 9, 23, 8, 0)
+    assert quote_service.get_quotes([name])[name]["source"] == "eod_close"
+    assert get_current_price(name) == 55.0
+
+
+def test_after_close_row_with_only_an_older_close_stays_stale(clock, cache_ds, providers):
+    """The session branch still serves the last session's row when the stored
+    close is older than it (today's close not ingested yet), labelled."""
+    name = tickers(1)[0]
+    seed_row(clock, name, et(2026, 9, 22, 15, 10), price=81.0)
+    _store_close(name, "2026-09-21", 79.0)
+    clock.now = et(2026, 9, 22, 18, 0)
+    got = quote_service.get_quotes([name])[name]
+    assert (got["source"], got["price"]) == ("stale", 81.0)
+
+
+def test_internal_callers_never_take_an_old_stale_quote(clock, durable_closes, providers):
+    """Owner default: no quote older than ~15 min is ever served as current.
+    The chip shows the old row labelled `stale`; `get_quote` (and so
+    `get_current_price`) falls back to the stored close instead."""
+    name = tickers(1)[0]
+    _store_close(name, "2026-09-21", 48.0)
+    # In session: a 20-minute-old row and a provider miss.
+    seed_row(clock, name, et(2026, 9, 22, 10, 25), price=50.0)
+    assert quote_service.get_quotes([name])[name]["source"] == "stale"
+    assert durable_closes.get_quote(name) is None
+    assert get_current_price(name) == 48.0
+    # After the close, same-session row 10 hours old, no newer close stored.
+    clock.now = et(2026, 9, 22, 20, 25)
+    assert quote_service.get_quotes([name])[name]["source"] == "stale"
+    assert get_current_price(name) == 48.0
+
+
+def test_memo_floor_stale_within_15_minutes_is_still_current(clock, cache_ds, providers):
+    """Under the 60 s memo floor a 5-minute-old row is expired early; on a
+    miss it is `stale` but within the 15-minute policy, so it is used."""
+    name = tickers(1)[0]
+    seed_row(clock, name, et(2026, 9, 22, 10, 40), price=70.0)
+    with DegradationLog().activate():
+        quote = cache_ds.get_quote(name)
+        assert quote is not None and quote["source"] == "stale" and quote["price"] == 70.0
+        assert get_current_price(name) == 70.0
+
+
+def test_usable_as_current_boundaries():
+    live = quote_service._quote("X", {"price": 1.0}, OPEN_NOW, source="live", now=OPEN_NOW)
+    assert quote_service.usable_as_current(live, OPEN_NOW)
+    stale = quote_service._quote("X", {"price": 1.0}, et(2026, 9, 22, 10, 30), source="stale", now=OPEN_NOW)
+    assert quote_service.usable_as_current(stale, OPEN_NOW)                      # exactly 15 min
+    assert not quote_service.usable_as_current(stale, et(2026, 9, 22, 10, 45, 1))
+    eod = dict(stale, source="eod_close")
+    assert not quote_service.usable_as_current(eod, OPEN_NOW)  # type: ignore[arg-type]
+
+
+def test_internal_get_quote_never_reads_the_durable_close(clock, cache_ds, providers, monkeypatch):
+    """`resolve_eod=False`: `get_current_price` has its own close fallback, so
+    `get_quote` must not spend a `daily_prices` read on every miss."""
+    name = tickers(1)[0]
+    reads: list[str] = []
+    real = quote_service._stored_close
+    monkeypatch.setattr(quote_service, "_stored_close", lambda t: reads.append(t) or real(t))
+    assert cache_ds.get_quote(name) is None
+    seed_row(clock, name, et(2026, 9, 22, 10, 0), price=50.0)
+    clock.now = et(2026, 9, 22, 20, 0)
+    assert cache_ds.get_quote(name) is None
+    assert reads == []
+    quote_service.get_quotes([name])          # the labelled path does read it
+    assert reads == [name]
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: the batch refusal memo, the budget, the one cache write
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status", [401, 429, 500, None])
+def test_non_entitlement_batch_failures_are_not_remembered(clock, cache_ds, providers, status):
+    """Only 402/403 mean "not in this plan". A bad key, a rate limit, a 5xx or
+    a timeout must not lock both processes out of the batch for a day."""
+    names = tickers(2)
+    providers.prices = {t: 20.0 for t in names}
+    providers.batch_status = status
+    got = quote_service.get_quotes(names)
+    assert providers.one_calls == names and all(got[t]["source"] == "live" for t in names)
+    assert provider_cache.get("entitlement", quote_service.BATCH_ENTITLEMENT_KEY) is None
+    more = tickers(1)
+    providers.prices[more[0]] = 21.0
+    quote_service.get_quotes(more)
+    assert providers.batch_calls == [names, more]   # the next request tries the batch again
+
+
+def test_batch_refusal_memo_expires_after_a_day(clock, cache_ds, providers):
+    names = tickers(1)
+    providers.prices = {names[0]: 20.0}
+    providers.batch_status = 402
+    quote_service.get_quotes(names)
+    assert providers.batch_calls == [names]
+    providers.batch_status = 200
+    clock.now = et(2026, 9, 23, 10, 44)
+    later = tickers(1)
+    providers.prices[later[0]] = 22.0
+    quote_service.get_quotes(later)
+    assert providers.batch_calls == [names]         # 23 h 59 min: still held
+    clock.now = et(2026, 9, 23, 10, 46)
+    last = tickers(1)
+    providers.prices[last[0]] = 23.0
+    quote_service.get_quotes(last)
+    assert providers.batch_calls == [names, last]   # expired: the batch is tried again
+
+
+def test_multiclass_alone_in_a_refusing_window_writes_no_entitlement(clock, cache_ds, providers):
+    """Even with FMP answering 402, a share-class request never makes a batch
+    call, so it can never record the plan-level refusal."""
+    stamp = time.perf_counter_ns() % 10**5
+    dotted = f"QC{stamp}.B"
+    with SessionLocal() as db:
+        db.merge(Company(ticker=dotted, company_name="Share class", sector="Test", industry="Test",
+                         universe_tier="data_only"))
+        db.commit()
+    providers.batch_status = 402
+    quote_service.get_quotes([dotted])
+    assert providers.batch_calls == [] and providers.one_calls == [dotted]
+    assert provider_cache.get("entitlement", quote_service.BATCH_ENTITLEMENT_KEY) is None
+
+
+def test_budget_counts_the_batch_call(clock, cache_ds, providers, monkeypatch):
+    """A batch that hung for 25 s leaves no budget for per-symbol calls."""
+    names = tickers(3)
+    providers.prices = {t: 40.0 for t in names}
+    elapsed = [0.0]
+    monkeypatch.setattr(quote_service, "_monotonic", lambda: elapsed[0])
+
+    def hung_batch(symbols, _ds):
+        providers.batch_calls.append(list(symbols))
+        elapsed[0] += 25.0                          # the batch timed out
+        return None, {}
+
+    monkeypatch.setattr(quote_service, "_fetch_batch", hung_batch)
+    got = quote_service.get_quotes(names)
+    assert providers.batch_calls == [names] and providers.one_calls == []
+    assert [(got[t]["source"], got[t]["reason"]) for t in names] == [("unavailable", "no_stored_close")] * 3
+    assert provider_cache.get("entitlement", quote_service.BATCH_ENTITLEMENT_KEY) is None
+
+
+def test_cold_list_is_one_cache_commit_whatever_n(clock, cache_ds, providers):
+    """20 cold tickers: one batch call and ONE cache transaction, not a
+    session and commit per key (the module doc's "one cache write")."""
+    names = tickers(20)
+    providers.prices = {t: 9.0 for t in names}
+    commits: list[int] = []
+
+    def on_commit(_conn):
+        commits.append(1)
+
+    event.listen(engine, "commit", on_commit)
+    try:
+        got = quote_service.get_quotes(names)
+    finally:
+        event.remove(engine, "commit", on_commit)
+    assert all(got[t]["source"] == "live" for t in names)
+    assert providers.batch_calls == [names]
+    assert len(commits) == 1, commits
+    assert set(provider_cache.read_rows("quote", names)) == set(names)
+
+
+# ---------------------------------------------------------------------------
+# Chat company-lites: one quote read for all of them, each price labelled
+# ---------------------------------------------------------------------------
+
+def test_chat_lites_prefetch_quotes_in_one_call_and_label_them(clock, cache_ds, providers, monkeypatch):
+    from app.agents import llm, orchestrator, pm_context
+    from app.services import memo_store
+
+    live_t, stale_t, eod_t, seed_t = tickers(4, prefix="QL")
+    with SessionLocal() as db:
+        db.get(Company, seed_t).last_price = 12.0
+        db.commit()
+    seed_row(clock, live_t, et(2026, 9, 22, 10, 40), price=100.0)   # fresh
+    seed_row(clock, stale_t, et(2026, 9, 22, 10, 25), price=200.0)  # 20 min old, provider misses
+    _store_close(eod_t, "2026-09-21", 300.0)
+
+    calls: list[list[str]] = []
+    real = quote_service.get_quotes
+
+    def spy(tks, **kwargs):
+        calls.append(list(tks))
+        return real(tks, **kwargs)
+
+    monkeypatch.setattr(quote_service, "get_quotes", spy)
+    monkeypatch.setattr(settings, "use_agents_sdk", False)
+    monkeypatch.setattr(orchestrator, "_extract_tickers", lambda _text: [live_t, stale_t, eod_t, seed_t])
+    monkeypatch.setattr(memo_store, "latest_memo", lambda _t: None)
+    monkeypatch.setattr(pm_context, "build_pm_context", lambda **_k: "")
+    prompts: list[str] = []
+    monkeypatch.setattr(llm, "chat_text", lambda prompt, **_k: prompts.append(prompt) or "answer")
+
+    assert orchestrator.Orchestrator()._answer_with_memo_context("compare them", []) is not None
+    assert calls == [[live_t, stale_t, eod_t, seed_t]]
+    lites = {row["ticker"]: row for row in json.loads(
+        prompts[0].split("Company snapshots (use when no memo is available):\n", 1)[1].split("\n\nConversation", 1)[0]
+    )}
+    assert (lites[live_t]["last_price"], lites[live_t]["last_price_source"]) == (100.0, "live")
+    assert lites[live_t]["last_price_as_of"] == z(et(2026, 9, 22, 10, 40))
+    assert (lites[stale_t]["last_price"], lites[stale_t]["last_price_source"]) == (200.0, "stale")
+    assert lites[stale_t]["last_price_as_of"] == z(et(2026, 9, 22, 10, 25))
+    assert (lites[eod_t]["last_price"], lites[eod_t]["last_price_source"]) == (300.0, "eod_close")
+    assert lites[eod_t]["last_price_as_of"] == z(et(2026, 9, 21, 16, 0))
+    assert (lites[seed_t]["last_price"], lites[seed_t]["last_price_source"]) == (12.0, "profile_seed")
+    assert lites[seed_t]["last_price_as_of"] is None

@@ -19,12 +19,12 @@ def get_current_price(ticker: str) -> float | None:
 
     Returns the freshest price available: a provider quote under the
     calendar-aware policy (`quote_service`: 15 minutes in session, until
-    the next open after the close, 60 s inside a memo run, labelled stale
-    up to an hour on a provider miss), or the last close when there is no
-    quote. `get_quote` answers None for an as-of backtest, a malformed
-    ticker, or an exchange calendar that cannot load (tzdata missing), so
-    each of those lands on the close here rather than raising into the
-    DCF defaults.
+    the next open after the close, 60 s inside a memo run; a stale row is
+    taken only while it is within those 15 minutes), or the last close when
+    there is no current quote. `get_quote` answers None for an as-of
+    backtest, a malformed ticker, or an exchange calendar that cannot load
+    (tzdata missing), so each of those lands on the close here rather than
+    raising into the DCF defaults.
     """
     quote = get_data_service().get_quote(ticker)
     if quote and quote.get("price") is not None:
