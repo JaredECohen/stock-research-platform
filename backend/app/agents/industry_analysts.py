@@ -19,8 +19,10 @@ How it reaches the memo
 ``applies_to`` is ``applies_to`` below: routing on AND the company has a
 routable classification. When the predicate says no, the spec does not
 run — an unmapped ticker records a soft "no mapping" degradation and the
-sector analyst stays primary, exactly as it is with routing off (the
-default until a production A/B is read).
+sector analyst stays primary, exactly as it is with routing off (the code
+default; production turns it on in render.yaml on both services, owner
+decision 2026-09-24). The PM reads a routed read through `pm_digest`, ahead
+of its capped findings JSON; a stand-in read never reaches it.
 
 Stale rows still route
 ----------------------
@@ -66,7 +68,7 @@ from ..config import settings
 from ..memory import SectorMemory
 from ..prompts import load_prompt
 from ..schemas import AgentFinding, Citation
-from ..services import gics_registry, industry_classification, industry_labels
+from ..services import gics_registry, industry_classification, industry_labels, memo_sections
 from ..services.industry_group_knowledge import (
     GroupMandate,
     group_mandate,
@@ -108,6 +110,16 @@ _TICKER_CHARS = 24
 # Below this, a mandate block cannot carry a line of prose AND its
 # attribution, so the block says the mandate was omitted instead.
 _MIN_MANDATE_CHARS = 240
+
+# See `run_industry_group_agent`: the analyst's JSON needs more than
+# `chat_json`'s default output ceiling.
+ANALYST_MAX_TOKENS = 2400
+# The PM reads the routed read as this bounded digest ahead of its capped
+# findings JSON (see `pm_digest`).
+PM_DIGEST_MAX_CHARS = 1500
+_PM_DIGEST_SUMMARY_CHARS = 600
+_PM_DIGEST_KEY_POINTS = 5
+_PM_DIGEST_FALSIFIERS = 3
 
 _CACHE: dict[tuple[str, int], IndustryAnalyst] = {}
 _CACHE_LOCK = threading.Lock()
@@ -730,9 +742,16 @@ def run_industry_group_agent(
     if memory_block:
         user_prompt += "\n\nPrior context from the group's long-term memory:\n" + memory_block
 
+    # Output headroom: this schema (4-7 sentence summary, key points, one
+    # causal-chain entry per methodology stage, placement, 3-5 KPIs with
+    # `why`, falsifiers, traps) is the largest any specialist is asked for,
+    # typically ~1.2-1.5k tokens. `chat_json`'s 1,600 default is the ceiling
+    # that truncated specialists mid-string in Wave 9b, which lands here as
+    # a deterministic fallback. 2,400 is the filing agent's value; it raises
+    # only the ceiling (<= $0.004 per memo at the cheap route if all used).
     llm_out = llm.chat_json(
         user_prompt, system=analyst.system_prompt(), route="cheap",
-        model=llm.resolve_role_model("sector"),
+        model=llm.resolve_role_model("sector"), max_tokens=ANALYST_MAX_TOKENS,
     )
     if not llm_out:
         return _deterministic_finding(analyst, profile, classification)
@@ -777,3 +796,52 @@ def run_industry_group_agent(
         data=data,
         provider_industry=_sub_industry_of(classification),
     )
+
+
+# --- what the PM reads -------------------------------------------------------------
+
+
+def pm_digest(finding: AgentFinding, *, max_chars: int = PM_DIGEST_MAX_CHARS) -> str:
+    """The routed read as the PM synthesis sees it, or "" to withhold it.
+
+    The roster puts this analyst last, and the PM's findings JSON is cut at
+    `max_agent_context_chars` in roster order, so on a live memo the JSON
+    entry is never read (META v1's views alone are 86,518 chars against a
+    60,000 cap). The graph therefore leaves the finding out of the JSON and
+    places this digest ahead of it (`graph._pm_view`, contract C7).
+
+    "" — the finding reaches neither the PM nor the stored influence — when
+    the finding is a stand-in rather than an analyst's read
+    (`memo_sections.finding_is_template`: the no-mapping stub, the
+    deterministic mandate read, a crash stub, an intake skip) or says
+    nothing at all. Owner decision 2026-09-24 hides template sections from
+    readers; the same principle keeps template text from reaching the
+    rating dressed as an analyst view.
+
+    Every field is already public: `_public_finding` scrubbed the prose and
+    the label is ours, so no code or registry name enters the PM prompt."""
+    if memo_sections.finding_is_template(finding):
+        return ""
+    headline = (finding.headline or "").strip()
+    summary = (finding.summary or "").strip()
+    if not headline and not summary:
+        return ""
+    data = finding.data if isinstance(finding.data, dict) else {}
+    group = data.get("industry_group") if isinstance(data.get("industry_group"), dict) else {}
+    label = str((group or {}).get("label") or "").strip()
+    lines = [f"## Industry group read{f' — {label}' if label else ''} ({AGENT_NAME})"]
+    if headline:
+        lines.append(f"Headline: {headline}")
+    if summary:
+        lines.append(f"Summary: {_clip(summary, _PM_DIGEST_SUMMARY_CHARS)}")
+    lines.extend(f"- {str(p).strip()}" for p in (finding.key_points or [])[:_PM_DIGEST_KEY_POINTS]
+                 if str(p).strip())
+    mandate_type = data.get("mandate_type")
+    if mandate_type in ("compounder", "inflection", "unclear"):
+        lines.append(f"Mandate type: {mandate_type}")
+    raw_falsifiers = data.get("falsifiers")
+    falsifiers = [str(f).strip() for f in (raw_falsifiers if isinstance(raw_falsifiers, list) else [])
+                  if str(f).strip()][:_PM_DIGEST_FALSIFIERS]
+    if falsifiers:
+        lines.append("Falsifiers: " + "; ".join(falsifiers))
+    return _clip("\n".join(lines), max_chars)
