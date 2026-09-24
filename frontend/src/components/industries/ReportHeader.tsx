@@ -20,7 +20,7 @@ import {
  * actually price, how the statistics were weighted and against what
  * benchmarks — and, when the last refresh failed, that it did and why.
  *
- * Two things this deliberately does NOT do:
+ * Three things this deliberately does NOT do:
  *
  *   * collapse membership into coverage. `n_constituents` is who is in
  *     the group; `n_with_prices` is how many of them had a price series.
@@ -29,6 +29,10 @@ import {
  *     whose prices have not warmed up yet, or a universe that holds too
  *     few of this industry to ever cover it. One sentence for both read
  *     as "not ready yet" for a group that will never be ready;
+ *   * pass an older edition off as this week's. Only analyst-written
+ *     editions are published (owner decision 1); when a newer week's
+ *     refresh produced none, `display.not_updated` names that week and a
+ *     "Not updated this week" banner says which edition is shown instead;
  *   * soften a failed refresh. A stale edition keeps its content — that
  *     is the point of keeping the last good one — but the badge names
  *     the attempt, its error and how many tries it has left, because a
@@ -130,6 +134,11 @@ export default function ReportHeader({
   const stale = report.stale === true;
   const attempt = report.last_attempt;
   const failedAttempt = attempt && attempt.status !== "succeeded" ? attempt : null;
+  // Owner decision 1: a week that produced no validated analyst edition
+  // leaves the last analyst edition up. The banner says so in words and
+  // names both weeks — a dated edition with no explanation would read as
+  // this week's analysis.
+  const notUpdated = report.display?.not_updated ?? null;
 
   return (
     <header className={`space-y-3 ${className}`} data-testid="industry-report-header">
@@ -167,6 +176,17 @@ export default function ReportHeader({
           )}
         </div>
       </div>
+
+      {notUpdated && (
+        <div className="card-tight border-warn-500/40 text-xs space-y-1" role="status" data-testid="not-updated-banner">
+          <div className="text-warn-500 font-medium">Not updated this week</div>
+          <div className="text-slate-300">
+            Showing the analyst edition for week {report.period_key || na("period not recorded")} (as of{" "}
+            {fmtDateTime(report.as_of, "no as-of on this edition")}). The {notUpdated.period_key} refresh{" "}
+            {notUpdated.outcome === "failed" ? "failed" : "did not produce a validated analyst edition"}.
+          </div>
+        </div>
+      )}
 
       {failedAttempt && (
         <div className="card-tight border-warn-500/40 text-xs space-y-1" role="status" data-testid="last-attempt">

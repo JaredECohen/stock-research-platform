@@ -59,6 +59,33 @@ describe("ReportHeader", () => {
     render(<ReportHeader report={fx.report} />);
     expect(screen.queryByTestId("badge-stale")).not.toBeInTheDocument();
     expect(screen.queryByTestId("last-attempt")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("not-updated-banner")).not.toBeInTheDocument();
+  });
+
+  // --- owner decision 1: a week with no analyst edition ------------------
+
+  it("banners an edition a newer week did not replace, naming both weeks", () => {
+    const r = fx.notUpdatedReport;
+    expect(r.display.not_updated).toEqual({ period_key: fx.OUTAGE_PERIOD, outcome: "withheld_template" });
+    render(<ReportHeader report={r} />);
+    const banner = screen.getByTestId("not-updated-banner");
+    expect(banner).toHaveTextContent("Not updated this week");
+    expect(banner).toHaveTextContent(`Showing the analyst edition for week ${r.period_key}`);
+    expect(banner).toHaveTextContent(
+      `The ${fx.OUTAGE_PERIOD} refresh did not produce a validated analyst edition.`,
+    );
+    // The stale badge stays too, with the server's own reason.
+    expect(screen.getByTestId("badge-stale")).toHaveTextContent("not updated this week");
+    // A week that ended on the template "succeeded" as a job, so no
+    // failed-attempt box claims a failure that did not happen.
+    expect(screen.queryByTestId("last-attempt")).not.toBeInTheDocument();
+  });
+
+  it("words a newer week that failed outright as a failure", () => {
+    const r = fx.clone(fx.notUpdatedReport);
+    r.display = { ...r.display, not_updated: { period_key: fx.OUTAGE_PERIOD, outcome: "failed" } };
+    render(<ReportHeader report={r} />);
+    expect(screen.getByTestId("not-updated-banner")).toHaveTextContent(`The ${fx.OUTAGE_PERIOD} refresh failed.`);
   });
 
   it("badges a stale edition with the store's reason and the attempt that failed", () => {
@@ -151,10 +178,12 @@ describe("ReportHeader", () => {
 
   it("prints what the edition cost, with the call count, rather than omitting a zero", () => {
     render(<ReportHeader report={fx.report} />);
-    // The captured edition ran no LLM call, so $0.0000 is the true cost —
-    // leaving it out would read as "not measured".
-    expect(fx.report.generation.llm_calls).toBe(0);
-    expect(screen.getByTestId("llm-cost")).toHaveTextContent("LLM cost $0.0000 over 0 calls");
+    // The captured edition's (stubbed) analyst model made two calls and was
+    // billed nothing, so $0.0000 is the true cost — leaving it out would
+    // read as "not measured".
+    expect(fx.report.generation.llm_calls).toBe(2);
+    expect(fx.report.llm_cost_usd).toBe(0);
+    expect(screen.getByTestId("llm-cost")).toHaveTextContent("LLM cost $0.0000 over 2 calls");
 
     const r = fx.clone(fx.report);
     r.llm_cost_usd = null;

@@ -13,7 +13,10 @@ import { fmtDate, fmtDateTime, na } from "./format";
  *
  *   * an edition that was **not** published (`pending_review`,
  *     `superseded`) is still listed, labelled with its status, because a
- *     gap in the version numbers is more alarming than a labelled row;
+ *     gap in the version numbers is more alarming than a labelled row.
+ *     The one exception is an edition kept for audit only (a template —
+ *     owner decision 1 never displays one): the server does not list it,
+ *     and `withheld` counts it, so the gap it leaves is explained here;
  *   * the response's `truncated` count is printed. A capped history that
  *     shows 26 rows and says nothing looks like a group that has only
  *     ever had 26 editions.
@@ -63,6 +66,12 @@ export default function HistoryPicker({ history, value, onSelect, className = ""
       <p className="text-[11px] text-slate-500" data-testid="history-count">
         {history.count} edition{history.count === 1 ? "" : "s"} listed
         {history.truncated > 0 ? `, ${history.truncated} older not shown (limit ${history.limit})` : ""}.
+        {history.withheld > 0
+          ? ` ${history.withheld} edition${history.withheld === 1 ? " was" : "s were"} kept for audit only ` +
+            "(no validated analyst edition) and " +
+            (history.withheld === 1 ? "is" : "are") +
+            " not published, so version numbers skip."
+          : ""}
         {history.last_attempt
           ? ` Last refresh attempt: ${history.last_attempt.status} at ${fmtDateTime(history.last_attempt.at)}.`
           : " No refresh attempt is recorded for this group."}

@@ -83,6 +83,11 @@ export interface LatestReportPointer {
   stale_by_age: boolean;
   age_days: number | null;
   stale_basis: string;
+  /** A newer week's refresh finished after this edition's week without
+   *  producing a validated analyst edition, so the pointer names an older
+   *  edition on purpose. `newer_attempt_period_key` is that week. */
+  not_updated: boolean;
+  newer_attempt_period_key: string | null;
 }
 
 /**
@@ -292,10 +297,18 @@ export interface IndustrySampleFloor {
   explanation: string;
 }
 
-/** The refresh attempt behind a `stale` verdict. */
+/** What a refresh attempt produced. `withheld_template`: the week ended on
+ *  the deterministic template, which is stored for audit only and never
+ *  displayed (owner decision 1). */
+export type IndustryAttemptOutcome = "published" | "withheld_template" | "failed" | "in_progress";
+
+/** The refresh attempt behind a `stale` verdict. The server never puts the
+ *  rejected model prose a validator message quotes in `error_message`; a
+ *  rejection reads "the analyst draft did not pass validation (N problems)". */
 export interface IndustryLastAttempt {
   job_id: number;
   status: string;
+  outcome: IndustryAttemptOutcome | "";
   at: string | null;
   period_key: string;
   attempts: number;
@@ -352,6 +365,29 @@ export interface IndustryReport {
   disclaimer: string;
   attribution: string;
   mapping_caveat: string;
+  /** How to present this edition (owner decision 1). */
+  display: IndustryReportDisplay;
+}
+
+/** A newer week that finished without a validated analyst edition. */
+export interface IndustryNotUpdated {
+  period_key: string;
+  outcome: "withheld_template" | "failed";
+}
+
+/**
+ * Presentation rules the server decides, so the page never infers them:
+ * only analyst-written editions are served (`edition_kind` is always
+ * `agentic`); a section a template filled inside one is listed in
+ * `hidden_sections`, its `interpretation` arrives as `null`, and the page
+ * prints `hidden_reason` in its place; `not_updated` names a newer week
+ * whose refresh produced no analyst edition.
+ */
+export interface IndustryReportDisplay {
+  edition_kind: "agentic" | "template";
+  hidden_sections: string[];
+  hidden_reason: string;
+  not_updated: IndustryNotUpdated | null;
 }
 
 export interface IndustryHistoryItem {
@@ -376,6 +412,9 @@ export interface IndustryHistory {
   limit: number;
   /** How many editions the cap dropped. A truncated list says so. */
   truncated: number;
+  /** Editions kept for audit only (templates), never listed — why the
+   *  version numbers can skip. */
+  withheld: number;
   items: IndustryHistoryItem[];
   last_attempt: IndustryLastAttempt | null;
   access: IndustryAccess;
@@ -401,9 +440,19 @@ export interface IndustryChanges {
   facts_delta: Record<string, IndustryFactDelta>;
   constituents: Record<string, unknown>;
   leaders_laggards: Record<string, unknown>;
-  analyst_view: Record<string, unknown>;
+  analyst_view: IndustryAnalystView;
   access: IndustryAccess;
   disclaimer: string;
+}
+
+/** Each edition's outlook view and the newer edition's what-changed line.
+ *  A side a template wrote is `null`, with its reason in `reasons` — the
+ *  server never sends template prose here (owner decision 1). */
+export interface IndustryAnalystView {
+  from: string | null;
+  to: string | null;
+  what_changed: string | null;
+  reasons: { from: string | null; to: string | null; what_changed: string | null };
 }
 
 // ---------------------------------------------------------------------------
@@ -497,5 +546,19 @@ export interface NoReportDetail {
   industry_group_code?: string;
   name?: string;
   taxonomy_version?: string;
+  /** `no_validated_analyst_edition` on `version=latest`: the group has no
+   *  analyst-written edition (owner decision 1 — templates never display). */
+  reason?: string;
+  /** Audit-only editions the group does hold, so "none published" is not
+   *  read as "never attempted". */
+  withheld_editions?: number;
   last_attempt?: IndustryLastAttempt | null;
+}
+
+/** 404 for `?version=N` naming an edition kept for audit only. */
+export interface EditionWithheldDetail {
+  code: "edition_withheld";
+  message: string;
+  industry_group_code?: string;
+  version?: number;
 }

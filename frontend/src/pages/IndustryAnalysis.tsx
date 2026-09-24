@@ -51,7 +51,18 @@ import type {
 const FEATURE = "industry_analysis";
 
 type Failure =
-  | { state: "missing"; detail: string; lastAttempt?: IndustryLastAttempt | null }
+  | {
+      state: "missing";
+      detail: string;
+      lastAttempt?: IndustryLastAttempt | null;
+      /** `no_report`, or `edition_withheld` for an edition number kept for
+       *  audit only (owner decision 1). */
+      code?: string;
+      /** `no_validated_analyst_edition` when the group has no analyst-written
+       *  edition at all. */
+      reason?: string;
+      withheldEditions?: number;
+    }
   | { state: "not_imported"; detail: string; remedy?: string }
   | { state: "error"; detail: string; status?: number };
 
@@ -59,12 +70,26 @@ type Resource<T> = { state: "loading" } | ({ state: "ok"; data: T }) | Failure;
 
 function classify(e: unknown): Failure {
   if (isApiError(e)) {
-    const s = e.structured as (Record<string, unknown> & { remedy?: string; last_attempt?: IndustryLastAttempt }) | undefined;
+    const s = e.structured as
+      | (Record<string, unknown> & {
+          remedy?: string;
+          last_attempt?: IndustryLastAttempt;
+          reason?: string;
+          withheld_editions?: number;
+        })
+      | undefined;
     if (e.code === "taxonomy_not_imported") {
       return { state: "not_imported", detail: e.detail || e.message, remedy: s?.remedy };
     }
     if (e.status === 404) {
-      return { state: "missing", detail: e.detail || e.message, lastAttempt: s?.last_attempt ?? null };
+      return {
+        state: "missing",
+        detail: e.detail || e.message,
+        lastAttempt: s?.last_attempt ?? null,
+        code: e.code,
+        reason: typeof s?.reason === "string" ? s.reason : undefined,
+        withheldEditions: typeof s?.withheld_editions === "number" ? s.withheld_editions : undefined,
+      };
     }
     return { state: "error", detail: e.detail || e.message, status: e.status };
   }
@@ -135,14 +160,39 @@ function ErrorCard({ failure, onRetry }: { failure: Failure; onRetry?: () => voi
       </div>
     );
   }
+  if (failure.state === "missing" && failure.code === "edition_withheld") {
+    return (
+      <div className="card text-sm space-y-1" role="status" data-testid="industry-edition-withheld">
+        <div className="section-title">Edition not published</div>
+        <p className="text-slate-300">This edition is kept for audit only.</p>
+        <p className="text-slate-400">{failure.detail}</p>
+      </div>
+    );
+  }
   if (failure.state === "missing") {
+    // Owner decision 1: only analyst-written editions are published. A group
+    // whose weeks all ended on the template has none — and says how many it
+    // is holding back, so "nothing published" is not read as "never run".
+    const noAnalyst = failure.reason === "no_validated_analyst_edition";
+    const withheld = failure.withheldEditions ?? 0;
     return (
       <div className="card text-sm space-y-1" role="status" data-testid="industry-missing">
-        <div className="section-title">No published edition yet</div>
+        <div className="section-title">{noAnalyst ? "No analyst edition yet" : "No published edition yet"}</div>
+        {noAnalyst && (
+          <p className="text-slate-300" data-testid="missing-no-analyst">
+            No analyst-written edition has been published for this group yet.
+            {withheld > 0
+              ? ` ${withheld} edition${withheld === 1 ? "" : "s"} without a validated analyst narrative ` +
+                `${withheld === 1 ? "is" : "are"} kept for audit only and not shown.`
+              : ""}
+          </p>
+        )}
         <p className="text-slate-400">{failure.detail}</p>
         {failure.lastAttempt ? (
           <p className="text-xs text-slate-500" data-testid="missing-last-attempt">
-            Last attempt: {failure.lastAttempt.status} ({failure.lastAttempt.error_type || "no error type"}
+            Last attempt: {failure.lastAttempt.status}
+            {failure.lastAttempt.outcome === "withheld_template" ? " — no validated analyst edition" : ""} (
+            {failure.lastAttempt.error_type || "no error type"}
             {failure.lastAttempt.error_message ? ` — ${failure.lastAttempt.error_message}` : ""}), attempt{" "}
             {failure.lastAttempt.attempts} of {failure.lastAttempt.max_attempts}.
           </p>

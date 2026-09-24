@@ -65,7 +65,17 @@ export default function ChangesPanel({ changes, className = "" }: { changes: Ind
   const constituents = (changes.constituents ?? {}) as Record<string, unknown>;
   const added = Array.isArray(constituents.added) ? (constituents.added as string[]) : [];
   const removed = Array.isArray(constituents.removed) ? (constituents.removed as string[]) : [];
-  const analyst = (changes.analyst_view ?? {}) as Record<string, unknown>;
+  const analyst = (changes.analyst_view ?? {}) as unknown as Record<string, unknown>;
+  // A side a template wrote arrives as `null` with its reason (owner
+  // decision 1); it prints as "n/a (reason)", never as an empty-looking
+  // "no view recorded", which would blame the analyst for a line the
+  // server withheld.
+  const reasons = (analyst.reasons ?? {}) as Record<string, string | null | undefined>;
+  const line = (key: string, fallback: string): string => {
+    const text = analyst[key];
+    if (typeof text === "string" && text) return text;
+    return na(reasons[key] || fallback);
+  };
 
   return (
     <div className={`space-y-3 ${className}`} data-testid="industry-changes">
@@ -128,15 +138,13 @@ export default function ChangesPanel({ changes, className = "" }: { changes: Ind
         <div className="text-slate-500 uppercase tracking-widest text-[10px]">
           Analyst interpretation — what the edition itself said changed
         </div>
-        <p className="text-slate-300">
-          {typeof analyst.what_changed === "string" && analyst.what_changed
-            ? analyst.what_changed
-            : na("this edition wrote no what-changed line")}
+        <p className="text-slate-300" data-testid="changes-what-changed">
+          {line("what_changed", "this edition wrote no what-changed line")}
         </p>
         {["from", "to"].map((k) => (
-          <p key={k} className="text-slate-500">
+          <p key={k} className="text-slate-500" data-testid={`changes-view-${k}`}>
             <span className="uppercase text-[10px] tracking-widest">{humanize(k)}: </span>
-            {typeof analyst[k] === "string" && analyst[k] ? String(analyst[k]) : na("no analyst view recorded")}
+            {line(k, "no analyst view recorded")}
           </p>
         ))}
       </div>

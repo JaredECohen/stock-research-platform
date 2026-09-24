@@ -51,10 +51,28 @@ describe("ChangesPanel", () => {
   });
 
   it("keeps the analyst's what-changed line in the interpretation block, labelled", () => {
-    render(<ChangesPanel changes={fx.changes} />);
+    const c = fx.clone(fx.changes);
+    c.analyst_view = { ...c.analyst_view, what_changed: "Breadth narrowed.", reasons: { ...c.analyst_view.reasons, what_changed: null } };
+    render(<ChangesPanel changes={c} />);
     const block = screen.getByTestId("changes-analyst-view");
     expect(block).toHaveTextContent("Analyst interpretation");
-    expect(block).toHaveTextContent(String((fx.changes.analyst_view as { what_changed: string }).what_changed));
+    expect(screen.getByTestId("changes-what-changed")).toHaveTextContent("Breadth narrowed.");
+  });
+
+  it("prints n/a with the server's reason for a line a template wrote, never the template's text", () => {
+    // The captured edition's what-changed line was template-filled: the
+    // server sent null and its reason (owner decision 1).
+    const view = fx.changes.analyst_view;
+    expect(view.what_changed).toBeNull();
+    expect(view.reasons.what_changed).toBeTruthy();
+    render(<ChangesPanel changes={fx.changes} />);
+    expect(screen.getByTestId("changes-what-changed")).toHaveTextContent(`n/a (${view.reasons.what_changed})`);
+    expect(screen.getByTestId("changes-what-changed")).not.toHaveTextContent("this edition wrote no what-changed line");
+
+    const c = fx.clone(fx.changes);
+    c.analyst_view = { ...c.analyst_view, to: null, reasons: { ...c.analyst_view.reasons, to: "template-filled in this edition" } };
+    render(<ChangesPanel changes={c} />);
+    expect(screen.getAllByTestId("changes-view-to")[1]).toHaveTextContent("n/a (template-filled in this edition)");
   });
 
   it("agrees with the facts view about which facts are percents", () => {

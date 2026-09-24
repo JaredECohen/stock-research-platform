@@ -18,6 +18,11 @@ import { humanize, na } from "./format";
  * names but the payload lacks is rendered as a stated absence rather
  * than dropped.
  *
+ * Only analyst-written editions reach this component (owner decision 1).
+ * A section a template filled inside one is listed in
+ * `display.hidden_sections` and its interpretation is replaced by the
+ * server's `hidden_reason`; its observed facts still render.
+ *
  * Keyboard: the tablist is a roving tabindex — Left/Right move and
  * select, Home/End reach the ends. Only the selected tab is tabbable, so
  * Tab from the page moves past the strip rather than through thirteen
@@ -162,6 +167,11 @@ export default function ReportTabs({ report, section, onSelect, extras = {}, cla
   const body = report.payload?.sections?.[current];
   const narrativeMode = report.payload?.narrative_by_section?.[current] ?? report.payload?.analyst_narrative ?? "";
   const factsOnly = INDUSTRY_FACTS_ONLY_SECTIONS.includes(current);
+  // A section a template filled inside an analyst edition (owner decision
+  // 1). The server has already nulled its interpretation; the page says why
+  // in the server's words instead of printing "no interpretation", which
+  // would read as a section the analyst skipped.
+  const hidden = (report.display?.hidden_sections ?? []).includes(current);
 
   return (
     <div className={`space-y-3 ${className}`} data-testid="industry-report-tabs">
@@ -222,7 +232,11 @@ export default function ReportTabs({ report, section, onSelect, extras = {}, cla
               <h3 className="text-xs uppercase tracking-widest text-slate-500" data-testid="heading-interpretation">
                 {INTERPRETATION_HEADING}
               </h3>
-              {body.interpretation ? (
+              {hidden ? (
+                <p className="text-xs text-slate-400" role="status" data-testid="interpretation-hidden">
+                  {report.display?.hidden_reason || "Analyst interpretation unavailable in this version."}
+                </p>
+              ) : body.interpretation ? (
                 <Interpretation interp={body.interpretation} mode={narrativeMode} />
               ) : (
                 <p className="text-xs text-slate-400" data-testid="interpretation-absent">
