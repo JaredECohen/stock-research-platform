@@ -35,24 +35,35 @@ META_OP_MARGIN = 0.41437855159579234
 META_OWN_MEDIAN = 0.3882502134788519
 
 
-def _meta_like_history(monkeypatch) -> CompsHistoryStats:
-    """Eight annual periods whose operating-margin median is exactly the
-    38.825% the saved META payload reports."""
-    margins = [0.30, 0.33, 0.37, 0.38, 0.3965, 0.40, 0.41, 0.42]
-    long_format: dict[str, list[dict]] = {"revenue": [], "operating_income": []}
+def _history(monkeypatch, margins: list[float], target: CompsRow, *,
+             fcf: float | None = None, prices: list[dict] | None = None,
+             ) -> CompsHistoryStats:
+    """Eight annual periods of revenue 1000 and the given operating margins
+    (plus a flat free cash flow when `fcf` is set) through the real
+    `build_history_stats`."""
+    long_format: dict[str, list[dict]] = {"revenue": [], "operating_income": [],
+                                          "free_cash_flow": []}
     for i, m in enumerate(margins):
         common = {"period": f"FY{2018 + i}", "period_end": f"{2018 + i}-12-31",
                   "fiscal_year": 2018 + i}
         long_format["revenue"].append({**common, "value": 1000.0})
         long_format["operating_income"].append({**common, "value": 1000.0 * m})
+        if fcf is not None:
+            long_format["free_cash_flow"].append({**common, "value": fcf})
 
     from app.services import history_service, market_data_service
     monkeypatch.setattr(history_service, "get_financial_history", lambda *a, **k: long_format)
-    monkeypatch.setattr(market_data_service, "get_price_series", lambda *a, **k: [])
-    target = CompsRow(ticker="META", company_name="Meta", operating_margin=META_OP_MARGIN)
-    out = ch.build_history_stats("META", target, lookback_quarters=20, min_periods=8)
+    monkeypatch.setattr(market_data_service, "get_price_series", lambda *a, **k: prices or [])
+    out = ch.build_history_stats(target.ticker, target, lookback_quarters=20, min_periods=8)
     assert out is not None
     return out
+
+
+def _meta_like_history(monkeypatch) -> CompsHistoryStats:
+    """Operating-margin median exactly the 38.825% the saved META payload reports."""
+    margins = [0.30, 0.33, 0.37, 0.38, 0.3965, 0.40, 0.41, 0.42]
+    target = CompsRow(ticker="META", company_name="Meta", operating_margin=META_OP_MARGIN)
+    return _history(monkeypatch, margins, target)
 
 
 def test_history_stats_carry_the_gap_in_points_beside_the_relative_change(monkeypatch):
@@ -60,8 +71,33 @@ def test_history_stats_carry_the_gap_in_points_beside_the_relative_change(monkey
     assert h.own_median["operating_margin"] == pytest.approx(0.38825)
     assert h.current_vs_own_median["operating_margin"] == 0.067          # relative
     assert h.current_minus_own_median_pp["operating_margin"] == 2.61     # points
-    # Multiples are not rate-type: no percentage-point gap is invented for them.
-    assert set(h.current_minus_own_median_pp) <= set(ch.PERCENT_POINT_METRICS)
+
+
+def test_points_gap_is_for_rates_only_and_survives_a_zero_median(monkeypatch):
+    """Multiples reach the gap loop too once a price series gives each
+    period a market cap; they must get a relative change and no points.
+    A margin whose own median is exactly zero has no relative change, but
+    its gap in points is still defined and must still be reported."""
+    # A flat 100 close and a 10,000 market cap give 100 shares, so every
+    # period's cap is 10,000: EV/revenue 10x, P/FCF 20x, FCF yield 5%.
+    prices = [{"date": f"{2017 + i}-12-31", "close": 100.0} for i in range(10)]
+    margins = [-0.02, -0.01, 0.0, 0.0, 0.0, 0.0, 0.01, 0.02]  # median exactly 0
+    target = CompsRow(ticker="ZMED", company_name="Zero Median", market_cap=10_000.0,
+                      operating_margin=0.03, ev_revenue=12.0, p_fcf=25.0, fcf_yield=0.06)
+    h = _history(monkeypatch, margins, target, fcf=500.0, prices=prices)
+
+    assert h.own_median["ev_revenue"] == pytest.approx(10.0)
+    assert h.own_median["p_fcf"] == pytest.approx(20.0)
+    for multiple, rel in (("ev_revenue", 0.2), ("p_fcf", 0.25)):
+        assert h.current_vs_own_median[multiple] == rel
+        assert multiple not in h.current_minus_own_median_pp, multiple
+    # A market-cap metric that is a rate still gets points.
+    assert h.current_minus_own_median_pp["fcf_yield"] == 1.0
+    assert h.current_vs_own_median["fcf_yield"] == 0.2
+
+    assert h.own_median["operating_margin"] == 0.0
+    assert "operating_margin" not in h.current_vs_own_median
+    assert h.current_minus_own_median_pp["operating_margin"] == 3.0
 
 
 def _meta_comps(history: CompsHistoryStats) -> CompsResult:
@@ -212,3 +248,15 @@ def test_cohort_margin_and_capex_deltas_are_printed_in_points():
     assert "Cohort op margin expanding (+2.9pp multi-year)" in lines
     assert "Cohort capex intensity moderating (-1.2pp multi-year)" in lines
     assert not any("% multi-year" in s for s in lines)
+
+
+def test_deterministic_bear_point_prints_a_compressing_margin_in_points():
+    """The offline bull/bear fallback formats the same delta separately, and
+    only when it is negative; no other test drives a compressing cohort."""
+    analysis = sector_agents._deterministic_bull_bear_analysis(
+        {"sector": "Technology"}, {"trends": {"cohort_op_margin_delta": -0.029}},
+    )
+    points = analysis.bear_case.key_points
+    assert any(p.startswith("Cohort op margin compressing (-2.9pp multi-year)")
+               for p in points), points
+    assert not any("% multi-year" in p for p in points)
