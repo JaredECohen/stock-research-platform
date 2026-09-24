@@ -15,16 +15,22 @@ Covers:
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event, select
 
+from app.config import settings
 from app.database import SessionLocal
 from app.main import app
-from app.models import MemoOutcome, MemoPostmortem, MemoSnapshot
+from app.models import Company, MemoOutcome, MemoPostmortem, MemoSnapshot
+from app.services import outcome_eligibility as oe
 from app.services import outcome_service
+from app.services.outcome_eligibility_evidence import DEV_COPY_SNAPSHOTS
+from app.tests.eligibility_helpers import add_outcome, add_snapshot, classify_all, isolated_sessions, mark
 
 
 def _seed_snapshot(
@@ -46,6 +52,8 @@ def _seed_snapshot(
             memo_json={
                 "ticker": ticker, "rating_label": rating,
                 "confidence_score": confidence, "sector": "Technology",
+                # W6: eligibility is fail-closed on generation_mode.
+                "generation_mode": "live",
                 "macro_regime_at_memo": regime,
                 "agent_influence": {"valuation": 0.5},
             },
@@ -442,3 +450,429 @@ def test_admin_track_record_endpoint_returns_aggregates():
     body = r.json()
     assert body["horizon_days"] == 90
     assert body["total"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# W6 / FIX-007 — eligibility-aware evaluation and the provisional track record.
+# Exact counts, so every test here runs on its own sqlite engine.
+# ---------------------------------------------------------------------------
+
+W6_TODAY = date(2026, 9, 24)
+
+
+@pytest.fixture
+def w6(tmp_path, monkeypatch):
+    sessions, engine = isolated_sessions(tmp_path, monkeypatch, outcome_service)
+    monkeypatch.setattr(settings, "enable_long_term_memory", False)
+    yield sessions, engine
+    engine.dispose()
+
+
+def _dev_copy_nvda(db) -> MemoSnapshot:
+    sid, ticker, generated = next(row for row in DEV_COPY_SNAPSHOTS if row[1] == "NVDA")
+    return add_snapshot(
+        db, id=sid, ticker=ticker, version=sid, generated_at=datetime.fromisoformat(generated),
+        mode="demo", memo_generated_at=generated,
+    )
+
+
+def _series(generated: datetime, closes: dict[int, float]) -> list[dict[str, Any]]:
+    return [
+        {"date": (generated.date() + timedelta(days=offset)).isoformat(), "close": close}
+        for offset, close in sorted(closes.items())
+    ]
+
+
+def test_evaluate_all_due_skips_ineligible_snapshots(w6, monkeypatch):
+    sessions, _ = w6
+    with sessions() as db:
+        dev = _dev_copy_nvda(db)
+        live = add_snapshot(db, ticker="LIVEW6", generated_at=datetime(2026, 5, 1, 13))
+        db.commit()
+    requests: list[str] = []
+    series = {
+        "LIVEW6": _series(live.generated_at, {0: 100.0, 30: 110.0, 90: 120.0}),
+        "SPY": _series(live.generated_at, {0: 500.0, 30: 505.0, 90: 510.0}),
+        "NVDA": _series(dev.generated_at, {0: 100.0, 30: 150.0, 90: 200.0}),
+    }
+
+    def prices(ticker, days=252):
+        requests.append(ticker)
+        return series.get(ticker, [])
+
+    reflected: list[str] = []
+    from app.services import market_data_service
+    monkeypatch.setattr(market_data_service, "get_price_series", prices)
+    monkeypatch.setattr(outcome_service, "_maybe_write_reflection",
+                        lambda snap, out: reflected.append(snap.ticker) or True)
+    report = outcome_service.evaluate_all_due(today=W6_TODAY)
+    assert report["written"] == 2 and report["due"] == 2
+    assert report["ineligible"] == 4
+    assert report["ineligible_snapshots_by_reason"] == {oe.REASON_DEV_COPY: 1}
+    assert report["unclassified"] == 0 and report["data_unavailable"] == 0
+    assert "NVDA" not in requests, "an ineligible snapshot must not cost a price fetch"
+    assert reflected == ["LIVEW6"]
+    with sessions() as db:
+        assert set(db.execute(select(MemoOutcome.memo_snapshot_id)).scalars()) == {live.id}
+
+
+def test_failed_sweep_still_scores_classified_snapshots(w6, monkeypatch):
+    """A sweep that aborts (ExclusionSetMismatch) turns the loop red but does
+    not stop scoring: snapshots with an existing ledger row are still
+    evaluated, and the one the sweep could not classify stays unscored.
+
+    Before, the exception escaped evaluate_all_due ahead of the scan, so one
+    unexpected snapshot stopped all outcome scoring until a redeploy.
+    """
+    from app.monitoring import outcome_loop
+    from app.services import market_data_service
+
+    sessions, _ = w6
+    dev_ids = {row[0] for row in DEV_COPY_SNAPSHOTS}
+    with sessions() as db:
+        live = add_snapshot(db, ticker="LIVEW6", generated_at=datetime(2026, 5, 1, 13))
+        db.commit()
+        classify_all(db)
+        # Demo, copy-era id and date, but not in the enumerated evidence.
+        stray = add_snapshot(db, id=next(i for i in range(400, 583) if i not in dev_ids), ticker="STRAYW6",
+                             generated_at=datetime(2026, 5, 4), mode="demo")
+        db.commit()
+    series = {
+        "LIVEW6": _series(live.generated_at, {0: 100.0, 30: 110.0, 90: 120.0}),
+        "SPY": _series(live.generated_at, {0: 500.0, 30: 505.0, 90: 510.0}),
+    }
+    requests: list[str] = []
+    monkeypatch.setattr(market_data_service, "get_price_series",
+                        lambda ticker, days=252: requests.append(ticker) or series.get(ticker, []))
+    calls: list[int] = []
+    real = oe.classify_pending
+
+    def counting(**kwargs):
+        calls.append(1)
+        return real(**kwargs)
+
+    monkeypatch.setattr(oe, "classify_pending", counting)
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(outcome_loop, "record_run", lambda *a, **k: recorded.append(k))
+    monkeypatch.setattr(outcome_service, "_maybe_write_reflection", lambda snap, out: False)
+    monkeypatch.setattr(outcome_loop, "evaluate_all_due",
+                        lambda: outcome_service.evaluate_all_due(today=W6_TODAY))
+    res = outcome_loop.run_once()
+    assert res["written"] == 2, "the classified live snapshot is still scored"
+    assert res["classification_error"].startswith("ExclusionSetMismatch")
+    assert f"STRAYW6#{stray.id}" in res["classification_error"]
+    assert res["unclassified_snapshot_ids"] == [stray.id] and res["unclassified"] == 2
+    assert "STRAYW6" not in requests
+    assert len(calls) == 1, "a failed sweep is not retried once per unclassified snapshot"
+    assert recorded[0]["success"] is False
+    assert "classification_error=ExclusionSetMismatch" in recorded[0]["note"]
+    with sessions() as db:
+        assert set(db.execute(select(MemoOutcome.memo_snapshot_id)).scalars()) == {live.id}
+        assert oe.lookup(db, stray.id) is None, "the aborted sweep wrote nothing"
+
+
+def test_sweep_failure_alone_turns_loop_red(w6, monkeypatch):
+    from app.monitoring import outcome_loop
+
+    def fail(**kwargs):
+        raise oe.ExclusionSetMismatch("synthetic")
+
+    monkeypatch.setattr(oe, "classify_pending", fail)
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(outcome_loop, "record_run", lambda *a, **k: recorded.append(k))
+    res = outcome_loop.run_once()
+    assert res["errors"] == 0 and res["unclassified"] == 0 and res["data_unavailable"] == 0
+    assert recorded[0]["success"] is False
+    assert "classification_error=ExclusionSetMismatch: synthetic" in recorded[0]["note"]
+
+
+def test_unclassified_snapshot_turns_loop_red(w6, monkeypatch):
+    from app.monitoring import outcome_loop
+    from app.services import market_data_service
+
+    sessions, _ = w6
+    with sessions() as db:
+        snap = add_snapshot(db, ticker="UNCLW6", generated_at=datetime.utcnow() - timedelta(days=100))
+        db.commit()
+    monkeypatch.setattr(oe, "classify_pending", lambda **kwargs: {"classified": 0})
+    requests: list[str] = []
+    monkeypatch.setattr(market_data_service, "get_price_series",
+                        lambda ticker, days=252: requests.append(ticker) or [])
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(outcome_loop, "record_run", lambda *a, **k: recorded.append(k))
+    res = outcome_loop.run_once()
+    assert res["unclassified"] == 2                       # 30d and 90d are due; 180d/365d are not
+    assert res["unclassified_snapshot_ids"] == [snap.id]
+    assert res["data_unavailable"] == 0 and requests == []
+    assert recorded[0]["success"] is False
+    assert "unclassified=2" in recorded[0]["note"]
+    assert f"unclassified_snapshot_ids={snap.id}" in recorded[0]["note"]
+
+
+def test_unclassified_only_when_due(w6, monkeypatch):
+    """A snapshot with nothing due is not a failure; one that arrives after the
+    sweep is classified inline before it is judged (the evaluator-fence race)."""
+    from app.services import market_data_service
+
+    sessions, _ = w6
+    monkeypatch.setattr(market_data_service, "get_price_series", lambda ticker, days=252: [])
+    with sessions() as db:
+        add_snapshot(db, ticker="FRESHW6", generated_at=datetime(2026, 9, 20))
+        db.commit()
+    real = oe.classify_pending
+    monkeypatch.setattr(oe, "classify_pending", lambda **kwargs: {"classified": 0})
+    report = outcome_service.evaluate_all_due(today=W6_TODAY)
+    assert report["unclassified"] == 0 and report["not_due"] == 4
+    assert report["unclassified_snapshot_ids"] == []
+
+    arrivals: list[int] = []
+
+    def sweep_then_race(**kwargs):
+        out = real(**kwargs)
+        if not arrivals:
+            with sessions() as other:
+                late = add_snapshot(other, ticker="LATEW6", generated_at=datetime(2026, 5, 20))
+                other.commit()
+                arrivals.append(late.id)
+        return out
+
+    monkeypatch.setattr(oe, "classify_pending", sweep_then_race)
+    report = outcome_service.evaluate_all_due(today=W6_TODAY)
+    assert arrivals
+    assert report["unclassified"] == 0
+    assert report["ticker_prices_unavailable"] == 2       # LATEW6 was judged, not skipped
+    with sessions() as db:
+        assert oe.lookup(db, arrivals[0]) == oe.Classification(True, oe.REASON_LIVE)
+
+
+def _tr(**kwargs):
+    return outcome_service.track_record(**kwargs)
+
+
+def test_track_record_counts_only_eligible_rows(w6):
+    sessions, _ = w6
+    with sessions() as db:
+        live = add_snapshot(db, ticker="ELIG", generated_at=datetime(2026, 5, 20))
+        add_outcome(db, live, horizon=90, forward_return=0.10, alpha=0.02)
+        dev = _dev_copy_nvda(db)
+        add_outcome(db, dev, horizon=90, forward_return=0.50, alpha=0.40)
+        db.commit()
+        classify_all(db)
+        late = add_snapshot(db, ticker="LATE", generated_at=datetime(2026, 6, 1))
+        add_outcome(db, late, horizon=90, forward_return=-0.3, alpha=-0.3)
+        db.commit()
+    tr = _tr(horizon_days=90)
+    assert tr["total"] == 1 and tr["directional_evaluations"] == 1
+    assert tr["thesis_hit_rate"] == 1.0
+    assert tr["avg_forward_return"] == pytest.approx(0.10) and tr["avg_alpha"] == pytest.approx(0.02)
+    assert tr["eligibility"] == {
+        "rule_version": oe.RULE_VERSION, "eligible": 1, "excluded": 1, "unclassified": 1,
+        "excluded_by_reason": {oe.REASON_DEV_COPY: 1},
+        "eligible_by_reason": {oe.REASON_LIVE: 1},
+    }
+    assert tr["benchmark"] == "SPY"
+
+
+def test_track_record_alpha_block(w6):
+    sessions, _ = w6
+    rows: list[tuple[str, str, float | None]] = [("ONE", "Bullish", a) for a in (-0.10, -0.08, -0.06, -0.04, -0.02)]
+    rows += [("TWO", "Bullish", 0.05), ("THREE", "Bullish", 0.06), ("FOUR", "Very Bullish", 0.07)]
+    rows += [("FIVE", "Bearish", -0.03)]         # trailed SPY on a short call: beat it
+    rows += [("SIX", "Neutral", 0.50)]           # no direction: not in the adjusted set
+    rows += [("SEVEN", "Bullish", None)]         # benchmark missing
+    with sessions() as db:
+        versions: dict[str, int] = {}
+        for ticker, rating, alpha in rows:
+            versions[ticker] = versions.get(ticker, 0) + 1
+            snap = add_snapshot(db, ticker=ticker, version=versions[ticker], rating=rating,
+                                generated_at=datetime(2026, 5, 20) + timedelta(hours=versions[ticker]))
+            add_outcome(db, snap, horizon=90, forward_return=(alpha or 0.0) + 0.01, alpha=alpha)
+        db.commit()
+        classify_all(db)
+    block = _tr(horizon_days=90)["alpha"]
+    raw = [a for _, _, a in rows if a is not None]
+    assert block["n"] == 10 and block["unavailable"] == 1
+    assert block["mean"] == pytest.approx(sum(raw) / len(raw))
+    assert block["directional_n"] == 9
+    assert block["directional_median"] == pytest.approx(-0.02)
+    assert block["beat_benchmark_rate"] == pytest.approx(4 / 9)
+    # One vote per company: ONE's five overlapping memos count once.
+    assert block["company_weighted_median"] == pytest.approx(0.05)
+    assert block["company_weighted_median"] != block["directional_median"]
+
+
+def test_track_record_base_rate_and_mix(w6):
+    sessions, _ = w6
+    seeds = [
+        ("B1", "Bullish", 0.10, 0.05, "llm_pm"),
+        ("B2", "Bullish", -0.05, -0.08, "keyword_pm"),
+        ("B3", "Bearish", -0.02, -0.04, "keyword_pm"),
+        ("N1", "Neutral", 0.30, 0.20, "patch"),
+        ("U1", "", 0.10, 0.01, "keyword_pm"),
+    ]
+    with sessions() as db:
+        for ticker, rating, fwd, alpha, source in seeds:
+            snap = add_snapshot(db, ticker=ticker, rating=rating, generated_at=datetime(2026, 5, 20))
+            add_outcome(db, snap, horizon=90, forward_return=fwd, alpha=alpha, rating=rating)
+            db.commit()
+            mark(db, snap.id, rating_source=source)
+    tr = _tr(horizon_days=90)
+    assert tr["thesis_hit_rate"] == pytest.approx(2 / 3)
+    assert tr["base_rate"] == {
+        "always_bullish_hit_rate": pytest.approx(1 / 3), "always_bullish_n": 3,
+        "positive_alpha_rate": pytest.approx(3 / 5), "positive_alpha_n": 5,
+    }
+    assert tr["rating_mix"] == {"Bearish": 1, "Bullish": 2, "Neutral": 1, "Unrated": 1}
+    assert tr["rating_mix_by_source"] == {
+        "keyword_pm": {"Bearish": 1, "Bullish": 1, "Unrated": 1},
+        "llm_pm": {"Bullish": 1},
+        "patch": {"Neutral": 1},
+    }
+
+
+def test_base_rate_uses_directional_denominator(w6):
+    """Neutral rows are not calls; counting them made "always Bullish" look
+    like a hard bar to clear (the pre-W6 figure used every row)."""
+    sessions, _ = w6
+    with sessions() as db:
+        for i, (rating, fwd) in enumerate([("Bullish", -0.10), ("Neutral", 0.2), ("Neutral", 0.2), ("Neutral", 0.2)]):
+            snap = add_snapshot(db, ticker=f"D{i}", rating=rating, generated_at=datetime(2026, 5, 20))
+            add_outcome(db, snap, horizon=90, forward_return=fwd, alpha=fwd)
+        db.commit()
+        classify_all(db)
+    base = _tr(horizon_days=90)["base_rate"]
+    assert base["always_bullish_n"] == 1
+    assert base["always_bullish_hit_rate"] == 0.0
+
+
+def test_track_record_coverage_and_universe(w6):
+    sessions, _ = w6
+    with sessions() as db:
+        for t in ("AA", "BB", "CC", "DD"):
+            db.add(Company(ticker=t, company_name=t, sector="Tech", industry="Soft", is_etf=False))
+        db.add(Company(ticker="ETFX", company_name="ETF", sector="ETF", industry="ETF", is_etf=True))
+        a = add_snapshot(db, ticker="AA", generated_at=datetime(2026, 5, 20))
+        b = add_snapshot(db, ticker="BB", generated_at=datetime(2026, 5, 20), rating="Neutral")
+        add_outcome(db, a, horizon=30, forward_return=0.1, alpha=0.01)
+        add_outcome(db, b, horizon=30, forward_return=0.1, alpha=0.01)
+        add_outcome(db, a, horizon=90, forward_return=0.1, alpha=0.01)
+        db.commit()
+        classify_all(db)
+    cov = _tr(horizon_days=30)["coverage"]
+    assert cov["universe_companies"] == 4
+    assert cov["memos_any_horizon"] == 2 and cov["companies_any_horizon"] == 2
+    by_h = {row["horizon_days"]: row for row in cov["horizons"]}
+    assert sorted(by_h) == [30, 90, 180, 365]
+    assert by_h[30] == {"horizon_days": 30, "memos": 2, "companies": 2, "directional": 1,
+                        "universe_pct": 0.5, "late_evaluation_candidates": 0}
+    assert by_h[90]["companies"] == 1 and by_h[180]["memos"] == 0
+    with sessions() as db:
+        db.query(Company).delete()
+        db.commit()
+    assert _tr(horizon_days=30)["coverage"]["horizons"][0]["universe_pct"] is None
+
+
+def test_late_evaluation_disclosed(w6):
+    """FIX-007's late-evaluation candidates are counted where they are shown."""
+    sessions, _ = w6
+    gen = datetime(2026, 5, 20)
+    with sessions() as db:
+        a = add_snapshot(db, ticker="LATEA", generated_at=gen)
+        b = add_snapshot(db, ticker="LATEB", generated_at=gen)
+        add_outcome(db, a, horizon=30, forward_return=0.1, alpha=0.01, evaluated_at=gen + timedelta(days=100))
+        add_outcome(db, b, horizon=30, forward_return=0.1, alpha=0.01, evaluated_at=gen + timedelta(days=31))
+        db.commit()
+        classify_all(db)
+    cov = _tr(horizon_days=30)["coverage"]
+    assert cov["late_evaluation_candidates"] == 1
+    assert cov["horizons"][0]["late_evaluation_candidates"] == 1
+    assert outcome_service.is_late_evaluation(gen, gen + timedelta(days=84), 30) is False
+    assert outcome_service.is_late_evaluation(gen, gen + timedelta(days=84, microseconds=1), 30) is True
+
+
+def test_track_record_provisional_thresholds(w6, monkeypatch):
+    sessions, _ = w6
+    monkeypatch.setattr(outcome_service, "PROVISIONAL_MIN_COMPANIES", 2)
+    monkeypatch.setattr(outcome_service, "PROVISIONAL_MIN_DIRECTIONAL", 3)
+    with sessions() as db:
+        for v in (1, 2):
+            snap = add_snapshot(db, ticker="PRV1", version=v, generated_at=datetime(2026, 5, 20, v))
+            add_outcome(db, snap, horizon=90, forward_return=0.1, alpha=0.01)
+        db.commit()
+        classify_all(db)
+    below = _tr(horizon_days=90)["provisional"]
+    assert below == {"is_provisional": True,
+                     "reasons": ["companies_below_threshold", "directional_below_threshold"],
+                     "min_companies": 2, "min_directional": 3, "companies": 1, "directional": 2}
+    with sessions() as db:
+        snap = add_snapshot(db, ticker="PRV2", generated_at=datetime(2026, 5, 20))
+        add_outcome(db, snap, horizon=90, forward_return=0.1, alpha=0.01)
+        db.commit()
+        classify_all(db)
+    at = _tr(horizon_days=90)["provisional"]
+    assert at["is_provisional"] is False and at["reasons"] == []
+
+
+def test_track_record_sector_filter_reads_no_memo_bodies(w6):
+    sessions, engine = w6
+    with sessions() as db:
+        tech = add_snapshot(db, ticker="SECT", generated_at=datetime(2026, 5, 20), sector="Technology")
+        energy = add_snapshot(db, ticker="SECE", generated_at=datetime(2026, 5, 20), sector="Energy")
+        for snap in (tech, energy):
+            add_outcome(db, snap, horizon=90, forward_return=0.1, alpha=0.01)
+        db.commit()
+        classify_all(db)
+    statements: list[str] = []
+
+    def capture(conn, cursor, statement, params, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        tr = _tr(horizon_days=90, sector="energy")
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert tr["total"] == 1 and tr["sector_filter"] == "energy"
+    assert statements and not any("memo_json" in s for s in statements)
+
+
+@pytest.mark.parametrize("rating", [
+    "Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish",
+    "Mixed Positive", "Mixed Negative", "", "bullish ", "Unrated",
+])
+def test_direction_agrees_with_thesis_held(rating):
+    direction = outcome_service._direction(rating)
+    up, down = outcome_service._thesis_held(rating, 0.1), outcome_service._thesis_held(rating, -0.1)
+    if direction is None:
+        assert up is None and down is None
+    else:
+        assert (up, down) == ((True, False) if direction == 1 else (False, True))
+
+
+def test_outcome_rows_unchanged_by_exclusion(w6):
+    """Exclusion is a read-side filter: no stored outcome value moves, and the
+    browser-called endpoint writes nothing."""
+    sessions, engine = w6
+    with sessions() as db:
+        live = add_snapshot(db, ticker="KEEPL", generated_at=datetime(2026, 5, 20))
+        dev = _dev_copy_nvda(db)
+        for snap in (live, dev):
+            add_outcome(db, snap, horizon=90, forward_return=0.1, alpha=0.02)
+        db.commit()
+        before = db.execute(select(*MemoOutcome.__table__.c).order_by(MemoOutcome.id)).all()
+        classify_all(db)
+    writes: list[str] = []
+
+    def capture(conn, cursor, statement, params, context, executemany):
+        if statement.lstrip().split(None, 1)[0].upper() in {"INSERT", "UPDATE", "DELETE", "CREATE", "ALTER"}:
+            writes.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        body = TestClient(app).get("/api/admin/track-record?horizon_days=90").json()
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert writes == []
+    assert body["total"] == 1 and body["eligibility"]["excluded"] == 1
+    with sessions() as db:
+        assert db.execute(select(*MemoOutcome.__table__.c).order_by(MemoOutcome.id)).all() == before

@@ -22,7 +22,8 @@
     "2026-W36": [
      "what_changed"
     ]
-   }
+   },
+   "forecast_assumption": "FA1 holds the edition's first rate anchor at its own observed value; no number is invented"
   },
   "trimmed": {
    "report.payload.sections.companies.facts.per_ticker[].weekly_closes": 232,
@@ -186,7 +187,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T10:33:25.261722",
+     "classified_at": "2026-09-24T11:42:27.971597",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 240000000000.0,
@@ -217,7 +218,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T10:33:25.261722",
+     "classified_at": "2026-09-24T11:42:27.971597",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 750000000000.0,
@@ -248,7 +249,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T10:33:25.261722",
+     "classified_at": "2026-09-24T11:42:27.971597",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 95000000000.0,
@@ -281,7 +282,7 @@
      "author": "Investment_Universe_163_Map.json@2026-09-10",
      "as_of": "2026-09-09",
      "confidence": 0.9,
-     "classified_at": "2026-09-24T10:33:25.261722",
+     "classified_at": "2026-09-24T11:42:27.971597",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 2900000000000.0,
@@ -312,7 +313,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T10:33:25.261722",
+     "classified_at": "2026-09-24T11:42:27.971597",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 190000000000.0,
@@ -389,7 +390,7 @@
    "job_id": 3,
    "status": "succeeded",
    "outcome": "published",
-   "at": "2026-09-24T10:33:25.596072",
+   "at": "2026-09-24T11:42:28.214139",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -1378,7 +1379,7 @@
        "taxonomy_version": "gics-2026-04"
       },
       "inputs_hash": "e11288397b8fdc1706b66e1389505023c0464f903a7261db4e7fc1620d82c813",
-      "computed_at": "2026-09-24T10:33:25.571124",
+      "computed_at": "2026-09-24T11:42:28.194731",
       "stats_id": 2
      },
      "interpretation": null
@@ -1814,7 +1815,7 @@
        },
        "our_forecast": {
         "value": null,
-        "reason": "scenarios are analyst interpretation, recorded there, not a forecast"
+        "reason": "forward numbers, if any, are registered assumptions in the interpretation"
        }
       },
       "macro_regime": {
@@ -1831,7 +1832,166 @@
         "in_line": "within \u00b12pp of the universe"
        }
       },
-      "scenario_policy": "Scenarios are labelled scenarios, not recommendations."
+      "scenario_policy": "Scenarios are labelled scenarios, not recommendations.",
+      "forecast_policy": "Forward numbers are registered assumptions anchored to an observed fact; they are labelled as assumptions, not forecasts of record.",
+      "anchors": [
+       {
+        "path": "performance.returns.1w.equal_weight",
+        "value": 0.025,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.1w.median",
+        "value": 0.03087,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.1m.equal_weight",
+        "value": 0.010765,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.1m.median",
+        "value": 0.009186,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.qtd.equal_weight",
+        "value": 0.079813,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.qtd.median",
+        "value": 0.077886,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.ytd.equal_weight",
+        "value": 0.104354,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.ytd.median",
+        "value": 0.003036,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.1y.equal_weight",
+        "value": 0.206819,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.1y.median",
+        "value": 0.080974,
+        "family": "rate"
+       },
+       {
+        "path": "performance.benchmark_relative.universe_ew.1w.value",
+        "value": 0.022331,
+        "family": "rate"
+       },
+       {
+        "path": "performance.benchmark_relative.universe_ew.1m.value",
+        "value": 0.011089,
+        "family": "rate"
+       },
+       {
+        "path": "performance.benchmark_relative.universe_ew.qtd.value",
+        "value": 0.055399,
+        "family": "rate"
+       },
+       {
+        "path": "performance.benchmark_relative.universe_ew.ytd.value",
+        "value": 0.037855,
+        "family": "rate"
+       },
+       {
+        "path": "performance.benchmark_relative.universe_ew.1y.value",
+        "value": 0.043157,
+        "family": "rate"
+       },
+       {
+        "path": "performance.benchmark_relative.sector_ew.1w.value",
+        "value": 0.023585,
+        "family": "rate"
+       },
+       {
+        "path": "performance.benchmark_relative.sector_ew.1m.value",
+        "value": 0.023217,
+        "family": "rate"
+       },
+       {
+        "path": "performance.benchmark_relative.sector_ew.qtd.value",
+        "value": 0.040316,
+        "family": "rate"
+       },
+       {
+        "path": "performance.benchmark_relative.sector_ew.ytd.value",
+        "value": -0.02161,
+        "family": "rate"
+       },
+       {
+        "path": "performance.benchmark_relative.sector_ew.1y.value",
+        "value": -0.02561,
+        "family": "rate"
+       },
+       {
+        "path": "statistics.breadth.1w.pct_positive",
+        "value": 0.75,
+        "family": "rate"
+       },
+       {
+        "path": "statistics.breadth.1m.pct_positive",
+        "value": 0.75,
+        "family": "rate"
+       },
+       {
+        "path": "statistics.breadth.above_50d_mean.share",
+        "value": 0.75,
+        "family": "rate"
+       },
+       {
+        "path": "statistics.dispersion.stdev",
+        "value": 0.032504,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.1w.market_cap_weight",
+        "value": 0.031412,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.1m.market_cap_weight",
+        "value": -0.019122,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.qtd.market_cap_weight",
+        "value": 0.049463,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.ytd.market_cap_weight",
+        "value": 0.090225,
+        "family": "rate"
+       },
+       {
+        "path": "performance.returns.1y.market_cap_weight",
+        "value": 0.111112,
+        "family": "rate"
+       },
+       {
+        "path": "statistics.dispersion.iqr",
+        "value": 0.025669,
+        "family": "rate"
+       },
+       {
+        "path": "statistics.dispersion.range",
+        "value": 0.091754,
+        "family": "rate"
+       }
+      ],
+      "anchors_truncated": 0
      },
      "interpretation": {
       "text": "Expectations ledger: reported consensus n/a (no licensed consensus tape); management guidance n/a (guidance is company-level; not aggregated at group level); price-implied: cohort valuation distribution on file; our forecast n/a (deterministic edition). Scenarios below are mandate templates, not forecasts.",
@@ -1845,31 +2005,46 @@
         "falsifier": ""
        },
        {
-        "type": "forecast_assumption",
+        "type": "observed_fact",
         "text": "Scenarios are mandate templates, not forecasts.",
         "basis": [
          "outlook.scenario_policy"
         ],
-        "falsifier": "n/a: template scenario carries no dated forecast"
+        "falsifier": ""
+       },
+       {
+        "type": "forecast_assumption",
+        "text": "Fixture analyst (stubbed model) assumption: the first observed rate anchor holds at 2.5% over the next 4 quarters, against 2.5% observed.",
+        "basis": [
+         "performance.returns.1w.equal_weight"
+        ],
+        "falsifier": "A later weekly statistics row shows this observed measure moving away from the level the assumption holds it at.",
+        "id": "FA1",
+        "value": "2.5%",
+        "horizon": "next 4 quarters",
+        "anchor": "performance.returns.1w.equal_weight"
        }
       ],
       "scenarios": {
        "base": {
         "text": "Base scenario: the group's KPIs track the mandate's cadence with no regime change asserted.",
         "falsifiers": [
-         "Observed: the mandate's leading indicators (Memory spot/contract prices [453010]; foundry utilization [453010]) turn while the group's core KPIs (Wafer starts [453010]; utilization [453010]) hold their reported cadence."
+         "Observed: the mandate's leading indicators (Memory spot/contract prices; foundry utilization) turn while the group's core KPIs (Wafer starts; utilization) hold their reported cadence."
+        ],
+        "assumption_ids": [
+         "FA1"
         ]
        },
        "bull": {
-        "text": "Bull scenario (compounder mandate): Fabless/IP/equipment/inspection platform with rising content per compute and durable installed base [453010].",
+        "text": "Bull scenario (compounder mandate): Fabless/IP/equipment/inspection platform with rising content per compute and durable installed base.",
         "falsifiers": [
-         "Observed on this group: the mandate's named failure mode (Overcapacity, node execution, customer concentration, export restrictions, rapid substitution [453010])."
+         "Observed on this group: the mandate's named failure mode (Overcapacity, node execution, customer concentration, export restrictions, rapid substitution)."
         ]
        },
        "bear": {
-        "text": "Bear scenario (inflection mandate breaks): Inventory/utilization bottom \u2192 pricing/orders turn \u2192 massive earnings elasticity [453010]; new node/HBM packaging bottleneck [453010] fails to materialise.",
+        "text": "Bear scenario (inflection mandate breaks): Inventory/utilization bottom \u2192 pricing/orders turn \u2192 massive earnings elasticity; new node/HBM packaging bottleneck fails to materialise.",
         "falsifiers": [
-         "Observed: the group's core KPIs (Wafer starts [453010]; utilization [453010]) reach the mandate's inflection cadence while its leading indicators (Memory spot/contract prices [453010]; foundry utilization [453010]) hold."
+         "Observed: the group's core KPIs (Wafer starts; utilization) reach the mandate's inflection cadence while its leading indicators (Memory spot/contract prices; foundry utilization) hold."
         ]
        }
       }
@@ -2278,8 +2453,8 @@
     "metadata": {
      "facts": {
       "report_schema_version": 1,
-      "generated_at": "2026-09-24T10:33:25.579297",
-      "run_id": "9aa0d863-c551-494a-8a7e-80d9603f1cd5",
+      "generated_at": "2026-09-24T11:42:28.201102",
+      "run_id": "3f2665b3-533a-4a5a-b0c9-087cab1479b4",
       "generation_mode": "llm",
       "taxonomy_version": "gics-2026-04",
       "taxonomy_version_id": 1,
@@ -2705,7 +2880,7 @@
     ]
    },
    "inputs_hash": "e11288397b8fdc1706b66e1389505023c0464f903a7261db4e7fc1620d82c813",
-   "computed_at": "2026-09-24T10:33:25.571124",
+   "computed_at": "2026-09-24T11:42:28.194731",
    "per_ticker_note": "per-ticker rows are served by GET /api/industries/{code}/companies"
   },
   "stats_unavailable_reason": null,
@@ -2802,7 +2977,7 @@
    "completion_tokens": 0,
    "cost_usd": 0.0,
    "latency_ms": 0,
-   "run_id": "9aa0d863-c551-494a-8a7e-80d9603f1cd5",
+   "run_id": "3f2665b3-533a-4a5a-b0c9-087cab1479b4",
    "generation_mode": "llm",
    "max_llm_calls": 2,
    "llm_planned_sections": [
@@ -2875,7 +3050,7 @@
    }
   ],
   "llm_cost_usd": 0.0,
-  "generated_at": "2026-09-24T10:33:25.591950",
+  "generated_at": "2026-09-24T11:42:28.210863",
   "access": {
    "surface": "latest",
    "tier": "public",
@@ -3042,7 +3217,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T10:33:25.261722",
+     "classified_at": "2026-09-24T11:42:27.971597",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 240000000000.0,
@@ -3079,7 +3254,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T10:33:25.261722",
+     "classified_at": "2026-09-24T11:42:27.971597",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 750000000000.0,
@@ -3116,7 +3291,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T10:33:25.261722",
+     "classified_at": "2026-09-24T11:42:27.971597",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 95000000000.0,
@@ -3149,7 +3324,7 @@
      "author": "Investment_Universe_163_Map.json@2026-09-10",
      "as_of": "2026-09-09",
      "confidence": 0.9,
-     "classified_at": "2026-09-24T10:33:25.261722",
+     "classified_at": "2026-09-24T11:42:27.971597",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 2900000000000.0,
@@ -3186,7 +3361,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T10:33:25.261722",
+     "classified_at": "2026-09-24T11:42:27.971597",
      "mapping_caveat": "derived from provider classification, not licensed GICS security assignments"
     },
     "market_cap": 190000000000.0,
@@ -3268,7 +3443,7 @@
      "completion_tokens": 0,
      "cost_usd": 0.0,
      "latency_ms": 0,
-     "run_id": "9aa0d863-c551-494a-8a7e-80d9603f1cd5",
+     "run_id": "3f2665b3-533a-4a5a-b0c9-087cab1479b4",
      "generation_mode": "llm",
      "max_llm_calls": 2,
      "llm_planned_sections": [
@@ -3286,7 +3461,7 @@
      "cost_usd_run": 0,
      "llm_calls_run": 0
     },
-    "generated_at": "2026-09-24T10:33:25.591950"
+    "generated_at": "2026-09-24T11:42:28.210863"
    },
    {
     "version": 1,
@@ -3312,7 +3487,7 @@
      "completion_tokens": 0,
      "cost_usd": 0.0,
      "latency_ms": 0,
-     "run_id": "0b4fc4f9-4ccd-4103-9932-76738a60300d",
+     "run_id": "93fc449f-4743-455c-9d15-4408c0e5bd74",
      "generation_mode": "llm",
      "max_llm_calls": 2,
      "llm_planned_sections": [
@@ -3330,14 +3505,14 @@
      "cost_usd_run": 0,
      "llm_calls_run": 0
     },
-    "generated_at": "2026-09-24T10:33:25.314157"
+    "generated_at": "2026-09-24T11:42:28.008127"
    }
   ],
   "last_attempt": {
    "job_id": 3,
    "status": "succeeded",
    "outcome": "published",
-   "at": "2026-09-24T10:33:25.596072",
+   "at": "2026-09-24T11:42:28.214139",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -3595,7 +3770,7 @@
    "job_id": 3,
    "status": "succeeded",
    "outcome": "published",
-   "at": "2026-09-24T10:33:25.596072",
+   "at": "2026-09-24T11:42:28.214139",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -4562,7 +4737,7 @@
        "taxonomy_version": "gics-2026-04"
       },
       "inputs_hash": "eb54a6668d03395a5cad68b7dcd0ad7ec2f6b9dd853d4e204261c59d28022705",
-      "computed_at": "2026-09-24T10:33:25.292247",
+      "computed_at": "2026-09-24T11:42:27.992706",
       "stats_id": 1
      },
      "interpretation": null
@@ -4738,14 +4913,17 @@
        },
        "our_forecast": {
         "value": null,
-        "reason": "scenarios are analyst interpretation, recorded there, not a forecast"
+        "reason": "forward numbers, if any, are registered assumptions in the interpretation"
        }
       },
       "macro_regime": {
        "value": null,
        "reason": "no macro broadcast in the snapshot"
       },
-      "scenario_policy": "Scenarios are labelled scenarios, not recommendations."
+      "scenario_policy": "Scenarios are labelled scenarios, not recommendations.",
+      "forecast_policy": "Forward numbers are registered assumptions anchored to an observed fact; they are labelled as assumptions, not forecasts of record.",
+      "anchors": [],
+      "anchors_truncated": 0
      },
      "interpretation": {
       "text": "Expectations ledger: reported consensus n/a (no licensed consensus tape); management guidance n/a (guidance is company-level; not aggregated at group level); price-implied: cohort valuation distribution on file; our forecast n/a (deterministic edition). Scenarios below are mandate templates, not forecasts.",
@@ -4759,31 +4937,31 @@
         "falsifier": ""
        },
        {
-        "type": "forecast_assumption",
+        "type": "observed_fact",
         "text": "Scenarios are mandate templates, not forecasts.",
         "basis": [
          "outlook.scenario_policy"
         ],
-        "falsifier": "n/a: template scenario carries no dated forecast"
+        "falsifier": ""
        }
       ],
       "scenarios": {
        "base": {
         "text": "Base scenario: the group's KPIs track the mandate's cadence with no regime change asserted.",
         "falsifiers": [
-         "Observed: the mandate's leading indicators (Memory spot/contract prices [453010]; foundry utilization [453010]) turn while the group's core KPIs (Wafer starts [453010]; utilization [453010]) hold their reported cadence."
+         "Observed: the mandate's leading indicators (Memory spot/contract prices; foundry utilization) turn while the group's core KPIs (Wafer starts; utilization) hold their reported cadence."
         ]
        },
        "bull": {
-        "text": "Bull scenario (compounder mandate): Fabless/IP/equipment/inspection platform with rising content per compute and durable installed base [453010].",
+        "text": "Bull scenario (compounder mandate): Fabless/IP/equipment/inspection platform with rising content per compute and durable installed base.",
         "falsifiers": [
-         "Observed on this group: the mandate's named failure mode (Overcapacity, node execution, customer concentration, export restrictions, rapid substitution [453010])."
+         "Observed on this group: the mandate's named failure mode (Overcapacity, node execution, customer concentration, export restrictions, rapid substitution)."
         ]
        },
        "bear": {
-        "text": "Bear scenario (inflection mandate breaks): Inventory/utilization bottom \u2192 pricing/orders turn \u2192 massive earnings elasticity [453010]; new node/HBM packaging bottleneck [453010] fails to materialise.",
+        "text": "Bear scenario (inflection mandate breaks): Inventory/utilization bottom \u2192 pricing/orders turn \u2192 massive earnings elasticity; new node/HBM packaging bottleneck fails to materialise.",
         "falsifiers": [
-         "Observed: the group's core KPIs (Wafer starts [453010]; utilization [453010]) reach the mandate's inflection cadence while its leading indicators (Memory spot/contract prices [453010]; foundry utilization [453010]) hold."
+         "Observed: the group's core KPIs (Wafer starts; utilization) reach the mandate's inflection cadence while its leading indicators (Memory spot/contract prices; foundry utilization) hold."
         ]
        }
       }
@@ -5081,8 +5259,8 @@
     "metadata": {
      "facts": {
       "report_schema_version": 1,
-      "generated_at": "2026-09-24T10:33:25.303677",
-      "run_id": "0b4fc4f9-4ccd-4103-9932-76738a60300d",
+      "generated_at": "2026-09-24T11:42:28.000474",
+      "run_id": "93fc449f-4743-455c-9d15-4408c0e5bd74",
       "generation_mode": "llm",
       "taxonomy_version": "gics-2026-04",
       "taxonomy_version_id": 1,
@@ -5518,7 +5696,7 @@
     }
    },
    "inputs_hash": "eb54a6668d03395a5cad68b7dcd0ad7ec2f6b9dd853d4e204261c59d28022705",
-   "computed_at": "2026-09-24T10:33:25.292247",
+   "computed_at": "2026-09-24T11:42:27.992706",
    "per_ticker_note": "per-ticker rows are served by GET /api/industries/{code}/companies"
   },
   "stats_unavailable_reason": null,
@@ -5616,7 +5794,7 @@
    "completion_tokens": 0,
    "cost_usd": 0.0,
    "latency_ms": 0,
-   "run_id": "0b4fc4f9-4ccd-4103-9932-76738a60300d",
+   "run_id": "93fc449f-4743-455c-9d15-4408c0e5bd74",
    "generation_mode": "llm",
    "max_llm_calls": 2,
    "llm_planned_sections": [
@@ -5689,7 +5867,7 @@
    }
   ],
   "llm_cost_usd": 0.0,
-  "generated_at": "2026-09-24T10:33:25.314157",
+  "generated_at": "2026-09-24T11:42:28.008127",
   "access": {
    "surface": "latest",
    "tier": "public",
@@ -5735,7 +5913,7 @@
    "job_id": 4,
    "status": "succeeded",
    "outcome": "published",
-   "at": "2026-09-24T10:33:25.682935",
+   "at": "2026-09-24T11:42:28.276356",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -7201,7 +7379,7 @@
        "taxonomy_version": "gics-2026-04"
       },
       "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66",
-      "computed_at": "2026-09-24T10:33:25.658162",
+      "computed_at": "2026-09-24T11:42:28.259334",
       "stats_id": 3
      },
      "interpretation": null
@@ -7917,7 +8095,7 @@
        },
        "our_forecast": {
         "value": null,
-        "reason": "scenarios are analyst interpretation, recorded there, not a forecast"
+        "reason": "forward numbers, if any, are registered assumptions in the interpretation"
        }
       },
       "macro_regime": {
@@ -7934,7 +8112,10 @@
         "in_line": "within \u00b12pp of the universe"
        }
       },
-      "scenario_policy": "Scenarios are labelled scenarios, not recommendations."
+      "scenario_policy": "Scenarios are labelled scenarios, not recommendations.",
+      "forecast_policy": "Forward numbers are registered assumptions anchored to an observed fact; they are labelled as assumptions, not forecasts of record.",
+      "anchors": [],
+      "anchors_truncated": 0
      },
      "interpretation": {
       "text": "Expectations ledger: reported consensus n/a (no licensed consensus tape); management guidance n/a (guidance is company-level; not aggregated at group level); price-implied: cohort valuation distribution on file; our forecast n/a (deterministic edition). Scenarios below are mandate templates, not forecasts.",
@@ -7948,31 +8129,31 @@
         "falsifier": ""
        },
        {
-        "type": "forecast_assumption",
+        "type": "observed_fact",
         "text": "Scenarios are mandate templates, not forecasts.",
         "basis": [
          "outlook.scenario_policy"
         ],
-        "falsifier": "n/a: template scenario carries no dated forecast"
+        "falsifier": ""
        }
       ],
       "scenarios": {
        "base": {
         "text": "Base scenario: the group's KPIs track the mandate's cadence with no regime change asserted.",
         "falsifiers": [
-         "Observed: the mandate's leading indicators (new supply [601040,601070]; Cap rates [601010]) turn while the group's core KPIs (Same-store NOI [601010,601025,601040,601050,601060,601070,601080]; occupancy [601010,601025,601030,601040,601050,601060,601070]) hold their reported cadence."
+         "Observed: the mandate's leading indicators (new supply; Cap rates) turn while the group's core KPIs (Same-store NOI; occupancy) hold their reported cadence."
         ]
        },
        "bull": {
-        "text": "Bull scenario (compounder mandate): Exceptional allocator buying/selling assets through cycles at NAV-accretive spreads [601010]; Infill portfolio with embedded below-market rents and accretive development runway [601025].",
+        "text": "Bull scenario (compounder mandate): Exceptional allocator buying/selling assets through cycles at NAV-accretive spreads; Infill portfolio with embedded below-market rents and accretive development runway.",
         "falsifiers": [
-         "Observed on this group: the mandate's named failure mode (Bad mix, leverage, value-destructive acquisitions [601010])."
+         "Observed on this group: the mandate's named failure mode (Bad mix, leverage, value-destructive acquisitions)."
         ]
        },
        "bear": {
-        "text": "Bear scenario (inflection mandate breaks): NAV discount closes after asset sales/deleveraging [601010]; Supply starts collapse while demand holds [601025] fails to materialise.",
+        "text": "Bear scenario (inflection mandate breaks): NAV discount closes after asset sales/deleveraging; Supply starts collapse while demand holds fails to materialise.",
         "falsifiers": [
-         "Observed: the group's core KPIs (Same-store NOI [601010,601025,601040,601050,601060,601070,601080]; occupancy [601010,601025,601030,601040,601050,601060,601070]) reach the mandate's inflection cadence while its leading indicators (new supply [601040,601070]; Cap rates [601010]) hold."
+         "Observed: the group's core KPIs (Same-store NOI; occupancy) reach the mandate's inflection cadence while its leading indicators (new supply; Cap rates) hold."
         ]
        }
       }
@@ -8453,8 +8634,8 @@
     "metadata": {
      "facts": {
       "report_schema_version": 1,
-      "generated_at": "2026-09-24T10:33:25.665525",
-      "run_id": "577a54a5-478a-49fe-b3c5-aaa7d9d8a51c",
+      "generated_at": "2026-09-24T11:42:28.263815",
+      "run_id": "781fdb15-00d7-4296-9be9-aa31413769f5",
       "generation_mode": "llm",
       "taxonomy_version": "gics-2026-04",
       "taxonomy_version_id": 1,
@@ -8855,7 +9036,7 @@
     }
    },
    "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66",
-   "computed_at": "2026-09-24T10:33:25.658162",
+   "computed_at": "2026-09-24T11:42:28.259334",
    "per_ticker_note": "per-ticker rows are served by GET /api/industries/{code}/companies"
   },
   "stats_unavailable_reason": null,
@@ -8947,7 +9128,7 @@
    "completion_tokens": 0,
    "cost_usd": 0.0,
    "latency_ms": 0,
-   "run_id": "577a54a5-478a-49fe-b3c5-aaa7d9d8a51c",
+   "run_id": "781fdb15-00d7-4296-9be9-aa31413769f5",
    "generation_mode": "llm",
    "max_llm_calls": 2,
    "llm_planned_sections": [
@@ -9021,7 +9202,7 @@
    }
   ],
   "llm_cost_usd": 0.0,
-  "generated_at": "2026-09-24T10:33:25.679192",
+  "generated_at": "2026-09-24T11:42:28.273825",
   "access": {
    "surface": "latest",
    "tier": "public",
@@ -9081,7 +9262,7 @@
    "job_id": 6,
    "status": "succeeded",
    "outcome": "withheld_template",
-   "at": "2026-09-24T10:33:26.178537",
+   "at": "2026-09-24T11:42:28.621788",
    "period_key": "2026-W37",
    "attempts": 3,
    "max_attempts": 3,
@@ -10547,7 +10728,7 @@
        "taxonomy_version": "gics-2026-04"
       },
       "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66",
-      "computed_at": "2026-09-24T10:33:25.658162",
+      "computed_at": "2026-09-24T11:42:28.259334",
       "stats_id": 3
      },
      "interpretation": null
@@ -11263,7 +11444,7 @@
        },
        "our_forecast": {
         "value": null,
-        "reason": "scenarios are analyst interpretation, recorded there, not a forecast"
+        "reason": "forward numbers, if any, are registered assumptions in the interpretation"
        }
       },
       "macro_regime": {
@@ -11280,7 +11461,10 @@
         "in_line": "within \u00b12pp of the universe"
        }
       },
-      "scenario_policy": "Scenarios are labelled scenarios, not recommendations."
+      "scenario_policy": "Scenarios are labelled scenarios, not recommendations.",
+      "forecast_policy": "Forward numbers are registered assumptions anchored to an observed fact; they are labelled as assumptions, not forecasts of record.",
+      "anchors": [],
+      "anchors_truncated": 0
      },
      "interpretation": {
       "text": "Expectations ledger: reported consensus n/a (no licensed consensus tape); management guidance n/a (guidance is company-level; not aggregated at group level); price-implied: cohort valuation distribution on file; our forecast n/a (deterministic edition). Scenarios below are mandate templates, not forecasts.",
@@ -11294,31 +11478,31 @@
         "falsifier": ""
        },
        {
-        "type": "forecast_assumption",
+        "type": "observed_fact",
         "text": "Scenarios are mandate templates, not forecasts.",
         "basis": [
          "outlook.scenario_policy"
         ],
-        "falsifier": "n/a: template scenario carries no dated forecast"
+        "falsifier": ""
        }
       ],
       "scenarios": {
        "base": {
         "text": "Base scenario: the group's KPIs track the mandate's cadence with no regime change asserted.",
         "falsifiers": [
-         "Observed: the mandate's leading indicators (new supply [601040,601070]; Cap rates [601010]) turn while the group's core KPIs (Same-store NOI [601010,601025,601040,601050,601060,601070,601080]; occupancy [601010,601025,601030,601040,601050,601060,601070]) hold their reported cadence."
+         "Observed: the mandate's leading indicators (new supply; Cap rates) turn while the group's core KPIs (Same-store NOI; occupancy) hold their reported cadence."
         ]
        },
        "bull": {
-        "text": "Bull scenario (compounder mandate): Exceptional allocator buying/selling assets through cycles at NAV-accretive spreads [601010]; Infill portfolio with embedded below-market rents and accretive development runway [601025].",
+        "text": "Bull scenario (compounder mandate): Exceptional allocator buying/selling assets through cycles at NAV-accretive spreads; Infill portfolio with embedded below-market rents and accretive development runway.",
         "falsifiers": [
-         "Observed on this group: the mandate's named failure mode (Bad mix, leverage, value-destructive acquisitions [601010])."
+         "Observed on this group: the mandate's named failure mode (Bad mix, leverage, value-destructive acquisitions)."
         ]
        },
        "bear": {
-        "text": "Bear scenario (inflection mandate breaks): NAV discount closes after asset sales/deleveraging [601010]; Supply starts collapse while demand holds [601025] fails to materialise.",
+        "text": "Bear scenario (inflection mandate breaks): NAV discount closes after asset sales/deleveraging; Supply starts collapse while demand holds fails to materialise.",
         "falsifiers": [
-         "Observed: the group's core KPIs (Same-store NOI [601010,601025,601040,601050,601060,601070,601080]; occupancy [601010,601025,601030,601040,601050,601060,601070]) reach the mandate's inflection cadence while its leading indicators (new supply [601040,601070]; Cap rates [601010]) hold."
+         "Observed: the group's core KPIs (Same-store NOI; occupancy) reach the mandate's inflection cadence while its leading indicators (new supply; Cap rates) hold."
         ]
        }
       }
@@ -11799,8 +11983,8 @@
     "metadata": {
      "facts": {
       "report_schema_version": 1,
-      "generated_at": "2026-09-24T10:33:25.665525",
-      "run_id": "577a54a5-478a-49fe-b3c5-aaa7d9d8a51c",
+      "generated_at": "2026-09-24T11:42:28.263815",
+      "run_id": "781fdb15-00d7-4296-9be9-aa31413769f5",
       "generation_mode": "llm",
       "taxonomy_version": "gics-2026-04",
       "taxonomy_version_id": 1,
@@ -12201,7 +12385,7 @@
     }
    },
    "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66",
-   "computed_at": "2026-09-24T10:33:25.658162",
+   "computed_at": "2026-09-24T11:42:28.259334",
    "per_ticker_note": "per-ticker rows are served by GET /api/industries/{code}/companies"
   },
   "stats_unavailable_reason": null,
@@ -12293,7 +12477,7 @@
    "completion_tokens": 0,
    "cost_usd": 0.0,
    "latency_ms": 0,
-   "run_id": "577a54a5-478a-49fe-b3c5-aaa7d9d8a51c",
+   "run_id": "781fdb15-00d7-4296-9be9-aa31413769f5",
    "generation_mode": "llm",
    "max_llm_calls": 2,
    "llm_planned_sections": [
@@ -12367,7 +12551,7 @@
    }
   ],
   "llm_cost_usd": 0.0,
-  "generated_at": "2026-09-24T10:33:25.679192",
+  "generated_at": "2026-09-24T11:42:28.273825",
   "access": {
    "surface": "latest",
    "tier": "public",
@@ -12413,7 +12597,7 @@
     "job_id": 7,
     "status": "succeeded",
     "outcome": "withheld_template",
-    "at": "2026-09-24T10:33:26.348269",
+    "at": "2026-09-24T11:42:28.739539",
     "period_key": "2026-W37",
     "attempts": 3,
     "max_attempts": 3,
@@ -12924,7 +13108,7 @@
        "period_key": "2026-W36",
        "as_of": "2026-09-04T21:00:00",
        "status": "succeeded",
-       "generated_at": "2026-09-24T10:33:25.591950",
+       "generated_at": "2026-09-24T11:42:28.210863",
        "degraded": true,
        "degraded_reasons": [
         "analyst_narrative:what_changed:deterministic",
@@ -13044,7 +13228,7 @@
        "period_key": "2026-W36",
        "as_of": "2026-09-04T21:00:00",
        "status": "succeeded",
-       "generated_at": "2026-09-24T10:33:25.679192",
+       "generated_at": "2026-09-24T11:42:28.273825",
        "degraded": true,
        "degraded_reasons": [
         "performance:insufficient_sample",

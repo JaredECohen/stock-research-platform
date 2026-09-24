@@ -1,5 +1,5 @@
-"""Memo lifecycle — snapshots, run checkpoints, outcomes, postmortems and
-the mispricing audit."""
+"""Memo lifecycle — snapshots, run checkpoints, outcomes, postmortems, the
+outcome-eligibility ledger and the mispricing audit."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -152,6 +152,49 @@ class MemoPostmortem(Base):
             name="uq_memo_postmortem_snapshot_horizon",
         ),
     )
+
+
+class MemoOutcomeEligibility(Base):
+    """W6 / FIX-007: whether a snapshot's realized outcomes count toward the
+    track record and the learning loop.
+
+    Exclusion only. Nothing in `memo_snapshots`, `memo_outcomes` or
+    `memo_postmortems` is changed or deleted by classification: this table is
+    derived data, one row per snapshot, written by
+    `services.outcome_eligibility.classify_pending()`. Absence of a row means
+    "unclassified", which every consumer treats as NOT eligible (fail closed).
+
+    `ticker` and `snapshot_generated_at` are an identity guard. They are
+    copied from the snapshot row at classification time, and a reader joins
+    on them as well as on the id: sqlite reuses a deleted max rowid, so a
+    ledger row can outlive its snapshot and be matched by an unrelated one.
+    A mismatch is treated as pending by the sweep and as not eligible by
+    every reader. On Postgres the CASCADE removes the row with its snapshot
+    (FIX-003 Option B deletes snapshots), so the guard is belt and braces.
+
+    `sector`, `generation_mode` and `rating_source` are copied (via JSON-path
+    projections, never full bodies) so the track record and its filters never
+    read `memo_json`.
+    """
+    __tablename__ = "memo_outcome_eligibility"
+
+    memo_snapshot_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("memo_snapshots.id", ondelete="CASCADE"), primary_key=True,
+    )
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False)
+    snapshot_generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # `memo_json["generated_at"]` when present, else the column: when the
+    # analysis ran, which is what the generation-mode label describes.
+    analysis_generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    trigger: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    inherited_from_snapshot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String(48), nullable=False)
+    generation_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    rating_source: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
+    sector: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rule_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    classified_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class MispricingAudit(Base):

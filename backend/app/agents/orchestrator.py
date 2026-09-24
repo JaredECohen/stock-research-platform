@@ -25,6 +25,7 @@ from ..schemas import (
     ScreenerResult,
     StockMemoOut,
 )
+from ..services import memo_sections
 from ..services.data_service import get_data_service
 from ..services.macro_service import macro_snapshot
 from ..services.portfolio_service import build_model_portfolio
@@ -140,10 +141,33 @@ def classify_intent(message: str) -> tuple[IntentType, list[str], str | None]:
 # Helpers to render answers from structured data
 # ---------------------------------------------------------------------------
 
+def _confidence_text(memo: StockMemoOut, *, fmt: str) -> str:
+    """The confidence as a presented memo shows it: the number, or the
+    owner's wording when W2a hides it (a template PM view)."""
+    if memo_sections.is_hidden(memo, "confidence_score"):
+        return "confidence unavailable in this version"
+    return fmt.format(int(memo.confidence_score))
+
+
+def _rating_note(memo: StockMemoOut) -> str:
+    entry = (memo.section_availability or {}).get("rating_label")
+    if entry is not None and entry.reason == "pm_view_unavailable":
+        return " (PM view unavailable; rating reflects the quantitative factor blend)"
+    return ""
+
+
 def _render_memo_answer(memo: StockMemoOut) -> str:
+    """Chat rendering of a PRESENTED memo (W2a): hidden prose already reads
+    `UNAVAILABLE_TEXT` and hidden list items are already filtered, so each
+    line prints what the memo page shows; confidence and the rating note
+    consult `section_availability` because the presenter never rewrites a
+    number."""
     bullets = []
     bullets.append(f"**{memo.ticker} — {memo.company_name}** ({memo.sector})")
-    bullets.append(f"Rating: **{memo.rating_label}** · confidence {int(memo.confidence_score)}/100")
+    bullets.append(
+        f"Rating: **{memo.rating_label}**{_rating_note(memo)} · "
+        f"{_confidence_text(memo, fmt='confidence {}/100')}"
+    )
     bullets.append(f"_Thesis:_ {memo.one_sentence_thesis}")
     bullets.append("")
     bullets.append(f"**PM View:** {memo.final_pm_view}")
@@ -180,7 +204,7 @@ def _render_memo_answer(memo: StockMemoOut) -> str:
 def _render_comparison_answer(memos: list[StockMemoOut]) -> str:
     parts = ["**Cross-comparison from a PM's perspective:**\n"]
     for m in memos:
-        parts.append(f"### {m.ticker} — {m.rating_label} (confidence {int(m.confidence_score)})")
+        parts.append(f"### {m.ticker} — {m.rating_label} ({_confidence_text(m, fmt='confidence {}')})")
         parts.append(m.one_sentence_thesis)
         parts.append(f"- Bull: {m.bull_case.headline}")
         parts.append(f"- Bear: {m.bear_case.headline}")
@@ -321,7 +345,8 @@ def _stored_memo(ticker: str) -> StockMemoOut | None:
     if snap is None:
         return None
     try:
-        return memo_store.memo_to_pydantic(snap)
+        # W2a: chat is a customer exit; it serves the presented memo.
+        return memo_store.present_snapshot(snap)
     except Exception as exc:
         log_safely(log, f"stored memo for {ticker} could not be hydrated for chat", exc)
         return None
@@ -395,9 +420,9 @@ class Orchestrator:
             # downstream rendering / tracing is identical.
             elif settings.use_agents_sdk:
                 from .sdk_runtime import run_stock_memo_via_sdk
-                memo = run_stock_memo_via_sdk(ticker)
+                memo = memo_sections.present_memo(run_stock_memo_via_sdk(ticker))
             else:
-                memo = run_stock_memo(ticker)
+                memo = memo_sections.present_memo(run_stock_memo(ticker))
             return ChatResponse(
                 intent=intent, answer=_render_memo_answer(memo),
                 agent_trace=trace, memo=memo, sources=memo.sources_used,
@@ -427,7 +452,7 @@ class Orchestrator:
                         memos.append(stored)
                     continue
                 try:
-                    memos.append(run_stock_memo(t))
+                    memos.append(memo_sections.present_memo(run_stock_memo(t)))
                 except Exception as exc:
                     log_safely(log, f"comparison memo unavailable for {t}", exc)
                     unavailable.append(t)
@@ -561,7 +586,7 @@ class Orchestrator:
 
         # Pull the latest snapshot memos for each candidate. memo_store
         # serves cached snapshots cheaply — no re-running of the graph.
-        from ..services.memo_store import latest_memo, memo_to_pydantic
+        from ..services.memo_store import latest_memo, present_snapshot
         memos: list[dict[str, Any]] = []
         # Tickers without a memo still get a "lite" company snapshot
         # (sector, industry, business_description + screener_metrics) so
@@ -577,7 +602,7 @@ class Orchestrator:
             snap = latest_memo(t)
             if snap is not None:
                 try:
-                    m = memo_to_pydantic(snap)
+                    m = present_snapshot(snap)
                     memos.append(_memo_for_chat_context(m))
                     if len(memos) >= 4:
                         break
@@ -737,9 +762,47 @@ def _memo_for_chat_context(m: StockMemoOut) -> dict[str, Any]:
     """Compact memo projection for the free-form chat prompt. Includes
     the dimensions a PM would actually cite when answering 'which is
     the better investment' — rating, stock score, DCF deltas, key
-    risks, valuation read."""
+    risks, valuation read.
+
+    Takes a PRESENTED memo (W2a). A hidden section's key is omitted rather
+    than sent as a placeholder, so the LLM has nothing to cite: thesis,
+    confidence, valuation summary, mispricing card, and the influence of
+    each analyst whose view is hidden. List sections arrive filtered."""
     scores = m.scores or {}
     dcf = m.dcf_summary or {}
+    out = _memo_context_fields(m, scores, dcf)
+    # "not_produced" is an empty field, sent empty as before; what must not
+    # reach the model is template text the memo page withholds.
+    hidden = {
+        k for k in memo_sections.unavailable_keys(m.section_availability or {})
+        if m.section_availability[k].reason != "not_produced"
+    }
+    omit = {
+        "thesis": "one_sentence_thesis", "confidence": "confidence_score",
+        "valuation_summary": "valuation_agent_view", "mispricing_thesis": "mispricing_thesis",
+    }
+    for ctx_key, section in omit.items():
+        if section in hidden:
+            out.pop(ctx_key, None)
+    if hidden:
+        out["agent_influence"] = {
+            k: v for k, v in (m.agent_influence or {}).items()
+            if k == "risk" or _influence_section(k) not in hidden
+        }
+        out["sections_unavailable"] = sorted(hidden)
+    return out
+
+
+def _influence_section(roster_key: str) -> str:
+    """The memo section a roster analyst's view lands in."""
+    from . import roster
+    for spec in roster.AGENTS:
+        if spec.key == roster_key:
+            return spec.memo_field or f"extra_agent_views.{roster_key}"
+    return f"extra_agent_views.{roster_key}"
+
+
+def _memo_context_fields(m: StockMemoOut, scores: dict[str, Any], dcf: dict[str, Any]) -> dict[str, Any]:
     return {
         "ticker": m.ticker,
         "name": m.company_name,

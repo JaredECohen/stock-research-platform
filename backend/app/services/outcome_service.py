@@ -15,11 +15,20 @@ noisy to write prose about every quarter.
 
 Backtest snapshots (`as_of_date` set) are skipped — outcomes only make
 sense for live recommendations.
+
+W6 / FIX-007: only snapshots the eligibility ledger marks eligible are
+scored or counted (`services/outcome_eligibility.py`). Ineligible snapshots —
+the 2026-05-04 dev-laptop demo copy, the migrated test fixtures (FIX-003),
+post-fix demo memos — are counted by reason and skipped before any price
+fetch, body read or reflection. Their existing outcome rows are kept, never
+deleted or modified; the track record simply excludes them.
 """
 from __future__ import annotations
 
 import logging
 import math
+import statistics
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date as _date
@@ -31,7 +40,8 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
-from ..models import MemoOutcome, MemoSnapshot
+from ..models import Company, MemoOutcome, MemoOutcomeEligibility, MemoSnapshot
+from . import outcome_eligibility
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +108,7 @@ PRICE_DATE_TOLERANCE_DAYS = 7
 def _ensure_table(db: Session) -> None:
     bind = db.get_bind()
     MemoOutcome.__table__.create(bind=bind, checkfirst=True)
+    outcome_eligibility.ensure_table(db)
 
 
 def _window_days_for_memo(generated_date: _date, today: _date) -> int | None:
@@ -245,6 +256,36 @@ def _thesis_held(rating: str, return_signed: float) -> bool | None:
     if "bearish" in r or "mixed negative" in r:
         return return_signed <= 0
     return None  # Neutral / unknown
+
+
+def _direction(rating: str) -> int | None:
+    """+1 for a long call, -1 for a short call, None for no directional bet.
+
+    Mirrors `_thesis_held` exactly (a test pins that they agree): the
+    direction a rating bets on is what makes alpha "beat the benchmark".
+    """
+    r = (rating or "").strip().lower()
+    if "bullish" in r or "mixed positive" in r:
+        return 1
+    if "bearish" in r or "mixed negative" in r:
+        return -1
+    return None
+
+
+def is_late_evaluation(generated: datetime | None, evaluated: datetime | None, horizon_days: int) -> bool | None:
+    """The outcome audit's late-evaluation triage predicate (FIX-007).
+
+    ``evaluated - generated > (horizon + 30) * 7/5 days``, cross-multiplied so
+    exact microsecond boundaries survive. None when either stamp is missing
+    or the evaluation precedes generation. A candidate is not proof of a bad
+    baseline, only a row a reader should know about.
+    """
+    if generated is None or evaluated is None or horizon_days <= 0:
+        return None
+    elapsed = evaluated - generated
+    if elapsed < timedelta(0):
+        return None
+    return elapsed * 5 > timedelta(days=(horizon_days + 30) * 7)
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +517,9 @@ class _OutcomeSnapshot:
     version: int
     generated_at: datetime
     as_of_date: datetime | None
+    # Identity-valid ledger answer; None when the snapshot is unclassified.
+    eligible: bool | None
+    eligibility_reason: str | None
     db: Session = field(repr=False)
 
     @cached_property
@@ -503,6 +547,9 @@ def _iter_outcome_snapshots(db: Session) -> Iterator[_OutcomeSnapshot]:
         stmt = select(
             MemoSnapshot.id, MemoSnapshot.ticker, MemoSnapshot.version,
             MemoSnapshot.generated_at, MemoSnapshot.as_of_date,
+            MemoOutcomeEligibility.eligible, MemoOutcomeEligibility.reason,
+        ).outerjoin(
+            MemoOutcomeEligibility, outcome_eligibility.identity_matches(),
         ).where(
             MemoSnapshot.as_of_date.is_(None),
             MemoSnapshot.id <= max_id,
@@ -541,6 +588,21 @@ def evaluate_all_due(
     have produced a row from harmless future/idempotent skips, and
     ``unevaluable`` retains the legacy date-window status for compatibility;
     coverage classification remains delegated to ``_evaluate_one``.
+
+    W6: the eligibility sweep runs first. Its failure (for example an
+    ``ExclusionSetMismatch``) rolls the sweep back and is reported as
+    ``classification_error``, which fails the loop, but scoring carries on
+    over the ledger rows that already exist: one bad new snapshot must not
+    stop every eligible memo from being scored until a redeploy. Readers
+    already treat an unclassified snapshot as ineligible, so continuing is
+    still fail-closed. Snapshots the ledger marks ineligible are counted, not
+    evaluated: ``ineligible`` counts their pairs and
+    ``ineligible_snapshots_by_reason`` their snapshots, and neither enters
+    ``due`` or ``data_unavailable`` (FIX-003: the fixture snapshots stop
+    driving the "left N due rows pending" error). ``unclassified`` counts only
+    DUE pairs of snapshots that still have no ledger row after an inline
+    sweep — a snapshot that arrives mid-run is classified before it is
+    skipped, and one with nothing due is not a failure. Nothing is deleted.
     """
     today = today or _date.today()
     horizons = list(horizons or DEFAULT_HORIZONS)
@@ -549,6 +611,13 @@ def evaluate_all_due(
         db = SessionLocal()
     try:
         _ensure_table(db)
+        classification_error: str | None = None
+        try:
+            classification: dict[str, Any] = outcome_eligibility.classify_pending(db=db)
+        except Exception as exc:
+            # classify_pending has rolled back and logged the named row.
+            classification_error = f"{type(exc).__name__}: {exc}"[:500]
+            classification = {}
         from .memory_probe import log_rss
         log_rss("outcome_scan_start")
         evaluated = 0
@@ -566,8 +635,38 @@ def evaluate_all_due(
             "price_history_too_short": 0,
             "price_window_incomplete": 0,
             "memo_predates_price_window": 0,
+            "ineligible": 0,
+            "unclassified": 0,
         }
+        ineligible_by_reason: Counter[str] = Counter()
+        unclassified_ids: list[int] = []
         for snap in _iter_outcome_snapshots(db):
+            if snap.eligible is None and classification_error is None:
+                # Inserted after the sweep (the id fence is taken later), or
+                # its ledger row belongs to a reused sqlite id. Classify now,
+                # before deciding anything about it. Not after a failed
+                # sweep: it would fail again, once per unclassified snapshot.
+                try:
+                    outcome_eligibility.classify_pending(db=db)
+                except Exception as exc:
+                    classification_error = f"{type(exc).__name__}: {exc}"[:500]
+                found = outcome_eligibility.lookup(db, snap.id)
+                if found is not None:
+                    snap.eligible, snap.eligibility_reason = found.eligible, found.reason
+            if snap.eligible is not True:
+                # Before `_evaluate_one`: no price fetch, no body, no reflection.
+                evaluated += len(horizons)
+                if snap.eligible is None:
+                    memo_date = snap.generated_at.date()
+                    due_now = sum(1 for h in horizons if memo_date + timedelta(days=h) <= today)
+                    statuses["unclassified"] += due_now
+                    statuses["not_due"] += len(horizons) - due_now
+                    if due_now:
+                        unclassified_ids.append(snap.id)
+                else:
+                    statuses["ineligible"] += len(horizons)
+                    ineligible_by_reason[snap.eligibility_reason or "unknown"] += 1
+                continue
             for h in horizons:
                 evaluated += 1
                 try:
@@ -629,6 +728,18 @@ def evaluate_all_due(
             )
         if errors:
             log.error("Outcome evaluation failed for %s pairs: %s", errors, ",".join(error_pairs))
+        if unclassified_ids:
+            log.error(
+                "Outcome evaluation found %s due pairs on %s unclassified snapshots "
+                "(eligibility sweep did not cover them): ids=%s",
+                statuses["unclassified"], len(unclassified_ids),
+                ",".join(str(i) for i in unclassified_ids),
+            )
+        if classification_error:
+            log.error(
+                "Outcome evaluation scored only already-classified snapshots: "
+                "eligibility sweep failed: %s", classification_error,
+            )
         if unevaluable:
             log.warning(
                 "Outcome evaluation returned %s legacy unevaluable pairs "
@@ -651,6 +762,12 @@ def evaluate_all_due(
             "unevaluable_pairs": unevaluable_pairs,
             "unavailable_pairs": unavailable_pairs,
             "error_pairs": error_pairs,
+            "ineligible": statuses["ineligible"],
+            "ineligible_snapshots_by_reason": dict(sorted(ineligible_by_reason.items())),
+            "unclassified": statuses["unclassified"],
+            "unclassified_snapshot_ids": unclassified_ids,
+            "classification": classification,
+            "classification_error": classification_error,
         }
     finally:
         if own:
@@ -693,60 +810,215 @@ def get_outcomes_for_snapshot(
             db.close()
 
 
+# Provisional banner thresholds (owner default, W6 design §8 Q2): the record
+# stays provisional until BOTH hold at the selected horizon. 30 companies is
+# about a sixth of the universe; several memos on one company are not
+# independent calls, which is why companies are counted separately.
+PROVISIONAL_MIN_COMPANIES = 30
+PROVISIONAL_MIN_DIRECTIONAL = 100
+
+
+def _mean(values: list[float]) -> float | None:
+    return statistics.fmean(values) if values else None
+
+
+def _median(values: list[float]) -> float | None:
+    return statistics.median(values) if values else None
+
+
+def _rate(hits: int, n: int) -> float | None:
+    return hits / n if n else None
+
+
+@dataclass(frozen=True)
+class _TRRow:
+    snapshot_id: int
+    ticker: str
+    horizon_days: int
+    rating: str
+    forward_return: float | None
+    alpha: float | None
+    thesis_held: bool | None
+    evaluated_at: datetime | None
+    eligible: bool | None
+    reason: str | None
+    sector: str | None
+    rating_source: str | None
+    snapshot_generated_at: datetime | None
+
+
+def _universe_companies(db: Session) -> int:
+    # The same `companies` table `GET /api/stocks` lists, without ETFs.
+    return int(db.execute(
+        select(func.count()).select_from(Company).where(
+            func.coalesce(Company.is_etf, False).is_(False),
+        )
+    ).scalar_one())
+
+
 def track_record(
     *, ticker: str | None = None, sector: str | None = None,
     horizon_days: int = 90, db: Session | None = None,
 ) -> dict[str, Any]:
-    """Aggregate track-record stats over evaluated outcomes.
+    """Aggregate track-record stats over ELIGIBLE evaluated outcomes (W6).
 
-    Filters: `ticker` (single name), `sector` (joined via memo_snapshots),
-    `horizon_days` (which forward window to look at). Returns counts +
-    hit rate + average alpha.
+    Filters: `ticker` (single name), `sector` (from the eligibility ledger,
+    never from memo bodies), `horizon_days` (which forward window to look
+    at). The historical keys (`total`, `thesis_hit_rate`, `avg_alpha`, ...)
+    are computed over eligible rows only. Rows on ineligible snapshots are
+    excluded, not deleted: they stay in `memo_outcomes` and are counted by
+    reason in `eligibility`. `thesis_hit_rate` is an absolute-return measure,
+    so it is published beside SPY-relative `alpha`, the always-Bullish
+    `base_rate` over the same directional rows, `coverage`, the rating mix by
+    who produced the rating, and a `provisional` verdict.
     """
     own = db is None
     if own:
         db = SessionLocal()
     try:
         _ensure_table(db)
-        stmt = select(MemoOutcome).where(MemoOutcome.horizon_days == horizon_days)
+        led = MemoOutcomeEligibility
+        # Small columns only, every horizon (coverage needs them all). The
+        # snapshot join reads only id/ticker/generated_at for the ledger's
+        # identity guard; no memo body is touched.
+        stmt = select(
+            MemoOutcome.memo_snapshot_id, MemoOutcome.ticker, MemoOutcome.horizon_days,
+            MemoOutcome.rating_at_memo, MemoOutcome.forward_return, MemoOutcome.alpha,
+            MemoOutcome.thesis_held, MemoOutcome.evaluated_at,
+            led.eligible, led.reason, led.sector, led.rating_source, led.snapshot_generated_at,
+        ).outerjoin(
+            MemoSnapshot, MemoSnapshot.id == MemoOutcome.memo_snapshot_id,
+        ).outerjoin(
+            led, outcome_eligibility.identity_matches(led, MemoSnapshot),
+        )
         if ticker:
             stmt = stmt.where(MemoOutcome.ticker == ticker.upper())
-        rows = db.execute(stmt).scalars().all()
-        # Sector filter requires a join — do it in Python since memo_snapshots
-        # already lives in the same DB. Cheap at our scale.
+        rows = [_TRRow(*r) for r in db.execute(stmt).all()]
         if sector:
-            snap_ids = {r.memo_snapshot_id for r in rows}
-            sec_rows = db.execute(
-                select(MemoSnapshot.id, MemoSnapshot.memo_json)
-                .where(MemoSnapshot.id.in_(snap_ids))
-            ).all()
-            keep = {
-                sid for sid, mj in sec_rows
-                if (mj or {}).get("sector", "").lower() == sector.lower()
-            }
-            rows = [r for r in rows if r.memo_snapshot_id in keep]
+            wanted = sector.strip().lower()
+            rows = [r for r in rows if (r.sector or "").strip().lower() == wanted]
+        universe = _universe_companies(db)
 
-        total = len(rows)
-        evaluated_directional = [r for r in rows if r.thesis_held is not None]
-        held = sum(1 for r in evaluated_directional if r.thesis_held)
-        avg_return = (
-            sum(r.forward_return for r in rows if r.forward_return is not None) / total
-            if total else 0.0
-        )
-        avg_alpha = None
-        alpha_rows = [r.alpha for r in rows if r.alpha is not None]
-        if alpha_rows:
-            avg_alpha = sum(alpha_rows) / len(alpha_rows)
+        eligible_rows = [r for r in rows if r.eligible is True]
+        sel_all = [r for r in rows if r.horizon_days == horizon_days]
+        sel = [r for r in eligible_rows if r.horizon_days == horizon_days]
+
+        total = len(sel)
+        directional = [r for r in sel if r.thesis_held is not None]
+        held = sum(1 for r in directional if r.thesis_held)
+        returns = [r.forward_return for r in sel if r.forward_return is not None]
+        alphas = [r.alpha for r in sel if r.alpha is not None]
+
+        # Direction-adjusted alpha: a Bearish call that trailed SPY beat it.
+        adjusted: list[tuple[str, float]] = []
+        for r in sel:
+            d = _direction(r.rating)
+            if d is not None and r.alpha is not None:
+                adjusted.append((r.ticker, d * r.alpha))
+        per_company: dict[str, list[float]] = {}
+        for t, a in adjusted:
+            per_company.setdefault(t, []).append(a)
+        # One vote per company damps overlapping memos on one name.
+        company_means = [statistics.fmean(v) for v in per_company.values()]
+
+        # Base rate over the SAME directional rows as thesis_hit_rate: what
+        # labelling every one of them Bullish would have scored. A Neutral
+        # row is not a call, so it is in neither denominator.
+        bull_base = [r.forward_return for r in directional if r.forward_return is not None]
+
+        rating_mix: Counter[str] = Counter()
+        mix_by_source: dict[str, Counter[str]] = {}
+        for r in sel:
+            label = (r.rating or "").strip() or "Unrated"
+            source = r.rating_source or outcome_eligibility.SOURCE_UNKNOWN
+            rating_mix[label] += 1
+            mix_by_source.setdefault(source, Counter())[label] += 1
+
+        horizons = sorted(set(DEFAULT_HORIZONS) | {horizon_days})
+        coverage_rows: list[dict[str, Any]] = []
+        for h in horizons:
+            hr = [r for r in eligible_rows if r.horizon_days == h]
+            companies_h = len({r.ticker for r in hr})
+            coverage_rows.append({
+                "horizon_days": h,
+                # One outcome per (snapshot, horizon), so memos == evaluations.
+                "memos": len({r.snapshot_id for r in hr}),
+                "companies": companies_h,
+                "directional": sum(1 for r in hr if r.thesis_held is not None),
+                "universe_pct": (companies_h / universe) if universe else None,
+                "late_evaluation_candidates": sum(
+                    1 for r in hr
+                    if is_late_evaluation(r.snapshot_generated_at, r.evaluated_at, h) is True
+                ),
+            })
+        sel_coverage = next(c for c in coverage_rows if c["horizon_days"] == horizon_days)
+
+        excluded_by_reason = Counter(r.reason or "unknown" for r in sel_all if r.eligible is False)
+        eligible_by_reason = Counter(r.reason or "unknown" for r in sel)
+        unclassified = sum(1 for r in sel_all if r.eligible is None)
+
+        companies = int(sel_coverage["companies"])
+        provisional_reasons = []
+        if companies < PROVISIONAL_MIN_COMPANIES:
+            provisional_reasons.append("companies_below_threshold")
+        if len(directional) < PROVISIONAL_MIN_DIRECTIONAL:
+            provisional_reasons.append("directional_below_threshold")
+
         return {
             "horizon_days": horizon_days,
             "total": total,
-            "directional_evaluations": len(evaluated_directional),
-            "thesis_hit_rate": (held / len(evaluated_directional))
-                if evaluated_directional else None,
-            "avg_forward_return": avg_return,
-            "avg_alpha": avg_alpha,
+            "directional_evaluations": len(directional),
+            "thesis_hit_rate": _rate(held, len(directional)),
+            # Mean over rows that have a return (every written row does);
+            # 0.0 on an empty selection, as before, for the existing client.
+            "avg_forward_return": _mean(returns) if returns else 0.0,
+            "avg_alpha": _mean(alphas),
             "ticker_filter": ticker,
             "sector_filter": sector,
+            "benchmark": DEFAULT_BENCHMARK,
+            "alpha": {
+                "n": len(alphas),
+                "unavailable": total - len(alphas),
+                "mean": _mean(alphas),
+                "median": _median(alphas),
+                "directional_n": len(adjusted),
+                "directional_median": _median([a for _, a in adjusted]),
+                "beat_benchmark_rate": _rate(sum(1 for _, a in adjusted if a > 0), len(adjusted)),
+                "company_weighted_median": _median(company_means),
+            },
+            "base_rate": {
+                "always_bullish_hit_rate": _rate(sum(1 for v in bull_base if v >= 0), len(bull_base)),
+                "always_bullish_n": len(bull_base),
+                "positive_alpha_rate": _rate(sum(1 for a in alphas if a > 0), len(alphas)),
+                "positive_alpha_n": len(alphas),
+            },
+            "rating_mix": dict(sorted(rating_mix.items())),
+            "rating_mix_by_source": {
+                source: dict(sorted(mix.items())) for source, mix in sorted(mix_by_source.items())
+            },
+            "coverage": {
+                "universe_companies": universe,
+                "memos_any_horizon": len({r.snapshot_id for r in eligible_rows}),
+                "companies_any_horizon": len({r.ticker for r in eligible_rows}),
+                "late_evaluation_candidates": sel_coverage["late_evaluation_candidates"],
+                "horizons": coverage_rows,
+            },
+            "eligibility": {
+                "rule_version": outcome_eligibility.RULE_VERSION,
+                "eligible": total,
+                "excluded": sum(excluded_by_reason.values()),
+                "unclassified": unclassified,
+                "excluded_by_reason": dict(sorted(excluded_by_reason.items())),
+                "eligible_by_reason": dict(sorted(eligible_by_reason.items())),
+            },
+            "provisional": {
+                "is_provisional": bool(provisional_reasons),
+                "reasons": provisional_reasons,
+                "min_companies": PROVISIONAL_MIN_COMPANIES,
+                "min_directional": PROVISIONAL_MIN_DIRECTIONAL,
+                "companies": companies,
+                "directional": len(directional),
+            },
         }
     finally:
         if own:

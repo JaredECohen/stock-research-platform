@@ -89,7 +89,7 @@ from ..schemas.fundamentals import (
     SeriesResponse,
 )
 from . import fundamentals_catalog as catalog
-from . import memo_store
+from . import memo_sections, memo_store
 from .fundamentals_series_service import build_series
 
 log = logging.getLogger(__name__)
@@ -360,7 +360,10 @@ def memo_staleness(snap: MemoSnapshot, out: SeriesResponse, db: Session) -> tupl
     fiscal period end. Both reasons are kept when both apply."""
     reasons: list[str] = []
     try:
-        fresh = memo_store.memo_freshness(snap, db=db)
+        # SAVEPOINT: on Postgres a failed statement aborts the request's
+        # transaction, and `generate` reads the commentary cache next.
+        with db.begin_nested():
+            fresh = memo_store.memo_freshness(snap, db=db)
     except SQLAlchemyError as exc:
         # Freshness is a disclosure, not a gate: an unreadable filings
         # table must not turn a commentary into a 500. Say we could not check.
@@ -383,33 +386,56 @@ def memo_staleness(snap: MemoSnapshot, out: SeriesResponse, db: Session) -> tupl
 def memo_excerpt(ticker: str, out: SeriesResponse, db: Session) -> MemoExcerpt | None:
     """The bounded excerpt of the latest live memo for `ticker`, or None
     when there is no snapshot (or it no longer validates — an old memo
-    the schema outgrew is reported as missing, not quoted blind)."""
+    the schema outgrew is reported as missing, not quoted blind).
+
+    W2a: the excerpt quotes the PRESENTED memo and leaves out every field
+    whose section is hidden (template thesis, fallback mispricing card,
+    template case headlines), so the model never relates the chart to text
+    the memo page does not show. `cache_key` carries PRESENTATION_VERSION so
+    a rule change never serves a row written from an older presentation."""
     snap = memo_store.latest_memo(ticker, db=db)
     if snap is None:
         return None
     try:
-        memo = memo_store.memo_to_pydantic(snap)
+        memo = memo_store.present_snapshot(snap, db=db)
     except Exception as exc:  # pydantic ValidationError or a corrupt JSON column
         log_safely(log, f"chart commentary: stored memo for {ticker} does not validate; treated as missing", exc)
         return None
     stale, reason = memo_staleness(snap, out, db)
     mt = memo.mispricing_thesis
     vv = memo.valuation_verdict
-    fields = (
-        ("rating", str(memo.rating_label)),
-        ("thesis", memo.one_sentence_thesis),
-        ("consensus view", mt.consensus_view),
-        ("our view", mt.our_view),
-        ("gap", mt.gap),
-        ("valuation verdict", f"{vv.verdict}" + (f" — {vv.summary}" if vv.summary else "")),
-        ("bull case", memo.bull_case.headline),
-        ("bear case", memo.bear_case.headline),
+    candidates: tuple[tuple[str, str, str | None], ...] = (
+        ("rating", str(memo.rating_label), None),
+        ("thesis", memo.one_sentence_thesis, "one_sentence_thesis"),
+        ("consensus view", mt.consensus_view, "mispricing_thesis"),
+        ("our view", mt.our_view, "mispricing_thesis"),
+        ("gap", mt.gap, "mispricing_thesis"),
+        ("valuation verdict", f"{vv.verdict}" + (f" — {vv.summary}" if vv.summary else ""),
+         "valuation_verdict"),
+        ("bull case", memo.bull_case.headline, "bull_case"),
+        ("bear case", memo.bear_case.headline, "bear_case"),
+    )
+    fields = tuple(
+        (label, value) for label, value, section in candidates
+        if not _excerpt_hidden(memo, section, label)
     )
     block = prompt_mod.MemoBlock(
         ticker=ticker, version=int(snap.version), generated_at=snap.generated_at.date().isoformat(),
         stale=stale, stale_reason=reason, fields=fields,
     )
     return MemoExcerpt(ticker, int(snap.version), snap.generated_at, stale, reason, block)
+
+
+def _excerpt_hidden(memo: Any, section: str | None, label: str) -> bool:
+    entry = (memo.section_availability or {}).get(section) if section else None
+    if entry is None:
+        return False
+    # "not_produced" is an empty field, quoted empty exactly as before W2a;
+    # what must never reach the model is template text the page withholds.
+    if entry.status == "unavailable" and entry.reason != "not_produced":
+        return True
+    # A case can stay visible with its template headline hidden.
+    return label in ("bull case", "bear case") and entry.headline_hidden
 
 
 def memos_used(excerpts: dict[str, MemoExcerpt | None]) -> dict[str, dict[str, Any] | None]:
@@ -433,6 +459,9 @@ def cache_key(
     payload = {
         "catalog_version": catalog.CATALOG_VERSION,
         "prompt_version": prompt_mod.PROMPT_VERSION,
+        # W2a: the memo excerpt is the presented memo, so the rules that hide
+        # sections are an input to the answer like the prompt is.
+        "presentation_version": memo_sections.PRESENTATION_VERSION,
         "tickers": tickers, "metrics": metrics, "years": years, "normalize": normalize,
         "fingerprint": fingerprint,
         "memo_versions": {t: (v["version"] if v else None) for t, v in memo_versions.items()},

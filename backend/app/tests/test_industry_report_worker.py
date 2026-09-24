@@ -621,6 +621,62 @@ def test_a_rejected_edition_is_retried_and_counts_the_problems_it_cannot_show(en
     assert rs.latest_good(code, version=env["info"]) is None  # nothing published
 
 
+def test_retry_passes_the_rejection_to_the_writer(env, monkeypatch):
+    """A retry after a validator rejection is told what was rejected —
+    otherwise attempt 2 is attempt 1's prompt again and fails the same
+    way. The deterministic final attempt makes no model call and gets no
+    notes; neither does a first attempt."""
+    code = env["codes"][0]
+    seen: list[tuple[bool, Any]] = []
+    real = jobs.writer.write_report
+
+    def recording(*args, deterministic: bool = False, repair_notes: Any = None, **kw):
+        seen.append((deterministic, repair_notes))
+        return real(*args, deterministic=deterministic, **kw)
+
+    problems = {1: ["outlook: number '75%' is not in the facts or a registered assumption"],
+                2: ["outlook: FA1 has no explicit horizon"]}
+    monkeypatch.setattr(jobs.writer, "write_report", recording)
+    monkeypatch.setattr(jobs.validator, "validate", lambda payload, facts: problems.get(len(seen), []))
+    clock = {"t": SUNDAY}
+    monkeypatch.setattr(jobs, "_utcnow", lambda: clock["t"])
+    monkeypatch.setattr(jobs.industry_lease, "utcnow", lambda: clock["t"])
+    job, _ = jobs.enqueue(code, PERIOD, version=env["info"])
+    messages = []
+    for _ in range(3):
+        jobs.process_next_job(now=clock["t"])
+        messages.append(_job(job["id"])["error_message"])
+        clock["t"] = clock["t"] + timedelta(hours=1)  # past each backoff
+
+    assert messages[0] == "1 validation problem(s): " + problems[1][0]
+    assert seen == [(False, ""), (False, messages[0]), (True, "")]
+    assert _job(job["id"])["status"] == "succeeded"  # the final attempt stored its audit-only copy
+
+
+def test_a_retry_after_a_crash_carries_no_repair_notes(env, monkeypatch):
+    """Only a validator rejection is something the model can repair; a
+    crash's message is not handed to it."""
+    code = env["codes"][0]
+    seen: list[Any] = []
+    real = jobs.writer.write_report
+
+    def crash_once(*args, repair_notes: Any = None, **kw):
+        seen.append(repair_notes)
+        if len(seen) == 1:
+            raise RuntimeError("model timed out")
+        return real(*args, **kw)
+
+    monkeypatch.setattr(jobs.writer, "write_report", crash_once)
+    clock = {"t": SUNDAY}
+    monkeypatch.setattr(jobs, "_utcnow", lambda: clock["t"])
+    monkeypatch.setattr(jobs.industry_lease, "utcnow", lambda: clock["t"])
+    jobs.enqueue(code, PERIOD, version=env["info"])
+    for _ in range(2):
+        jobs.process_next_job(now=clock["t"])
+        clock["t"] = clock["t"] + timedelta(hours=1)
+    assert seen == ["", ""]
+
+
 def test_an_unwritable_report_never_creates_a_row(env, monkeypatch):
     code = env["codes"][0]
     monkeypatch.setattr(jobs.writer, "write_report", _boom)

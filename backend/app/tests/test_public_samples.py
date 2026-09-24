@@ -514,3 +514,164 @@ def test_public_routes_ignore_a_bad_bearer(wall, client, monkeypatch):
     """A stale token in the browser must not break the landing page."""
     resp = client.get(f"/api/public/samples/{LISTED[0]}", headers={"Authorization": "Bearer not-a-jwt"})
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# W2a — the public sample is the presented memo
+# ---------------------------------------------------------------------------
+
+_W2A_FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "memo_sections"
+
+
+def _template_memo(ticker: str):
+    """The GOOGL shape from the W2a fixtures: a template PM view, fallback
+    mispricing card and deterministic sector read, flagged by nothing."""
+    from app.schemas import StockMemoOut
+    raw = json.loads((_W2A_FIXTURES / "googl_live_prepflag.json").read_text())
+    return StockMemoOut.model_validate(raw).model_copy(update={"ticker": ticker})
+
+
+def test_sample_memo_presented_at_build_and_legacy_row_at_serve(wall, client, monkeypatch):
+    from app.services.memo_sections import SIG, UNAVAILABLE_TEXT
+    tail = SIG["pm_view_tail"].text
+    raw = _template_memo(LISTED[0])
+    memo_store.save_memo(raw)
+    _build(LISTED[0], monkeypatch)
+    with SessionLocal() as db:
+        stored_row = public_samples.rows_for(db, LISTED[0])["memo"].payload
+    # Built presented: the row carries the map and no template prose.
+    assert stored_row["section_availability"]["one_sentence_thesis"]["status"] == "unavailable"
+    assert tail not in json.dumps(stored_row)
+
+    body = client.get(f"/api/public/samples/{LISTED[0]}").json()
+    assert body["memo"]["one_sentence_thesis"] == UNAVAILABLE_TEXT
+    ledger = body["expectations_ledger"]
+    for leg in ("reported_consensus", "our_forecast"):
+        assert ledger[leg] == {"status": "not_captured", "items": [],
+                               "reason": "unavailable in this version"}, leg
+
+    # A row a pre-W2a build left (no map) is presented at serve time, and the
+    # commentary that LLM wrote from the unpresented memo is withheld.
+    legacy = public_samples.strip_for_public(raw.model_dump(mode="json", exclude={"section_availability"}))
+    now = datetime(2026, 9, 20, 12, 0, 0)
+    with SessionLocal() as db:
+        public_samples._upsert_row(db, LISTED[0], "memo", legacy, source_ref="memo_snapshot:1",
+                                   degraded=[], now=now, built_by="test")
+        public_samples._upsert_row(db, LISTED[0], "commentary", {"text": "Old commentary."},
+                                   source_ref="llm:cheap", degraded=[], now=now, built_by="test")
+        rows = public_samples.rows_for(db, LISTED[0])
+    body = client.get(f"/api/public/samples/{LISTED[0]}").json()
+    assert body["memo"]["one_sentence_thesis"] == UNAVAILABLE_TEXT
+    assert body["memo"]["section_availability"]["final_pm_view"]["status"] == "unavailable"
+    assert tail not in json.dumps(body)
+    assert body["commentary"] is None
+    assert "commentary: withheld (built before section availability)" in body["degraded"]
+    assert body["expectations_ledger"]["our_forecast"]["reason"] == "unavailable in this version"
+    # The served body changed with the rows unchanged: the ETag must roll over.
+    current = public_samples.compute_etag(rows)
+    monkeypatch.setattr(public_samples, "_ASSEMBLY_VERSION", "v2")
+    assert public_samples.compute_etag(rows) != current
+
+
+def test_public_commentary_rests_only_on_shown_sections(monkeypatch):
+    from app.agents import llm
+    from app.services.memo_sections import present_memo
+    shown = public_samples.strip_for_public(
+        present_memo(_template_memo(LISTED[0])).model_dump(mode="json"))
+    facts = public_samples._commentary_facts(LISTED[0], shown)
+    assert "Thesis:" not in facts and "Our view:" not in facts and "Consensus view:" not in facts
+    assert "confidence" not in facts
+    assert f"Rating: {shown['rating_label']}." in facts
+    assert "Valuation verdict:" in facts
+    prompts: list[str] = []
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test-not-used")
+    monkeypatch.setattr(llm, "chat_text", lambda prompt, **_k: prompts.append(prompt) or "Neutral text.")
+    payload, _ref, notes = public_samples._build_commentary(LISTED[0], shown, now=datetime(2026, 9, 24))
+    assert payload is not None and notes == []
+    assert prompts and "Unavailable in this version" not in prompts[0]
+    assert "Thesis:" not in prompts[0]
+
+
+def test_commentary_served_only_beside_the_memo_it_was_written_from(wall, client, monkeypatch):
+    """A memo rebuild that succeeds next to a commentary rebuild that fails
+    keeps the OLD commentary row. It was written from a different memo (or
+    presentation), so the page withholds it instead of setting LLM prose
+    built on a hidden thesis beside the placeholder."""
+    from app.agents import llm
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test-not-used")
+    memo_store.save_memo(_template_memo(LISTED[0]))
+    monkeypatch.setattr(llm, "chat_text", lambda *_a, **_k: "A neutral paragraph.")
+    out = _build(LISTED[0], monkeypatch, now=datetime(2026, 9, 24, 12, 0, 0))
+    assert "commentary" in out["built"]
+    with SessionLocal() as db:
+        stored = public_samples.rows_for(db, LISTED[0])["commentary"].payload
+    assert stored["basis"]["presentation_version"] == public_samples.PRESENTATION_VERSION
+    body = client.get(f"/api/public/samples/{LISTED[0]}").json()
+    # Served beside its memo, in the page's wire shape.
+    assert body["commentary"] == {k: v for k, v in stored.items() if k != "basis"}
+
+    # A newer memo, and the commentary rebuild fails: the old row stays.
+    memo_store.save_memo(_template_memo(LISTED[0]))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(llm, "chat_text", boom)
+    out = _build(LISTED[0], monkeypatch, now=datetime(2026, 9, 25, 12, 0, 0))
+    assert "memo" in out["built"] and "commentary" not in out["built"]
+    body = client.get(f"/api/public/samples/{LISTED[0]}").json()
+    assert body["commentary"] is None
+    assert "commentary: withheld (built from a different memo presentation)" in body["degraded"]
+
+    # A pre-W2a commentary row (no stamp) beside a presented memo row.
+    with SessionLocal() as db:
+        public_samples._upsert_row(db, LISTED[0], "commentary", {"text": "Old commentary."},
+                                   source_ref="llm:cheap", degraded=[],
+                                   now=datetime(2026, 9, 25, 12, 0, 0), built_by="test")
+    body = client.get(f"/api/public/samples/{LISTED[0]}").json()
+    assert body["commentary"] is None
+
+
+def test_commentary_withheld_after_a_presentation_rule_change(wall, client, monkeypatch):
+    """Nothing but the stamp ties a commentary row to the rules its memo was
+    presented under; a PRESENTATION_VERSION bump withholds it and rolls the
+    ETag, though no row changed."""
+    from app.agents import llm
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test-not-used")
+    memo_store.save_memo(_template_memo(LISTED[0]))
+    monkeypatch.setattr(llm, "chat_text", lambda *_a, **_k: "A neutral paragraph.")
+    _build(LISTED[0], monkeypatch)
+    first = client.get(f"/api/public/samples/{LISTED[0]}")
+    assert first.json()["commentary"] is not None
+    monkeypatch.setattr(public_samples, "PRESENTATION_VERSION", public_samples.PRESENTATION_VERSION + 1)
+    second = client.get(f"/api/public/samples/{LISTED[0]}")
+    assert second.json()["commentary"] is None
+    assert second.headers["etag"] != first.headers["etag"]
+
+
+def test_unreadable_legacy_memo_row_is_served_as_stored(wall, client, monkeypatch, caplog):
+    """A pre-W2a memo row that no longer validates is served as stored (and
+    logged) so the logged-out page never breaks."""
+    _build(LISTED[0], monkeypatch)
+    legacy = {"ticker": LISTED[0], "bull_case": [{"key_point": None}]}
+    with SessionLocal() as db:
+        public_samples._upsert_row(db, LISTED[0], "memo", legacy, source_ref="memo_snapshot:1",
+                                   degraded=[], now=datetime(2026, 9, 20), built_by="test")
+    with caplog.at_level("WARNING", logger="app.services.public_samples"):
+        r = client.get(f"/api/public/samples/{LISTED[0]}")
+    assert r.status_code == 200, r.text
+    assert r.json()["memo"] == legacy
+    assert any("does not validate" in rec.getMessage() for rec in caplog.records)
+
+
+def test_ledger_guidance_unavailable_when_the_earnings_view_is_hidden():
+    from app.services.memo_sections import present_memo
+    hidden = make_finding("Earnings Analyst", data={"deterministic_fallback": "LLM returned nothing."})
+    shown = present_memo(_memo(LISTED[0], earnings_agent_view=hidden)).model_dump(mode="json")
+    assert shown["section_availability"]["earnings_agent_view"]["status"] == "unavailable"
+    ledger = public_samples.build_expectations_ledger(shown)
+    assert ledger["management_guidance"] == {"status": "not_captured", "items": [],
+                                             "reason": "unavailable in this version"}
+    kept = public_samples.build_expectations_ledger(
+        present_memo(_memo(LISTED[0], earnings_agent_view=make_finding("Earnings Analyst"))).model_dump(mode="json"))
+    assert ledger != kept and kept["management_guidance"]["reason"] == "not captured"

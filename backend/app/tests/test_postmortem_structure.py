@@ -28,6 +28,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import MemoOutcome, MemoPostmortem, MemoSnapshot
 from app.services import postmortem_service as pm
+from app.tests.eligibility_helpers import mark
 
 
 @pytest.fixture(autouse=True)
@@ -47,7 +48,7 @@ def _seed_snapshot(
             db.query(MemoOutcome).filter(MemoOutcome.ticker == ticker).delete()
             db.query(MemoSnapshot).filter(MemoSnapshot.ticker == ticker).delete()
         memo = {"ticker": ticker, "confidence_score": 70.0, "sector": "Technology",
-                "macro_regime_at_memo": regime}
+                "macro_regime_at_memo": regime, "generation_mode": "live"}
         if rating is not None:
             memo["rating_label"] = rating
         snap = MemoSnapshot(
@@ -56,6 +57,9 @@ def _seed_snapshot(
         )
         db.add(snap)
         db.commit()
+        # W6: selection and the prior-version dedupe read only eligible
+        # snapshots; most tests here call them without a sweep.
+        mark(db, snap.id)
         db.refresh(snap)
         db.expunge(snap)
         return snap
@@ -234,12 +238,13 @@ def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir, no_llm):
     report = pm.run_postmortems(horizon_days=90, limit=500)
     assert set(report) == {
         "horizon_days", "due", "written", "already_done", "deduped", "skipped",
-        "deduped_memos", "deferred", "deferred_memos",
+        "deduped_memos", "deferred", "deferred_memos", "ineligible",
         "skipped_memos", "memory_written", "memory_written_memos",
         "memory_failed", "memory_failed_memos", "memory_disabled", "memory_disabled_memos",
-        "memory_not_requested", "memory_not_requested_memos",
+        "memory_not_requested", "memory_not_requested_memos", "classification_error",
     }
     assert report["horizon_days"] == 90 and report["written"] >= 1
+    assert report["classification_error"] is None
     assert {"ticker": t, "horizon": 90} in no_llm       # the LLM was asked, and declined
 
     rows = _postmortems(t, 90)
@@ -316,3 +321,105 @@ def test_run_postmortems_with_a_configured_key_uses_only_the_chat_json_seam(memo
     assert rows[0].agent_attribution == {"sector": 0.5, "valuation": -0.25}
     assert rows[0].regime_at_memo == "llm_guess"          # memo had no tag → LLM guess used
     assert "LLM lesson body" in (memory_dir / "companies" / f"{t}.md").read_text()
+
+
+# ---------------------------------------------------------------------------
+# W6 / FIX-007 — eligible-only selection (isolated engine: exact counts)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def w6_pm(tmp_path, monkeypatch):
+    from app.tests.eligibility_helpers import isolated_sessions
+
+    sessions, engine = isolated_sessions(tmp_path, monkeypatch, pm)
+    monkeypatch.setattr(settings, "enable_long_term_memory", False)
+    calls: list[str] = []
+
+    def record(memo, outcome, horizon_days):
+        calls.append(outcome.ticker)
+        return None
+
+    monkeypatch.setattr(pm, "_llm_postmortem", record)
+    yield sessions, calls
+    engine.dispose()
+
+
+def _nvda_dev_copy(db):
+    from app.services.outcome_eligibility_evidence import DEV_COPY_SNAPSHOTS
+    from app.tests.eligibility_helpers import add_snapshot
+
+    sid, ticker, generated = next(row for row in DEV_COPY_SNAPSHOTS if row[1] == "NVDA")
+    return add_snapshot(db, id=sid, ticker=ticker, version=sid, mode="demo",
+                        generated_at=datetime.fromisoformat(generated), memo_generated_at=generated)
+
+
+def test_scan_due_skips_ineligible_and_counts_them(w6_pm):
+    """A dev-copy outcome is never selected for strong-route LLM spend."""
+    from app.tests.eligibility_helpers import add_outcome, add_snapshot
+
+    sessions, calls = w6_pm
+    with sessions() as db:
+        dev = _nvda_dev_copy(db)
+        live = add_snapshot(db, ticker="PMLIVE", generated_at=datetime(2026, 5, 20))
+        for snap in (dev, live):
+            add_outcome(db, snap, horizon=90, forward_return=0.2, alpha=0.1)
+        db.commit()
+    report = pm.run_postmortems(horizon_days=90, limit=25)
+    assert report["ineligible"] == 1
+    assert report["due"] == report["written"] == 1
+    assert calls == ["PMLIVE"]
+    with sessions() as db:
+        assert [r.memo_snapshot_id for r in db.query(MemoPostmortem).all()] == [live.id]
+
+
+def test_prior_demo_version_does_not_dedupe_live_memo(w6_pm):
+    """Before W6 the dev-copy prior (same rating) suppressed the first live
+    memo's postmortem as "rating unchanged". NVDA has hundreds of them."""
+    from app.tests.eligibility_helpers import add_outcome, add_snapshot
+
+    sessions, calls = w6_pm
+    with sessions() as db:
+        dev = _nvda_dev_copy(db)
+        live = add_snapshot(db, ticker="NVDA", version=dev.version + 1, rating="Bullish",
+                            generated_at=datetime(2026, 6, 20))
+        add_outcome(db, live, horizon=90, forward_return=0.2, alpha=0.1)
+        db.commit()
+    report = pm.run_postmortems(horizon_days=90, limit=25)
+    assert report["deduped"] == 0, report["deduped_memos"]
+    assert report["written"] == 1 and calls == ["NVDA"]
+
+
+def test_failed_sweep_still_postmortems_classified_memos(w6_pm, monkeypatch):
+    """An aborted eligibility sweep is reported and turns the loop red, but
+    memos the ledger already classifies still get their postmortems; the one
+    the sweep could not classify is skipped (fail closed). Before, the
+    exception escaped run_postmortems ahead of the scan."""
+    from app.monitoring import postmortem_loop
+    from app.services import outcome_eligibility as oe
+    from app.services.outcome_eligibility_evidence import DEV_COPY_SNAPSHOTS
+    from app.tests.eligibility_helpers import add_outcome, add_snapshot, classify_all
+
+    sessions, calls = w6_pm
+    dev_ids = {row[0] for row in DEV_COPY_SNAPSHOTS}
+    with sessions() as db:
+        live = add_snapshot(db, ticker="PMLIVE", generated_at=datetime(2026, 5, 20))
+        add_outcome(db, live, horizon=90, forward_return=0.2, alpha=0.1)
+        db.commit()
+        classify_all(db)
+        stray = add_snapshot(db, id=next(i for i in range(400, 583) if i not in dev_ids), ticker="PMSTRAY",
+                             generated_at=datetime(2026, 5, 4), mode="demo")
+        add_outcome(db, stray, horizon=90, forward_return=0.2, alpha=0.1)
+        db.commit()
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(postmortem_loop, "record_run", lambda *a, **k: recorded.append(k))
+    monkeypatch.setattr(postmortem_loop, "run_postmortems",
+                        lambda horizon_days, limit: pm.run_postmortems(horizon_days=horizon_days, limit=limit)
+                        if horizon_days == 90 else {"due": 0, "written": 0})
+    postmortem_loop.run_once()
+    assert calls == ["PMLIVE"]
+    assert recorded[0]["success"] is False
+    assert f"classification_error=ExclusionSetMismatch: dev-copy classification outside the enumerated set: " \
+           f"PMSTRAY#{stray.id}" in recorded[0]["note"]
+    with sessions() as db:
+        assert [r.memo_snapshot_id for r in db.query(MemoPostmortem).all()] == [live.id]
+        assert oe.lookup(db, stray.id) is None

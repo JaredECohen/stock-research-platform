@@ -21,11 +21,13 @@ from __future__ import annotations
 import json
 import logging
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
@@ -135,8 +137,8 @@ def save_memo(
         # The exclude is a backstop behind the refusal above: the stored row
         # never carries the read-time map, even an empty one, so there is
         # no stored value for a reader to mistake for the current verdict.
-        # public_samples._build_memo is the other store of a memo dump and
-        # applies the same exclude.
+        # (public_samples._build_memo stores the PRESENTED public copy, map
+        # included, on purpose: that row is a rendering, not the memo.)
         memo_payload: dict[str, Any] = json.loads(
             memo.model_dump_json(exclude={"section_availability"})
         )
@@ -359,6 +361,139 @@ def legacy_case_points(legacy: list[Any]) -> list[str] | None:
            for point in legacy):
         return [point["key_point"] for point in legacy]
     return None
+
+
+@dataclass(frozen=True)
+class PatchChain:
+    """What a news-patch snapshot's lineage says about its fields (W2a).
+
+    `fields`: every field a patch between this snapshot and its base
+    replaced (`revision_log[*].fields_patched`). `base`: the first non-patch
+    ancestor, read raw, which the PM-view and mispricing rules are evaluated
+    on — a patch never re-runs the PM synthesis. `complete=False` means a hop
+    was missing, unreadable or unlogged, so the base is unknown and the
+    presenter errs toward hiding.
+    """
+    fields: frozenset[str] = frozenset()
+    base: StockMemoOut | None = None
+    complete: bool = True
+
+
+NOT_A_PATCH = PatchChain()
+_INCOMPLETE = PatchChain(complete=False)
+
+# (ticker, version) -> projected (trigger, parent_version, revision_log) or
+# None, plus ("memo", ticker, version) -> the base memo. One dict per
+# request, so a history listing walks each ancestor once.
+ChainCache = dict[tuple[Any, ...], Any]
+
+
+def patch_chain_for(
+    snap: MemoSnapshot, *, db: Session | None = None, max_hops: int = 50,
+    cache: ChainCache | None = None,
+) -> PatchChain:
+    """Walk an `incremental_patch` snapshot back to its base.
+
+    Cost: one indexed SELECT per hop, projected to
+    `(trigger, parent_version, revision_log)` — never the memo body — plus
+    one read of the base body. Only patch snapshots walk at all (pins only,
+    at most `MAX_PATCHES_PER_DAY` a day). A database error returns the
+    conservative incomplete chain rather than failing the read.
+
+    On a caller's session the walk runs inside a SAVEPOINT: on Postgres a
+    failed statement aborts the whole transaction, so swallowing the error
+    without rolling back would fail the caller's next statement (the
+    commentary cache lookup, the sample upsert, the next history row).
+    """
+    if getattr(snap, "trigger", None) != "incremental_patch":
+        return NOT_A_PATCH
+    cache = {} if cache is None else cache
+    own = db is None
+    session = SessionLocal() if own else db
+    assert session is not None
+    try:
+        if own:
+            return _walk_chain(session, snap, max_hops, cache)
+        with session.begin_nested():
+            return _walk_chain(session, snap, max_hops, cache)
+    except SQLAlchemyError as exc:
+        log.warning("memo patch chain walk failed for %s v%s: %s",
+                    snap.ticker, snap.version, type(exc).__name__)
+        return _INCOMPLETE
+    finally:
+        if own:
+            session.close()
+
+
+def _walk_chain(session: Session, snap: MemoSnapshot, max_hops: int, cache: ChainCache) -> PatchChain:
+    fields: set[str] = set()
+    ticker = snap.ticker
+    trigger, parent, log_entries = snap.trigger, snap.parent_version, snap.revision_log
+    for _ in range(max_hops):
+        patched = [
+            entry.get("fields_patched") for entry in (log_entries or [])
+            if isinstance(entry, dict) and isinstance(entry.get("fields_patched"), list)
+        ]
+        if not patched:
+            # Patches written before fields were logged (a59ff56): which
+            # fields this hop changed is unknown, so it credits none.
+            return PatchChain(frozenset(fields), None, False)
+        for names in patched:
+            fields.update(str(n) for n in names or [])
+        if parent is None:
+            return PatchChain(frozenset(fields), None, False)
+        key = (ticker, parent)
+        if key not in cache:
+            row = session.execute(
+                select(MemoSnapshot.trigger, MemoSnapshot.parent_version,
+                       MemoSnapshot.revision_log)
+                .where(MemoSnapshot.ticker == ticker, MemoSnapshot.version == parent)
+            ).first()
+            cache[key] = tuple(row) if row is not None else None
+        hop = cache[key]
+        if hop is None:
+            return PatchChain(frozenset(fields), None, False)
+        trigger, next_parent, log_entries = hop
+        if trigger != "incremental_patch":
+            base = _base_memo(session, ticker, parent, cache)
+            if base is None:
+                return PatchChain(frozenset(fields), None, False)
+            return PatchChain(frozenset(fields), base, True)
+        parent = next_parent
+    return PatchChain(frozenset(fields), None, False)
+
+
+def _base_memo(session: Session, ticker: str, version: int, cache: ChainCache) -> StockMemoOut | None:
+    key = ("memo", ticker, version)
+    if key not in cache:
+        row = session.execute(
+            select(MemoSnapshot).where(MemoSnapshot.ticker == ticker, MemoSnapshot.version == version)
+        ).scalar_one_or_none()
+        memo: StockMemoOut | None = None
+        if row is not None:
+            try:
+                memo = memo_to_pydantic(row)
+            except StoredMemoUnreadable:
+                memo = None
+        cache[key] = memo
+    return cache[key]
+
+
+def present_snapshot(
+    snap: MemoSnapshot, *, db: Session | None = None, cache: ChainCache | None = None,
+) -> StockMemoOut:
+    """The customer-facing memo for a stored snapshot (W2a).
+
+    `memo_to_pydantic` then the presenter, with the patch chain resolved.
+    Raises `StoredMemoUnreadable` exactly as `memo_to_pydantic` does. The
+    snapshot row is only read, never written.
+    """
+    from . import memo_sections
+    memo = memo_to_pydantic(snap)
+    chain = patch_chain_for(snap, db=db, cache=cache)
+    return memo_sections.present_memo(
+        memo, patched_fields=chain.fields, base=chain.base, chain_complete=chain.complete,
+    )
 
 
 def memo_to_pydantic(snap: MemoSnapshot) -> StockMemoOut:

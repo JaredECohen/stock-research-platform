@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from ..config import settings
@@ -37,6 +37,7 @@ from ..models import (
     MemoPostmortem,
     MemoSnapshot,
 )
+from . import outcome_eligibility
 
 log = logging.getLogger(__name__)
 
@@ -69,13 +70,21 @@ def _rating_of(snap: MemoSnapshot | SnapshotCandidate) -> str:
 
 
 def _prior_snapshot(db, ticker: str, version: int) -> SnapshotCandidate | None:
-    """The most recent prior version for this ticker (version < current)."""
+    """The most recent ELIGIBLE prior version for this ticker (version < current).
+
+    W6: an ineligible prior (NVDA and MSFT have hundreds of dev-copy demo
+    versions) must not suppress a live memo's postmortem as "rating
+    unchanged"; the dedupe compares calls the learning loop actually counts.
+    """
     row = db.execute(
-        select(
-            MemoSnapshot.id, MemoSnapshot.ticker, MemoSnapshot.version,
-            MemoSnapshot.memo_json["rating_label"].label("rating"),
+        outcome_eligibility.eligible_only(
+            select(
+                MemoSnapshot.id, MemoSnapshot.ticker, MemoSnapshot.version,
+                MemoSnapshot.memo_json["rating_label"].label("rating"),
+            )
+            .where(MemoSnapshot.ticker == ticker, MemoSnapshot.version < version),
+            MemoSnapshot.id,
         )
-        .where(MemoSnapshot.ticker == ticker, MemoSnapshot.version < version)
         .order_by(MemoSnapshot.version.desc())
         .limit(1)
     ).first()
@@ -155,6 +164,9 @@ class DueScan:
     items: list[dict[str, Any]] = field(default_factory=list)
     deduped: list[dict[str, Any]] = field(default_factory=list)
     deferred: list[dict[str, Any]] = field(default_factory=list)
+    # W6: outcomes at this horizon with no postmortem whose snapshot is not
+    # eligible (or not yet classified). Counted, never selected.
+    ineligible: int = 0
 
 
 def _memo_identity(snap: MemoSnapshot | SnapshotCandidate, reason: str) -> dict[str, Any]:
@@ -202,7 +214,14 @@ def _scan_due(
     scan = DueScan()
     seen_keys: set[tuple[int, int]] = set()
     with SessionLocal() as db:
-        stmt = (
+        no_postmortem = ~select(MemoPostmortem.id).where(
+            MemoPostmortem.memo_snapshot_id == MemoOutcome.memo_snapshot_id,
+            MemoPostmortem.horizon_days == horizon_days,
+        ).exists()
+        # W6: only eligible snapshots are postmortem'd. This is the gate in
+        # front of strong-route LLM spend and memory writes, so the demo
+        # dev copy and the migrated fixtures never reach either.
+        stmt = outcome_eligibility.eligible_only(
             select(
                 MemoOutcome, MemoSnapshot.id, MemoSnapshot.ticker,
                 MemoSnapshot.version,
@@ -210,12 +229,15 @@ def _scan_due(
             )
             .join(MemoSnapshot, MemoOutcome.memo_snapshot_id == MemoSnapshot.id)
             .where(MemoOutcome.horizon_days == horizon_days)
-            .where(~select(MemoPostmortem.id).where(
-                MemoPostmortem.memo_snapshot_id == MemoOutcome.memo_snapshot_id,
-                MemoPostmortem.horizon_days == horizon_days,
-            ).exists())
-            .order_by(MemoOutcome.memo_snapshot_id)
-        )
+            .where(no_postmortem),
+            MemoOutcome.memo_snapshot_id,
+        ).order_by(MemoOutcome.memo_snapshot_id)
+        scan.ineligible = int(db.execute(
+            select(func.count(MemoOutcome.id))
+            .where(MemoOutcome.horizon_days == horizon_days)
+            .where(no_postmortem)
+            .where(~outcome_eligibility.eligible_exists(MemoOutcome.memo_snapshot_id))
+        ).scalar_one())
         # A budget of 25 used to apply *after* fetching every full memo.
         # JSON bodies and revision logs can dwarf the result metadata and
         # overlap the filing poller's working set. Select just the policy
@@ -470,11 +492,30 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
                       version, or the 14-day per-ticker rate limit).
       `deferred`      eligible work beyond this pass's budget, with every
                       omitted snapshot named in `deferred_memos`.
+      `ineligible`    outcomes on snapshots the W6 eligibility ledger
+                      excludes; counted, never postmortem'd or learned from.
       `skipped`       the postmortem could not be parsed or persisted.
       `memory_failed` the new postmortem exists, but its requested memory
                       writes or their persisted completion flag failed.
       `memory_disabled` memory was disabled; no file was touched.
+      `classification_error` the eligibility sweep's failure, or None.
     """
+    # W6: make sure every snapshot has an eligibility row before selecting
+    # work. A no-op after the 02:30 outcome loop; it protects the admin
+    # run-postmortems path and the backfill script. Its own session, so a test
+    # that isolates this module's SessionLocal stays isolated.
+    #
+    # A failed sweep (rolled back, the named row logged) is reported, not
+    # raised: selection is `eligible_only`, so snapshots it could not
+    # classify are already skipped, and the rest keep their postmortems.
+    classification_error: str | None = None
+    try:
+        with SessionLocal() as db:
+            outcome_eligibility.classify_pending(db=db)
+    except Exception as exc:
+        classification_error = f"{type(exc).__name__}: {exc}"[:500]
+        log.error("postmortem %sd: eligibility sweep failed, selecting from the existing ledger: %s",
+                  horizon_days, classification_error)
     scan = _scan_due(horizon_days, limit=limit)
     due = scan.items
     written = 0
@@ -600,8 +641,10 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
         "deduped_memos": scan.deduped,
         "deferred": len(scan.deferred),
         "deferred_memos": scan.deferred,
+        "ineligible": scan.ineligible,
         "skipped": len(skipped_memos),
         "skipped_memos": skipped_memos,
+        "classification_error": classification_error,
     }
     for status, identities in memory_memos.items():
         report[f"memory_{status}"] = len(identities)

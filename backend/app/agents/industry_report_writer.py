@@ -51,11 +51,15 @@ from ..services.llm_metrics import cost_per_run, estimate_cost_usd
 from . import llm, prompts
 from .industry_analysts import IndustryAnalyst
 from .industry_report_validator import (
+    FORECAST_POLICY,
     INTERPRETED_SECTIONS,
     SECTION_ORDER,
     _has_causal_marker,
+    _is_exempt,
     _sentences,
+    anchor_catalog,
     is_real_falsifier,
+    numeric_tokens,
 )
 from .log_safety import log_safely, redact
 
@@ -389,10 +393,11 @@ def _outlook_facts(payload: dict[str, Any], snapshot_payload: dict[str, Any]) ->
             "reported_consensus": _na("no licensed consensus tape"),
             "management_guidance": _na("guidance is company-level; not aggregated at group level"),
             "price_implied": price_implied,
-            "our_forecast": _na("scenarios are analyst interpretation, recorded there, not a forecast"),
+            "our_forecast": _na("forward numbers, if any, are registered assumptions in the interpretation"),
         },
         "macro_regime": regime if regime else _na("no macro broadcast in the snapshot"),
         "scenario_policy": "Scenarios are labelled scenarios, not recommendations.",
+        "forecast_policy": FORECAST_POLICY,
     }
 
 
@@ -565,6 +570,15 @@ def build_facts(
     facts["what_changed"] = _what_changed_facts(prior_report, facts)
     facts["sources"] = _sources_facts(analyst, stats, method)
     facts["metadata"] = _metadata_facts(analyst, stats, run_id=run_id, mode=mode)
+    # The observed facts an outlook assumption may be anchored to, built
+    # LAST so it reads every other section, and from nothing but them: the
+    # worker's `_server_facts` rebuild must reproduce it exactly, and the
+    # validator recomputes it with the same function. The outlook call only
+    # sees the outlook's own facts, so this catalogue is how the model
+    # learns which observations it may depart from.
+    anchors, truncated = anchor_catalog(facts)
+    facts["outlook"]["anchors"] = anchors
+    facts["outlook"]["anchors_truncated"] = truncated
     if facts["performance"].get("status") not in (None, "ok"):
         degraded.append(f"performance:{facts['performance']['status']}")
     return facts
@@ -696,6 +710,26 @@ def _fmt_pct(value: Any) -> str:
 
 def _items_text(items: list[dict[str, Any]], limit: int = 4) -> str:
     return "; ".join(f"{i['text']} [{','.join(i.get('industry_codes') or [])}]" for i in items[:limit])
+
+
+def _forward_items_text(items: list[dict[str, Any]] | None, limit: int, *, marker_free: bool = False) -> str:
+    """Mandate items quotable in the OUTLOOK, where the number rule is the
+    forecast-assumption contract: a scenario may carry no number but a
+    registered assumption's, and the section is checked against its own
+    facts only. So an item is printed without its bracketed industry codes
+    (six-digit numbers the outlook's facts do not carry), and an item whose
+    own prose holds a measurement is skipped rather than quoted as an
+    undeclared forecast. ``marker_free`` also skips items that assert a
+    mechanism, for text used as a falsifier (see `_marker_free_items`)."""
+    kept: list[str] = []
+    for item in items or []:
+        text = str(item.get("text") or "").strip() if isinstance(item, dict) else ""
+        if not text or (marker_free and _has_causal_marker(text)):
+            continue
+        if any(not _is_exempt(raw) for raw, _, _ in numeric_tokens(text)):
+            continue
+        kept.append(text)
+    return "; ".join(kept[:limit])
 
 
 def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: IndustryAnalyst,
@@ -865,15 +899,17 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
            and ledger["price_implied"].get("value") else "price-implied n/a; ")
         + "our forecast n/a (deterministic edition). Scenarios below are mandate templates, not forecasts."
     )
-    compounder = _items_text(m.as_checklists()["compounder"], 2) or "n/a (no compounder checklist in the mandate)"
-    inflection = _items_text(m.as_checklists()["inflection"], 2) or "n/a (no inflection checklist in the mandate)"
+    compounder = (_forward_items_text(m.as_checklists()["compounder"], 2)
+                  or "n/a (no quotable compounder checklist in the mandate)")
+    inflection = (_forward_items_text(m.as_checklists()["inflection"], 2)
+                  or "n/a (no quotable inflection checklist in the mandate)")
     # Scenario falsifiers name the mandate's own observables. The previous
     # texts hedged every one of them with a parenthetical "(n/a in this
     # edition)" — or, for the bull case with no failure mode on file, were
     # the bare string "n/a" — which is a scenario nothing can break.
-    leading_obs = _marker_free_items(kp.get("leading_indicators"), 2)
-    kpi_obs = _marker_free_items(kp.get("core_kpis"), 2)
-    failure_obs = _marker_free_items(rk.get("common_failure_modes"), 1)
+    leading_obs = _forward_items_text(kp.get("leading_indicators"), 2, marker_free=True)
+    kpi_obs = _forward_items_text(kp.get("core_kpis"), 2, marker_free=True)
+    failure_obs = _forward_items_text(rk.get("common_failure_modes"), 1, marker_free=True)
     scenarios = {
         "base": {"text": "Base scenario: the group's KPIs track the mandate's cadence with no regime change asserted.",
                  "falsifiers": [
@@ -899,8 +935,13 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
             next((f for f in sc["falsifiers"] if is_real_falsifier(f)), ""),
         )
     claims.append(_claim(text, "observed_fact", ["outlook.expectations_ledger"]))
-    claims.append(_claim("Scenarios are mandate templates, not forecasts.", "forecast_assumption",
-                         ["outlook.scenario_policy"], "n/a: template scenario carries no dated forecast"))
+    # A statement of policy, not a forward number: under the registered-
+    # assumption contract a `forecast_assumption` needs an id, a value, an
+    # anchor and a horizon, and this one has none — so it is recorded as
+    # the observed policy it is, and the audit-only template still
+    # validates (it must, to be stored).
+    claims.append(_claim("Scenarios are mandate templates, not forecasts.", "observed_fact",
+                         ["outlook.scenario_policy"]))
     out["outlook"] = {"text": text, "claims": claims, "scenarios": scenarios}
 
     # risks
@@ -934,6 +975,37 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
 # --- LLM interpretation ----------------------------------------------------------
 
 
+# Field caps for a registered forecast assumption. A field over its cap is
+# DROPPED, not truncated: "21.5%" cut to "21." would be a different number,
+# and an absent field is rejected by the validator with a message the
+# repair hint can act on.
+_FA_FIELD_CAPS: dict[str, int] = {"id": 8, "value": 16, "horizon": 60, "anchor": 160}
+
+
+def _short_str(value: Any, cap: int) -> str | None:
+    if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    return text if text and len(text) <= cap else None
+
+
+def _assumption_fields(c: dict[str, Any]) -> dict[str, Any]:
+    """The registration of a `forecast_assumption` claim: id, value,
+    horizon, anchor and optional bounds. Dropping these (as this function's
+    caller used to drop every key but type/text/basis/falsifier) would turn
+    every registered assumption into one the validator must reject."""
+    out: dict[str, Any] = {}
+    for key, cap in _FA_FIELD_CAPS.items():
+        text = _short_str(c.get(key), cap)
+        if text is not None:
+            out[key] = text
+    bounds = c.get("bounds")
+    if isinstance(bounds, (list, tuple)):
+        kept = [_short_str(b, _FA_FIELD_CAPS["value"]) for b in bounds]
+        out["bounds"] = [b if b is not None else "" for b in kept]
+    return out
+
+
 def _coerce_section(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict) or not isinstance(raw.get("text"), str) or not raw["text"].strip():
         return None
@@ -941,12 +1013,15 @@ def _coerce_section(raw: Any) -> dict[str, Any] | None:
     claims = []
     for c in raw.get("claims") or []:
         if isinstance(c, dict) and isinstance(c.get("text"), str):
-            claims.append({
+            claim = {
                 "type": str(c.get("type") or "observed_fact"),
                 "text": c["text"],
                 "basis": [str(b) for b in (c.get("basis") or [])],
                 "falsifier": str(c.get("falsifier") or ""),
-            })
+            }
+            if claim["type"] == "forecast_assumption":
+                claim.update(_assumption_fields(c))
+            claims.append(claim)
     out["claims"] = claims
     if isinstance(raw.get("stages"), list):
         out["stages"] = [
@@ -954,15 +1029,40 @@ def _coerce_section(raw: Any) -> dict[str, Any] | None:
             for s in raw["stages"] if isinstance(s, dict)
         ]
     if isinstance(raw.get("scenarios"), dict):
-        out["scenarios"] = {
-            str(k): {"text": str(v.get("text", "")), "falsifiers": [str(f) for f in (v.get("falsifiers") or [])]}
-            for k, v in raw["scenarios"].items() if isinstance(v, dict)
-        }
+        scenarios: dict[str, Any] = {}
+        for k, v in raw["scenarios"].items():
+            if not isinstance(v, dict):
+                continue
+            scenario: dict[str, Any] = {"text": str(v.get("text", "")),
+                                        "falsifiers": [str(f) for f in (v.get("falsifiers") or [])]}
+            # Which registered assumptions the scenario rests on: the only
+            # numbers it may quote (validator F8/F10).
+            if isinstance(v.get("assumption_ids"), list):
+                scenario["assumption_ids"] = [str(i).strip() for i in v["assumption_ids"]]
+            scenarios[str(k)] = scenario
+        out["scenarios"] = scenarios
     return out
 
 
+# Output-token cap for a batch that does NOT carry the outlook.
+_DEFAULT_MAX_TOKENS = 3200
+
+
+def _repair_block(repair_notes: str) -> str:
+    """The validator's rejection of the previous attempt, for the retry.
+    Without it a retry is the same prompt again and fails the same way."""
+    if not repair_notes or not repair_notes.strip():
+        return ""
+    return (
+        "\n\nYour previous draft of this edition was rejected by the validator for: "
+        f"{repair_notes.strip()}\n"
+        "Fix exactly these problems; do not add numbers that are neither in the facts nor "
+        "registered assumptions."
+    )
+
+
 def _llm_call(analyst: IndustryAnalyst, facts: dict[str, dict[str, Any]], sections: tuple[str, ...],
-              *, run_id: str, generation: dict[str, Any]) -> dict[str, Any] | None:
+              *, run_id: str, generation: dict[str, Any], repair_notes: str = "") -> dict[str, Any] | None:
     """One bounded chat_json call for `sections`; records tokens and cost."""
     report_rules = load_prompt("industry_report") or ""
     system = analyst.system_prompt() + ("\n\n" + report_rules if report_rules else "")
@@ -970,11 +1070,16 @@ def _llm_call(analyst: IndustryAnalyst, facts: dict[str, dict[str, Any]], sectio
         f"Sections to interpret now: {', '.join(sections)}.\n"
         "Facts payload (observed; do not restate numbers that are not here):\n"
         + json.dumps({s: facts[s] for s in sections}, default=str)[: settings.max_agent_context_chars]
+        + _repair_block(repair_notes)
     )
+    # Each registered assumption costs the outlook batch roughly 120-150
+    # output tokens; at the old flat 3200 a full set truncated the JSON.
+    max_tokens = (int(settings.industry_report_outlook_max_tokens) if "outlook" in sections
+                  else _DEFAULT_MAX_TOKENS)
     started = time.monotonic()
     with llm.llm_call_context(agent_name=analyst.display_name, run_id=run_id, route="cheap"):
         out = llm.chat_json(prompt, system=system, route="cheap", model=llm.resolve_role_model("sector"),
-                            max_tokens=3200)
+                            max_tokens=max_tokens)
     generation["llm_calls"] += 1
     generation["latency_ms"] += int((time.monotonic() - started) * 1000)
     usage = llm.last_usage() or {}
@@ -998,9 +1103,13 @@ def _llm_call(analyst: IndustryAnalyst, facts: dict[str, dict[str, Any]], sectio
 def write_report(
     analyst: IndustryAnalyst, stats: Any, snapshot_row: Any, prior_report: Any,
     events: list[dict[str, Any]] | None, *, run_id: str, deterministic: bool = False,
+    repair_notes: str = "",
 ) -> WriterResult:
     """Build one edition. Never raises on the interpretation layer: a failed
-    or absent LLM degrades to the deterministic edition and says so."""
+    or absent LLM degrades to the deterministic edition and says so.
+
+    ``repair_notes`` is the validator's rejection of the job's previous
+    attempt; every model call of this attempt is told what to fix."""
     degraded: list[str] = []
     errors: list[str] = []
     generation: dict[str, Any] = {
@@ -1035,7 +1144,8 @@ def write_report(
         generation["llm_planned_sections"] = sorted({s for batch in plan for s in batch})
         for sections in plan:
             try:
-                out = _llm_call(analyst, facts, sections, run_id=run_id, generation=generation)
+                out = _llm_call(analyst, facts, sections, run_id=run_id, generation=generation,
+                                repair_notes=repair_notes)
             except Exception as exc:
                 log_safely(log, f"industry report LLM call failed for {analyst.code}", exc)
                 errors.append(f"llm: {redact(exc)}")

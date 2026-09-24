@@ -306,7 +306,7 @@ def test_old_memo_can_use_durable_history_beyond_remote_ladder(database):
     prices.persist_prices("OLD", rows, source="fmp")
     prices.persist_prices("SPY", rows, source="fmp")
     with database[0]() as db:
-        snapshot = MemoSnapshot(ticker="OLD", version=1, generated_at=datetime(2020, 1, 2), memo_json={"rating_label": "Bullish"})
+        snapshot = MemoSnapshot(ticker="OLD", version=1, generated_at=datetime(2020, 1, 2), memo_json={"rating_label": "Bullish", "generation_mode": "live"})
         db.add(snapshot)
         db.flush()
         outcome, status = _evaluate_one(snapshot, 30, db=db, today=date(2026, 9, 13), benchmark="SPY")

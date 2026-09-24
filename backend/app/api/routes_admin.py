@@ -375,10 +375,15 @@ def track_record_endpoint(
     ticker: str | None = None,
     sector: str | None = None,
 ) -> dict[str, Any]:
-    """Wave 4A: aggregate realized-outcome stats over evaluated memos.
+    """Wave 4A / W6: aggregate realized-outcome stats over ELIGIBLE memos.
 
-    Filters: `ticker` (single name), `sector`, `horizon_days` (which forward
-    window to look at). Returns hit rate + avg alpha + total evaluated.
+    Filters: `ticker` (single name), `sector` (from the eligibility ledger),
+    `horizon_days` (which forward window to look at). Every historical key is
+    computed over eligible rows only; excluded rows are counted by reason in
+    `eligibility`, never deleted. Adds SPY-relative `alpha` beside the
+    absolute hit rate, the always-Bullish `base_rate`, `rating_mix` (and by
+    rating source), `coverage` and the `provisional` block the page's banner
+    reads. DB-only and read-only: a GET never classifies.
     """
     return outcome_service.track_record(
         ticker=ticker, sector=sector, horizon_days=horizon_days,

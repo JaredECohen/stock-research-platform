@@ -123,6 +123,8 @@ MODEL_NAMES = [
     "MemoOutcome", "EarningsTranscript", "DocChunk", "MemoPostmortem",
     "ThemeExposure", "CatalystEvent", "RegenJob", "MispricingAudit",
     "CronLoopRun",
+    # W6 / FIX-007 (`models/memo.py`): the outcome-eligibility ledger.
+    "MemoOutcomeEligibility",
     # FEAT-002 (`models/accounts.py`, `models/public.py`).
     "User", "Subscription", "UsageCounter", "UsageEvent", "AdminOverride",
     "BillingWebhookEvent", "RateLimitWindow", "ActiveAction",
@@ -151,6 +153,8 @@ TABLE_NAMES = sorted([
     "mispricing_audits", "portfolio_runs", "provider_cache", "regen_jobs",
     "research_snapshots", "screener_metrics", "screener_scores", "sdk_traces",
     "stock_memos", "theme_exposure", "ui_logs",
+    # W6 / FIX-007 (`models/memo.py`).
+    "memo_outcome_eligibility",
     # FEAT-002 (`models/accounts.py`, `models/public.py`).
     "users", "subscriptions", "usage_counters", "usage_events", "admin_overrides",
     "billing_webhook_events", "rate_limit_windows", "active_actions",
