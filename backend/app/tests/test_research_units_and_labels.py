@@ -9,6 +9,11 @@ local-only):
   offer, `current_vs_own_median = 0.067`, carried no unit. The builder now
   also emits the gap in points, the deterministic text labels both, and the
   narrative LLM is handed the labelled field (prompt text untouched).
+- Sector placement: META's 16.38x EV/EBITDA sat in Q4 of a cohort whose
+  maximum was 21.20x, and was labelled "richest in cohort". Quartile labels
+  now name the band and the measure ranked — never an extremum, and never
+  multiple wording for a yield or a spend ratio.
+- Cohort trend deltas are differences of margins, i.e. percentage points.
 """
 from __future__ import annotations
 
@@ -17,12 +22,13 @@ from unittest.mock import PropertyMock
 
 import pytest
 
-from app.agents import llm
+from app.agents import graph, influence, llm, sector_agents
 from app.agents.comps_agent import run_comps_agent
 from app.agents.long_form import deterministic_long_form
 from app.config import Settings
 from app.finance import comps_history as ch
 from app.schemas import AgentFinding, CompsHistoryStats, CompsResult, CompsRow
+from app.services.sector_research_service import compute_kpi_placements
 
 # META v1, saved values.
 META_OP_MARGIN = 0.41437855159579234
@@ -126,3 +132,83 @@ def test_long_form_self_history_labels_units():
     om = next(line for line in _comps_long_form(fresh).splitlines()
               if line.startswith("- **operating_margin**"))
     assert "+2.6 percentage points vs own median (+6.7% relative)" in om
+
+
+# ---------------------------------------------------------------------------
+# Sector quartile placement labels
+# ---------------------------------------------------------------------------
+
+_GROUPS = {
+    "quality": ["operating_margin"],
+    "capital_intensity": ["capex_pct_revenue"],
+    "valuation": ["EV_EBITDA", "FCF_yield"],
+}
+
+
+def _placements(target: dict, cohort: dict[str, list[float]]) -> dict:
+    n = len(next(iter(cohort.values())))
+    rows = [{k: v[i] for k, v in cohort.items()} for i in range(n)]
+    return compute_kpi_placements(target, rows, _GROUPS)
+
+
+def test_meta_top_quartile_multiple_is_not_called_the_cohort_maximum():
+    cohort = {
+        "EV_EBITDA": [4.37, 5.0, 5.89, 8.0, 10.0, 11.59, 12.0, 13.29, 15.0, 21.20],
+        "FCF_yield": [0.0193, 0.0193, 0.025, 0.05, 0.06, 0.0678, 0.09, 0.117, 0.15, 0.215],
+        "operating_margin": [0.03, 0.1, 0.14, 0.2, 0.21, 0.213, 0.25, 0.29, 0.30, 0.32],
+        "capex_pct_revenue": [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.20],
+    }
+    target = {"EV_EBITDA": 16.38, "FCF_yield": 0.0277, "operating_margin": 0.4144,
+              "capex_pct_revenue": 0.15}
+    p = _placements(target, cohort)
+    assert p["EV_EBITDA"]["distribution"]["max"] == 21.20  # a peer is richer
+    assert p["EV_EBITDA"]["quartile"] == 4
+    assert p["EV_EBITDA"]["interpretation"] == "top-quartile multiple"
+    # A below-median yield is not a "below-median multiple" (it is the rich side).
+    assert p["FCF_yield"]["quartile"] == 2
+    assert p["FCF_yield"]["interpretation"] == "below-median yield"
+    assert p["capex_pct_revenue"]["interpretation"] == "top-quartile intensity"
+    assert p["operating_margin"]["interpretation"] == "top quartile"  # unchanged group
+
+
+@pytest.mark.parametrize("q", [1, 2, 3, 4])
+def test_no_valuation_label_claims_an_extremum_or_shifts_keyword_signals(q):
+    old = {4: "richest in cohort", 3: "above-median multiple",
+           2: "below-median multiple", 1: "cheapest in cohort"}[q]
+    # One ranked KPI per group, target placed in quartile q of 8 cohort values.
+    cohort = [float(i) for i in range(1, 9)]
+    target_for_q = {1: 0.5, 2: 2.5, 3: 4.5, 4: 8.5}[q]
+    for kpi in ("EV_EBITDA", "FCF_yield", "capex_pct_revenue"):
+        p = _placements({kpi: target_for_q}, {kpi: cohort})[kpi]
+        assert p["quartile"] == q
+        label = p["interpretation"]
+        assert not any(w in label for w in ("richest", "cheapest", "in cohort"))
+        # ...and names what was ranked: a yield or a spend ratio is not a multiple.
+        measure = {"EV_EBITDA": "multiple", "FCF_yield": "yield",
+                   "capex_pct_revenue": "intensity"}[kpi]
+        assert label.endswith(measure), (kpi, label)
+        # Wording only: deterministic bull/bear line selection and influence
+        # tone read these lines by keyword, and must score them as before.
+        line = f"{kpi}: 1.0 vs cohort median 1.0 — "
+        for polarity in ("bull", "bear"):
+            new_pick = graph._findings_signal_lines(
+                AgentFinding(agent="Sector Analyst", headline="", summary="",
+                             key_points=[line + label]), polarity=polarity)
+            old_pick = graph._findings_signal_lines(
+                AgentFinding(agent="Sector Analyst", headline="", summary="",
+                             key_points=[line + old]), polarity=polarity)
+            assert bool(new_pick) == bool(old_pick)
+        assert influence._tone_score(label) == influence._tone_score(old)
+
+
+# ---------------------------------------------------------------------------
+# Cohort trend deltas
+# ---------------------------------------------------------------------------
+
+def test_cohort_margin_and_capex_deltas_are_printed_in_points():
+    lines = sector_agents._format_trends({
+        "cohort_op_margin_delta": 0.029, "cohort_capex_delta": -0.012,
+    })
+    assert "Cohort op margin expanding (+2.9pp multi-year)" in lines
+    assert "Cohort capex intensity moderating (-1.2pp multi-year)" in lines
+    assert not any("% multi-year" in s for s in lines)
