@@ -17,6 +17,7 @@ from .agents import (
     BullBearCase,
     CatalystItem,
     CriticReview,
+    DivergenceAssessment,
     RiskItem,
     RoundFindings,
 )
@@ -49,11 +50,144 @@ class ValuationVerdict(BaseModel):
     practice. The thesis, the valuation card, and the mispricing fallback
     all read from it.
     """
-    verdict: Literal["undervalued", "fairly_priced", "overvalued"] = "fairly_priced"
+    # "mixed" (W2b 7(b): opposing evidence votes) is accepted here one
+    # deploy wave before anything writes it. Expand before write is what
+    # keeps a rollback safe: if the writer is reverted, memos it already
+    # stored still validate instead of turning into `memo_unreadable`.
+    verdict: Literal["undervalued", "fairly_priced", "overvalued", "mixed"] = "fairly_priced"
+    # How `verdict` was reached. Every memo stored before W2b derived it
+    # from the rating (`graph._verdict_word`), so the default is the truth
+    # for them; W2b's evidence-only verdict records "evidence".
+    basis: Literal["rating", "evidence"] = "rating"
+    # The evidence votes and inputs behind an "evidence" verdict (W2b).
+    # Free-form so the vote set can evolve without a schema bump.
+    signals: dict[str, Any] = Field(default_factory=dict)
     dcf_base_upside: float | None = None
     comps_ev_ebitda_premium: float | None = None
     factor_valuation: float | None = None
     summary: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Memo contract C1 (S2, 2026-09-24): every StockMemoOut change W2a and W2b
+# need, shipped expand-only in one schema bump. No writer sets any of these
+# in the slice that adds them; later slices only write them.
+# ---------------------------------------------------------------------------
+
+SectionStatus = Literal["available", "degraded", "unavailable"]
+# Closed vocabulary; the frontend maps each value to one sentence. This is
+# the union of the integration plan's C1 list and the reasons W2a §4.3's
+# per-section rules emit, so the presenter (a later slice that must not
+# touch this schema) never needs a value the contract lacks.
+SectionReason = Literal[
+    "template_fallback", "template_always", "derived_from_hidden", "skipped_by_intake",
+    "critic_not_run", "rule_based", "llm_patched", "reduced_inputs", "not_produced",
+    "unclassified",
+    "agent_failed", "no_source_data", "pm_view_unavailable", "partial_template",
+    "follow_up_unanswered", "templated_scenarios",
+]
+
+
+class SectionAvailability(BaseModel):
+    """Read-time verdict on one memo section (W2a). Never stored.
+
+    Computed by the presenter from the stored payload on every read, so a
+    change to the classification rules applies to old memos without
+    rewriting them. `memo_store.save_memo` refuses a memo that carries one.
+    """
+    status: SectionStatus = "available"
+    reason: SectionReason | None = None
+    hidden_items: int = 0           # list sections: items the presenter removed
+    headline_hidden: bool = False   # bull/bear: headline blanked, real items kept
+    # Evidence for the verdict, e.g. "event:PM Synthesis/DeterministicFallback",
+    # "signature:pm_view_tail", "provenance:thesis=rewrite".
+    basis: list[str] = Field(default_factory=list)
+
+
+NumberClaimStatus = Literal[
+    "traced", "weak", "untraceable", "mis_anchored", "assumption", "threshold", "unchecked",
+]
+
+
+class NumberClaim(BaseModel):
+    """One figure in memo prose and how it traced to the source ledger (W2b 7a).
+
+    `start`/`end` are offsets into the field's text; `raw` is the exact
+    slice, so a renderer can detect a stale offset instead of mis-marking.
+    """
+    field: str
+    start: int
+    end: int
+    raw: str
+    value: float | None = None
+    unit: str = ""
+    status: NumberClaimStatus
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class WithheldItem(BaseModel):
+    """A list item removed from the memo because its figures did not trace."""
+    field: str
+    index: int
+    text: str
+    claims: list[NumberClaim] = Field(default_factory=list)
+
+
+class NumberCheck(BaseModel):
+    """W2b 7(a) number-to-source check. `checked=False` means not run."""
+    checked: bool = False
+    method_version: str = "1"
+    # Per-status tallies ("traced", "untraceable", ...). A dict rather than
+    # one field per status so a new status does not need a schema bump.
+    counts: dict[str, int] = Field(default_factory=dict)
+    claims: list[NumberClaim] = Field(default_factory=list)
+    withheld: list[WithheldItem] = Field(default_factory=list)
+    lists_not_withheld: list[str] = Field(default_factory=list)
+    # Fields whose figures were not checked (e.g. text a news patch added),
+    # which the UI labels rather than presenting as verified.
+    unchecked_fields: list[str] = Field(default_factory=list)
+    sources_cited: list[str] = Field(default_factory=list)
+    primary_kinds_cited: list[str] = Field(default_factory=list)
+    assumptions: list[dict[str, Any]] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class RatingReconciliation(BaseModel):
+    """W2b 7(b): how the PM rating was squared with the valuation evidence."""
+    outcome: Literal["not_applicable", "consistent", "accepted", "downgraded"] = "not_applicable"
+    pm_rating: str = ""
+    pm_confidence: float | None = None
+    blended_rating: str = ""
+    final_rating: str = ""
+    valuation_verdict: str = ""
+    divergence: bool = False
+    reason: str = ""
+    reason_checks: dict[str, bool] = Field(default_factory=dict)
+    critic_assessment: DivergenceAssessment = "not_assessed"
+    note: str = ""
+
+
+class ConfidenceCap(BaseModel):
+    """One ceiling on earned confidence (W2b 7c), e.g. `critic_not_live` 60."""
+    code: str
+    cap: float
+    detail: str = ""
+
+
+class ConfidenceAssessment(BaseModel):
+    """PM confidence (`raw`) and what the caps left of it (`final`)."""
+    raw: float
+    final: float
+    caps: list[ConfidenceCap] = Field(default_factory=list)
+    binding: str | None = None
+
+
+class MemoQuality(BaseModel):
+    """W2b research-quality record. None on every memo that pre-dates it."""
+    v: int = 1
+    number_check: NumberCheck | None = None
+    rating_reconciliation: RatingReconciliation | None = None
+    confidence: ConfidenceAssessment | None = None
 
 
 class StockMemoOut(BaseModel):
@@ -158,6 +292,20 @@ class StockMemoOut(BaseModel):
     # memos that pre-date the field, and when `ENABLE_SCORECARD=false`.
     # It informs the memo; it does not enter the rating blend.
     scorecard: ScorecardSummary | None = None
+    # W2a write-time facts the payload cannot otherwise recover, e.g.
+    # {"v": 1, "llm_configured": bool, "thesis": "pm"|"rewrite",
+    # "mispricing": "pm"|"fallback"}; W2b may add "confidence": "earned".
+    # {} on memos that pre-date it. Persisted with the memo.
+    section_provenance: dict[str, Any] = Field(default_factory=dict)
+    # W2a read-time map keyed by section key. Filled only by the presenter
+    # on the way out; empty on raw and stored memos. `save_memo` refuses a
+    # memo that carries one (a presented memo must never become the stored
+    # truth) and also excludes the key as a backstop.
+    section_availability: dict[str, SectionAvailability] = Field(default_factory=dict)
+    # W2b research-quality record (number check, rating reconciliation,
+    # earned confidence). None on memos that pre-date it; the UI then
+    # renders nothing new.
+    quality: MemoQuality | None = None
     disclaimer: str = (
         "MarketMosaic is for investment research and education only. "
         "It does not provide personalized financial, investment, legal, or tax advice."

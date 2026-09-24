@@ -115,13 +115,29 @@ def save_memo(
     # Assignment/model_copy can bypass pydantic validation. A serializable
     # object is not necessarily a readable memo; validate before any DB work.
     memo = StockMemoOut.model_validate(memo.model_dump(mode="python", warnings=False))
+    # W2a: `section_availability` is computed on the way OUT, from the stored
+    # payload, and the presenter replaces hidden prose with a placeholder. A
+    # memo carrying it is therefore a presented memo; saving one would make
+    # the placeholder text the stored truth and hide those sections from
+    # every later rule change. Refuse loudly rather than strip silently, so
+    # the caller that round-tripped a presented memo is found, not masked.
+    if memo.section_availability:
+        raise ValueError(
+            f"refusing to save a presented memo for {memo.ticker}: section_availability is "
+            "read-time only; save the raw memo, not the output of the presenter"
+        )
     own = db is None
     if own:
         db = SessionLocal()
     try:
         # Round-trip through json to make the payload safe for SQLite's JSON
         # column even when fields contain non-serializable types like datetime.
-        memo_payload: dict[str, Any] = json.loads(memo.model_dump_json())
+        # The exclude is a backstop behind the refusal above: the stored row
+        # never carries the read-time map, even an empty one, so there is
+        # no stored value for a reader to mistake for the current verdict.
+        memo_payload: dict[str, Any] = json.loads(
+            memo.model_dump_json(exclude={"section_availability"})
+        )
         from .regen_lease import LeaseLost, assert_current
         job = assert_current(db=db, lock=True)
         if job is not None:
