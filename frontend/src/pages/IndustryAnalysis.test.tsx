@@ -196,6 +196,9 @@ describe("IndustryAnalysis — index", () => {
 // query and the hash, which are what make the URL a citation.
 describe("IndustryAnalysis — public labels and slugs", () => {
   it("replaces an old link's internal code with the slug, keeping ?version, ?tab and the hash", async () => {
+    // The captured group answers with its slug, never the code the old
+    // link carried (so this test cannot pass by the two coinciding).
+    expect(fx.CODE).toMatch(/^[a-z][a-z0-9-]+$/);
     const { fetchMock } = mount(`/app/industries/4530?version=1&tab=performance#returns`);
     await settle();
     await waitFor(() => expect(location()).toBe(`/app/industries/${fx.CODE}?version=1&tab=performance#returns`));

@@ -309,6 +309,24 @@ def test_scrub_strings_keeps_the_shape():
 # --- project_public ------------------------------------------------------------------
 
 
+def test_project_public_withholds_branded_sources_but_not_a_word_containing_the_letters():
+    """A primary source that names the brand or its publishers is withheld
+    and counted; one about biologics is not (the old substring test dropped
+    it). Bare-code group lists under the snapshot's keys become slugs."""
+    out = il.project_public({
+        "primary_sources": [{"name": "Biologics manufacturing reference"},
+                            {"name": "MSCI GICS workbook", "url": "https://www.msci.com/x"}],
+        "insufficient_sample_groups": ["4530", "4510"],
+        "missing_groups": ["4530", {"code": "4510", "name": "Software & Services", "reason": "no_stats"}],
+    })
+    assert out["primary_sources"] == [{"name": "Biologics manufacturing reference"}]
+    assert out["primary_sources_withheld"] == 1
+    assert out["insufficient_sample_groups"] == [il.slug("4530"), il.slug("4510")]
+    assert out["missing_groups"] == [il.slug("4530"),
+                                     {"code": il.slug("4510"), "name": il.label("4510"), "reason": "no_stats"}]
+    assert il.has_brand("GICS") and il.has_brand("gics_x") and not il.has_brand("Biologics")
+
+
 def test_project_public_rewrites_keys_and_strings_and_never_mutates_its_input():
     payload = {
         "code": "4530", "name": "Semiconductors & Semiconductor Equipment",
