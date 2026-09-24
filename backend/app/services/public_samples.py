@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models.public import PublicSample
 from ..models.universe import Company
+from .memo_sections import PRESENTATION_VERSION
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ PAYLOAD_CAP_BYTES = 1_500_000
 #       serve time (template-filled sections read "Unavailable in this
 #       version."), their stored commentary is withheld, and the ledger
 #       reports a hidden mispricing card as unavailable.
+#   (The ETag also carries memo_sections.PRESENTATION_VERSION: a rule change
+#   re-presents legacy memo rows and withholds commentary at serve time.)
 _ASSEMBLY_VERSION = "v3"
 
 # The admin "rebuild" trigger crosses the web→worker boundary through the
@@ -170,7 +173,7 @@ def list_samples(db: Session) -> list[dict[str, Any]]:
 def compute_etag(rows: dict[str, PublicSample]) -> str:
     """Quoted strong ETag over the per-row hashes. Stable across processes
     (rows are the only input) and distinct for the unbuilt state."""
-    parts = [_ASSEMBLY_VERSION]
+    parts = [_ASSEMBLY_VERSION, f"presentation:{PRESENTATION_VERSION}"]
     for kind in KINDS:
         row = rows.get(kind)
         parts.append(f"{kind}:{row.etag if row is not None else '-'}")
@@ -228,6 +231,13 @@ def assemble(db: Session, ticker: str) -> tuple[dict[str, Any], str]:
             payload[kind] = None
             degraded.append("commentary: withheld (built before section availability)")
             continue
+        if kind == "commentary" and not commentary_is_current(row.payload, rows.get("memo")):
+            # A memo rebuild that succeeded next to a commentary rebuild that
+            # did not (LLM error, empty answer, no LLM) keeps the OLD
+            # commentary row, written from a different memo or presentation.
+            payload[kind] = None
+            degraded.append("commentary: withheld (built from a different memo presentation)")
+            continue
         payload[kind] = _public_shape(kind, row.payload)
         if payload[kind] is None:
             degraded.append(f"{kind}: empty")
@@ -260,7 +270,24 @@ def _public_shape(kind: str, stored: Any) -> Any:
         return list(points) if isinstance(points, list) and points else None
     if kind == "memo" and isinstance(stored, dict) and "section_availability" not in stored:
         return _present_legacy_memo(stored)
+    if kind == "commentary" and isinstance(stored, dict) and "basis" in stored:
+        # Build provenance, not page content: the wire shape stays
+        # `{text, generated_at, model}`.
+        return {k: v for k, v in stored.items() if k != "basis"}
     return stored
+
+
+def commentary_is_current(stored: Any, memo_row: PublicSample | None) -> bool:
+    """True when a commentary row was written from the memo row now served,
+    under the current presentation rules. `_build_commentary` stamps both
+    facts; a row without the stamp predates them and is not current."""
+    basis = stored.get("basis") if isinstance(stored, dict) else None
+    return (
+        isinstance(basis, dict)
+        and memo_row is not None
+        and basis.get("presentation_version") == PRESENTATION_VERSION
+        and basis.get("memo_source_ref") == memo_row.source_ref
+    )
 
 
 def _present_legacy_memo(stored: dict[str, Any]) -> dict[str, Any]:
@@ -577,6 +604,11 @@ WORKER_ONLY_FUNCTIONS: frozenset[str] = frozenset({
 })
 
 
+def _stored_ref(source_ref: str | None) -> str | None:
+    """`source_ref` as the column holds it (64 chars)."""
+    return (source_ref or "")[:64] or None
+
+
 def _upsert_row(
     db: Session, ticker: str, kind: str, payload: dict[str, Any], *,
     source_ref: str | None, degraded: list[str], now: datetime, built_by: str,
@@ -586,7 +618,7 @@ def _upsert_row(
         row = PublicSample(ticker=ticker, kind=kind)
         db.add(row)
     row.payload = payload
-    row.source_ref = (source_ref or "")[:64] or None
+    row.source_ref = _stored_ref(source_ref)
     row.etag = payload_etag(payload)
     row.built_at = now
     row.built_by = built_by[:32]
@@ -713,7 +745,9 @@ def _build_screener_row(ticker: str, db: Session) -> tuple[dict[str, Any] | None
     return row, f"screener_score:{mine.id}", []
 
 
-def _build_commentary(ticker: str, memo: dict[str, Any] | None, *, now: datetime) -> tuple[dict[str, Any] | None, str | None, list[str]]:
+def _build_commentary(
+    ticker: str, memo: dict[str, Any] | None, *, now: datetime, memo_source_ref: str | None = None,
+) -> tuple[dict[str, Any] | None, str | None, list[str]]:
     """One short LLM paragraph framing the sample. Optional: skipped
     outright when no LLM is configured (CI, demo deployments), and a
     failure or empty answer is a degraded note, never an exception."""
@@ -748,6 +782,10 @@ def _build_commentary(ticker: str, memo: dict[str, Any] | None, *, now: datetime
         "text": text.strip()[:2000],
         "generated_at": now.isoformat(),
         "model": f"{settings.active_llm_provider}:cheap",
+        # What the text was written from; `assemble` serves it only beside
+        # that memo row under these presentation rules.
+        "basis": {"presentation_version": PRESENTATION_VERSION,
+                  "memo_source_ref": _stored_ref(memo_source_ref)},
     }, "llm:cheap", []
 
 
@@ -803,6 +841,7 @@ def build_for_ticker(
     built: list[str] = []
     degraded: list[str] = []
     memo_payload: dict[str, Any] | None = None
+    memo_source_ref: str | None = None
     try:
         builders: list[tuple[str, Any]] = [
             ("memo", lambda: _build_memo(ticker, db)),
@@ -811,7 +850,8 @@ def build_for_ticker(
             ("fundamentals", lambda: _build_fundamentals(ticker, db)),
             ("prices", lambda: _build_prices(ticker)),
             ("screener_row", lambda: _build_screener_row(ticker, db)),
-            ("commentary", lambda: _build_commentary(ticker, memo_payload, now=now)),
+            ("commentary", lambda: _build_commentary(ticker, memo_payload, now=now,
+                                                     memo_source_ref=memo_source_ref)),
         ]
         for kind, fn in builders:
             try:
@@ -833,7 +873,7 @@ def build_for_ticker(
             _upsert_row(db, ticker, kind, fitted, source_ref=source_ref, degraded=fit_notes, now=now, built_by=built_by)
             built.append(kind)
             if kind == "memo":
-                memo_payload = fitted
+                memo_payload, memo_source_ref = fitted, source_ref
         return {"ticker": ticker, "built": built, "degraded": degraded}
     finally:
         if own:
