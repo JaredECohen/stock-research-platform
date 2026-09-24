@@ -581,27 +581,62 @@ def post_pass_failure_note(failures: list[dict[str, Any]]) -> str:
 # (embeddings plus an LLM diff); `transcripts` costs four AlphaVantage
 # requests. The third read, `get_financial_statements`, is deliberately NOT
 # in this list: it is one JSON response with no bodies and no LLM behind it.
-# It is also no longer how provider-owned tickers are refreshed: once a
-# ticker has durable rows from a named provider, `backfill_ticker` skips it
-# entirely and `fundamental_history_service.backfill_fundamentals` (FMP
-# primary, provider-identified, quarantine-audited) owns that history.
+# It no longer touches provider-owned history: once a ticker has durable
+# rows from a named provider, `backfill_ticker` ingests only periods newer
+# than that provider history (see `provider_owned_period_ends`), and
+# `fundamental_history_service.backfill_fundamentals` (FMP primary,
+# provider-identified, quarantine-audited) owns everything up to it.
 _BUDGETED_BACKFILL_CAPABILITIES = ("filings", "transcripts")
 
 
-def provider_owned_fundamentals(ticker: str, *, db: Session | None = None) -> bool:
-    """True when the ticker already has durable rows from a named provider."""
+# 52/53-week fiscal years move a period end by a few days between providers
+# (`fundamental_history_service.PERIOD_END_TOLERANCE_DAYS`, not imported:
+# that module imports this one).
+_OWNED_PERIOD_END_TOLERANCE_DAYS = 7
+
+
+def provider_owned_period_ends(ticker: str, *, db: Session | None = None) -> dict[str, _date] | None:
+    """Newest named-provider period end per statement, or None at first contact.
+
+    Annual rows decide a statement's cutoff (the legacy read is annual);
+    a statement with only quarterly named rows falls back to the ticker's
+    newest named period end of any statement or cadence.
+    """
     own = db is None
     if own:
         db = SessionLocal()
     try:
         FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
-        return db.execute(select(FinancialPeriod.id).where(
-            FinancialPeriod.ticker == ticker.upper(),
-            FinancialPeriod.source.not_in(LEGACY_SOURCES),
-        ).limit(1)).first() is not None
+        rows = db.execute(select(FinancialPeriod.statement, FinancialPeriod.fiscal_quarter, FinancialPeriod.period_end)
+                          .where(FinancialPeriod.ticker == ticker.upper(),
+                                 FinancialPeriod.source.not_in(LEGACY_SOURCES),
+                                 FinancialPeriod.period_end.is_not(None))).all()
     finally:
         if own:
             db.close()
+    if not rows:
+        return None
+    newest = max(end for _, _, end in rows)
+    cutoffs: dict[str, _date] = {}
+    for statement, quarter, end in rows:
+        if quarter is None and (statement not in cutoffs or end > cutoffs[statement]):
+            cutoffs[statement] = end
+    return {statement: cutoffs.get(statement, newest) for statement in ("income", "balance", "cash")}
+
+
+def _periods_after_owned(statements: dict[str, Any], cutoffs: dict[str, _date]) -> tuple[dict[str, list], int]:
+    """Keep only legacy rows for periods newer than the named-provider history."""
+    kept: dict[str, list] = {}
+    skipped = 0
+    for statement, cutoff in cutoffs.items():
+        kept[statement] = []
+        for row in statements.get(statement) or []:
+            end = _coerce_date(row.get("period_end") or row.get("date") or row.get("period"))
+            if end is not None and (end - cutoff).days > _OWNED_PERIOD_END_TOLERANCE_DAYS:
+                kept[statement].append(row)
+            else:
+                skipped += 1
+    return kept, skipped
 
 
 def backfill_hits_provider(ticker: str) -> bool:
@@ -647,9 +682,18 @@ def backfill_ticker(
     # FIX-006: the anonymous, cache-backed annual read cannot say which
     # provider answered or whether a cache did, so it must never touch
     # provider-owned history (it would add unidentified `live` rows beside
-    # FMP's). First-contact and demo tickers keep the legacy ingest.
-    durable = provider_owned_fundamentals(ticker, db=db)
-    statements = {} if durable else (ds.get_financial_statements(ticker) or {})
+    # FMP's). It still supplies periods NEWER than that history: until the
+    # filing-driven refresh (W5a S6, `fundamental_refresh`) ships, it is the
+    # only scheduled writer of new periods, and the raw readers (DCF history,
+    # scorecard pit_snapshot, screener, Explorer, cycle_position) would
+    # otherwise freeze at the one-time re-pull. The next FMP run adopts or
+    # quarantines such a row with an audit. First-contact and demo tickers
+    # keep the whole legacy ingest.
+    owned_through = provider_owned_period_ends(ticker, db=db)
+    statements = ds.get_financial_statements(ticker) or {}
+    legacy_skipped = 0
+    if owned_through is not None:
+        statements, legacy_skipped = _periods_after_owned(statements, owned_through)
     filings = ds.get_filings(ticker, prefer_cached=prefer_cached) or []
     transcripts = ds.get_earnings_transcripts(
         ticker, prefer_cached=prefer_cached,
@@ -689,8 +733,9 @@ def backfill_ticker(
             "filings": n_filings,
             "transcripts": n_tx,
         }
-        if durable:
+        if owned_through is not None:
             result["fundamentals"] = "durable"
+            result["legacy_periods_skipped"] = legacy_skipped
         failures = run_ingest_post_passes(filing_ids, transcript_ids)
         if failures:
             result["post_pass_failures"] = failures

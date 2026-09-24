@@ -316,9 +316,12 @@ def test_upsert_refuses_period_end_change_under_available_at():
         ("period_end_change_refused", "2025-02-02", None)]
 
 
-def test_provider_owned_ticker_skips_the_legacy_statement_read(monkeypatch):
-    """The anonymous, cache-backed annual read must not write beside durable
-    provider-owned history; first-contact tickers keep the legacy ingest."""
+def test_provider_owned_ticker_ingests_only_periods_newer_than_named_history(monkeypatch):
+    """The anonymous, cache-backed annual read must not write inside durable
+    provider-owned history, but until S6's filing-driven refresh ships it is
+    the only scheduled writer of NEW periods, so those still arrive (the raw
+    readers would otherwise freeze at the one-time re-pull). First-contact
+    tickers keep the whole legacy ingest."""
     from datetime import date
 
     from app.services.data_service import get_data_service
@@ -334,13 +337,21 @@ def test_provider_owned_ticker_skips_the_legacy_statement_read(monkeypatch):
 
     def spy(ticker):
         asked.append(ticker)
-        return original(ticker)
+        if ticker != "NVDA":
+            return original(ticker)
+        rows = [("FY2024", "2024-01-28", 7.0), ("FY2025", "2025-01-28", 9.0), ("FY2026", "2026-01-25", 11.0)]
+        return {"income": [{"period": p, "period_end": e, "revenue": v, "currency": "USD"} for p, e, v in rows],
+                "balance": [], "cash": []}
 
     monkeypatch.setattr(ds, "get_financial_statements", spy)
     owned = history_service.backfill_ticker("NVDA")
     first_contact = history_service.backfill_ticker("MSFT")
-    assert owned["financial_periods"] == 0 and owned["fundamentals"] == "durable"
+    assert owned["fundamentals"] == "durable" and owned["legacy_periods_skipped"] == 2
+    assert owned["financial_periods"] == 1
     assert first_contact["financial_periods"] > 0 and "fundamentals" not in first_contact
-    assert asked == ["MSFT"]
+    assert asked == ["NVDA", "MSFT"]
     with SessionLocal() as db:
-        assert db.query(FinancialPeriod).filter_by(ticker="NVDA").count() == 1
+        rows = {(r.period, r.source, r.value) for r in db.query(FinancialPeriod).filter_by(ticker="NVDA")}
+    # FY2025 (2 days from FMP's end) and the older FY2024 stay FMP's; only
+    # the period after the named history is added, as an unidentified row.
+    assert rows == {("FY2025", "fmp", 1.0), ("FY2026", "live", 11.0)}
