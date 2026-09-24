@@ -3,20 +3,30 @@
 FinancialPeriod stores latest reported values, not a revision ledger. Availability
 is retained on updates, so this is explicitly NOT an as-originally-reported PIT
 archive. Provider/coverage failures are returned with their full identities.
+
+Ownership (owner decision 2026-09-24, FIX-006): FMP owns every observation it
+reports. An equal FMP verification adopts a secondary or legacy observation
+(source -> fmp, fetch time -> now, availability kept). An FMP disagreement
+quarantines the other row (`fundamental_quarantine`, never a delete) and stores
+FMP's observation, carrying the quarantined row's availability when it is
+valid. Secondary providers still cannot date-stamp or adopt an FMP observation,
+and never fill a period FMP reports. Between non-primary providers the earlier
+rules are unchanged. Every quarantine, adoption and restatement is audited in
+`financial_data_repairs` with before-images.
 """
 from __future__ import annotations
 
 import logging
 import math
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
-from ..models import FinancialPeriod
+from ..models import FinancialDataRepair, FinancialPeriod
 from . import history_service as history
 from . import scorecard_pit
 from .data_service import get_data_service
@@ -26,6 +36,21 @@ log = logging.getLogger(__name__)
 LINES = {"income": history._INCOME_LINES, "balance": history._BALANCE_LINES, "cash": history._CASH_LINES}
 PRIMARY = {"income": "revenue", "balance": "total_assets", "cash": "cash_from_operations"}
 LEGACY_SOURCES = {"", "live", "demo", "unknown"}
+# Owner decision 2026-09-24: FMP is primary everywhere; other providers only
+# fill periods FMP lacks.
+PRIMARY_PROVIDER = "fmp"
+# 52/53-week fiscal years move a period end by a few days between providers.
+PERIOD_END_TOLERANCE_DAYS = 7
+# Unattended (scheduled) refreshes may quarantine only small, unambiguous
+# sets. Anything larger, or any label/alias/period-end shift, becomes a
+# planned repair a person reviews through the bk-repair GET/apply routes.
+QUARANTINE_AUTO_MAX_ROWS = 20
+QUARANTINE_AUTO_MAX_SHARE = 0.05
+# Integration critique names: exact_key_value_conflict,
+# exact_key_currency_conflict, availability_before_period_end.
+SAFE_AUTO_REASONS = frozenset({"value_conflicts_with_primary", "currency_conflicts_with_primary",
+                               "invalid_availability_precedes_period_end"})
+TakeoverMode = Literal["supervised", "unattended"]
 REFRESH_TTL_DAYS = 7
 BLOCKING_ISSUES = {
     "stored_value_conflict", "invalid_value", "stored_period_end_conflict", "conflicting_provider_period",
@@ -35,7 +60,68 @@ BLOCKING_ISSUES = {
     "legacy_period_relabel_conflict",
     "ambiguous_provider_period_end",
     "duplicate_stored_period_end",
+    # An unattended takeover that needs review has not happened yet.
+    "primary_takeover_planned",
+    "repull_plan_mismatch",
 }
+# Stored exactly as FMP reports them (owner decision 2026-09-24); flagged on
+# read, never normalized. The flag retires itself once the stored value
+# moves more than 0.5% away from the evidenced provider value (an FMP fix).
+KNOWN_DEFINITION_BREAKS: dict[tuple[str, str, str], dict[str, Any]] = {
+    ("BK", "income", "revenue"): {
+        "period": "2026Q1", "provider_value": 9.863e9, "issuer_value": 5.409e9,
+        "note": "FMP 2026Q1 revenue is gross of interest expense (issuer net revenue = 9.863bn - 4.454bn); "
+                "2026Q2 is net. Do not compare across the break.",
+        "evidence": "docs/reviews/2026-09-13-bk-provider-comparability.json"},
+    ("BK", "income", "eps_diluted"): {
+        "period": "2026Q2", "provider_value": 2.43, "issuer_value": 2.45,
+        "note": "FMP 2026Q2 diluted EPS differs from the issuer's reported 2.45.",
+        "evidence": "docs/reviews/2026-09-13-bk-provider-comparability.json"},
+    ("BK", "income", "weighted_avg_shares_diluted"): {
+        "period": "2026Q2", "provider_value": 698.164e6, "issuer_value": 692.223e6,
+        "note": "FMP 2026Q2 diluted share count differs from the issuer's reported 692.223m.",
+        "evidence": "docs/reviews/2026-09-13-bk-provider-comparability.json"},
+}
+
+
+# The parts of a re-pull plan that change or move a STORED row, each keyed by
+# row id so a reviewed dry run and its execution can be compared exactly.
+# Inserts of periods nothing stores are deliberately not part of it: they
+# overwrite nothing, and a quarter FMP publishes between review and
+# execution (earnings season) must not abort a ticker. `primary_received`
+# says whether FMP answered: a reviewed plan made with FMP must not execute
+# on fallback data after a transient FMP failure, nor the reverse.
+PLAN_COMPONENTS = ("quarantine", "adoptions", "restatements", "relabels", "primary_received")
+
+
+class PlanMismatch(RuntimeError):
+    """An executed re-pull would change stored rows differently from its reviewed dry run."""
+
+    def __init__(self, expected: dict[str, Any], actual: dict[str, Any]) -> None:
+        super().__init__("fundamentals repull plan mismatch")
+        self.expected, self.actual = expected, actual
+        self.differs = [c for c in PLAN_COMPONENTS if expected.get(c) != actual.get(c)]
+
+
+def normalize_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """JSON-stable form of a plan identity (string row ids, sorted adoptions)."""
+    plan = plan or {}
+    return {"quarantine": {str(k): v for k, v in (plan.get("quarantine") or {}).items()},
+            "adoptions": sorted(int(i) for i in plan.get("adoptions") or []),
+            "restatements": {str(k): v for k, v in (plan.get("restatements") or {}).items()},
+            "relabels": {str(k): v for k, v in (plan.get("relabels") or {}).items()},
+            "primary_received": bool(plan.get("primary_received"))}
+
+
+def plan_identity(report: dict[str, Any]) -> dict[str, Any]:
+    """What a run did (or, dry, would do) to stored rows, from its report."""
+    return normalize_plan({
+        "quarantine": {q["id"]: q["reason"] for q in report.get("quarantined") or []},
+        "adoptions": {a["id"] for a in report.get("adoptions") or []},
+        "restatements": {r["id"]: r["new_value"] for r in report.get("restatements") or []},
+        "relabels": {r["id"]: r["new_period"] for r in report.get("period_relabels") or []},
+        "primary_received": any(a.get("provider") == PRIMARY_PROVIDER and a.get("received")
+                                for a in report.get("attempts") or [])})
 
 
 def _has_blockers(issues: list[dict]) -> bool:
@@ -70,6 +156,26 @@ def _unusable_legacy_alias(row: FinancialPeriod, canonical: str) -> bool:
     return row.source in LEGACY_SOURCES and row.period != canonical and not _stored_period_valid(row)
 
 
+def _canonical(period: Any) -> str:
+    fy, fq = history._parse_period(period)
+    return (f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}") if fy else str(period)
+
+
+def _near(a: date | None, b: date | None) -> bool:
+    return a is not None and b is not None and abs((a - b).days) <= PERIOD_END_TOLERANCE_DAYS
+
+
+def _json_value(value: float | None) -> float | str | None:
+    return value if value is None or math.isfinite(value) else str(value)
+
+
+def _row_identity(row: FinancialPeriod) -> dict:
+    return {"id": row.id, "ticker": row.ticker, "statement": row.statement,
+            "period": row.period, "period_end": str(row.period_end), "line_item": row.line_item,
+            "fiscal_year": row.fiscal_year, "fiscal_quarter": row.fiscal_quarter, "source": row.source,
+            "currency": row.currency}
+
+
 def _stored_observation_identity(row: FinancialPeriod) -> tuple:
     """An observed statement line, independent of a possibly stale FY label."""
     return (row.period_end, row.statement, row.line_item, row.fiscal_quarter is not None)
@@ -99,7 +205,10 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
     out: dict[str, list[dict]] = {s: [] for s in LINES}
     issues: list[dict] = []
     try:
-        if not inspect(db.get_bind()).has_table(FinancialPeriod.__tablename__):
+        # The session's own connection: `backfill_fundamentals` calls this read
+        # mid-transaction, and checking out a second pooled connection there
+        # can reset the shared one (sqlite StaticPool) and drop its writes.
+        if not inspect(db.connection()).has_table(FinancialPeriod.__tablename__):
             return out
         query = select(FinancialPeriod).where(FinancialPeriod.ticker == ticker.strip().upper())
         # Inspect each entire group before applying a requested date/cadence so
@@ -115,10 +224,7 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
         for row in rows:
             if row.source == "demo" or row.statement not in LINES:
                 continue
-            identity = {"id": row.id, "ticker": row.ticker, "statement": row.statement,
-                        "period": row.period, "period_end": str(row.period_end), "line_item": row.line_item,
-                        "fiscal_year": row.fiscal_year, "fiscal_quarter": row.fiscal_quarter, "source": row.source,
-                        "currency": row.currency}
+            identity = _row_identity(row)
             fy, fq, d = _valid_period(row.period, row.period_end, end=_today())
             if fy is None or (row.fiscal_year is not None and row.fiscal_year != fy) or row.fiscal_quarter != fq:
                 parsed_fy, parsed_fq = history._parse_period(row.period)
@@ -145,6 +251,9 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
             # provider fact. Exclude only this legacy line from usable reads;
             # every stored field remains untouched, even when values differ.
             replacements = confirmed_observations.get(_stored_observation_identity(row), [])
+            primary_replacements = [r for r in replacements if r.source == PRIMARY_PROVIDER]
+            if len(replacements) > 1 and len(primary_replacements) == 1:
+                replacements = primary_replacements  # R3: the primary candidate decides.
             if row.source in LEGACY_SOURCES and len(replacements) == 1:
                 replacement = replacements[0]
                 replacement_fy, replacement_fq = history._parse_period(replacement.period)
@@ -162,8 +271,20 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
             for row in group:
                 periods_by_end.setdefault((statement, history._parse_period(period)[1] is not None, row.period_end), set()).add(period)
         duplicate_keys = set()
+        superseded_labels = set()
         for (statement, _, end), periods in periods_by_end.items():
             if len(periods) > 1:
+                # R2: one period end under several labels. When exactly one
+                # label group holds primary rows it is the observation; the
+                # others stay stored and are named, not silently dropped.
+                primary_periods = [p for p in periods if any(r.source == PRIMARY_PROVIDER for r in groups[(statement, p)])]
+                if len(primary_periods) == 1:
+                    for period in sorted(periods - {primary_periods[0]}):
+                        superseded_labels.add((statement, period))
+                        issues.extend({"kind": "label_superseded_by_primary", **_row_identity(row),
+                                       "value": _json_value(row.value), "primary_period": primary_periods[0]}
+                                      for row in groups[(statement, period)])
+                    continue
                 duplicate_keys.update((statement, period) for period in periods)
                 issues.append({"kind": "duplicate_stored_period_end", "ticker": ticker.strip().upper(),
                     "statement": statement, "period_end": end.isoformat(), "periods": sorted(periods),
@@ -171,8 +292,25 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
                               "period_end": str(row.period_end), "source": row.source}
                              for period in sorted(periods) for row in groups[(statement, period)]]})
         for (statement, period), group in groups.items():
-            if (statement, period) in duplicate_keys:
+            if (statement, period) in duplicate_keys or (statement, period) in superseded_labels:
                 continue
+            primary_rows = [r for r in group if r.source == PRIMARY_PROVIDER]
+            if primary_rows:
+                # R1: inside a primary period, named secondaries never
+                # contribute, and a legacy line is kept only when the primary
+                # does not report it and agrees on date and currency.
+                primary_values = {r.line_item: r.value for r in primary_rows}
+                primary_ends = {r.period_end for r in primary_rows}
+                primary_currencies = {r.currency for r in primary_rows}
+                kept = []
+                for r in group:
+                    if (r.source == PRIMARY_PROVIDER or (r.source in LEGACY_SOURCES and r.line_item not in primary_values
+                            and r.period_end in primary_ends and r.currency in primary_currencies)):
+                        kept.append(r)
+                        continue
+                    issues.append({"kind": "superseded_by_primary", **_row_identity(r), "value": _json_value(r.value),
+                                   "primary_value": _json_value(primary_values.get(r.line_item))})
+                group = kept
             ends = {r.period_end for r in group}
             currencies = {r.currency for r in group}
             values: dict[str, set[float]] = {}
@@ -184,6 +322,7 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
                     "rows": [{"id": r.id, "period": r.period, "line_item": r.line_item, "period_end": str(r.period_end),
                               "currency": r.currency, "value": r.value, "source": r.source} for r in group]})
                 continue
+            group = sorted(group, key=lambda r: (r.source != PRIMARY_PROVIDER, r.source in LEGACY_SOURCES))
             row = group[0]
             if start_date and row.period_end < start_date:
                 continue
@@ -192,7 +331,7 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
             item = {"period": period, "period_end": row.period_end.isoformat(), "currency": row.currency,
                     "source": row.source, "line_sources": {}, "line_fetched_at": {}, "available_at": row.available_at.isoformat() if row.available_at else None,
                     "available_at_source": row.available_at_source, "fetched_at": row.fetched_at.isoformat() if row.fetched_at else None}
-            for r in sorted(group, key=lambda r: r.source in LEGACY_SOURCES):
+            for r in sorted(group, key=lambda r: (r.source != PRIMARY_PROVIDER, r.source in LEGACY_SOURCES)):
                 if r.line_item not in item["line_sources"]:
                     item[r.line_item] = r.value
                     item["line_sources"][r.line_item] = r.source
@@ -200,6 +339,7 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
                 if item["source"] != r.source:
                     item["source"] = "mixed"
             out[statement].append(item)
+        issues.extend(_definition_break_flags(ticker.strip().upper(), out))
         if issues:
             out["_history_issues"] = issues
             log.warning("fundamentals stored read %s: %d issues: %s", ticker, len(issues), issues)
@@ -207,6 +347,22 @@ def read_stored_financials(ticker: str, *, start_date: date | None = None, caden
     finally:
         if own:
             db.close()
+
+
+def _definition_break_flags(ticker: str, statements: dict) -> list[dict]:
+    """Nonblocking flags for evidenced provider definition breaks (BK)."""
+    flags = []
+    for (flag_ticker, statement, line), spec in KNOWN_DEFINITION_BREAKS.items():
+        if flag_ticker != ticker:
+            continue
+        for item in statements.get(statement, []):
+            value = item.get(line)
+            if (item.get("period") == spec["period"] and isinstance(value, (int, float))
+                    and abs(value - spec["provider_value"]) <= 0.005 * abs(spec["provider_value"])):
+                flags.append({"kind": "provider_definition_break", "ticker": ticker, "statement": statement,
+                              "period": spec["period"], "line_item": line, "stored_value": value,
+                              "source": item.get("line_sources", {}).get(line), **spec})
+    return flags
 
 
 def _coverage(statements: dict, start: date, end: date, *, issues: list[dict] | None = None) -> dict:
@@ -387,7 +543,9 @@ def _clean_payload(raw: dict, provider: str, symbol: str, issues: list[dict]) ->
 def _fetch_financial_history(ticker: str, start: date, *, required_start: date | None = None) -> tuple[list[dict], list[dict], list[dict]]:
     """Fetch older label evidence while judging fallback against required coverage."""
     coverage_start = required_start or start
-    payloads, issues, attempts = [], [], []
+    payloads: list[dict] = []
+    issues: list[dict[str, Any]] = []
+    attempts: list[dict[str, Any]] = []
     combined = {s: [] for s in LINES}
     for provider in get_data_service()._live_chain("financials"):
         name = str(getattr(provider, "name", type(provider).__name__))
@@ -419,6 +577,13 @@ def _fetch_financial_history(ticker: str, start: date, *, required_start: date |
             if not any(clean.values()):
                 attempts.append({**attempt, "received": False})
                 continue
+            # A 401/402/403 under one spelling that the same provider answers
+            # under another is a symbol-coverage refusal (BRK.B -> BRK-B), not
+            # a plan loss. Only unresolved denials mean an entitlement gap.
+            for issue in issues:
+                if (issue.get("kind") == "provider_entitlement_denied" and issue.get("provider") == name
+                        and issue.get("symbol") != symbol and not issue.get("resolved")):
+                    issue.update(resolved=True, resolved_by_symbol=symbol)
             attempts.append({**attempt, "received": True, "periods_received": {s: len(clean[s]) for s in LINES}})
             payloads.append(clean)
             for s in LINES:
@@ -536,34 +701,210 @@ def _relabel_legacy_periods(db: Session, ticker: str, rows: list, payloads: list
     report["rows_relabelled"] += len(approved)
 
 
-def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = False, *, db: Session | None = None) -> dict:
+def _primary_facts(payloads: list[dict]) -> dict[tuple[str, str, str], dict]:
+    facts: dict[tuple[str, str, str], dict] = {}
+    for payload in payloads:
+        for statement, whitelist in LINES.items():
+            for row in payload[statement]:
+                if row.get("source") != PRIMARY_PROVIDER:
+                    continue
+                end = history._coerce_date(row["period_end"])
+                quarterly = history._parse_period(row["period"])[1] is not None
+                for line in whitelist:
+                    if line in row:
+                        facts[(row["period"], statement, line)] = {
+                            "period": row["period"], "period_end": end, "value": row[line],
+                            "currency": row["currency"], "quarterly": quarterly}
+    return facts
+
+
+def _fact_evidence(fact: dict | None) -> dict | None:
+    if fact is None:
+        return None
+    return {**fact, "period_end": fact["period_end"].isoformat() if fact["period_end"] else None}
+
+
+def _takeover_reason(row: FinancialPeriod, facts: dict, observations: dict, period_ends: dict) -> tuple[str | None, dict | None]:
+    """First matching reason to move a non-primary row aside, with the primary fact it contradicts."""
+    legacy = row.source in LEGACY_SOURCES
+    key = (row.period, row.statement, row.line_item)
+    canonical = _canonical(row.period)
+    fy, fq = history._parse_period(row.period)
+    quarterly = (fq is not None) if fy else row.fiscal_quarter is not None
+    fact = facts.get(key)
+    if fact is None and canonical != row.period and (canonical, row.statement, row.line_item) in facts:
+        return "alias_superseded_by_primary", facts[(canonical, row.statement, row.line_item)]
+    if fact is not None:
+        if row.period_end is not None and row.period_end != fact["period_end"]:
+            return "period_end_conflicts_with_primary", fact
+        if row.value is not None and math.isfinite(row.value) and row.value != fact["value"]:
+            return "value_conflicts_with_primary", fact
+        if not legacy and row.currency != fact["currency"]:
+            return "currency_conflicts_with_primary", fact
+        if row.available_at is not None and fact["period_end"] and row.available_at < fact["period_end"]:
+            return "invalid_availability_precedes_period_end", fact
+        return None, None  # Equal: adopted (named) or upgraded in place (legacy) by the write loop.
+    if row.period_end is None:
+        return None, None
+    near = [k for end, k in observations.get((row.statement, row.line_item, quarterly), ()) if _near(end, row.period_end)]
+    if near:
+        return "label_conflicts_with_primary_observation", facts[sorted(near)[0]]
+    if not legacy and any(_near(end, row.period_end) for end in period_ends.get((row.statement, quarterly), ())):
+        return "secondary_row_in_primary_period", None
+    # Legacy lines FMP does not report came from the same FMP-first chain;
+    # missing never erases, so they stay.
+    return None, None
+
+
+def _primary_takeover(db: Session, ticker: str, rows: list, payloads: list[dict], report: dict, *,
+                      mode: TakeoverMode, pre_images: dict[int, dict], expected: dict[str, Any] | None,
+                      audit_key: str | None) -> tuple[dict[tuple, tuple], set[tuple]]:
+    """Quarantine (or plan) every stored row that contradicts an FMP observation.
+
+    Returns `(available_override, blocked_keys)`. `rows` is updated in place so
+    moved rows can no longer act as existing occupants. A primary row whose
+    stored availability precedes its period end (LULU 35607/35609) is flagged,
+    not moved or re-inserted: the PIT exclusion documented in
+    docs/ops/scorecard-pit-eligibility.md must keep holding.
+    """
+    from . import fundamental_quarantine as quarantine
+
+    facts = _primary_facts(payloads)
+    if not facts:
+        if expected is not None and expected["quarantine"]:
+            raise PlanMismatch(expected, {**expected, "quarantine": {}})
+        return {}, set()
+    observations: dict[tuple, list] = {}
+    period_ends: dict[tuple, set] = {}
+    for key, observed in facts.items():
+        observations.setdefault((key[1], key[2], observed["quarterly"]), []).append((observed["period_end"], key))
+        period_ends.setdefault((key[1], observed["quarterly"]), set()).add(observed["period_end"])
+    actions = []
+    fact: dict | None
+    for row in rows:
+        if row.source == PRIMARY_PROVIDER:
+            fact = facts.get((row.period, row.statement, row.line_item))
+            if fact and row.available_at is not None and fact["period_end"] and row.available_at < fact["period_end"]:
+                report["issues"].append({"kind": "primary_availability_precedes_period_end", **_row_identity(row),
+                    "available_at": row.available_at.isoformat(), "value": _json_value(row.value),
+                    "action": "flagged_not_moved", "reason": "pit_exclusion_preserved"})
+            continue
+        reason, fact = _takeover_reason(row, facts, observations, period_ends)
+        if reason:
+            before = pre_images.get(row.id)
+            actions.append({"row": row, "reason": reason, "primary_fact": _fact_evidence(fact),
+                            "pre_run": before if before is not None and before != quarantine._snapshot(row) else None,
+                            "fact": fact})
+    # Checked before anything moves; the rest of the plan is compared once
+    # the write loop has run (`backfill_fundamentals`).
+    actual = {str(a["row"].id): a["reason"] for a in actions}
+    if expected is not None and actual != expected["quarantine"]:
+        raise PlanMismatch(expected, {**expected, "quarantine": actual})
+    if not actions:
+        return {}, set()
+    for action in actions:
+        row, fact = action["row"], action["fact"]
+        report["quarantined"].append({"id": row.id, "reason": action["reason"], "statement": row.statement,
+            "period": row.period, "line_item": row.line_item,
+            "period_end": row.period_end.isoformat() if row.period_end else None, "source": row.source,
+            "value": _json_value(row.value),
+            "primary_period": fact["period"] if fact else None,
+            "primary_period_end": fact["period_end"].isoformat() if fact and fact["period_end"] else None,
+            "primary_value": _json_value(fact["value"]) if fact else None})
+    unsafe = [a["reason"] for a in actions if a["reason"] not in SAFE_AUTO_REASONS]
+    too_many = len(actions) > QUARANTINE_AUTO_MAX_ROWS or len(actions) > QUARANTINE_AUTO_MAX_SHARE * max(len(rows), 1)
+    repair_id = quarantine.repair_id_for(audit_key, quarantine.QUARANTINE_KIND, ticker)
+    if mode == "unattended" and (unsafe or too_many):
+        planned = quarantine.quarantine_rows(db, ticker=ticker, actions=actions, status="planned", mode=mode,
+                                             repair_id=repair_id)
+        blocked = set()
+        for action in actions:
+            row, fact = action["row"], action["fact"]
+            blocked.add((row.period, row.statement, row.line_item))
+            if fact:
+                blocked.add((fact["period"], row.statement, row.line_item))
+        report["planned_repair_id"] = planned["repair_id"]
+        report["issues"].append({"kind": "primary_takeover_planned", "ticker": ticker,
+            "repair_id": planned["repair_id"], "rows": len(actions), "counts": planned["counts"],
+            "reason": "unsafe_reasons" if unsafe else "exceeds_unattended_limits",
+            "limits": {"max_rows": QUARANTINE_AUTO_MAX_ROWS, "max_share": QUARANTINE_AUTO_MAX_SHARE,
+                       "safe_reasons": sorted(SAFE_AUTO_REASONS)}})
+        return {}, blocked
+    override = {}
+    for action in actions:
+        row, fact = action["row"], action["fact"]
+        # INSERT-only availability: the replacement at the same key keeps the
+        # observation's original availability when that date is possible
+        # (not before the period end). Nothing stored is re-dated.
+        if (fact and row.period == fact["period"] and row.available_at is not None and fact["period_end"]
+                and row.available_at >= fact["period_end"]):
+            override[(row.period, row.statement, row.line_item)] = (row.available_at, row.available_at_source)
+    moved = {id(a["row"]) for a in actions}  # object identity: moved rows are expired
+    applied = quarantine.quarantine_rows(db, ticker=ticker, actions=actions, mode=mode, repair_id=repair_id)
+    rows[:] = [r for r in rows if id(r) not in moved]
+    report["rows_quarantined"] = len(actions)
+    report["quarantine_repair_id"] = applied["repair_id"]
+    report["quarantine_namespace"] = applied["namespace"]
+    return override, set()
+
+
+def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = False, *, db: Session | None = None,
+                          dry_run: bool = False, mode: TakeoverMode = "supervised",
+                          expected_plan: dict[str, Any] | None = None, audit_key: str | None = None) -> dict:
     """Populate durable fundamentals only, with explicit complete/partial coverage.
 
     With an external session, writes are flushed but its caller owns commit and
     the report says committed=False. Missing/nonfinite values never erase data;
-    conflicting values from a different provider are retained and reported.
+    conflicting values from a different non-primary provider are retained and
+    reported. FMP-primary takeover rules are in the module docstring.
+
+    `dry_run` performs the whole run inside a transaction and rolls it back, so
+    the report is the exact plan (quarantines, adoptions, restatements) and
+    nothing persists; it needs an owned session. `mode="unattended"` (scheduled
+    refreshes) quarantines only small safe sets and otherwise records a planned
+    repair. `expected_plan` (a reviewed dry run's `plan_identity`: quarantine
+    reasons, adoptions, restatement values and relabels, by row id) aborts
+    the whole ticker transaction when the executed plan differs in any part.
     """
+    from . import fundamental_quarantine as quarantine
+
     ticker = ticker.strip().upper()
     start = history._coerce_date(start_date)
     if not ticker or len(ticker) > 16 or start is None or start > _today():
         raise ValueError("valid ticker and start_date on or before today required")
+    if mode not in ("supervised", "unattended"):
+        raise ValueError("mode must be supervised or unattended")
+    if dry_run and db is not None:
+        raise ValueError("dry_run needs an owned session so it can roll back")
+    expected = normalize_plan(expected_plan) if expected_plan is not None else None
     own = db is None
     db = db or SessionLocal()
     report: dict[str, Any] = {"ticker": ticker, "requested_start": start.isoformat(), "requested_end": _today().isoformat(),
                               "rows_written": 0, "periods_received": {s: 0 for s in LINES}, "provider": [], "attempts": [], "issues": [],
                               "source_upgrades": [], "refresh_complete": False, "rows_refreshed": 0,
                               "period_relabels": [], "rows_relabelled": 0,
-                              "point_in_time": "latest_restated_values_at_original_availability", "committed": False}
+                              "point_in_time": "latest_restated_values_at_original_availability", "committed": False,
+                              "dry_run": dry_run, "takeover_mode": mode, "rows_quarantined": 0,
+                              "quarantine_repair_id": None, "quarantined": [], "adoptions": [], "restatements": [],
+                              "adoption_repair_id": None, "restatement_repair_id": None, "planned_repair_id": None,
+                              "secondary_rows_skipped": 0, "rows_inserted": 0,
+                              "new_period_ends": {s: {"annual": [], "quarterly": []} for s in LINES}}
     try:
         FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
+        # DDL before any write: SQLite would otherwise lock against the open
+        # write transaction when the first audit row is inserted.
+        FinancialDataRepair.__table__.create(bind=db.get_bind(), checkfirst=True)
         stored = read_stored_financials(ticker, db=db)
         report["issues"].extend(stored.get("_history_issues", []))
         before = _coverage(stored, start, _today(), issues=report["issues"])
         if not force_refresh and _complete(before) and _fresh(before) and not _has_blockers(report["issues"]):
-            report.update(coverage=before, success=True, source="database", committed=own)
+            report.update(coverage=before, success=True, source="database", committed=own and not dry_run)
             return report
+        # The provider request reaches back to the oldest stored observation
+        # that FMP might contradict (legacy and named secondaries alike), so
+        # the takeover sees FMP's version of every such period.
         existing_dates = list(db.execute(select(FinancialPeriod.period_end).where(
-            FinancialPeriod.ticker == ticker, FinancialPeriod.source.in_(LEGACY_SOURCES),
+            FinancialPeriod.ticker == ticker, FinancialPeriod.source != PRIMARY_PROVIDER,
             FinancialPeriod.period_end.is_not(None), FinancialPeriod.period_end <= _today(),
         )).scalars())
         fetch_start = min([start, *existing_dates])
@@ -582,12 +923,14 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         existing = {}
         aliases: dict[tuple[str, str, str], list] = {}
         existing_rows = list(db.execute(select(FinancialPeriod).where(FinancialPeriod.ticker == ticker)).scalars())
+        pre_images = {r.id: quarantine._snapshot(r) for r in existing_rows}
         _relabel_legacy_periods(db, ticker, existing_rows, payloads, report)
+        available_override, blocked_keys = _primary_takeover(
+            db, ticker, existing_rows, payloads, report, mode=mode, pre_images=pre_images,
+            expected=expected, audit_key=audit_key)
+        quarantined_ids = {q["id"] for q in report["quarantined"]} if report["rows_quarantined"] else set()
         for r in existing_rows:
-            fy, fq = history._parse_period(r.period)
-            canonical = (f"{fy:04d}Q{fq}" if fq else f"FY{fy:04d}") if fy else r.period
-            aliases.setdefault((canonical, r.statement, r.line_item), []).append(r)
-        blocked_keys = set()
+            aliases.setdefault((_canonical(r.period), r.statement, r.line_item), []).append(r)
         incoming_keys = {(r["period"], s, line) for p in payloads for s in LINES
                          for r in p[s] for line in LINES[s] if line in r}
         for key, group in aliases.items():
@@ -611,6 +954,23 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         for (period, statement, _), row in existing.items():
             if row.currency and row.source not in LEGACY_SOURCES:
                 currencies.setdefault((period, statement), set()).add(row.currency)
+        # Periods FMP reports (this payload or stored FMP rows) belong to FMP:
+        # a secondary row for one of them is skipped whole, never merged in.
+        primary_cover: dict[tuple[str, bool], list[tuple[date | None, dict]]] = {}
+        for payload in payloads:
+            for statement in LINES:
+                for row in payload[statement]:
+                    if row["source"] == PRIMARY_PROVIDER:
+                        primary_cover.setdefault((statement, history._parse_period(row["period"])[1] is not None), []).append(
+                            (history._coerce_date(row["period_end"]), {k: v for k, v in row.items() if k in LINES[statement]}))
+        stored_primary: dict[tuple, dict] = {}
+        for r in existing_rows:
+            if r.source == PRIMARY_PROVIDER and r.period_end is not None:
+                stored_primary.setdefault((r.statement, _canonical(r.period), r.period_end), {})[r.line_item] = r.value
+        for (statement, period, end), lines in stored_primary.items():
+            primary_cover.setdefault((statement, history._parse_period(period)[1] is not None), []).append((end, lines))
+        adoption_audit: list[tuple[FinancialPeriod, dict]] = []
+        restatement_audit: list[tuple[FinancialPeriod, dict]] = []
         now = datetime.utcnow()
         for payload in payloads:
             for statement, whitelist in LINES.items():
@@ -622,6 +982,17 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                     period = row["period"]
                     end = history._coerce_date(row["period_end"])
                     fy, fq = history._parse_period(period)
+                    if source != PRIMARY_PROVIDER:
+                        cover = next((lines for cover_end, lines in primary_cover.get((statement, fq is not None), ())
+                                      if _near(cover_end, end)), None)
+                        if cover is not None:
+                            report["secondary_rows_skipped"] += 1
+                            report["issues"].extend({"kind": "secondary_disagrees_with_primary", "ticker": ticker,
+                                "statement": statement, "period": period, "period_end": row["period_end"],
+                                "line_item": line, "provider": source, "value": row[line],
+                                "primary_value": _json_value(cover[line])}
+                                for line in whitelist if line in row and cover.get(line) is not None and cover[line] != row[line])
+                            continue
                     available, rule = scorecard_pit.derive_available_at(ticker=ticker, period_end=end, fiscal_year=fy,
                         fiscal_quarter=fq, provider_date=row.get("filing_date") or row.get("accepted_date"), fetched_at=now, filings=[])
                     for line in whitelist:
@@ -649,7 +1020,23 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                             continue
                         if prior and prior.value is not None and math.isfinite(prior.value):
                             if prior.source != source and prior.source not in LEGACY_SOURCES and prior.value == row[line] and prior.currency == row["currency"]:
-                                continue  # Corroboration does not transfer ownership of a stored fact.
+                                if source == PRIMARY_PROVIDER:
+                                    # Equal FMP verification adopts the observation;
+                                    # its id and availability are kept.
+                                    # The pre-run image, so restoring the adoption also
+                                    # reverses a relabel this run made to the row.
+                                    before_image = pre_images.get(prior.id) or quarantine._snapshot(prior)
+                                    report["adoptions"].append({"id": prior.id, "statement": statement, "period": period,
+                                        "line_item": line, "old_source": prior.source, "new_source": source})
+                                    report["source_upgrades"].append({"ticker": ticker, "id": prior.id, "statement": statement,
+                                        "period": period, "period_end": str(end), "line_item": line, "old_source": prior.source,
+                                        "new_source": source, "old_value": prior.value, "new_value": row[line],
+                                        "old_currency": prior.currency, "new_currency": row["currency"], "reason": "primary_adoption"})
+                                    prior.source = source
+                                    prior.fetched_at = now
+                                    adoption_audit.append((prior, before_image))
+                                    report["rows_written"] += 1
+                                continue  # Corroboration does not transfer ownership between secondaries.
                             if prior.source != source and prior.source not in LEGACY_SOURCES and prior.value != row[line]:
                                 report["issues"].append({"kind": "stored_value_conflict", "statement": statement,
                                     "period": period, "line_item": line, "provider": source, "stored_source": prior.source,
@@ -661,12 +1048,32 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                                        "period_end": str(end), "line_item": line, "old_source": prior.source,
                                        "new_source": source, "old_value": prior.value if prior.value is not None and math.isfinite(prior.value) else None,
                                        "new_value": row[line], "old_currency": prior.currency, "new_currency": row["currency"]}
+                        prior_image = quarantine._snapshot(prior) if prior is not None else None
+                        old_value = prior.value if prior is not None else None
+                        write_available = available_override.get(key, (available, rule)) if prior is None else (available, rule)
                         if history._upsert_financial_period(db, ticker=ticker, period=period, statement=statement,
                             line_item=line, value=row[line], period_end=end, fiscal_year=fy, fiscal_quarter=fq,
-                            source=source, currency=row["currency"], fetched_at=now, available_at=available, available_at_source=rule, existing_rows=existing):
+                            source=source, currency=row["currency"], fetched_at=now, available_at=write_available[0],
+                            available_at_source=write_available[1], existing_rows=existing, refusals=report["issues"]):
                             report["rows_written"] += 1
                             if upgrade:
                                 report["source_upgrades"].append(upgrade)
+                                if source == PRIMARY_PROVIDER and prior is not None and prior_image is not None:
+                                    # A legacy upgrade is an adoption: equal value,
+                                    # a filled NULL, or a currency-only correction.
+                                    # Pre-run image: restore also undoes a relabel.
+                                    adoption_audit.append((prior, pre_images.get(prior.id) or prior_image))
+                                    report["adoptions"].append({"id": prior.id, "statement": statement, "period": period,
+                                        "line_item": line, "old_source": upgrade["old_source"], "new_source": source})
+                            elif prior is not None and prior.source == source and old_value != row[line] and prior_image is not None:
+                                restatement_audit.append((prior, prior_image))
+                                report["restatements"].append({"id": prior.id, "statement": statement, "period": period,
+                                    "line_item": line, "old_value": _json_value(old_value), "new_value": row[line], "source": source})
+                            if prior is None:
+                                report["rows_inserted"] += 1
+                                if line == PRIMARY[statement]:
+                                    report["new_period_ends"][statement]["quarterly" if fq else "annual"].append(
+                                        end.isoformat() if end else None)
                             currencies.setdefault((period, statement), set()).add(row["currency"])
                         elif prior is not None and prior.source == source:
                             # A same-provider verification refreshes its timestamp
@@ -677,10 +1084,32 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                             report["rows_written"] += 1
                             report["rows_refreshed"] += 1
         db.flush()
+        if expected is not None and (actual_plan := plan_identity(report)) != expected:
+            raise PlanMismatch(expected, actual_plan)
+        audit_extra = {"dry_run": True} if dry_run else None
+        adoption = quarantine.record_in_place(db, ticker=ticker, kind=quarantine.ADOPTION_KIND, entries=adoption_audit,
+            repair_id=quarantine.repair_id_for(audit_key, quarantine.ADOPTION_KIND, ticker), extra=audit_extra)
+        restatement = quarantine.record_in_place(db, ticker=ticker, kind=quarantine.RESTATEMENT_KIND, entries=restatement_audit,
+            repair_id=quarantine.repair_id_for(audit_key, quarantine.RESTATEMENT_KIND, ticker), extra=audit_extra)
+        report["adoption_repair_id"] = adoption["repair_id"] if adoption else None
+        report["restatement_repair_id"] = restatement["repair_id"] if restatement else None
+        if report["quarantine_repair_id"]:
+            audit = db.get(FinancialDataRepair, report["quarantine_repair_id"])
+            if audit is not None:
+                audit.result = {"rows_quarantined": report["rows_quarantined"], "replacement_ids": {
+                    str(q["id"]): getattr(existing.get((q["primary_period"], q["statement"], q["line_item"])), "id", None)
+                    for q in report["quarantined"]}}
+                db.flush()
         after = read_stored_financials(ticker, db=db)
         preserved_duplicates = {i["id"]: i for i in after.get("_history_issues", [])
                                 if i["kind"] == "legacy_duplicate_observation_excluded"}
         for issue in report["issues"]:
+            if (issue.get("id") in quarantined_ids and not issue.get("resolved")
+                    and issue.get("kind") != "secondary_disagrees_with_primary"):
+                # A relabel blocked by, or a stored read issue about, a row
+                # that is now quarantined no longer describes stored data.
+                issue.update(resolved=True, resolution="quarantined_superseded_by_primary")
+                continue
             # A blocked relabel need not make usable history fail when the
             # exact preserved row has a unique authoritative replacement.
             # Ambiguous labels and all other collisions stay blocking.
@@ -707,7 +1136,10 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                     report["issues"].append({"kind": "stored_fetch_stale", "statement": statement, "cadence": cadence,
                                             "latest_primary_fetched_at": bucket["latest_primary_fetched_at"], "refresh_ttl_days": REFRESH_TTL_DAYS})
         report["success"] = _complete(report["coverage"]) and _fresh(report["coverage"]) and not _has_blockers(report["issues"])
-        if own:
+        if dry_run:
+            # The report is the plan; nothing it describes may persist.
+            db.rollback()
+        elif own:
             db.commit()
             report["committed"] = True
         if report["issues"]:
@@ -717,8 +1149,22 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         if own:
             db.rollback()
         log.warning("fundamentals history %s failed: %s", ticker, type(exc).__name__)
-        report.update(success=False, rows_written=0, rows_refreshed=0, rows_relabelled=0)
-        report["issues"].append({"kind": "persistence_or_read_error", "error_type": type(exc).__name__})
+        # Nothing the run listed persisted. Keep it for diagnosis under its own
+        # key, so no consumer (the re-pull ledger, the admin response) counts
+        # rolled-back quarantines, adoptions or restatements as done.
+        rolled_back = {key: report[key] for key in ("quarantined", "adoptions", "restatements", "source_upgrades",
+                                                    "period_relabels") if report[key]}
+        if rolled_back:
+            report["rolled_back_plan"] = rolled_back
+        report.update(success=False, rows_written=0, rows_refreshed=0, rows_relabelled=0, rows_quarantined=0,
+                      rows_inserted=0, quarantine_repair_id=None, adoption_repair_id=None, restatement_repair_id=None,
+                      planned_repair_id=None, quarantined=[], adoptions=[], restatements=[], source_upgrades=[],
+                      period_relabels=[], new_period_ends={s: {"annual": [], "quarterly": []} for s in LINES})
+        if isinstance(exc, PlanMismatch):
+            report["issues"].append({"kind": "repull_plan_mismatch", "ticker": ticker, "differs": exc.differs,
+                                     "expected": exc.expected, "actual": exc.actual})
+        else:
+            report["issues"].append({"kind": "persistence_or_read_error", "error_type": type(exc).__name__})
         return report
     finally:
         if own:

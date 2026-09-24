@@ -77,9 +77,31 @@ def test_populated_legacy_duplicates_are_excluded_without_any_stored_change(data
     assert all(str(row_id) in caplog.text for row_id in legacy + named)
 
 
-def test_multiple_valid_provider_candidates_are_ambiguous_and_stay_blocking(database):
-    legacy, _ = seed(database)
+def test_multiple_valid_provider_candidates_prefer_the_primary(database):
+    # R3 (FMP primary): with FMP and Alpha Vantage both observing the legacy
+    # line's period end, FMP's row is the replacement; AV's alias inside FMP's
+    # period is named as superseded (R1). Nothing stored changes.
+    legacy, named = seed(database)
     with database[0]() as db:
+        alpha = fact("2025", date(2026, 2, 1), "balance", "short_term_debt", 0, source="alpha_vantage")
+        db.add(alpha)
+        db.commit()
+        alpha_id = alpha.id
+    before = all_stored_fields(database)
+    result = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    assert result["success"]
+    excluded = next(i for i in result["issues"] if i["kind"] == "legacy_duplicate_observation_excluded" and i["id"] == legacy[0])
+    assert excluded["replacement"]["id"] == named[0] and excluded["replacement"]["source"] == "fmp"
+    assert any(i["kind"] == "superseded_by_primary" and i["id"] == alpha_id for i in result["issues"])
+    assert not any(i["kind"] == "duplicate_stored_period_end" for i in result["issues"])
+    assert all_stored_fields(database) == before
+
+
+def test_multiple_non_primary_candidates_are_ambiguous_and_stay_blocking(database):
+    legacy, named = seed(database)
+    with database[0]() as db:
+        for row in db.execute(select(FinancialPeriod).where(FinancialPeriod.source == "fmp")).scalars():
+            row.source = "other_verified"
         db.add(fact("2025", date(2026, 2, 1), "balance", "short_term_debt", 0, source="alpha_vantage"))
         db.commit()
     before = all_stored_fields(database)
@@ -91,15 +113,21 @@ def test_multiple_valid_provider_candidates_are_ambiguous_and_stay_blocking(data
 
 
 def test_known_provider_contradiction_is_never_excluded_as_legacy(database):
+    # Still not excluded *as legacy*: the named AV row under a label FMP does
+    # not use at that period end is superseded by FMP's label (R2), named
+    # with its identity and value, nonblocking. Nothing stored changes.
     legacy, _ = seed(database)
     with database[0]() as db:
         db.get(FinancialPeriod, legacy[0]).source = "alpha_vantage"
         db.commit()
     before = all_stored_fields(database)
     result = svc.fundamental_coverage("TEST", date(2024, 9, 13))
-    assert not result["success"]
-    assert any(i["kind"] == "duplicate_stored_period_end" for i in result["issues"])
+    assert result["success"]
+    assert not any(i["kind"] == "duplicate_stored_period_end" for i in result["issues"])
     assert not any(i["kind"] == "legacy_duplicate_observation_excluded" and i["id"] == legacy[0] for i in result["issues"])
+    superseded = next(i for i in result["issues"] if i["kind"] == "label_superseded_by_primary" and i["id"] == legacy[0])
+    assert (superseded["source"], superseded["value"], superseded["period"], superseded["primary_period"]) == (
+        "alpha_vantage", 5, "FY2026", "FY2025")
     assert all_stored_fields(database) == before
 
 
@@ -137,6 +165,11 @@ def test_unconfirmed_legacy_duplicates_remain_a_blocking_read_gap(database):
     with database[0]() as db:
         for row_id in named:
             db.get(FinancialPeriod, row_id).source = "live"
+        # No FMP row may observe that period end either: a primary label
+        # would supersede the legacy ones (R2) instead of leaving a gap.
+        for row in db.execute(select(FinancialPeriod).where(FinancialPeriod.period == "FY2025",
+                                                            FinancialPeriod.statement == "balance")).scalars():
+            row.source = "live"
         db.commit()
     before = all_stored_fields(database)
     result = svc.fundamental_coverage("TEST", date(2024, 9, 13))
@@ -146,7 +179,7 @@ def test_unconfirmed_legacy_duplicates_remain_a_blocking_read_gap(database):
     assert all_stored_fields(database) == before
 
 
-def test_backfill_preserves_collision_rows_and_reports_success_only_with_confirmed_read(database, monkeypatch):
+def test_backfill_quarantines_collision_rows_and_reports_success_only_with_confirmed_read(database, monkeypatch):
     from types import SimpleNamespace
 
     legacy, named = seed(database)
@@ -166,12 +199,18 @@ def test_backfill_preserves_collision_rows_and_reports_success_only_with_confirm
     monkeypatch.setattr(svc, "get_data_service", lambda: SimpleNamespace(_live_chain=lambda cap: [provider]))
     report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
     assert report["success"] and report["committed"] and report["rows_relabelled"] == 0
-    warnings = [i for i in report["issues"] if i["kind"] == "legacy_period_relabel_preserved_duplicate"]
-    assert {i["id"] for i in warnings} == set(legacy)
-    assert {i["replacement"]["id"] for i in warnings} == set(named)
-    assert all(i["original_kind"] == "legacy_period_relabel_conflict" for i in warnings)
+    # FMP-primary: the legacy labels contradicting FMP's FY2025 observation are
+    # quarantined (was: preserved in place and excluded on every read).
+    conflicts = [i for i in report["issues"] if i["kind"] == "legacy_period_relabel_conflict"]
+    assert {i["id"] for i in conflicts} == set(legacy)
+    assert all(i["resolution"] == "quarantined_superseded_by_primary" for i in conflicts)
+    assert {q["id"]: q["reason"] for q in report["quarantined"]} == {
+        row_id: "label_conflicts_with_primary_observation" for row_id in legacy}
     after = {row["id"]: row for row in all_stored_fields(database)}
-    assert all(after[row_id] == before[row_id] for row_id in legacy)
+    for row_id in legacy:
+        assert after[row_id]["ticker"].startswith("~Q") and len(after[row_id]["ticker"]) == 16
+        assert {k: v for k, v in after[row_id].items() if k != "ticker"} == {
+            k: v for k, v in before[row_id].items() if k != "ticker"}
     # Provider verification may refresh its own metadata; preserved duplicates
     # and named factual identities/values/currency/availability do not change.
     assert all({k: v for k, v in after[row_id].items() if k != "fetched_at"} ==

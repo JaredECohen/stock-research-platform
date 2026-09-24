@@ -91,3 +91,58 @@ def test_database_reader_and_execution_stream_exclude_same_rows_without_writes()
         after = [{c.key: getattr(row, c.key) for c in FinancialPeriod.__table__.columns}
                  for row in db.scalars(select(FinancialPeriod).order_by(FinancialPeriod.id))]
         assert before == after and not db.dirty and not db.new and not db.deleted
+
+
+def test_lulu_invalid_availability_flagged_not_reinserted(tmp_path, monkeypatch):
+    """The FMP takeover must not re-date or re-insert LULU 35607/35609.
+
+    Their stored availability (2025-04-18) precedes their period end
+    (2026-02-01), so the PIT readers exclude them. A re-pull flags them
+    (nonblocking) and leaves them exactly as stored: no replacement row with
+    a new availability date may make the period PIT-eligible (integration
+    critique item 5; docs/ops/scorecard-pit-eligibility.md).
+    """
+    from types import SimpleNamespace
+
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database import Base
+    from app.models import FinancialDataRepair
+    from app.services import fundamental_history_service as svc
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'lulu.db'}")
+    Base.metadata.create_all(engine, tables=[FinancialPeriod.__table__, FinancialDataRepair.__table__])
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(svc, "SessionLocal", factory)
+    monkeypatch.setattr(svc, "_today", lambda: date(2026, 9, 13))
+    debt = ("short_term_debt", "total_debt")
+    with factory() as db:
+        for ident, line in zip((35607, 35609), debt, strict=True):
+            db.add(FinancialPeriod(id=ident, ticker="LULU", statement="balance", line_item=line, period="FY2025",
+                                   fiscal_year=2025, value=298724000.0, period_end=date(2026, 2, 1),
+                                   available_at=date(2025, 4, 18), available_at_source="lag_rule", currency="USD",
+                                   source="fmp", fetched_at=datetime(2026, 9, 13, 5, 14, 55)))
+        db.commit()
+    fmp = {s: [] for s in svc.LINES}
+    for year in (2023, 2024, 2025):
+        for statement, primary in svc.PRIMARY.items():
+            row = {"period": f"FY{year}", "period_end": date(year + 1, 2, 1).isoformat(), "currency": "USD",
+                   "filing_date": date(year + 1, 3, 27).isoformat(), "fiscal_label_source": "provider", primary: 1.0}
+            if statement == "balance" and year == 2025:
+                row.update(short_term_debt=298724000.0, total_debt=298724000.0)
+            fmp[statement].append(row)
+    provider = SimpleNamespace(name="fmp", get_financial_history=lambda symbol, start: fmp)
+    monkeypatch.setattr(svc, "get_data_service", lambda: SimpleNamespace(_live_chain=lambda cap: [provider]))
+    report = svc.backfill_fundamentals("LULU", date(2024, 9, 13), True)
+    flags = [i for i in report["issues"] if i["kind"] == "primary_availability_precedes_period_end"]
+    assert {f["id"] for f in flags} == {35607, 35609} and not svc._has_blockers(flags)
+    assert report["rows_quarantined"] == 0
+    with factory() as db:
+        rows = list(db.scalars(select(FinancialPeriod).where(FinancialPeriod.ticker == "LULU",
+                                                             FinancialPeriod.line_item.in_(debt))))
+        assert {(r.id, r.available_at, r.period_end) for r in rows} == {
+            (35607, date(2025, 4, 18), date(2026, 2, 1)), (35609, date(2025, 4, 18), date(2026, 2, 1))}
+        _, stream = next(scorecard_service._iter_period_rows(db, ["LULU"]))
+    snap = features.pit_snapshot(stream, date(2026, 9, 13))
+    assert {r["id"] for r in snap.excluded_rows} >= {35607, 35609}
+    assert not set(debt) & set(snap.latest.balance)

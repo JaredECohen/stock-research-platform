@@ -30,6 +30,25 @@ def payload(*, annual=True, quarterly=True, value=100, currency="EUR"):
                  "currency": currency, primary: value} for p, d in periods] for s, primary in svc.PRIMARY.items()}
 
 
+def all_fields(row):
+    return {c.name: getattr(row, c.name) for c in FinancialPeriod.__table__.columns}
+
+
+def quarantined(database, *ids):
+    """Rows by id; a quarantined row is under a 16-char `~Q` namespace."""
+    with database() as db:
+        rows = {i: all_fields(db.get(FinancialPeriod, i)) for i in ids}
+    assert all(r["ticker"].startswith("~Q") and len(r["ticker"]) == 16 for r in rows.values())
+    return rows
+
+
+def repairs(database, kind=None):
+    from app.models import FinancialDataRepair
+    with database() as db:
+        rows = list(db.execute(select(FinancialDataRepair)).scalars())
+        return [r for r in rows if kind is None or r.plan.get("kind") == kind]
+
+
 def providers(monkeypatch, *data):
     calls = []
     chain = []
@@ -109,14 +128,21 @@ def test_nonfinite_missing_and_conflicting_currency_never_wipe_good_values(datab
 
 
 def test_cross_provider_conflict_is_reported_without_overwriting(database, monkeypatch):
+    # FMP-primary (2026-09-24): a secondary never writes into a period FMP
+    # reports; its disagreement is named, nonblocking, and nothing changes.
     providers(monkeypatch, ("fmp", payload()))
     svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    with database() as db:
+        before = [all_fields(r) for r in db.execute(select(FinancialPeriod).order_by(FinancialPeriod.id)).scalars()]
     providers(monkeypatch, ("other", payload(value=250)))
     report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
-    assert not report["success"] and report["rows_written"] == 0
-    conflicts = [i for i in report["issues"] if i["kind"] == "stored_value_conflict"]
-    assert len(conflicts) == 36
-    assert all(i["stored_source"] == "fmp" for i in conflicts)
+    assert report["success"] and report["rows_written"] == 0 and report["secondary_rows_skipped"] == 36
+    disagreements = [i for i in report["issues"] if i["kind"] == "secondary_disagrees_with_primary"]
+    assert len(disagreements) == 36
+    assert all(i["provider"] == "other" and i["value"] == 250 and i["primary_value"] == 100 for i in disagreements)
+    assert not any(i["kind"] == "stored_value_conflict" for i in report["issues"])
+    with database() as db:
+        assert [all_fields(r) for r in db.execute(select(FinancialPeriod).order_by(FinancialPeriod.id)).scalars()] == before
 
 
 def test_missing_periods_and_short_history_are_named(database, monkeypatch):
@@ -155,9 +181,10 @@ def test_fmp_history_has_both_cadences_and_preserves_noncalendar_fiscal_year(mon
     calls = []
     def get(path, **params):
         calls.append((path, params))
-        return [{"date": "2025-09-30", "fiscalYear": "2026", "period": "FY" if params.get("period") == "annual" else "Q1",
-                 "reportedCurrency": "EUR", "revenue": 7}]
-    monkeypatch.setattr(provider, "_get", get)
+        return 200, [{"date": "2025-09-30", "fiscalYear": "2026", "period": "FY" if params.get("period") == "annual" else "Q1",
+                      "reportedCurrency": "EUR", "revenue": 7}]
+    # `_get` wraps `_get_status`, so one patch drives both FMP read paths.
+    monkeypatch.setattr(provider, "_get_status", get)
     result = provider.get_financial_history("test", date(2000, 1, 1))
     assert len(calls) == 6
     assert {p["period"] for _, p in calls} == {"annual", "quarter"}
@@ -219,7 +246,7 @@ def test_unsourced_legacy_refresh_does_not_claim_other_provider_values(database)
 
 def test_fmp_unidentified_quarter_is_reported_not_relabeled_as_annual(monkeypatch):
     provider = FMPProvider()
-    monkeypatch.setattr(provider, "_get", lambda *a, **k: [{"date": "2025-09-30", "reportedCurrency": "USD", "revenue": 3}])
+    monkeypatch.setattr(provider, "_get_status", lambda *a, **k: (200, [{"date": "2025-09-30", "reportedCurrency": "USD", "revenue": 3}]))
     result = provider.get_financial_history("TEST", date(2024, 1, 1))
     assert len(result["_history_issues"]) == 3
     assert all(i["kind"] == "invalid_fiscal_quarter" for i in result["_history_issues"])
@@ -312,26 +339,42 @@ def test_alpha_explicit_report_lists_keep_annual_and_noncalendar_quarters_separa
 
 def test_fmp_actual_normalizers_preserve_reported_availability_dates(monkeypatch):
     provider = FMPProvider()
-    monkeypatch.setattr(provider, "_get", lambda *a, **k: [{"date": "2025-12-31", "fiscalYear": "2025", "period": "FY" if k["period"] == "annual" else "Q4",
-        "reportedCurrency": "USD", "filingDate": "2026-01-28", "acceptedDate": "2026-01-28 16:00:00"}])
+    monkeypatch.setattr(provider, "_get_status", lambda *a, **k: (200, [{"date": "2025-12-31", "fiscalYear": "2025", "period": "FY" if k["period"] == "annual" else "Q4",
+        "reportedCurrency": "USD", "filingDate": "2026-01-28", "acceptedDate": "2026-01-28 16:00:00"}]))
     result = provider.get_financial_history("TEST", date(2024, 1, 1))
     assert all(r["filing_date"] == "2026-01-28" and r["accepted_date"] == "2026-01-28 16:00:00" for s in svc.LINES for r in result[s])
 
 
 @pytest.mark.parametrize("legacy", ["live", "unknown", ""], ids=["mode_only", "unknown_source", "empty_source"])
-def test_verified_refresh_upgrades_legacy_values_with_source_and_value_audit(database, monkeypatch, legacy):
+def test_verified_refresh_quarantines_drifted_legacy_values_and_keeps_availability(database, monkeypatch, legacy):
+    # Supersedes the 2026-09-13 "verified refresh upgrades legacy values in
+    # place" contract: a drifted legacy value is quarantined (every field but
+    # ticker preserved, audited) and FMP's value is inserted carrying the
+    # legacy row's valid availability.
     providers(monkeypatch, ("fmp", payload()))
     svc.backfill_fundamentals("TEST", date(2024, 9, 13))
     with database() as db:
         for row in db.execute(select(FinancialPeriod)).scalars():
             row.source = legacy
         db.commit()
+        before = {r.id: all_fields(r) for r in db.execute(select(FinancialPeriod)).scalars()}
     providers(monkeypatch, ("fmp", payload(value=105)))
     report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
-    assert report["success"] and report["rows_written"] == 36
-    assert len(report["source_upgrades"]) == 36
-    assert all(u["old_source"] == legacy and u["new_source"] == "fmp" and u["old_value"] == 100 and u["new_value"] == 105
-               and u["ticker"] == "TEST" and u["id"] and u["period"] and u["line_item"] for u in report["source_upgrades"])
+    assert report["success"] and report["rows_written"] == report["rows_inserted"] == 36
+    assert report["rows_quarantined"] == 36 and report["source_upgrades"] == []
+    assert {q["reason"] for q in report["quarantined"]} == {"value_conflicts_with_primary"}
+    assert all(q["value"] == 100 and q["primary_value"] == 105 and q["source"] == legacy for q in report["quarantined"])
+    moved = quarantined(database, *before)
+    assert all({k: v for k, v in moved[i].items() if k != "ticker"} == {k: v for k, v in before[i].items() if k != "ticker"}
+               for i in before)
+    [audit] = repairs(database, "fmp_primary_takeover")
+    assert audit.id == report["quarantine_repair_id"] and audit.status == "applied"
+    assert {a["id"] for a in audit.plan["actions"]} == set(before)
+    with database() as db:
+        fresh = list(db.execute(select(FinancialPeriod).where(FinancialPeriod.ticker == "TEST")).scalars())
+    assert len(fresh) == 36 and {r.source for r in fresh} == {"fmp"} and {r.value for r in fresh} == {105}
+    carried = {(b["period"], b["statement"]): (b["available_at"], b["available_at_source"]) for b in before.values()}
+    assert all(carried[(r.period, r.statement)] == (r.available_at, r.available_at_source) for r in fresh)
     assert {r["source"] for r in svc.read_stored_financials("TEST")["income"]} == {"fmp"}
 
 
@@ -420,8 +463,14 @@ def test_backfill_updates_standalone_canonical_without_duplicate_and_repairs_nul
     report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
     assert report["success"] and report["rows_written"] == 36
     assert any(i["kind"] == "invalid_stored_period" and i["resolved"] for i in report["issues"])
+    # The drifted legacy value (90) is quarantined, not overwritten in place.
+    [moved] = report["quarantined"]
+    assert moved["reason"] == "value_conflicts_with_primary" and moved["value"] == 90
+    old = quarantined(database, moved["id"])[moved["id"]]
+    assert (old["period"], old["period_end"], old["value"], old["source"]) == ("FY2025", None, 90, "live")
     with database() as db:
-        rows = db.execute(select(FinancialPeriod).where(FinancialPeriod.statement == "income", FinancialPeriod.fiscal_year == 2025,
+        rows = db.execute(select(FinancialPeriod).where(FinancialPeriod.ticker == "TEST", FinancialPeriod.statement == "income",
+                                                       FinancialPeriod.fiscal_year == 2025,
                                                        FinancialPeriod.fiscal_quarter.is_(None))).scalars().all()
         assert len(rows) == 1 and rows[0].period == "FY2025" and rows[0].value == 100 and rows[0].source == "fmp"
         assert rows[0].period_end == date(2025, 12, 31)
@@ -454,8 +503,8 @@ def test_quarter_freshness_names_missing_later_quarter():
 def test_boolean_values_are_rejected_before_real_provider_mapping(monkeypatch):
     from app.providers.alpha_vantage_provider import AlphaVantageProvider
     fmp = FMPProvider()
-    monkeypatch.setattr(fmp, "_get", lambda *a, **k: [{"date": "2025-12-31", "fiscalYear": "2025",
-        "period": "FY" if k["period"] == "annual" else "Q4", "reportedCurrency": "USD", "revenue": True}])
+    monkeypatch.setattr(fmp, "_get_status", lambda *a, **k: (200, [{"date": "2025-12-31", "fiscalYear": "2025",
+        "period": "FY" if k["period"] == "annual" else "Q4", "reportedCurrency": "USD", "revenue": True}]))
     raw = fmp.get_financial_history("TEST", date(2024, 1, 1))
     assert all(r["revenue"] is None for r in raw["income"])
     assert any(i["raw_field"] == "revenue" and i["reason"] == "boolean_value" for i in raw["_history_issues"])
@@ -567,20 +616,33 @@ def test_primary_missing_nonfinite_and_unidentified_currency_remain_blocking(dat
     assert any(i["kind"] == kind and i["line_item"] == line for i in report["issues"])
 
 
-def test_legacy_default_currency_is_corrected_to_verified_provider_currency_with_audit(database, monkeypatch):
+@pytest.mark.parametrize("legacy_value", [31, 30], ids=["currency_only", "value_drift"])
+def test_legacy_default_currency_is_corrected_to_verified_provider_currency_with_audit(database, monkeypatch, legacy_value):
     with database() as db:
         FinancialPeriod.__table__.create(bind=db.get_bind(), checkfirst=True)
         # Primary is absent: unrelated old USD metadata must not block adding it.
-        db.add(FinancialPeriod(ticker="TEST", period="FY2025", period_end=date(2025, 12, 31), fiscal_year=2025,
-                               statement="income", line_item="net_income", value=30, currency="USD", source="live"))
+        legacy = FinancialPeriod(ticker="TEST", period="FY2025", period_end=date(2025, 12, 31), fiscal_year=2025,
+                                 statement="income", line_item="net_income", value=legacy_value, currency="USD", source="live")
+        db.add(legacy)
         db.commit()
+        legacy_id = legacy.id
     fresh = payload(currency="EUR")
     next(r for r in fresh["income"] if r["period"] == "FY2025")["net_income"] = 31
     providers(monkeypatch, ("fmp", fresh))
     report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
     assert report["success"]
-    upgrade = report["source_upgrades"][0]
-    assert (upgrade["old_source"], upgrade["new_source"], upgrade["old_currency"], upgrade["new_currency"], upgrade["old_value"], upgrade["new_value"]) == ("live", "fmp", "USD", "EUR", 30, 31)
+    if legacy_value == 31:
+        # A currency-only difference is the documented metadata correction:
+        # upgraded in place (same id), audited as an FMP adoption.
+        upgrade = report["source_upgrades"][0]
+        assert (upgrade["old_source"], upgrade["new_source"], upgrade["old_currency"], upgrade["new_currency"],
+                upgrade["old_value"], upgrade["new_value"]) == ("live", "fmp", "USD", "EUR", 31, 31)
+        [audit] = repairs(database, "primary_adoption")
+        assert audit.plan["actions"][0]["id"] == legacy_id and audit.plan["actions"][0]["before"]["currency"] == "USD"
+    else:
+        # Legacy value drift (FIX-006 policy): quarantined, FMP inserted.
+        assert report["source_upgrades"] == [] and report["quarantined"][0]["id"] == legacy_id
+        assert quarantined(database, legacy_id)[legacy_id]["value"] == 30
     providers(monkeypatch, ("fmp", payload(currency="USD")))
     protected = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
     assert not protected["success"] and protected["rows_written"] == 0
@@ -619,19 +681,43 @@ def seed_shifted_legacy(database, *, with_optional=False):
     return ids
 
 
-def test_provider_confirmed_fiscal_chain_relabels_atomically_with_ids_and_availability(database, monkeypatch):
+@pytest.mark.parametrize("legacy_value", [101, 100], ids=["confirmed", "drifted"])
+def test_provider_confirmed_fiscal_chain_relabels_atomically_with_ids_and_availability(database, monkeypatch, legacy_value):
     ids = seed_shifted_legacy(database)
+    with database() as db:
+        for row_id in ids.values():
+            db.get(FinancialPeriod, row_id).value = legacy_value
+        db.commit()
     calls = providers(monkeypatch, ("fmp", fiscal_payload()))
     report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
     assert report["success"] and report["rows_relabelled"] == 27
     assert calls[0][2] == date(2018, 2, 1) == date.fromisoformat(report["provider_requested_start"])
     assert len(report["period_relabels"]) == 27
     with database() as db:
-        for (_statement, year), row_id in ids.items():
+        for (statement, year), row_id in ids.items():
             row = db.get(FinancialPeriod, row_id)
             assert row.period == f"FY{year - 1}" and row.period_end == date(year, 2, 1)
-            assert row.fiscal_year == year - 1 and row.value == 101 and row.source == "fmp"
-            assert row.available_at == date(year, 3, 20)
+            assert row.fiscal_year == year - 1 and row.available_at == date(year, 3, 20)
+            if legacy_value == 101:
+                # FMP confirms label and value: relabelled and adopted in place.
+                assert row.ticker == "TEST" and row.value == 101 and row.source == "fmp"
+            else:
+                # Drift supersedes the id-preservation claim: the relabelled row
+                # is quarantined unchanged and FMP's value takes its key with
+                # the original availability.
+                assert row.ticker.startswith("~Q") and row.value == 100 and row.source == "live"
+                replacement = db.execute(select(FinancialPeriod).where(
+                    FinancialPeriod.ticker == "TEST", FinancialPeriod.period == f"FY{year - 1}",
+                    FinancialPeriod.statement == statement, FinancialPeriod.line_item == svc.PRIMARY[statement])).scalar_one()
+                assert replacement.value == 101 and replacement.source == "fmp"
+                assert replacement.available_at == date(year, 3, 20)
+    if legacy_value == 100:
+        assert report["rows_quarantined"] == 27
+        [audit] = repairs(database, "fmp_primary_takeover")
+        # The audit keeps the pre-run label next to the moved (relabelled) image.
+        assert all(a["pre_run"]["period"] != a["before"]["period"] for a in audit.plan["actions"])
+    else:
+        assert report["rows_quarantined"] == 0 and len(report["adoptions"]) == 27
     second = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
     assert second["success"] and second["rows_relabelled"] == second["rows_written"] == 0 and len(calls) == 1
 
@@ -661,13 +747,20 @@ def test_known_provider_destination_blocks_dependent_chain_without_overwrite(dat
         db.commit()
     providers(monkeypatch, ("fmp", fiscal_payload()))
     report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
-    assert not report["success"]
+    # The relabel chain is still blocked (never overwritten), but FMP now owns
+    # the period: the named secondary contradicting FMP's date and the blocked
+    # legacy rows are quarantined unchanged, which resolves the conflicts.
     conflicts = [i for i in report["issues"] if i["kind"] == "legacy_period_relabel_conflict"]
     assert {i["id"] for i in conflicts} >= {ids[("income", 2025)], ids[("income", 2026)]}
-    with database() as db:
-        known = db.get(FinancialPeriod, ids[("income", 2024)])
-        assert (known.period, known.period_end, known.source, known.value) == ("FY2024", date(2024, 2, 1), "other_verified", 100)
-        assert db.get(FinancialPeriod, ids[("income", 2025)]).period == "FY2025"
+    assert all(i["resolved"] and i["resolution"] == "quarantined_superseded_by_primary" for i in conflicts)
+    assert report["success"]
+    reasons = {q["id"]: q["reason"] for q in report["quarantined"]}
+    assert reasons[ids[("income", 2024)]] == "period_end_conflicts_with_primary"
+    assert reasons[ids[("income", 2025)]] == "period_end_conflicts_with_primary"
+    assert reasons[ids[("income", 2026)]] == "label_conflicts_with_primary_observation"
+    known = quarantined(database, ids[("income", 2024)])[ids[("income", 2024)]]
+    assert (known["period"], known["period_end"], known["source"], known["value"]) == ("FY2024", date(2024, 2, 1), "other_verified", 100)
+    assert quarantined(database, ids[("income", 2025)])[ids[("income", 2025)]]["period"] == "FY2025"
 
 
 def test_relabel_and_later_write_failure_roll_back_together(database, monkeypatch):
@@ -721,7 +814,7 @@ def test_external_session_owns_relabel_commit_and_rollback(database, monkeypatch
         assert all(db.get(FinancialPeriod, row_id).period == f"FY{year}" for (_, year), row_id in ids.items())
 
 
-def test_duplicate_legacy_destination_is_preserved_after_unique_provider_fact_is_stored(database, monkeypatch):
+def test_duplicate_legacy_destination_is_quarantined_after_unique_provider_fact_is_stored(database, monkeypatch):
     ids = seed_shifted_legacy(database)
     with database() as db:
         extra = FinancialPeriod(ticker="TEST", period="FY2027", period_end=date(2026, 2, 1), fiscal_year=2027,
@@ -732,16 +825,18 @@ def test_duplicate_legacy_destination_is_preserved_after_unique_provider_fact_is
     providers(monkeypatch, ("fmp", fiscal_payload()))
     result = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
     assert result["success"]
-    blocked = {i["id"] for i in result["issues"] if i["kind"] == "legacy_period_relabel_preserved_duplicate"}
-    assert {ids[("income", 2026)], extra_id} <= blocked
+    # Both colliding legacy labels contradict FMP's FY2025 observation at the
+    # same period end: quarantined unchanged (were: kept and read-excluded).
+    reasons = {q["id"]: q["reason"] for q in result["quarantined"]}
+    assert reasons[ids[("income", 2026)]] == reasons[extra_id] == "label_conflicts_with_primary_observation"
+    blocked = [i for i in result["issues"] if i.get("id") in {ids[("income", 2026)], extra_id}
+               and i["kind"] == "legacy_period_relabel_conflict"]
+    assert blocked and all(i["resolution"] == "quarantined_superseded_by_primary" for i in blocked)
     coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
     assert coverage["success"]
-    excluded = [i for i in coverage["issues"] if i["kind"] == "legacy_duplicate_observation_excluded"]
-    assert {i["id"] for i in excluded} == {ids[("income", 2026)], extra_id}
-    assert len({i["replacement"]["id"] for i in excluded}) == 1
-    with database() as db:
-        assert db.get(FinancialPeriod, extra_id).value == 90
-        assert db.get(FinancialPeriod, ids[("income", 2026)]).value == 100
+    assert not any(i["kind"] == "legacy_duplicate_observation_excluded" for i in coverage["issues"])
+    rows = quarantined(database, extra_id, ids[("income", 2026)])
+    assert rows[extra_id]["value"] == 90 and rows[ids[("income", 2026)]]["value"] == 100
 
 
 def seed_undated_alias(database, *, source="live", canonical=False):
@@ -756,30 +851,38 @@ def seed_undated_alias(database, *, source="live", canonical=False):
 
 
 @pytest.mark.parametrize("existing_canonical", [False, True])
-def test_undated_legacy_alias_is_preserved_beside_confirmed_canonical_fact(database, monkeypatch, existing_canonical):
+def test_undated_legacy_alias_is_quarantined_beside_confirmed_canonical_fact(database, monkeypatch, existing_canonical):
+    # MSFT/NVDA shape: an undated bare-year alias of a period FMP reports is
+    # quarantined with every field but ticker preserved (was: kept and
+    # warned about on every stored read). An equal legacy canonical row is
+    # adopted in place under its own id.
     calls = providers(monkeypatch, ("fmp", payload()))
+    canonical_id = None
     if existing_canonical:
         svc.backfill_fundamentals("TEST", date(2024, 9, 13))
         with database() as db:
             row = db.execute(select(FinancialPeriod).where(FinancialPeriod.period == "FY2023", FinancialPeriod.statement == "income")).scalar_one()
             row.source = "live"
             db.commit()
+            canonical_id = row.id
     alias_id = seed_undated_alias(database)
     before = svc.fundamental_coverage("TEST", date(2024, 9, 13))
     assert not before["success"]
     report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
     assert report["success"]
+    assert [(q["id"], q["reason"]) for q in report["quarantined"]] == [(alias_id, "alias_superseded_by_primary")]
+    alias = quarantined(database, alias_id)[alias_id]
+    assert (alias["period"], alias["period_end"], alias["value"], alias["source"], alias["currency"]) == ("2023", None, 777, "live", "USD")
+    assert alias["available_at"] == date(2024, 2, 1) and alias["fetched_at"] == datetime(2024, 3, 1)
     with database() as db:
-        alias = db.get(FinancialPeriod, alias_id)
-        assert (alias.period, alias.period_end, alias.value, alias.source, alias.currency) == ("2023", None, 777, "live", "USD")
-        assert alias.available_at == date(2024, 2, 1) and alias.fetched_at == datetime(2024, 3, 1)
-        canonical = db.execute(select(FinancialPeriod).where(FinancialPeriod.period == "FY2023", FinancialPeriod.statement == "income")).scalar_one()
+        canonical = db.execute(select(FinancialPeriod).where(FinancialPeriod.ticker == "TEST", FinancialPeriod.period == "FY2023",
+                                                            FinancialPeriod.statement == "income")).scalar_one()
         assert canonical.id != alias_id and canonical.source == "fmp" and canonical.value == 100
         assert canonical.period_end == date(2023, 12, 31)
+        if existing_canonical:
+            assert canonical.id == canonical_id and report["adoptions"][0]["id"] == canonical_id
     coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
-    warning = next(i for i in coverage["issues"] if i["kind"] == "unusable_legacy_observation")
-    assert coverage["success"] and warning["id"] == alias_id and warning["value"] == 777
-    assert warning["usable_canonical_id"] == canonical.id and warning["usable_canonical_source"] == "fmp"
+    assert coverage["success"] and not any(i["kind"] == "unusable_legacy_observation" for i in coverage["issues"])
     rows = svc.read_stored_financials("TEST")
     annual = [r for r in rows["income"] if r["period"] == "FY2023"]
     assert len(annual) == 1 and annual[0]["revenue"] == 100
@@ -800,28 +903,38 @@ def test_undated_legacy_alias_without_provider_primary_remains_blocking(database
 
 
 def test_known_provider_undated_alias_is_not_discarded_to_resolve_conflict(database, monkeypatch):
+    # Not discarded: quarantined with its full before-image (was: kept and
+    # blocking as a stored_period_alias_conflict).
     providers(monkeypatch, ("fmp", payload()))
     svc.backfill_fundamentals("TEST", date(2024, 9, 13))
     alias_id = seed_undated_alias(database, source="alpha_vantage")
     report = svc.backfill_fundamentals("TEST", date(2024, 9, 13), True)
-    assert not report["success"]
-    assert any(i["kind"] == "stored_period_alias_conflict" for i in report["issues"])
-    assert any(i["kind"] == "invalid_stored_period" and i["id"] == alias_id for i in report["issues"])
-    with database() as db:
-        assert db.get(FinancialPeriod, alias_id).value == 777
+    assert report["success"]
+    assert not any(i["kind"] == "stored_period_alias_conflict" for i in report["issues"])
+    assert any(i["kind"] == "invalid_stored_period" and i["id"] == alias_id and i["resolved"] for i in report["issues"])
+    assert [(q["id"], q["reason"]) for q in report["quarantined"]] == [(alias_id, "alias_superseded_by_primary")]
+    row = quarantined(database, alias_id)[alias_id]
+    assert row["value"] == 777 and row["source"] == "alpha_vantage"
+    [audit] = repairs(database, "fmp_primary_takeover")
+    assert audit.plan["actions"][0]["before"] == {**{k: (v.isoformat() if hasattr(v, "isoformat") else v)
+                                                     for k, v in row.items()}, "ticker": "TEST"}
 
 
-def test_invalid_exact_canonical_occupant_in_alias_group_stays_blocking(database, monkeypatch):
+def test_invalid_exact_canonical_occupant_in_alias_group_is_quarantined(database, monkeypatch):
+    # Both the undated alias and the undated canonical occupant disagree with
+    # FMP (777 vs 100): quarantined, not left blocking and not overwritten.
     alias_id = seed_undated_alias(database)
     canonical_id = seed_undated_alias(database, canonical=True)
     providers(monkeypatch, ("fmp", payload()))
     report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
-    assert not report["success"]
-    assert any(i["kind"] == "stored_period_alias_conflict" for i in report["issues"])
-    with database() as db:
-        for row_id in (alias_id, canonical_id):
-            row = db.get(FinancialPeriod, row_id)
-            assert row.period_end is None and row.value == 777 and row.source == "live"
+    assert report["success"]
+    assert not any(i["kind"] == "stored_period_alias_conflict" for i in report["issues"])
+    assert {q["id"]: q["reason"] for q in report["quarantined"]} == {
+        alias_id: "alias_superseded_by_primary", canonical_id: "value_conflicts_with_primary"}
+    for row in quarantined(database, alias_id, canonical_id).values():
+        assert row["period_end"] is None and row["value"] == 777 and row["source"] == "live"
+
+
 
 
 def test_fundamentals_keep_canonical_bk_routing_separate_from_price_rename(database, monkeypatch):

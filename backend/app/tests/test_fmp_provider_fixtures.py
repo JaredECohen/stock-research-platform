@@ -527,3 +527,65 @@ def test_wrong_shaped_rows_propagate_as_an_exception(router, provider):
     router.add("/quote", '["not-a-dict"]')
     with pytest.raises(AttributeError):
         provider.get_quote("ACME")
+
+
+# ---------------------------------------------------------------------------
+# FIX-006: entitlement classification (C4 `_get_status`)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status", [401, 402, 403])
+def test_history_classifies_402_as_entitlement_denied(router, provider, caplog, status):
+    """A plan refusal is not "no data": the 2026-09-21 closeout could not tell
+    the BRK.B spelling refusal from a plan loss because both looked alike."""
+    router.add("/income-statement", '{"Error Message": "Special Endpoint"}', status=status)
+    router.add("/balance-sheet-statement", "[]")
+    router.add_fixture("/cash-flow-statement", "cash_flow_statement.json")
+    with caplog.at_level("WARNING", logger="app.providers.fmp_provider"):
+        result = provider.get_financial_history("brk.b", "2024-01-01")
+    denied = [i for i in result["_history_issues"] if i["kind"] == "provider_entitlement_denied"]
+    assert [(i["status"], i["endpoint"], i["statement"], i["cadence"]) for i in denied] == [
+        (status, "/income-statement", "income", "annual"), (status, "/income-statement", "income", "quarterly")]
+    # An empty 200 is still "no data", never an entitlement claim.
+    assert {(i["statement"], i["kind"]) for i in result["_history_issues"] if i.get("statement") == "balance"} == {
+        ("balance", "provider_no_data")}
+    assert f"FMP /income-statement -> {status} symbol=BRK.B" in caplog.text
+    assert FAKE_KEY not in caplog.text
+    assert provider._get_status("/income-statement", symbol="BRK.B") == (status, None)
+    assert provider._get("/income-statement", symbol="BRK.B") is None
+
+
+def test_ratios_keys_unchanged_by_fmp_primary(router, provider, caplog):
+    """Decision 7(d): FMP-primary must not add `revenue_growth` to `ratios`
+    (graph.py feeds that key into the published factor blend). The endpoints
+    the re-pull never exercises still log refusals with the symbol."""
+    _happy_router(router)
+    ratios = provider.get_ratios("acme")
+    assert ratios is not None and set(ratios) == RATIO_KEYS and "revenue_growth" not in ratios
+    router.add("/key-metrics", '{"Error Message": "Restricted"}', status=402)
+    with caplog.at_level("WARNING", logger="app.providers.fmp_provider"):
+        degraded = provider.get_ratios("acme")
+    assert degraded is not None and set(degraded) == RATIO_KEYS and degraded["EV_EBITDA"] is None
+    assert "FMP /key-metrics -> 402 symbol=ACME" in caplog.text and FAKE_KEY not in caplog.text
+
+
+def test_every_endpoint_classifies_entitlement_refusals(router, provider, monkeypatch):
+    """C4 covers every FMP endpoint, not only the statement-history calls:
+    ratios, key-metrics, estimates and earnings keep their return shapes
+    (decision 7(d)) and record the refusal per endpoint instead."""
+    monkeypatch.setattr(fmp, "_ENTITLEMENT_DENIALS", {})
+    _happy_router(router)
+    router.add("/key-metrics", '{"Error Message": "Restricted"}', status=402)
+    router.add("/analyst-estimates", '{"Error Message": "Restricted"}', status=403)
+    router.add("/earnings", "[]", status=401)
+    ratios = provider.get_ratios("acme")
+    assert set(ratios or {}) == RATIO_KEYS and "revenue_growth" not in (ratios or {})
+    provider.get_estimates("acme")
+    provider.get_earnings("zzz")
+    router.add("/quote", "[]", status=500)  # not an entitlement status
+    provider.get_quote("acme")
+    denied = {d["endpoint"]: d for d in fmp.entitlement_denials()}
+    assert set(denied) == {"/key-metrics", "/analyst-estimates", "/earnings"}
+    assert (denied["/key-metrics"]["status"], denied["/key-metrics"]["symbols"]) == (402, ["ACME"])
+    assert denied["/analyst-estimates"]["status"] == 403 and denied["/earnings"]["last_symbol"] == "ZZZ"
+    assert all(d["kind"] == "provider_entitlement_denied" and d["provider"] == "fmp" for d in denied.values())
+    assert FAKE_KEY not in repr(denied)

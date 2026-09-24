@@ -313,3 +313,66 @@ def test_old_memo_can_use_durable_history_beyond_remote_ladder(database):
         assert outcome is not None, status
         assert outcome.forward_return == 0
         assert "price_window=durable_history" in outcome.note
+
+
+def test_requested_start_equals_the_plan_for_every_target(database):
+    with database[0]() as db:
+        db.add(Company(ticker="ABC", company_name="ABC", sector="Unknown", industry="Unknown"))
+        db.add(Company(ticker="NEW", company_name="NEW", sector="Unknown", industry="Unknown"))
+        db.add(MemoSnapshot(ticker="ABC", version=1, generated_at=datetime(2021, 3, 4), memo_json={}))
+        db.add(MemoSnapshot(ticker="ABC", version=2, generated_at=datetime(2023, 3, 4), memo_json={}))
+        db.add(MemoSnapshot(ticker="ABC", version=3, generated_at=datetime(2019, 1, 1), as_of_date=datetime(2019, 1, 1)))
+        db.commit()
+    today = date(2026, 9, 13)
+    plan = {t["ticker"]: t["requested_start"] for t in backfill.backfill_plan(today=today)["targets"]}
+    assert backfill.requested_start("abc", today=today).isoformat() == plan["ABC"] == "2021-02-25"
+    assert backfill.requested_start("NEW", today=today).isoformat() == plan["NEW"] == "2024-09-13"
+
+
+def test_scope_fundamentals_skips_prices_and_dry_run_writes_nothing(database, monkeypatch):
+    from app.services import fundamental_history_service as fundamentals
+    from app.services import provider_cache
+    with database[0]() as db:
+        db.add(Company(ticker="ABC", company_name="ABC", sector="Unknown", industry="Unknown"))
+        db.commit()
+    monkeypatch.setattr(backfill, "backfill_prices", lambda *a, **k: pytest.fail("prices were not requested"))
+    monkeypatch.setattr(provider_cache, "invalidate", lambda *a: pytest.fail("a dry run must not touch caches"))
+    seen = []
+
+    def fundamentals_run(ticker, start, **kwargs):
+        seen.append(kwargs)
+        return {"success": True, "committed": False, "dry_run": True, "rows_quarantined": 2}
+
+    monkeypatch.setattr(fundamentals, "backfill_fundamentals", fundamentals_run)
+    dry = backfill.sync_ticker("ABC", force_refresh=True, scope="fundamentals", dry_run=True)
+    assert dry["dry_run"] and dry["status"] == "dry_run" and dry["prices"]["status"] == "not_requested"
+    assert seen == [{"force_refresh": True, "dry_run": True}]
+    with database[0]() as db:
+        assert db.get(MarketDataSync, "ABC") is None
+    with pytest.raises(ValueError):
+        backfill.sync_ticker("ABC", dry_run=True)
+    with pytest.raises(ValueError):
+        backfill.sync_ticker("ABC", scope="prices")
+    monkeypatch.setattr(fundamentals, "backfill_fundamentals",
+                        lambda *a, **k: {"success": True, "committed": False, "rows_written": 0})
+    real = backfill.sync_ticker("ABC", scope="fundamentals")
+    assert real["success"] and real["prices"] == {"status": "not_requested", "success": True}
+    with database[0]() as db:
+        assert db.get(MarketDataSync, "ABC").status == "complete"
+
+
+def test_committed_fundamentals_invalidate_the_company_cold_snapshot(database, monkeypatch):
+    from app.cache import snapshots
+    from app.services import fundamental_history_service as fundamentals
+    from app.services import provider_cache
+    with database[0]() as db:
+        db.add(Company(ticker="ABC", company_name="ABC", sector="Unknown", industry="Unknown"))
+        db.commit()
+    calls = []
+    monkeypatch.setattr(snapshots, "invalidate", lambda subject, kind=None: calls.append((subject, kind)) or 2)
+    monkeypatch.setattr(provider_cache, "invalidate", lambda *a: 1)
+    monkeypatch.setattr(fundamentals, "backfill_fundamentals", lambda *a, **k: {"success": True, "committed": True})
+    result = backfill.sync_ticker("ABC", scope="fundamentals")
+    assert calls == [("ABC", "company_cold")]
+    assert result["company_cold_invalidation"] == {"success": True, "status": "invalidated", "kind": "company_cold",
+                                                   "rows_invalidated": 2}

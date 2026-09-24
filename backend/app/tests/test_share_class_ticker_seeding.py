@@ -195,6 +195,27 @@ def test_a_genuinely_unknown_symbol_is_still_a_miss(one_spelling):
     assert get_data_service().get_company_profile("ZZNOPE") is None
 
 
+def test_primary_provider_tries_every_spelling_before_fallback(monkeypatch):
+    """FIX-006: provider-major order. The primary (FMP spells it `BRK-B`)
+    must be asked under every spelling before a fallback that happens to
+    accept our `BRK.B` spelling gets to answer."""
+    from app.services import data_service
+
+    primary = OneSpellingProvider()
+    primary.name = "fmp"
+    fallback = OneSpellingProvider(known=BERKSHIRE)
+    fallback.name = "alpha_vantage"
+    ds = data_service.DataService()
+    monkeypatch.setattr(ds, "_live_chain", lambda capability: [primary, fallback])
+    profile = ds._try_chain_symbol("profile", "get_company_profile", BERKSHIRE)
+    assert profile is not None and profile["ticker"] == PROVIDER_SPELLING, "the fallback answered first"
+    assert primary.asked[:2] == [BERKSHIRE, PROVIDER_SPELLING]
+    assert fallback.asked == []
+    primary.asked.clear()
+    ds._try_chain_symbol("profile", "get_company_profile", "AAPL")
+    assert primary.asked == ["AAPL"] and fallback.asked == ["AAPL"]
+
+
 def test_seed_universe_gives_berkshire_a_row_under_the_canonical_ticker(
     one_spelling, no_berkshire_row, monkeypatch,
 ):

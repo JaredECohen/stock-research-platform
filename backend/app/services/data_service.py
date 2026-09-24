@@ -275,9 +275,15 @@ class DataService:
             "profile": [self.fmp, self.alpha],
             "prices": [self.fmp, self.tiingo, self.polygon, self.alpha],
             "quote": [self.fmp, self.tiingo, self.polygon],
-            # Wave 9b — Alpha Vantage as a financials fallback. FMP's
-            # Starter tier returns 403 on most fundamentals endpoints;
-            # AV Premium covers the same vocabulary.
+            # FMP is primary (owner decision 2026-09-24). Receipts: the
+            # 2026-09-13 durable import got FMP statements for every
+            # canonical symbol (351 of 353 calls; both misses were the
+            # dotted BRK.B spelling), and the four HTTP 402s in the
+            # 2026-09-21 window were all BRK.B, answered under BRK-B. No
+            # endpoint- or cadence-level plan gap is evidenced; FMP 401/402/
+            # 403 are now classified as `provider_entitlement_denied` so a
+            # real downgrade is visible. Alpha Vantage only fills periods
+            # FMP does not report.
             "financials": [self.fmp, self.alpha],
             "ratios": [self.fmp],
             "key_metrics": [self.fmp],
@@ -342,17 +348,35 @@ class DataService:
         pays for the extra spellings only when the first one misses. The
         caller's spelling stays canonical for the cache key and the
         database — this changes what we *ask* for, never what we store.
+
+        Provider-major: every spelling is tried against a provider before
+        the next provider is asked (FIX-006). Symbol-major order let a
+        fallback answer `BRK.B` under our spelling before FMP, the primary,
+        was asked for `BRK-B`. A separator-free ticker still goes through
+        `_try_chain` itself, the seam below the cache and above the network
+        that the cost and cache tests replace.
         """
         variants = symbol_variants(ticker)
-        for symbol in variants:
-            result = self._try_chain(capability, fn_name, symbol, *args, **kwargs)
-            if result:
-                if symbol != variants[0]:
-                    log.info(
-                        "%s resolved %s under the provider spelling %s",
-                        capability, variants[0], symbol,
-                    )
-                return result
+        if len(variants) == 1:
+            return self._try_chain(capability, fn_name, ticker, *args, **kwargs)
+        for provider in self._live_chain(capability):
+            fn: Callable | None = getattr(provider, fn_name, None)
+            if not fn:
+                continue
+            for symbol in variants:
+                try:
+                    result = fn(symbol, *args, **kwargs)
+                except Exception as exc:  # pragma: no cover
+                    # Type only: provider exception text can quote a keyed URL.
+                    log.warning("Provider %s.%s failed: %s", provider.name, fn_name, type(exc).__name__)
+                    continue
+                if result:
+                    if symbol != variants[0]:
+                        log.info(
+                            "%s resolved %s under the provider spelling %s",
+                            capability, variants[0], symbol,
+                        )
+                    return result
         return None
 
     # ------------------------------------------------------------------

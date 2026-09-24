@@ -285,3 +285,73 @@ def test_restatement_on_reupsert_keeps_the_original_available_at():
     assert after.value == (original_value or 0.0) + 1.0
     assert after.available_at == original_available
     assert after.available_at_source == "assumed_fye"
+
+
+def test_upsert_refuses_period_end_change_under_available_at():
+    """FIX-006 root cause: an INSERT-only availability must never end up
+    before its period end because a later write moved the end (LULU)."""
+    from datetime import date
+
+    _reset_tables()
+    key = dict(ticker="PEGRD", period="FY2025", statement="balance", line_item="total_debt",
+               fiscal_year=2025, fiscal_quarter=None, source="fmp")
+    refusals: list = []
+    with SessionLocal() as db:
+        assert history_service._upsert_financial_period(
+            db, **key, value=5.0, period_end=date(2025, 2, 2), available_at=date(2025, 4, 18),
+            available_at_source="lag_rule")
+        db.flush()
+        for new_end in (date(2026, 2, 1), None):
+            assert not history_service._upsert_financial_period(
+                db, **key, value=6.0, period_end=new_end, refusals=refusals)
+        db.commit()
+        row = db.query(FinancialPeriod).filter_by(ticker="PEGRD").one()
+        assert (row.period_end, row.available_at, row.value) == (date(2025, 2, 2), date(2025, 4, 18), 5.0)
+        # Same end: the ordinary same-provider restatement still applies.
+        assert history_service._upsert_financial_period(db, **key, value=6.0, period_end=date(2025, 2, 2))
+        db.commit()
+        assert db.query(FinancialPeriod).filter_by(ticker="PEGRD").one().value == 6.0
+    assert [(r["kind"], r["stored_period_end"], r["incoming_period_end"]) for r in refusals] == [
+        ("period_end_change_refused", "2025-02-02", "2026-02-01"),
+        ("period_end_change_refused", "2025-02-02", None)]
+
+
+def test_provider_owned_ticker_ingests_only_periods_newer_than_named_history(monkeypatch):
+    """The anonymous, cache-backed annual read must not write inside durable
+    provider-owned history, but until S6's filing-driven refresh ships it is
+    the only scheduled writer of NEW periods, so those still arrive (the raw
+    readers would otherwise freeze at the one-time re-pull). First-contact
+    tickers keep the whole legacy ingest."""
+    from datetime import date
+
+    from app.services.data_service import get_data_service
+
+    _reset_tables()
+    with SessionLocal() as db:
+        db.add(FinancialPeriod(ticker="NVDA", period="FY2025", statement="income", line_item="revenue", value=1.0,
+                               period_end=date(2025, 1, 26), fiscal_year=2025, source="fmp", currency="USD"))
+        db.commit()
+    ds = get_data_service()
+    original = ds.get_financial_statements
+    asked: list[str] = []
+
+    def spy(ticker):
+        asked.append(ticker)
+        if ticker != "NVDA":
+            return original(ticker)
+        rows = [("FY2024", "2024-01-28", 7.0), ("FY2025", "2025-01-28", 9.0), ("FY2026", "2026-01-25", 11.0)]
+        return {"income": [{"period": p, "period_end": e, "revenue": v, "currency": "USD"} for p, e, v in rows],
+                "balance": [], "cash": []}
+
+    monkeypatch.setattr(ds, "get_financial_statements", spy)
+    owned = history_service.backfill_ticker("NVDA")
+    first_contact = history_service.backfill_ticker("MSFT")
+    assert owned["fundamentals"] == "durable" and owned["legacy_periods_skipped"] == 2
+    assert owned["financial_periods"] == 1
+    assert first_contact["financial_periods"] > 0 and "fundamentals" not in first_contact
+    assert asked == ["NVDA", "MSFT"]
+    with SessionLocal() as db:
+        rows = {(r.period, r.source, r.value) for r in db.query(FinancialPeriod).filter_by(ticker="NVDA")}
+    # FY2025 (2 days from FMP's end) and the older FY2024 stay FMP's; only
+    # the period after the named history is added, as an unidentified row.
+    assert rows == {("FY2025", "fmp", 1.0), ("FY2026", "live", 11.0)}
