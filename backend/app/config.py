@@ -50,7 +50,8 @@ class Settings(BaseSettings):
     # and error reporters that capture frame locals. Only the repr changes;
     # values, env loading and model_dump are untouched.
     # test_config_secret_repr fails if a new *_key / *_token / *_secret /
-    # *_salt field (or a credential-bearing URL) is added without it.
+    # *_salt / *_password / *_dsn field, or any *_url / *_uri field it does
+    # not list as public, is added without it.
     model_config = SettingsConfigDict(
         env_file=tuple(_project_env_files()),
         env_file_encoding="utf-8",
