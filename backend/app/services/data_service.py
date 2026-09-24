@@ -379,6 +379,32 @@ class DataService:
                     return result
         return None
 
+    def _try_chain_symbol_with_provider(
+        self, capability: str, fn_name: str, ticker: str, *args, **kwargs,
+    ) -> tuple[Any | None, str | None]:
+        """`_try_chain_symbol` that also says WHICH provider answered.
+
+        The quote label names its source ("fmp", "tiingo", "polygon"), which
+        `_try_chain` does not report. Same provider-major order across the
+        share-class spellings; `_try_chain` itself stays untouched because
+        the cost and cache tests replace it as their seam.
+        """
+        for provider in self._live_chain(capability):
+            fn: Callable | None = getattr(provider, fn_name, None)
+            if not fn:
+                continue
+            for symbol in symbol_variants(ticker):
+                try:
+                    result = fn(symbol, *args, **kwargs)
+                except Exception as exc:  # pragma: no cover
+                    # Type only: provider exception text can quote a keyed URL.
+                    log.warning("Provider %s.%s failed: %s", getattr(provider, "name", "?"), fn_name,
+                                type(exc).__name__)
+                    continue
+                if result:
+                    return result, str(getattr(provider, "name", None) or type(provider).__name__)
+        return None, None
+
     # ------------------------------------------------------------------
     # Provider status
     # ------------------------------------------------------------------
@@ -503,20 +529,41 @@ class DataService:
     def get_quote(
         self, ticker: str, *, force_refresh: bool = False,
     ) -> dict[str, Any] | None:
-        """Intraday last-trade quote with a 60s TTL.
+        """Intraday provider quote under the calendar-aware policy (W5b).
 
-        Bypassed during as-of backtests — historical runs read closes
-        from `get_price_history` clipped to the as-of date, never live
-        quotes. Live mode: provider chain returns a normalized dict
-        with `price`, `previous_close`, `change_pct`, `timestamp`.
+        Delegates to `quote_service`: fresh for 15 minutes while the NYSE
+        session is open and until the next open after the close, a 60 s
+        floor inside memo runs, labelled stale-on-miss. Returns the quote
+        dict (`price`, `previous_close`, `change_pct`, `price_time`,
+        `as_of`, `source`, ...) or None.
+
+        None when the source is `unavailable` or `eod_close`: this method
+        has always meant a provider quote, and `get_current_price` keeps its
+        own close fallback. None, too, under an as-of backtest (historical
+        runs read closes, never live quotes), for a malformed ticker, and
+        when the exchange calendar cannot load (tzdata missing): a quote is
+        an overlay, so its failure must degrade the caller to the close
+        rather than raise into the DCF defaults.
         """
         if current_as_of_date() is not None:
             return None
-        return self._cached(
-            "quote", ticker.upper(),
-            lambda: self._try_chain_symbol("quote", "get_quote", ticker),
-            force_refresh=force_refresh,
-        )
+        from ..finance.market_calendar import CalendarUnavailable
+        from . import quote_service
+        key = str(ticker or "").strip().upper()
+        try:
+            quote = quote_service.get_quotes(
+                [key], max_age_seconds=0 if force_refresh else None,
+                resolve_eod=False, service=self,
+            ).get(key)
+        except ValueError:
+            log.info("quote skipped for malformed ticker %r", key[:20])
+            return None
+        except CalendarUnavailable as exc:
+            log.warning("quote skipped, exchange calendar unavailable: %s", exc)
+            return None
+        if not quote or quote["source"] in ("unavailable", "eod_close"):
+            return None
+        return dict(quote)
 
     def get_financial_statements(
         self, ticker: str, *, force_refresh: bool = False,

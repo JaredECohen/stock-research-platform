@@ -17,10 +17,14 @@ def get_close_series(ticker: str, days: int = 252) -> list[float]:
 def get_current_price(ticker: str) -> float | None:
     """Live intraday price with EOD-close fallback.
 
-    Returns the freshest price available: a 60s-cached quote during
-    market hours, or yesterday's close if the quote chain misses (or
-    when an as-of backtest is active and `get_quote` short-circuits
-    to None).
+    Returns the freshest price available: a provider quote under the
+    calendar-aware policy (`quote_service`: 15 minutes in session, until
+    the next open after the close, 60 s inside a memo run, labelled stale
+    up to an hour on a provider miss), or the last close when there is no
+    quote. `get_quote` answers None for an as-of backtest, a malformed
+    ticker, or an exchange calendar that cannot load (tzdata missing), so
+    each of those lands on the close here rather than raising into the
+    DCF defaults.
     """
     quote = get_data_service().get_quote(ticker)
     if quote and quote.get("price") is not None:
