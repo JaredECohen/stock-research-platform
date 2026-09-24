@@ -6,6 +6,7 @@ contents — those are tested in their respective wave's PR.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime
 
 from fastapi.testclient import TestClient
@@ -115,7 +116,7 @@ def test_news_domain_reload_returns_counts():
 # ---------------------------------------------------------------------------
 
 def _seed_memo_for_audit(ticker: str, *, bull_kp: int, bear_kp: int,
-                         lean: str = "balanced") -> None:
+                         lean: str = "balanced", bull_case: object = None) -> dict:
     memo_json = {
         "ticker": ticker,
         "rating_label": "Neutral",
@@ -136,6 +137,8 @@ def _seed_memo_for_audit(ticker: str, *, bull_kp: int, bear_kp: int,
             },
         },
     }
+    if bull_case is not None:
+        memo_json["bull_case"] = bull_case
     with SessionLocal() as db:
         from app.services.memo_store import _ensure_table as _et
         _et(db)
@@ -146,6 +149,7 @@ def _seed_memo_for_audit(ticker: str, *, bull_kp: int, bear_kp: int,
             revision_log=[], generated_at=datetime.utcnow(),
         ))
         db.commit()
+    return deepcopy(memo_json)
 
 
 def test_lopsidedness_audit_reports_skew_and_lean_distribution():
@@ -178,6 +182,38 @@ def test_lopsidedness_audit_caps_at_n():
     body = r.json()
     assert body["inspected"] <= 2
     assert len(body["rows"]) <= 2
+
+
+def test_lopsidedness_audit_survives_legacy_list_cases():
+    """FIX-004 sweep: the audit reads raw memo_json, so a legacy list-shaped
+    bull_case used to raise AttributeError (a 500). The unambiguous ABBV-v7
+    shape is counted the way the memo reader serves it; an ambiguous one is
+    reported, not counted and not coerced; neither stored row changes."""
+    legacy = _seed_memo_for_audit(
+        "AUDLEG", bull_kp=0, bear_kp=3,
+        bull_case=[{"key_point": "LINZESS label expansion"}, {"key_point": "second"}],
+    )
+    ambiguous = _seed_memo_for_audit(
+        "AUDAMB", bull_kp=0, bear_kp=3, bull_case=[{"key_point": None}],
+    )
+    try:
+        r = TestClient(app).get("/api/admin/lopsidedness-audit?n=100")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        rows = {row["ticker"]: row for row in body["rows"]}
+        assert (rows["AUDLEG"]["bull_kp"], rows["AUDLEG"]["bear_kp"]) == (2, 3)
+        assert "AUDAMB" not in rows
+        assert {"ticker": "AUDAMB", "version": 1, "fields": ["bull_case"]} in body["unreadable_rows"]
+        with SessionLocal() as db:
+            stored = {s.ticker: s.memo_json for s in db.query(MemoSnapshot)
+                      .filter(MemoSnapshot.ticker.in_(["AUDLEG", "AUDAMB"]))}
+        assert stored == {"AUDLEG": legacy, "AUDAMB": ambiguous}
+    finally:
+        # The ambiguous row must not leak into later cross-ticker walks.
+        with SessionLocal() as db:
+            db.query(MemoSnapshot).filter(
+                MemoSnapshot.ticker.in_(["AUDLEG", "AUDAMB"])).delete(synchronize_session=False)
+            db.commit()
 
 
 # ---------------------------------------------------------------------------

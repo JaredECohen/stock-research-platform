@@ -22,6 +22,7 @@ import logging
 from typing import Any
 
 from ..config import settings
+from ..finance.comps_history import PERCENT_POINT_METRICS
 from ..schemas import AgentFinding
 from . import llm
 
@@ -116,6 +117,9 @@ def _format_data_evidence(data: dict[str, Any]) -> str:
         own_med = history.get("own_median") or {}
         cur_pct = history.get("current_percentile") or {}
         cvm = history.get("current_vs_own_median") or {}
+        # Absolute gap in percentage points; absent on payloads saved before
+        # it existed, which then show the relative change labelled as such.
+        cvm_pp = history.get("current_minus_own_median_pp") or {}
         lines = []
         for k in ("ev_ebitda", "operating_margin", "revenue_growth"):
             if own_med.get(k) is None:
@@ -123,11 +127,22 @@ def _format_data_evidence(data: dict[str, Any]) -> str:
             med_s = _fmt_metric_value(k, own_med[k])
             pct = cur_pct.get(k)
             delta = cvm.get(k)
+            gap_pp = cvm_pp.get(k)
             extras = []
             if pct is not None:
                 extras.append(f"{pct * 100:.0f}th pct of own history")
-            if delta is not None:
-                extras.append(f"{delta:+.0%} vs own median")
+            if k not in PERCENT_POINT_METRICS:
+                # A multiple's relative change is unambiguous.
+                if delta is not None:
+                    extras.append(f"{delta:+.0%} vs own median")
+            elif gap_pp is not None:
+                extras.append(
+                    f"{gap_pp:+.1f} percentage points vs own median"
+                    + (f" ({delta:+.1%} relative)" if delta is not None else "")
+                )
+            elif delta is not None:
+                # A bare "+7%" on a margin reads as points; say what it is.
+                extras.append(f"{delta:+.1%} relative to own median")
             extras_s = " · ".join(extras)
             lines.append(f"- **{k}** vs own {history.get('lookback_label', 'history')} median {med_s}"
                          + (f" — {extras_s}" if extras_s else ""))

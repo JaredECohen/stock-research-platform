@@ -12,7 +12,8 @@ service can fall through to the next provider in the chain.
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+import threading
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -24,6 +25,33 @@ from .price_history import history_start, normalize_history
 log = logging.getLogger(__name__)
 BASE_URL = "https://financialmodelingprep.com/stable"
 TIMEOUT = 10.0
+ENTITLEMENT_STATUSES = frozenset({401, 402, 403})
+
+# FIX-006 / C4: every FMP endpoint's 401/402/403 is classified as
+# `provider_entitlement_denied`, not only the statement-history calls whose
+# callers carry an issue list. The ratios, key-metrics, estimates and
+# earnings callers return plain dicts whose keys are a contract (decision
+# 7(d)), so their refusals are recorded here per endpoint instead. This is
+# per-process state: the FMP re-pull worker persists its process's view to
+# the database (`fmp_repull_ledger.observe_worker_env`) for the admin GET.
+_ENTITLEMENT_LOCK = threading.Lock()
+_ENTITLEMENT_DENIALS: dict[str, dict[str, Any]] = {}
+
+
+def _record_entitlement_denial(path: str, status: int, symbol: Any) -> None:
+    with _ENTITLEMENT_LOCK:
+        entry = _ENTITLEMENT_DENIALS.setdefault(path, {"kind": "provider_entitlement_denied", "provider": "fmp",
+                                                       "endpoint": path, "count": 0, "symbols": []})
+        entry.update(status=status, last_symbol=symbol, last_at=datetime.utcnow().isoformat())
+        entry["count"] += 1
+        if symbol and symbol not in entry["symbols"] and len(entry["symbols"]) < 20:
+            entry["symbols"].append(symbol)
+
+
+def entitlement_denials() -> list[dict[str, Any]]:
+    """This process's FMP 401/402/403 refusals, one record per endpoint."""
+    with _ENTITLEMENT_LOCK:
+        return [{**entry, "symbols": list(entry["symbols"])} for _, entry in sorted(_ENTITLEMENT_DENIALS.items())]
 
 
 def _to_float(v: Any) -> float | None:
@@ -58,21 +86,34 @@ class FMPProvider:
             ],
         )
 
-    def _get(self, path: str, **params: Any) -> Any | None:
+    def _get_status(self, path: str, **params: Any) -> tuple[int | None, Any | None]:
+        """`(HTTP status, body)`; body only on 200, `(None, None)` when not sent or failed.
+
+        The status is what tells an entitlement refusal (401/402/403) from an
+        empty answer. The one log line names the symbol so a plan loss can be
+        told from a spelling refusal (the 2026-09-21 closeout could not); the
+        key is a query parameter and is never logged.
+        """
         if not self.api_key:
-            return None
+            return None, None
+        symbol = params.get("symbol") or params.get("symbols")
         try:
             params["apikey"] = self.api_key
             with httpx.Client(timeout=TIMEOUT) as client:
                 r = client.get(f"{BASE_URL}{path}", params=params)
                 if r.status_code != 200:
-                    log.warning("FMP %s -> %s", path, r.status_code)
-                    return None
-                return r.json()
+                    log.warning("FMP %s -> %s symbol=%s", path, r.status_code, symbol)
+                    if r.status_code in ENTITLEMENT_STATUSES:
+                        _record_entitlement_denial(path, r.status_code, symbol)
+                    return r.status_code, None
+                return 200, r.json()
         except Exception as exc:  # pragma: no cover — network paths
             # httpx errors quote the URL, which carries `?apikey=`.
             log_safely(log, f"FMP request failed for {path}", exc)
-            return None
+            return None, None
+
+    def _get(self, path: str, **params: Any) -> Any | None:
+        return self._get_status(path, **params)[1]
 
     # ------------------------------------------------------------------
     # Profile
@@ -354,7 +395,13 @@ class FMPProvider:
             ("cash", "/cash-flow-statement", self._cash_row),
         ):
             for cadence, api_period, limit in (("annual", "annual", years + 2), ("quarterly", "quarter", years * 4 + 4)):
-                raw = self._get(path, symbol=ticker.upper(), period=api_period, limit=limit)
+                status, raw = self._get_status(path, symbol=ticker.upper(), period=api_period, limit=limit)
+                if status in ENTITLEMENT_STATUSES:
+                    # A refusal is not "no data": it is either a plan gap or a
+                    # symbol the plan does not cover (BRK.B; BRK-B answers).
+                    result["_history_issues"].append({"kind": "provider_entitlement_denied", "status": status,
+                                                      "endpoint": path, "statement": statement, "cadence": cadence})
+                    continue
                 if not isinstance(raw, list) or not raw:
                     result["_history_issues"].append({"kind": "provider_no_data", "statement": statement, "cadence": cadence})
                     continue

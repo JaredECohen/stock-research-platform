@@ -9,6 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +43,15 @@ def _project_env_files() -> list[str]:
 
 
 class Settings(BaseSettings):
+    # Every credential-bearing field is declared `repr=False`. The repr is
+    # rendered by things nobody reviews for secrets: pytest prints it for
+    # any failing `assert settings.<attr> ...` (the "where True =
+    # Settings(...).has_llm" line), and so do `--showlocals`, `%r` logging
+    # and error reporters that capture frame locals. Only the repr changes;
+    # values, env loading and model_dump are untouched.
+    # test_config_secret_repr fails if a new *_key / *_token / *_secret /
+    # *_salt / *_password / *_dsn field, or any *_url / *_uri field it does
+    # not list as public, is added without it.
     model_config = SettingsConfigDict(
         env_file=tuple(_project_env_files()),
         env_file_encoding="utf-8",
@@ -51,7 +61,7 @@ class Settings(BaseSettings):
 
     # LLM — provider selection + per-provider config
     llm_provider: str = "auto"  # "auto" | "openai" | "anthropic"
-    openai_api_key: str = ""
+    openai_api_key: str = Field(default="", repr=False)
     openai_strong_model: str = "gpt-5.5"
     openai_cheap_model: str = "gpt-4.1-mini"
     # Multi-agent role assignment (Phase 3+). The PM uses the existing Chat
@@ -63,7 +73,7 @@ class Settings(BaseSettings):
     # Macro agent: GPT-5.4 default per the architecture spec; flip to Gemini
     # by setting OPENAI_MACRO_MODEL="" + GEMINI_API_KEY in the agent code path.
     openai_macro_model: str = "gpt-5.4"
-    anthropic_api_key: str = ""
+    anthropic_api_key: str = Field(default="", repr=False)
     anthropic_strong_model: str = "claude-opus-4-8"
     anthropic_cheap_model: str = "claude-haiku-4-5"
     anthropic_critic_model: str = "claude-opus-4-8"
@@ -76,7 +86,7 @@ class Settings(BaseSettings):
     #     GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json in prod.
     # When both are configured, Vertex wins so production deployments
     # don't accidentally fall back to API-key auth.
-    gemini_api_key: str = ""
+    gemini_api_key: str = Field(default="", repr=False)
     gemini_news_model: str = "gemini-2.5-flash"
     gemini_social_model: str = "gemini-2.5-flash"
     gemini_longdoc_model: str = "gemini-3.1-pro"
@@ -105,12 +115,20 @@ class Settings(BaseSettings):
     llm_prompt_caching_enabled: bool = True
 
     # Database
-    database_url: str = "sqlite:///./marketmosaic.db"
+    database_url: str = Field(default="sqlite:///./marketmosaic.db", repr=False)
 
     # Feature flags
     use_demo_data: bool = True
     enable_live_data: bool = False
     enable_agent_critic: bool = True
+    # Reported on /api/providers/status, but NO retrieval path reads it: the
+    # filing and earnings analysts query `vector_store.search` first whenever
+    # the ticker is known, and the filing analyst falls back to BM25
+    # (`retrieval_service.search`) when that returns nothing, fails, or is
+    # skipped for lack of a ticker. `false` therefore does not
+    # mean semantic retrieval is off; a production audit read it that way.
+    # Whether a real switch should exist is a retrieval-policy decision for
+    # the owner.
     enable_vector_search: bool = False
     # Phase 3: route single_stock_analysis through the OpenAI Agents SDK
     # instead of the legacy hand-rolled graph. Default off so existing tests
@@ -163,19 +181,19 @@ class Settings(BaseSettings):
     memory_condense_batch: int = 10
 
     # Providers
-    fmp_api_key: str = ""
-    alpha_vantage_api_key: str = ""
-    fred_api_key: str = ""
-    polygon_api_key: str = ""
-    tiingo_api_key: str = ""
-    finnhub_api_key: str = ""
-    intrinio_api_key: str = ""
-    nasdaq_data_link_api_key: str = ""
+    fmp_api_key: str = Field(default="", repr=False)
+    alpha_vantage_api_key: str = Field(default="", repr=False)
+    fred_api_key: str = Field(default="", repr=False)
+    polygon_api_key: str = Field(default="", repr=False)
+    tiingo_api_key: str = Field(default="", repr=False)
+    finnhub_api_key: str = Field(default="", repr=False)
+    intrinio_api_key: str = Field(default="", repr=False)
+    nasdaq_data_link_api_key: str = Field(default="", repr=False)
     # Sector-overlay providers. All three work without a key against
     # public endpoints; supplying a key lifts the daily rate cap.
-    eia_api_key: str = ""
-    bls_api_key: str = ""
-    census_api_key: str = ""
+    eia_api_key: str = Field(default="", repr=False)
+    bls_api_key: str = Field(default="", repr=False)
+    census_api_key: str = Field(default="", repr=False)
     sec_user_agent: str = "MarketMosaic contact@example.com"
     # How old a stale `provider_cache` row may be and still be served when
     # the live provider misses, per capability, overriding the defaults in
@@ -197,7 +215,7 @@ class Settings(BaseSettings):
     # share counters. Set ENABLED=false in tests so TestClient runs
     # don't pollute production counters.
     rate_limit_enabled: bool = True
-    rate_limit_storage_url: str = "memory://"
+    rate_limit_storage_url: str = Field(default="memory://", repr=False)
 
     # Bearer token guarding the `/api/admin/*` ops surface (plus
     # `/api/seed-universe`, which lives in routes_admin but outside that
@@ -209,7 +227,7 @@ class Settings(BaseSettings):
     # Set it in the Render dashboard (render.yaml carries `sync: false`),
     # never in the repo. Empty by default so dev and the test suite work
     # without ceremony.
-    admin_api_token: str = ""
+    admin_api_token: str = Field(default="", repr=False)
 
     # PM rating blend (Option A). The final rating label is derived from a
     # weighted mix of the LLM's directional call and the deterministic
@@ -250,12 +268,12 @@ class Settings(BaseSettings):
     # origins the token's `azp` must match (PUBLIC_BASE_URL in prod).
     clerk_issuer: str = ""
     clerk_jwks_url: str = ""
-    clerk_publishable_key: str = ""
+    clerk_publishable_key: str = Field(default="", repr=False)
     clerk_authorized_parties: str = ""
     # Stripe. No SDK — `services/stripe_client.py` is a thin httpx client.
     # Secrets are read only there and in the webhook verifier; never log.
-    stripe_secret_key: str = ""
-    stripe_webhook_secret: str = ""
+    stripe_secret_key: str = Field(default="", repr=False)
+    stripe_webhook_secret: str = Field(default="", repr=False)
     stripe_price_pro_monthly: str = ""
     stripe_price_pro_annual: str = ""
     stripe_portal_configuration_id: str = ""
@@ -292,7 +310,7 @@ class Settings(BaseSettings):
     # hashes exist so repeated trial creation from one source is visible
     # later; salting keeps them from being a rainbow-table lookup of the
     # visitor's IP. Rotate to invalidate. Empty salt still hashes (dev).
-    abuse_hash_salt: str = ""
+    abuse_hash_salt: str = Field(default="", repr=False)
     # How many proxies sit between the internet and uvicorn — i.e. how
     # many trailing `X-Forwarded-For` entries were written by infrastructure
     # we trust. Render is exactly one hop, so the caller is the LAST entry
@@ -366,7 +384,7 @@ class Settings(BaseSettings):
     # `admin_api_token` so the export can be handed to a downstream system
     # without granting the ops surface. Empty (default) means the export
     # follows the same policy as the other scorecard reads.
-    scorecard_export_token: str = ""
+    scorecard_export_token: str = Field(default="", repr=False)
 
     # ------------------------------------------------------------------
     # FEAT-003 — GICS Industry Group analysts and weekly Industry Analysis.
@@ -431,6 +449,24 @@ class Settings(BaseSettings):
     # status (`pending_review`) exists; no publish endpoint is built while
     # this stays False.
     industry_reports_require_review: bool = False
+    # Owner decision 1 (2026-09-24): template editions are stored for audit
+    # only and never displayed, so a week in which a group produced no
+    # validated analyst edition leaves that group "not updated". The weekly
+    # health verdict is the share of finished groups in that state: with 25
+    # groups, 0.10 tolerates two and calls three or more an unhealthy week
+    # (FIX-002: "a run where more than 1-2 groups land deterministic is a
+    # failed run"). A rate rather than a count, so a taxonomy revision
+    # needs no code change.
+    industry_report_not_updated_unhealthy_rate: float = 0.10
+    # Output-token cap for the writer batch that carries `outlook`. Declared
+    # here with its sibling (this block has one owner per deploy wave); the
+    # forecast-assumption slice is the consumer.
+    industry_report_outlook_max_tokens: int = 4000
+    # The deployed worker's drainer runs the legacy-edition reclassification
+    # (template rows -> audit_only, flags re-derived) once, recorded by a
+    # ledger row, so nobody needs a production shell for it. Reads never
+    # depend on it; this is the switch that stops the automatic run.
+    industry_reclassify_legacy_editions: bool = True
 
     @property
     def industry_benchmarks_list(self) -> list[str]:

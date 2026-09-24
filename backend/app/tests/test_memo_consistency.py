@@ -71,6 +71,265 @@ def test_refresh_dcf_references_noops_when_unchanged():
 
 
 # ---------------------------------------------------------------------------
+# FIX-008 — DCF-derived arithmetic is recomputed, not left from the old model
+# ---------------------------------------------------------------------------
+
+def _with_scenarios(dcf: DCFResult, *, current: float | None, **scenarios) -> DCFResult:
+    """Copy `dcf` with (implied_price, upside) set per named scenario."""
+    data = dcf.model_dump()
+    data["current_price"] = current
+    for name, (price, upside) in scenarios.items():
+        data[name]["implied_share_price"] = price
+        data[name]["upside_pct"] = upside
+    return DCFResult(**data)
+
+
+# The saved META v1 memo (docs/reviews/2026-09-13-META-v1.json): the
+# valuation analyst wrote against dcf_initial_summary, the PM DCF Adjuster
+# shipped dcf_summary.
+def _meta_initial_and_final() -> tuple[DCFResult, DCFResult]:
+    dcf = build_dcf("NVDA")
+    initial = _with_scenarios(
+        dcf, current=648.03,
+        base=(794.9500804392044, 0.22671802299153498),
+        bull=(1454.9509556865448, 1.2451907406856857),
+        bear=(373.3253526686917, -0.42390729955605183),
+    )
+    final = _with_scenarios(
+        dcf, current=648.03,
+        base=(708.9303286367508, 0.0939776378203954),
+        bull=(1162.6842269331853, 0.7941827182895628),
+        bear=(366.0839443044916, -0.4350817951260102),
+    )
+    return initial, final
+
+
+_META_KP0 = (
+    "Base DCF $794.95 (+22.7%); bull $1,454.95 (+124.5%); bear $373.33 (-42.4%). "
+    "The 3.9x bull/bear ratio is the tell — this is a terminal-growth-fragile name."
+)
+
+
+def test_refresh_recomputes_bull_bear_ratio_meta_counterexample():
+    """META v1 kept "3.9x" (1,454.95 / 373.33) beside final prices whose
+    ratio is 3.176x. The ratio must come from the final model."""
+    initial, final = _meta_initial_and_final()
+    finding = AgentFinding(agent="Valuation Analyst", headline="h", summary="s",
+                           key_points=[_META_KP0], confidence=0.7)
+    _refresh_dcf_references(finding, initial, final)
+    kp = finding.key_points[0]
+    assert kp.startswith(
+        "Base DCF $708.93 (+9.4%); bull $1,162.68 (+79.4%); bear $366.08 (-43.5%). "
+        "The 3.2x bull/bear ratio"
+    )
+    assert "3.9x" not in kp
+
+
+def test_refresh_rewrites_long_form_report():
+    """The drill-down is rendered before the PM adjustment; it must not
+    keep the initial model's numbers while the card shows the final ones."""
+    initial, final = _meta_initial_and_final()
+    long_form = (
+        "**META screens cheap on our DCF (+22.7% base)**\n\n"
+        "### Key points\n- " + _META_KP0 + "\n\n"
+        "The 3.9x bull-to-bear spread ($373–$1,455) underscores fragility; "
+        "27.5x earnings, 16.4x EV/EBITDA."
+    )
+    finding = AgentFinding(agent="Valuation Analyst", headline="h", summary="s",
+                           key_points=[], confidence=0.7, long_form_report=long_form)
+    _refresh_dcf_references(finding, initial, final)
+    out = finding.long_form_report or ""
+    assert "(+9.4% base)" in out
+    assert "The 3.2x bull/bear ratio" in out
+    assert "3.2x bull-to-bear spread ($366–$1,163)" in out
+    assert "27.5x earnings, 16.4x EV/EBITDA" in out
+    for stale in ("3.9x", "$794.95", "+22.7%", "$1,454.95", "$373", "$1,455"):
+        assert stale not in out
+
+
+def test_refresh_ratio_ambiguity_guard_and_precision():
+    """Only a multiple tied to bull/bear wording AND equal to the old ratio
+    at its printed precision is rewritten, at that same precision."""
+    initial, final = _meta_initial_and_final()
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary=("A bull/bear ratio of 3.90x. Trades at 3.9x EV/Revenue, "
+                 "27.5x earnings; a peer's 4.4x bull/bear ratio; 13.9x bull/bear."),
+    )
+    _refresh_dcf_references(finding, initial, final)
+    assert finding.summary == (
+        "A bull/bear ratio of 3.18x. Trades at 3.9x EV/Revenue, "
+        "27.5x earnings; a peer's 4.4x bull/bear ratio; 13.9x bull/bear."
+    )
+
+
+def test_refresh_is_single_pass_without_cascades():
+    """A new value equal to another scenario's old value must not be
+    rewritten a second time, and a figure must not match inside a longer
+    number ("9.0%" in "19.0%", "$109" in "$109.50")."""
+    dcf = build_dcf("NVDA")
+    old = _with_scenarios(dcf, current=100.0, base=(109.0, 0.09),
+                          bull=(117.0, 0.17), bear=(80.0, -0.20))
+    new = _with_scenarios(dcf, current=100.0, base=(117.0, 0.17),
+                          bull=(130.0, 0.30), bear=(80.0, -0.20))
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="Base +9%, bull +17%", confidence=0.7,
+        summary="Base $109.00, bull $117.00; margin 19.0%; peer at $109.50.",
+        key_points=[],
+    )
+    _refresh_dcf_references(finding, old, new)
+    assert finding.headline == "Base +17%, bull +30%"
+    assert finding.summary == "Base $117.00, bull $130.00; margin 19.0%; peer at $109.50."
+
+
+def test_refresh_recomputes_worded_downside_and_upside():
+    """Unsigned magnitudes are DCF figures only when "downside"/"upside"
+    follows; the same digits elsewhere are left alone."""
+    dcf = build_dcf("NVDA")
+    old = _with_scenarios(dcf, current=100.0, base=(137.0, -0.63),
+                          bull=(122.0, 0.22), bear=(20.0, -0.80))
+    new = _with_scenarios(dcf, current=100.0, base=(155.0, -0.55),
+                          bull=(118.0, 0.18), bear=(20.0, -0.80))
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary="Base: 63% downside and 63.0% downside; bull 22% upside; 63% of revenue.",
+    )
+    _refresh_dcf_references(finding, old, new)
+    assert finding.summary == (
+        "Base: 55% downside and 55.0% downside; bull 18% upside; 63% of revenue."
+    )
+
+
+def test_refresh_integer_magnitude_needs_a_dcf_clause():
+    """An integer "N% upside" is a DCF figure only in a clause that names a
+    scenario or an old DCF price; the Street's target or a drawdown that
+    happens to share the digits is left alone."""
+    initial, final = _meta_initial_and_final()
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary=("The Street's $800 target implies 23% upside; a 42% downside "
+                 "to the 2022 low. Base case: 23% upside. Bear at $373 is a 42% downside."),
+    )
+    _refresh_dcf_references(finding, initial, final)
+    assert finding.summary == (
+        "The Street's $800 target implies 23% upside; a 42% downside "
+        "to the 2022 low. Base case: 9% upside. Bear at $366 is a 44% downside."
+    )
+
+
+def test_refresh_negative_to_positive_flip_keeps_the_signed_form():
+    """A scenario that crosses zero upward: "-5.0%" is both the signed and
+    the one-decimal form of the old base, so it must map to the signed new
+    figure, not be dropped as ambiguous and left beside the new price."""
+    dcf = build_dcf("NVDA")
+    old = _with_scenarios(dcf, current=100.0, base=(95.0, -0.05),
+                          bull=(140.0, 0.40), bear=(70.0, -0.30))
+    new = _with_scenarios(dcf, current=100.0, base=(103.2, 0.032),
+                          bull=(145.0, 0.45), bear=(102.0, 0.02))
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="DCF base -5.0% vs spot", key_points=[],
+        confidence=0.7,
+        summary=("Base case implied price $95.00 vs current $100.00 (-5.0%). "
+                 "Bull $140.00 (+40.0%) | Bear $70.00 (-30.0%)."),
+    )
+    _refresh_dcf_references(finding, old, new)
+    assert finding.headline == "DCF base +3.2% vs spot"
+    assert finding.summary == (
+        "Base case implied price $103.20 vs current $100.00 (+3.2%). "
+        "Bull $145.00 (+45.0%) | Bear $102.00 (+2.0%)."
+    )
+
+
+def test_refresh_sign_flip_rewrites_magnitude_and_direction():
+    """A scenario whose sign the PM adjustment flipped: the worded figure is
+    rebuilt from the new value, direction word included, so neither the old
+    model's magnitude nor an inverted direction survives."""
+    dcf = build_dcf("NVDA")
+    old = _with_scenarios(dcf, current=100.0, base=(37.0, -0.63),
+                          bull=(122.0, 0.22), bear=(20.0, -0.80))
+    new = _with_scenarios(dcf, current=100.0, base=(110.0, 0.10),
+                          bull=(95.0, -0.05), bear=(20.0, -0.80))
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary=("Base implies a 63% downside; bull 22.0% upside. "
+                 "If rates fall, the bull case's 22.0% Upside evaporates. "
+                 "Bull $122.00 (+22.0%); bull 22% upside."),
+    )
+    _refresh_dcf_references(finding, old, new)
+    assert finding.summary == (
+        "Base implies a 10% upside; bull 5.0% downside. "
+        "If rates fall, the bull case's 5.0% Downside evaporates. "
+        "Bull $95.00 (-5.0%); bull 5% downside."
+    )
+    for wrong in ("63%", "22.0%", "22%", "10% downside", "-5.0% upside", "5.0% upside"):
+        assert wrong not in finding.summary
+
+
+def test_refresh_rewrites_figures_after_a_comma():
+    """The standalone guard only matters for digit-led figures; a "$" or
+    signed figure right after a comma is still a DCF figure."""
+    initial, final = _meta_initial_and_final()
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary="Base/bull/bear: +22.7%,+124.5%,-42.4% ($794.95,$1,454.95,$373.33).",
+    )
+    _refresh_dcf_references(finding, initial, final)
+    assert finding.summary == (
+        "Base/bull/bear: +9.4%,+79.4%,-43.5% ($708.93,$1,162.68,$366.08)."
+    )
+
+
+@pytest.mark.parametrize("swap", [False, True])
+def test_refresh_leaves_a_string_two_scenarios_share(swap):
+    """Two old scenarios that print the same string but move to different
+    new values: which one the prose meant is unknowable, so it is left as
+    written (in either scenario order), while unshared figures still move."""
+    dcf = build_dcf("NVDA")
+    a, b = (1454.6, 0.101), (1455.2, 0.099)
+    na, nb = (708.93, 0.05), (1162.68, 0.20)
+    if swap:
+        a, b, na, nb = b, a, nb, na
+    old = _with_scenarios(dcf, current=1322.0, base=a, bull=b, bear=(900.0, -0.32))
+    new = _with_scenarios(dcf, current=1322.0, base=na, bull=nb, bear=(880.0, -0.33))
+    finding = AgentFinding(
+        agent="Valuation Analyst", headline="h", key_points=[], confidence=0.7,
+        summary="Fair value near $1,455 (+10%) on both base and bull; bear $900.00.",
+    )
+    _refresh_dcf_references(finding, old, new)
+    assert finding.summary == (
+        "Fair value near $1,455 (+10%) on both base and bull; bear $880.00."
+    )
+
+
+def test_refresh_ratio_left_alone_when_a_side_is_unpriced():
+    """Guard (passes before and after FIX-008): no ratio exists for a None
+    price, and nothing is invented for it — matching the pct/USD contract."""
+    initial, final = _meta_initial_and_final()
+    unpriced_bear = _with_scenarios(final, current=648.03, bear=(None, None))
+    finding = AgentFinding(agent="Valuation Analyst", headline="h", summary="s",
+                           key_points=[_META_KP0], confidence=0.7)
+    _refresh_dcf_references(finding, initial, unpriced_bear)
+    assert "3.9x bull/bear ratio" in finding.key_points[0]
+    assert "$708.93" in finding.key_points[0]
+    finding2 = AgentFinding(agent="Valuation Analyst", headline="h", summary="s",
+                            key_points=["The 3.9x bull/bear ratio"], confidence=0.7)
+    _refresh_dcf_references(finding2, unpriced_bear, initial)
+    assert finding2.key_points[0] == "The 3.9x bull/bear ratio"
+
+
+def test_refresh_noops_on_equal_copies():
+    """Guard (passes before and after FIX-008): an equal-valued copy (not
+    the same object) changes nothing and appends no note."""
+    initial, _ = _meta_initial_and_final()
+    finding = AgentFinding(agent="Valuation Analyst", headline="h", summary="s",
+                           key_points=[_META_KP0], confidence=0.7,
+                           long_form_report=_META_KP0)
+    _refresh_dcf_references(finding, initial, initial.model_copy(deep=True))
+    assert finding.key_points == [_META_KP0]
+    assert finding.long_form_report == _META_KP0
+
+
+# ---------------------------------------------------------------------------
 # Theme 1 — reconciled valuation verdict
 # ---------------------------------------------------------------------------
 

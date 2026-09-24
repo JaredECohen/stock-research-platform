@@ -405,17 +405,44 @@ def test_tree_nests_four_levels_with_attribution(bundled):
     assert all(x["is_active"] for x in subs)  # retired rows are not rendered
 
 
-def test_display_mode_is_validated_not_acted_on(monkeypatch):
+def _node(code: str, name: str) -> reg.NodeInfo:
+    return reg.NodeInfo(
+        code=code, name=name, level=reg.LEVEL_BY_CODE_LENGTH[len(code)], parent_code=code[:-2] or None,
+        is_active=True, effective_from=None, effective_to=None, sort_order=1,
+    )
+
+
+def test_display_mode_is_validated(monkeypatch):
     assert reg.display_mode() == "codes_and_names"
     monkeypatch.setattr(reg.settings, "gics_display_mode", "internal_labels")
     assert reg.display_mode() == "internal_labels"
     monkeypatch.setattr(reg.settings, "gics_display_mode", "bogus")
     assert reg.display_mode() == "codes_and_names"
-    node = reg.NodeInfo(
-        code="4530", name="Semis", level="industry_group", parent_code="45",
-        is_active=True, effective_from=None, effective_to=None, sort_order=1,
-    )
-    assert reg.display(node) == "Semis (4530)"
+    assert reg.display(_node("4530", "Semis")) == "Semis (4530)"
+
+
+def test_internal_labels_mode_displays_our_label_and_names_no_lower_level(monkeypatch):
+    """Owner decision 2026-09-24: `internal_labels` is built — it renders
+    MarketMosaic's own label. Industries and sub-industries are never
+    named publicly, so they display as the group they roll up to."""
+    from app.services import industry_labels as il
+
+    monkeypatch.setattr(reg.settings, "gics_display_mode", "internal_labels")
+    assert reg.display(_node("4530", "Semiconductors & Semiconductor Equipment")) == il.label("4530")
+    assert reg.display(_node("45", "Information Technology")) == il.label("45")
+    assert reg.display(_node("453010", "Semiconductors & Semiconductor Equipment")) == il.label("4530")
+    assert reg.display(_node("45301020", "Semiconductors")) == il.label("4530")
+
+
+def test_codes_and_names_mode_warns_once_per_process(monkeypatch, caplog):
+    """The code-and-name rendering carries licensed names; it still works
+    (admin/internal) but says so — once, not once per row."""
+    monkeypatch.setattr(reg, "_CODES_AND_NAMES_WARNED", False)
+    with caplog.at_level("WARNING", logger=reg.log.name):
+        assert reg.display(_node("4530", "Semis")) == "Semis (4530)"
+        reg.display(_node("4510", "Soft"))
+    warnings = [r for r in caplog.records if "codes_and_names" in r.getMessage()]
+    assert len(warnings) == 1
 
 
 # --- the CLI ----------------------------------------------------------------

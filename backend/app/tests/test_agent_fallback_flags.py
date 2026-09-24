@@ -52,10 +52,15 @@ def _boom(*args: Any, **kwargs: Any) -> None:
 
 @pytest.fixture(autouse=True)
 def _blank_keys_guard():
-    assert not settings.has_llm, (
-        "test_agent_fallback_flags must run with blank LLM keys "
-        "(OPENAI_API_KEY='' ANTHROPIC_API_KEY='' GEMINI_API_KEY='')"
-    )
+    # Not `assert not settings.has_llm`: pytest prints a failing assert's
+    # operands, here the Settings object, and this guard fails precisely
+    # when a developer .env with live keys is loaded.
+    if settings.has_llm:
+        pytest.fail(
+            "test_agent_fallback_flags must run with blank LLM keys "
+            "(OPENAI_API_KEY='' ANTHROPIC_API_KEY='' GEMINI_API_KEY='')",
+            pytrace=False,
+        )
     assert active_log() is None
     yield
     assert active_log() is None

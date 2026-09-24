@@ -11,7 +11,17 @@ files are not touched.
 """
 from __future__ import annotations
 
+import pytest
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+@pytest.fixture(autouse=True)
+def _no_process_env_key(monkeypatch):
+    """The process env wins over both files, so a key exported in the shell
+    (or blanked, as the suite's documented command does) would replace the
+    synthetic one: the test fails, and its assertion prints that real value
+    as an operand. These tests are about the files; take the env out."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
 
 def _make_settings(env_files):

@@ -198,12 +198,24 @@ export default function Settings() {
           <div className="card">
             <div className="section-title mb-2">Feature flags</div>
             <div className="grid sm:grid-cols-2 gap-2 text-sm">
-              {Object.entries(status.feature_flags).map(([k, v]) => (
-                <div key={k} className="flex justify-between border-b border-ink-800 py-1.5">
-                  <span className="text-slate-300">{k}</span>
-                  <span className={v ? "text-accent-500" : "text-slate-500"}>{String(v)}</span>
-                </div>
-              ))}
+              {Object.entries(status.feature_flags).map(([k, v]) => {
+                // A bare `false` next to a flag no code reads was taken for
+                // "feature off"; show what the backend says it really does.
+                const note = status.feature_flag_notes?.[k];
+                return (
+                  <div key={k} className="border-b border-ink-800 py-1.5">
+                    <div className="flex justify-between">
+                      <span className="text-slate-300">{k}</span>
+                      <span className={v ? "text-accent-500" : "text-slate-500"}>{String(v)}</span>
+                    </div>
+                    {note ? (
+                      <p className="text-xs text-slate-500 mt-0.5" data-testid={`flag-note-${k}`}>
+                        {note}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           </div>
 

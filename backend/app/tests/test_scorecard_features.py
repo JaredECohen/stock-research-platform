@@ -594,3 +594,44 @@ def test_unmatched_sector_applies_every_feature_and_flags_it():
 def test_utilities_lose_only_the_current_ratio():
     res = _features(sector="Utilities")
     assert {n for n, r in res.reasons.items() if r.startswith("excluded:")} == {"current_ratio"}
+
+
+def test_primary_first_tie_break_scorecard_and_explorer(monkeypatch):
+    """FMP is primary (owner decision 2026-09-24): when FMP and a secondary
+    both hold one fiscal year's line, both readers use FMP's value, even when
+    the secondary became available later or arrived first in the SELECT."""
+    fmp = ("income", "revenue", "FY2024", date(2024, 12, 31), 2024, None, 1.0, date(2025, 2, 15), {"source": "fmp"})
+    alpha = ("income", "revenue", "2024", date(2024, 12, 31), 2024, None, 2.0, date(2025, 2, 20),
+             {"source": "alpha_vantage"})
+    for rows in ([fmp, alpha], [alpha, fmp]):
+        assert F.pit_snapshot(rows, AS_OF).latest.income == {"revenue": 1.0}
+    assert F.inputs_hash(F.pit_snapshot([fmp, alpha], AS_OF), PRICE_CTX) == \
+        F.inputs_hash(F.pit_snapshot([alpha, fmp], AS_OF), PRICE_CTX)
+
+    from app.database import SessionLocal
+    from app.models import FinancialPeriod
+    from app.services import fundamentals_series_service as fss
+    from app.services import history_service, market_data_service
+    from app.tests.factories import make_financial_period
+
+    monkeypatch.setattr(market_data_service, "get_price_series", lambda *a, **k: [])
+    ticker = "FXPRM"
+    with SessionLocal() as db:
+        history_service._ensure_tables(db)
+        db.query(FinancialPeriod).filter(FinancialPeriod.ticker == ticker).delete(synchronize_session=False)
+        # The secondary's bare-year label is inserted first, so an unordered
+        # SELECT returns it first; before the tie-break its value was shown.
+        db.add(make_financial_period(ticker, 2024, "revenue", 2.0, period="2024", period_end=date(2024, 12, 31),
+                                     source="alpha_vantage"))
+        db.flush()
+        db.add(make_financial_period(ticker, 2024, "revenue", 1.0, period="FY2024", period_end=date(2024, 12, 31),
+                                     source="fmp"))
+        db.commit()
+    try:
+        resp = fss.build_series([ticker], ["revenue"])
+        series = next(s for s in resp.series if s.ticker == ticker and s.metric == "revenue")
+        assert [(p.period, p.value) for p in series.points] == [("FY2024", 1.0)]
+    finally:
+        with SessionLocal() as db:
+            db.query(FinancialPeriod).filter(FinancialPeriod.ticker == ticker).delete(synchronize_session=False)
+            db.commit()

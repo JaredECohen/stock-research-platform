@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import func, or_, select, update
 
@@ -80,13 +81,53 @@ def coverage_report(ticker: str | None = None) -> dict:
             "price_incomplete_tickers": [row["ticker"] for row in rows if not row["prices"]["coverage_complete"]]}
 
 
-def sync_ticker(ticker: str, *, force_refresh: bool = False) -> dict:
+def requested_start(ticker: str, *, today: date | None = None) -> date:
+    """`backfill_plan`'s start for one target without building the whole plan.
+
+    The two-year floor, extended to a week before the oldest live memo
+    snapshot so memo-time context is covered. Pinned equal to the plan.
+    """
+    today = today or date.today()
+    start = minimum_start(today)
+    with SessionLocal() as db:
+        oldest = db.execute(select(func.min(MemoSnapshot.generated_at)).where(
+            MemoSnapshot.ticker == ticker.upper(), MemoSnapshot.as_of_date.is_(None))).scalar_one_or_none()
+    if oldest is not None:
+        start = min(start, oldest.date() - timedelta(days=7))
+    return start
+
+
+SYNC_SCOPES = ("all", "fundamentals")
+
+
+def sync_ticker(ticker: str, *, force_refresh: bool = False, scope: str = "all", dry_run: bool = False,
+                expected_plan: dict[str, Any] | None = None, audit_key: str | None = None) -> dict:
+    """Import one planned target. `scope="fundamentals"` skips prices.
+
+    `dry_run` (fundamentals only) returns the exact FMP-primary plan from a
+    rolled-back run: no `market_data_syncs` claim, no cache invalidation, no
+    financial rows or audits persist. The FMP re-pull ledger passes
+    `expected_plan`/`audit_key` so an executed ticker must change stored rows
+    exactly as its reviewed dry run said it would.
+    """
     from .fundamental_history_service import backfill_fundamentals
+    if scope not in SYNC_SCOPES:
+        raise ValueError("scope must be all or fundamentals")
+    if dry_run and scope != "fundamentals":
+        raise ValueError("dry_run requires scope=fundamentals")
     ticker = ticker.upper()
     target = next((target for target in backfill_plan()["targets"] if target["ticker"] == ticker), None)
     if target is None:
         raise LookupError("Ticker is not a stored company, benchmark or memo symbol")
     start = date.fromisoformat(target["requested_start"])
+    if dry_run:
+        fundamentals = (backfill_fundamentals(ticker, start, force_refresh=force_refresh, dry_run=True)
+                        if target["fundamentals_required"]
+                        else {"status": "not_required", "reason": target["kind"], "success": True})
+        return {"ticker": ticker, "requested_start": start.isoformat(), "requested_end": date.today().isoformat(),
+                "dry_run": True, "scope": scope, "status": "dry_run", "success": bool(fundamentals.get("success")),
+                "prices": {"status": "not_requested", "success": True}, "fundamentals": fundamentals,
+                "memo_generation_requests": 0, "outcome_rows_modified": 0}
     started = datetime.utcnow()
     # A durable running record makes interrupted imports visible. Each price
     # and financial write is independently idempotent on its natural key.
@@ -109,11 +150,16 @@ def sync_ticker(ticker: str, *, force_refresh: bool = False) -> dict:
             return {"ticker": ticker, "status": "running", "success": False,
                     "started_at": existing.started_at.isoformat(), "note": "An existing backfill is still in progress."}
     report = {"ticker": ticker, "requested_start": start.isoformat(), "requested_end": date.today().isoformat(),
-              "started_at": started.isoformat(), "memo_generation_requests": 0, "outcome_rows_modified": 0}
+              "started_at": started.isoformat(), "memo_generation_requests": 0, "outcome_rows_modified": 0,
+              "scope": scope}
     for kind, action in (
         ("prices", lambda: backfill_prices(ticker, start, force_refresh=force_refresh)),
-        ("fundamentals", lambda: backfill_fundamentals(ticker, start, force_refresh=force_refresh)),
+        ("fundamentals", lambda: backfill_fundamentals(ticker, start, force_refresh=force_refresh,
+                                                       expected_plan=expected_plan, audit_key=audit_key)),
     ):
+        if kind == "prices" and scope == "fundamentals":
+            report[kind] = {"status": "not_requested", "success": True}
+            continue
         if kind == "fundamentals" and not target["fundamentals_required"]:
             report[kind] = {"status": "not_required", "reason": target["kind"], "success": True}
             continue
@@ -136,7 +182,19 @@ def sync_ticker(ticker: str, *, force_refresh: bool = False) -> dict:
                      "key": ticker, "error_type": type(exc).__name__}
         log.info("market data financial cache ticker=%s result=%s", ticker, cache)
     report["financial_cache_invalidation"] = cache
-    report["success"] = all(report[kind].get("success", False) for kind in ("prices", "fundamentals")) and cache["success"]
+    # The stock page's cold snapshot was built from the pre-import statements
+    # and would otherwise be served for up to 90 days.
+    cold = {"success": True, "status": "not_needed", "rows_invalidated": 0}
+    if financials.get("committed"):
+        from ..cache.snapshots import invalidate as invalidate_snapshots
+        try:
+            cold = {"success": True, "status": "invalidated", "kind": "company_cold",
+                    "rows_invalidated": invalidate_snapshots(ticker, kind="company_cold")}
+        except Exception as exc:
+            cold = {"success": False, "status": "failed", "kind": "company_cold", "error_type": type(exc).__name__}
+    report["company_cold_invalidation"] = cold
+    report["success"] = (all(report[kind].get("success", False) for kind in ("prices", "fundamentals"))
+                         and cache["success"] and cold["success"])
     report["status"] = "complete" if report["success"] else "incomplete"
     report["completed_at"] = datetime.utcnow().isoformat()
     with SessionLocal() as db:

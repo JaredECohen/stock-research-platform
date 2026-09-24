@@ -118,7 +118,9 @@ def _rows(ticker: str) -> dict[str, PublicSample]:
 def test_run_once_builds_from_stored_memo_and_dcf_and_records_counts(wall, stub_providers, recorded):
     _seed_memo(LISTED[0])
     _seed_dcf(LISTED[0])
-    assert not settings.has_llm, "CI has no LLM keys; the commentary call must be skipped"
+    # Not an assert: a failing one renders its operand, the Settings object.
+    if settings.has_llm:
+        pytest.fail("CI has no LLM keys; the commentary call must be skipped", pytrace=False)
 
     out = sample_build_loop.run_once()
     assert out["success"] is True

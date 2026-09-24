@@ -24,6 +24,7 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -32,6 +33,28 @@ from ..models import MemoSnapshot
 from ..schemas import StockMemoOut
 
 log = logging.getLogger(__name__)
+
+
+class StoredMemoUnreadable(ValueError):
+    """A stored snapshot that no longer validates as `StockMemoOut`.
+
+    Carries the row's identity and the failing field paths only, never the
+    memo body, because the message reaches API errors, chat-tool output and
+    loop notes. A ValueError (as pydantic's ValidationError is) so any
+    existing `except ValueError` keeps catching it. The snapshot is left
+    exactly as stored: ambiguous legacy shapes are refused, not coerced.
+    """
+
+    def __init__(self, *, ticker: str, version: int, snapshot_id: int | None,
+                 fields: tuple[str, ...]) -> None:
+        self.ticker = ticker
+        self.version = version
+        self.snapshot_id = snapshot_id
+        self.fields = fields
+        super().__init__(
+            f"stored memo {ticker} v{version} (snapshot {snapshot_id}) does not validate at "
+            + ", ".join(fields)
+        )
 
 # Allowed triggers — kept here as the source of truth so callers don't pass
 # free-form strings the UI can't reason about.
@@ -92,13 +115,31 @@ def save_memo(
     # Assignment/model_copy can bypass pydantic validation. A serializable
     # object is not necessarily a readable memo; validate before any DB work.
     memo = StockMemoOut.model_validate(memo.model_dump(mode="python", warnings=False))
+    # W2a: `section_availability` is computed on the way OUT, from the stored
+    # payload, and the presenter replaces hidden prose with a placeholder. A
+    # memo carrying it is therefore a presented memo; saving one would make
+    # the placeholder text the stored truth and hide those sections from
+    # every later rule change. Refuse loudly rather than strip silently, so
+    # the caller that round-tripped a presented memo is found, not masked.
+    if memo.section_availability:
+        raise ValueError(
+            f"refusing to save a presented memo for {memo.ticker}: section_availability is "
+            "read-time only; save the raw memo, not the output of the presenter"
+        )
     own = db is None
     if own:
         db = SessionLocal()
     try:
         # Round-trip through json to make the payload safe for SQLite's JSON
         # column even when fields contain non-serializable types like datetime.
-        memo_payload: dict[str, Any] = json.loads(memo.model_dump_json())
+        # The exclude is a backstop behind the refusal above: the stored row
+        # never carries the read-time map, even an empty one, so there is
+        # no stored value for a reader to mistake for the current verdict.
+        # public_samples._build_memo is the other store of a memo dump and
+        # applies the same exclude.
+        memo_payload: dict[str, Any] = json.loads(
+            memo.model_dump_json(exclude={"section_availability"})
+        )
         from .regen_lease import LeaseLost, assert_current
         job = assert_current(db=db, lock=True)
         if job is not None:
@@ -291,6 +332,35 @@ def memo_history(
             db.close()
 
 
+def _validate_stored(snap: MemoSnapshot, payload: Any) -> StockMemoOut:
+    try:
+        return StockMemoOut.model_validate(payload)
+    except ValidationError as exc:
+        # Paths only: `include_input=False` keeps stored memo text out of the error.
+        fields = tuple(dict.fromkeys(
+            ".".join(str(part) for part in err["loc"]) or "<root>"
+            for err in exc.errors(include_url=False, include_input=False, include_context=False)
+        ))
+        raise StoredMemoUnreadable(
+            ticker=snap.ticker, version=snap.version, snapshot_id=snap.id, fields=fields,
+        ) from exc
+
+
+def legacy_case_points(legacy: list[Any]) -> list[str] | None:
+    """The exact points of an unambiguous legacy bull/bear list, else None.
+
+    Only two list shapes are unambiguous: all strings, or all
+    `{"key_point": <str>}`. Anything else (mixed, null or unknown keys) is
+    None so every reader refuses the same shapes `memo_to_pydantic` does.
+    """
+    if all(isinstance(point, str) for point in legacy):
+        return list(legacy)
+    if all(isinstance(point, dict) and isinstance(point.get("key_point"), str)
+           for point in legacy):
+        return [point["key_point"] for point in legacy]
+    return None
+
+
 def memo_to_pydantic(snap: MemoSnapshot) -> StockMemoOut:
     """Read a snapshot, projecting only unambiguous legacy case lists.
 
@@ -298,21 +368,20 @@ def memo_to_pydantic(snap: MemoSnapshot) -> StockMemoOut:
     new-publication validation. An absent legacy headline remains empty; no
     research narrative is inferred. The complete original case is retained in
     visible degradation metadata alongside its source snapshot identity.
+    A snapshot that still does not validate raises StoredMemoUnreadable
+    (identity and field paths, no body).
     """
     payload = deepcopy(snap.memo_json)
     if not isinstance(payload, dict):
-        return StockMemoOut.model_validate(payload)
+        return _validate_stored(snap, payload)
     for field in ("bull_case", "bear_case"):
         legacy = payload.get(field)
         if not isinstance(legacy, list):
             continue
-        if all(isinstance(point, str) for point in legacy):
-            points = list(legacy)
-        elif all(isinstance(point, dict) and isinstance(point.get("key_point"), str)
-                 for point in legacy):
-            points = [point["key_point"] for point in legacy]
-        else:
-            # Leave ambiguous shapes to ordinary schema validation.
+        points = legacy_case_points(legacy)
+        if points is None:
+            # Ambiguous shapes are refused, never coerced: validation below
+            # raises StoredMemoUnreadable and the row stays as stored.
             continue
         payload[field] = {"headline": "", "key_points": points}
         agent = "Stored memo compatibility"
@@ -329,4 +398,4 @@ def memo_to_pydantic(snap: MemoSnapshot) -> StockMemoOut:
             "source_snapshot_ticker": snap.ticker,
             "original_value": legacy,
         })
-    return StockMemoOut.model_validate(payload)
+    return _validate_stored(snap, payload)

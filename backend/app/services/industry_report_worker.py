@@ -29,9 +29,20 @@ Three properties this file is responsible for, each of which has a test:
   read API composes staleness from this table's ``last_attempt``. The job
   kind string is therefore exactly ``group_report`` — ``report_store``
   filters on it.
-* **A week never ends blank because of the model.** The final attempt runs
-  the deterministic writer, which needs no LLM, and the edition is
-  published labelled ``degraded`` rather than not at all.
+* **Only an analyst-written edition is ever published** (owner decision 1,
+  2026-09-24). A non-final attempt whose edition fails the display rule
+  (``industry_report_store.content_publishable``: the template, or an
+  analyst edition below the minimum — which is what an open LLM breaker
+  returns, fast) raises the retryable ``AnalystUnavailable`` BEFORE
+  anything is saved, so the backoff buys the model another chance. The
+  final attempt still runs the deterministic writer, which needs no LLM,
+  and its edition is stored ``audit_only``: kept for audit, never shown.
+  The group's page keeps its last analyst edition, marked "not updated".
+* **The week's outcome is measured.** When a group job finishes, the
+  period's agentic / template / failed / pending counts and the
+  not-updated rate against ``INDUSTRY_REPORT_NOT_UPDATED_UNHEALTHY_RATE``
+  are recorded as the weekly loop's progress (DB-backed, so cron-health on
+  the web service reads it) — for the CURRENT period only.
 
 Rolling predecessors retain a renewable per-attempt lease. Expired work
 may be retried, but stale attempts cannot publish or update a replacement.
@@ -119,6 +130,13 @@ def _utcnow() -> datetime:
 class ReportRejected(RuntimeError):
     """The validator refused the edition. Retried like any other failure;
     the message names the problems (and counts any it had to drop)."""
+
+
+class AnalystUnavailable(RuntimeError):
+    """A non-final attempt produced no publishable analyst edition (no LLM,
+    an open breaker, or a model that wrote too little). Raised before
+    ``save_report`` so the job's backoff retries it; only the final,
+    deterministic attempt stores an audit-only copy."""
 
 
 # ---------------------------------------------------------------------------
@@ -298,35 +316,45 @@ def enqueue(
 
 
 def _editions_for_period(codes: list[str], period_key: str,
-                         info: gics_registry.VersionInfo) -> set[str]:
-    """The groups that already HAVE an edition for ``period_key``.
+                         info: gics_registry.VersionInfo) -> dict[str, bool]:
+    """The groups that already HAVE an edition for ``period_key``, as
+    ``{code: withheld}`` — ``withheld`` when the week's only product is an
+    audit-only template, so a caller can say "generated, not published"
+    instead of "already published" about a week nobody can read.
 
     One chunked query for the whole period, never one per group.
 
     Deliberately not ``report_store.latest_good_many``: that only ever
-    returns rows flagged ``is_latest_good``, and ``save_report`` never
-    flags an edition that landed as ``pending_review``. With
+    returns PUBLISHABLE editions, and neither a ``pending_review`` edition
+    nor an ``audit_only`` template is one. With
     ``INDUSTRY_REPORTS_REQUIRE_REVIEW`` on, every Sunday would therefore
     find no published edition for last Sunday's week, re-enqueue all of
     it, and pay the model again — forever, and invisibly, because the
-    editions it is reproducing are sitting in the review queue. A week
-    that has already been *generated* is a week not to generate again;
-    whether a human has released it is a different question.
+    editions it is reproducing are sitting in the review queue. The same
+    holds for a week whose only product was an audit-only template: it
+    already cost three attempts, and re-spending them silently every
+    Sunday is not a retry policy. A week that has already been *generated*
+    is a week not to generate again; whether it was published is a
+    different question, and ``force`` (the admin regenerate route) is the
+    deliberate retry.
     """
-    out: set[str] = set()
+    out: dict[str, bool] = {}
     with SessionLocal() as db:
         for i in range(0, len(codes), 200):
             rows = db.execute(
-                select(IndustryReport.industry_group_code).where(
+                select(IndustryReport.industry_group_code, IndustryReport.status).where(
                     IndustryReport.taxonomy_version_id == info.id,
                     IndustryReport.industry_group_code.in_(codes[i:i + 200]),
                     IndustryReport.period_key == period_key,
                     IndustryReport.status.in_(
                         (industry_report_store.STATUS_SUCCEEDED,
-                         industry_report_store.STATUS_PENDING_REVIEW)),
+                         industry_report_store.STATUS_PENDING_REVIEW,
+                         industry_report_store.STATUS_AUDIT_ONLY)),
                 )
             ).all()
-            out.update(str(code) for (code,) in rows)
+            for code, status in rows:
+                withheld = status == industry_report_store.STATUS_AUDIT_ONLY
+                out[str(code)] = out.get(str(code), True) and withheld
     return out
 
 
@@ -339,11 +367,13 @@ def enqueue_period(
     """Enqueue the whole period: one group report per active group (or per
     ``codes``) plus the cross-industry snapshot.
 
-    A group that already has a published edition for ``period_key`` is
-    skipped unless ``force`` — re-running a week that is already on the
-    site spends LLM budget to reproduce it. Everything the call decided
-    *not* to do is counted in the result: coalesced, skipped_published,
-    unknown codes, and any group beyond ``INDUSTRY_REPORTS_MAX_JOBS_PER_RUN``.
+    A group that already has an edition for ``period_key`` is skipped
+    unless ``force`` — re-running a week that is already generated spends
+    LLM budget to reproduce it. Everything the call decided *not* to do is
+    counted in the result: coalesced, skipped_published (every skipped
+    group; ``skipped_withheld`` is the subset whose week is an audit-only
+    template, generated but not on the site), unknown codes, and any group
+    beyond ``INDUSTRY_REPORTS_MAX_JOBS_PER_RUN``.
     """
     info = gics_registry.resolve_version(version)
     if codes is None:
@@ -354,8 +384,13 @@ def enqueue_period(
         wanted = [str(c).strip() for c in codes if str(c).strip() in known]
         unknown = sorted({str(c).strip() for c in codes if str(c).strip() not in known})
 
-    already = set() if force or not wanted else _editions_for_period(wanted, period_key, info)
+    already = {} if force or not wanted else _editions_for_period(wanted, period_key, info)
     skipped_published = [code for code in wanted if code in already]
+    # The subset of those whose week produced only an audit-only template:
+    # skipped for the same reason (generated; `force` is the retry), but
+    # nothing of it is on the site, and saying "published" would mislead
+    # the operator doing exactly that retry.
+    skipped_withheld = [code for code in skipped_published if already[code]]
     todo = [code for code in wanted if code not in already]
 
     cap = int(settings.industry_reports_max_jobs_per_run if max_jobs is None else max_jobs)
@@ -392,6 +427,8 @@ def enqueue_period(
         "coalesced_codes": sorted(j["code"] for j in coalesced if j.get("code")),
         "skipped_published": len(skipped_published),
         "skipped_published_codes": sorted(skipped_published),
+        "skipped_withheld": len(skipped_withheld),
+        "skipped_withheld_codes": sorted(skipped_withheld),
         "unknown_codes": unknown,
         "over_budget": len(over_budget),
         "over_budget_codes": over_budget,
@@ -403,9 +440,9 @@ def enqueue_period(
         ),
         "job_ids": [j["id"] for j in enqueued],
     }
-    log.info("industry period %s: enqueued=%d coalesced=%d skipped_published=%d over_budget=%d",
+    log.info("industry period %s: enqueued=%d coalesced=%d skipped_published=%d (withheld=%d) over_budget=%d",
              period_key, result["enqueued"], result["coalesced"],
-             result["skipped_published"], result["over_budget"])
+             result["skipped_published"], result["skipped_withheld"], result["over_budget"])
     return result
 
 
@@ -477,6 +514,113 @@ def heartbeat(now: datetime | None = None) -> str:
     note = " ".join(f"{k}={v}" for k, v in sorted(counts.items()))
     record_run(HEARTBEAT_NAME, success=counts["failed_today"] == 0, note=note)
     return note
+
+
+# ---------------------------------------------------------------------------
+# The week's outcome — how many groups a reader will find updated
+# ---------------------------------------------------------------------------
+
+
+def period_outcome(period_key: str, info: gics_registry.VersionInfo) -> dict[str, Any]:
+    """Per group, what the week produced, and whether that is healthy.
+
+    Two queries for the whole period, never one per group: the period's
+    group-report jobs, and the period's editions (metadata only). Each
+    group lands in exactly one bucket, first match wins:
+
+    * ``agentic`` — it has a publishable-content edition for the period
+      (a ``pending_review`` analyst edition counts: it was generated);
+    * ``pending`` — a job for it is still queued or running;
+    * ``template`` — its only edition is audit-only;
+    * ``failed`` — its job failed without writing an edition.
+
+    ``finished = agentic + template + failed``; ``template_rate`` and
+    ``not_updated_rate = (template + failed) / finished`` are ``None`` while
+    nothing has finished, and ``healthy`` is ``None`` while anything is
+    pending — a verdict on half a week is not one.
+    """
+    with SessionLocal() as db:
+        job_rows = db.execute(
+            select(IndustryReportJob.industry_group_code, IndustryReportJob.status,
+                   IndustryReportJob.report_id).where(
+                IndustryReportJob.taxonomy_version_id == info.id,
+                IndustryReportJob.period_key == period_key,
+                IndustryReportJob.kind == KIND_GROUP,
+            )
+        ).all()
+        report_rows = db.execute(
+            select(IndustryReport.industry_group_code, IndustryReport.status,
+                   IndustryReport.generation, IndustryReport.degraded).where(
+                IndustryReport.taxonomy_version_id == info.id,
+                IndustryReport.period_key == period_key,
+            )
+        ).all()
+    agentic_codes = {str(r.industry_group_code) for r in report_rows
+                     if r.status != industry_report_store.STATUS_AUDIT_ONLY
+                     and industry_report_store.content_publishable(r.generation, r.degraded)}
+    template_codes = {str(r.industry_group_code) for r in report_rows} - agentic_codes
+    pending_codes = {str(r.industry_group_code) for r in job_rows if r.status in _ACTIVE_STATUSES}
+    failed_codes = {str(r.industry_group_code) for r in job_rows if r.status == "failed" and r.report_id is None}
+    groups = agentic_codes | template_codes | pending_codes | failed_codes
+    pending = pending_codes - agentic_codes
+    template = template_codes - pending
+    failed = failed_codes - agentic_codes - pending - template
+    finished = len(agentic_codes) + len(template) + len(failed)
+    threshold = float(settings.industry_report_not_updated_unhealthy_rate)
+    not_updated_rate = round((len(template) + len(failed)) / finished, 4) if finished else None
+    return {
+        "period_key": period_key,
+        "groups": len(groups),
+        "agentic": len(agentic_codes),
+        "template": len(template),
+        "failed": len(failed),
+        "pending": len(pending),
+        "complete": not pending,
+        "template_rate": round(len(template) / finished, 4) if finished else None,
+        "not_updated_rate": not_updated_rate,
+        "threshold": threshold,
+        "healthy": None if pending or not_updated_rate is None else not_updated_rate <= threshold,
+        "not_updated_codes": sorted(template | failed),
+    }
+
+
+def period_outcome_note(outcome: dict[str, Any], *, prefix: str = "") -> str:
+    """``period=2026-W39 agentic=22 template=2 failed=1 pending=0
+    template_rate=0.08 not_updated_rate=0.12 threshold=0.1 healthy=False``
+    — every count, never a bare verdict (``prefix`` namespaces the keys
+    when the weekly loop appends the previous week to its own note)."""
+    keys = ("period_key", "agentic", "template", "failed", "pending",
+            "template_rate", "not_updated_rate", "threshold", "healthy")
+    parts = [f"{prefix}{'period' if k == 'period_key' else k}={outcome.get(k)}" for k in keys]
+    if outcome.get("not_updated_codes"):
+        parts.append(f"{prefix}not_updated_codes={','.join(outcome['not_updated_codes'])}")
+    return " ".join(parts)
+
+
+def _record_period_progress(job: dict[str, Any]) -> None:
+    """After a group job reaches a terminal state, record the CURRENT
+    period's outcome as the weekly loop's in-flight progress.
+
+    Only the current period: a forced regenerate of an old week finishing
+    on a Tuesday must not overwrite this week's verdict with last month's.
+    ``record_progress`` keeps a ``False`` verdict until the next Sunday
+    ``record_run`` clears it, so an unhealthy week stays visible for the
+    rest of the week even if an operator regenerates a group afterwards.
+    Never raises — the job has already finished."""
+    try:
+        current, _ = period_for(_utcnow())
+        if job.get("period_key") != current:
+            log.debug("industry job %s finished for %s (current period %s): no progress recorded",
+                      job.get("id"), job.get("period_key"), current)
+            return
+        from ..monitoring import record_progress
+        from ..monitoring.industry_weekly_loop import LOOP_NAME
+
+        info = gics_registry.resolve_version(job["taxonomy_version_id"])
+        outcome = period_outcome(current, info)
+        record_progress(LOOP_NAME, success=outcome["healthy"], note=period_outcome_note(outcome))
+    except Exception:  # pragma: no cover — telemetry must not fail a finished job
+        log.warning("recording the industry period outcome failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -848,8 +992,8 @@ def _run_group_report(job: dict[str, Any], info: gics_registry.VersionInfo,
     """Stats → edition → validation → save, for one claimed group job."""
     code, period_key, job_id = job["code"], job["period_key"], job["id"]
     # The final attempt runs the deterministic writer: a week that failed
-    # twice on the model must still end with an edition on the site,
-    # labelled for what it is rather than passed off as the analyst's.
+    # twice on the model still ends with an edition on file — stored for
+    # audit only, never shown, and never passed off as the analyst's.
     deterministic = int(job["attempts"]) >= int(job["max_attempts"])
 
     _append_progress(job_id, "computing_stats")
@@ -886,6 +1030,18 @@ def _run_group_report(job: dict[str, Any], info: gics_registry.VersionInfo,
         _append_progress(job_id, "validation_failed", n_problems=len(problems))
         raise ReportRejected(_validation_message(problems))
 
+    withheld = industry_report_store.withheld_reason(result.generation, result.degraded, result.payload)
+    if withheld is not None and not deterministic:
+        # Checked after validation so a rejected analyst draft keeps its
+        # more useful ReportRejected message. An open breaker makes the
+        # writer return the template in milliseconds; storing it here
+        # would end the group's week on attempt 1.
+        _append_progress(job_id, "not_publishable", reason=withheld[:200])
+        raise AnalystUnavailable(
+            f"attempt {job['attempts']} of {job['max_attempts']} produced no publishable analyst "
+            f"edition ({withheld}); retried — only the final attempt stores an audit-only copy"
+        )
+
     _append_progress(job_id, "validated")
     report = industry_report_store.save_report(
         code=code, period_key=period_key, as_of=as_of, payload=result.payload, version=info,
@@ -899,10 +1055,14 @@ def _run_group_report(job: dict[str, Any], info: gics_registry.VersionInfo,
         errors=result.errors,
         job_id=job_id,
     )
+    published = "audit_only" if report.status == industry_report_store.STATUS_AUDIT_ONLY else "agentic"
+    if published == "audit_only":
+        log.warning("industry job %d stored a TEMPLATE edition for %s/%s (audit only, not displayed)",
+                    job_id, code, period_key)
     return {
         "report_id": report.id,
         "note": (
-            f"version={report.version} status={report.status} "
+            f"version={report.version} status={report.status} published={published} "
             f"mode={result.payload.get('analyst_narrative')} degraded={len(result.degraded)}"
         ),
     }
@@ -998,6 +1158,8 @@ def execute_job(claim: industry_lease.IndustryClaim, *, book: ContextBook | None
             log.error("industry job %d FAILED after %.1fs: %s: %s", job_id,
                       (_utcnow() - started).total_seconds(), type(exc).__name__, safe_exc(exc))
             done = _finish_claim(claim, error=exc, tb=tb)
+    if done is not None and done.get("kind") == KIND_GROUP and done.get("status") in _FINISHED_STATUSES:
+        _record_period_progress(done)
     try:
         from . import memory_probe
         memory_probe.trim_memory(f"industry_report_job_{job_id}")
@@ -1039,6 +1201,56 @@ def drain(limit: int = 200, *, now: datetime | None = None) -> list[dict[str, An
 
 _worker_thread: threading.Thread | None = None
 _stop_event = threading.Event()
+# This process's memo of "the one-shot reclassification needs no more
+# attempts". The ledger row in the database is the authority; this only
+# saves the ledger read on every heartbeat once the answer is known.
+_reclassify_settled = False
+
+
+def reclassify_legacy_editions_once() -> dict[str, Any] | None:
+    """Run the legacy-edition reclassification from the deployed worker,
+    once, so nobody needs a production shell or credentials for it.
+
+    Called between jobs on the drainer thread, so it can never interleave
+    with this process's own ``save_report``; the store additionally refuses
+    while any group job is queued or running (checked ``FOR UPDATE`` in the
+    same transaction) and this retries on the next heartbeat. The ledger row
+    makes it one-shot across restarts and against the owner's CLI. An
+    aborted run (the plan was not the pinned legacy population, or a
+    compare-and-set or post-write invariant failed; nothing was written) is
+    logged at ERROR and not retried by this process.
+
+    It never raises. It runs on the drainer's heartbeat, so an exception
+    escaping it would skip the heartbeat and every job behind it, on every
+    pass, for as long as the error lasted — a housekeeping step stopping
+    the queue. Anything unexpected is logged at ERROR and retried on the
+    next heartbeat.
+    ``INDUSTRY_RECLASSIFY_LEGACY_EDITIONS=false`` switches it off."""
+    global _reclassify_settled
+    if _reclassify_settled or not settings.industry_reclassify_legacy_editions:
+        return None
+    try:
+        out = industry_report_store.run_legacy_reclassification_once(source="worker_drainer")
+    except industry_report_store.ReclassifyRefused as exc:
+        log.info("industry reclassification deferred: %s", exc)
+        return {"status": "deferred", "reason": str(exc)}
+    except gics_registry.TaxonomyNotImported:
+        return {"status": "deferred", "reason": "taxonomy not imported"}
+    except industry_report_store.ReclassifyAborted as exc:
+        _reclassify_settled = True
+        log.error("industry reclassification ABORTED, nothing written: %s", exc)
+        return {"status": "aborted", "reason": str(exc)}
+    except Exception as exc:
+        log.error("industry reclassification failed (%s); retrying on the next heartbeat", safe_exc(exc))
+        return {"status": "error", "reason": safe_exc(exc)}
+    _reclassify_settled = True
+    if out["status"] == "applied":
+        # The manifest is the audit trail; it is also on the ledger row.
+        log.warning("industry reclassification applied by the worker: ledger=%s counts=%s manifest=%s",
+                    out.get("ledger_id"), out.get("counts"), out.get("manifest"))
+    else:
+        log.info("industry reclassification: %s (ledger=%s)", out["status"], out.get("ledger_id"))
+    return out
 
 
 def _worker_loop() -> None:
@@ -1058,6 +1270,9 @@ def _worker_loop() -> None:
                     recover_orphans(now)  # name legacy claims made during overlap after boot
                 heartbeat(now)
                 last_beat = now.timestamp()
+                # After the heartbeat, and it never raises: housekeeping
+                # must not be what stops the drainer or silences it.
+                reclassify_legacy_editions_once()
             if process_next_job(book=book) is None:
                 book.drop()  # nothing queued: release the period's prices
                 _stop_event.wait(POLL_SECONDS)

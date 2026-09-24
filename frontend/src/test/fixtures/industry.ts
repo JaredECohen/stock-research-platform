@@ -26,6 +26,16 @@
 // is the same group's first week (enough members, no prices yet — the
 // warm-up clears it) and `universeShortReport` is a group whose
 // membership is itself below the floor, which no warm-up can fix.
+//
+// Owner decision 1 (template editions are never displayed) adds three
+// captured states, all produced by the real worker path: `report` carries
+// a section the (stubbed) analyst model did not write, which the server
+// hides; `notUpdatedReport` is the thin group after a week in which the
+// model was down — its last analyst edition with `display.not_updated`;
+// and `noAgenticDetail` is the 404 for a group whose only edition is an
+// audit-only template. The "analyst" is the deterministic stand-in the
+// capture declares in `meta.analyst_stub` — its prose is the writer's own
+// template text relabelled, never invented.
 import wire from "./industry.wire.json";
 import type {
   IndustryAccess,
@@ -46,6 +56,10 @@ interface Wire {
     code: string;
     short_code: string;
     empty_code: string;
+    no_agentic_code: string;
+    outage_period: string;
+    read_at: Record<string, string>;
+    analyst_stub: { enabled: boolean; label: string; model: string; reason: string };
     min_sample: number;
     trimmed: Record<string, number>;
     trimmed_note: string;
@@ -56,6 +70,8 @@ interface Wire {
   report: IndustryReport;
   report_warming_up: IndustryReport;
   report_universe_short: IndustryReport;
+  report_not_updated: IndustryReport;
+  report_no_agentic: { detail: NoReportDetail };
   companies: IndustryCompanies;
   companies_warming_up: IndustryCompanies;
   history: IndustryHistory;
@@ -87,6 +103,15 @@ export const warmingUpReport: IndustryReport = w.report_warming_up;
 /** A thin group's priced week: every member priced and STILL below the
  *  floor. The structural way to sit below it, which no warm-up fixes. */
 export const universeShortReport: IndustryReport = w.report_universe_short;
+/** The thin group after a week whose only product was an audit-only
+ *  template (the model was down): the page shows its LAST analyst edition,
+ *  with `display.not_updated` naming the week that produced none. */
+export const notUpdatedReport: IndustryReport = w.report_not_updated;
+/** `404 no_report` for a group whose only edition is audit-only:
+ *  `reason: no_validated_analyst_edition`, `withheld_editions` counted. */
+export const noAgenticDetail: NoReportDetail = w.report_no_agentic.detail;
+/** The week the capture ran with the model down. */
+export const OUTAGE_PERIOD = w.meta.outage_period;
 export const companies: IndustryCompanies = w.companies;
 /** `/companies` as it answered BEFORE any price existed — the SAME
  *  endpoint, read in the earlier week. `/companies` prices its rows from
@@ -134,12 +159,15 @@ export function staleReport(over: Partial<IndustryReport> = {}): IndustryReport 
   r.last_attempt = {
     job_id: 41,
     status: "failed",
+    outcome: "failed",
     at: "2026-09-13T06:41:00",
     period_key: "2026-W37",
     attempts: 3,
     max_attempts: 3,
     error_type: "ReportRejected",
-    error_message: "drivers section opened with a KPI forecast",
+    // The public form: the server replaces a rejection's raw message (it
+    // quotes the rejected model prose) with a count of problems.
+    error_message: "the analyst draft did not pass validation (1 problem)",
     report_id: null,
     source: "weekly_cron",
   };

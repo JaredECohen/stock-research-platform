@@ -33,6 +33,9 @@ from app.tests.gating_helpers import seed_demo_universe
 
 AS_OF = datetime(2026, 9, 4, 21, 0)
 PERIOD = "2026-W36"
+# Only analyst-written editions reach the PM (owner decision 1).
+AGENTIC = {"generation_mode": "llm"}
+TEMPLATE = {"generation_mode": "deterministic"}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -117,14 +120,15 @@ def test_block_quotes_the_own_groups_edition_and_names_linked_and_unmapped(clean
     nvda = _own_group("NVDA", clean)
     _snapshot(clean, [nvda])
     rs.save_report(
-        code=nvda, period_key=PERIOD, as_of=AS_OF, version=clean, degraded=["analyst_narrative:llm_unavailable"],
+        code=nvda, period_key=PERIOD, as_of=AS_OF, version=clean, generation=AGENTIC,
+        degraded=["cross_industry:snapshot:none_yet"],
         payload={"sections": {
             "outlook": {"interpretation": {"analyst_view": "Capacity additions " + "x" * 900}},
             "what_changed": {"interpretation": {"text": "Breadth narrowed."}},
         }},
     )
     block = pm_context.industry_context_block(ticker="NVDA", tickers=["ZZNOPE"])
-    assert f"Industry group {nvda} — edition v1 {PERIOD} (degraded edition: analyst_narrative:llm_unavailable)" in block
+    assert f"Industry group {nvda} — edition v1 {PERIOD} (degraded edition: cross_industry:snapshot:none_yet)" in block
     assert "Analyst view: Capacity additions" in block and "What changed: Breadth narrowed." in block
     assert "No industry-group mapping for: ZZNOPE (unclassified)" in block
     if isn.linked_group_codes(nvda):
@@ -152,7 +156,7 @@ def tools(monkeypatch) -> dict[str, Any]:
 def test_chat_tool_answers_for_a_portfolio_of_tickers_from_stored_artifacts_only(clean, tools, monkeypatch):
     nvda, jpm = _own_group("NVDA", clean), _own_group("JPM", clean)
     _snapshot(clean, [nvda, jpm])
-    rs.save_report(code=jpm, period_key=PERIOD, as_of=AS_OF, version=clean,
+    rs.save_report(code=jpm, period_key=PERIOD, as_of=AS_OF, version=clean, generation=AGENTIC,
                    payload={"sections": {"outlook": {"interpretation": {"analyst_view": "Banks steady."}}}})
 
     def _boom(*a, **k):
@@ -214,29 +218,154 @@ def test_chat_tool_carries_the_access_policy_it_was_served_under(clean, tools, m
     assert missing["access"] == {"surface": "pm_chat", "tier": "pro", "enforced": True, "latest_report_tier": "pro"}
 
 
-def test_chat_tool_reads_every_groups_edition_in_one_query(clean, tools):
-    """A portfolio question puts several groups in scope; the editions
-    must come back in one SELECT, not one per group, because this runs on
-    a web request."""
+
+
+def _count_selects():
+    import contextlib
+
     from sqlalchemy import event
 
+    @contextlib.contextmanager
+    def counting():
+        seen: dict[str, list[str]] = {"reports": [], "jobs": []}
+
+        def _count(conn, cursor, statement, params, context, executemany):
+            if not statement.lstrip().upper().startswith("SELECT"):
+                return
+            if "industry_reports" in statement:
+                seen["reports"].append(statement)
+            elif "industry_report_jobs" in statement:
+                seen["jobs"].append(statement)
+
+        engine = SessionLocal.kw["bind"]
+        event.listen(engine, "before_cursor_execute", _count)
+        try:
+            yield seen
+        finally:
+            event.remove(engine, "before_cursor_execute", _count)
+
+    return counting()
+
+
+def test_chat_tool_reads_every_groups_edition_in_a_constant_number_of_queries(clean, tools):
+    """A portfolio question puts several groups in scope; this runs on a
+    web request, so the editions come back in the store's two queries
+    (candidates' metadata, then the winners) and the attempted periods in
+    one — never a query per group."""
     codes = [g.code for g in reg.industry_groups(version=clean)]
     _snapshot(clean, codes)
     for c in codes[:3]:
-        rs.save_report(code=c, period_key=PERIOD, as_of=AS_OF, version=clean,
+        rs.save_report(code=c, period_key=PERIOD, as_of=AS_OF, version=clean, generation=AGENTIC,
                        payload={"sections": {"outlook": {"interpretation": {"analyst_view": "x"}}}})
 
-    selects: list[str] = []
-
-    def _count(conn, cursor, statement, params, context, executemany):
-        if statement.lstrip().upper().startswith("SELECT") and "industry_reports" in statement:
-            selects.append(statement)
-
-    engine = SessionLocal.kw["bind"]
-    event.listen(engine, "before_cursor_execute", _count)
-    try:
+    with _count_selects() as one:
+        tools["get_industry_context"](tickers=["NVDA"])
+    with _count_selects() as many:
         out = tools["get_industry_context"](tickers=["NVDA", "JPM", "AAPL", "MSFT"])
-    finally:
-        event.remove(engine, "before_cursor_execute", _count)
     assert out["status"] == "ok" and len(out["groups"]) >= 2
-    assert len(selects) == 1, f"{len(selects)} report queries for {len(out['groups'])} groups"
+    assert len(one["reports"]) == len(many["reports"]) == 2, many["reports"]
+    assert len(one["jobs"]) == len(many["jobs"]) == 1, many["jobs"]
+
+
+def test_pm_reads_analyst_editions_only(clean, tools):
+    """A template edition never reaches the PM or the chat tool — not the
+    newest one, and not a legacy one still flagged latest-good. The group
+    reads as having no edition, or as its last ANALYST edition."""
+    nvda, jpm = _own_group("NVDA", clean), _own_group("JPM", clean)
+    _snapshot(clean, [nvda, jpm])
+    rs.save_report(code=nvda, period_key=PERIOD, as_of=AS_OF, version=clean, generation=TEMPLATE,
+                   payload={"sections": {"outlook": {"interpretation": {"analyst_view": "TEMPLATE VIEW"}}}})
+    with SessionLocal() as db:  # legacy: analyst v1 superseded by a template flagged latest-good
+        db.add(IndustryReport(taxonomy_version_id=clean.id, industry_group_code=jpm, version=1,
+                              period_key="2026-W35", as_of=AS_OF, status="superseded", is_latest_good=False,
+                              generation=AGENTIC, degraded=[], generated_at=AS_OF,
+                              payload={"sections": {"outlook": {"interpretation": {"analyst_view": "Analyst view."}}}}))
+        db.add(IndustryReport(taxonomy_version_id=clean.id, industry_group_code=jpm, version=2,
+                              period_key=PERIOD, as_of=AS_OF, status="succeeded", is_latest_good=True,
+                              generation=TEMPLATE, degraded=[], generated_at=AS_OF,
+                              payload={"sections": {"outlook": {"interpretation": {"analyst_view": "TEMPLATE VIEW"}}}}))
+        db.commit()
+
+    block = pm_context.industry_context_block(ticker="NVDA", tickers=["JPM"])
+    assert "TEMPLATE VIEW" not in block
+    assert f"Industry group {nvda}: no published Industry Analysis edition yet." in block
+    assert f"Industry group {jpm} — edition v1 2026-W35" in block and "Analyst view." in block
+    out = tools["get_industry_context"](tickers=["NVDA", "JPM"])
+    by_code = {g["code"]: g for g in out["groups"]}
+    assert by_code[nvda]["report"] is None
+    assert by_code[jpm]["report"]["version"] == 1 and "TEMPLATE" not in str(out)
+
+
+def test_diff_and_pm_excerpt_hide_template_what_changed(clean):
+    """`what_changed` (and the outlook view) written by a template inside an
+    analyst edition is template prose. The diff returns null with the
+    reason; the PM excerpt returns "" (rendered "n/a"). Neither quotes it."""
+    nvda = _own_group("NVDA", clean)
+    _snapshot(clean, [nvda])
+    base = {"sections": {
+        "outlook": {"interpretation": {"analyst_view": "Model view one."}},
+        "what_changed": {"interpretation": {"text": "Model change one."}},
+    }}
+    rs.save_report(code=nvda, period_key="2026-W35", as_of=AS_OF, version=clean, generation=AGENTIC, payload=base)
+    templated = {"sections": {
+        "outlook": {"interpretation": {"analyst_view": "Model outlook two."}},
+        "what_changed": {"interpretation": {"text": "TEMPLATE CHANGE"}},
+    }}
+    # One template-filled section of ten leaves a publishable analyst
+    # edition; the marker is what says which one the template wrote.
+    rs.save_report(code=nvda, period_key=PERIOD, as_of=AS_OF, version=clean, generation=AGENTIC,
+                   payload=templated, degraded=["analyst_narrative:what_changed:deterministic"])
+
+    delta = rs.diff(nvda, 1, 2, version=clean)
+    view = delta["analyst_view"]
+    assert view["what_changed"] is None and "template-filled" in view["reasons"]["what_changed"]
+    assert view["to"] == "Model outlook two." and view["reasons"]["to"] is None
+    assert view["from"] == "Model view one."
+
+    excerpt = pm_context._report_excerpt(nvda)
+    assert excerpt["what_changed"] == "" and excerpt["hidden_sections"] == ["what_changed"]
+    block = pm_context.industry_context_block(ticker="NVDA")
+    assert "TEMPLATE CHANGE" not in block and "What changed: n/a" in block
+
+    # A template-filled outlook is hidden the same way on both surfaces
+    # (such an edition is below the publication minimum, so it can only
+    # arrive through an explicit comparison or a legacy row — hence the
+    # direct calls).
+    outlook_templated = {
+        "payload": {"sections": {
+            "outlook": {"interpretation": {"analyst_view": "TEMPLATE OUTLOOK"}},
+            "what_changed": {"interpretation": {"text": "Model change three."}},
+        }},
+        "degraded": ["analyst_narrative:outlook:deterministic"], "version": 3, "period_key": PERIOD,
+    }
+    ex = pm_context._excerpt_from(nvda, outlook_templated)
+    assert ex["analyst_view"] == "" and "TEMPLATE" not in str(ex)
+    both = rs._analyst_view({"payload": base, "degraded": []}, outlook_templated)
+    assert both["to"] is None and "template-filled" in both["reasons"]["to"]
+
+
+def test_block_marks_a_group_not_updated_this_week(clean):
+    """The newest week finished without an analyst edition: the PM reads
+    last week's analysis and is told it was not updated, and which week."""
+    from app.models import IndustryReportJob
+
+    nvda = _own_group("NVDA", clean)
+    _snapshot(clean, [nvda])
+    rs.save_report(code=nvda, period_key=PERIOD, as_of=AS_OF, version=clean, generation=AGENTIC,
+                   payload={"sections": {"outlook": {"interpretation": {"analyst_view": "Old view."}}}})
+    template = rs.save_report(code=nvda, period_key="2026-W37", as_of=AS_OF, version=clean, generation=TEMPLATE,
+                              payload={"sections": {}})
+    with SessionLocal() as db:
+        db.add(IndustryReportJob(kind="group_report", taxonomy_version_id=clean.id, industry_group_code=nvda,
+                                 period_key="2026-W37", run_id="r", status="succeeded", attempts=3,
+                                 max_attempts=3, enqueued_at=AS_OF, report_id=template.id))
+        db.commit()
+    try:
+        block = pm_context.industry_context_block(ticker="NVDA")
+        assert (f"(not updated this week; newest analyst edition is {PERIOD}, the 2026-W37 refresh produced none)"
+                in block)
+        assert pm_context._report_excerpt(nvda)["not_updated"] == "2026-W37"
+    finally:
+        with SessionLocal() as db:
+            db.query(IndustryReportJob).filter(IndustryReportJob.industry_group_code == nvda).delete()
+            db.commit()

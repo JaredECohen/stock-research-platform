@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from calendar import monthrange
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -120,17 +120,51 @@ def market_data_coverage(ticker: str | None = Query(None, max_length=16)) -> dic
 def market_data_backfill(
     ticker: str = Query(..., min_length=1, max_length=16, pattern=r"^[A-Za-z0-9][A-Za-z0-9.\-^=]*$"),
     force_refresh: bool = False,
+    scope: Literal["all", "fundamentals"] = "all",
+    dry_run: bool = False,
 ) -> dict:
     """Populate one target; the plan endpoint enumerates the complete universe.
 
     A resumable client submits targets sequentially. Only prices and
     fundamentals are fetched: no filings, LLMs, memos or outcome writes.
+    `scope=fundamentals` skips prices; `dry_run=true` (fundamentals only)
+    returns the exact FMP-primary plan and persists nothing.
     """
     from ..services.market_data_backfill import sync_ticker
     try:
-        return sync_ticker(ticker, force_refresh=force_refresh)
+        return sync_ticker(ticker, force_refresh=force_refresh, scope=scope, dry_run=dry_run)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class FundamentalsRepullAuthorizeRequest(BaseModel):
+    result_digest: str = Field(..., pattern=r"^[0-9a-f]{64}$")
+    # Owner decision 3: the evidence archive is backed up BEFORE the re-pull.
+    # The manifest's SHA-256 is the owner's attestation, recorded in the ledger.
+    evidence_backup_sha256: str = Field(..., pattern=r"^[0-9a-f]{64}$")
+
+
+@router.get("/api/admin/market-data/fmp-repull")
+def fundamentals_repull_status() -> dict:
+    """Read-only: the worker's FMP re-pull dry-run and execute ledgers."""
+    from ..services.fmp_repull_ledger import repull_status
+    return repull_status()
+
+
+@router.post("/api/admin/market-data/fmp-repull/authorize")
+def authorize_fundamentals_repull(body: FundamentalsRepullAuthorizeRequest) -> dict:
+    """Owner-only: let the worker execute the reviewed dry run (digest-bound),
+    after the evidence-archive backup whose manifest SHA-256 it records."""
+    from ..services.fmp_repull_ledger import authorize_execution
+    try:
+        return authorize_execution(body.result_digest, evidence_backup_sha256=body.evidence_backup_sha256,
+                                   authorized_by="admin")
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="No FMP re-pull dry run exists yet.") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/api/admin/market-data/prices")
@@ -192,9 +226,20 @@ def read_bk_fundamental_repair(plan_id: str) -> dict:
 
 @router.post("/api/admin/market-data/bk-repair/{plan_id}/apply")
 def apply_bk_fundamental_repair(plan_id: str, body: BKRepairApplyRequest) -> dict:
-    """Apply only the stored, digest-confirmed plan; never fetch providers."""
+    """Apply only the stored, digest-confirmed plan; never fetch providers.
+
+    Also applies an FMP-primary quarantine that an unattended refresh saved
+    as `planned` for review (FIX-006); the same digest and row fences apply.
+    """
+    from ..services import fundamental_quarantine
     from ..services.bk_fundamental_repair import apply_bk_repair
     try:
+        kind = fundamental_quarantine.plan_kind(plan_id)
+        if kind in fundamental_quarantine.QUARANTINE_KINDS:
+            return fundamental_quarantine.apply_planned(plan_id, body.digest)
+        if kind is not None:
+            # Ledgers and in-place audits are records, not applicable plans.
+            raise ValueError("Not an applicable repair plan")
         return apply_bk_repair(plan_id, body.digest)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="BK repair plan not found.") from exc
@@ -890,6 +935,7 @@ def lopsidedness_audit(
     inspected = 0
 
     history_seen: set[str] = set()
+    skipped: list[dict[str, Any]] = []
     # Pull latest memo per ticker (skip duplicates) up to n unique tickers.
     from sqlalchemy import select
 
@@ -906,12 +952,19 @@ def lopsidedness_audit(
             if r.ticker in history_seen:
                 continue
             history_seen.add(r.ticker)
-            inspected += 1
             memo = r.memo_json or {}
-            bull = memo.get("bull_case") or {}
-            bear = memo.get("bear_case") or {}
-            bull_kp = len(bull.get("key_points") or [])
-            bear_kp = len(bear.get("key_points") or [])
+            counts = {field: _case_key_point_count(memo.get(field))
+                      for field in ("bull_case", "bear_case")}
+            unreadable = [field for field, count in counts.items() if count is None]
+            if unreadable:
+                # The memo reader refuses this row (FIX-004), so the audit
+                # reports it rather than inventing a count; it stays out of
+                # the averages. Read-only: the stored row is not touched.
+                skipped.append({"ticker": r.ticker, "version": r.version, "fields": unreadable})
+                continue
+            inspected += 1
+            bull_kp = counts["bull_case"] or 0
+            bear_kp = counts["bear_case"] or 0
             bull_kp_total += bull_kp
             bear_kp_total += bear_kp
             sector_view = memo.get("sector_agent_view") or {}
@@ -949,7 +1002,24 @@ def lopsidedness_audit(
             falsifiable_total / inspected if inspected else 0.0, 2,
         ),
         "rows": rows,
+        "unreadable_rows": skipped,
     }
+
+
+def _case_key_point_count(case: Any) -> int | None:
+    """Key points in a stored bull/bear case, or None when unreadable.
+
+    Stored rows can still carry the legacy list shapes; count those the way
+    `memo_to_pydantic` serves them and refuse the ambiguous ones.
+    """
+    if not case:
+        return 0
+    if isinstance(case, dict):
+        return len(case.get("key_points") or [])
+    if isinstance(case, list):
+        points = memo_store.legacy_case_points(case)
+        return None if points is None else len(points)
+    return None
 
 
 # ---------------------------------------------------------------------------

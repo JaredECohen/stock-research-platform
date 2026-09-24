@@ -9,9 +9,13 @@ env. The Postgres URL must be the **External** connection string from
 Render (the internal one is only reachable from inside Render's VPC).
 
     cd backend
-    SOURCE_SQLITE=./marketmosaic.db \
+    SOURCE_SQLITE=/path/to/clean-export.db \
     TARGET_POSTGRES_URL='postgresql+psycopg2://user:pass@host/dbname?sslmode=require' \
     python -m scripts.migrate_sqlite_to_postgres
+
+The source must be a database no test run has touched. Never use
+`./marketmosaic.db`: it is the settings default, so every `pytest` run
+from `backend/` writes fixture rows into it (see below).
 
 What it does
 ------------
@@ -25,10 +29,19 @@ What it does
 
 Idempotency
 -----------
-The script DELETEs from each target table before copying. Re-running
-is safe and gives you a faithful snapshot of your local state — but
-it WILL clobber any rows that exist on the target. Don't run against
-a production DB after real users have written to it.
+The script DELETEs from each target table before copying, so it WILL
+clobber any rows that exist on the target. It therefore refuses a
+non-empty target unless `MM_MIGRATE_OVERWRITE_TARGET=1` is set; with
+that opt-in, re-running gives a faithful snapshot of your local state.
+Don't run against a production DB after real users have written to it.
+
+SOURCE_SQLITE has no default: `./marketmosaic.db` is also the file the
+test suite writes into, and copying it is how fixture tickers (TSTONE,
+AUDA, ...) and demo-mode memos reached production (FIX-003). That copy
+went into an EMPTY target, so the non-empty check above would not have
+stopped it; the script also refuses a source that holds any ticker in
+`dbguard.FIXTURE_TICKERS`. That list is a tripwire for the symbols the
+suite always writes, not proof that a source is clean.
 """
 from __future__ import annotations
 
@@ -37,7 +50,7 @@ import sys
 import time
 from typing import List, Type
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, make_url, text
 from sqlalchemy.orm import Session, sessionmaker
 
 # Tables we DON'T migrate. Each has a reason; keep in sync as we add
@@ -101,6 +114,21 @@ def _ordered_models() -> List[Type]:
     return out
 
 
+def _fixture_tickers_in(src_engine) -> list[str]:
+    """Fixture tickers the source holds, from the tables tests write them to."""
+    from app.tests.dbguard import FIXTURE_TICKERS
+
+    insp = inspect(src_engine)
+    found: set[str] = set()
+    with src_engine.connect() as conn:
+        for name in ("companies", "memo_snapshots"):
+            if not insp.has_table(name):
+                continue
+            rows = conn.execute(text(f'SELECT DISTINCT ticker FROM "{name}"')).scalars()
+            found.update(t for t in rows if t in FIXTURE_TICKERS)
+    return sorted(found)
+
+
 def _copy_table(src_session: Session, dst_session: Session, table) -> int:
     """Copy every row from `table` (source) into the same table on
     `dst_session`. Returns rows copied."""
@@ -125,7 +153,11 @@ def _copy_table(src_session: Session, dst_session: Session, table) -> int:
 def main() -> int:
     _bootstrap_paths()
 
-    src_path = os.environ.get("SOURCE_SQLITE", "./marketmosaic.db")
+    src_path = os.environ.get("SOURCE_SQLITE")
+    if not src_path:
+        print("error: SOURCE_SQLITE must be set explicitly — ./marketmosaic.db "
+              "is the file the test suite writes into (FIX-003)", file=sys.stderr)
+        return 1
     dst_url = os.environ.get("TARGET_POSTGRES_URL")
     if not dst_url:
         print("error: TARGET_POSTGRES_URL must be set "
@@ -137,6 +169,33 @@ def main() -> int:
 
     src_engine = create_engine(f"sqlite:///{src_path}", future=True)
     dst_engine = create_engine(dst_url, future=True)
+    tables = _ordered_models()
+
+    found = _fixture_tickers_in(src_engine)
+    if found:
+        print(f"error: SOURCE_SQLITE holds test-fixture tickers ({', '.join(found)}), "
+              "so a test run has written into it; copying it is how those rows reached "
+              "production (FIX-003). Export a clean source instead.", file=sys.stderr)
+        return 1
+
+    # _copy_table DELETEs before inserting. A target that already holds
+    # rows is almost always a live database, and wiping it is not
+    # recoverable from here — make the overwrite a deliberate opt-in.
+    # Checked before create_all so a refused target gets no DDL either.
+    if os.environ.get("MM_MIGRATE_OVERWRITE_TARGET") != "1":
+        insp = inspect(dst_engine)
+        with dst_engine.connect() as conn:
+            occupied = [
+                table.name for table in tables
+                if insp.has_table(table.name)
+                and conn.execute(table.select().limit(1)).first() is not None
+            ]
+        if occupied:
+            from app.tests.dbguard import redacted
+            print(f"error: target {redacted(make_url(dst_url))} is not empty "
+                  f"({', '.join(occupied)}); this script would delete those rows. "
+                  "Set MM_MIGRATE_OVERWRITE_TARGET=1 to overwrite it.", file=sys.stderr)
+            return 1
 
     # Ensure target schema exists. Equivalent to what `init_db()` does
     # on app startup, but we want it now before we copy.
@@ -146,7 +205,6 @@ def main() -> int:
 
     SrcSession = sessionmaker(bind=src_engine, autoflush=False)
     DstSession = sessionmaker(bind=dst_engine, autoflush=False)
-    tables = _ordered_models()
 
     totals = {"copied": 0, "tables": 0}
     started = time.perf_counter()

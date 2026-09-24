@@ -1,9 +1,13 @@
 """Retrieval service: chunks + simple BM25-ish keyword search.
 
-In demo mode we use a deterministic, fast keyword scoring approach. If
-ENABLE_VECTOR_SEARCH is true *and* OpenAI keys are set, we delegate to an
-OpenAI embeddings index — but for a polished demo, the BM25-ish scorer is
-plenty and keeps the dependency tree small.
+Keyword-scores chunks built from filings, transcripts and news. It never
+delegates to an embeddings index. In the memo pipeline the filing analyst
+calls `search` only as a fallback, when `vector_store.search` returns no
+passages, fails, or is skipped for lack of a ticker; the earnings analyst
+does not call it (`agents.tools.
+retrieve` also wraps it). No setting chooses between the two paths —
+`settings.enable_vector_search` is reported on `/api/providers/status`
+but read by no retrieval code.
 """
 from __future__ import annotations
 

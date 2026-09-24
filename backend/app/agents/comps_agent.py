@@ -60,12 +60,19 @@ def _self_history_points(
                 f"EV/EBITDA vs own {label} median {own_med['ev_ebitda']:.1f}x — "
                 f"currently at {ev_pct * 100:.0f}th percentile of own history."
             )
-    if target_op_margin is not None and own_med.get("operating_margin") is not None:
+    own_om = own_med.get("operating_margin")
+    if target_op_margin is not None and own_om is not None:
         delta = history.current_vs_own_median.get("operating_margin")
         if delta is not None:
+            # `delta` is a RELATIVE change; printed bare ("+7% delta") it
+            # reads as percentage points, which is how the saved META v1
+            # narrative reported a 2.6-point gap. State the gap in points
+            # and label the relative change.
+            gap_pp = (target_op_margin - own_om) * 100
             pts.append(
-                f"Op margin vs own {label} median "
-                f"{own_med['operating_margin']:.0%} — {delta:+.0%} delta."
+                f"Op margin {target_op_margin:.1%} vs own {label} median "
+                f"{own_om:.1%} — {gap_pp:+.1f} percentage "
+                f"points ({delta:+.1%} relative)."
             )
     if target_revenue_growth is not None and own_med.get("revenue_growth") is not None:
         rg_pct = pct.get("revenue_growth")

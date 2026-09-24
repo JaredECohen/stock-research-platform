@@ -60,6 +60,17 @@ def _hit_count_since(since: datetime) -> int:
 
 
 def main() -> int:
+    # Before the seed: run_full_seed rewrites company rows and smoke plants
+    # memos, so a non-local DATABASE_URL (e.g. from .env) must stop the run
+    # here, not after init_db has already run DDL against it. FIX-003.
+    from app.config import settings
+    from app.tests.dbguard import refusal
+
+    reason = refusal(settings.database_url)
+    if reason:
+        print(f"measure_live_cost: {reason}", file=sys.stderr)
+        return 2
+
     db_file = Path("./marketmosaic.db")
     if db_file.exists():
         db_file.unlink()
@@ -79,15 +90,23 @@ def main() -> int:
     print("Running cold smoke suite...")
     t0 = datetime.utcnow()
     with contextlib.redirect_stdout(io.StringIO()):
-        smoke.main()
+        cold_rc = smoke.main()
+    # A failed smoke run writes few or no cost rows, and the ratio below
+    # then reads as a pass (0.0%). Report the failure instead.
+    if cold_rc != 0:
+        print(f"cold smoke suite failed (rc={cold_rc}); no measurement", file=sys.stderr)
+        return cold_rc
 
     print("Running warm smoke suite...")
     # Tiny pause so timestamp ordering is unambiguous between cold and warm.
     import time as _t; _t.sleep(0.25)
     t1 = datetime.utcnow()
     with contextlib.redirect_stdout(io.StringIO()):
-        smoke.main()
+        warm_rc = smoke.main()
     t2 = datetime.utcnow()
+    if warm_rc != 0:
+        print(f"warm smoke suite failed (rc={warm_rc}); no measurement", file=sys.stderr)
+        return warm_rc
 
     cold_rows = [r for r in _query_since(t0) if r.generated_at < t1]
     warm_rows = [r for r in _query_since(t1) if r.generated_at < t2]

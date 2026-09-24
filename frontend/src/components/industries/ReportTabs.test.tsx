@@ -92,6 +92,30 @@ describe("ReportTabs", () => {
     );
   });
 
+  // --- owner decision 1: template-filled sections are hidden ------------
+
+  it("replaces a template-filled section's interpretation with the server's reason, keeping its facts", () => {
+    const hidden = fx.report.display.hidden_sections;
+    expect(hidden.length).toBeGreaterThan(0);
+    const name = hidden[0];
+    // The server already nulled it; the page must not say "none on this edition".
+    expect(fx.report.payload.sections[name].interpretation).toBeNull();
+    mount(name);
+    expect(screen.getByTestId("interpretation-hidden")).toHaveTextContent(fx.report.display.hidden_reason);
+    expect(screen.getByTestId("interpretation-hidden")).toHaveTextContent(
+      "Analyst interpretation unavailable in this version.",
+    );
+    expect(screen.queryByTestId("interpretation-absent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("interpretation-view")).not.toBeInTheDocument();
+    expect(screen.getByTestId("facts-view")).toBeInTheDocument();
+
+    // A model-written section of the same edition renders normally.
+    const shown = ORDER.find((s) => !INDUSTRY_FACTS_ONLY_SECTIONS.includes(s) && !hidden.includes(s))!;
+    render(<ReportTabs report={fx.report} section={shown} onSelect={() => {}} />);
+    const provenance = screen.getAllByTestId("interpretation-provenance");
+    expect(provenance[provenance.length - 1]).toHaveTextContent("the industry analyst model");
+  });
+
   it("shows each claim's basis and falsifier when the claims are opened", () => {
     mount("drivers");
     const claims = screen.getByTestId("interpretation-claims");

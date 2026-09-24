@@ -65,13 +65,38 @@ def test_legacy_projection_preserves_text_and_original_row(memo_db, field, value
 
 @pytest.mark.parametrize("value", [
     ["mixed", {"key_point": "shape"}], [{"key_point": 123}], [None], [{"unexpected": "point"}],
+    [{"key_point": None}],
 ])
 def test_ambiguous_legacy_cases_still_fail_without_rewriting(memo_db, value):
+    # FIX-004 residual: still refused (owner ruling, never coerced), but as a
+    # typed error naming the row and field path rather than a raw
+    # ValidationError that quotes the stored text and 500s the memo route.
     row_id, original = _legacy(memo_db, value=value)
-    with pytest.raises(ValidationError):
+    with pytest.raises(memo_store.StoredMemoUnreadable) as info:
         memo_store.memo_to_pydantic(memo_store.latest_memo("ABBV"))
+    assert isinstance(info.value, ValueError)
+    assert (info.value.ticker, info.value.version, info.value.snapshot_id) == ("ABBV", 7, row_id)
+    assert info.value.fields == ("bull_case",)
+    assert str(info.value) == f"stored memo ABBV v7 (snapshot {row_id}) does not validate at bull_case"
     with memo_db() as db:
         assert db.get(MemoSnapshot, row_id).memo_json == original
+
+
+def test_news_alert_on_unreadable_prior_raises_typed_error_and_writes_nothing(memo_db, monkeypatch):
+    # news_loop's per-ticker catch-all records this as an update failure named
+    # by type; the alert must never reach the LLM or publish a patched version.
+    row_id, original = _legacy(memo_db, value=["text", {"key_point": "x"}])
+
+    def assess(*_a):
+        raise AssertionError("an unreadable prior memo must not be assessed")
+
+    monkeypatch.setattr(news_impact_agent, "assess", assess)
+    with pytest.raises(memo_store.StoredMemoUnreadable):
+        update_orchestrator.on_news_alert("ABBV", _stub_alert())
+    with memo_db() as db:
+        rows = db.scalars(select(MemoSnapshot)).all()
+        assert [r.id for r in rows] == [row_id]
+        assert rows[0].memo_json == original
 
 
 def test_typed_case_is_unchanged_and_not_marked_degraded(memo_db):

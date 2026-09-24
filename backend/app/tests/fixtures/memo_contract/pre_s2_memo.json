@@ -1,0 +1,139 @@
+{
+ "agent_influence": {},
+ "bear_case": {
+  "headline": "bear",
+  "key_points": [
+   "r1"
+  ]
+ },
+ "bull_case": {
+  "headline": "bull",
+  "key_points": [
+   "b1"
+  ]
+ },
+ "business_summary": "bd",
+ "catalysts": [],
+ "company_name": "ZZPRE",
+ "comps_agent_view": {
+  "agent": "x",
+  "confidence": 0.5,
+  "data": {},
+  "evidence": [],
+  "headline": "h",
+  "key_points": [],
+  "long_form_report": null,
+  "sources": [],
+  "summary": "s"
+ },
+ "confidence_score": 61.5,
+ "dcf_initial_summary": {},
+ "dcf_pm_adjustment_headline": "",
+ "dcf_pm_adjustments": [],
+ "dcf_summary": {
+  "base_upside": 0.12
+ },
+ "degradation_events": [],
+ "degraded_agents": [],
+ "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+ "earnings_agent_view": {
+  "agent": "x",
+  "confidence": 0.5,
+  "data": {},
+  "evidence": [],
+  "headline": "h",
+  "key_points": [],
+  "long_form_report": null,
+  "sources": [],
+  "summary": "s"
+ },
+ "earnings_qoq_delta": null,
+ "extra_agent_views": {},
+ "filing_agent_view": {
+  "agent": "x",
+  "confidence": 0.5,
+  "data": {},
+  "evidence": [],
+  "headline": "h",
+  "key_points": [],
+  "long_form_report": null,
+  "sources": [],
+  "summary": "s"
+ },
+ "final_pm_view": "pm view",
+ "final_verdict": "verdict",
+ "forward_catalysts": [],
+ "generated_at": "2026-09-20T12:00:00",
+ "generation_mode": "live",
+ "intake_decision": {},
+ "key_risks": [],
+ "macro_regime_at_memo": "",
+ "macro_sensitivity": {
+  "agent": "x",
+  "confidence": 0.5,
+  "data": {},
+  "evidence": [],
+  "headline": "h",
+  "key_points": [],
+  "long_form_report": null,
+  "sources": [],
+  "summary": "s"
+ },
+ "macro_snapshot_at_memo": {},
+ "mispricing_thesis": {
+  "consensus_view": "",
+  "falsifiers": [],
+  "gap": "",
+  "our_view": ""
+ },
+ "one_sentence_thesis": "thesis",
+ "portfolio_fit": "",
+ "price_at_memo": null,
+ "price_at_memo_at": null,
+ "rating_label": "Bullish",
+ "risk_committee_challenge": {
+  "advice_compliance_check": "Output framed as research/education only.",
+  "challenges": [],
+  "overall_assessment": "ok",
+  "review_mode": "live",
+  "suggested_revisions": [],
+  "underweighted_risks": []
+ },
+ "round_findings": [],
+ "scorecard": null,
+ "scores": {},
+ "sector": "Technology",
+ "sector_agent_view": {
+  "agent": "x",
+  "confidence": 0.5,
+  "data": {},
+  "evidence": [],
+  "headline": "h",
+  "key_points": [],
+  "long_form_report": null,
+  "sources": [],
+  "summary": "s"
+ },
+ "sources_used": [],
+ "technical_agent_view": null,
+ "thesis_breakers": [],
+ "ticker": "ZZPRE",
+ "valuation_agent_view": {
+  "agent": "x",
+  "confidence": 0.5,
+  "data": {},
+  "evidence": [],
+  "headline": "h",
+  "key_points": [],
+  "long_form_report": null,
+  "sources": [],
+  "summary": "s"
+ },
+ "valuation_verdict": {
+  "comps_ev_ebitda_premium": null,
+  "dcf_base_upside": 0.12,
+  "factor_valuation": null,
+  "summary": "Undervalued.",
+  "verdict": "undervalued"
+ }
+}

@@ -25,7 +25,9 @@ def _clean():
 
 
 def test_run_stock_memo_discards_stale_events_and_keeps_late_ones(monkeypatch):
-    assert not settings.has_llm, "must stay zero-cost: no provider is ever called"
+    # Not an assert: a failing one renders its operand, the Settings object.
+    if settings.has_llm:
+        pytest.fail("must stay zero-cost: no provider is ever called", pytrace=False)
 
     logs: list = []
 

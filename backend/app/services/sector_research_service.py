@@ -256,6 +256,39 @@ def _distribution(values: list[float]) -> dict[str, float]:
     }
 
 
+def _placement_label(group_name: str, kpi: str, quartile: int) -> str:
+    """Name the quartile band the target sits in, never a cohort extremum.
+
+    The valuation and capital-intensity labels used to read "richest in
+    cohort" / "cheapest in cohort" for quartiles 4 / 1: saved META v1 was
+    "richest" at 16.4x EV/EBITDA while a peer traded at 21.2x. Those groups
+    also hold yields and spend ratios, which the multiple wording mislabelled
+    (META's 2.8% FCF yield read "below-median multiple" beside a 36.1x P/FCF
+    "above-median multiple"). So the label names the band and what was ranked.
+
+    Q4/Q1 use the hyphenated compound ("top-quartile multiple"): the
+    unhyphenated "top quartile" is a bull keyword in
+    `graph._findings_signal_lines`, and a rich multiple is not a bull signal.
+    Q3/Q2 keep the "above-median"/"below-median" wording, so line selection
+    there is exactly what it was.
+    """
+    if group_name not in ("valuation", "capital_intensity"):
+        return {
+            4: "top quartile", 3: "above median",
+            2: "below median", 1: "bottom quartile",
+        }[quartile]
+    if kpi.lower().endswith("_yield"):
+        measure = "yield"
+    elif group_name == "valuation":
+        measure = "multiple"
+    else:
+        measure = "intensity"
+    return {
+        4: f"top-quartile {measure}", 3: f"above-median {measure}",
+        2: f"below-median {measure}", 1: f"bottom-quartile {measure}",
+    }[quartile]
+
+
 def compute_kpi_placements(
     target_ratios: dict, cohort_ratios: list[dict], kpi_groups: dict[str, list[str]]
 ) -> dict[str, dict]:
@@ -280,24 +313,10 @@ def compute_kpi_placements(
                 "distribution": dist,
             }
             if target_val is not None:
-                entry["quartile"] = _quartile(cohort_vals, target_val)
-                # Higher is better for some, lower for valuation
-                higher_is_better = group_name not in ("valuation", "capital_intensity")
-                if entry["quartile"]:
-                    if higher_is_better:
-                        entry["interpretation"] = (
-                            "top quartile" if entry["quartile"] == 4
-                            else "above median" if entry["quartile"] == 3
-                            else "below median" if entry["quartile"] == 2
-                            else "bottom quartile"
-                        )
-                    else:
-                        entry["interpretation"] = (
-                            "richest in cohort" if entry["quartile"] == 4
-                            else "above-median multiple" if entry["quartile"] == 3
-                            else "below-median multiple" if entry["quartile"] == 2
-                            else "cheapest in cohort"
-                        )
+                quartile = _quartile(cohort_vals, target_val)
+                entry["quartile"] = quartile
+                if quartile:
+                    entry["interpretation"] = _placement_label(group_name, kpi, quartile)
             placements[kpi] = entry
     return placements
 

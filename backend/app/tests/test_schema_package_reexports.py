@@ -99,6 +99,15 @@ SCHEMA_NAMES = [
     "TaxonomyImportOut",
     "TaxonomyImportRequest",
     "TaxonomyOut",
+    # Memo contract C1 (S2, `schemas/memo.py`): W2a + W2b, expand-only.
+    "SectionAvailability",
+    "NumberClaim",
+    "WithheldItem",
+    "NumberCheck",
+    "RatingReconciliation",
+    "ConfidenceCap",
+    "ConfidenceAssessment",
+    "MemoQuality",
 ]
 
 # `typing.Literal` aliases are not classes and carry no `__module__`.
@@ -177,12 +186,18 @@ MODEL_SUBMODULES = [
 # made the Industry Group Analyst unreachable from the PM dialog;
 # `deep_research._addressable` validates against the live roster instead.
 # The critic-provenance repair then added optional CriticReview.review_mode,
-# defaulting to unknown for old snapshots. These intentional changes are
-# pinned here. Update this deliberately, in
+# defaulting to unknown for old snapshots. Memo contract C1 (S2,
+# 2026-09-24) then landed every W2a/W2b change in one expand-only bump:
+# `section_provenance`, the read-time `section_availability`, the optional
+# `quality: MemoQuality`, `ValuationVerdict` widened to "mixed" plus
+# `basis`/`signals`, and `CriticReview.valuation_divergence_assessment`, all
+# defaulted so stored snapshots read unchanged. It ships a deploy wave before
+# anything writes the new values, so reverting a writer cannot strand stored
+# memos as unreadable. These intentional changes are pinned here. Update this deliberately, in
 # the same commit, whenever `StockMemoOut` itself changes — never to make
 # an accidental drift pass.
 STOCK_MEMO_OUT_SCHEMA_SHA256 = (
-    "9bc783587bb9b3521c678e6bcf09ba09b0799b770c843ce9085da24a8ad2ff54"
+    "f6e38f3e45ce524c4a97788595eacf5a8e694eacc6a1402ca5b77caa6492d62b"
 )
 
 

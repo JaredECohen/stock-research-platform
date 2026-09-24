@@ -15,9 +15,13 @@ it is **flagged stale with the reason**, its **last attempt is on the
 record** with the error, and **no other group is affected**.
 
 Nothing here reaches a provider or an LLM. The reads are redirected
-through ``industry_analytics.default_loaders``; the writer runs in its
-deterministic mode because there are no API keys, which is also the mode
-production falls back to on the final attempt.
+through ``industry_analytics.default_loaders``, and the analyst model is
+the deterministic stand-in in ``fixtures/industry_analyst_stub.py``: only
+an analyst-written edition is ever published (owner decision 1), so a
+week run on the bare template would publish nothing at all. The last
+test runs the model-outage week for real — every group falls back to the
+audit-only template, the page keeps last week's analyst edition marked
+"not updated", and the week's health says so.
 """
 from __future__ import annotations
 
@@ -36,6 +40,7 @@ from app.services import industry_analytics as ia
 from app.services import industry_classification as ic
 from app.services import industry_report_store as rs
 from app.services import industry_report_worker as jobs
+from app.tests.fixtures import industry_analyst_stub
 from app.tests.gating_helpers import seed_demo_universe
 
 SUNDAY = datetime(2026, 9, 6, 6, 30)
@@ -108,6 +113,7 @@ def _stub_reads(universe, monkeypatch):
         )
 
     monkeypatch.setattr(ia, "default_loaders", loaders)
+    industry_analyst_stub.install(monkeypatch)
     # The initial report, later attempts and leases share the simulated week.
     # Real wall time would expire historical claims and can date the prior
     # report after the deliberately advanced failed refresh.
@@ -185,11 +191,10 @@ def test_a_whole_week_runs_from_the_loop_to_a_published_edition_per_group(univer
         assert edition is not None, f"group {code} cleared the sample floor but never published"
         assert edition["period_key"] == PERIOD and edition["version"] == 1
         assert edition["stats_id"] is not None
-        # No API keys in the test environment, so the narrative is the
-        # deterministic one and the edition says so rather than implying
-        # an analyst wrote it.
-        assert edition["payload"]["analyst_narrative"] == "llm_unavailable"
-        assert "analyst_narrative:llm_unavailable" in edition["degraded"]
+        # Only an analyst edition publishes; this one is the stub's, and
+        # its generation says so.
+        assert edition["payload"]["analyst_narrative"] == "llm"
+        assert edition["generation"]["model"] == industry_analyst_stub.MODEL
         assert rs.freshness(code, version=universe["info"])["stale"] is False
 
     with SessionLocal() as db:
@@ -378,3 +383,53 @@ def test_a_published_edition_carries_the_spillovers_that_name_its_group(universe
     for code in linked:
         facts = published[code]["payload"]["sections"]["cross_industry"]["facts"]
         assert facts["spillovers"], f"{code} is named by a dependency link but its edition reports none"
+
+
+def test_a_model_outage_week_keeps_last_weeks_analysis_marked_not_updated(universe, monkeypatch):
+    """Owner decision 1, end to end. Week two the model answers nothing
+    (an open breaker returns in milliseconds), so every group retries and
+    then ends on the deterministic template — stored audit-only, never
+    shown. Every page keeps week one's analyst edition, says it was not
+    updated and names the week; the week's health counts it as unhealthy
+    rather than as a success."""
+    from app.models import CronLoopRun
+    from app.monitoring import _LAST_RUNS
+
+    loop.run_once(now=SUNDAY)
+    jobs.drain()
+    week_one = _reports(universe)
+    assert week_one
+
+    monkeypatch.setattr(jobs.writer, "_llm_call", lambda *a, **kw: None)
+    clock = {"t": NEXT_SUNDAY}
+    monkeypatch.setattr(jobs, "_utcnow", lambda: clock["t"])
+    summary = loop.run_once(now=NEXT_SUNDAY)
+    # The loop's note carries the PREVIOUS week's verdict: week one was clean.
+    assert f"prev_period={PERIOD}" in summary["note"] and "prev_template=0" in summary["note"]
+    assert summary["previous_period"]["healthy"] is True
+    try:
+        for _ in range(3):
+            jobs.drain(now=clock["t"])
+            clock["t"] = clock["t"] + timedelta(hours=2)
+
+        week_two = _reports(universe)
+        assert week_two.keys() == week_one.keys()
+        for code, edition in week_two.items():
+            assert edition["id"] == week_one[code]["id"], f"{code} published a template"
+            fresh = rs.freshness(code, version=universe["info"])
+            assert fresh["stale"] is True
+            assert fresh["not_updated"] == {"period_key": NEXT_PERIOD, "outcome": "withheld_template"}
+            assert f"the {NEXT_PERIOD} refresh produced no validated analyst edition" in fresh["stale_reason"]
+
+        outcome = jobs.period_outcome(NEXT_PERIOD, universe["info"])
+        assert outcome["agentic"] == 0 and outcome["pending"] == 0
+        assert outcome["template"] == outcome["groups"] > 0
+        assert outcome["healthy"] is False
+        with SessionLocal() as db:
+            row = db.query(CronLoopRun).filter(CronLoopRun.loop_name == loop.LOOP_NAME).one()
+            assert row.progress_success is False and f"period={NEXT_PERIOD}" in row.progress_note
+    finally:
+        _LAST_RUNS.pop(loop.LOOP_NAME, None)
+        with SessionLocal() as db:
+            db.query(CronLoopRun).filter(CronLoopRun.loop_name == loop.LOOP_NAME).delete()
+            db.commit()
