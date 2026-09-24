@@ -14,7 +14,7 @@ One tick, in order:
    across N report jobs;
 3. **enqueue the period** — one ``group_report`` job per active group plus
    the period's ``cross_snapshot`` job, coalescing against active jobs and
-   skipping groups already published for this week unless ``force``.
+   skipping groups already generated for this week unless ``force``.
 
 Nothing is computed here. The loop is the scheduler's hand on a durable
 queue; the drainer thread on the worker does the work, so a tick that
@@ -148,6 +148,7 @@ def run_once(
         "enqueued": result["enqueued"],
         "coalesced": result["coalesced"],
         "skipped_published": result["skipped_published"],
+        "skipped_withheld": result.get("skipped_withheld", 0),
         "over_budget": result["over_budget"],
         "unknown_codes": result["unknown_codes"],
         "cross_snapshot_job": result["cross_snapshot"].get("job_id"),
@@ -162,6 +163,9 @@ def run_once(
         "enqueued": result["enqueued"],
         "coalesced": result["coalesced"],
         "skipped_published": result["skipped_published"],
+        # Of those, weeks generated only as an audit-only template — not
+        # on the site, and retried only by an admin `force`.
+        "skipped_withheld": result.get("skipped_withheld", 0),
         "over_budget": result["over_budget"],
         "cross_snapshot": result["cross_snapshot"].get("job_id") or "none",
         "warm_fetched": warm.get("fetched", 0),

@@ -1194,6 +1194,22 @@ def test_admin_regenerate_speaks_the_queue_s_real_contract(client, admin_token, 
         assert result[count_key] == len(result[codes_key]), (count_key, codes_key)
 
 
+def test_admin_regenerate_does_not_call_an_audit_only_week_published(client, admin_token, group, taxonomy):
+    """The design's manual retry for a withheld week is an admin
+    regenerate; telling that operator the group is "already published"
+    when nothing of it is on the site sends them away from the retry."""
+    period = "2026-W37"
+    store.save_report(code=group.code, period_key=period, as_of=datetime(2026, 9, 11, 21, 0),
+                      payload={"sections": {}}, version=taxonomy, generation={"generation_mode": "deterministic"})
+    resp = client.post("/api/admin/industries/reports/regenerate",
+                       json={"codes": [group.code], "period_key": period}, headers=admin_token)
+    assert resp.status_code == 202, resp.text
+    [skip] = resp.json()["skipped"]
+    assert skip["code"] == group.code
+    assert "published" not in skip["reason"].replace("not published", "")
+    assert "audit-only" in skip["reason"] and "force=true" in skip["reason"]
+
+
 def test_admin_regenerate_refuses_a_drifted_taxonomy_unless_told_otherwise(client, admin_token, group, monkeypatch):
     """Queueing a week against a node set the deploy has already replaced
     publishes a stale structure as this week's edition, so it is a 409

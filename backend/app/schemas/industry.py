@@ -494,7 +494,7 @@ class ClassifyOut(BaseModel):
 class RegenerateRequest(BaseModel):
     codes: list[str] | None = Field(None, description="Industry group codes; default every active group.")
     period_key: str | None = Field(None, description="ISO week; default the week of the most recent as-of weekday.")
-    force: bool = Field(False, description="Re-generate even when the period already published.")
+    force: bool = Field(False, description="Re-generate even when the period already has an edition (published or audit-only).")
     accept_stale_taxonomy: bool = Field(
         False,
         description=(

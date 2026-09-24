@@ -474,6 +474,8 @@ def test_template_week_is_not_reenqueued(env):
     assert template.status == "audit_only"
     again = jobs.enqueue_period(PERIOD, [code], version=env["info"], include_cross_snapshot=False)
     assert again["enqueued"] == 0 and again["skipped_published_codes"] == [code]
+    # ...but it is not published, and the result says which skips those are.
+    assert again["skipped_withheld"] == 1 and again["skipped_withheld_codes"] == [code]
     forced = jobs.enqueue_period(PERIOD, [code], version=env["info"], force=True, include_cross_snapshot=False)
     assert forced["enqueued"] == 1
 

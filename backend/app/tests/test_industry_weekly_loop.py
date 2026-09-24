@@ -146,6 +146,9 @@ def test_a_published_week_is_skipped_unless_forced(info, runs, enabled, monkeypa
         summary = loop.run_once(now=SUNDAY, codes=[code])
         assert summary["skipped_published"] == 1 and summary["enqueued"] == 0
         assert "skipped_published=1" in runs[-1][2]
+        # No generation_mode: a template, stored audit-only. The note says
+        # the skip is a withheld week, not a published one.
+        assert summary["skipped_withheld"] == 1 and "skipped_withheld=1" in runs[-1][2]
         forced = loop.run_once(now=SUNDAY, codes=[code], force=True)
         assert forced["enqueued"] == 1
     finally:

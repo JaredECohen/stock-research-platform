@@ -252,6 +252,7 @@ def regenerate_reports_endpoint(
             f"industry_report_worker.enqueue_period did not accept the agreed arguments: {exc}",
             period_key=period_key,
         ) from None
+    withheld = set(result.get("skipped_withheld_codes") or [])
     return RegenerateOut(
         period_key=period_key,
         taxonomy_version=info.version_key,
@@ -262,7 +263,14 @@ def regenerate_reports_endpoint(
         enqueued=[{"code": c} for c in (result.get("enqueued_codes") or [])],
         coalesced=[{"code": c} for c in (result.get("coalesced_codes") or [])],
         skipped=(
-            [{"code": c, "reason": "already published this period"}
+            # A week whose only product is an audit-only template was
+            # generated but is NOT on the site (owner decision 1); calling
+            # it "published" would tell the operator retrying it that
+            # there is nothing to retry.
+            [{"code": c,
+              "reason": ("generated this period as an audit-only template (not published); "
+                         "pass force=true to retry")
+              if c in withheld else "already generated this period"}
              for c in (result.get("skipped_published_codes") or [])]
             + [{"code": c, "reason": "over the per-run job cap"}
                for c in (result.get("over_budget_codes") or [])]

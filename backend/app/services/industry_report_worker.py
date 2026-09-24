@@ -316,8 +316,11 @@ def enqueue(
 
 
 def _editions_for_period(codes: list[str], period_key: str,
-                         info: gics_registry.VersionInfo) -> set[str]:
-    """The groups that already HAVE an edition for ``period_key``.
+                         info: gics_registry.VersionInfo) -> dict[str, bool]:
+    """The groups that already HAVE an edition for ``period_key``, as
+    ``{code: withheld}`` — ``withheld`` when the week's only product is an
+    audit-only template, so a caller can say "generated, not published"
+    instead of "already published" about a week nobody can read.
 
     One chunked query for the whole period, never one per group.
 
@@ -335,11 +338,11 @@ def _editions_for_period(codes: list[str], period_key: str,
     different question, and ``force`` (the admin regenerate route) is the
     deliberate retry.
     """
-    out: set[str] = set()
+    out: dict[str, bool] = {}
     with SessionLocal() as db:
         for i in range(0, len(codes), 200):
             rows = db.execute(
-                select(IndustryReport.industry_group_code).where(
+                select(IndustryReport.industry_group_code, IndustryReport.status).where(
                     IndustryReport.taxonomy_version_id == info.id,
                     IndustryReport.industry_group_code.in_(codes[i:i + 200]),
                     IndustryReport.period_key == period_key,
@@ -349,7 +352,9 @@ def _editions_for_period(codes: list[str], period_key: str,
                          industry_report_store.STATUS_AUDIT_ONLY)),
                 )
             ).all()
-            out.update(str(code) for (code,) in rows)
+            for code, status in rows:
+                withheld = status == industry_report_store.STATUS_AUDIT_ONLY
+                out[str(code)] = out.get(str(code), True) and withheld
     return out
 
 
@@ -362,11 +367,13 @@ def enqueue_period(
     """Enqueue the whole period: one group report per active group (or per
     ``codes``) plus the cross-industry snapshot.
 
-    A group that already has a published edition for ``period_key`` is
-    skipped unless ``force`` — re-running a week that is already on the
-    site spends LLM budget to reproduce it. Everything the call decided
-    *not* to do is counted in the result: coalesced, skipped_published,
-    unknown codes, and any group beyond ``INDUSTRY_REPORTS_MAX_JOBS_PER_RUN``.
+    A group that already has an edition for ``period_key`` is skipped
+    unless ``force`` — re-running a week that is already generated spends
+    LLM budget to reproduce it. Everything the call decided *not* to do is
+    counted in the result: coalesced, skipped_published (every skipped
+    group; ``skipped_withheld`` is the subset whose week is an audit-only
+    template, generated but not on the site), unknown codes, and any group
+    beyond ``INDUSTRY_REPORTS_MAX_JOBS_PER_RUN``.
     """
     info = gics_registry.resolve_version(version)
     if codes is None:
@@ -377,8 +384,13 @@ def enqueue_period(
         wanted = [str(c).strip() for c in codes if str(c).strip() in known]
         unknown = sorted({str(c).strip() for c in codes if str(c).strip() not in known})
 
-    already = set() if force or not wanted else _editions_for_period(wanted, period_key, info)
+    already = {} if force or not wanted else _editions_for_period(wanted, period_key, info)
     skipped_published = [code for code in wanted if code in already]
+    # The subset of those whose week produced only an audit-only template:
+    # skipped for the same reason (generated; `force` is the retry), but
+    # nothing of it is on the site, and saying "published" would mislead
+    # the operator doing exactly that retry.
+    skipped_withheld = [code for code in skipped_published if already[code]]
     todo = [code for code in wanted if code not in already]
 
     cap = int(settings.industry_reports_max_jobs_per_run if max_jobs is None else max_jobs)
@@ -415,6 +427,8 @@ def enqueue_period(
         "coalesced_codes": sorted(j["code"] for j in coalesced if j.get("code")),
         "skipped_published": len(skipped_published),
         "skipped_published_codes": sorted(skipped_published),
+        "skipped_withheld": len(skipped_withheld),
+        "skipped_withheld_codes": sorted(skipped_withheld),
         "unknown_codes": unknown,
         "over_budget": len(over_budget),
         "over_budget_codes": over_budget,
@@ -426,9 +440,9 @@ def enqueue_period(
         ),
         "job_ids": [j["id"] for j in enqueued],
     }
-    log.info("industry period %s: enqueued=%d coalesced=%d skipped_published=%d over_budget=%d",
+    log.info("industry period %s: enqueued=%d coalesced=%d skipped_published=%d (withheld=%d) over_budget=%d",
              period_key, result["enqueued"], result["coalesced"],
-             result["skipped_published"], result["over_budget"])
+             result["skipped_published"], result["skipped_withheld"], result["over_budget"])
     return result
 
 
