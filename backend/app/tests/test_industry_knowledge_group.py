@@ -315,9 +315,12 @@ def test_public_prompt_block_has_no_code_or_registry_name():
     ranked_names = [n for s in ik.load_industry_knowledge()["sectors"]
                     for n in [s["name"], *(g["name"] for g in s["industry_groups"])]
                     if "&" in n or "," in n]
+    omission_prefix = igk._omission_line(1).split("1", 1)[0]
     for g in ik.list_industry_groups():
         m = igk.group_mandate(g["code"])
         nodes = _registry_nodes_of(g["code"])
+        public_lines = {"- " + il.scrub_text(f"{b.economics} | Advantage test: {b.advantage_test}")
+                        for b in m.sub_industries}
         for budget in (400, 1200, 2600, igk.PROMPT_BLOCK_MAX_CHARS):
             block = m.as_prompt_block(max_chars=budget, provenance="public")
             where = (g["code"], budget)
@@ -340,8 +343,13 @@ def test_public_prompt_block_has_no_code_or_registry_name():
                 assert name not in block, (where, name)
             if igk.PUBLIC_SUB_INDUSTRY_HEADER in block:
                 briefs = block.split(igk.PUBLIC_SUB_INDUSTRY_HEADER, 1)[1].split("\nAttribution:", 1)[0]
+                # Every line is EXACTLY an unnamed brief (or the omission
+                # count): a line that led with the registry sub-industry name
+                # ("- Systems Software: ...") passed the old prefix check.
                 for line in briefs.strip("\n").split("\n"):
-                    assert line.startswith("- "), (where, line)
+                    assert line in public_lines or line.startswith(omission_prefix), (where, line)
+                    for b in m.sub_industries:
+                        assert not re.match(rf"- {re.escape(b.name)}(:| —| \()", line), (where, line)
             assert block.rstrip().endswith(f"Attribution: {il.PUBLIC_BRIEF_ATTRIBUTION}"), where
         # The codes edition is untouched by the new mode.
         assert m.as_prompt_block() == m.as_prompt_block(provenance="codes")
