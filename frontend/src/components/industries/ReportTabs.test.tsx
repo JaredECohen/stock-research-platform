@@ -1,7 +1,13 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import ReportTabs, { FACTS_HEADING, INTERPRETATION_HEADING } from "@/components/industries/ReportTabs";
+import ReportTabs, {
+  ASSUMPTION_BADGE,
+  ASSUMPTIONS_HEADING,
+  FACTS_HEADING,
+  INTERPRETATION_HEADING,
+} from "@/components/industries/ReportTabs";
+import { fmtByPath } from "@/components/industries/format";
 import { INDUSTRY_FACTS_ONLY_SECTIONS } from "@/types/industries";
 import * as fx from "@/test/fixtures/industry";
 
@@ -114,6 +120,49 @@ describe("ReportTabs", () => {
     render(<ReportTabs report={fx.report} section={shown} onSelect={() => {}} />);
     const provenance = screen.getAllByTestId("interpretation-provenance");
     expect(provenance[provenance.length - 1]).toHaveTextContent("the industry analyst model");
+  });
+
+  // --- owner decision 1: registered forecast assumptions ----------------
+
+  it("renders the outlook's registered assumptions as a labelled table from the captured edition", () => {
+    const outlook = fx.report.payload.sections.outlook;
+    const claims = outlook.interpretation!.claims ?? [];
+    const [fa] = claims.filter((c) => c.type === "forecast_assumption");
+    // The capture really carries one: the stub analyst registers FA1 on the
+    // edition's first rate anchor, and the base scenario lists it.
+    expect(fa?.id).toBe("FA1");
+    const anchors = outlook.facts.anchors as Array<{ path: string; value: number; family: string }>;
+    const anchor = anchors.find((a) => a.path === fa.anchor)!;
+    expect(anchor.family).toBe("rate");
+
+    mount("outlook");
+    const table = screen.getByTestId("assumptions-table");
+    expect(table).toHaveTextContent(ASSUMPTIONS_HEADING);
+    expect(ASSUMPTIONS_HEADING).toBe("Analyst assumptions — not observed data");
+    const row = within(table).getByTestId("assumption-FA1");
+    expect(row).toHaveTextContent(fa.value!);
+    expect(row).toHaveTextContent(fa.horizon!);
+    expect(row).toHaveTextContent(fa.falsifier);
+    // Measured against the observation it departs from, read from the
+    // edition's own catalogue and formatted in its unit.
+    expect(row).toHaveTextContent(fmtByPath(anchor.path, anchor.value));
+    expect(row).toHaveTextContent("Base");
+    expect(screen.getByTestId("scenario-uses-base")).toHaveTextContent("uses FA1");
+    // The claim itself is badged as an assumption, not as a fact.
+    expect(within(screen.getByTestId("interpretation-claims")).getByText(ASSUMPTION_BADGE)).toBeInTheDocument();
+  });
+
+  it("renders no assumptions table where none is registered", () => {
+    mount("performance");
+    expect(screen.queryByTestId("assumptions-table")).not.toBeInTheDocument();
+  });
+
+  it("says so when an assumption's anchor is not in the edition's catalogue", () => {
+    const r = fx.clone(fx.report);
+    const outlook = r.payload.sections.outlook;
+    outlook.facts = { ...outlook.facts, anchors: [] };
+    render(<ReportTabs report={r} section="outlook" onSelect={() => {}} />);
+    expect(screen.getByTestId("assumption-FA1")).toHaveTextContent("anchor not in this edition's catalogue");
   });
 
   it("shows each claim's basis and falsifier when the claims are opened", () => {

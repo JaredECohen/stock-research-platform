@@ -233,6 +233,33 @@ export interface IndustryClaim {
   text: string;
   basis: string[];
   falsifier: string;
+  /** A `forecast_assumption` (outlook only) is a REGISTERED forward number
+   * (owner decision 1): `id` FA1..FA12, one rate or multiple as `value`, an
+   * explicit `horizon`, and the `anchor` — the path of the observed fact it
+   * departs from, listed in the outlook's `facts.anchors`. `bounds` are the
+   * declared thresholds its falsifier may name. The validator has checked
+   * all of it; the page prints it as an assumption, never as data. */
+  id?: string;
+  value?: string;
+  horizon?: string;
+  anchor?: string;
+  bounds?: string[];
+}
+
+/** One observed fact an outlook assumption may be anchored to — the
+ *  server's catalogue in `sections.outlook.facts.anchors`. */
+export interface IndustryAnchor {
+  path: string;
+  value: number;
+  family: "rate" | "multiple" | string;
+}
+
+export interface IndustryScenario {
+  text: string;
+  falsifiers?: string[];
+  /** The registered assumptions the scenario rests on; the only numbers
+   *  it may quote are theirs. */
+  assumption_ids?: string[];
 }
 
 export interface IndustryInterpretation {
@@ -241,7 +268,7 @@ export interface IndustryInterpretation {
   /** The eight-stage causal order, when the section is ordered by it. */
   stages?: Array<{ id: string; text: string }>;
   /** Scenarios — labelled scenarios, never recommendations. */
-  scenarios?: Record<string, { text: string; falsifiers?: string[] }>;
+  scenarios?: Record<string, IndustryScenario>;
 }
 
 export interface IndustryReportSection {

@@ -60,7 +60,11 @@ would be an audit-only template with nothing to render). The stub returns
 the writer's own template prose relabelled "Fixture analyst (stubbed
 model)", so no analyst text in the fixture is invented; ``meta.analyst_stub``
 says so. The two display-rule states are produced by running those weeks
-with the stub OFF — a real model outage.
+with the stub OFF — a real model outage. The stub's one addition is a
+registered forecast assumption in the outlook (FA1, holding the edition's
+first rate anchor at its own observed value), so the page's assumptions
+table renders from a real published edition; ``meta.analyst_stub
+.forecast_assumption`` declares it.
 
 Two edits are made after the capture, and both are declared in ``meta``:
 per-ticker ``weekly_closes`` arrays are emptied (each row keeps a
@@ -409,6 +413,12 @@ def capture(*, stub_analyst: bool = True) -> dict[str, Any]:
             "model": industry_analyst_stub.MODEL,
             "reason": industry_analyst_stub.REASON,
             "sections_not_written": {k: list(v) for k, v in NOT_WRITTEN.items()} if stub_analyst else {},
+            # The outlook's registered assumption is the stub's only addition
+            # to the template prose; declared so nobody reads it as a forecast.
+            "forecast_assumption": (
+                f"{industry_analyst_stub.ASSUMPTION_ID} holds the edition's first rate anchor at its own "
+                "observed value; no number is invented" if stub_analyst else None
+            ),
         },
         "trimmed": trimmed,
         "trimmed_note": TRIMMED_NOTE,
