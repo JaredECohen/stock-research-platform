@@ -16,9 +16,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import os
 import re
 from collections.abc import Iterable, Iterator, Sequence
 from functools import lru_cache
+from pathlib import Path
 
 from ..config import settings
 
@@ -128,17 +130,63 @@ _FALLBACK_CHARS_PER_TOKEN = 3.6
 # find out it is larger than 500 tokens.
 _MAX_CHARS_PER_TOKEN = 8.0
 
+# The `cl100k_base` BPE ranks, committed to the repo (FIX-012). tiktoken
+# otherwise downloads them from openaipublic.blob.core.windows.net on first
+# use and caches them under the system temp dir, which made exact token
+# counting depend on the network:
+#
+#   * CI's netguard refuses that download, so a fresh runner silently fell
+#     back to the character heuristic and skipped every encoder-specific
+#     test — a green run said nothing about real token budgets.
+#   * On Render, a fresh container re-fetched on every boot, and a boot
+#     during a blob-storage or egress outage chunked a whole session on the
+#     heuristic.
+#
+# The file name is tiktoken's cache key — sha1 of the ranks URL — because
+# tiktoken's `read_file_cached` looks for exactly `<TIKTOKEN_CACHE_DIR>/<key>`.
+# tiktoken verifies it against the SHA-256 pinned in `tiktoken_ext` and, on a
+# mismatch, DELETES it and re-fetches; `.gitattributes` marks it `-text` so
+# no EOL normalisation can trigger that, and `test_tiktoken_vendored` fails
+# on a hash drift or a tiktoken upgrade that moves the pin.
+TIKTOKEN_RANKS_URL = "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
+VENDORED_TIKTOKEN_DIR = Path(__file__).resolve().parents[1] / "data" / "tiktoken"
+VENDORED_TIKTOKEN_FILE = VENDORED_TIKTOKEN_DIR / hashlib.sha1(TIKTOKEN_RANKS_URL.encode()).hexdigest()
+
+
+def _use_vendored_tiktoken_cache() -> None:
+    """Point tiktoken's disk cache at the committed ranks, if they are there.
+
+    `setdefault`, not assignment: an operator-set `TIKTOKEN_CACHE_DIR` wins.
+    A missing file changes nothing, so a checkout without it behaves exactly
+    as before (download, or the heuristic). Only `embeddings` uses tiktoken
+    in this app, so redirecting the process-wide cache touches nothing else.
+
+    Never raises: `_encoding()` promises that, and `Path.is_file` still
+    raises on errors other than "not there" (EACCES on the directory, EIO).
+    An unreadable vendored dir is treated like a missing one.
+    """
+    try:
+        present = VENDORED_TIKTOKEN_FILE.is_file()
+    except OSError as exc:
+        log.warning("vendored tiktoken ranks unreadable (%s); using tiktoken defaults", exc)
+        return
+    if present:
+        os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(VENDORED_TIKTOKEN_DIR))
+
 
 @lru_cache(maxsize=1)
 def _encoding():
     """The tiktoken encoding for `EMBEDDING_MODEL`, or None.
 
-    Never raises. `tiktoken` fetches an encoding's BPE ranks over the
-    network on first use and caches them on disk; a worker that boots
-    without that cache and without egress would otherwise take the whole
-    process down inside a filing index. Returning None puts the chunker on
-    the calibrated character heuristic, which is worse and still correct.
+    Never raises. The ranks are read from the vendored copy above; were it
+    missing or corrupt, `tiktoken` would fetch them over the network, and a
+    worker without egress would otherwise take the whole process down inside
+    a filing index. Returning None puts the chunker on the calibrated
+    character heuristic, which is worse and still correct.
     """
+    # Before the import, and inside the lru_cache, so it runs once per
+    # process and before tiktoken can resolve its cache directory.
+    _use_vendored_tiktoken_cache()
     try:
         import tiktoken
     except Exception as exc:  # pragma: no cover — tiktoken is pinned

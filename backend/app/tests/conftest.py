@@ -15,6 +15,7 @@ To exercise the live provider chain in a specific test, opt out:
 """
 from __future__ import annotations
 
+import os
 import sys
 
 import pytest
@@ -89,21 +90,25 @@ def pytest_terminal_summary(terminalreporter):
         )
 
     # A green run must not be read as "token budgets were checked against the
-    # embedding model's vocabulary". `count_tokens` degrades to a character
-    # heuristic when tiktoken's BPE ranks are neither cached nor fetchable —
-    # the state a fresh CI runner is in, since the netguard blocks the fetch —
-    # and that degradation is otherwise silent.
+    # embedding model's vocabulary". The cl100k_base ranks are vendored
+    # (FIX-012), so the encoder loads offline and the encoder-specific tests
+    # assert rather than skip. If it still failed to load, `count_tokens`
+    # degraded to its character heuristic for every other test too, and that
+    # degradation is otherwise silent — so name the file that failed.
     embeddings = sys.modules.get("app.services.embeddings")
     if embeddings is not None and embeddings._encoding.cache_info().currsize:
         if embeddings._encoding() is None:
+            vendored = embeddings.VENDORED_TIKTOKEN_FILE
+            state = "present" if vendored.is_file() else "MISSING"
             terminalreporter.section("tiktoken encoding unavailable")
             terminalreporter.line(
-                "count_tokens ran on its character heuristic for this whole session: "
-                "tiktoken's cl100k_base ranks are not cached and the netguard refuses "
-                "the one-time download. Chunk-budget assertions measured the fallback, "
-                "not the embedding model's vocabulary, and the encoder-specific tests "
-                "were skipped. Seed the cache once with MM_ALLOW_NETWORK=1, or point "
-                "TIKTOKEN_CACHE_DIR at a warm one, to exercise them for real."
+                f"count_tokens ran on its character heuristic for this whole session: the "
+                f"vendored cl100k_base ranks at {vendored} ({state}) did not load, and the "
+                "network fallback failed too (the netguard refuses it). tiktoken deletes a cache file whose "
+                "SHA-256 does not match its pin, so check `git status` for a deletion and "
+                "run test_tiktoken_vendored.py, which says whether the bytes or the pin "
+                f"moved. TIKTOKEN_CACHE_DIR={os.environ.get('TIKTOKEN_CACHE_DIR')!r} "
+                "overrides the vendored directory when set."
             )
 
     offenders = netguard.hits()
