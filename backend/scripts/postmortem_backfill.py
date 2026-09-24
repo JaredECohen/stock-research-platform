@@ -50,8 +50,15 @@ def _dry_run(horizons: list[int], limit: int) -> int:
     from app.services import outcome_eligibility
     from app.services.postmortem_service import _scan_due
 
+    sweep_failed = False
     with SessionLocal() as db:
-        print(f"eligibility: {outcome_eligibility.classify_pending(db=db)}")
+        try:
+            print(f"eligibility: {outcome_eligibility.classify_pending(db=db)}")
+        except Exception as exc:
+            # The real run carries on over the existing ledger after a failed
+            # sweep, so the dry run does too, and still says so and exits 1.
+            sweep_failed = True
+            print(f"eligibility sweep FAILED (nothing written): {type(exc).__name__}: {exc}")
         unclassified = list(db.execute(
             select(MemoSnapshot.id, MemoSnapshot.ticker)
             .outerjoin(MemoOutcomeEligibility, MemoOutcomeEligibility.memo_snapshot_id == MemoSnapshot.id)
@@ -72,7 +79,7 @@ def _dry_run(horizons: list[int], limit: int) -> int:
             print(f"  - {snap.ticker} v{snap.version} (snapshot #{snap.id})")
         if len(scan.items) > 10:
             print(f"  ... +{len(scan.items) - 10} more")
-    return 1 if unclassified else 0
+    return 1 if unclassified or sweep_failed else 0
 
 
 def main() -> int:

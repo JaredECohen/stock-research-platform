@@ -623,3 +623,32 @@ def test_postmortem_backfill_dry_run_classifies_first(tmp_path, monkeypatch, cap
             assert len(_ledger(sessions)) == 2
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("sweep", ["no_op", "raises"])
+def test_postmortem_backfill_dry_run_exits_1_when_snapshots_stay_unclassified(tmp_path, monkeypatch, capsys, sweep):
+    """The dry run is the guard before strong-route postmortem spend: if the
+    sweep did not cover every snapshot (or failed), it names them and exits 1."""
+    import scripts.postmortem_backfill as backfill
+    from app import database
+    from app.services import postmortem_service
+
+    sessions, engine = isolated_sessions(tmp_path, monkeypatch, database, postmortem_service)
+
+    def fail(**kwargs):
+        raise oe.ExclusionSetMismatch("synthetic")
+
+    try:
+        with sessions() as db:
+            snap = add_snapshot(db, ticker="DRYUNCL", generated_at=datetime(2026, 6, 1))
+            add_outcome(db, snap, horizon=90, forward_return=0.1, alpha=0.05)
+            db.commit()
+        monkeypatch.setattr(oe, "classify_pending", (lambda **kwargs: {"classified": 0}) if sweep == "no_op" else fail)
+        assert backfill._dry_run([90], 25) == 1
+        out = capsys.readouterr().out
+        assert "unclassified snapshots = 1" in out
+        assert f"DRYUNCL #{snap.id}" in out
+        if sweep == "raises":
+            assert "eligibility sweep FAILED (nothing written): ExclusionSetMismatch: synthetic" in out
+    finally:
+        engine.dispose()
