@@ -329,6 +329,30 @@ def test_memo_view_release_does_not_lock_the_ticker_out(auth_on, client, monkeyp
     assert detail["used"] == 3
 
 
+def test_unreadable_memo_is_structured_422_and_uncharged(auth_on, client):
+    """FIX-004 residual: a stored snapshot whose legacy bull_case mixes
+    shapes is refused as stored (never coerced), as 422 `memo_unreadable`
+    rather than a 500, and — like any failed open — costs nothing."""
+    snap = store_memo(STORED[0])
+    with SessionLocal() as db:
+        row = db.get(type(snap), snap.id)
+        payload = dict(row.memo_json)
+        payload["bull_case"] = ["x", {"key_point": "y"}]
+        row.memo_json = payload
+        db.commit()
+    _sub, tok = free_user(auth_on)
+    uid = user_id_for(client, tok)
+    detail = assert_structured(client.get(f"/api/stocks/{STORED[0]}/memo", headers=bearer(tok)),
+                               code="memo_unreadable", status=422)
+    assert detail["extra"] == {"ticker": STORED[0], "version": snap.version, "fields": ["bull_case"]}
+    with SessionLocal() as db:
+        events = db.query(UsageEvent).filter(UsageEvent.user_id == uid, UsageEvent.feature == "memo_view").all()
+        assert [(e.resource_ref, e.status) for e in events] == [(STORED[0], "released")]
+        assert db.get(type(snap), snap.id).memo_json == payload
+    usage = client.get("/api/me/usage", headers=bearer(tok))
+    assert usage.status_code == 200, usage.text
+
+
 def test_sync_analyze_is_refused_under_the_wall(auth_on, client):
     _sub, tok = pro_user(client, auth_on)
     resp = client.post(f"/api/stocks/{NO_MEMO}/analyze?sync=true", headers=bearer(tok))

@@ -182,6 +182,32 @@ def _stamp_snapshot_headers(response: Response, snap: Any) -> None:
     response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
 
 
+def _memo_or_unreadable(snap: Any) -> StockMemoOut:
+    """`memo_to_pydantic`, answering a stored snapshot that no longer
+    validates with a structured 422 instead of an ASGI 500 (FIX-004).
+
+    422, not 409: the Research page turns every 409 into the "Analyze
+    this stock" gate, which would regenerate (or charge a research run)
+    over a row the owner has ruled must be refused as stored. The row is
+    not touched; the log names it without quoting it (no exc_info: the
+    chained ValidationError carries stored text)."""
+    try:
+        return memo_store.memo_to_pydantic(snap)
+    except memo_store.StoredMemoUnreadable as exc:
+        log.error(
+            "stored memo unreadable ticker=%s version=%s snapshot_id=%s fields=%s",
+            exc.ticker, exc.version, exc.snapshot_id, ",".join(exc.fields),
+        )
+        raise EntitlementError(
+            422, "memo_unreadable",
+            f"The stored memo for {exc.ticker} (version {exc.version}) cannot be displayed: "
+            "it was saved in a format this version of MarketMosaic cannot read. "
+            "The stored record has not been changed.",
+            feature="memo_view",
+            extra={"ticker": exc.ticker, "version": exc.version, "fields": list(exc.fields)},
+        ) from exc
+
+
 def _memo_from_store_only(
     request: Request,
     response: Response,
@@ -247,7 +273,7 @@ def _memo_from_store_only(
             response.headers["X-Memo-Stale-Trigger"] = freshness["trigger"] or ""
         _stamp_snapshot_headers(response, snap)
         response.headers["X-Memo-Source"] = "cache"
-        memo = memo_store.memo_to_pydantic(snap)
+        memo = _memo_or_unreadable(snap)
     except Exception:
         grant.release(db)
         raise
@@ -304,7 +330,7 @@ def get_stock_memo(
             raise HTTPException(status_code=404, detail="Stored memo version not found")
         grant = authorize(request, "memo_view", resource=t, db=db)
         try:
-            memo = memo_store.memo_to_pydantic(snap)
+            memo = _memo_or_unreadable(snap)
             _stamp_snapshot_headers(response, snap)
             response.headers["X-Memo-Source"] = "cache"
         except Exception:
@@ -332,7 +358,7 @@ def get_stock_memo(
                 response.headers["X-Memo-Trigger"] = snap.trigger
                 response.headers["X-Memo-Generated-At"] = snap.generated_at.isoformat()
                 response.headers["X-Memo-Source"] = "cache"
-                return memo_store.memo_to_pydantic(snap)
+                return _memo_or_unreadable(snap)
             # Stale — fall through to a fresh run, advertising why.
             response.headers["X-Memo-Stale-Reason"] = freshness["reason"]
             response.headers["X-Memo-Stale-Trigger"] = freshness["trigger"] or ""

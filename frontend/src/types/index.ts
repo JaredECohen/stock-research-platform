@@ -758,6 +758,7 @@ export type ApiErrorCode =
   | "concurrency_limited"
   | "feature_disabled"
   | "no_memo"
+  | "memo_unreadable"
   | "already_subscribed"
   | "billing_unavailable"
   | (string & {});

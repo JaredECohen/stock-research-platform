@@ -60,4 +60,29 @@ describe("Research under the login wall", () => {
     expect(screen.getByTestId("rate-limit-notice")).toHaveTextContent("NVDA stays selected");
     expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
   });
+
+  it("shows the unreadable-stored-memo message without offering Analyze", async () => {
+    // FIX-004: a stored snapshot that no longer validates is a 422, not a 409,
+    // so the page must say so rather than route into the (charged) Analyze gate.
+    const mock = stubFetch([
+      [
+        "/api/stocks/NVDA/memo",
+        () =>
+          errJson(422, {
+            code: "memo_unreadable",
+            message:
+              "The stored memo for NVDA (version 7) cannot be displayed: it was saved in a format this version of MarketMosaic cannot read. The stored record has not been changed.",
+            feature: "memo_view",
+            extra: { ticker: "NVDA", version: 7, fields: ["bull_case"] },
+          }),
+      ],
+      [/\/api\/stocks$/, () => okJson([NVDA])],
+    ]);
+    renderWithProviders(<Research />, { route: "/app/research?ticker=NVDA", config: { auth_enabled: true }, auth: SIGNED_IN });
+    await settle();
+    await settle();
+    expect(screen.getByText(/cannot be displayed/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Analyze this stock" })).toBeNull();
+    expect(calls(mock, "/analyze")).toHaveLength(0);
+  });
 });
