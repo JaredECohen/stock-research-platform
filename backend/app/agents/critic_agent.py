@@ -75,6 +75,39 @@ def _company_memory_context(ticker: str) -> str:
         return ""
 
 
+_ASSESSMENTS = frozenset({"supported", "unsupported"})
+
+
+def _divergence_block(memo_dict: dict) -> str:
+    """The W2b 7(b) block the critic must see, or "".
+
+    Built from `quality.rating_reconciliation` (the PM's rating, the
+    evidence verdict and the PM's stated reason). It is PREPENDED before the
+    memo dump rather than left inside it: the dump is cut at
+    `max_agent_context_chars` (60k) while a live memo's dump runs to ~270k,
+    and `quality` is the last field, so inside the dump the critic would
+    never read it."""
+    from .memo_quality import diverges
+
+    quality = memo_dict.get("quality")
+    rec = quality.get("rating_reconciliation") if isinstance(quality, dict) else None
+    if not isinstance(rec, dict):
+        return ""
+    pm_rating = str(rec.get("pm_rating") or memo_dict.get("rating_label") or "")
+    verdict = str(rec.get("valuation_verdict") or "")
+    if not diverges(pm_rating, verdict):
+        return ""
+    vv = memo_dict.get("valuation_verdict")
+    summary = str(vv.get("summary") or "") if isinstance(vv, dict) else ""
+    reason = str(rec.get("reason") or "").strip()
+    return (
+        f"\n\n## RATING DIVERGENCE (PM rated {pm_rating}; valuation evidence reads "
+        f"{verdict.replace('_', ' ')})\n"
+        f"Valuation evidence: {summary or 'n/a'}\n"
+        f"PM's stated reason: {reason or 'none given'}"
+    )
+
+
 def run_critic(memo_dict: dict) -> CriticReview | None:
     if not settings.enable_agent_critic:
         return None
@@ -88,6 +121,7 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
     prior_block = _prior_memo_context(ticker)
     memory_block = _company_memory_context(ticker)
 
+    divergence_block = _divergence_block(memo_dict)
     payload = json.dumps(memo_dict, default=str)[: settings.max_agent_context_chars]
     # Critic intentionally crosses provider families (Phase 4): if Anthropic is
     # configured, force-route through ANTHROPIC_CRITIC_MODEL regardless of
@@ -103,6 +137,7 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
         prompts.CRITIC_PROMPT
         + prior_block
         + memory_block
+        + divergence_block
         + "\n\nDraft memo:\n" + payload,
         system=prompts.PM_SYSTEM, route="strong",
         provider_override=provider_override,
@@ -120,6 +155,13 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
                 "advice_compliance_check", "Output framed as research/education, not personalized advice."
             ),
         )
+        # Read only when the critic was actually asked (the block was sent);
+        # any other value, or an unasked one, stays "not_assessed".
+        raw_assessment = (llm_out.get("valuation_divergence_assessment")
+                          if isinstance(llm_out, dict) else None)
+        if (divergence_block and isinstance(raw_assessment, str)
+                and raw_assessment.strip().lower() in _ASSESSMENTS):
+            review.valuation_divergence_assessment = raw_assessment.strip().lower()  # type: ignore[assignment]
     else:
         # This checks a few fields, not factual accuracy or research quality.
         # A missing live result must not read as an independent endorsement.
