@@ -368,12 +368,17 @@ def test_embedding_dispatch_is_fenced_without_changing_unowned_callers(database,
     client = SimpleNamespace(embeddings=SimpleNamespace(create=lambda **kw: calls.append(kw)))
     monkeypatch.setattr("openai.OpenAI", lambda **kw: client)
     monkeypatch.setattr(embeddings, "_is_openai_available", lambda: True)
+    # A live process: CI's demo-only mode would take the free hash path
+    # before any dispatch (W7 `_hash_allowed`).
+    monkeypatch.setattr(embeddings, "_hash_allowed", lambda: False)
     with lease.claim_context(receipt), pytest.raises(lease.LeaseLost):
         embeddings.embed(["must not dispatch"])
     assert calls == []
-    # No claim: the same client entrypoint is still reached, then existing
-    # fallback handles this deliberately incomplete mocked response.
-    assert len(embeddings.embed(["ordinary caller"])) == 1
+    # No claim: the same client entrypoint is still reached. Embeddings are
+    # strict now (W7 §8.1), so this deliberately incomplete mocked response
+    # raises rather than degrading to hash vectors.
+    with pytest.raises(embeddings.EmbeddingUnavailable):
+        embeddings.embed(["ordinary caller"])
     assert len(calls) == 1
 
 

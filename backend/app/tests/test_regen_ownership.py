@@ -233,6 +233,9 @@ def test_stale_embedding_dispatch_is_cancelled_without_hash_fallback(database, m
     receipt = claim(database)
     expire(database, receipt)
     monkeypatch.setattr(embeddings, "_is_openai_available", lambda: True)
+    # A live process: CI's demo-only mode would take the free hash path
+    # before any dispatch (W7 `_hash_allowed`).
+    monkeypatch.setattr(embeddings, "_hash_allowed", lambda: False)
     monkeypatch.setattr(openai, "OpenAI", lambda **kw: SimpleNamespace(embeddings=SimpleNamespace(
         create=lambda **kw: pytest.fail("stale embedding request dispatched"))))
     monkeypatch.setattr(embeddings, "_hash_embed", lambda *a: pytest.fail("cancellation degraded to hash fallback"))
