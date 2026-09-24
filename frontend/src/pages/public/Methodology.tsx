@@ -115,7 +115,7 @@ export default function Methodology() {
           <p className="text-sm text-slate-300 mt-2 leading-relaxed">
             SEC filings and investor-relations material are the primary facts. Fundamentals, estimates and prices come from market-data
             providers through a fallback chain, and every memo records the price and the data it was written from. Industry context comes
-            from a maintained knowledge base covering each GICS industry's economic engine, indicators, moats and failure modes.
+            from a maintained knowledge base covering each industry's economic engine, indicators, moats and failure modes.
           </p>
         </section>
 

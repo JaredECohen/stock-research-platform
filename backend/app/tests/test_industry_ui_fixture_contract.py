@@ -336,10 +336,29 @@ def test_the_capture_covers_the_states_the_ui_has_to_render(wire):
     )
     sources = {row["classification"]["source"] for row in companies["items"]}
     assert len(sources) > 1, f"the captured group has one classification source ({sources}); re-capture a mixed group"
-    assert any(row["sub_industry_name"] for row in companies["items"]), "no row carries a sub-industry name"
-    assert any(row["sub_industry_name"] is None for row in companies["items"]), "every row carries a sub-industry name"
+    # A row names its industry by the provider's own label; the taxonomy's
+    # industry / sub-industry levels are not served at all.
+    assert any(row["provider_industry"] for row in companies["items"]), "no row carries a provider industry"
+    assert not [k for row in companies["items"] for k in row if "sub_industry" in k or k == "industry_code"]
 
     deltas = wire["changes"]["facts_delta"].values()
     assert any(d["delta"] is None and d["reason"] for d in deltas), (
         "no fact in the captured diff is missing on one side; the 'never differenced to zero' path would be untested"
     )
+
+
+def test_the_fixture_is_public_data_with_no_taxonomy_code_brand_or_registry_name(wire):
+    """Owner decision 2026-09-24: the UI is built on what the API serves,
+    and the API serves our labels and slugs only. The fixture — `meta`
+    included, since the UI tests route by `meta.code` — must pass the same
+    walk the live routes do (`test_industry_public_surface.public_leaks`);
+    a leak here is either a projection gap or a stale capture."""
+    from app.tests.test_industry_public_surface import public_leaks
+
+    leaks = public_leaks(wire)
+    assert leaks == [], leaks[:10]
+    from app.services import industry_labels as il
+
+    for key in ("code", "short_code", "empty_code", "no_agentic_code"):
+        assert il.code_for(wire["meta"][key]) != wire["meta"][key], (key, "meta must name groups by slug")
+    assert wire["meta"]["taxonomy_version"] == il.PUBLIC_TAXONOMY_KEY

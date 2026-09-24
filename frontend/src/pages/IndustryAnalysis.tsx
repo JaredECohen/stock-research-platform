@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, isApiError } from "@/api/client";
 import { useAuth } from "@/auth/AuthContext";
 import { useAccount } from "@/auth/useAccount";
@@ -29,9 +29,14 @@ import type {
  * view is a handful of row fetches — which is what lets the latest
  * edition be public at all.
  *
- * The URL is the state: `/app/industries/4530?version=2&tab=performance`
+ * The URL is the state: `/app/industries/chips-chipmaking-equipment?version=2&tab=performance`
  * is a citable reference to one edition's one section, which is the
- * point of publishing editions rather than a live page.
+ * point of publishing editions rather than a live page. The segment is
+ * the group's public slug; an old link that carries an internal code
+ * still resolves, and the page replaces it with the slug the API answered
+ * with — keeping `?version`, `?tab` and the hash — so a code never stays
+ * in the address bar (owner decision 2026-09-24: no licensed codes on any
+ * public surface).
  *
  * What the page refuses to do:
  *
@@ -224,6 +229,7 @@ export default function IndustryAnalysis() {
   const { code = "" } = useParams();
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const auth = useAuth();
   const { account } = useAccount();
 
@@ -268,6 +274,20 @@ export default function IndustryAnalysis() {
 
   const report = reportRes?.state === "ok" ? reportRes.data : null;
   const companies = companiesRes?.state === "ok" ? companiesRes.data : null;
+
+  // Slug canonicalisation. The API accepts an old link's internal code but
+  // always answers with the group's public slug; when the two differ the
+  // address bar is rewritten to the slug in place (`replace`, so Back does
+  // not bounce through the code), keeping the query and the hash — the
+  // `?version`/`?tab` that make the URL a citation.
+  const canonicalCode = report?.code ?? companies?.code ?? null;
+  useEffect(() => {
+    if (!code || !canonicalCode || canonicalCode === code) return;
+    navigate(
+      { pathname: `/app/industries/${encodeURIComponent(canonicalCode)}`, search: location.search, hash: location.hash },
+      { replace: true },
+    );
+  }, [code, canonicalCode, location.search, location.hash, navigate]);
 
   const setParam = useCallback(
     (key: string, value: string | null) => {
@@ -348,7 +368,7 @@ export default function IndustryAnalysis() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Industry Analysis</h1>
           <p className="text-xs text-slate-400 mt-1">
-            Weekly editions per GICS industry group, written against the group's own mandate. Choose a group to read the
+            Weekly editions per industry group, written against the group's own mandate. Choose a group to read the
             latest published edition.
           </p>
         </div>
@@ -362,10 +382,12 @@ export default function IndustryAnalysis() {
           </div>
           <div className="card-tight">
             <dt className="text-slate-500 uppercase tracking-widest text-[10px]">Structure</dt>
+            {/* Sectors and groups only: they are the levels with public
+                labels. Industries and sub-industries are never named
+                publicly, and a count of them would invite the question. */}
             <dd className="text-slate-200">
               {counts.sector ?? na("sectors not counted")} sectors · {counts.industry_group ?? na("groups not counted")}{" "}
-              groups · {counts.industry ?? na("industries not counted")} industries ·{" "}
-              {counts.sub_industry ?? na("sub-industries not counted")} sub-industries
+              groups
             </dd>
           </div>
           <div className="card-tight">

@@ -182,9 +182,45 @@ describe("IndustryAnalysis — index", () => {
 
     const card = screen.getByTestId("taxonomy-not-imported");
     expect(card).toHaveTextContent("has not been imported");
-    expect(card).toHaveTextContent("import_gics_taxonomy");
+    expect(card).toHaveTextContent("import the taxonomy");
+    expect(card.textContent).not.toMatch(/gics/i);
     expect(screen.queryByTestId("industry-picker")).not.toBeInTheDocument();
     expectNoWrites(fetchMock);
+  });
+});
+
+// Owner decision 2026-09-24: our own labels publicly, no licensed codes or
+// branding. The URL segment is the group's slug; an old link that carries
+// an internal code still resolves (the API accepts both) and the page
+// rewrites the address to the slug the API answered with — keeping the
+// query and the hash, which are what make the URL a citation.
+describe("IndustryAnalysis — public labels and slugs", () => {
+  it("replaces an old link's internal code with the slug, keeping ?version, ?tab and the hash", async () => {
+    const { fetchMock } = mount(`/app/industries/4530?version=1&tab=performance#returns`);
+    await settle();
+    await waitFor(() => expect(location()).toBe(`/app/industries/${fx.CODE}?version=1&tab=performance#returns`));
+    // The page stays on the same edition and section after the rewrite.
+    expect(screen.getByRole("tab", { selected: true })).toHaveTextContent(/Performance/);
+    expect(calls(fetchMock, `/api/industries/${fx.CODE}/report?version=1`).length).toBeGreaterThan(0);
+    expectNoWrites(fetchMock);
+  });
+
+  it("leaves a slug URL alone", async () => {
+    mount(`/app/industries/${fx.CODE}?tab=companies`);
+    await settle();
+    expect(location()).toBe(`/app/industries/${fx.CODE}?tab=companies`);
+  });
+
+  it("names no third-party classification on the index page, and counts only the public levels", async () => {
+    mountIndex();
+    await settle();
+    const index = screen.getByTestId("industry-index");
+    expect(index.textContent).not.toMatch(/(?<![A-Za-z])gics(?![A-Za-z])/i);
+    expect(index).toHaveTextContent("Weekly editions per industry group");
+    const counts = screen.getByTestId("taxonomy-counts");
+    expect(counts).toHaveTextContent(`${fx.taxonomy.node_counts.sector} sectors`);
+    expect(counts.textContent).not.toMatch(/sub-industries|\bindustries\b/);
+    expect(counts).toHaveTextContent(fx.TAXONOMY_VERSION);
   });
 });
 
@@ -239,7 +275,9 @@ describe("IndustryAnalysis — one group", () => {
     const table = screen.getByTestId("companies-table");
     const mapped = fx.companies.items.find((i) => i.classification.source === "research_map")!;
     expect(within(table).getByTestId(`source-badge-${mapped.ticker}`)).toHaveTextContent("Research map");
-    expect(within(table).getByTestId(`sub-industry-${mapped.ticker}`)).toHaveTextContent(mapped.sub_industry_name!);
+    expect(within(table).getByTestId(`provider-industry-${mapped.ticker}`)).toHaveTextContent(
+      mapped.provider_industry!,
+    );
   });
 
   it("surfaces a disagreement between the edition's priced count and the membership read", async () => {
