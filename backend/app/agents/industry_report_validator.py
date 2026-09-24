@@ -98,9 +98,20 @@ _RATIO_CEILING = 10.0
 FORWARD_SECTIONS: tuple[str, ...] = ("outlook",)
 MAX_FORECAST_ASSUMPTIONS = 12
 _FA_ID_RE = re.compile(r"^FA(?:[1-9]|1[0-2])$")
+# F4 is a WHOLE-FIELD grammar, not a search: the horizon is printed verbatim
+# in the assumptions table, so anything a search let through beside the
+# horizon phrase ("next 4 quarters, oil 95", "... ; strong buy", "... for
+# GICS group 4530") would reach the page unchecked. A count is capped at
+# 12 — the prose rule's count exemption — so a horizon the field accepts is
+# one the assumption's own text can quote ("the next 24 months" would pass
+# here and then fail as an unregistered "24" in the prose); longer horizons
+# are stated in years or as a fiscal year.
 _HORIZON_RE = re.compile(
-    r"\b(?:\d+\s*(?:quarters?|years?|months?|weeks?)|next\s+(?:quarter|year|month|12 months)"
-    r"|FY\s?\d{2,4}|[HQ][1-4]\s?(?:FY)?\d{2,4}|20\d{2})\b", re.I,
+    r"(?:(?:over|within|through|by|in|to|for)\s+)?(?:the\s+)?"
+    r"(?:next\s+(?:(?:[1-9]|1[0-2])\s+)?(?:quarters?|years?|months?|weeks?)"
+    r"|(?:[1-9]|1[0-2])\s+(?:quarters?|years?|months?|weeks?)"
+    r"|(?:end\s+of\s+)?(?:FY\s?(?:\d{2}|20\d{2})|[HQ][1-4]\s?(?:FY\s?)?(?:\d{2}|20\d{2})|20\d{2}))",
+    re.I,
 )
 _MAX_HORIZON_CHARS = 60
 RATE_UNITS: tuple[str, ...] = ("%", "bps", "bp", "pp")
@@ -117,10 +128,24 @@ ANCHOR_PREFIXES: dict[str, tuple[str, ...]] = {
 # (the valuation multiples come last in prefix order).
 MAX_ANCHORS = 40
 _HEADLINE_LEAVES = frozenset({"median", "equal_weight", "value", "pct_positive", "share", "stdev"})
+# The leaf names a rate or a multiple actually lives at under the anchor
+# prefixes. A WHITELIST, not a count blacklist: those subtrees also carry
+# bookkeeping keyed by something other than a measure — breadth's
+# `excluded_by_reason` maps a reason code ("window_too_short") to a number
+# of constituents — and a count reached through a key that names no count
+# would otherwise be offered to the model as a rate, anchor an assumption,
+# and print on the page as "200.00%".
+_MEASURE_LEAVES = _HEADLINE_LEAVES | {"market_cap_weight", "iqr", "range", "p25", "p75"}
 # A leaf naming a count is a sample size or a window, never a rate: `n`,
 # `n_mcw`, `benchmark_n`, `window_sessions`, `n_days`. Same token rule as
 # the UI's `unitFor` (frontend/src/components/industries/format.ts).
 _COUNT_LEAF_TOKENS = frozenset({"n", "count", "sessions", "days"})
+# The outlook's anchors catalogue and its truncation count are the writer's
+# bookkeeping. The catalogue's values are copies of other sections' facts
+# and the count is a number nobody observed, so neither may license a
+# number anywhere — the outlook's own set and the whole-pack set both
+# leave them out.
+_CATALOGUE_KEYS = frozenset({"anchors", "anchors_truncated"})
 FORECAST_POLICY = (
     "Forward numbers are registered assumptions anchored to an observed fact; they are "
     "labelled as assumptions, not forecasts of record."
@@ -236,8 +261,9 @@ def _supported(raw: str, value: float, decimals: int, allowed: set[float]) -> bo
 
 def _matches(value: float, decimals: int, allowed: set[float]) -> bool:
     """`value`, shown at `decimals`, is one of `allowed` (or its percent
-    form). No count/year exemption: used where a token must BE the fact,
-    such as an assumption's anchor value quoted in its own text."""
+    form), whatever unit the token carries. No count/year exemption; the
+    caller decides that. An anchor quoted as an observation goes through
+    `states_observed` instead, which does look at the unit."""
     tol = 0.5 * (10 ** -decimals) + 1e-9
     for a in allowed:
         if abs(a - value) <= tol:
@@ -435,7 +461,7 @@ def anchor_catalog(facts: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
             if node is _MISSING:
                 continue
             for path, leaf, value in _numeric_leaves(node, root):
-                if _is_count_leaf(leaf):
+                if leaf not in _MEASURE_LEAVES or _is_count_leaf(leaf):
                     continue
                 rows.append((leaf in _HEADLINE_LEAVES, {"path": path, "value": value, "family": family}))
     ordered = [r for headline, r in rows if headline] + [r for headline, r in rows if not headline]
@@ -506,9 +532,8 @@ class ForecastAssumption:
         return abs(canon - self.value) <= tol
 
     def states_anchor(self, raw: str, value: float, decimals: int) -> bool:
-        """`raw` is the anchor's observed value (a bare figure, or one in the
-        assumption's own unit family)."""
-        return _token_family(raw) in (None, self.family) and _matches(value, decimals, {self.anchor_value})
+        """`raw` is the anchor's observed value, in the unit `raw` shows."""
+        return states_observed(raw, value, decimals, self.anchor_value, self.family)
 
     def states_bound(self, raw: str, value: float, decimals: int) -> bool:
         if self.bounds is None or _token_family(raw) != self.family:
@@ -517,15 +542,36 @@ class ForecastAssumption:
         return any(abs(canon - b) <= tol for b in self.bounds)
 
 
+def states_observed(raw: str, value: float, decimals: int, observed: float, family: str) -> bool:
+    """`raw` states the observed fact `observed` (of unit `family`) at the
+    precision it shows, IN THE UNIT IT SHOWS.
+
+    A rate is stored as a decimal and shown as a percentage, so "%" and
+    "pp" compare with ``observed * 100`` and "bps" with ``observed *
+    10000`` — never with the raw decimal, which let "0.2%" pass for an
+    observed 23.4%. A multiple is shown at face value and never scaled, so
+    "520x" cannot pass for 5.2x. A bare figure is read in the family's
+    displayed unit; a bare count or year ("the next 4 quarters") is an
+    identifier, not a statement of any observation.
+    """
+    fam = _token_family(raw)
+    if fam not in (None, family) or _is_exempt(raw):
+        return False
+    if family == "multiple":
+        shown = observed
+    elif re.search(r"bps?$", raw.strip().lower()):
+        shown = observed * 10000.0
+    else:
+        shown = observed * 100.0
+    return abs(value - shown) <= 0.5 * (10 ** -decimals) + 1e-9
+
+
 def _horizon_ok(horizon: Any) -> bool:
-    """An explicit horizon, whose only numbers are bare counts or years:
-    the field is printed beside the assumption, so a "20%" smuggled into it
-    would be a number nothing checked."""
+    """An explicit horizon and nothing else: the field is printed beside
+    the assumption, so it must match the horizon grammar whole."""
     if not isinstance(horizon, str) or not horizon.strip() or len(horizon) > _MAX_HORIZON_CHARS:
         return False
-    if not _HORIZON_RE.search(horizon):
-        return False
-    return all(raw.isdigit() for raw, _, _ in numeric_tokens(horizon))
+    return _HORIZON_RE.fullmatch(" ".join(horizon.split()).rstrip(".")) is not None
 
 
 def _bounds_of(raw: Any, measure: tuple[str, float, str] | None) -> tuple[float, float] | None:
@@ -650,12 +696,14 @@ def _forward_errors(name: str, interp: dict[str, Any], facts: dict[str, Any],
 
     section_facts = facts.get(name)
     own_facts: dict[str, Any] = section_facts if isinstance(section_facts, dict) else {}
-    own = _numbers({k: v for k, v in own_facts.items() if k not in ("anchors", "anchors_truncated")})
-    own |= {float(a["value"]) for a in anchors}
+    own = _numbers({k: v for k, v in own_facts.items() if k not in _CATALOGUE_KEYS})
 
     def general(text: str) -> None:  # F8
         for raw, value, decimals in numeric_tokens(text):
+            # An anchor is quoted in its own unit (states_observed), not by
+            # the unit-agnostic rule the section's other facts get.
             if _supported(raw, value, decimals, own) or any(
+                    states_observed(raw, value, decimals, float(a["value"]), a["family"]) for a in anchors) or any(
                     fa.states_value(raw, value, decimals) for fa in fas.values()):
                 continue
             errors.append(f"{name}: number {raw!r} is not in the facts or a registered assumption")
@@ -703,6 +751,32 @@ def _forward_errors(name: str, interp: dict[str, Any], facts: dict[str, Any],
                               "of an assumption it lists")
 
 
+def _pack_numbers(facts: dict[str, Any]) -> set[float]:
+    """Every number in the whole facts pack, less the outlook's catalogue
+    bookkeeping (`_CATALOGUE_KEYS`): its truncation count would otherwise
+    license "22%" in every backward-looking section."""
+    outlook = facts.get("outlook")
+    if isinstance(outlook, dict) and _CATALOGUE_KEYS & outlook.keys():
+        facts = {**facts, "outlook": {k: v for k, v in outlook.items() if k not in _CATALOGUE_KEYS}}
+    return _numbers(facts)
+
+
+def _claim_field_texts(interp: dict[str, Any]) -> list[str]:
+    """The structured claim fields the page prints beside the prose — an
+    assumption's value, horizon, anchor and bounds. They are not prose,
+    so their numbers are checked by F3-F5; the advice-phrase scan still
+    has to see them."""
+    out: list[str] = []
+    for claim in _claims_of(interp):
+        for key in ("value", "horizon", "anchor"):
+            if isinstance(claim.get(key), str):
+                out.append(claim[key])
+        bounds = claim.get("bounds")
+        if isinstance(bounds, list):
+            out.extend(str(b) for b in bounds)
+    return out
+
+
 # --- the gate -----------------------------------------------------------------
 
 
@@ -736,7 +810,7 @@ def validate(payload: dict[str, Any], facts: dict[str, Any]) -> list[str]:
         if name in facts and sections[name].get("facts") != facts[name]:
             errors.append(f"facts mutated: {name}")
 
-    allowed = _numbers(facts)
+    allowed = _pack_numbers(facts)
     stage_ids = [s["id"] for s in thesis_stages()]
 
     for name in INTERPRETED_SECTIONS:
@@ -767,6 +841,11 @@ def validate(payload: dict[str, Any], facts: dict[str, Any]) -> list[str]:
         forward = name in FORWARD_SECTIONS
         if forward:
             _forward_errors(name, interp, facts, errors)
+        for text in _claim_field_texts(interp):
+            low = text.lower()
+            for phrase in FORBIDDEN_PHRASES:
+                if phrase in low:
+                    errors.append(f"{name}: advice phrasing {phrase!r}")
         for text in _interpretation_texts(interp):
             low = text.lower()
             for phrase in FORBIDDEN_PHRASES:

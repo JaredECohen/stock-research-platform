@@ -441,7 +441,10 @@ def _rich_stats() -> dict:
                                    for i, h in enumerate(horizons)}
                                for b in ("universe_ew", "sector_ew", "KFR.MKT_RF.D")}
     p["breadth"] = {"1w": {"pct_positive": 0.67, "n": 3},
-                    "above_50d_mean": {"share": 0.33, "n": 3, "window_sessions": 50}}
+                    # A reason code keyed to a number of constituents, as
+                    # compute_group_stats writes it: a count, not a rate.
+                    "above_50d_mean": {"share": 0.33, "n": 3, "window_sessions": 50,
+                                       "excluded_by_reason": {"closes_too_sparse": 1, "window_too_short": 2}}}
     p["dispersion"] = {"horizon": "1m", "stdev": 0.03, "iqr": 0.02, "range": 0.09, "n": 3}
     p["fundamentals"] = {m: {"median": 0.2, "p25": 0.1, "p75": 0.3, "n": 3}
                          for m in ("revenue_growth_yoy", "op_margin", "fcf_margin")}
@@ -470,6 +473,10 @@ def test_anchor_catalog_is_reproducible_by_server_facts(analyst):
             assert v.resolve_fact_path(rebuilt, a["path"]) == a["value"], a
             assert a["path"].startswith(v.ANCHOR_PREFIXES[a["family"]]), a
             assert not v._is_count_leaf(a["path"].rsplit(".", 1)[-1]), a
+            # Every segment, not only the leaf: a count keyed by a reason
+            # code has a leaf that names no count.
+            assert a["path"].rsplit(".", 1)[-1] in v._MEASURE_LEAVES, a
+            assert "excluded_by_reason" not in a["path"], a
         assert v.validate(res.payload, rebuilt) == []
 
     # The small row: its returns and its one valuation multiple, no counts.
