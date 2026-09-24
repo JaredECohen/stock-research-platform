@@ -381,13 +381,39 @@ def _months_between(earlier: date, later: date) -> int:
     return (later.year - earlier.year) * 12 + (later.month - earlier.month)
 
 
-def _provenance(td: _TickerData, now: datetime) -> SeriesProvenance:
+def _filed_annual(session: Session, tickers: list[str]) -> dict[str, dict[str, Any]]:
+    """EDGAR's newest filed annual period per ticker (FIX-005 refresh state).
+
+    Best-effort: the Explorer must render without it (a database from
+    before the table existed, or any read failure).
+    """
+    try:
+        from .fundamental_refresh import state_summary
+        return state_summary(tickers, db=session)
+    except Exception as exc:
+        log_safely(log, "fundamentals series: refresh state unavailable", exc)
+        return {}
+
+
+def _provenance(td: _TickerData, now: datetime, filed: dict[str, Any] | None = None) -> SeriesProvenance:
     if not td.has_rows:
         return SeriesProvenance()
     last_fy = max(td.by_year)
     last_end, _ = td.period_end_for(last_fy)
     today = now.date()
     reasons: list[str] = []
+    # FIX-005: say so when the issuer has filed a newer fiscal year than the
+    # one stored, once FMP has had its publication grace to publish it.
+    from .fundamental_history_service import PERIOD_END_TOLERANCE_DAYS, PUBLICATION_GRACE
+    filed_end = date.fromisoformat(filed["filed_annual_end"]) if filed and filed.get("filed_annual_end") else None
+    observed = datetime.fromisoformat(filed["annual_observed_at"]) if filed and filed.get("annual_observed_at") else None
+    if (filed is not None and filed_end is not None
+            and (last_end is None or (filed_end - last_end).days > PERIOD_END_TOLERANCE_DAYS)
+            and (observed is None or now >= observed + PUBLICATION_GRACE)):
+        reasons.append(
+            f"FY ending {filed_end.isoformat()} was filed ({filed.get('filed_annual_form')}, "
+            f"{filed.get('filed_annual_on')}) and is not stored yet"
+        )
     if _months_between(last_end, today) > catalog.STALE_LAST_PERIOD_MONTHS:
         reasons.append(
             f"last stored period FY{last_fy} ended {last_end.isoformat()}, more than "
@@ -564,6 +590,7 @@ def build_series(
     session = db or SessionLocal()
     try:
         data = _load_rows(session, tickers, lines)
+        filed = _filed_annual(session, tickers)
     finally:
         if own:
             session.close()
@@ -590,7 +617,7 @@ def build_series(
     unavailable: list[UnavailableTicker] = []
     for t in tickers:
         td = data[t]
-        prov = _provenance(td, now)
+        prov = _provenance(td, now, filed.get(t))
         if not td.has_rows:
             remedy = (
                 NOT_ANNUAL_REMEDY.format(excluded=td.excluded) if td.excluded

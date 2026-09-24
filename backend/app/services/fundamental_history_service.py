@@ -13,12 +13,20 @@ valid. Secondary providers still cannot date-stamp or adopt an FMP observation,
 and never fill a period FMP reports. Between non-primary providers the earlier
 rules are unchanged. Every quarantine, adoption and restatement is audited in
 `financial_data_repairs` with before-images.
+
+Freshness (FIX-005, owner decision 2026-09-24): coverage is fresh when it
+holds the latest period the issuer has reported per EDGAR
+(`fundamental_refresh_state`), or that period is still inside its
+publication grace. A missing filed period blocks as
+`expected_period_missing`; fetch age never does. `KNOWN_REPORTING_ENDED`
+alone ends an issuer's expectations.
 """
 from __future__ import annotations
 
 import logging
 import math
-from datetime import UTC, date, datetime
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -51,12 +59,18 @@ QUARANTINE_AUTO_MAX_SHARE = 0.05
 SAFE_AUTO_REASONS = frozenset({"value_conflicts_with_primary", "currency_conflicts_with_primary",
                                "invalid_availability_precedes_period_end"})
 TakeoverMode = Literal["supervised", "unattended"]
-REFRESH_TTL_DAYS = 7
+# FIX-005 (owner decision 2026-09-24, "load as often as it changes"):
+# freshness means holding the latest period the issuer has REPORTED (EDGAR's
+# index, `fundamental_refresh_state`), not a recent fetch. A filed period is
+# allowed this long after it was observed before its absence blocks: FMP
+# publishes statements some hours to days after the filing (lag unmeasured;
+# `fundamental_refresh` receipts measure it).
+PUBLICATION_GRACE = timedelta(hours=72)
 BLOCKING_ISSUES = {
     "stored_value_conflict", "invalid_value", "stored_period_end_conflict", "conflicting_provider_period",
     "invalid_period", "invalid_stored_period", "conflicting_stored_statement", "invalid_stored_value_or_currency",
     "missing_stored_primary_value", "invalid_coverage_period", "stored_period_alias_conflict", "refresh_incomplete",
-    "coverage_gap", "stored_fetch_stale",
+    "coverage_gap", "expected_period_missing",
     "legacy_period_relabel_conflict",
     "ambiguous_provider_period_end",
     "duplicate_stored_period_end",
@@ -82,6 +96,36 @@ KNOWN_DEFINITION_BREAKS: dict[tuple[str, str, str], dict[str, Any]] = {
         "note": "FMP 2026Q2 diluted share count differs from the issuer's reported 692.223m.",
         "evidence": "docs/reviews/2026-09-13-bk-provider-comparability.json"},
 }
+# Periodic reporting ended (acquisition/delisting), each with a primary
+# source. Coverage is judged over the reporting life and no newer period is
+# expected. This registry is the ONLY thing that ends an expectation: an
+# EDGAR 25/25-NSE/15-* notice is recorded as evidence but can concern one
+# class of notes of an issuer that keeps filing (integration critique).
+# Prices keep their own exceptions (no successor splicing).
+KNOWN_REPORTING_ENDED: dict[str, tuple[date, str]] = {
+    "ANSS": (date(2025, 7, 17), "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2025-373"),
+    "AVB": (date(2026, 8, 17),
+            "https://www.sec.gov/Archives/edgar/data/915912/000110465926097833/tm2623381d1_8k.htm"),
+    "EA": (date(2026, 8, 4), "https://www.ea.com/amp/news/ea-announces-completion-of-acquisition"),
+}
+
+
+@dataclass(frozen=True)
+class ExpectedPeriod:
+    """The newest period EDGAR says the issuer has reported, for one cadence."""
+    end: date
+    basis: str
+    form: str | None
+    accession: str | None
+    filed_on: date | None
+    observed_at: datetime | None
+    missing_after: datetime | None
+
+    def evidence(self) -> dict[str, Any]:
+        return {"form": self.form, "accession": self.accession,
+                "filed_on": self.filed_on.isoformat() if self.filed_on else None,
+                "observed_at": self.observed_at.isoformat() if self.observed_at else None,
+                "missing_after": self.missing_after.isoformat() if self.missing_after else None}
 
 
 # The parts of a re-pull plan that change or move a STORED row, each keyed by
@@ -131,6 +175,61 @@ def _has_blockers(issues: list[dict]) -> bool:
 
 def _today() -> date:
     return date.today()
+
+
+def _now() -> datetime:
+    """Naive UTC, like every stored timestamp here. A test seam."""
+    return datetime.utcnow()
+
+
+def reporting_ended_on(ticker: str) -> date | None:
+    entry = KNOWN_REPORTING_ENDED.get(ticker.strip().upper())
+    return entry[0] if entry else None
+
+
+def coverage_window(ticker: str, start: date, today: date | None = None) -> tuple[date, date, date | None]:
+    """`(start, end, reporting_ended_on)` over which coverage is judged.
+
+    For an issuer that stopped reporting, the window ends on that date and
+    its start moves back by the same span, so the final periods before the
+    end are judged (critique: otherwise ANSS would turn blocking again once
+    the requested start passed its last period, around mid-2027).
+    """
+    today = today or _today()
+    ended = reporting_ended_on(ticker)
+    if ended is None or ended >= today:
+        return start, today, ended
+    return min(start, ended - (today - start)), ended, ended
+
+
+def _expected_periods(ticker: str, db: Session) -> dict[str, ExpectedPeriod]:
+    """What EDGAR says the issuer has reported, per cadence; `{}` if unknown.
+
+    Returns nothing when the state table does not exist yet (every database
+    created before FIX-005), or when reporting ended (registry only).
+    """
+    from ..models import FundamentalRefreshState
+
+    ticker = ticker.strip().upper()
+    if reporting_ended_on(ticker) is not None:
+        return {}
+    if not inspect(db.connection()).has_table(FundamentalRefreshState.__tablename__):
+        return {}
+    state = db.execute(select(FundamentalRefreshState).where(FundamentalRefreshState.ticker == ticker)).scalar_one_or_none()
+    if state is None:
+        return {}
+    out = {}
+    for cadence, end, form, accession, filed_on, observed in (
+        ("quarterly", state.filed_quarter_end, state.filed_quarter_form, state.filed_quarter_accession,
+         state.filed_quarter_on, state.quarter_observed_at),
+        ("annual", state.filed_annual_end, state.filed_annual_form, state.filed_annual_accession,
+         state.filed_annual_on, state.annual_observed_at),
+    ):
+        if end is not None:
+            out[cadence] = ExpectedPeriod(end=end, basis="edgar_filing", form=form, accession=accession,
+                                          filed_on=filed_on, observed_at=observed,
+                                          missing_after=observed + PUBLICATION_GRACE if observed else None)
+    return out
 
 
 def _valid_currency(value: Any) -> bool:
@@ -365,7 +464,19 @@ def _definition_break_flags(ticker: str, statements: dict) -> list[dict]:
     return flags
 
 
-def _coverage(statements: dict, start: date, end: date, *, issues: list[dict] | None = None) -> dict:
+def _coverage(statements: dict, start: date, end: date, *, issues: list[dict] | None = None,
+              expected: dict[str, ExpectedPeriod] | None = None, now: datetime | None = None,
+              valid_through: date | None = None) -> dict:
+    """Per statement/cadence coverage over `[start, end]`.
+
+    `fresh` means "not overdue": false only when EDGAR shows a filed period
+    newer than the newest stored one and its publication grace has passed.
+    Fetch age no longer decides it (FIX-005); `latest_primary_fetched_at`
+    is the last provider confirmation, reported for information.
+    `valid_through` separates "not a future date" from the window end, for
+    an issuer whose reporting ended before today.
+    """
+    now = now or _now()
     result = {}
     for statement in LINES:
         result[statement] = {}
@@ -373,7 +484,7 @@ def _coverage(statements: dict, start: date, end: date, *, issues: list[dict] | 
             points = []
             fetched_by_point = {}
             for row in statements.get(statement, []):
-                fy, fq, d = _valid_period(row.get("period"), row.get("period_end"), end=end)
+                fy, fq, d = _valid_period(row.get("period"), row.get("period_end"), end=valid_through or end)
                 if fy is None:
                     if issues is not None and cadence == "annual":
                         issues.append({"kind": "invalid_coverage_period", "statement": statement,
@@ -394,14 +505,10 @@ def _coverage(statements: dict, start: date, end: date, *, issues: list[dict] | 
             oldest = points[0][0] if points else None
             newest = points[-1][0] if points else None
             fetched_at = fetched_by_point.get(points[-1]) if points else None
-            try:
-                fetched_dt = datetime.fromisoformat(str(fetched_at).replace("Z", "+00:00"))
-                if fetched_dt.tzinfo is None:
-                    fetched_dt = fetched_dt.replace(tzinfo=UTC)
-                fetch_age = (datetime.now(UTC) - fetched_dt).total_seconds()
-                fresh = 0 <= fetch_age <= REFRESH_TTL_DAYS * 86400
-            except (TypeError, ValueError, OverflowError):
-                fresh = False
+            exp = (expected or {}).get(cadence)
+            current = exp is None or (newest is not None
+                                      and newest >= exp.end - timedelta(days=PERIOD_END_TOLERANCE_DAYS))
+            overdue = exp is not None and not current and (exp.missing_after is None or now >= exp.missing_after)
             # Operational freshness guard, not a regulatory filing calendar.
             # Q3 may wait longer for the annual report that supplies Q4.
             stale_days = 460 if cadence == "annual" else (185 if points and points[-1][1] % 4 == 2 else 140)
@@ -421,7 +528,12 @@ def _coverage(statements: dict, start: date, end: date, *, issues: list[dict] | 
                 "oldest": oldest.isoformat() if oldest else None, "newest": newest.isoformat() if newest else None,
                 "period_count": len(points), "covers_start": covers, "stale": stale,
                 "stale_threshold_days": stale_days,
-                "latest_primary_fetched_at": fetched_at, "fresh": fresh, "refresh_ttl_days": REFRESH_TTL_DAYS,
+                "latest_primary_fetched_at": fetched_at,
+                "expected_latest_period_end": exp.end.isoformat() if exp else None,
+                "expected_basis": exp.basis if exp else None,
+                "expected_evidence": exp.evidence() if exp else None,
+                "period_current": current, "awaiting_provider": not current and not overdue,
+                "fresh": not overdue,
                 "missing_periods": missing, "primary_line_item": PRIMARY[statement],
                 "complete": bool(covers and not stale and not missing),
             }
@@ -433,18 +545,43 @@ def fundamental_coverage(ticker: str, start_date: date, *, db: Session | None = 
     start = history._coerce_date(start_date)
     if start is None or start > _today():
         raise ValueError("start_date on or before today required")
-    stored = read_stored_financials(ticker, db=db)
+    own = db is None
+    db = db or SessionLocal()
+    try:
+        stored = read_stored_financials(ticker, db=db)
+        expected = _expected_periods(ticker, db)
+    finally:
+        if own:
+            db.close()
     issues = list(stored.get("_history_issues", []))
-    coverage = _coverage(stored, start, _today(), issues=issues)
+    window_start, end, ended = coverage_window(ticker, start)
+    coverage = _coverage(stored, window_start, end, issues=issues, expected=expected, now=_now(),
+                         valid_through=_today())
     issues.extend([{"kind": "coverage_gap", "statement": statement, "cadence": cadence, **bucket}
               for statement, buckets in coverage.items() for cadence, bucket in buckets.items()
               if not bucket["complete"]])
-    issues.extend([{"kind": "stored_fetch_stale", "statement": statement, "cadence": cadence,
-                    "latest_primary_fetched_at": bucket["latest_primary_fetched_at"], "refresh_ttl_days": REFRESH_TTL_DAYS}
-                   for statement, buckets in coverage.items() for cadence, bucket in buckets.items()
-                   if bucket["complete"] and not bucket["fresh"]])
+    issues.extend(_expected_period_missing(coverage))
     return {"ticker": ticker.strip().upper(), "requested_start": start.isoformat(), "requested_end": _today().isoformat(),
+            "coverage_start": window_start.isoformat(), "coverage_end": end.isoformat(),
+            "reporting_ended_on": ended.isoformat() if ended else None,
             "coverage": coverage, "success": _complete(coverage) and _fresh(coverage) and not _has_blockers(issues), "issues": issues}
+
+
+def _expected_period_missing(coverage: dict) -> list[dict]:
+    """Blocking: a period the issuer filed is still not stored after its grace."""
+    out = []
+    for statement, buckets in coverage.items():
+        for cadence, bucket in buckets.items():
+            if not bucket["complete"] or bucket["fresh"]:
+                continue
+            evidence = bucket["expected_evidence"] or {}
+            out.append({"kind": "expected_period_missing", "statement": statement, "cadence": cadence,
+                        "newest_period_end": bucket["newest"],
+                        "expected_period_end": bucket["expected_latest_period_end"],
+                        "basis": bucket["expected_basis"], "form": evidence.get("form"),
+                        "accession": evidence.get("accession"), "filed_on": evidence.get("filed_on"),
+                        "missing_since": evidence.get("missing_after")})
+    return out
 
 
 def _complete(coverage: dict) -> bool:
@@ -540,9 +677,27 @@ def _clean_payload(raw: dict, provider: str, symbol: str, issues: list[dict]) ->
     return clean
 
 
-def _fetch_financial_history(ticker: str, start: date, *, required_start: date | None = None) -> tuple[list[dict], list[dict], list[dict]]:
-    """Fetch older label evidence while judging fallback against required coverage."""
+def _fetch_financial_history(ticker: str, start: date, *, required_start: date | None = None,
+                             coverage_end: date | None = None, expected: dict[str, ExpectedPeriod] | None = None,
+                             secondary_for_expected: bool = False) -> tuple[list[dict], list[dict], list[dict]]:
+    """Fetch older label evidence while judging fallback against required coverage.
+
+    By default a fallback provider is never consulted merely because FMP
+    lags a filing by a few days (the 140/185/460-day `stale` guard absorbs
+    that). With `secondary_for_expected` (the refresh's last retries, about
+    nine nights after the filing), a payload that is complete but lacks the
+    filed period counts as incomplete, so the next provider may fill exactly
+    the period FMP still does not report.
+    """
     coverage_start = required_start or start
+    end = coverage_end or _today()
+
+    def enough(statements: dict) -> bool:
+        coverage = _coverage(statements, coverage_start, end, valid_through=_today(),
+                             expected=expected if secondary_for_expected else None)
+        return _complete(coverage) and (not secondary_for_expected or all(
+            b["period_current"] for s in coverage.values() for b in s.values()))
+
     payloads: list[dict] = []
     issues: list[dict[str, Any]] = []
     attempts: list[dict[str, Any]] = []
@@ -588,10 +743,10 @@ def _fetch_financial_history(ticker: str, start: date, *, required_start: date |
             payloads.append(clean)
             for s in LINES:
                 combined[s].extend(clean[s])
-            coverage = _coverage(combined, coverage_start, _today())
-            if _complete(coverage):
+            if enough(combined):
                 return payloads, issues, attempts
-            issues.append({"kind": "provider_partial_coverage", **attempt, "coverage": _coverage(clean, coverage_start, _today())})
+            issues.append({"kind": "provider_partial_coverage", **attempt,
+                           "coverage": _coverage(clean, coverage_start, end, valid_through=_today())})
             break  # A valid alias resolved this security; next provider may add missing cadence.
     return payloads, issues, attempts
 
@@ -850,7 +1005,8 @@ def _primary_takeover(db: Session, ticker: str, rows: list, payloads: list[dict]
 
 def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = False, *, db: Session | None = None,
                           dry_run: bool = False, mode: TakeoverMode = "supervised",
-                          expected_plan: dict[str, Any] | None = None, audit_key: str | None = None) -> dict:
+                          expected_plan: dict[str, Any] | None = None, audit_key: str | None = None,
+                          allow_secondary_for_expected: bool = False) -> dict:
     """Populate durable fundamentals only, with explicit complete/partial coverage.
 
     With an external session, writes are flushed but its caller owns commit and
@@ -865,6 +1021,13 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
     repair. `expected_plan` (a reviewed dry run's `plan_identity`: quarantine
     reasons, adoptions, restatement values and relabels, by row id) aborts
     the whole ticker transaction when the executed plan differs in any part.
+
+    Freshness (FIX-005): a database-only call skips providers when coverage
+    is complete, holds the latest period EDGAR shows as filed (or is still
+    inside its publication grace) and has no blockers; fetch age alone never
+    forces a provider call. `allow_secondary_for_expected` lets a fallback
+    provider fill a filed period FMP still lacks (`fundamental_refresh`'s
+    late retries only).
     """
     from . import fundamental_quarantine as quarantine
 
@@ -896,7 +1059,16 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         FinancialDataRepair.__table__.create(bind=db.get_bind(), checkfirst=True)
         stored = read_stored_financials(ticker, db=db)
         report["issues"].extend(stored.get("_history_issues", []))
-        before = _coverage(stored, start, _today(), issues=report["issues"])
+        expected_periods = _expected_periods(ticker, db)
+        window_start, coverage_end, ended = coverage_window(ticker, start)
+        report.update(coverage_start=window_start.isoformat(), coverage_end=coverage_end.isoformat(),
+                      reporting_ended_on=ended.isoformat() if ended else None)
+
+        def judge(statements: dict, issues: list[dict] | None = None) -> dict:
+            return _coverage(statements, window_start, coverage_end, issues=issues, expected=expected_periods,
+                             now=_now(), valid_through=_today())
+
+        before = judge(stored, report["issues"])
         if not force_refresh and _complete(before) and _fresh(before) and not _has_blockers(report["issues"]):
             report.update(coverage=before, success=True, source="database", committed=own and not dry_run)
             return report
@@ -907,19 +1079,22 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
             FinancialPeriod.ticker == ticker, FinancialPeriod.source != PRIMARY_PROVIDER,
             FinancialPeriod.period_end.is_not(None), FinancialPeriod.period_end <= _today(),
         )).scalars())
-        fetch_start = min([start, *existing_dates])
+        fetch_start = min([window_start, *existing_dates])
         report["provider_requested_start"] = fetch_start.isoformat()
         # End the owned read transaction before spending time on provider IO.
         if own:
             db.rollback()
-        payloads, issues, attempts = _fetch_financial_history(ticker, fetch_start, required_start=start)
+        payloads, issues, attempts = _fetch_financial_history(
+            ticker, fetch_start, required_start=window_start, coverage_end=coverage_end, expected=expected_periods,
+            secondary_for_expected=allow_secondary_for_expected)
         report["issues"].extend(issues)
         report["attempts"] = attempts
         incoming = {s: [row for payload in payloads for row in payload[s]] for s in LINES}
-        report["refresh_complete"] = bool(payloads) and _complete(_coverage(incoming, start, _today()))
+        incoming_coverage = _coverage(incoming, window_start, coverage_end, valid_through=_today())
+        report["refresh_complete"] = bool(payloads) and _complete(incoming_coverage)
         if force_refresh and not report["refresh_complete"]:
             report["issues"].append({"kind": "refresh_incomplete", "ticker": ticker,
-                                     "coverage": _coverage(incoming, start, _today())})
+                                     "coverage": incoming_coverage})
         existing = {}
         aliases: dict[tuple[str, str, str], list] = {}
         existing_rows = list(db.execute(select(FinancialPeriod).where(FinancialPeriod.ticker == ticker)).scalars())
@@ -971,7 +1146,7 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
             primary_cover.setdefault((statement, history._parse_period(period)[1] is not None), []).append((end, lines))
         adoption_audit: list[tuple[FinancialPeriod, dict]] = []
         restatement_audit: list[tuple[FinancialPeriod, dict]] = []
-        now = datetime.utcnow()
+        now = _now()
         for payload in payloads:
             for statement, whitelist in LINES.items():
                 report["periods_received"][statement] += len(payload[statement])
@@ -1127,14 +1302,12 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         for issue in after.get("_history_issues", []):
             if issue not in report["issues"]:
                 report["issues"].append(issue)
-        report["coverage"] = _coverage(after, start, _today(), issues=report["issues"])
+        report["coverage"] = judge(after, report["issues"])
         for statement, buckets in report["coverage"].items():
             for cadence, bucket in buckets.items():
                 if not bucket["complete"]:
                     report["issues"].append({"kind": "coverage_gap", "statement": statement, "cadence": cadence, **bucket})
-                elif not bucket["fresh"]:
-                    report["issues"].append({"kind": "stored_fetch_stale", "statement": statement, "cadence": cadence,
-                                            "latest_primary_fetched_at": bucket["latest_primary_fetched_at"], "refresh_ttl_days": REFRESH_TTL_DAYS})
+        report["issues"].extend(_expected_period_missing(report["coverage"]))
         report["success"] = _complete(report["coverage"]) and _fresh(report["coverage"]) and not _has_blockers(report["issues"])
         if dry_run:
             # The report is the plan; nothing it describes may persist.

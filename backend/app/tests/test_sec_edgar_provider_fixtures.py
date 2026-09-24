@@ -274,6 +274,56 @@ def test_get_filings_metadata_only(router):
     assert [str(c.url) for c in router.calls] == [SUBMISSIONS]
 
 
+def test_index_mode_includes_periodic_extras_and_body_window_is_unchanged(router):
+    """FIX-005: the metadata read also lists what the issuer reported that
+    the body set cannot show (10-Q/A, 20-F(/A)) and deregistration notices
+    (evidence only), while the 10-K/10-Q/8-K rows stay exactly the body
+    window so the poller's seen-set diff cannot re-fire on deploy."""
+    globex = sec.SUBMISSIONS_URL.format(cik="0000654321")
+    router.add(globex, _load("submissions_CIK0000654321.json"))
+    rows = SECEdgarProvider().get_filings("GLBX", cik="654321", fetch_text=False)
+    assert rows is not None
+    assert [r["type"] for r in rows] == ["8-K", "10-Q/A", "25-NSE", "10-Q", "20-F", "15-12B", "20-F/A"]
+    by_type = {r["type"]: r for r in rows}
+    assert by_type["20-F"]["period_end"] == "2025-12-31" and by_type["20-F"]["filing_date"] == "2026-04-28"
+    assert by_type["10-Q/A"]["accession_number"] == "0000654321-26-000039"
+    assert by_type["25-NSE"]["period_end"] is None  # an empty reportDate stays None
+    # The body read of the same index returns only the body forms, in order.
+    bodies = SECEdgarProvider().get_filings("GLBX", cik="654321", fetch_text=True)
+    assert [r["type"] for r in bodies] == ["8-K", "10-Q"]
+    assert [r["accession_number"] for r in bodies] == [
+        r["accession_number"] for r in rows if r["type"] in sec.BODY_FORMS]
+
+
+def test_index_extras_have_separate_caps_and_never_shift_the_body_window(router):
+    """Twelve body forms interleaved with twelve amendments and seven 25-NSE
+    notices: the body window is the first ten body forms either way, the
+    extras stop at ten, and deregistration notices at their own five so they
+    cannot crowd an amendment out."""
+    forms, dates, accs, reports, docs = [], [], [], [], []
+    for i in range(12):
+        for form in ("10-Q", "10-Q/A", "25-NSE") if i < 7 else ("10-Q", "10-Q/A"):
+            n = len(forms)
+            forms.append(form)
+            dates.append(f"2026-{12 - i:02d}-01")
+            accs.append(f"0000777777-26-{n:06d}")
+            reports.append("2026-06-30" if form != "25-NSE" else "")
+            docs.append(f"doc{n}.htm")
+    import json
+    body = json.dumps({"filings": {"recent": {"accessionNumber": accs, "filingDate": dates, "reportDate": reports,
+                                              "form": forms, "primaryDocument": docs}}})
+    router.add(sec.SUBMISSIONS_URL.format(cik="0000777777"), body)
+    rows = SECEdgarProvider().get_filings("CAPS", cik="777777", fetch_text=False)
+    assert rows is not None
+    counts = {t: sum(r["type"] == t for r in rows) for t in ("10-Q", "10-Q/A", "25-NSE")}
+    assert counts == {"10-Q": sec.MAX_BODY_FORMS, "10-Q/A": sec.MAX_INDEX_ONLY_FORMS,
+                      "25-NSE": sec.MAX_DEREGISTRATION_FORMS}
+    first_ten_bodies = [a for a, f in zip(accs, forms) if f == "10-Q"][:10]
+    assert [r["accession_number"] for r in rows if r["type"] == "10-Q"] == first_ten_bodies
+    bodies = SECEdgarProvider().get_filings("CAPS", cik="777777", fetch_text=True)
+    assert [r["accession_number"] for r in bodies] == first_ten_bodies
+
+
 def test_get_filings_fetches_text_and_extracts_sections(router):
     router.add(SUBMISSIONS, _load("submissions_CIK0000123456.json"))
     router.add(f"{ARCHIVE}/000012345625000031/acme-20250630.htm", _load("10k_trimmed.html"))
