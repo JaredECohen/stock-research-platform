@@ -328,6 +328,21 @@ def _validate_stored(snap: MemoSnapshot, payload: Any) -> StockMemoOut:
         ) from exc
 
 
+def legacy_case_points(legacy: list[Any]) -> list[str] | None:
+    """The exact points of an unambiguous legacy bull/bear list, else None.
+
+    Only two list shapes are unambiguous: all strings, or all
+    `{"key_point": <str>}`. Anything else (mixed, null or unknown keys) is
+    None so every reader refuses the same shapes `memo_to_pydantic` does.
+    """
+    if all(isinstance(point, str) for point in legacy):
+        return list(legacy)
+    if all(isinstance(point, dict) and isinstance(point.get("key_point"), str)
+           for point in legacy):
+        return [point["key_point"] for point in legacy]
+    return None
+
+
 def memo_to_pydantic(snap: MemoSnapshot) -> StockMemoOut:
     """Read a snapshot, projecting only unambiguous legacy case lists.
 
@@ -345,12 +360,8 @@ def memo_to_pydantic(snap: MemoSnapshot) -> StockMemoOut:
         legacy = payload.get(field)
         if not isinstance(legacy, list):
             continue
-        if all(isinstance(point, str) for point in legacy):
-            points = list(legacy)
-        elif all(isinstance(point, dict) and isinstance(point.get("key_point"), str)
-                 for point in legacy):
-            points = [point["key_point"] for point in legacy]
-        else:
+        points = legacy_case_points(legacy)
+        if points is None:
             # Ambiguous shapes are refused, never coerced: validation below
             # raises StoredMemoUnreadable and the row stays as stored.
             continue

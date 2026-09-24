@@ -890,6 +890,7 @@ def lopsidedness_audit(
     inspected = 0
 
     history_seen: set[str] = set()
+    skipped: list[dict[str, Any]] = []
     # Pull latest memo per ticker (skip duplicates) up to n unique tickers.
     from sqlalchemy import select
 
@@ -906,12 +907,19 @@ def lopsidedness_audit(
             if r.ticker in history_seen:
                 continue
             history_seen.add(r.ticker)
-            inspected += 1
             memo = r.memo_json or {}
-            bull = memo.get("bull_case") or {}
-            bear = memo.get("bear_case") or {}
-            bull_kp = len(bull.get("key_points") or [])
-            bear_kp = len(bear.get("key_points") or [])
+            counts = {field: _case_key_point_count(memo.get(field))
+                      for field in ("bull_case", "bear_case")}
+            unreadable = [field for field, count in counts.items() if count is None]
+            if unreadable:
+                # The memo reader refuses this row (FIX-004), so the audit
+                # reports it rather than inventing a count; it stays out of
+                # the averages. Read-only: the stored row is not touched.
+                skipped.append({"ticker": r.ticker, "version": r.version, "fields": unreadable})
+                continue
+            inspected += 1
+            bull_kp = counts["bull_case"] or 0
+            bear_kp = counts["bear_case"] or 0
             bull_kp_total += bull_kp
             bear_kp_total += bear_kp
             sector_view = memo.get("sector_agent_view") or {}
@@ -949,7 +957,24 @@ def lopsidedness_audit(
             falsifiable_total / inspected if inspected else 0.0, 2,
         ),
         "rows": rows,
+        "unreadable_rows": skipped,
     }
+
+
+def _case_key_point_count(case: Any) -> int | None:
+    """Key points in a stored bull/bear case, or None when unreadable.
+
+    Stored rows can still carry the legacy list shapes; count those the way
+    `memo_to_pydantic` serves them and refuse the ambiguous ones.
+    """
+    if not case:
+        return 0
+    if isinstance(case, dict):
+        return len(case.get("key_points") or [])
+    if isinstance(case, list):
+        points = memo_store.legacy_case_points(case)
+        return None if points is None else len(points)
+    return None
 
 
 # ---------------------------------------------------------------------------
