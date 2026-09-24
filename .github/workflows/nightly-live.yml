@@ -43,6 +43,12 @@ jobs:
           RUN_LIVE_TESTS: "1"
           ENABLE_LIVE_DATA: "true"
           USE_DEMO_DATA: "false"
+          # Production routes the Industry Group Analyst on both services
+          # (owner decision 2026-09-24, render.yaml); this suite mirrors the
+          # production path, so its memos route too (~$0.02/night on memos
+          # that already run). test_regen_smoke asserts the routed read
+          # landed as an analyst's read, not a deterministic fallback.
+          ENABLE_INDUSTRY_ANALYST_ROUTING: "true"
           # Provider keys come from repository secrets. Each test
           # individually skips when its key isn't set, so a partial
           # configuration won't fail the run.

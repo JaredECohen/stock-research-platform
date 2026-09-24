@@ -241,3 +241,16 @@ def test_appended_spec_failure_is_isolated_and_on_the_banner(monkeypatch):
     # Nothing else degraded because of it.
     assert memo.sector_agent_view.confidence > 0.0
     assert [e["agent"] for e in memo.degradation_events] == memo.degraded_agents
+
+
+def test_only_the_roster_tail_carries_a_pm_digest():
+    """The PM's findings JSON is cut at `max_agent_context_chars` in roster
+    order, so the tail is what the cut removes first — on every live memo on
+    file it is never read. The digest special case exists for that entry
+    only; giving one to any other analyst would move a PM input that is
+    read today."""
+    with_digest = [spec for spec in AGENTS if spec.pm_digest is not None]
+    assert [spec.key for spec in with_digest] == ["industry_group"]
+    assert with_digest[0] is AGENTS[-1]
+    from app.agents import industry_analysts
+    assert AGENTS[-1].pm_digest is industry_analysts.pm_digest

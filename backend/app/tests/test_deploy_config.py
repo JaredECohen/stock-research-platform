@@ -123,6 +123,39 @@ def test_exactly_one_service_owns_the_industry_report_queue():
     assert values[web["name"]] == "false", "a page view must never generate a report"
 
 
+def test_industry_analyst_routing_is_explicit_and_on_for_both_services():
+    """Owner decision 2026-09-24: new memos route the Industry Group Analyst.
+
+    BOTH services write memos — the worker drains the regen queue, and web
+    runs them inline (GET /memo on a stale snapshot, POST /analyze?sync=true,
+    chat) while FEAT-002 is dark — so one value per process would make a
+    memo's roster depend on which process wrote it. Explicit on each, not
+    inherited: the code default is false (CI, dev laptops), so a missing key
+    silently turns routing off in production.
+    """
+    values = {}
+    for svc in _services():
+        env = {e["key"]: e.get("value") for e in svc.get("envVars", []) if "value" in e}
+        assert "ENABLE_INDUSTRY_ANALYST_ROUTING" in env, (
+            f"{svc['name']} does not define ENABLE_INDUSTRY_ANALYST_ROUTING; the flag must be "
+            f"explicit on every service, not inherited from the code default (false)"
+        )
+        values[svc["name"]] = env["ENABLE_INDUSTRY_ANALYST_ROUTING"]
+    web, worker = _web_and_worker()
+    assert values == {web["name"]: "true", worker["name"]: "true"}, values
+
+
+def test_nightly_live_suite_routes_like_production():
+    """The nightly live suite mirrors the production memo path, so its memos
+    route too; `test_regen_smoke` checks the routed read is an analyst's."""
+    yaml = pytest.importorskip("yaml")
+    workflow = REPO_ROOT / ".github" / "workflows" / "nightly-live.yml"
+    steps = yaml.safe_load(workflow.read_text())["jobs"]["live-tests"]["steps"]
+    live = [s for s in steps if "test_regen_smoke.py" in (s.get("run") or "")]
+    assert len(live) == 1, "nightly-live.yml no longer runs test_regen_smoke.py in one step"
+    assert live[0].get("env", {}).get("ENABLE_INDUSTRY_ANALYST_ROUTING") == "true"
+
+
 def test_every_service_caps_malloc_arenas():
     """MALLOC_ARENA_MAX is the cheapest guard against RSS ratcheting in
     these thread-heavy processes; a new service silently omitting it

@@ -14,10 +14,10 @@ system is marked **OWNER** and is not something an agent performs.
 | Accounts + billing (FEAT-002) | merged behind flags | `AUTH_ENABLED=false`, `USAGE_LIMITS_ENABLED=false`, no `STRIPE_*` |
 | Fundamentals Explorer (FEAT-001) | merged | on (anonymous = Pro shape while the wall is off) |
 | Fundamental Factor Scorecard (Phase 6) | merged | `ENABLE_SCORECARD=true`, `ENABLE_SCORECARD_DISAGREEMENT_REGEN=false`, `SCORECARD_EXPORT_TOKEN` unset |
-| GICS registry + classification audit (FEAT-003 slice 1) | merged | `ENABLE_INDUSTRY_ANALYST_ROUTING=false` |
+| GICS registry + classification audit (FEAT-003 slice 1) | merged | code default `ENABLE_INDUSTRY_ANALYST_ROUTING=false`; `render.yaml` sets it `"true"` on both services (owner decision 2026-09-24) |
 | Snapshot-cascade OOM fix + `snapshot_gc` retention (hotfix) | merged | always on; GC daily 04:15 UTC |
 | Provider-key log leak fix (hotfix) | merged | always on |
-| Industry analysts, analytics, weekly reports, API, UI (FEAT-003 slices 2–6) | merged | `ENABLE_INDUSTRY_REPORTS` false on web / true on worker; `ENABLE_INDUSTRY_ANALYST_ROUTING=false`; `INDUSTRY_REPORTS_REQUIRE_REVIEW=false`; `INDUSTRY_ANALYSIS_ACCESS=public` |
+| Industry analysts, analytics, weekly reports, API, UI (FEAT-003 slices 2–6) | merged | `ENABLE_INDUSTRY_REPORTS` false on web / true on worker; `ENABLE_INDUSTRY_ANALYST_ROUTING` `"true"` on both services (confirm via `/health` and the `worker_heartbeat` note, see `feat-003-industry-analysis.md` §4 step 4); `INDUSTRY_REPORTS_REQUIRE_REVIEW=false`; `INDUSTRY_ANALYSIS_ACCESS=public` |
 
 ## 1. Pre-flight (agent-verifiable, all green before asking for authorization)
 
@@ -29,7 +29,8 @@ system is marked **OWNER** and is not something an agent performs.
       sockets (`app/tests/netguard.py`) and lists any test that reached for the network.
 - [ ] `frontend/`: `npm run lint`, `npm test`, `npm run build`.
 - [ ] `test_deploy_config` passes: `ENABLE_MONITORING`/`ENABLE_REGEN_WORKER` false on web,
-      true on the worker; `ENABLE_INDUSTRY_REPORTS` true on exactly one service.
+      true on the worker; `ENABLE_INDUSTRY_REPORTS` true on exactly one service;
+      `ENABLE_INDUSTRY_ANALYST_ROUTING` explicit and `"true"` on both services.
 - [ ] `KNOWN_LOOPS` count in `CLAUDE.md` matches `app/monitoring/__init__.py` (21).
 - [ ] Route audit doc has a live row for every route (`test_route_audit`).
 
