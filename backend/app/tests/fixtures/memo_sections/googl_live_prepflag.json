@@ -1,0 +1,772 @@
+{
+ "agent_influence": {
+  "comps": 1.0,
+  "earnings": 0.419,
+  "filing": 0.3429,
+  "macro": 0.2057,
+  "risk": 0.0,
+  "sector": 0.3714,
+  "technical": 0.0,
+  "valuation": -0.2905
+ },
+ "bear_case": {
+  "headline": "Bear case: Internet Content & Information thesis breaks on execution.",
+  "key_points": [
+   "Valuation in the top cohort quartile — any execution slip re-rates the multiple.",
+   "DCF driver — Synthetic driver 70: synthetic rationale for the googl_live_prepflag fixture.",
+   "DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepflag fixture.",
+   "DCF driver — Synthetic driver 72: synthetic rationale for the googl_live_prepflag fixture.",
+   "DCF bear case implies $89.52 (-73%).",
+   "Risk lens: Low FCF yield (1.9%) reduces downside support"
+  ]
+ },
+ "bull_case": {
+  "headline": "Bull case: durable execution against sector tailwinds.",
+  "key_points": [
+   "Quality + growth profile supports a premium versus peers.",
+   "DCF driver — Synthetic driver 67: synthetic rationale for the googl_live_prepflag fixture.",
+   "DCF driver — Synthetic driver 68: synthetic rationale for the googl_live_prepflag fixture.",
+   "DCF driver — Synthetic driver 69: synthetic rationale for the googl_live_prepflag fixture.",
+   "DCF bull case implies $245.66 (-26%)."
+  ]
+ },
+ "business_summary": "Synthetic business description 66 for the googl_live_prepflag fixture.",
+ "catalysts": [
+  {
+   "detail": "operating_margin: 32.0% vs cohort median 21.2% — top quartile",
+   "horizon": "medium_term",
+   "impact": "medium",
+   "title": "operating_margin: 32.0% vs cohort median 21.2% — top quartile"
+  },
+  {
+   "detail": "ROIC: 21.8% vs cohort median 7.1% — top quartile",
+   "horizon": "medium_term",
+   "impact": "medium",
+   "title": "ROIC: 21.8% vs cohort median 7.1% — top quartile"
+  },
+  {
+   "detail": "Quarterly print expected on 2026-10-28; tone + guidance the swing factor.",
+   "horizon": "near_term",
+   "impact": "medium",
+   "title": "Next earnings: 2026-10-28"
+  }
+ ],
+ "company_name": "Alphabet Inc.",
+ "comps_agent_view": {
+  "agent": "Comps Analyst",
+  "confidence": 0.7,
+  "data": {},
+  "evidence": [],
+  "headline": "GOOGL trades at a 44% EV/EBITDA premium to peers with below-peer growth.",
+  "key_points": [
+   "EV/EBITDA: target 27.4x vs peer median 19.0x.",
+   "Op margin: 32% vs peers 41%.",
+   "Growth: +15% vs peers +18%.",
+   "FCF yield: 1.7% vs peers 1.8%.",
+   "Op margin vs own 8y median 27% — +19% delta."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+  "sources": [],
+  "summary": "Peer set: META, MSFT, AMZN. Trades at a +44.4% premium to peers on EV/EBITDA. Operating margin trails peer median, which weakens the case for a premium. Growth is below peer median. Own-history context: Operating margin running above its own multi-year median."
+ },
+ "confidence_score": 59.01176470588235,
+ "dcf_initial_summary": {},
+ "dcf_pm_adjustment_headline": "",
+ "dcf_pm_adjustments": [],
+ "dcf_summary": {
+  "base_implied_price": 153.1921511550129,
+  "base_upside": -0.536693932693141,
+  "bear_implied_price": 89.52190230094607,
+  "bear_upside": -0.7292547941903944,
+  "bull_implied_price": 245.6576038997659,
+  "bull_upside": -0.2570464119166312,
+  "current_price": 330.65,
+  "summary": "Base case implied price $153.19 vs current $330.65 (-53.7%). Bull $245.66 (-25.7%) | Bear $89.52 (-72.9%). ⚠ Model warnings: 0 errors, 1 warns",
+  "terminal_growth": 0.035,
+  "wacc": 0.0952
+ },
+ "degradation_events": [],
+ "degraded_agents": [],
+ "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+ "earnings_agent_view": {
+  "agent": "Earnings Analyst",
+  "confidence": 0.88,
+  "data": {},
+  "evidence": [],
+  "headline": "Synthetic analyst headline 1 for the googl_live_prepflag fixture.",
+  "key_points": [
+   "Synthetic analyst point 3 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 4 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 5 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 6 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 7 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 8 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 9 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 10 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 11 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 12 for the googl_live_prepflag fixture."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+  "sources": [],
+  "summary": "Synthetic analyst summary 2 for the googl_live_prepflag fixture."
+ },
+ "earnings_qoq_delta": null,
+ "extra_agent_views": {},
+ "filing_agent_view": {
+  "agent": "Filing Analyst",
+  "confidence": 0.72,
+  "data": {},
+  "evidence": [],
+  "headline": "Synthetic analyst headline 13 for the googl_live_prepflag fixture.",
+  "key_points": [
+   "Synthetic analyst point 15 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 16 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 17 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 18 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 19 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 20 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 21 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 22 for the googl_live_prepflag fixture."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+  "sources": [],
+  "summary": "Synthetic analyst summary 14 for the googl_live_prepflag fixture."
+ },
+ "final_pm_view": "Research view: Bullish. GOOGL is undervalued — durable execution against sector tailwinds. The market is under-pricing the durable part of the franchise; the key risk is Valuation in the top cohort quartile — any execution slip re-rates the multiple.. Sector framing supports the cohort thesis; valuation-relative read is the main swing factor. The risk committee flagged the dominant downside scenarios; portfolio fit depends on macro view.",
+ "final_verdict": "PM final view: Bullish (confidence 59). GOOGL is undervalued — durable execution against sector tailwinds. The market is under-pricing the durable part of the franchise; the key risk is Valuation in the top cohort quartile — any execution slip re-rates the multiple.. Cohort placement: see sector view for KPI quartile context. Key disagreement: Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver. Watch items: DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepfla",
+ "forward_catalysts": [],
+ "generated_at": "2026-09-10T04:06:34.355889",
+ "generation_mode": "live",
+ "intake_decision": {
+  "rationale": "Synthetic intake rationale 40 for the googl_live_prepflag fixture.",
+  "skipped": [
+   "technical"
+  ]
+ },
+ "key_risks": [
+  {
+   "detail": "Valuation in the top cohort quartile — any execution slip re-rates the multiple.",
+   "severity": "medium",
+   "title": "Valuation in the top cohort quartile — any execution slip re-rates the multiple.",
+   "type": "macro"
+  },
+  {
+   "detail": "DCF driver — Synthetic driver 70: synthetic rationale for the googl_live_prepflag fixture.",
+   "severity": "medium",
+   "title": "DCF driver — Synthetic driver 70: synthetic rationale for the googl_live_prepfla",
+   "type": "valuation"
+  },
+  {
+   "detail": "DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepflag fixture.",
+   "severity": "high",
+   "title": "DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepfla",
+   "type": "regulatory"
+  },
+  {
+   "detail": "DCF driver — Synthetic driver 72: synthetic rationale for the googl_live_prepflag fixture.",
+   "severity": "medium",
+   "title": "DCF driver — Synthetic driver 72: synthetic rationale for the googl_live_prepfla",
+   "type": "company"
+  }
+ ],
+ "macro_regime_at_memo": "soft_landing",
+ "macro_sensitivity": {
+  "agent": "Macro Analyst",
+  "confidence": 0.72,
+  "data": {},
+  "evidence": [],
+  "headline": "Synthetic analyst headline 33 for the googl_live_prepflag fixture.",
+  "key_points": [
+   "Synthetic analyst point 35 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 36 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 37 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 38 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 39 for the googl_live_prepflag fixture."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+  "sources": [],
+  "summary": "Synthetic analyst summary 34 for the googl_live_prepflag fixture."
+ },
+ "macro_snapshot_at_memo": {},
+ "mispricing_thesis": {
+  "consensus_view": "The market pays a 44% EV/EBITDA premium versus peers for GOOGL.",
+  "falsifiers": [
+   "DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepfla"
+  ],
+  "gap": "Our DCF base case implies -54% to fair value; the blended read calls the name undervalued.",
+  "our_view": "GOOGL is undervalued — durable execution against sector tailwinds. The market is under-pricing the durable part of the franchise; the key risk is Valuation in the top cohort quartile — any execution slip re-rates the multiple.."
+ },
+ "one_sentence_thesis": "GOOGL is undervalued — durable execution against sector tailwinds. The market is under-pricing the durable part of the franchise; the key risk is Valuation in the top cohort quartile — any execution slip re-rates the multiple..",
+ "portfolio_fit": "In a balanced model portfolio, GOOGL fits the 'Communication Services' sleeve. With a 'Bullish' research view, sizing is governed by the user's max position size and risk level.",
+ "price_at_memo": 330.65,
+ "price_at_memo_at": "2026-09-10T04:06:22.071358",
+ "quality": null,
+ "rating_label": "Bullish",
+ "risk_committee_challenge": {
+  "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
+  "challenges": [
+   "Rating (Bullish) is one-sided — list explicit thesis-breakers and the cost of being wrong."
+  ],
+  "overall_assessment": "Memo is structurally sound; balance and source citations should be tightened.",
+  "review_mode": "unknown",
+  "suggested_revisions": [
+   "Tag every claim with a source: filing, transcript, or ratio.",
+   "Verify the bull case is symmetric to the bear case.",
+   "If valuation is elevated, explicitly state what the market is pricing in."
+  ],
+  "underweighted_risks": [
+   "Re-emphasize the sector cohort context if quality deteriorates."
+  ],
+  "valuation_divergence_assessment": "not_assessed"
+ },
+ "round_findings": [
+  {
+   "early_exit": false,
+   "findings": {
+    "comps": {
+     "agent": "Comps Analyst",
+     "confidence": 0.7,
+     "data": {},
+     "evidence": [],
+     "headline": "GOOGL trades at a 44% EV/EBITDA premium to peers with below-peer growth.",
+     "key_points": [
+      "EV/EBITDA: target 27.4x vs peer median 19.0x.",
+      "Op margin: 32% vs peers 41%.",
+      "Growth: +15% vs peers +18%.",
+      "FCF yield: 1.7% vs peers 1.8%.",
+      "Op margin vs own 8y median 27% — +19% delta."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+     "sources": [],
+     "summary": "Peer set: META, MSFT, AMZN. Trades at a +44.4% premium to peers on EV/EBITDA. Operating margin trails peer median, which weakens the case for a premium. Growth is below peer median. Own-history context: Operating margin running above its own multi-year median."
+    },
+    "earnings": {
+     "agent": "Earnings Analyst",
+     "confidence": 0.88,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 1 for the googl_live_prepflag fixture.",
+     "key_points": [
+      "Synthetic analyst point 3 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 4 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 5 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 6 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 7 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 8 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 9 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 10 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 11 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 12 for the googl_live_prepflag fixture."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+     "sources": [],
+     "summary": "Synthetic analyst summary 2 for the googl_live_prepflag fixture."
+    },
+    "filing": {
+     "agent": "Filing Analyst",
+     "confidence": 0.87,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 41 for the googl_live_prepflag fixture.",
+     "key_points": [
+      "Synthetic analyst point 43 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 44 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 45 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 46 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 47 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 48 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 49 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 50 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 51 for the googl_live_prepflag fixture."
+     ],
+     "long_form_report": null,
+     "sources": [],
+     "summary": "Synthetic analyst summary 42 for the googl_live_prepflag fixture."
+    },
+    "macro": {
+     "agent": "Macro Analyst",
+     "confidence": 0.72,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 33 for the googl_live_prepflag fixture.",
+     "key_points": [
+      "Synthetic analyst point 35 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 36 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 37 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 38 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 39 for the googl_live_prepflag fixture."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+     "sources": [],
+     "summary": "Synthetic analyst summary 34 for the googl_live_prepflag fixture."
+    },
+    "risk": {
+     "agent": "Risk Analyst",
+     "confidence": 0.7,
+     "data": {},
+     "evidence": [],
+     "headline": "Risk profile for GOOGL",
+     "key_points": [],
+     "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+     "sources": [],
+     "summary": "Low FCF yield reduces downside support. 1 structured rec(s) applied to the memo (see data.recommendations)."
+    },
+    "sector": {
+     "agent": "Sector Analyst",
+     "confidence": 0.78,
+     "data": {
+      "bull_bear_analysis": {
+       "bear_case": {
+        "headline": "Bear case: Internet Content & Information thesis breaks on execution.",
+        "key_points": [
+         "Valuation in the top cohort quartile — any execution slip re-rates the multiple."
+        ]
+       },
+       "bull_case": {
+        "headline": "Bull case: durable execution against sector tailwinds.",
+        "key_points": [
+         "Quality + growth profile supports a premium versus peers."
+        ]
+       },
+       "falsifiable_tests": [
+        {
+         "invalidates_side": "bull",
+         "statement": "Cohort revenue growth turns negative for two consecutive quarters AND target margin compresses with it."
+        },
+        {
+         "invalidates_side": "bear",
+         "statement": "Core driver re-accelerates and the target's cohort margin quartile improves."
+        }
+       ],
+       "key_disagreement": "Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver.",
+       "sector_lean": "balanced",
+       "sector_synthesis": "Cohort context for Internet Content & Information (Mixed regime regime): the bear case rests on execution; the bull case rests on execution against the dominant driver. Sector lean is balanced based on cohort placement; PM should weigh other findings."
+      },
+      "cross_sector_relevance": [],
+      "kpi_placements": {
+       "EV_EBITDA": {
+        "distribution": {
+         "max": 21.198816810368683,
+         "mean": 10.899473052261246,
+         "median": 10.795286070376207,
+         "min": 4.3713620488940625,
+         "n": 10,
+         "p25": 5.886455435858752,
+         "p75": 13.28593635675507,
+         "stdev": 4.983175328721229
+        },
+        "group": "valuation",
+        "interpretation": "richest in cohort",
+        "quartile": 4,
+        "target": 21.14517592889794
+       },
+       "FCF_yield": {
+        "distribution": {
+         "max": 0.21504203991827756,
+         "mean": 0.08396670209335652,
+         "median": 0.0639000384669595,
+         "min": 0.019270379953628625,
+         "n": 10,
+         "p25": 0.02385950869886153,
+         "p75": 0.1169266657285886,
+         "stdev": 0.06166908276490113
+        },
+        "group": "valuation",
+        "interpretation": "cheapest in cohort",
+        "quartile": 1,
+        "target": 0.019319633320922246
+       },
+       "PFCF": {
+        "distribution": {
+         "max": 51.893112767177136,
+         "mean": 21.478323509508165,
+         "median": 16.52038416803759,
+         "min": 4.6502535056867496,
+         "n": 10,
+         "p25": 6.386058454051607,
+         "p75": 36.09028367563816,
+         "stdev": 15.704983547851015
+        },
+        "group": "valuation",
+        "interpretation": "richest in cohort",
+        "quartile": 4,
+        "target": 51.76081674992493
+       },
+       "ROIC": {
+        "distribution": {
+         "max": 0.2521668961712825,
+         "mean": 0.10645622421400594,
+         "median": 0.07133956514756723,
+         "min": 0.006819053290689928,
+         "n": 10,
+         "p25": 0.0576622776493174,
+         "p75": 0.17950279862720422,
+         "stdev": 0.07630445053964188
+        },
+        "group": "quality",
+        "interpretation": "top quartile",
+        "quartile": 4,
+        "target": 0.21801897891560507
+       },
+       "operating_margin": {
+        "distribution": {
+         "max": 0.41437855159579234,
+         "mean": 0.22448433917943103,
+         "median": 0.21199169546006463,
+         "min": 0.0350975975975976,
+         "n": 10,
+         "p25": 0.1464866296002118,
+         "p75": 0.29494704605507255,
+         "stdev": 0.09840298017099226
+        },
+        "group": "quality",
+        "interpretation": "top quartile",
+        "quartile": 4,
+        "target": 0.32032638592380025
+       }
+      },
+      "macro_alignment": "neutral",
+      "regime": "Mixed regime",
+      "sector": "Communication Services",
+      "sub_industry": "Internet Content & Information"
+     },
+     "evidence": [],
+     "headline": "Internet Content & Information cohort, regime: Mixed regime · fragmented (HHI 0.15)",
+     "key_points": [
+      "operating_margin: 32.0% vs cohort median 21.2% — top quartile",
+      "ROIC: 21.8% vs cohort median 7.1% — top quartile",
+      "EV_EBITDA: 21.1x vs cohort median 10.8x — richest in cohort",
+      "FCF_yield: 1.9% vs cohort median 6.4% — cheapest in cohort",
+      "PFCF: 51.8x vs cohort median 16.5x — richest in cohort",
+      "Cohort revenue growth (recent): +7.2%",
+      "Cohort op margin expanding (+3.1% multi-year)",
+      "Cohort capex intensity intensifying (+1.7% multi-year)",
+      "Cohort-wide filing themes: Regulatory pressure (16), Competitive intensity (12), Liquidity risk (7).",
+      "FF5+momentum regression explains 51% of GOOGL's excess return variance over the last 1226 trading days.",
+      "Market beta of 1.13.",
+      "Investment (CMA) beta -0.46 (aggressive-investment tilt).",
+      "Profitability (RMW) beta +0.37 (profitability tilt)."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+     "sources": [],
+     "summary": "Communication Services / Internet Content & Information regime read: Mixed regime. Cohort of 10 peers selected on sub_industry basis. Cohort outliers: margin leader META, valuation cheapest CMCSA. Secular trends: Search disruption from AI assistants; Reels/Shorts engagement displacing legacy formats."
+    },
+    "technical": {
+     "agent": "Technical Analyst",
+     "confidence": 0.0,
+     "data": {
+      "intake_rationale": "Synthetic intake rationale 40 for the googl_live_prepflag fixture.",
+      "intake_skipped": true
+     },
+     "evidence": [],
+     "headline": "Technical Analyst — skipped per PM intake.",
+     "key_points": [],
+     "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+     "sources": [],
+     "summary": "Synthetic intake rationale 40 for the googl_live_prepflag fixture."
+    },
+    "valuation": {
+     "agent": "Valuation Analyst",
+     "confidence": 0.55,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 52 for the googl_live_prepflag fixture.",
+     "key_points": [
+      "Synthetic analyst point 54 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 55 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 56 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 57 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 58 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 59 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 60 for the googl_live_prepflag fixture."
+     ],
+     "long_form_report": null,
+     "sources": [],
+     "summary": "Synthetic analyst summary 53 for the googl_live_prepflag fixture."
+    }
+   },
+   "pm_questions": [],
+   "pm_rationale": "",
+   "round": 0
+  },
+  {
+   "early_exit": false,
+   "findings": {
+    "filing": {
+     "agent": "Filing Analyst",
+     "confidence": 0.72,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 13 for the googl_live_prepflag fixture.",
+     "key_points": [
+      "Synthetic analyst point 15 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 16 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 17 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 18 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 19 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 20 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 21 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 22 for the googl_live_prepflag fixture."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+     "sources": [],
+     "summary": "Synthetic analyst summary 14 for the googl_live_prepflag fixture."
+    },
+    "valuation": {
+     "agent": "Valuation Analyst",
+     "confidence": 0.61,
+     "data": {},
+     "evidence": [],
+     "headline": "Synthetic analyst headline 23 for the googl_live_prepflag fixture.",
+     "key_points": [
+      "Synthetic analyst point 25 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 26 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 27 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 28 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 29 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 30 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 31 for the googl_live_prepflag fixture.",
+      "Synthetic analyst point 32 for the googl_live_prepflag fixture."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+     "sources": [],
+     "summary": "Synthetic analyst summary 24 for the googl_live_prepflag fixture."
+    }
+   },
+   "pm_questions": [
+    {
+     "question": "Synthetic PM question 61 for the googl_live_prepflag fixture.",
+     "target_agent": "valuation",
+     "why_it_matters": "Synthetic PM rationale 62 for the googl_live_prepflag fixture."
+    },
+    {
+     "question": "Synthetic PM question 63 for the googl_live_prepflag fixture.",
+     "target_agent": "filing",
+     "why_it_matters": "Synthetic PM rationale 64 for the googl_live_prepflag fixture."
+    }
+   ],
+   "pm_rationale": "Synthetic PM rationale 65 for the googl_live_prepflag fixture.",
+   "round": 1
+  }
+ ],
+ "scorecard": null,
+ "scores": {
+  "beat_streak": 4.0,
+  "blended_pm_score": 61.9,
+  "confidence": 59.01176470588235,
+  "deep_research_questions": 2.0,
+  "deep_research_rounds": 1.0,
+  "evidence_quality": 95.9,
+  "factor_catalyst": 50.0,
+  "factor_earnings_momentum": 74.0,
+  "factor_growth": 50.0,
+  "factor_macro_fit": 60.0,
+  "factor_pm_score": 56.5,
+  "factor_quality": 63.2,
+  "factor_risk": 80.6,
+  "factor_valuation": 25.1,
+  "guidance_net_direction": 0.0,
+  "llm_rating_score": 70.0,
+  "llm_rating_weight": 0.4,
+  "raw_confidence": 60.0,
+  "risk_confidence": 70.0,
+  "risk_recs_applied": 1.0,
+  "sector_confidence": 78.0,
+  "valuation_confidence": 61.0
+ },
+ "section_provenance": {},
+ "sector": "Communication Services",
+ "sector_agent_view": {
+  "agent": "Sector Analyst",
+  "confidence": 0.78,
+  "data": {
+   "bull_bear_analysis": {
+    "bear_case": {
+     "headline": "Bear case: Internet Content & Information thesis breaks on execution.",
+     "key_points": [
+      "Valuation in the top cohort quartile — any execution slip re-rates the multiple."
+     ]
+    },
+    "bull_case": {
+     "headline": "Bull case: durable execution against sector tailwinds.",
+     "key_points": [
+      "Quality + growth profile supports a premium versus peers."
+     ]
+    },
+    "falsifiable_tests": [
+     {
+      "invalidates_side": "bull",
+      "statement": "Cohort revenue growth turns negative for two consecutive quarters AND target margin compresses with it."
+     },
+     {
+      "invalidates_side": "bear",
+      "statement": "Core driver re-accelerates and the target's cohort margin quartile improves."
+     }
+    ],
+    "key_disagreement": "Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver.",
+    "sector_lean": "balanced",
+    "sector_synthesis": "Cohort context for Internet Content & Information (Mixed regime regime): the bear case rests on execution; the bull case rests on execution against the dominant driver. Sector lean is balanced based on cohort placement; PM should weigh other findings."
+   },
+   "cross_sector_relevance": [],
+   "kpi_placements": {
+    "EV_EBITDA": {
+     "distribution": {
+      "max": 21.198816810368683,
+      "mean": 10.899473052261246,
+      "median": 10.795286070376207,
+      "min": 4.3713620488940625,
+      "n": 10,
+      "p25": 5.886455435858752,
+      "p75": 13.28593635675507,
+      "stdev": 4.983175328721229
+     },
+     "group": "valuation",
+     "interpretation": "richest in cohort",
+     "quartile": 4,
+     "target": 21.14517592889794
+    },
+    "FCF_yield": {
+     "distribution": {
+      "max": 0.21504203991827756,
+      "mean": 0.08396670209335652,
+      "median": 0.0639000384669595,
+      "min": 0.019270379953628625,
+      "n": 10,
+      "p25": 0.02385950869886153,
+      "p75": 0.1169266657285886,
+      "stdev": 0.06166908276490113
+     },
+     "group": "valuation",
+     "interpretation": "cheapest in cohort",
+     "quartile": 1,
+     "target": 0.019319633320922246
+    },
+    "PFCF": {
+     "distribution": {
+      "max": 51.893112767177136,
+      "mean": 21.478323509508165,
+      "median": 16.52038416803759,
+      "min": 4.6502535056867496,
+      "n": 10,
+      "p25": 6.386058454051607,
+      "p75": 36.09028367563816,
+      "stdev": 15.704983547851015
+     },
+     "group": "valuation",
+     "interpretation": "richest in cohort",
+     "quartile": 4,
+     "target": 51.76081674992493
+    },
+    "ROIC": {
+     "distribution": {
+      "max": 0.2521668961712825,
+      "mean": 0.10645622421400594,
+      "median": 0.07133956514756723,
+      "min": 0.006819053290689928,
+      "n": 10,
+      "p25": 0.0576622776493174,
+      "p75": 0.17950279862720422,
+      "stdev": 0.07630445053964188
+     },
+     "group": "quality",
+     "interpretation": "top quartile",
+     "quartile": 4,
+     "target": 0.21801897891560507
+    },
+    "operating_margin": {
+     "distribution": {
+      "max": 0.41437855159579234,
+      "mean": 0.22448433917943103,
+      "median": 0.21199169546006463,
+      "min": 0.0350975975975976,
+      "n": 10,
+      "p25": 0.1464866296002118,
+      "p75": 0.29494704605507255,
+      "stdev": 0.09840298017099226
+     },
+     "group": "quality",
+     "interpretation": "top quartile",
+     "quartile": 4,
+     "target": 0.32032638592380025
+    }
+   },
+   "macro_alignment": "neutral",
+   "regime": "Mixed regime",
+   "sector": "Communication Services",
+   "sub_industry": "Internet Content & Information"
+  },
+  "evidence": [],
+  "headline": "Internet Content & Information cohort, regime: Mixed regime · fragmented (HHI 0.15)",
+  "key_points": [
+   "operating_margin: 32.0% vs cohort median 21.2% — top quartile",
+   "ROIC: 21.8% vs cohort median 7.1% — top quartile",
+   "EV_EBITDA: 21.1x vs cohort median 10.8x — richest in cohort",
+   "FCF_yield: 1.9% vs cohort median 6.4% — cheapest in cohort",
+   "PFCF: 51.8x vs cohort median 16.5x — richest in cohort",
+   "Cohort revenue growth (recent): +7.2%",
+   "Cohort op margin expanding (+3.1% multi-year)",
+   "Cohort capex intensity intensifying (+1.7% multi-year)",
+   "Cohort-wide filing themes: Regulatory pressure (16), Competitive intensity (12), Liquidity risk (7).",
+   "FF5+momentum regression explains 51% of GOOGL's excess return variance over the last 1226 trading days.",
+   "Market beta of 1.13.",
+   "Investment (CMA) beta -0.46 (aggressive-investment tilt).",
+   "Profitability (RMW) beta +0.37 (profitability tilt)."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+  "sources": [],
+  "summary": "Communication Services / Internet Content & Information regime read: Mixed regime. Cohort of 10 peers selected on sub_industry basis. Cohort outliers: margin leader META, valuation cheapest CMCSA. Secular trends: Search disruption from AI assistants; Reels/Shorts engagement displacing legacy formats."
+ },
+ "sources_used": [],
+ "technical_agent_view": {
+  "agent": "Technical Analyst",
+  "confidence": 0.0,
+  "data": {
+   "intake_rationale": "Synthetic intake rationale 40 for the googl_live_prepflag fixture.",
+   "intake_skipped": true
+  },
+  "evidence": [],
+  "headline": "Technical Analyst — skipped per PM intake.",
+  "key_points": [],
+  "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+  "sources": [],
+  "summary": "Synthetic intake rationale 40 for the googl_live_prepflag fixture."
+ },
+ "thesis_breakers": [
+  {
+   "detail": "DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepflag fixture.",
+   "severity": "high",
+   "title": "DCF driver — Synthetic driver 71: synthetic rationale for the googl_live_prepfla",
+   "type": "regulatory"
+  }
+ ],
+ "ticker": "GOOGL",
+ "valuation_agent_view": {
+  "agent": "Valuation Analyst",
+  "confidence": 0.61,
+  "data": {},
+  "evidence": [],
+  "headline": "Synthetic analyst headline 23 for the googl_live_prepflag fixture.",
+  "key_points": [
+   "Synthetic analyst point 25 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 26 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 27 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 28 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 29 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 30 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 31 for the googl_live_prepflag fixture.",
+   "Synthetic analyst point 32 for the googl_live_prepflag fixture."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+  "sources": [],
+  "summary": "Synthetic analyst summary 24 for the googl_live_prepflag fixture."
+ },
+ "valuation_verdict": {
+  "basis": "rating",
+  "comps_ev_ebitda_premium": 0.444,
+  "dcf_base_upside": -0.536693932693141,
+  "factor_valuation": 25.1,
+  "signals": {},
+  "summary": "Net read: undervalued (DCF base case -54% to fair value; EV/EBITDA 44% premium vs peers; quant valuation factor 25/100).",
+  "verdict": "undervalued"
+ }
+}

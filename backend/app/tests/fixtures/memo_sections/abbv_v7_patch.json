@@ -1,0 +1,648 @@
+{
+ "agent_influence": {
+  "comps": 0.0,
+  "earnings": 0.0,
+  "filing": 0.0,
+  "macro": 0.9615,
+  "risk": 0.0,
+  "sector": 1.0,
+  "technical": 0.0,
+  "valuation": 0.8974
+ },
+ "bear_case": {
+  "headline": "Bear case: Drug Manufacturers - General thesis breaks on execution.",
+  "key_points": [
+   "Valuation in the top cohort quartile — any execution slip re-rates the multiple.",
+   "DCF driver — Generic sector — downside scenario: Deterministic generic fallback: growth -400bp, margin -300bp, terminal growth -50bp, WACC +100bp.",
+   "DCF bear case implies $191.95 (-8%)."
+  ]
+ },
+ "bull_case": {
+  "headline": "",
+  "key_points": [
+   "Synthetic bull_case point 4 for the abbv_v7_patch fixture."
+  ]
+ },
+ "business_summary": "Synthetic business description 3 for the abbv_v7_patch fixture.",
+ "catalysts": [
+  {
+   "detail": "operating_margin: 32.8% vs cohort median 29.1% — above median",
+   "horizon": "medium_term",
+   "impact": "medium",
+   "title": "operating_margin: 32.8% vs cohort median 29.1% — above median"
+  },
+  {
+   "detail": "Cohort revenue growth (recent): +8.9%",
+   "horizon": "medium_term",
+   "impact": "medium",
+   "title": "Cohort revenue growth (recent): +8.9%"
+  },
+  {
+   "detail": "Quarterly print expected on 2026-07-30; tone + guidance the swing factor.",
+   "horizon": "near_term",
+   "impact": "medium",
+   "title": "Next earnings: 2026-07-30"
+  }
+ ],
+ "company_name": "AbbVie Inc.",
+ "comps_agent_view": {
+  "agent": "Comps Analyst",
+  "confidence": 0.4,
+  "data": {},
+  "evidence": [],
+  "headline": "Insufficient peer data for comps.",
+  "key_points": [],
+  "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+  "sources": [],
+  "summary": "No peer set defined for this ticker in the demo dataset."
+ },
+ "confidence_score": 90.0,
+ "dcf_initial_summary": {},
+ "dcf_pm_adjustment_headline": "",
+ "dcf_pm_adjustments": [],
+ "dcf_summary": {
+  "base_implied_price": 376.32060163226555,
+  "base_upside": 0.8057610443006984,
+  "bear_implied_price": 191.9486818410967,
+  "bear_upside": -0.07894106602160901,
+  "bull_implied_price": 674.188219704252,
+  "bull_upside": 2.235068232745931,
+  "current_price": 208.4,
+  "summary": "Base case implied price $376.32 vs current $208.40 (+80.6%). Bull $674.19 (+223.5%) | Bear $191.95 (-7.9%). ⚠ Model warnings: 0 errors, 1 warns",
+  "terminal_growth": 0.025,
+  "wacc": 0.06
+ },
+ "degradation_events": [
+  {
+   "agent": "Stored memo compatibility",
+   "error_type": "LegacyCaseShape",
+   "field": "bull_case",
+   "message": "bull_case was a legacy list; exact points retained, headline unavailable.",
+   "original_value": [
+    {
+     "key_point": "Synthetic bull_case point 4 for the abbv_v7_patch fixture."
+    }
+   ],
+   "source_snapshot_id": 592,
+   "source_snapshot_ticker": "ABBV",
+   "source_snapshot_version": 7
+  }
+ ],
+ "degraded_agents": [
+  "Stored memo compatibility"
+ ],
+ "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+ "earnings_agent_view": {
+  "agent": "Earnings Analyst",
+  "confidence": 0.4,
+  "data": {},
+  "evidence": [],
+  "headline": "ABBV: transcript pending LLM analysis.",
+  "key_points": [],
+  "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+  "sources": [],
+  "summary": "Transcript for 2025Q2 is on file (43,847 chars of prepared remarks + Q&A) but the LLM analyst couldn't run a full pass on this request — see source for details. Next earnings date TBD."
+ },
+ "earnings_qoq_delta": null,
+ "extra_agent_views": {},
+ "filing_agent_view": {
+  "agent": "Filing Analyst",
+  "confidence": 0.6,
+  "data": {},
+  "evidence": [],
+  "headline": "ABBV 10-K highlights",
+  "key_points": [
+   "Risk: synthetic risk factor 1.",
+   "Risk: synthetic risk factor 2.",
+   "Risk: synthetic risk factor 3."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+  "sources": [],
+  "summary": "10-K dated 2026-02-20: Synthetic filing excerpt for the abbv_v7_patch fixture."
+ },
+ "final_pm_view": "Research view: Bullish. Synthetic PM view 2 for the abbv_v7_patch fixture.",
+ "final_verdict": "PM final view: Neutral (confidence 44). ABBV: Bull case: durable execution against sector tailwinds — base-case DCF implies +81% to fair value. Cohort placement: see sector view for KPI quartile context. Cross-sector pull-through: WMT, COST. Key disagreement: Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver. Watch items: none flagged.",
+ "forward_catalysts": [],
+ "generated_at": "2026-05-18T19:32:41.059274",
+ "generation_mode": "demo",
+ "intake_decision": {},
+ "key_risks": [],
+ "macro_regime_at_memo": "soft_landing",
+ "macro_sensitivity": {
+  "agent": "Macro Analyst",
+  "confidence": 0.75,
+  "data": {},
+  "evidence": [],
+  "headline": "Macro scenario: Soft landing",
+  "key_points": [
+   "Favored sectors: Technology, Communication Services, Industrials, Consumer Discretionary.",
+   "Pressured sectors: Energy, Defensive Staples.",
+   "Top scenario risks: Re-acceleration in inflation; Labor market crack; Credit-spread blowout."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+  "sources": [],
+  "summary": "Scenario read: Synthetic scenario narrative for the abbv_v7_patch fixture."
+ },
+ "macro_snapshot_at_memo": {},
+ "mispricing_thesis": {
+  "consensus_view": "",
+  "falsifiers": [],
+  "gap": "",
+  "our_view": ""
+ },
+ "one_sentence_thesis": "ABBV: Bull case: durable execution against sector tailwinds — base-case DCF implies +81% to fair value.",
+ "portfolio_fit": "In a balanced model portfolio, ABBV fits the 'Healthcare' sleeve. With a 'Neutral' research view, sizing is governed by the user's max position size and risk level.",
+ "price_at_memo": 208.4,
+ "price_at_memo_at": "2026-05-18T19:32:41.059049",
+ "quality": null,
+ "rating_label": "Bullish",
+ "risk_committee_challenge": {
+  "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
+  "challenges": [
+   "Risks list is thin — add specific operational and macro risks."
+  ],
+  "overall_assessment": "Memo is structurally sound; balance and source citations should be tightened.",
+  "review_mode": "unknown",
+  "suggested_revisions": [
+   "Tag every claim with a source: filing, transcript, or ratio.",
+   "Verify the bull case is symmetric to the bear case.",
+   "If valuation is elevated, explicitly state what the market is pricing in."
+  ],
+  "underweighted_risks": [
+   "Re-emphasize the sector cohort context if quality deteriorates."
+  ],
+  "valuation_divergence_assessment": "not_assessed"
+ },
+ "round_findings": [
+  {
+   "early_exit": false,
+   "findings": {
+    "comps": {
+     "agent": "Comps Analyst",
+     "confidence": 0.4,
+     "data": {},
+     "evidence": [],
+     "headline": "Insufficient peer data for comps.",
+     "key_points": [],
+     "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+     "sources": [],
+     "summary": "No peer set defined for this ticker in the demo dataset."
+    },
+    "earnings": {
+     "agent": "Earnings Analyst",
+     "confidence": 0.4,
+     "data": {},
+     "evidence": [],
+     "headline": "ABBV: transcript pending LLM analysis.",
+     "key_points": [],
+     "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+     "sources": [],
+     "summary": "Transcript for 2025Q2 is on file (43,847 chars of prepared remarks + Q&A) but the LLM analyst couldn't run a full pass on this request — see source for details. Next earnings date TBD."
+    },
+    "filing": {
+     "agent": "Filing Analyst",
+     "confidence": 0.6,
+     "data": {},
+     "evidence": [],
+     "headline": "ABBV 10-K highlights",
+     "key_points": [
+      "Risk: synthetic risk factor 1.",
+      "Risk: synthetic risk factor 2.",
+      "Risk: synthetic risk factor 3."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+     "sources": [],
+     "summary": "10-K dated 2026-02-20: Synthetic filing excerpt for the abbv_v7_patch fixture."
+    },
+    "macro": {
+     "agent": "Macro Analyst",
+     "confidence": 0.75,
+     "data": {},
+     "evidence": [],
+     "headline": "Macro scenario: Soft landing",
+     "key_points": [
+      "Favored sectors: Technology, Communication Services, Industrials, Consumer Discretionary.",
+      "Pressured sectors: Energy, Defensive Staples.",
+      "Top scenario risks: Re-acceleration in inflation; Labor market crack; Credit-spread blowout."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+     "sources": [],
+     "summary": "Scenario read: Synthetic scenario narrative for the abbv_v7_patch fixture."
+    },
+    "risk": {
+     "agent": "Risk Analyst",
+     "confidence": 0.7,
+     "data": {},
+     "evidence": [],
+     "headline": "Risk profile for ABBV",
+     "key_points": [],
+     "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+     "sources": [],
+     "summary": "Leverage at 3.6x debt/EBITDA is elevated. 1 structured rec(s) applied to the memo (see data.recommendations)."
+    },
+    "sector": {
+     "agent": "Sector Analyst",
+     "confidence": 0.78,
+     "data": {
+      "bull_bear_analysis": {
+       "bear_case": {
+        "headline": "Bear case: Drug Manufacturers - General thesis breaks on execution.",
+        "key_points": [
+         "Valuation in the top cohort quartile — any execution slip re-rates the multiple."
+        ]
+       },
+       "bull_case": {
+        "headline": "Bull case: durable execution against sector tailwinds.",
+        "key_points": [
+         "Quality + growth profile supports a premium versus peers."
+        ]
+       },
+       "falsifiable_tests": [
+        {
+         "invalidates_side": "bull",
+         "statement": "Cohort revenue growth turns negative for two consecutive quarters AND target margin compresses with it."
+        },
+        {
+         "invalidates_side": "bear",
+         "statement": "Core driver re-accelerates and the target's cohort margin quartile improves."
+        }
+       ],
+       "key_disagreement": "Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver.",
+       "sector_lean": "balanced",
+       "sector_synthesis": "Cohort context for Drug Manufacturers - General (Mixed regime regime): the bear case rests on execution; the bull case rests on execution against the dominant driver. Sector lean is balanced based on cohort placement; PM should weigh other findings."
+      },
+      "cross_sector_relevance": [
+       "WMT",
+       "COST"
+      ],
+      "kpi_placements": {
+       "EV_EBITDA": {
+        "distribution": {
+         "max": 35.80995433787339,
+         "mean": 16.0750751919689,
+         "median": 13.763559823794383,
+         "min": 10.108046751460984,
+         "n": 7,
+         "p25": 10.108046751460984,
+         "p75": 15.685449168207024,
+         "stdev": 8.272401922897142
+        },
+        "group": "valuation",
+        "interpretation": "richest in cohort",
+        "quartile": 4,
+        "target": 26.69696341709683
+       },
+       "PE": {
+        "distribution": {
+         "max": 46.760866416323054,
+         "mean": 22.08481875684514,
+         "median": 18.211158185328184,
+         "min": 14.427551221650049,
+         "n": 7,
+         "p25": 14.427551221650049,
+         "p75": 22.836568538451566,
+         "stdev": 10.371360622238026
+        },
+        "group": "valuation",
+        "interpretation": "richest in cohort",
+        "quartile": 4,
+        "target": 96.26165832465689
+       },
+       "ROIC": {
+        "distribution": {
+         "max": 0.3019606547698144,
+         "mean": 0.1711768774098951,
+         "median": 0.13901429864932868,
+         "min": 0.08838314439482423,
+         "n": 7,
+         "p25": 0.08838314439482423,
+         "p75": 0.2174472996210169,
+         "stdev": 0.06546038555790791
+        },
+        "group": "quality",
+        "interpretation": "bottom quartile",
+        "quartile": 1,
+        "target": 0.12966703469481794
+       },
+       "operating_margin": {
+        "distribution": {
+         "max": 0.45560686724251676,
+         "mean": 0.3273033584546572,
+         "median": 0.29057456247788577,
+         "min": 0.2466801962319628,
+         "n": 7,
+         "p25": 0.2466801962319628,
+         "p75": 0.4013517644261794,
+         "stdev": 0.07382025590340595
+        },
+        "group": "quality",
+        "interpretation": "above median",
+        "quartile": 3,
+        "target": 0.32849901896664485
+       }
+      },
+      "macro_alignment": "neutral",
+      "regime": "Mixed regime",
+      "sector": "Healthcare",
+      "sub_industry": "Drug Manufacturers - General"
+     },
+     "evidence": [],
+     "headline": "Drug Manufacturers - General cohort, regime: Mixed regime · fragmented (HHI 0.14)",
+     "key_points": [
+      "operating_margin: 32.8% vs cohort median 29.1% — above median",
+      "ROIC: 13.0% vs cohort median 13.9% — bottom quartile",
+      "EV_EBITDA: 26.7x vs cohort median 13.8x — richest in cohort",
+      "Cohort revenue growth (recent): +8.9%",
+      "Cohort op margin expanding (+3.8% multi-year)",
+      "Cohort capex intensity steady (-0.4% multi-year)",
+      "Cohort-wide filing themes: Regulatory pressure (19), Input-cost inflation (8), Liquidity risk (8)."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+     "sources": [],
+     "summary": "Healthcare / Drug Manufacturers - General regime read: Mixed regime. Cohort of 7 peers selected on sub_industry basis. Cohort outliers: margin leader LLY, valuation cheapest BMY. Secular trends: GLP-1 demand re-shaping pharma capex; Medicare Advantage rates normalizing."
+    },
+    "technical": {
+     "agent": "Technical Analyst",
+     "confidence": 0.6,
+     "data": {
+      "signals": {
+       "bb_lower": 196.25358384466367,
+       "bb_middle": 204.73499999999999,
+       "bb_position": 0.7325672934653675,
+       "bb_upper": 213.2164161553363,
+       "ema_10": 207.36654505873366,
+       "ema_20": 206.7682893802695,
+       "high_52w": 244.38,
+       "last_date": "2026-05-18",
+       "last_price": 208.68,
+       "low_52w": 181.8,
+       "macd_histogram": 1.0898748813743047,
+       "macd_line": -0.05829055793952875,
+       "macd_signal": -1.1481654393138334,
+       "momentum": "positive",
+       "notes": [
+        "Death-cross alignment (SMA50 below SMA200)."
+       ],
+       "position_52w": 0.4295302013422819,
+       "rsi_14": 52.41838679819014,
+       "sma_200": 218.88389999999998,
+       "sma_50": 209.3244,
+       "sma_50_above_200": false,
+       "trend": "down",
+       "vwma_20": 204.49133447648325
+      }
+     },
+     "evidence": [],
+     "headline": "ABBV: down trend · positive momentum · 43% of 52w range",
+     "key_points": [
+      "Death-cross alignment (SMA50 below SMA200)."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+     "sources": [],
+     "summary": "SMA50 (209.32) is below SMA200 (218.88) — last close 208.68. RSI(14) at 52. MACD histogram +1.09 (expanding). Bollinger position 73% within band. Technical signals are positioning context for the fundamental thesis, not a standalone trade signal."
+    },
+    "valuation": {
+     "agent": "Valuation Analyst",
+     "confidence": 0.7,
+     "data": {},
+     "evidence": [],
+     "headline": "P/E 96.3x; EV/EBITDA 26.7x; FCF yield 4.4%; DCF base implies +81% vs current",
+     "key_points": [
+      "Base case implied price: $376.32",
+      "Bull case: $674.19 | Bear case: $191.95",
+      "Valuation is elevated on EV/EBITDA — rate-sensitive.",
+      "FCF yield > 4% gives downside support if execution holds."
+     ],
+     "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+     "sources": [],
+     "summary": "Current multiples: P/E 96.3x, EV/EBITDA 26.7x, FCF yield 4.4%, DCF base implies +81% vs current. DCF triangulates against multiples; the bull/bear range frames the discount-rate sensitivity. Valuation risk increases if terminal growth or margin assumptions slip."
+    }
+   },
+   "pm_questions": [],
+   "pm_rationale": "",
+   "round": 0
+  },
+  {
+   "early_exit": true,
+   "findings": {},
+   "pm_questions": [],
+   "pm_rationale": "Synthetic PM rationale 1 for the abbv_v7_patch fixture.",
+   "round": 1
+  }
+ ],
+ "scorecard": null,
+ "scores": {
+  "blended_pm_score": 52.2,
+  "confidence": 54.60714285714286,
+  "cross_sector_relevance_count": 2.0,
+  "deep_research_questions": 0.0,
+  "deep_research_rounds": 1.0,
+  "evidence_quality": 98.2,
+  "factor_catalyst": 50.0,
+  "factor_earnings_momentum": 50.0,
+  "factor_growth": 50.0,
+  "factor_macro_fit": 60.0,
+  "factor_pm_score": 53.6,
+  "factor_quality": 60.0,
+  "factor_risk": 43.8,
+  "factor_valuation": 51.2,
+  "llm_rating_score": 50.0,
+  "llm_rating_weight": 0.4,
+  "raw_confidence": 55.0,
+  "risk_confidence": 70.0,
+  "risk_recs_applied": 1.0,
+  "sector_confidence": 78.0,
+  "valuation_confidence": 70.0
+ },
+ "section_provenance": {},
+ "sector": "Healthcare",
+ "sector_agent_view": {
+  "agent": "Sector Analyst",
+  "confidence": 0.78,
+  "data": {
+   "bull_bear_analysis": {
+    "bear_case": {
+     "headline": "Bear case: Drug Manufacturers - General thesis breaks on execution.",
+     "key_points": [
+      "Valuation in the top cohort quartile — any execution slip re-rates the multiple."
+     ]
+    },
+    "bull_case": {
+     "headline": "Bull case: durable execution against sector tailwinds.",
+     "key_points": [
+      "Quality + growth profile supports a premium versus peers."
+     ]
+    },
+    "falsifiable_tests": [
+     {
+      "invalidates_side": "bull",
+      "statement": "Cohort revenue growth turns negative for two consecutive quarters AND target margin compresses with it."
+     },
+     {
+      "invalidates_side": "bear",
+      "statement": "Core driver re-accelerates and the target's cohort margin quartile improves."
+     }
+    ],
+    "key_disagreement": "Bears price in cohort margin compression flowing through to this name; bulls price in this name continuing to outpace cohort on the dominant driver.",
+    "sector_lean": "balanced",
+    "sector_synthesis": "Cohort context for Drug Manufacturers - General (Mixed regime regime): the bear case rests on execution; the bull case rests on execution against the dominant driver. Sector lean is balanced based on cohort placement; PM should weigh other findings."
+   },
+   "cross_sector_relevance": [
+    "WMT",
+    "COST"
+   ],
+   "kpi_placements": {
+    "EV_EBITDA": {
+     "distribution": {
+      "max": 35.80995433787339,
+      "mean": 16.0750751919689,
+      "median": 13.763559823794383,
+      "min": 10.108046751460984,
+      "n": 7,
+      "p25": 10.108046751460984,
+      "p75": 15.685449168207024,
+      "stdev": 8.272401922897142
+     },
+     "group": "valuation",
+     "interpretation": "richest in cohort",
+     "quartile": 4,
+     "target": 26.69696341709683
+    },
+    "PE": {
+     "distribution": {
+      "max": 46.760866416323054,
+      "mean": 22.08481875684514,
+      "median": 18.211158185328184,
+      "min": 14.427551221650049,
+      "n": 7,
+      "p25": 14.427551221650049,
+      "p75": 22.836568538451566,
+      "stdev": 10.371360622238026
+     },
+     "group": "valuation",
+     "interpretation": "richest in cohort",
+     "quartile": 4,
+     "target": 96.26165832465689
+    },
+    "ROIC": {
+     "distribution": {
+      "max": 0.3019606547698144,
+      "mean": 0.1711768774098951,
+      "median": 0.13901429864932868,
+      "min": 0.08838314439482423,
+      "n": 7,
+      "p25": 0.08838314439482423,
+      "p75": 0.2174472996210169,
+      "stdev": 0.06546038555790791
+     },
+     "group": "quality",
+     "interpretation": "bottom quartile",
+     "quartile": 1,
+     "target": 0.12966703469481794
+    },
+    "operating_margin": {
+     "distribution": {
+      "max": 0.45560686724251676,
+      "mean": 0.3273033584546572,
+      "median": 0.29057456247788577,
+      "min": 0.2466801962319628,
+      "n": 7,
+      "p25": 0.2466801962319628,
+      "p75": 0.4013517644261794,
+      "stdev": 0.07382025590340595
+     },
+     "group": "quality",
+     "interpretation": "above median",
+     "quartile": 3,
+     "target": 0.32849901896664485
+    }
+   },
+   "macro_alignment": "neutral",
+   "regime": "Mixed regime",
+   "sector": "Healthcare",
+   "sub_industry": "Drug Manufacturers - General"
+  },
+  "evidence": [],
+  "headline": "Drug Manufacturers - General cohort, regime: Mixed regime · fragmented (HHI 0.14)",
+  "key_points": [
+   "operating_margin: 32.8% vs cohort median 29.1% — above median",
+   "ROIC: 13.0% vs cohort median 13.9% — bottom quartile",
+   "EV_EBITDA: 26.7x vs cohort median 13.8x — richest in cohort",
+   "Cohort revenue growth (recent): +8.9%",
+   "Cohort op margin expanding (+3.8% multi-year)",
+   "Cohort capex intensity steady (-0.4% multi-year)",
+   "Cohort-wide filing themes: Regulatory pressure (19), Input-cost inflation (8), Liquidity risk (8)."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+  "sources": [],
+  "summary": "Healthcare / Drug Manufacturers - General regime read: Mixed regime. Cohort of 7 peers selected on sub_industry basis. Cohort outliers: margin leader LLY, valuation cheapest BMY. Secular trends: GLP-1 demand re-shaping pharma capex; Medicare Advantage rates normalizing."
+ },
+ "sources_used": [],
+ "technical_agent_view": {
+  "agent": "Technical Analyst",
+  "confidence": 0.6,
+  "data": {
+   "signals": {
+    "bb_lower": 196.25358384466367,
+    "bb_middle": 204.73499999999999,
+    "bb_position": 0.7325672934653675,
+    "bb_upper": 213.2164161553363,
+    "ema_10": 207.36654505873366,
+    "ema_20": 206.7682893802695,
+    "high_52w": 244.38,
+    "last_date": "2026-05-18",
+    "last_price": 208.68,
+    "low_52w": 181.8,
+    "macd_histogram": 1.0898748813743047,
+    "macd_line": -0.05829055793952875,
+    "macd_signal": -1.1481654393138334,
+    "momentum": "positive",
+    "notes": [
+     "Death-cross alignment (SMA50 below SMA200)."
+    ],
+    "position_52w": 0.4295302013422819,
+    "rsi_14": 52.41838679819014,
+    "sma_200": 218.88389999999998,
+    "sma_50": 209.3244,
+    "sma_50_above_200": false,
+    "trend": "down",
+    "vwma_20": 204.49133447648325
+   }
+  },
+  "evidence": [],
+  "headline": "ABBV: down trend · positive momentum · 43% of 52w range",
+  "key_points": [
+   "Death-cross alignment (SMA50 below SMA200)."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+  "sources": [],
+  "summary": "SMA50 (209.32) is below SMA200 (218.88) — last close 208.68. RSI(14) at 52. MACD histogram +1.09 (expanding). Bollinger position 73% within band. Technical signals are positioning context for the fundamental thesis, not a standalone trade signal."
+ },
+ "thesis_breakers": [],
+ "ticker": "ABBV",
+ "valuation_agent_view": {
+  "agent": "Valuation Analyst",
+  "confidence": 0.7,
+  "data": {},
+  "evidence": [],
+  "headline": "P/E 96.3x; EV/EBITDA 26.7x; FCF yield 4.4%; DCF base implies +81% vs current",
+  "key_points": [
+   "Base case implied price: $376.32",
+   "Bull case: $674.19 | Bear case: $191.95",
+   "Valuation is elevated on EV/EBITDA — rate-sensitive.",
+   "FCF yield > 4% gives downside support if execution holds."
+  ],
+  "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+  "sources": [],
+  "summary": "Current multiples: P/E 96.3x, EV/EBITDA 26.7x, FCF yield 4.4%, DCF base implies +81% vs current. DCF triangulates against multiples; the bull/bear range frames the discount-rate sensitivity. Valuation risk increases if terminal growth or margin assumptions slip."
+ },
+ "valuation_verdict": {
+  "basis": "rating",
+  "comps_ev_ebitda_premium": null,
+  "dcf_base_upside": null,
+  "factor_valuation": null,
+  "signals": {},
+  "summary": "",
+  "verdict": "fairly_priced"
+ }
+}

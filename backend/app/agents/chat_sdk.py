@@ -74,6 +74,39 @@ def _profile_for(fin: dict[str, Any], ticker: str) -> dict[str, Any]:
     return profile
 
 
+def _memo_tool_payload(ticker: str) -> dict[str, Any]:
+    """`get_memo`'s answer: the chat projection of the PRESENTED memo (W2a),
+    so the agent never quotes a section the memo page hides."""
+    from ..services.memo_store import latest_memo, present_snapshot
+    from .orchestrator import _memo_for_chat_context
+    snap = latest_memo((ticker or "").upper())
+    if snap is None:
+        return {"error": f"No memo cached for {ticker}. The user may need to run an analysis first."}
+    try:
+        m = present_snapshot(snap)
+    except Exception as exc:
+        return {"error": f"Failed to load memo for {ticker}: {exc}"}
+    return _memo_for_chat_context(m)
+
+
+SPECIALIST_UNAVAILABLE = "specialist unavailable in this version"
+
+
+def _specialist_payload(agent: str, ticker: str, finding: Any) -> dict[str, Any]:
+    """An `ask_*` tool's answer. A fallback stand-in (deterministic read-out,
+    no-input stub, crash placeholder) is refused rather than relayed as the
+    specialist's answer — the same rule that hides it on the memo (W2a,
+    critique delta 4)."""
+    from ..services.memo_sections import finding_is_template
+    if finding_is_template(finding):
+        return {"error": SPECIALIST_UNAVAILABLE, "agent": agent, "ticker": ticker.upper()}
+    return {
+        "agent": agent, "ticker": ticker.upper(),
+        "headline": finding.headline, "summary": finding.summary,
+        "key_points": finding.key_points, "confidence": finding.confidence,
+    }
+
+
 def _build_chat_agent() -> Any | None:
     """Wire an `Agent` with the four data-fetch tools the chat handler
     might need. Returns None if the SDK isn't usable."""
@@ -90,16 +123,7 @@ def _build_chat_agent() -> Any | None:
             case headlines, and the PM-adjusted DCF summary. Use this
             FIRST for any question about a specific name. Returns
             `{"error": "..."}` if no memo exists yet."""
-            from ..services.memo_store import latest_memo, memo_to_pydantic
-            from .orchestrator import _memo_for_chat_context
-            snap = latest_memo((ticker or "").upper())
-            if snap is None:
-                return {"error": f"No memo cached for {ticker}. The user may need to run an analysis first."}
-            try:
-                m = memo_to_pydantic(snap)
-            except Exception as exc:
-                return {"error": f"Failed to load memo for {ticker}: {exc}"}
-            return _memo_for_chat_context(m)
+            return _memo_tool_payload(ticker)
 
         @function_tool
         def get_dcf_summary(ticker: str) -> dict[str, Any]:
@@ -322,11 +346,7 @@ def _build_chat_agent() -> Any | None:
                 finding = run_sector_agent(profile, ratios, prior_round_critique=question)
             except Exception as exc:
                 return {"error": f"sector specialist failed: {exc}"}
-            return {
-                "agent": "sector", "ticker": ticker.upper(),
-                "headline": finding.headline, "summary": finding.summary,
-                "key_points": finding.key_points, "confidence": finding.confidence,
-            }
+            return _specialist_payload("sector", ticker, finding)
 
         @function_tool
         def ask_earnings(ticker: str, question: str) -> dict[str, Any]:
@@ -349,11 +369,7 @@ def _build_chat_agent() -> Any | None:
                 )
             except Exception as exc:
                 return {"error": f"earnings specialist failed: {exc}"}
-            return {
-                "agent": "earnings", "ticker": ticker.upper(),
-                "headline": finding.headline, "summary": finding.summary,
-                "key_points": finding.key_points, "confidence": finding.confidence,
-            }
+            return _specialist_payload("earnings", ticker, finding)
 
         @function_tool
         def ask_filings(ticker: str, question: str) -> dict[str, Any]:
@@ -373,11 +389,7 @@ def _build_chat_agent() -> Any | None:
                 )
             except Exception as exc:
                 return {"error": f"filings specialist failed: {exc}"}
-            return {
-                "agent": "filings", "ticker": ticker.upper(),
-                "headline": finding.headline, "summary": finding.summary,
-                "key_points": finding.key_points, "confidence": finding.confidence,
-            }
+            return _specialist_payload("filings", ticker, finding)
 
         @function_tool
         def ask_valuation(ticker: str, question: str) -> dict[str, Any]:
@@ -399,11 +411,7 @@ def _build_chat_agent() -> Any | None:
                 )
             except Exception as exc:
                 return {"error": f"valuation specialist failed: {exc}"}
-            return {
-                "agent": "valuation", "ticker": ticker.upper(),
-                "headline": finding.headline, "summary": finding.summary,
-                "key_points": finding.key_points, "confidence": finding.confidence,
-            }
+            return _specialist_payload("valuation", ticker, finding)
 
         @function_tool
         def ask_macro(question: str, ticker: str | None = None) -> dict[str, Any]:
@@ -420,12 +428,7 @@ def _build_chat_agent() -> Any | None:
                         profile=profile, scenario=question,
                         prior_round_critique=question,
                     )
-                    return {
-                        "agent": "macro", "ticker": ticker.upper(),
-                        "headline": finding.headline, "summary": finding.summary,
-                        "key_points": finding.key_points,
-                        "confidence": finding.confidence,
-                    }
+                    return _specialist_payload("macro", ticker, finding)
                 from .macro_agent import run_macro_scenario
                 scenario = run_macro_scenario(question)
                 return {
