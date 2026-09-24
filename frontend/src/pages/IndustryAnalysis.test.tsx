@@ -88,10 +88,22 @@ async function settle() {
 
 const location = () => screen.getByTestId("location").textContent;
 
+// Telemetry POSTs are not writes this page makes: `lib/logger` flushes on a
+// module-level 1.5 s timer, so a flush started by an EARLIER test can land
+// inside this one's spy. Counting it made "never writes" fail on timer
+// phase alone. `stubFetch` exempts the same two URLs.
+const TELEMETRY = ["/api/admin/ui-log", "/api/public/events"];
+
 /** The one assertion every test makes: the page reads, it never writes. */
 function expectNoWrites(fetchMock: ReturnType<typeof stubFetch>) {
-  const methods = fetchMock.mock.calls.map(([, init]) => String((init as RequestInit | undefined)?.method ?? "GET").toUpperCase());
-  expect(methods.filter((m) => m !== "GET" && m !== "HEAD")).toEqual([]);
+  const writes = fetchMock.mock.calls
+    .map(([input, init]) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      const method = String((init as RequestInit | undefined)?.method ?? "GET").toUpperCase();
+      return { url, method };
+    })
+    .filter(({ url, method }) => method !== "GET" && method !== "HEAD" && !TELEMETRY.some((t) => url.includes(t)));
+  expect(writes.map(({ method, url }) => `${method} ${url}`)).toEqual([]);
 }
 
 describe("IndustryAnalysis — index", () => {
