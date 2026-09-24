@@ -183,7 +183,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T14:34:13.630543",
+     "classified_at": "2026-09-24T14:47:36.777449",
      "mapping_caveat": "company placements are derived from provider classification data"
     },
     "market_cap": 240000000000.0,
@@ -210,7 +210,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T14:34:13.630543",
+     "classified_at": "2026-09-24T14:47:36.777449",
      "mapping_caveat": "company placements are derived from provider classification data"
     },
     "market_cap": 750000000000.0,
@@ -237,7 +237,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T14:34:13.630543",
+     "classified_at": "2026-09-24T14:47:36.777449",
      "mapping_caveat": "company placements are derived from provider classification data"
     },
     "market_cap": 95000000000.0,
@@ -264,7 +264,7 @@
      "author": "Investment_Universe_163_Map.json@2026-09-10",
      "as_of": "2026-09-09",
      "confidence": 0.9,
-     "classified_at": "2026-09-24T14:34:13.630543",
+     "classified_at": "2026-09-24T14:47:36.777449",
      "mapping_caveat": "company placements are derived from provider classification data"
     },
     "market_cap": 2900000000000.0,
@@ -291,7 +291,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T14:34:13.630543",
+     "classified_at": "2026-09-24T14:47:36.777449",
      "mapping_caveat": "company placements are derived from provider classification data"
     },
     "market_cap": 190000000000.0,
@@ -368,7 +368,7 @@
    "job_id": 3,
    "status": "succeeded",
    "outcome": "published",
-   "at": "2026-09-24T14:34:16.222376",
+   "at": "2026-09-24T14:47:38.283732",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -406,13 +406,10 @@
        "name": "Technology"
       },
       "taxonomy_version": "mm-2026-04",
-      "boundaries": [
-       {}
-      ],
-      "sub_industries": [
-       {},
-       {}
-      ],
+      "boundaries": [],
+      "boundaries_withheld": 1,
+      "sub_industries": [],
+      "sub_industries_withheld": 2,
       "n_constituents": 5,
       "n_with_prices": 4,
       "period_key": "2026-W36",
@@ -1343,7 +1340,7 @@
        "taxonomy_version": "mm-2026-04"
       },
       "inputs_hash": "e11288397b8fdc1706b66e1389505023c0464f903a7261db4e7fc1620d82c813",
-      "computed_at": "2026-09-24T14:34:16.074866",
+      "computed_at": "2026-09-24T14:47:38.201843",
       "stats_id": 2
      },
      "interpretation": null
@@ -2405,8 +2402,8 @@
     "metadata": {
      "facts": {
       "report_schema_version": 1,
-      "generated_at": "2026-09-24T14:34:16.141678",
-      "run_id": "f7b2203e-a124-41e7-8476-251181475e68",
+      "generated_at": "2026-09-24T14:47:38.235043",
+      "run_id": "18666b8f-7ee5-4edc-a925-a91f46e6db03",
       "generation_mode": "llm",
       "taxonomy_version": "mm-2026-04",
       "taxonomy_version_id": 1,
@@ -2832,7 +2829,7 @@
     ]
    },
    "inputs_hash": "e11288397b8fdc1706b66e1389505023c0464f903a7261db4e7fc1620d82c813",
-   "computed_at": "2026-09-24T14:34:16.074866",
+   "computed_at": "2026-09-24T14:47:38.201843",
    "per_ticker_note": "per-ticker rows are served by GET /api/industries/{code}/companies"
   },
   "stats_unavailable_reason": null,
@@ -2929,7 +2926,7 @@
    "completion_tokens": 0,
    "cost_usd": 0.0,
    "latency_ms": 0,
-   "run_id": "f7b2203e-a124-41e7-8476-251181475e68",
+   "run_id": "18666b8f-7ee5-4edc-a925-a91f46e6db03",
    "generation_mode": "llm",
    "max_llm_calls": 2,
    "llm_planned_sections": [
@@ -3002,7 +2999,7 @@
    }
   ],
   "llm_cost_usd": 0.0,
-  "generated_at": "2026-09-24T14:34:16.195590",
+  "generated_at": "2026-09-24T14:47:38.272352",
   "access": {
    "surface": "latest",
    "tier": "public",
@@ -3165,7 +3162,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T14:34:13.630543",
+     "classified_at": "2026-09-24T14:47:36.777449",
      "mapping_caveat": "company placements are derived from provider classification data"
     },
     "market_cap": 240000000000.0,
@@ -3198,7 +3195,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T14:34:13.630543",
+     "classified_at": "2026-09-24T14:47:36.777449",
      "mapping_caveat": "company placements are derived from provider classification data"
     },
     "market_cap": 750000000000.0,
@@ -3231,7 +3228,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T14:34:13.630543",
+     "classified_at": "2026-09-24T14:47:36.777449",
      "mapping_caveat": "company placements are derived from provider classification data"
     },
     "market_cap": 95000000000.0,
@@ -3258,7 +3255,7 @@
      "author": "Investment_Universe_163_Map.json@2026-09-10",
      "as_of": "2026-09-09",
      "confidence": 0.9,
-     "classified_at": "2026-09-24T14:34:13.630543",
+     "classified_at": "2026-09-24T14:47:36.777449",
      "mapping_caveat": "company placements are derived from provider classification data"
     },
     "market_cap": 2900000000000.0,
@@ -3291,7 +3288,7 @@
      "author": "provider_aliases.json@fmp-aliases-2026-09",
      "as_of": "2026-09-10",
      "confidence": 0.8,
-     "classified_at": "2026-09-24T14:34:13.630543",
+     "classified_at": "2026-09-24T14:47:36.777449",
      "mapping_caveat": "company placements are derived from provider classification data"
     },
     "market_cap": 190000000000.0,
@@ -3373,7 +3370,7 @@
      "completion_tokens": 0,
      "cost_usd": 0.0,
      "latency_ms": 0,
-     "run_id": "f7b2203e-a124-41e7-8476-251181475e68",
+     "run_id": "18666b8f-7ee5-4edc-a925-a91f46e6db03",
      "generation_mode": "llm",
      "max_llm_calls": 2,
      "llm_planned_sections": [
@@ -3391,7 +3388,7 @@
      "cost_usd_run": 0,
      "llm_calls_run": 0
     },
-    "generated_at": "2026-09-24T14:34:16.195590"
+    "generated_at": "2026-09-24T14:47:38.272352"
    },
    {
     "version": 1,
@@ -3417,7 +3414,7 @@
      "completion_tokens": 0,
      "cost_usd": 0.0,
      "latency_ms": 0,
-     "run_id": "1a4e2052-2f78-4924-8182-8204a47311b6",
+     "run_id": "42fa4539-ce8c-4316-8f2a-2aa05932d249",
      "generation_mode": "llm",
      "max_llm_calls": 2,
      "llm_planned_sections": [
@@ -3435,14 +3432,14 @@
      "cost_usd_run": 0,
      "llm_calls_run": 0
     },
-    "generated_at": "2026-09-24T14:34:14.033825"
+    "generated_at": "2026-09-24T14:47:36.981077"
    }
   ],
   "last_attempt": {
    "job_id": 3,
    "status": "succeeded",
    "outcome": "published",
-   "at": "2026-09-24T14:34:16.222376",
+   "at": "2026-09-24T14:47:38.283732",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -3700,7 +3697,7 @@
    "job_id": 3,
    "status": "succeeded",
    "outcome": "published",
-   "at": "2026-09-24T14:34:16.222376",
+   "at": "2026-09-24T14:47:38.283732",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -3738,13 +3735,10 @@
        "name": "Technology"
       },
       "taxonomy_version": "mm-2026-04",
-      "boundaries": [
-       {}
-      ],
-      "sub_industries": [
-       {},
-       {}
-      ],
+      "boundaries": [],
+      "boundaries_withheld": 1,
+      "sub_industries": [],
+      "sub_industries_withheld": 2,
       "n_constituents": 5,
       "n_with_prices": 0,
       "period_key": "2026-W35",
@@ -4653,7 +4647,7 @@
        "taxonomy_version": "mm-2026-04"
       },
       "inputs_hash": "eb54a6668d03395a5cad68b7dcd0ad7ec2f6b9dd853d4e204261c59d28022705",
-      "computed_at": "2026-09-24T14:34:13.835653",
+      "computed_at": "2026-09-24T14:47:36.893162",
       "stats_id": 1
      },
      "interpretation": null
@@ -5163,8 +5157,8 @@
     "metadata": {
      "facts": {
       "report_schema_version": 1,
-      "generated_at": "2026-09-24T14:34:13.926647",
-      "run_id": "1a4e2052-2f78-4924-8182-8204a47311b6",
+      "generated_at": "2026-09-24T14:47:36.921877",
+      "run_id": "42fa4539-ce8c-4316-8f2a-2aa05932d249",
       "generation_mode": "llm",
       "taxonomy_version": "mm-2026-04",
       "taxonomy_version_id": 1,
@@ -5600,7 +5594,7 @@
     }
    },
    "inputs_hash": "eb54a6668d03395a5cad68b7dcd0ad7ec2f6b9dd853d4e204261c59d28022705",
-   "computed_at": "2026-09-24T14:34:13.835653",
+   "computed_at": "2026-09-24T14:47:36.893162",
    "per_ticker_note": "per-ticker rows are served by GET /api/industries/{code}/companies"
   },
   "stats_unavailable_reason": null,
@@ -5698,7 +5692,7 @@
    "completion_tokens": 0,
    "cost_usd": 0.0,
    "latency_ms": 0,
-   "run_id": "1a4e2052-2f78-4924-8182-8204a47311b6",
+   "run_id": "42fa4539-ce8c-4316-8f2a-2aa05932d249",
    "generation_mode": "llm",
    "max_llm_calls": 2,
    "llm_planned_sections": [
@@ -5771,7 +5765,7 @@
    }
   ],
   "llm_cost_usd": 0.0,
-  "generated_at": "2026-09-24T14:34:14.033825",
+  "generated_at": "2026-09-24T14:47:36.981077",
   "access": {
    "surface": "latest",
    "tier": "public",
@@ -5817,7 +5811,7 @@
    "job_id": 4,
    "status": "succeeded",
    "outcome": "published",
-   "at": "2026-09-24T14:34:16.719758",
+   "at": "2026-09-24T14:47:38.559406",
    "period_key": "2026-W36",
    "attempts": 1,
    "max_attempts": 3,
@@ -5855,26 +5849,10 @@
        "name": "Property & Real Estate"
       },
       "taxonomy_version": "mm-2026-04",
-      "boundaries": [
-       {},
-       {},
-       {},
-       {},
-       {},
-       {},
-       {},
-       {}
-      ],
-      "sub_industries": [
-       {},
-       {},
-       {},
-       {},
-       {},
-       {},
-       {},
-       {}
-      ],
+      "boundaries": [],
+      "boundaries_withheld": 8,
+      "sub_industries": [],
+      "sub_industries_withheld": 8,
       "n_constituents": 1,
       "n_with_prices": 1,
       "period_key": "2026-W36",
@@ -7182,7 +7160,7 @@
        "taxonomy_version": "mm-2026-04"
       },
       "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66",
-      "computed_at": "2026-09-24T14:34:16.596856",
+      "computed_at": "2026-09-24T14:47:38.481346",
       "stats_id": 3
      },
      "interpretation": null
@@ -8426,8 +8404,8 @@
     "metadata": {
      "facts": {
       "report_schema_version": 1,
-      "generated_at": "2026-09-24T14:34:16.635074",
-      "run_id": "a0a2b053-fe39-4c49-a84b-6d186a296780",
+      "generated_at": "2026-09-24T14:47:38.508422",
+      "run_id": "2fa40d52-94a9-4dcb-b9f3-d03a956eb9db",
       "generation_mode": "llm",
       "taxonomy_version": "mm-2026-04",
       "taxonomy_version_id": 1,
@@ -8828,7 +8806,7 @@
     }
    },
    "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66",
-   "computed_at": "2026-09-24T14:34:16.596856",
+   "computed_at": "2026-09-24T14:47:38.481346",
    "per_ticker_note": "per-ticker rows are served by GET /api/industries/{code}/companies"
   },
   "stats_unavailable_reason": null,
@@ -8920,7 +8898,7 @@
    "completion_tokens": 0,
    "cost_usd": 0.0,
    "latency_ms": 0,
-   "run_id": "a0a2b053-fe39-4c49-a84b-6d186a296780",
+   "run_id": "2fa40d52-94a9-4dcb-b9f3-d03a956eb9db",
    "generation_mode": "llm",
    "max_llm_calls": 2,
    "llm_planned_sections": [
@@ -8994,7 +8972,7 @@
    }
   ],
   "llm_cost_usd": 0.0,
-  "generated_at": "2026-09-24T14:34:16.687486",
+  "generated_at": "2026-09-24T14:47:38.543693",
   "access": {
    "surface": "latest",
    "tier": "public",
@@ -9054,7 +9032,7 @@
    "job_id": 6,
    "status": "succeeded",
    "outcome": "withheld_template",
-   "at": "2026-09-24T14:34:20.168960",
+   "at": "2026-09-24T14:47:40.191534",
    "period_key": "2026-W37",
    "attempts": 3,
    "max_attempts": 3,
@@ -9092,26 +9070,10 @@
        "name": "Property & Real Estate"
       },
       "taxonomy_version": "mm-2026-04",
-      "boundaries": [
-       {},
-       {},
-       {},
-       {},
-       {},
-       {},
-       {},
-       {}
-      ],
-      "sub_industries": [
-       {},
-       {},
-       {},
-       {},
-       {},
-       {},
-       {},
-       {}
-      ],
+      "boundaries": [],
+      "boundaries_withheld": 8,
+      "sub_industries": [],
+      "sub_industries_withheld": 8,
       "n_constituents": 1,
       "n_with_prices": 1,
       "period_key": "2026-W36",
@@ -10419,7 +10381,7 @@
        "taxonomy_version": "mm-2026-04"
       },
       "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66",
-      "computed_at": "2026-09-24T14:34:16.596856",
+      "computed_at": "2026-09-24T14:47:38.481346",
       "stats_id": 3
      },
      "interpretation": null
@@ -11663,8 +11625,8 @@
     "metadata": {
      "facts": {
       "report_schema_version": 1,
-      "generated_at": "2026-09-24T14:34:16.635074",
-      "run_id": "a0a2b053-fe39-4c49-a84b-6d186a296780",
+      "generated_at": "2026-09-24T14:47:38.508422",
+      "run_id": "2fa40d52-94a9-4dcb-b9f3-d03a956eb9db",
       "generation_mode": "llm",
       "taxonomy_version": "mm-2026-04",
       "taxonomy_version_id": 1,
@@ -12065,7 +12027,7 @@
     }
    },
    "inputs_hash": "0054d5d3d646bb638d6026afaab1e922d01fb955af46fa79172c97f60088fa66",
-   "computed_at": "2026-09-24T14:34:16.596856",
+   "computed_at": "2026-09-24T14:47:38.481346",
    "per_ticker_note": "per-ticker rows are served by GET /api/industries/{code}/companies"
   },
   "stats_unavailable_reason": null,
@@ -12157,7 +12119,7 @@
    "completion_tokens": 0,
    "cost_usd": 0.0,
    "latency_ms": 0,
-   "run_id": "a0a2b053-fe39-4c49-a84b-6d186a296780",
+   "run_id": "2fa40d52-94a9-4dcb-b9f3-d03a956eb9db",
    "generation_mode": "llm",
    "max_llm_calls": 2,
    "llm_planned_sections": [
@@ -12231,7 +12193,7 @@
    }
   ],
   "llm_cost_usd": 0.0,
-  "generated_at": "2026-09-24T14:34:16.687486",
+  "generated_at": "2026-09-24T14:47:38.543693",
   "access": {
    "surface": "latest",
    "tier": "public",
@@ -12277,7 +12239,7 @@
     "job_id": 7,
     "status": "succeeded",
     "outcome": "withheld_template",
-    "at": "2026-09-24T14:34:22.013910",
+    "at": "2026-09-24T14:47:40.778959",
     "period_key": "2026-W37",
     "attempts": 3,
     "max_attempts": 3,
@@ -12780,7 +12742,7 @@
        "period_key": "2026-W36",
        "as_of": "2026-09-04T21:00:00",
        "status": "succeeded",
-       "generated_at": "2026-09-24T14:34:16.195590",
+       "generated_at": "2026-09-24T14:47:38.272352",
        "degraded": true,
        "degraded_reasons": [
         "analyst_narrative:what_changed:deterministic",
@@ -12900,7 +12862,7 @@
        "period_key": "2026-W36",
        "as_of": "2026-09-04T21:00:00",
        "status": "succeeded",
-       "generated_at": "2026-09-24T14:34:16.687486",
+       "generated_at": "2026-09-24T14:47:38.543693",
        "degraded": true,
        "degraded_reasons": [
         "performance:insufficient_sample",

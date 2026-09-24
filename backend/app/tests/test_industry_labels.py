@@ -327,6 +327,23 @@ def test_project_public_withholds_branded_sources_but_not_a_word_containing_the_
     assert il.has_brand("GICS") and il.has_brand("gics_x") and not il.has_brand("Biologics")
 
 
+def test_a_row_that_was_only_a_non_public_identity_is_dropped_and_counted():
+    """The report's overview lists its industries as `{code, name}` rows.
+    Both keys are withheld for a 6-digit code, and an empty `{}` row would
+    render as a row of nothing — so the row goes and the count stays."""
+    out = il.project_public({
+        "boundaries": [{"code": "453010", "name": "Semiconductors & Semiconductor Equipment"}],
+        "sub_industries": [{"code": "45301010", "name": "Semiconductor Materials & Equipment",
+                            "industry_code": "453010"}, {"code": "45301020", "name": "Semiconductors",
+                                                         "industry_code": "453010", "note": "kept"}],
+        "empty": [{}], "numbers": [1, 2],
+    })
+    assert out["boundaries"] == [] and out["boundaries_withheld"] == 1
+    assert out["sub_industries"] == [{"note": "kept"}] and out["sub_industries_withheld"] == 1
+    assert out["empty"] == [{}] and "empty_withheld" not in out       # nothing was withheld from it
+    assert out["numbers"] == [1, 2] and "numbers_withheld" not in out
+
+
 def test_project_public_rewrites_keys_and_strings_and_never_mutates_its_input():
     payload = {
         "code": "4530", "name": "Semiconductors & Semiconductor Equipment",

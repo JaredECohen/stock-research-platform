@@ -676,6 +676,17 @@ def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels, keep: Any) -
                 out[f"{k}_withheld"] = len(v) - len(kept)
         elif k == "ref" and isinstance(v, str) and has_brand(v):
             out[k] = _PUBLIC_REF
+        elif isinstance(v, list):
+            # A list entry that was nothing BUT a non-public identity (an
+            # overview `boundaries` row is `{code, name}` of an industry)
+            # projects to `{}`; a page would render a row of nothing. It is
+            # dropped and counted, the same way a withheld source is.
+            projected = [_project(item, idx, labels, keep) for item in v]
+            emptied = {i for i, (a, b) in enumerate(zip(v, projected))
+                       if isinstance(a, dict) and a and b == {}}
+            out[k] = [p for i, p in enumerate(projected) if i not in emptied]
+            if emptied:
+                out[f"{k}_withheld"] = len(emptied)
         else:
             out[k] = _project(v, idx, labels, keep)
     return out
