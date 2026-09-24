@@ -118,6 +118,19 @@ def health() -> dict:
     }
 
 
+# `enable_vector_search=false` was read in a production audit as "semantic
+# retrieval disabled". It is not consulted anywhere (see config.py); the
+# note travels with the flag so neither the Settings page nor an audit of
+# this payload can draw that conclusion again.
+FEATURE_FLAG_NOTES: dict[str, str] = {
+    "enable_vector_search": (
+        "Not consulted by retrieval: the filing and earnings analysts always "
+        "search the vector index first; the filing analyst falls back to BM25 "
+        "keyword search only when that search returns nothing."
+    ),
+}
+
+
 @router.get("/api/providers/status")
 def providers_status() -> dict:
     ds = get_data_service()
@@ -143,4 +156,7 @@ def providers_status() -> dict:
             "enable_agent_critic": settings.enable_agent_critic,
             "enable_vector_search": settings.enable_vector_search,
         },
+        # Additive: what a reported flag actually does, where its name
+        # misleads. Keys above stay booleans (the Settings page renders them).
+        "feature_flag_notes": dict(FEATURE_FLAG_NOTES),
     }

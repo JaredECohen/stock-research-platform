@@ -172,7 +172,10 @@ class DocChunk(Base):
     stored as JSON-serialized lists of floats (Postgres + sqlite both
     support this) — when pgvector is enabled in production, an out-of-
     band migration converts the column to `vector(<dim>)` and adds an
-    HNSW index. Until then, retrieval falls back to BM25 over `text`.
+    HNSW index. Until then `vector_store.search` scores the JSON embeddings
+    in Python; it never falls back to BM25 itself — BM25 over filing text
+    (`retrieval_service`) is the filing analyst's own fallback when the
+    vector search returns nothing.
 
     `source_type` ∈ {filing, transcript, memo, news}. `source_id` is
     the foreign-key into the originating table (FilingDoc.id,

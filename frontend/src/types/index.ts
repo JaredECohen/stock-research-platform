@@ -608,6 +608,8 @@ export interface ProvidersStatusResponse {
   llm_configured: boolean;
   llm?: LLMStatus;
   feature_flags: Record<string, boolean>;
+  /** What a reported flag actually does, where its name misleads (e.g. a flag no code reads). Absent on older backends. */
+  feature_flag_notes?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------
