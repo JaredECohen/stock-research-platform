@@ -243,7 +243,16 @@ class GroupMandate:
             if sub_block:
                 parts.append(sub_block)
         parts.append(attribution_line)
-        return _bounded("\n".join(parts), max_chars)
+        block = _bounded("\n".join(parts), max_chars)
+        if public:
+            # The mandate's prose names sub-industries by their registry
+            # names ("Office REITs lease space ..."). The report validator's
+            # L1 rule rejects those names in new prose, and a model repeats
+            # what its prompt says, so the public edition writes them as
+            # plain descriptions ("office REITs"). Length-preserving, so the
+            # budget measured above still holds.
+            block = industry_labels.plain_registry_phrases(block)
+        return block
 
     def _head_lines(self, items_per_field: int, *, public: bool = False) -> list[str]:
         item = _public_item if public else _with_codes

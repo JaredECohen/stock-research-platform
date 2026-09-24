@@ -260,7 +260,7 @@ def _error(status: int, error_code: str, message: str, **extra: Any) -> HTTPExce
     renames a `name` only beside a `code` key, and next to
     `industry_group_code` a registry name would otherwise be served as
     written ("Banks" has no `&` for the scrubber to recognise)."""
-    detail = industry_labels.project_public({"message": message, **extra})
+    detail = industry_labels.project_public({"message": message, **extra}, rollup=True)
     return HTTPException(status_code=status, detail={"code": error_code, **detail})
 
 
@@ -277,7 +277,7 @@ def _public(model: type[_M], **fields: Any) -> _M:
     and once on what is actually served (so the projection can never emit
     a body the response model would not accept)."""
     built = model(**fields)
-    return model.model_validate(industry_labels.project_public(built.model_dump(by_alias=True)))
+    return model.model_validate(industry_labels.project_public(built.model_dump(by_alias=True), rollup=True))
 
 
 def _taxonomy_or_503(access: dict[str, Any]) -> gics_registry.VersionInfo:
@@ -760,8 +760,16 @@ def get_industry_changes(
         delta = store.diff(node.code, source_version, to, version=info)
     except store.EditionWithheld as exc:
         raise withheld_404(exc) from None
-    except store.ReportNotFound as exc:
-        raise _error(404, "no_report", str(exc), industry_group_code=node.code) from None
+    except store.ReportNotFound:
+        # Worded here, never `str(exc)`: the store's message names the group
+        # by its internal code ("industry report 4530 version 99 ..."), and
+        # the projection leaves a bare 4-digit token alone because it can be
+        # a year. `to` resolved just above, so the missing side is `from`.
+        raise _error(
+            404, "no_report", f"no edition {source_version} of {_label(node)} to compare from",
+            industry_group_code=node.code, name=_label(node), taxonomy_version=info.version_key,
+            version=source_version,
+        ) from None
     return _public(
         IndustryChangesOut,
         code=node.code,

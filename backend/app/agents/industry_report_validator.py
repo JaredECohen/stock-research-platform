@@ -802,10 +802,14 @@ def _claim_field_texts(interp: dict[str, Any]) -> list[str]:
 #   the year, and the projection still rewrites the unambiguous
 #   name-plus-code form;
 # * a multi-word registry name of an industry or sub-industry that is not
-#   also a sector or group name, matched case-sensitively as a phrase.
-#   Single words ("Software", "Restaurants", "Semiconductors") are ordinary
-#   English — the mandate's own prose uses them — and a sector/group name
-#   is the projection's to relabel, not a rejection.
+#   also a sector or group name, matched case-sensitively as a phrase on
+#   the raw text (`industry_labels.registry_phrase_hits`; a hit wholly
+#   inside one of OUR labels is exempt) and quoted in the reason so a
+#   retry knows what to change. Single words ("Software", "Restaurants",
+#   "Semiconductors") are ordinary English — the mandate's own prose uses
+#   them — and a sector/group name is the projection's to relabel, not a
+#   rejection. The mandate prompt writes these phrases in lower case
+#   (`plain_registry_phrases`), so a model is never shown one to repeat.
 L1_MESSAGE = "prints an internal taxonomy code or third-party classification mark"
 _L1_BRAND_RE = re.compile(r"(?<![A-Za-z])GICS(?![A-Za-z])", re.I)
 _L1_BRACKET_RE = re.compile(r"[\[(]\s*\d{6,8}(?:\s*[,;/]\s*\d{6,8})*\s*[\])]")
@@ -814,42 +818,32 @@ _L1_YEAR_RE = re.compile(r"^(?:19|20)\d\d$")
 
 
 @lru_cache(maxsize=1)
-def _l1_index() -> tuple[frozenset[str], re.Pattern[str] | None, re.Pattern[str] | None]:
-    """(known 6/8-digit codes, the registry-name pattern, our labels), from
-    the same bundled index the public scrubber uses — one taxonomy source.
-
-    Our own labels are blanked before the name match: "Software & IT
-    Services" is OUR label for a group and happens to contain the registry
-    name of an industry ("IT Services"). A label is exactly what prose is
-    asked to say, so it can never be the leak."""
+def _l1_long_codes() -> frozenset[str]:
+    """The known 6/8-digit codes, from the same bundled index the public
+    scrubber uses — one taxonomy source."""
     from ..services import industry_labels
 
-    names = industry_labels.registry_names()
-    upper = {n for c, n in names.items() if len(c) in (2, 4)}
-    long_codes = frozenset(c for c in names if len(c) in (6, 8))
-    phrases = sorted({n for c, n in names.items()
-                      if len(c) in (6, 8) and n not in upper and len(n.split()) > 1}, key=len, reverse=True)
-    pattern = (re.compile(r"(?<![\w&])(?:" + "|".join(re.escape(p) for p in phrases) + r")(?![\w])")
-               if phrases else None)
-    labels = industry_labels.load()
-    ours = sorted({lab for lab, _slug in (*labels.sectors.values(), *labels.groups.values())},
-                  key=len, reverse=True)
-    ours_re = re.compile("|".join(re.escape(lab) for lab in ours)) if ours else None
-    return long_codes, pattern, ours_re
+    return frozenset(c for c in industry_labels.registry_names() if len(c) in (6, 8))
 
 
 def taxonomy_leaks(text: str, *, group_code: str | None = None) -> list[str]:
     """What in `text` would put the licensed taxonomy on the page (L1), as
-    short reasons; empty when clean."""
+    short reasons; empty when clean.
+
+    A registry-name reason QUOTES the phrase. The reason is all a repair
+    retry is told, and "registry name" alone does not say which words to
+    change — a model re-reading its own paragraph cannot guess that
+    "Office REITs" is the taxonomy's name and "office landlords" is not."""
+    from ..services import industry_labels
+
     if not isinstance(text, str) or not text:
         return []
-    long_codes, names_re, ours_re = _l1_index()
     found: list[str] = []
     if _L1_BRAND_RE.search(text):
         found.append("classification brand")
     if _L1_BRACKET_RE.search(text):
         found.append("bracketed code list")
-    if any(m.group(1) in long_codes for m in _L1_LONG_CODE_RE.finditer(text)):
+    if any(m.group(1) in _l1_long_codes() for m in _L1_LONG_CODE_RE.finditer(text)):
         found.append("industry or sub-industry code")
     code = str(group_code or "")
     if len(code) == 4 and code.isdigit() and not _L1_YEAR_RE.match(code):
@@ -858,9 +852,12 @@ def taxonomy_leaks(text: str, *, group_code: str | None = None) -> list[str]:
         )
         if own.search(text):
             found.append("the group's own code")
-    unlabelled = ours_re.sub(" ", text) if ours_re is not None else text
-    if names_re is not None and names_re.search(unlabelled):
-        found.append("industry or sub-industry registry name")
+    # Our own labels are exempt ("Software & IT Services" contains the
+    # industry name "IT Services"); `registry_phrase_hits` discards only a
+    # hit that lies wholly inside a label, so a registry name that merely
+    # CONTAINS a label word ("Health Care Technology") is still caught.
+    for phrase in dict.fromkeys(m.group(0) for m in industry_labels.registry_phrase_hits(text)):
+        found.append(f"industry or sub-industry registry name {phrase!r}")
     return found
 
 

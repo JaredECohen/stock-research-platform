@@ -842,6 +842,14 @@ def _l1_errors(errs: list[str]) -> list[str]:
     ("Semiconductor Materials & Equipment names: 17 constituents in the sample.",
      "industry or sub-industry registry name"),
     ("Application Software names: 17 constituents in the sample.", "industry or sub-industry registry name"),
+    # registry names that CONTAIN one of our label words ("Technology",
+    # "Banking"): blanking the labels first used to hide them
+    ("Health Care Technology names: 17 constituents in the sample.",
+     "industry or sub-industry registry name 'Health Care Technology'"),
+    ("Technology Distributors names: 17 constituents in the sample.",
+     "industry or sub-industry registry name 'Technology Distributors'"),
+    ("Investment Banking & Brokerage names: 17 constituents in the sample.",
+     "industry or sub-industry registry name 'Investment Banking & Brokerage'"),
 ])
 def test_l1_rejects_marks_codes_and_registry_names(text, reason):
     errs = _l1("overview", text)
@@ -861,9 +869,22 @@ def test_l1_rejects_marks_codes_and_registry_names(text, reason):
     # counts, note marks, a lowercase phrase
     "The group has 17 constituents in the sample [12].",
     "application software names: 17 constituents in the sample.",
+    # our label words on their own, next to a lower-case description
+    "Technology and Banking names, and health care technology: 17 constituents in the sample.",
 ])
 def test_l1_accepts_labels_ordinary_words_and_counts(text):
     assert _l1_errors(_l1("overview", text)) == []
+
+
+def test_a_registry_name_rejection_quotes_the_phrase():
+    """The L1 reason is all a repair retry is told. "registry name" alone
+    does not say which words to change, so the phrase is quoted — and the
+    writer's repair block carries it to the model verbatim."""
+    from app.agents import industry_report_writer as w
+
+    errs = _l1_errors(_l1("overview", "Office REITs lease space under multi-year contracts; 17 constituents."))
+    assert errs == [f"overview: {v.L1_MESSAGE} (industry or sub-industry registry name 'Office REITs')"], errs
+    assert "'Office REITs'" in w._repair_block("\n".join(errs))
 
 
 def test_year_tokens_are_not_taxonomy_leaks():

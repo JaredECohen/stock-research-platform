@@ -100,7 +100,7 @@ class _Rules:
         self.distinctive_re = re.compile(
             r"(?<![\w&])(?:" + "|".join(re.escape(n) for n in distinctive) + r")(?![\w])")
         ours = sorted({lab for lab, _ in (*labels.sectors.values(), *labels.groups.values())}, key=len, reverse=True)
-        self.ours_re = re.compile("|".join(re.escape(lab) for lab in ours))
+        self.ours_re = re.compile(r"(?<![\w&])(?:" + "|".join(re.escape(lab) for lab in ours) + r")(?![\w])")
         self.group_forms = re.compile(
             r"\((" + "|".join(sorted(self.groups)) + r")\)|\bgroup\s+(" + "|".join(sorted(self.groups)) + r")(?!\d)"
             r"|Industry Group Analyst\s+\d{4}", re.I)
@@ -129,9 +129,35 @@ def text_leaks(text: str) -> list[str]:
         out.append("group code form")
     if any(m.group(1) in r.short for m in _QUOTED_CODE.finditer(text)):
         out.append("quoted taxonomy code")
-    if r.distinctive_re.search(r.ours_re.sub(" ", text)):
+    # A registry name is excused only when it lies wholly INSIDE one of our
+    # labels. Blanking the labels first would also blank a label word inside
+    # a longer registry name ("Health Care Technology" has "Technology").
+    spans = [m.span() for m in r.ours_re.finditer(text)]
+    if any(not any(a <= m.start() and m.end() <= b for a, b in spans) for m in r.distinctive_re.finditer(text)):
         out.append("distinctive registry name")
+    if il.registry_phrase_hits(text):
+        out.append("industry/sub-industry registry name")
     return out
+
+
+def own_code_leaks(obj: Any, codes: set[str], path: str = "$") -> list[str]:
+    """A group's own internal code as a standalone token in ANY string of a
+    body about that group ("industry report 4530 version 99 not found").
+    `text_leaks` cannot flag a bare 4-digit token in general — it is as
+    often a year or a count — but in a body about group 4530 the token
+    4530 is the code. Year-shaped codes are left out for the same reason."""
+    found: list[str] = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            found.extend(own_code_leaks(str(k), codes, f"{path} key"))
+            found.extend(own_code_leaks(v, codes, f"{path}.{k}"))
+    elif isinstance(obj, (list, tuple)):
+        for i, v in enumerate(obj):
+            found.extend(own_code_leaks(v, codes, f"{path}[{i}]"))
+    elif isinstance(obj, str):
+        found.extend(f"{path}: own code {c} in {obj[:120]!r}" for c in sorted(codes)
+                     if re.search(rf"(?<!\d){c}(?!\d)", obj))
+    return found
 
 
 def public_leaks(obj: Any, path: str = "$", *, key: str = "") -> list[str]:
@@ -183,7 +209,11 @@ def test_the_walker_catches_what_it_is_for():
                    "$.report_versions: key", "$.missing_groups[0]", "$.rows[0].industry_code",
                    "$.rows[0].industry_name", "$.sub"):
         assert any(leak.startswith(needle) for leak in leaks), (needle, leaks)
-    assert public_leaks(il.project_public(raw)) == []
+    assert public_leaks(il.project_public(raw, rollup=True)) == []  # the industry routes' projection
+    # Registry names that contain one of OUR label words ("Technology" is a
+    # sector label) are still registry names.
+    for name in ("Health Care Technology", "Technology Distributors", "Investment Banking & Brokerage"):
+        assert text_leaks(f"{name} demand rose."), name
     # ...and ordinary prose is not a leak.
     assert public_leaks({"domain": "Health Care", "text": "Energy names rallied in 2030; top 10 banks",
                          "provider_industry": "Semiconductors", "label": il.label("4530")}) == []
@@ -348,6 +378,11 @@ def _reads(w: dict[str, Any]) -> list[tuple[str, int]]:
         # refusals are public bodies too
         (f"/api/industries/{tslug}/report", 404),               # no_report + withheld count
         (f"/api/industries/{w['template_code']}/report", 404),
+        # The same refusals for a group whose registry name has no "&" for
+        # the scrubber to recognise: only the route's own `name=` keeps the
+        # registry name off these.
+        (f"/api/industries/{tslug}/report?version=1", 404),     # edition_withheld
+        (f"/api/industries/{tslug}/report?version=99", 404),    # no such edition
         (f"/api/industries/{slug}/report?version=3", 404),      # edition_withheld
         (f"/api/industries/{slug}/report?version=99", 404),     # no such edition
         (f"/api/industries/{slug}/report?version=abc", 422),
@@ -368,10 +403,12 @@ def _reads(w: dict[str, Any]) -> list[tuple[str, int]]:
 
 def test_no_gics_mark_or_internal_code_on_any_public_surface(world, client):
     problems: dict[str, list[str]] = {}
+    own = {c for c in (world["code"], world["template_code"]) if not _YEAR.match(c)}
     for path, status in _reads(world):
         resp = client.get(path)
         assert resp.status_code == status, (path, resp.status_code, resp.text[:300])
         leaks = public_leaks(resp.json())
+        leaks += own_code_leaks(resp.json(), own)
         if leaks:
             problems[path] = leaks[:8]
     assert problems == {}
@@ -414,6 +451,23 @@ def test_the_no_report_refusal_names_the_group_by_label(world, client):
     assert detail["industry_group_code"] == il.slug(world["template_code"])
     assert il.label(world["template_code"]) in detail["message"]
     assert detail["taxonomy_version"] == il.PUBLIC_TAXONOMY_KEY
+
+
+def test_every_refusal_names_the_group_by_label(world, client):
+    """`name=` on each refusal is the route's, not the projection's: the
+    template group's registry name has no "&", so the projection would
+    serve it as written."""
+    tslug, tcode = il.slug(world["template_code"]), world["template_code"]
+    assert "&" not in il.registry_names()[tcode] and "," not in il.registry_names()[tcode]
+    for path, error in ((f"/api/industries/{tslug}/report?version=1", "edition_withheld"),
+                        (f"/api/industries/{tslug}/report?version=99", "no_report")):
+        detail = client.get(path).json()["detail"]
+        assert detail["code"] == error, (path, detail)
+        assert detail["name"] == il.label(tcode) and detail["industry_group_code"] == tslug, (path, detail)
+    changes = client.get(f"/api/industries/{world['slug']}/changes?from=99").json()["detail"]
+    assert changes["code"] == "no_report" and changes["name"] == il.label(world["code"])
+    assert changes["message"] == f"no edition 99 of {il.label(world['code'])} to compare from"
+    assert changes["version"] == 99
 
 
 def test_portfolio_exposure_block_is_public(world, client):

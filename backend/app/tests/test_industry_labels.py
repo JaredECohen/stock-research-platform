@@ -232,11 +232,15 @@ SCRUB_TABLE = [
     # word that merely contains the four letters is not it
     ("see gics_industries_2026.json", "see industry_industries_2026.json"),
     ("Biologics production → Bioprocess consumables", "Biologics production → Bioprocess consumables"),
-    # S10: a distinctive sub-industry name (legacy prose) reads as the
-    # label of the group it rolls up to — never named publicly itself
+    ("", ""),
+]
+
+# S10: on the INDUSTRY surfaces (`rollup=True`), a distinctive industry /
+# sub-industry name in legacy report prose reads as the label of the group
+# it rolls up to — never named publicly itself.
+ROLLUP_TABLE = [
     ("Semiconductor Materials & Equipment names", f"{_C} names"),
     ("Oil & Gas Drilling rigs", f"{il.label('1010')} rigs"),
-    ("", ""),
 ]
 
 
@@ -244,6 +248,52 @@ SCRUB_TABLE = [
 def test_scrub_text_table(text, expected):
     assert il.scrub_text(text) == expected
     assert il.scrub_text(expected) == expected   # idempotent
+
+
+@pytest.mark.parametrize("text,expected", ROLLUP_TABLE)
+def test_the_industry_rollup_relabels_distinctive_industry_names(text, expected):
+    assert il.scrub_text(text, rollup=True) == expected
+    assert il.scrub_text(expected, rollup=True) == expected   # idempotent
+    assert il.project_public({"t": text}, rollup=True) == {"t": expected}
+    assert il.project_for_prompt({"t": text}) == {"t": expected}   # the report writer's facts
+
+
+def test_memo_prose_keeps_ordinary_industry_names():
+    """REGRESSION (S10 review): the rollup was global, so every memo sector
+    card and industry finding had its industry words rewritten into a
+    broader group label — "Unlike Oil & Gas Exploration & Production peers,
+    XOM refines" named XOM's own group as the contrast, and "HON: Aerospace
+    & Defense backlog grew" became a machinery sentence. Outside the
+    industry-report surfaces an industry name is ordinary prose (often a
+    provider's own industry string), and only sector/group names and codes
+    are rewritten."""
+    from app.agents import sector_agents
+
+    for text in ("Unlike Oil & Gas Exploration & Production peers, XOM refines.",
+                 "HON: Aerospace & Defense backlog grew.",
+                 "Semiconductor Materials & Equipment names"):
+        assert il.scrub_text(text) == text
+        assert il.project_public({"summary": text}) == {"summary": text}
+    out = sector_agents._scrub_spliced_output({"summary": "HON: Aerospace & Defense backlog grew."},
+                                              provider_industry="Conglomerates")
+    assert out["summary"] == "HON: Aerospace & Defense backlog grew."
+    # ...while a group's registry name and codes still go on every surface.
+    assert il.scrub_text("Semiconductors & Semiconductor Equipment (4530) names") == f"{_C} names"
+
+
+def test_plain_registry_phrases_describes_without_naming():
+    """The prompt-side counterpart of the L1 rule: registry phrases become
+    lower-case descriptions (acronyms kept), our labels are untouched even
+    where they contain a registry name, and the length never changes."""
+    for text, expected in (
+        ("Office REITs lease space.", "office REITs lease space."),
+        ("Health Care Technology and Technology Distributors", "health care technology and technology distributors"),
+        ("Software & IT Services leads; IT Services lag.", "Software & IT Services leads; IT services lag."),
+        ("Property REITs own buildings.", "Property REITs own buildings."),
+    ):
+        assert il.plain_registry_phrases(text) == expected
+        assert len(il.plain_registry_phrases(text)) == len(text)
+        assert il.registry_phrase_hits(il.plain_registry_phrases(text)) == []
 
 
 def test_scrub_text_maps_the_fixed_branded_sentences_to_their_public_twins():

@@ -759,7 +759,7 @@ def render_pm_block(snapshot: CrossIndustrySnapshot | dict[str, Any] | None, max
             )
             # A link label is analyst prose from the dependency atlas and may
             # quote a registry group name; it is scrubbed like any prose.
-            link_label = _short(industry_labels.scrub_text(str(s.get("label") or "")), 40)
+            link_label = _short(industry_labels.scrub_text(str(s.get("label") or ""), rollup=True), 40)
             parts.append(f"{s['id']} {link_label} [{s.get('source')}]: {moved}")
         tail.append("Dependency links with a ≥5% 1M move (analyst hypotheses, not correlations): " + "; ".join(parts) + ".")
     window_days = payload.get("events_window_days", EVENT_WINDOW_DAYS)

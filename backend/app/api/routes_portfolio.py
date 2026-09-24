@@ -64,7 +64,9 @@ def industry_exposure_block(portfolio: ModelPortfolio) -> dict[str, Any]:
             "weights are the portfolio's own; group statistics are observed weekly data "
             "and regime labels are rule-based reads — scenario context, not advice"
         )
-        public: dict[str, Any] = industry_labels.project_public(block)
+        # The industry surfaces' projection (with the rollup): this block is
+        # built from the same snapshot rows the industry routes serve.
+        public: dict[str, Any] = industry_labels.project_public(block, rollup=True)
         return public
     except Exception as exc:
         log_safely(log, "industry exposure block failed (portfolio still returned)", exc, level=logging.DEBUG)

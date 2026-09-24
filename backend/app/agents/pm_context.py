@@ -141,7 +141,8 @@ def industry_context_payload(
         info = None
     if info is None:
         public_none: dict[str, Any] = industry_labels.project_public(
-            {"status": "taxonomy_not_imported", "tickers": symbols, "code": code, "groups": [], "access": access})
+            {"status": "taxonomy_not_imported", "tickers": symbols, "code": code, "groups": [], "access": access},
+            rollup=True)
         return public_none
 
     detail = relevant_groups_detail(symbols, version=info) if symbols else {
@@ -211,7 +212,9 @@ def industry_context_payload(
         "mapping_caveat": industry_labels.PUBLIC_MAPPING_CAVEAT,
         "note": "stored weekly artifacts (observed statistics + labelled interpretation); scenarios, not recommendations",
     }
-    public: dict[str, Any] = industry_labels.project_public(payload)
+    # rollup: the payload quotes industry-report editions, legacy ones
+    # included, so it gets the industry surfaces' projection.
+    public: dict[str, Any] = industry_labels.project_public(payload, rollup=True)
     return public
 
 
@@ -246,15 +249,19 @@ def industry_context_block(
         # the PM writes public memo prose from this block and cannot echo
         # an identifier it never saw (owner decision 2026-09-24). A legacy
         # analyst edition's own prose may still quote one, so the excerpt
-        # texts are scrubbed too.
+        # texts are scrubbed too — with the industry rollup, since they are
+        # report prose (an industry name there reads as its group's label).
         for code in detail["own"]:
             group = industry_labels.label(code)
             excerpt = _excerpt_from(code, editions.get(code), newer_period=attempted.get(code))
             if excerpt is None:
                 parts.append(f"Industry group {group}: no published Industry Analysis edition yet.")
                 continue
-            degraded = (f" (degraded edition: {', '.join(industry_labels.scrub_text(d) for d in excerpt['degraded'])})"
-                        if excerpt["degraded"] else "")
+            degraded = (
+                " (degraded edition: "
+                f"{', '.join(industry_labels.scrub_text(d, rollup=True) for d in excerpt['degraded'])})"
+                if excerpt["degraded"] else ""
+            )
             stale = (
                 f" (not updated this week; newest analyst edition is {excerpt['period_key']}, "
                 f"the {excerpt['not_updated']} refresh produced none)"
@@ -262,8 +269,8 @@ def industry_context_block(
             )
             parts.append(
                 f"Industry group {group} — edition of {excerpt['period_key']}{degraded}{stale}. "
-                f"Analyst view: {industry_labels.scrub_text(excerpt['analyst_view']) or 'n/a'} "
-                f"What changed: {industry_labels.scrub_text(excerpt['what_changed']) or 'n/a'}"
+                f"Analyst view: {industry_labels.scrub_text(excerpt['analyst_view'], rollup=True) or 'n/a'} "
+                f"What changed: {industry_labels.scrub_text(excerpt['what_changed'], rollup=True) or 'n/a'}"
             )
         if detail["linked"]:
             parts.append(

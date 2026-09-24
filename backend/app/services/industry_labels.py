@@ -226,9 +226,10 @@ def public_display_name(code: Any) -> str:
 @dataclass(frozen=True)
 class _Index:
     names: dict[str, str]            # every known code (2/4/6/8, retired too) -> registry name
-    public_names: dict[str, str]     # multi-word sector/group registry names with & or , -> label
+    public_names: dict[str, str]     # multi-word registry names with & or , -> label (see `rollup`)
     public_names_re: re.Pattern[str] | None
     exact: tuple[tuple[str, str], ...]
+    rollup: bool                     # does `public_names` also roll industry names up to groups?
 
 
 def _exact_table(labels: Labels) -> tuple[tuple[str, str], ...]:
@@ -254,8 +255,8 @@ def _exact_table(labels: Labels) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(pairs.items(), key=lambda kv: -len(kv[0])))
 
 
-@lru_cache(maxsize=1)
-def _index() -> _Index:
+@lru_cache(maxsize=2)
+def _index(rollup: bool = False) -> _Index:
     labels = load()
     payload = industry_knowledge.load_industry_knowledge()
     names: dict[str, str] = {}
@@ -280,28 +281,35 @@ def _index() -> _Index:
         # ordinary English and rewriting them would mangle sentences.
         if entry is not None and ("&" in name or "," in name):
             public_names[name] = entry[0]
-    # An industry / sub-industry is never named publicly; a distinctive name
-    # of one ("Semiconductor Materials & Equipment") reads as the label of
-    # the group it rolls up to — what `gics_registry.display()` shows for
-    # those levels. This is the net for LEGACY analyst prose (new editions
-    # are rejected by the validator's L1 rule instead). A name that two
-    # groups share is ambiguous and left for L1; a sector/group name keeps
-    # its own mapping above.
-    rollup: dict[str, set[str]] = {}
-    for code, name in names.items():
-        if len(code) in (6, 8) and ("&" in name or "," in name) and name not in public_names:
-            group = labels.entry(code[:4])
-            if group is not None:
-                rollup.setdefault(name, set()).add(group[0])
-    for name, targets in rollup.items():
-        if len(targets) == 1:
-            public_names[name] = next(iter(targets))
+    # The ROLLUP (`rollup=True` only): a distinctive industry / sub-industry
+    # name ("Semiconductor Materials & Equipment") reads as the label of the
+    # group it rolls up to — what `gics_registry.display()` shows for those
+    # levels. It is the net for LEGACY industry-report prose (new editions
+    # are rejected by the validator's L1 rule instead), so only the industry
+    # surfaces ask for it: the read routes, the PM's report excerpts and the
+    # report writer's facts. It is NOT the default, because in company-memo
+    # prose the same strings are ordinary industry words — and often a
+    # provider's industry string ("Aerospace & Defense") — and rewriting
+    # them into a broader group label changes what a sentence says ("Unlike
+    # Oil & Gas Exploration & Production peers, XOM refines" would name
+    # XOM's own group as the contrast). A name two groups share is ambiguous
+    # and left for L1; a sector/group name keeps its own mapping above.
+    if rollup:
+        targets_of: dict[str, set[str]] = {}
+        for code, name in names.items():
+            if len(code) in (6, 8) and ("&" in name or "," in name) and name not in public_names:
+                group = labels.entry(code[:4])
+                if group is not None:
+                    targets_of.setdefault(name, set()).add(group[0])
+        for name, targets in targets_of.items():
+            if len(targets) == 1:
+                public_names[name] = next(iter(targets))
     pattern = None
     if public_names:
         alternation = "|".join(re.escape(n) for n in sorted(public_names, key=len, reverse=True))
         pattern = re.compile(rf"(?<![\w&])(?:{alternation})(?![\w])")
     return _Index(names=names, public_names=public_names, public_names_re=pattern,
-                  exact=_exact_table(labels))
+                  exact=_exact_table(labels), rollup=rollup)
 
 
 def clear_cache() -> None:
@@ -309,6 +317,7 @@ def clear_cache() -> None:
     The module constants keep the values read at import."""
     _default_labels.cache_clear()
     _index.cache_clear()
+    _phrase_index.cache_clear()
 
 
 def registry_names() -> dict[str, str]:
@@ -316,6 +325,80 @@ def registry_names() -> dict[str, str]:
     registry name. A copy: the report validator's L1 rule and the
     public-surface tests read it, and neither may edit the cached index."""
     return dict(_index().names)
+
+
+@lru_cache(maxsize=1)
+def _phrase_index() -> tuple[re.Pattern[str] | None, re.Pattern[str] | None]:
+    """(the industry/sub-industry registry-phrase pattern, our labels) —
+    the phrase set the report validator's L1 rule rejects in new prose.
+
+    A phrase is the multi-word registry name of a 6/8-digit node that is
+    not also a sector/group name; single words ("Software", "Restaurants")
+    are ordinary English. Case-sensitive: "Office REITs" is the taxonomy's
+    name, "office REITs" is a description."""
+    names = _index().names
+    upper = {n for c, n in names.items() if len(c) in (2, 4)}
+    phrases = sorted({n for c, n in names.items()
+                      if len(c) in (6, 8) and n not in upper and len(n.split()) > 1}, key=len, reverse=True)
+    phrase_re = (re.compile(r"(?<![\w&])(?:" + "|".join(re.escape(p) for p in phrases) + r")(?![\w])")
+                 if phrases else None)
+    labels = load()
+    ours = sorted({lab for lab, _slug in (*labels.sectors.values(), *labels.groups.values())},
+                  key=len, reverse=True)
+    ours_re = (re.compile(r"(?<![\w&])(?:" + "|".join(re.escape(lab) for lab in ours) + r")(?![\w])")
+               if ours else None)
+    return phrase_re, ours_re
+
+
+def registry_phrase_hits(text: Any) -> list[re.Match[str]]:
+    """Every industry/sub-industry registry phrase in `text` that is not
+    part of one of OUR labels ("Software & IT Services" is our label and
+    contains the registry name "IT Services"; a label is what prose is
+    asked to say, so it is never the leak).
+
+    Matched on the raw text, and a hit is discarded only when it lies
+    wholly inside a label occurrence. Blanking the labels out first (the
+    earlier approach) also blanked the label WORDS inside longer registry
+    names — "Health Care Technology" lost "Technology", "Technology
+    Distributors" became "Distributors" — so those names were never seen."""
+    if not isinstance(text, str) or not text:
+        return []
+    phrase_re, ours_re = _phrase_index()
+    if phrase_re is None:
+        return []
+    spans = [m.span() for m in ours_re.finditer(text)] if ours_re is not None else []
+    return [m for m in phrase_re.finditer(text)
+            if not any(a <= m.start() and m.end() <= b for a, b in spans)]
+
+
+def _plain_word(word: str) -> str:
+    """"Office" → "office"; an acronym ("IT", "REITs") keeps its capitals."""
+    return word if sum(ch.isupper() for ch in word) > 1 else word.lower()
+
+
+def plain_registry_phrases(text: str) -> str:
+    """Write every registry phrase `registry_phrase_hits` finds as an
+    ordinary lower-case description ("Office REITs lease space" → "office
+    REITs lease space"), for text a model is PROMPTED with.
+
+    The mandate's own prose names sub-industries ("Office REITs",
+    "Industrial REITs" in the Property REITs mandate); a model that reads
+    the capitalised name repeats it, and L1 then rejects the edition. The
+    description keeps its meaning — unlike rolling it up to the group
+    label, which would turn four different REIT types into one — and is
+    not the taxonomy's name. Length-preserving (ASCII case change only), so
+    a budget measured on the text still holds after it."""
+    hits = registry_phrase_hits(text)
+    if not hits:
+        return text
+    out: list[str] = []
+    last = 0
+    for m in hits:
+        out.append(text[last:m.start()])
+        out.append(re.sub(r"[A-Za-z]+", lambda w: _plain_word(w.group(0)), m.group(0)))
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out)
 
 
 # --- scrub_text ----------------------------------------------------------------
@@ -455,7 +538,7 @@ def _keep_set(keep: Any) -> frozenset[str]:
     return frozenset(p.strip() for p in (keep or ()) if _keepable(p))
 
 
-def scrub_text(text: str, *, keep: Any = ()) -> str:
+def scrub_text(text: str, *, keep: Any = (), rollup: bool = False) -> str:
     """Remove taxonomy codes, the brand and registry group names from
     prose. A registry name EQUAL to a ``keep`` phrase is left as written
     (the caller's already-public provider industry string: "Household &
@@ -477,7 +560,9 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
     d. standalone known 6/8-digit codes → removed. A bare 4-digit token is
        never touched (2020 and 2030 are years as well as group codes);
     e. multi-word registry sector/group names containing ``&`` or ``,`` →
-       our label (case-sensitive);
+       our label (case-sensitive); with ``rollup=True`` (industry-report
+       surfaces only — see ``_index``) a distinctive industry/sub-industry
+       name → the label of its group as well;
     f. the internal taxonomy key → the public key; any remaining "GICS" is
        dropped before a noun ("the GICS sector" → "the sector") and
        otherwise read as "industry".
@@ -493,7 +578,7 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
         return text
     kept = _keep_set(keep)
     labels = load()
-    idx = _index()
+    idx = _index(rollup)
     out = text
     for old, new in idx.exact:
         if old in out:
@@ -618,7 +703,7 @@ def _code_list_slugs(values: list[Any], idx: _Index, labels: Labels, keep: Any) 
     return out
 
 
-def _constant_for(key: str, value: Any, labels: Labels, keep: Any) -> Any:
+def _constant_for(key: str, value: Any, idx: _Index, labels: Labels, keep: Any) -> Any:
     default = {"attribution": labels.attribution, "mapping_caveat": labels.mapping_caveat,
                "security_reference_caveat": labels.security_reference_caveat}[key]
     if not isinstance(value, str):
@@ -626,10 +711,10 @@ def _constant_for(key: str, value: Any, labels: Labels, keep: Any) -> Any:
     # A known branded sentence maps to its own public twin (the brief
     # attribution is not the taxonomy attribution); any other text that
     # names the brand gets the key's public constant, not a half-scrub.
-    exact = dict(_index().exact)
+    exact = dict(idx.exact)
     if value in exact:
         return exact[value]
-    return default if has_brand(value) else scrub_text(value, keep=keep)
+    return default if has_brand(value) else scrub_text(value, keep=keep, rollup=idx.rollup)
 
 
 def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels, keep: Any) -> dict[Any, Any]:
@@ -661,7 +746,7 @@ def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels, keep: Any) -
         elif k in _PASSTHROUGH_KEYS and (v is None or _keepable(v)):
             out[k] = v
         elif k in _CONSTANT_KEYS:
-            out[k] = _constant_for(k, v, labels, keep)
+            out[k] = _constant_for(k, v, idx, labels, keep)
         elif k == "provenance" and isinstance(v, dict):
             out[k] = {}
         elif k in _VERSION_KEYS and isinstance(v, str) and v.lower().startswith("gics-"):
@@ -694,7 +779,7 @@ def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels, keep: Any) -
 
 def _project(obj: Any, idx: _Index, labels: Labels, keep: Any = ()) -> Any:
     if isinstance(obj, str):
-        return scrub_text(obj, keep=keep)
+        return scrub_text(obj, keep=keep, rollup=idx.rollup)
     if isinstance(obj, dict):
         return _project_dict(obj, idx, labels, keep)
     if isinstance(obj, (list, tuple)):
@@ -702,7 +787,7 @@ def _project(obj: Any, idx: _Index, labels: Labels, keep: Any = ()) -> Any:
     return copy.deepcopy(obj)
 
 
-def project_public(obj: Any, *, keep: Any = ()) -> Any:
+def project_public(obj: Any, *, keep: Any = (), rollup: bool = False) -> Any:
     """A public copy of a JSON-shaped payload (the input is never mutated):
 
     1. ``code`` / ``sector_code`` / ``industry_group_code`` / ``group_code``
@@ -722,14 +807,17 @@ def project_public(obj: Any, *, keep: Any = ()) -> Any:
        publishers → removed, counted in ``<key>_withheld``; a branded
        ``ref`` → the knowledge-base reference.
     6. ``provider_industry`` → kept verbatim (public by design).
-    7. every remaining string → ``scrub_text`` (with ``keep``).
+    7. every remaining string → ``scrub_text`` (with ``keep`` and
+       ``rollup``). ``rollup=True`` is for industry-report surfaces only
+       (the read routes, the PM's report excerpts): see ``_index``.
     """
-    return _project(obj, _index(), load(), keep)
+    return _project(obj, _index(rollup), load(), keep)
 
 
 def project_for_prompt(obj: Any, *, keep: Any = ()) -> Any:
     """The same projection, applied to facts sent to a model: a prompt that
     never contains a code or registry name cannot be echoed into prose.
     A separate name so a prompt-only rule can diverge without moving what
-    API responses carry."""
-    return _project(obj, _index(), load(), keep)
+    API responses carry. Its only caller is the industry report writer,
+    whose prose L1 gates, so the industry rollup applies."""
+    return _project(obj, _index(rollup=True), load(), keep)

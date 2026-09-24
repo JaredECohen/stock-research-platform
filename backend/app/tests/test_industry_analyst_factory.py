@@ -689,3 +689,28 @@ def test_applies_to_is_false_with_routing_off_and_records_nothing():
     inputs = make_inputs("MSFT", industry_group={"state": "mapped", "industry_group_code": "4510"})
     assert ia.applies_to(inputs) is False
     assert inputs.degradation.failures == []
+
+
+def test_no_report_prompt_line_trips_the_validator_l1_rule():
+    """The weekly report writer sends each group analyst's system prompt
+    (and the report rules) to the model, and the validator's L1 rule
+    rejects any registry name the model echoes into new prose. The
+    Property REITs mandate named its sub-industries ("Office REITs lease
+    space ...") in the taxonomy's own capitalisation, so every edition that
+    repeated its own mandate was rejected. Every line, every group."""
+    from app.agents import industry_report_validator as v
+    from app.prompts import load_prompt
+
+    offending: list[tuple[str, list[str], str]] = []
+    for group in reg.industry_groups():
+        for line in ia.get_industry_analyst(group.code).system_prompt().splitlines():
+            if leaks := v.taxonomy_leaks(line, group_code=group.code):
+                offending.append((group.code, leaks, line[:120]))
+    for line in (load_prompt("industry_report") or "").splitlines():
+        if leaks := v.taxonomy_leaks(line):
+            offending.append(("rules", leaks, line[:120]))
+    assert offending == []
+    # The description survives: the Property REITs mandate still says what
+    # an office REIT does, in plain words.
+    reits = ia.get_industry_analyst("6010").system_prompt()
+    assert "office REITs lease space" in reits and "Office REITs" not in reits
