@@ -41,6 +41,12 @@ plus calendar and sweep checks), under their own cap of 30 per night and a
 15-minute budget. Filings and transcripts stay reconciliation-only, and a
 provider-owned ticker's statements are never read here any more.
 
+Last, when OpenAI embeddings are live, a bounded re-index retry (W7): the
+newest zero-chunk in-scope filings and transcripts of the last 14 days are
+indexed again — at most 10 sources, $0.10 and 20 MB a night, never a
+post-pass — so a post-pass that failed on an embedding outage is not lost.
+The note carries `reindexed=` / `reindex_deferred=` and every identity.
+
 Wired in only when `ENABLE_MONITORING=true`; rolling history into local
 SQLite is overkill for the demo loop but essential when the curated
 universe is being driven against live providers.
@@ -193,6 +199,7 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
             fund = fundamental_refresh.nightly()
         except Exception as exc:  # nightly() never raises; this keeps record_run below
             fund = {**fundamental_refresh._empty_result(), "errors": [f"nightly:{type(exc).__name__}"]}
+    reindex = _reindex_retry() if not single else None
     note_parts = [
         f"tickers={len(tickers) - len(deferred)}",
         f"fp={totals['financial_periods']}",
@@ -204,6 +211,9 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
         note_parts.append(f"cold={cold}")
     if fund is not None:
         note_parts.append(f"fund_refreshed={fund['refreshed']} fund_pending={fund['pending']}")
+    if reindex is not None:
+        note_parts.append(f"reindexed={reindex.get('sources_indexed', 0)} "
+                          f"reindex_deferred={len(reindex.get('deferred') or [])}")
     if rate_limited:
         note_parts.append(f"rate_limited={rate_limited}")
     if auth_errors:
@@ -230,14 +240,21 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
         note += f"; bounded filing sources={len(truncated_filings)}: " + truncated_filing_note(truncated_filings)
     if fund is not None:
         note += _fundamentals_note(fund)
+    if reindex is not None:
+        note += _reindex_note(reindex)
     log.info("history_backfill: %s", note)
     # A filed period still missing after its secondary attempt (≈ night 9)
     # is the FIX-005 regression signal: it fails the loop on the night the
     # ticker becomes stuck, and is named without failing afterwards. A
     # period merely lagging inside its retry window is named, not a failure.
     fund_failed = fund is not None and bool(fund["errors"] or fund["stuck"])
+    # The re-index retry fails the loop only if it crashed outright. A source
+    # it could not index already failed its own post-pass night, and an
+    # OpenAI outage is the case this retry exists to absorb.
+    reindex_failed = reindex is not None and bool(reindex.get("crashed"))
     record_run("history_backfill",
-               success=errors == 0 and not post_pass_failures and not fetch_failures and not fund_failed, note=note)
+               success=(errors == 0 and not post_pass_failures and not fetch_failures
+                        and not fund_failed and not reindex_failed), note=note)
     totals["errors"] = errors
     totals["rate_limited"] = rate_limited
     totals["auth_errors"] = auth_errors
@@ -254,7 +271,68 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
         totals["fund_errors"] = len(fund["errors"])
         totals["fund_stuck"] = len(fund["stuck"])
         totals["fund_held"] = len(fund.get("held") or [])
+    if reindex is not None:
+        totals["reindexed"] = int(reindex.get("sources_indexed", 0))
+        totals["reindex_deferred"] = len(reindex.get("deferred") or [])
     return totals
+
+
+# W7 §8.3 / critique: the bounded automatic re-index retry. A post-pass whose
+# embedding call failed (an OpenAI outage, now a raised `EmbeddingUnavailable`
+# rather than a silent hash vector) leaves its source with zero chunks, and
+# `run_ingest_post_passes` never retries. Nightly, re-index the newest such
+# sources inside this existing loop — no new loop, `KNOWN_LOOPS` unchanged —
+# under caps that bound the only automatic corpus spend: at most 10 sources,
+# $0.10 and 20 MB a night, over sources dated in the last 14 days. Never a
+# post-pass: no LLM diff, no memory writes.
+REINDEX_RECENT_DAYS = 14
+REINDEX_MAX_SOURCES = 10
+REINDEX_MAX_USD = 0.10
+REINDEX_MAX_ADDED_MB = 20
+
+
+def _reindex_retry() -> dict | None:
+    """Run the bounded retry, or None when embeddings are not live here.
+
+    Demo mode, CI and a keyless process skip it: their vectors would be hash
+    vectors, which is exactly the unusable class a repair must not create.
+    """
+    from ..services import corpus_repair
+    from ..services import embeddings as emb_svc
+    if not emb_svc.semantic_available():
+        return None
+    now = datetime.utcnow()
+    try:
+        return corpus_repair.index_missing(
+            recent_days=REINDEX_RECENT_DAYS, max_sources=REINDEX_MAX_SOURCES,
+            max_usd=REINDEX_MAX_USD, max_added_mb=REINDEX_MAX_ADDED_MB,
+            receipt=f"history_backfill:{now:%Y-%m-%d}", now=now,
+        )
+    except Exception as exc:
+        log.warning("history_backfill re-index retry crashed error_type=%s", type(exc).__name__)
+        return {"sources_indexed": 0, "deferred": [], "crashed": type(exc).__name__}
+
+
+def _reindex_note(reindex: dict) -> str:
+    """Every source the retry indexed, deferred or failed on, by identity.
+
+    "deferred" here is prefixed with "reindex", keeping it distinct from the
+    cold-read cap's own "deferred N over the …" segment.
+    """
+    note = ""
+    if reindex.get("crashed"):
+        note += f"; reindex crashed: {reindex['crashed']}"
+    if reindex.get("stopped_reason"):
+        note += f"; reindex stopped: {reindex['stopped_reason']}"
+    if reindex.get("indexed"):
+        note += f"; reindexed sources: {note_names(reindex['indexed'])}"
+    if reindex.get("deferred"):
+        note += f"; reindex deferred: {note_names(reindex['deferred'])}"
+    if reindex.get("failures"):
+        note += f"; reindex failures: {note_names(reindex['failures'])}"
+    if reindex.get("empty"):
+        note += f"; reindex wrote no chunks: {note_names(reindex['empty'])}"
+    return note
 
 
 def _fundamentals_note(fund: dict) -> str:
