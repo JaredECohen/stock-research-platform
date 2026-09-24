@@ -290,7 +290,10 @@ export interface CompsHistoryStats {
   own_p25: Record<string, number | null>;
   own_p75: Record<string, number | null>;
   current_percentile: Record<string, number>;
+  /** Relative change, (current - median) / |median|; 0.067 = 6.7% above, not 6.7 points. */
   current_vs_own_median: Record<string, number>;
+  /** Gap in percentage points for rate-type metrics; absent on older payloads. */
+  current_minus_own_median_pp?: Record<string, number>;
   interpretation: string;
 }
 
@@ -605,6 +608,8 @@ export interface ProvidersStatusResponse {
   llm_configured: boolean;
   llm?: LLMStatus;
   feature_flags: Record<string, boolean>;
+  /** What a reported flag actually does, where its name misleads (e.g. a flag no code reads). Absent on older backends. */
+  feature_flag_notes?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------

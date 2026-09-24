@@ -121,6 +121,14 @@ class Settings(BaseSettings):
     use_demo_data: bool = True
     enable_live_data: bool = False
     enable_agent_critic: bool = True
+    # Reported on /api/providers/status, but NO retrieval path reads it: the
+    # filing and earnings analysts query `vector_store.search` first whenever
+    # the ticker is known, and the filing analyst falls back to BM25
+    # (`retrieval_service.search`) when that returns nothing, fails, or is
+    # skipped for lack of a ticker. `false` therefore does not
+    # mean semantic retrieval is off; a production audit read it that way.
+    # Whether a real switch should exist is a retrieval-policy decision for
+    # the owner.
     enable_vector_search: bool = False
     # Phase 3: route single_stock_analysis through the OpenAI Agents SDK
     # instead of the legacy hand-rolled graph. Default off so existing tests

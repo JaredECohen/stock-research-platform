@@ -34,6 +34,15 @@ _METRICS = (
     "roic", "pe", "ev_revenue", "ev_ebitda", "p_fcf", "fcf_yield",
 )
 
+# Metrics stored as fractions of 1 (a rate, not a multiple). Their gap to the
+# own-history median is stated in percentage points: a relative change on a
+# margin reads as points, and the saved META v1 comps narrative turned a 6.7%
+# relative gap (41.44% vs 38.825%) into "6.7 percentage points" (it is 2.6).
+PERCENT_POINT_METRICS = (
+    "revenue_growth", "gross_margin", "operating_margin", "ebitda_margin",
+    "roic", "fcf_yield",
+)
+
 # Line items we need from `history_service` to recompute every metric in
 # `_METRICS`. Pre-flattened so the caller makes one trip.
 _NEEDED_LINES = (
@@ -271,6 +280,7 @@ def build_history_stats(
     own_p75: dict[str, float | None] = {}
     current_percentile: dict[str, float] = {}
     current_vs_own_median: dict[str, float] = {}
+    current_minus_own_median_pp: dict[str, float] = {}
     for metric in _METRICS:
         series = [
             v for m in per_period_metrics
@@ -297,6 +307,9 @@ def build_history_stats(
             continue
         current_percentile[metric] = round(_percentile_in(series, target_val), 3)
         med_v = own_median[metric]
+        if med_v is not None and metric in PERCENT_POINT_METRICS:
+            # Defined even at a zero median, where the relative change is not.
+            current_minus_own_median_pp[metric] = round((target_val - med_v) * 100, 2)
         if med_v is not None and med_v != 0:
             current_vs_own_median[metric] = round(
                 (target_val - med_v) / abs(med_v), 3,
@@ -329,5 +342,6 @@ def build_history_stats(
         own_p75=own_p75,
         current_percentile=current_percentile,
         current_vs_own_median=current_vs_own_median,
+        current_minus_own_median_pp=current_minus_own_median_pp,
         interpretation=interpretation,
     )

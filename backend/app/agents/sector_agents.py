@@ -72,14 +72,16 @@ def _format_trends(trends: dict) -> list[str]:
     g = trends.get("cohort_revenue_growth_recent")
     if g is not None:
         out.append(f"Cohort revenue growth (recent): {g:+.1%}")
+    # Both deltas are differences of two ratios (now minus then), i.e.
+    # percentage points; printed with `%` they read as relative changes.
     om_d = trends.get("cohort_op_margin_delta")
     if om_d is not None:
         direction = "expanding" if om_d > 0.01 else "compressing" if om_d < -0.01 else "stable"
-        out.append(f"Cohort op margin {direction} ({om_d:+.1%} multi-year)")
+        out.append(f"Cohort op margin {direction} ({om_d * 100:+.1f}pp multi-year)")
     cx_d = trends.get("cohort_capex_delta")
     if cx_d is not None:
         direction = "intensifying" if cx_d > 0.005 else "moderating" if cx_d < -0.005 else "steady"
-        out.append(f"Cohort capex intensity {direction} ({cx_d:+.1%} multi-year)")
+        out.append(f"Cohort capex intensity {direction} ({cx_d * 100:+.1f}pp multi-year)")
     return out
 
 
@@ -205,7 +207,7 @@ def _deterministic_bull_bear_analysis(
     om_d = trends.get("cohort_op_margin_delta")
     if om_d is not None and om_d < -0.005:
         bear_points.append(
-            f"Cohort op margin compressing ({om_d:+.1%} multi-year) — competitive intensity is rising."
+            f"Cohort op margin compressing ({om_d * 100:+.1f}pp multi-year) — competitive intensity is rising."
         )
     val = placements.get("EV_EBITDA") or placements.get("PFCF")
     if val and val.get("quartile") in (3, 4):
