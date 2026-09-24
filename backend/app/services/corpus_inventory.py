@@ -20,7 +20,13 @@ into a 512 MiB worker, and nothing here needs a vector — only whether one is
 there (`IS [NOT] NULL`) and how big it is stored (`pg_column_size`).
 `test_corpus_inventory.test_census_never_selects_embedding_values` enforces
 this with a SQL hook. `filing_docs.sections` bodies are MBs, so the fetch
-error flag is read by JSON path for candidate ids only.
+error flag and whether any section holds text are computed by JSON path in
+the database, for candidate ids only, and come back as flags.
+
+Bytes are *gross*: what a run adds to the database before any VACUUM. An
+in-place re-embed does not shrink Postgres — MVCC keeps the superseded value
+until VACUUM, which only makes the space reusable — so the old value's size
+is reported separately (`superseded_bytes`) and never credited.
 """
 from __future__ import annotations
 
@@ -55,6 +61,9 @@ LEGACY_DIM = 3072  # text-embedding-3-large, 2026-05-06 → 2026-05-30
 SQLITE_OK_EMBEDDING_BYTES = 31_000
 VECTOR_COLUMN_BYTES = 6_160
 CHUNK_TEXT_BYTES = 2_500
+# With pgvector, every usable row also gets an HNSW entry: another copy of
+# the 1536 float4s plus its layer-0 neighbour links (m=16 → 32 tids).
+HNSW_ROW_BYTES = 6_400
 # sqlite has no `pg_column_size`; a stored JSON float is ~20 characters, so
 # a row's current embedding is estimated from its recorded dimension.
 SQLITE_JSON_BYTES_PER_DIM = 20
@@ -71,6 +80,12 @@ TRANSCRIPT_WINDOW_DAYS = 2 * 365
 _PHASE2_BATCH = 500
 
 MB = 1024 * 1024
+
+
+def vector_row_bytes(pgvector: bool) -> int:
+    """Bytes a usable vector adds beyond its JSON embedding: the pgvector
+    column, and its HNSW entry when pgvector is live."""
+    return VECTOR_COLUMN_BYTES + (HNSW_ROW_BYTES if pgvector else 0)
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +245,9 @@ class MissingSource:
     date: date | None
     word_count: int
     category: str
+    # When the row was last written. A source written moments ago may have
+    # its own post-pass in flight; `corpus_repair.index_missing` leaves it.
+    fetched_at: datetime | None = None
 
     @property
     def identity(self) -> str:
@@ -250,20 +268,48 @@ def _truthy_flag(value: Any) -> bool:
     return str(value).strip().lower() not in ("", "0", "false", "null", "none")
 
 
-def _fetch_error_ids(db: Session, ids: list[int]) -> set[int]:
-    """Filing ids whose stored body is a failed fetch.
+def _section_has_text(key: str):
+    """SQL: the section `key` holds something `index_filing` could chunk.
 
-    Phase 2 of the anti-join: a JSON-path projection over the candidate ids
-    only, never the `sections` body itself.
+    Evaluated in the database; only the boolean comes back. A JSON list is
+    returned as its JSON text, so an empty list (`[]`) is excluded here too.
     """
+    value = FilingDoc.sections[key].as_string()
+    trimmed = func.trim(value)
+    return and_(value.is_not(None), func.length(trimmed) > 0, trimmed.not_in(("[]", '""', "{}", "null")))
+
+
+def _filing_body_flags(db: Session, ids: list[int]) -> tuple[set[int], set[int]]:
+    """(ids whose stored body is a failed fetch, ids with any text section).
+
+    Phase 2 of the anti-join: JSON-path projections over the candidate ids
+    only, never the `sections` body itself.
+
+    The second set is what separates an indexable filing from one that will
+    always index to zero chunks. `index_filing` chunks `sections` only, and
+    an 8-K's items map to none of the section keys, so a fetched 8-K stores
+    `{"_source_metadata": ...}` with its whole body in `raw_text` — a
+    positive `word_count` and nothing to embed. Counted as indexable, each
+    one took a nightly retry slot, newest first, until a real 10-Q whose
+    post-pass hit an outage was never reached.
+    """
+    from .history_service import FILING_SECTION_KEYS
+
+    one: ColumnElement[Any] = literal_column("1")
+    zero: ColumnElement[Any] = literal_column("0")
     flag = FilingDoc.sections[("_source_metadata", "text_fetch_error")].as_string()
-    out: set[int] = set()
+    has_text = case((or_(*(_section_has_text(k) for k in FILING_SECTION_KEYS)), one), else_=zero)
+    fetch_errors: set[int] = set()
+    with_text: set[int] = set()
     for start in range(0, len(ids), _PHASE2_BATCH):
         chunk = ids[start:start + _PHASE2_BATCH]
-        for fid, value in db.execute(select(FilingDoc.id, flag).where(FilingDoc.id.in_(chunk))).all():
+        rows = db.execute(select(FilingDoc.id, flag, has_text).where(FilingDoc.id.in_(chunk))).all()
+        for fid, value, text_flag in rows:
             if _truthy_flag(value):
-                out.add(int(fid))
-    return out
+                fetch_errors.add(int(fid))
+            if text_flag:
+                with_text.add(int(fid))
+    return fetch_errors, with_text
 
 
 def missing_sources(db: Session, *, now: datetime, since: date | None = None) -> list[MissingSource]:
@@ -277,7 +323,8 @@ def missing_sources(db: Session, *, now: datetime, since: date | None = None) ->
       * `demo` — DEMO accession, or a ticker that is not a company;
       * `fetch_error` — the stored filing body is a failed fetch (skipped
         on purpose at ingest; indexing it would index an error page);
-      * `empty_body` — nothing to embed;
+      * `empty_body` — nothing to embed: no words, or (filings) no text in
+        any section `index_filing` chunks — an 8-K's body is `raw_text` only;
       * `out_of_scope` — not an auto-pull-tier ticker and no memo, or older
         than the analysts' window (3 years for filings, 2 for transcripts);
       * `indexable` — everything else.
@@ -294,13 +341,13 @@ def missing_sources(db: Session, *, now: datetime, since: date | None = None) ->
 
     filing_stmt = select(
         FilingDoc.id, FilingDoc.ticker, FilingDoc.filing_date, FilingDoc.word_count,
-        FilingDoc.accession_number,
+        FilingDoc.accession_number, FilingDoc.fetched_at,
     ).where(~exists(select(DocChunk.id).where(
         DocChunk.source_type == "filing", DocChunk.source_id == FilingDoc.id,
     )))
     transcript_stmt = select(
         EarningsTranscript.id, EarningsTranscript.ticker, EarningsTranscript.call_date,
-        EarningsTranscript.word_count,
+        EarningsTranscript.word_count, EarningsTranscript.fetched_at,
     ).where(~exists(select(DocChunk.id).where(
         DocChunk.source_type == "transcript", DocChunk.source_id == EarningsTranscript.id,
     )))
@@ -316,26 +363,26 @@ def missing_sources(db: Session, *, now: datetime, since: date | None = None) ->
 
     out: list[MissingSource] = []
     non_demo_filings: list[int] = []
-    staged: list[tuple[int, str, date | None, int, bool]] = []
-    for fid, ticker, filed, wc, accession in filings:
+    staged: list[tuple[int, str, date | None, int, bool, datetime | None]] = []
+    for fid, ticker, filed, wc, accession, fetched in filings:
         demo = ticker not in tiers or "DEMO" in (accession or "").upper()
-        staged.append((int(fid), ticker, filed, int(wc or 0), demo))
+        staged.append((int(fid), ticker, filed, int(wc or 0), demo, fetched))
         if not demo:
             non_demo_filings.append(int(fid))
-    fetch_errors = _fetch_error_ids(db, non_demo_filings)
-    for fid, ticker, filed, wc, demo in staged:
+    fetch_errors, with_text = _filing_body_flags(db, non_demo_filings)
+    for fid, ticker, filed, wc, demo, fetched in staged:
         if demo:
             cat = "demo"
         elif fid in fetch_errors:
             cat = "fetch_error"
-        elif wc <= 0:
+        elif wc <= 0 or fid not in with_text:
             cat = "empty_body"
         elif not in_scope(ticker) or filed is None or filed < filing_floor:
             cat = "out_of_scope"
         else:
             cat = "indexable"
-        out.append(MissingSource("filing", fid, ticker, filed, wc, cat))
-    for tid, ticker, called, wc in transcripts:
+        out.append(MissingSource("filing", fid, ticker, filed, wc, cat, fetched))
+    for tid, ticker, called, wc, fetched in transcripts:
         wc = int(wc or 0)
         if ticker not in tiers:
             cat = "demo"
@@ -345,12 +392,12 @@ def missing_sources(db: Session, *, now: datetime, since: date | None = None) ->
             cat = "out_of_scope"
         else:
             cat = "indexable"
-        out.append(MissingSource("transcript", int(tid), ticker, called, wc, cat))
+        out.append(MissingSource("transcript", int(tid), ticker, called, wc, cat, fetched))
     return out
 
 
-def index_missing_bytes(sources: Iterable[MissingSource], avg_ok: int) -> int:
-    return sum(s.est_chunks for s in sources) * (avg_ok + VECTOR_COLUMN_BYTES + CHUNK_TEXT_BYTES)
+def index_missing_bytes(sources: Iterable[MissingSource], avg_ok: int, pgvector: bool = False) -> int:
+    return sum(s.est_chunks for s in sources) * (avg_ok + vector_row_bytes(pgvector) + CHUNK_TEXT_BYTES)
 
 
 # ---------------------------------------------------------------------------
@@ -435,13 +482,16 @@ def build_inventory(*, now: datetime | None = None) -> dict[str, Any]:
         "rows": re_rows,
         "tokens": re_tokens,
         "usd": round(emb_svc.tokens_to_usd(re_tokens), 8),
-        "added_bytes": re_rows * (avg_ok + VECTOR_COLUMN_BYTES) - int(re_current),
+        # Gross: the new value is written beside the old one, which only
+        # VACUUM releases (and then only for reuse). Never net of it.
+        "added_bytes": re_rows * (avg_ok + vector_row_bytes(pgvector)),
+        "superseded_bytes": int(re_current),
     }
     index_plan = {
         "sources": len(indexable),
         "est_tokens": ix_tokens,
         "usd": round(emb_svc.tokens_to_usd(ix_tokens), 8),
-        "added_bytes": index_missing_bytes(indexable, avg_ok),
+        "added_bytes": index_missing_bytes(indexable, avg_ok, pgvector),
     }
     return {
         "generated_at": now.isoformat(),

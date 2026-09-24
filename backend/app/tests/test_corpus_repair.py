@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -92,7 +93,7 @@ def test_ok_orphan_demo_rows_untouched(corpus_db, live_openai):  # noqa: F811
 
 def test_concurrent_change_guard_skips(corpus_db, live_openai, monkeypatch):  # noqa: F811
     ids, _ = seed(corpus_db)
-    raced = ids["hash"][0]
+    raced = ids["hash"][1]  # mid-range, so the receipt's id ranges must show the gap
     real_embed = emb_svc.embed
 
     def embed_while_reindexed(texts):
@@ -109,6 +110,9 @@ def test_concurrent_change_guard_skips(corpus_db, live_openai, monkeypatch):  # 
     assert res["skipped_changed"] == 1 and res["rows_repaired"] == 6
     row = corpus_db.rows()[raced]
     assert (row.embedding_model, row.meta) == ("fresh", {"fresh": True})
+    # The receipt claims only the rows it rewrote.
+    targets = _target_ids(ids)
+    assert res["chunk_id_ranges"] == [[targets[0], raced - 1], [raced + 1, targets[-1]]]
 
 
 def _repair_with(corpus_db, **caps):  # noqa: F811
@@ -131,11 +135,15 @@ def test_caps_stop_before_exceeding_usd(corpus_db, live_openai):  # noqa: F811
 
 def test_caps_stop_before_exceeding_bytes(corpus_db, live_openai):  # noqa: F811
     seed(corpus_db)
-    # Batch 1 = two hash rows: 2 × (31 000 + 6 160 − 256 × 20) = 64 080 bytes.
-    # Batch 2 adds a hash and a (shrinking) 3072 row: +7 760 → 71 840 > 70 000.
-    res = _repair_with(corpus_db, max_added_mb=70_000 / ci.MB)
+    # Every re-embedded row is charged gross: 31 000 + 6 160 = 37 160 bytes.
+    # Batch 1 = two hash rows: 74 320. Batch 2 = a hash and a 3072-dim legacy
+    # row. Netting out the old values used to price the legacy row at
+    # −24 280 (it "shrinks"), so batch 2 looked like +7 760 and ran; on
+    # Postgres the old value stays on disk until VACUUM, so it really adds
+    # 74 320 more, crossing 100 000.
+    res = _repair_with(corpus_db, max_added_mb=100_000 / ci.MB)
     assert res["stopped_reason"] == cr.STOP_MAX_ADDED_MB
-    assert res["rows_repaired"] == 2 and res["added_bytes_est"] == 64_080
+    assert res["rows_repaired"] == 2 and res["added_bytes_est"] == 74_320
 
 
 def test_db_ceiling_refuses(corpus_db, live_openai):  # noqa: F811
@@ -162,12 +170,201 @@ def test_usage_tokens_drive_the_cap(corpus_db, live_openai):  # noqa: F811
     # (5-19). Estimates alone would repair all 7 rows for 95 tokens.
     live_openai.tokens_per_text = 1_000
     res = _repair_with(corpus_db, max_usd=emb_svc.tokens_to_usd(1_500))
+    # The documented bound: only the first batch billed above its estimate
+    # can overshoot (here 2 000 against 1 500); billing is known only after
+    # the call. The run stops there instead of repairing all 7.
     assert res["tokens"] == 2_000 and res["rows_repaired"] == 2
     assert res["stopped_reason"] == cr.STOP_MAX_USD
     # A response without `usage` is still charged, at our own count.
     live_openai.tokens_per_text = None
     res = cr.reembed(**GENEROUS, now=NOW)
     assert res["tokens_estimated"] > 0 and res["tokens"] == res["tokens_estimated"]
+
+
+def test_observed_billing_ratio_prevents_a_second_overshoot(corpus_db, live_openai):  # noqa: F811
+    """Batch 1 (rows 5+5 tokens) bills 20: twice our estimate. Batch 2 is
+    estimated at 5+11=16, which at face value fits a 39-token cap (20+16)
+    but bills 20 more, to 40. Scaled by the observed ratio it projects to
+    52 and the run stops within the cap."""
+    seed(corpus_db)
+    cap = emb_svc.tokens_to_usd(39)
+    res = _repair_with(corpus_db, max_usd=cap)
+    assert res["stopped_reason"] == cr.STOP_MAX_USD
+    assert res["tokens"] == 20 and res["rows_repaired"] == 2
+    assert emb_svc.tokens_to_usd(res["tokens"]) <= cap
+
+
+@pytest.mark.parametrize("cap", ["max_usd", "max_added_mb", "max_rows", "max_sources", "max_db_mb"])
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -1])
+def test_non_finite_or_negative_caps_are_refused(corpus_db, live_openai, monkeypatch, capsys, cap, bad):  # noqa: F811
+    """`nan < 0` is False and nothing is ever `> inf`: such a cap passed the
+    sign check and then never bound, so `--max-db-mb inf` satisfied the
+    mandatory ceiling. A negative one escaped as a traceback (exit 1, which
+    means "stopped by a cap, resumable") after the census had been built."""
+    seed(corpus_db)
+    before = _snapshot(corpus_db)
+    klass = "index-missing" if cap == "max_sources" else "reembed"
+    kwargs = {"max_usd": 1.0, "max_rows": 100, "max_sources": 10, "max_added_mb": 100.0,
+              "max_db_mb": 10_000.0, cap: bad}
+    monkeypatch.setattr(cr.inv_svc, "build_inventory", lambda **kw: pytest.fail("census built before refusing"))
+    receipt = cr.run(mode="apply", klass=klass, now=NOW, **kwargs)
+    assert receipt["exit_code"] == 2 and cap in receipt["refused"]
+    json.dumps(receipt, allow_nan=False)  # a strict-JSON receipt, even echoing a NaN cap
+    with pytest.raises(ValueError):
+        if klass == "reembed":
+            cr.reembed(max_usd=kwargs["max_usd"], max_rows=kwargs["max_rows"],
+                       max_added_mb=kwargs["max_added_mb"], max_db_mb=kwargs["max_db_mb"], now=NOW)
+        else:
+            cr.index_missing(max_sources=kwargs["max_sources"], max_usd=kwargs["max_usd"],
+                             max_added_mb=kwargs["max_added_mb"], max_db_mb=kwargs["max_db_mb"], now=NOW)
+    assert live_openai.calls == [] and _snapshot(corpus_db) == before
+    if cap in ("max_rows", "max_sources") or math.isfinite(bad):
+        return  # argparse's int type already rejects nan/inf; -1 is covered above
+    # Through the CLI: argparse's float accepts "nan" and "inf"; the run
+    # refuses them and the printed line stays strict JSON.
+    flag = "--" + cap.replace("_", "-")
+    assert _cli().main(["--apply", "--class", klass, "--max-db-mb", "10000", flag, str(bad)]) == 2
+    line = capsys.readouterr().out.strip().splitlines()[-1]
+    json.loads(line.split(" ", 1)[1], parse_constant=lambda c: pytest.fail(f"bare {c} in the receipt"))
+
+
+def test_db_ceiling_zero_is_refused(corpus_db, live_openai):  # noqa: F811
+    seed(corpus_db)
+    receipt = cr.run(mode="apply", klass="reembed", max_db_mb=0, now=NOW)
+    assert receipt["exit_code"] == 2 and "max_db_mb" in receipt["refused"]
+
+
+def _growing_db(monkeypatch, step=200_000, base=10 * ci.MB):
+    """`_measure_db` reporting a database that grows `step` bytes per read."""
+    reads = []
+
+    def measure():
+        reads.append(base + step * len(reads))
+        return reads[-1]
+
+    monkeypatch.setattr(cr, "_measure_db", measure)
+    return reads
+
+
+def test_db_ceiling_is_remeasured_before_every_batch(corpus_db, live_openai, monkeypatch):  # noqa: F811
+    """Estimates miss real growth (dead tuples, TOAST, index pages); only the
+    measured size sees it, so it is read before every batch — a size read
+    once at the start would let a long run grow far past the ceiling."""
+    seed(corpus_db)
+    reads = _growing_db(monkeypatch)
+    ceiling_mb = (10 * ci.MB + 220_000) / ci.MB
+    # Batch 1 projects 10 MB + 74 320: fits. Batch 2 reads 10 MB + 200 000,
+    # projects 274 320 over the base: past the ceiling.
+    res = _repair_with(corpus_db, max_db_mb=ceiling_mb)
+    assert res["stopped_reason"] == cr.STOP_MAX_DB_MB and res["rows_repaired"] == 2 and len(reads) == 2
+
+
+def test_db_ceiling_is_remeasured_before_every_source(corpus_db, live_openai, monkeypatch):  # noqa: F811
+    _, sources = seed(corpus_db)
+    reads = _growing_db(monkeypatch)
+    ceiling_mb = (10 * ci.MB + 220_000) / ci.MB
+    # Source 1 (2 est. chunks, 79 320) fits; source 2 reads +200 000 and
+    # adds 39 660: past the ceiling.
+    res = cr.index_missing(max_sources=10, max_usd=1.0, max_added_mb=100, max_db_mb=ceiling_mb, now=NOW)
+    assert res["stopped_reason"] == cr.STOP_MAX_DB_MB and len(reads) == 2
+    assert res["indexed"] == [f"AAA:filing:{sources['f_indexable']}"]
+    assert res["deferred"] == [f"AAA:transcript:{sources['t_indexable']}", f"CCC:filing:{sources['f_memo_scope']}"]
+
+
+def test_unmeasurable_db_with_a_ceiling_stops_before_spending(corpus_db, live_openai, monkeypatch):  # noqa: F811
+    seed(corpus_db)
+    before = _snapshot(corpus_db)
+    monkeypatch.setattr(cr, "_measure_db", lambda: None)
+    res = cr.reembed(**GENEROUS, max_db_mb=10_000, now=NOW)
+    out = cr.index_missing(max_sources=10, max_usd=1.0, max_added_mb=100, max_db_mb=10_000, now=NOW)
+    assert res["stopped_reason"] == out["stopped_reason"] == cr.STOP_DB_SIZE_UNKNOWN
+    assert live_openai.calls == [] and _snapshot(corpus_db) == before
+
+
+def test_reembed_outage_stops_and_is_resumable(corpus_db, live_openai, monkeypatch):  # noqa: F811
+    """An outage mid-run keeps every committed batch, stops at once (no call
+    per remaining batch), exits 1 with a receipt, and the next run finishes."""
+    ids, _ = seed(corpus_db)
+    real_create = live_openai.create
+
+    def create_then_fail(**kw):
+        if live_openai.calls:
+            live_openai.calls.append(list(kw["input"]))
+            raise ConnectionError("provider down")
+        return real_create(**kw)
+
+    monkeypatch.setattr(live_openai, "create", create_then_fail)
+    res = _repair_with(corpus_db)
+    assert res["stopped_reason"] == cr.STOP_EMBEDDING_UNAVAILABLE
+    assert res["rows_repaired"] == 2 and len(live_openai.calls) == 2
+    unusable = [i for i in _target_ids(ids) if corpus_db.rows()[i].embedding_dim != emb_svc.EMBEDDING_DIM
+                or corpus_db.rows()[i].embedding is None]
+    assert len(unusable) == 5
+    receipt = cr.run(mode="apply", klass="reembed", max_db_mb=10_000, now=NOW)
+    assert receipt["exit_code"] == 1 and receipt["stopped_reason"] == cr.STOP_EMBEDDING_UNAVAILABLE
+    assert receipt["results"]["rows_repaired"] == 0 and "provider down" not in json.dumps(receipt)
+    monkeypatch.setattr(live_openai, "create", real_create)
+    again = cr.reembed(**GENEROUS, now=NOW)
+    assert again["rows_repaired"] == 5 and again["stopped_reason"] is None
+
+
+def test_index_missing_caps_stop_before_exceeding_usd(corpus_db, live_openai):  # noqa: F811
+    _, sources = seed(corpus_db)
+    everything = [f"AAA:filing:{sources['f_indexable']}", f"AAA:transcript:{sources['t_indexable']}",
+                  f"CCC:filing:{sources['f_memo_scope']}"]
+    # The newest source is estimated at ceil(400 × 1.3) = 520 tokens.
+    res = cr.index_missing(max_sources=10, max_usd=emb_svc.tokens_to_usd(519), max_added_mb=100, now=NOW)
+    assert res["stopped_reason"] == cr.STOP_MAX_USD and res["sources_indexed"] == 0
+    assert res["deferred"] == everything and live_openai.calls == []
+    # Room for the first two (520, then 65 on top of what was billed), not
+    # the 1 170-token third.
+    res = cr.index_missing(max_sources=10, max_usd=emb_svc.tokens_to_usd(600), max_added_mb=100, now=NOW)
+    assert res["stopped_reason"] == cr.STOP_MAX_USD and res["indexed"] == everything[:2]
+    assert res["deferred"] == everything[2:]
+
+
+def test_index_missing_caps_stop_before_exceeding_bytes(corpus_db, live_openai):  # noqa: F811
+    _, sources = seed(corpus_db)
+    # The newest source: 2 est. chunks × (31 000 + 6 160 + 2 500) = 79 320.
+    res = cr.index_missing(max_sources=10, max_usd=1.0, max_added_mb=79_319 / ci.MB, now=NOW)
+    assert res["stopped_reason"] == cr.STOP_MAX_ADDED_MB and res["sources_indexed"] == 0
+    assert len(res["deferred"]) == 3 and live_openai.calls == []
+
+
+def test_index_missing_rechecks_chunks_and_isolates_failures(corpus_db, live_openai, monkeypatch):  # noqa: F811
+    ids, sources = seed(corpus_db)
+    with corpus_db.Session() as db:
+        stale = next(s for s in ci.missing_sources(db, now=NOW) if s.id == sources["f_indexable"])
+    # A census that is out of date: filing `ok[0]`'s source already has chunks.
+    with corpus_db.Session() as db:
+        has_chunks = db.get(DocChunk, ids["ok"][0]).source_id
+    real_missing = ci.missing_sources
+    monkeypatch.setattr(ci, "missing_sources", lambda db, **kw: [
+        ci.MissingSource("filing", has_chunks, "AAA", stale.date, 400, "indexable"), *real_missing(db, **kw)])
+    before = _snapshot(corpus_db)
+    real_index = filing_memory.index_filing
+
+    def index_or_fail(row):
+        if row.id == sources["f_indexable"]:
+            raise ValueError("unparseable section")
+        return real_index(row)
+
+    monkeypatch.setattr(filing_memory, "index_filing", index_or_fail)
+    res = cr.index_missing(max_sources=2, max_usd=1.0, max_added_mb=100, now=NOW)
+    # The stale candidate is skipped without a slot; the failing one is named
+    # by type and does not stop the rest.
+    assert res["skipped_changed"] == [f"AAA:filing:{has_chunks}"]
+    assert res["failures"] == [f"AAA:filing:{sources['f_indexable']}:ValueError"]
+    assert res["indexed"] == [f"AAA:transcript:{sources['t_indexable']}"]
+    after = _snapshot(corpus_db)
+    assert {i: v for i, v in after.items() if i in before} == before  # good chunks untouched
+
+
+def test_apply_without_a_class_is_refused(corpus_db, live_openai):  # noqa: F811
+    seed(corpus_db)
+    before = _snapshot(corpus_db)
+    assert _cli().main(["--apply", "--max-db-mb", "10000"]) == 2  # --class defaults to "all"
+    assert live_openai.calls == [] and _snapshot(corpus_db) == before
 
 
 def test_apply_refuses_without_key(corpus_db, monkeypatch):  # noqa: F811

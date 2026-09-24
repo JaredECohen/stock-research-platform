@@ -14,9 +14,11 @@ from datetime import date, datetime
 
 import pytest
 
+from app.models import FilingDoc
 from app.services import corpus_inventory as ci
 from app.services import embeddings as emb_svc
-from app.tests.corpus_fixtures import NOW, corpus_db, embedding_value_refs  # noqa: F401
+from app.services import filing_memory
+from app.tests.corpus_fixtures import EIGHT_K, NOW, corpus_db, embedding_value_refs, ingest_sec_filings  # noqa: F401
 
 MAY, JUNE = datetime(2026, 5, 10), datetime(2026, 6, 10)
 
@@ -107,6 +109,28 @@ def test_sources_without_chunks_split(corpus_db):  # noqa: F811
     assert recent == {sources["f_indexable"]}
 
 
+def test_a_fetched_8k_is_empty_body_not_indexable(corpus_db):  # noqa: F811
+    """An 8-K's items map to no section key, so the real ingest path stores
+    `sections={"_source_metadata": ...}` and the whole body in `raw_text`:
+    a positive `word_count` and nothing `index_filing` would ever chunk.
+    Classed `indexable`, each one took a nightly retry slot forever."""
+    corpus_db.company("AAA")
+    (eight_k,) = ingest_sec_filings(corpus_db, "AAA", [("AAA-8K-1", date(2026, 9, 20), "8-K", EIGHT_K)])
+    blank = corpus_db.filing(ticker="AAA", accession="AAA-BLANK", words=300,
+                             sections={"mda": "   ", "risk_factors": [], "segments": None})
+    listed = corpus_db.filing(ticker="AAA", accession="AAA-LIST", words=300,
+                              sections={"risk_factors": ["Supply concentration."]})
+    with corpus_db.Session() as db:
+        row = db.get(FilingDoc, eight_k)
+        assert set(row.sections) == {"_source_metadata"} and row.word_count > 0  # the real shape
+        db.expunge(row)
+        by_id = {s.id: s.category for s in ci.missing_sources(db, now=NOW)}
+    assert list(filing_memory._iter_filing_chunks(row)) == []  # nothing to embed, ever
+    assert by_id == {eight_k: "empty_body", blank: "empty_body", listed: "indexable"}
+    plan = ci.build_inventory(now=NOW)["repair_plan"]["index_missing"]
+    assert plan["sources"] == 1  # the 8-K no longer inflates tokens, USD or bytes
+
+
 def test_cost_and_bytes_arithmetic(corpus_db):  # noqa: F811
     seed(corpus_db)
     plan = ci.build_inventory(now=NOW)["repair_plan"]
@@ -116,7 +140,10 @@ def test_cost_and_bytes_arithmetic(corpus_db):  # noqa: F811
     current = (3 * 256 + 3072 + 768) * ci.SQLITE_JSON_BYTES_PER_DIM  # null embeddings store nothing
     assert plan["reembed"] == {
         "rows": 7, "tokens": tokens, "usd": round(tokens / 1e6 * emb_svc.EMBEDDING_USD_PER_MTOK, 8),
-        "added_bytes": 7 * (ci.SQLITE_OK_EMBEDDING_BYTES + ci.VECTOR_COLUMN_BYTES) - current,
+        # Gross, never net of the superseded values: an in-place UPDATE does
+        # not shrink the database until VACUUM (and then only for reuse).
+        "added_bytes": 7 * (ci.SQLITE_OK_EMBEDDING_BYTES + ci.VECTOR_COLUMN_BYTES),
+        "superseded_bytes": current,
     }
     words = (400, 900, 50)
     est = [math.ceil(w * 1.3) for w in words]

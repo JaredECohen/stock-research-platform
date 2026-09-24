@@ -18,13 +18,20 @@ orphan and demo rows are reported by the census, never re-embedded and never
 deleted.
 
 Caps. Every run is bounded by dollars, rows or sources, and added bytes,
-checked *before* each batch or source against the projected cost, so a run
-stops before exceeding a cap rather than after. Spend is the provider's
-`usage.total_tokens` (`embeddings.usage_meter`); a chunk's `token_count` is
-only the pre-batch estimate. `max_db_mb` is an absolute ceiling on the whole
-database, measured (`pg_database_size`) before every batch and source —
-`basic-256mb` Postgres has unknown free storage, and storage, not money, is
-what a repair can exhaust.
+checked *before* each batch or source against the projected cost. Spend is
+the provider's `usage.total_tokens` (`embeddings.usage_meter`); a chunk's
+`token_count` (a source's `word_count`) is only the pre-batch estimate, so
+the one overshoot the USD cap allows is the first batch or source the
+provider bills above that estimate. From then on each projection is scaled
+by the billed/estimated ratio observed so far (never below 1), so the run
+stops before a second. Bytes are gross (`corpus_inventory`: nothing is
+credited for superseded values, which only VACUUM releases). `max_db_mb` is
+an absolute ceiling on the whole database, measured (`pg_database_size`)
+before every batch and source — `basic-256mb` Postgres has unknown free
+storage, and storage, not money, is what a repair can exhaust, so this
+measured ceiling, not the estimate, is the backstop. Every cap must be a
+finite non-negative number (`max_db_mb` positive); NaN or inf would make a
+comparison that never binds.
 
 Callers: the operator CLI (`scripts/corpus_repair.py`, dry-run `--plan`
 first) and one bounded automatic retry inside `history_backfill` (≤10 recent
@@ -33,6 +40,7 @@ sources, ≤$0.10, ≤20 MB a night). Nothing here runs on import.
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta
@@ -50,6 +58,9 @@ from . import vector_store
 log = logging.getLogger(__name__)
 
 REEMBED_BATCH = 64
+# How long after a source row is written before `index_missing` may touch
+# it (see there). A 10-K's post-pass takes a minute or two.
+SETTLE = timedelta(hours=1)
 CLASSES = ("reembed", "index-missing")
 
 # Why a run ended early. None means it ran out of work.
@@ -71,10 +82,30 @@ def new_receipt_id(now: datetime | None = None) -> str:
     return f"cr-{now:%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}"
 
 
+def _valid_cap(value: object, *, positive: bool = False) -> bool:
+    # `nan < 0` is False and `x > inf` never true: a NaN or inf cap would
+    # pass a sign check and then never stop anything.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value) and (value > 0 if positive else value >= 0)
+
+
 def _require_caps(**caps: float | int | None) -> None:
     for name, value in caps.items():
-        if value is None or value < 0:
-            raise ValueError(f"corpus repair cap {name} must be a non-negative number, got {value!r}")
+        if not _valid_cap(value):
+            raise ValueError(f"corpus repair cap {name} must be a finite non-negative number, got {value!r}")
+
+
+def _require_db_ceiling(max_db_mb: float | None) -> None:
+    """`None` (no ceiling) is for the nightly retry only; `run` requires one."""
+    if max_db_mb is not None and not _valid_cap(max_db_mb, positive=True):
+        raise ValueError(f"corpus repair cap max_db_mb must be a finite positive number, got {max_db_mb!r}")
+
+
+def _billing_ratio(billed: int, estimated: int) -> float:
+    """How far the provider has billed above our pre-batch estimates so far.
+    Never below 1: an over-estimate must not loosen the cap."""
+    return max(1.0, billed / estimated) if estimated > 0 else 1.0
 
 
 def _require_semantic() -> None:
@@ -144,18 +175,20 @@ def reembed(
     committed batch repaired, so the next run picks up the remainder.
     """
     _require_caps(max_usd=max_usd, max_rows=max_rows, max_added_mb=max_added_mb)
+    _require_db_ceiling(max_db_mb)
     _require_semantic()
     receipt = receipt or new_receipt_id(now)
     max_added = max_added_mb * inv_svc.MB
 
     with SessionLocal() as db:
-        dialect = db.get_bind().dialect.name
         avg_ok = inv_svc.avg_ok_embedding_bytes(db)
-    current = inv_svc.current_embedding_bytes_expr(dialect).label("current_bytes")
-    # The `embedding` column itself is never selected: only its stored size.
+    # Gross per row: the new JSON value and vector are written beside the
+    # old ones (MVCC), so the old row's size is never credited back.
+    per_row = avg_ok + inv_svc.vector_row_bytes(vector_store.pgvector_available())
+    # The `embedding` column itself is never selected.
     stmt = select(
         DocChunk.id, DocChunk.text, DocChunk.token_count, DocChunk.meta,
-        DocChunk.embedding_dim, DocChunk.embedding_model, current,
+        DocChunk.embedding_dim, DocChunk.embedding_model,
     ).where(inv_svc.reembed_target_clause()).order_by(DocChunk.id)
 
     res: dict[str, Any] = {
@@ -165,6 +198,7 @@ def reembed(
     }
     touched: list[int] = []
     attempted = 0
+    estimated_done = 0  # pre-batch estimates of the batches already billed
     last_id = 0
     while True:
         with SessionLocal() as db:
@@ -179,8 +213,9 @@ def reembed(
         empty = [r for r in rows if not (r.text or "").strip()]
         work = [r for r in rows if (r.text or "").strip()]
         est_tokens = sum(int(r.token_count or 0) or emb_svc.count_tokens(r.text) for r in work)
-        est_bytes = sum(avg_ok + inv_svc.VECTOR_COLUMN_BYTES - int(r.current_bytes or 0) for r in work)
-        if work and emb_svc.tokens_to_usd(res["tokens"] + est_tokens) > max_usd:
+        est_bytes = len(work) * per_row
+        projected = est_tokens * _billing_ratio(res["tokens"], estimated_done)
+        if work and emb_svc.tokens_to_usd(res["tokens"] + projected) > max_usd:
             res["stopped_reason"] = STOP_MAX_USD
             break
         if work and res["added_bytes_est"] + est_bytes > max_added:
@@ -202,6 +237,7 @@ def reembed(
                 vectors = None
         res["tokens"] += meter.total_tokens
         res["tokens_estimated"] += meter.estimated_tokens
+        estimated_done += est_tokens
         if vectors is None or any(len(v) != emb_svc.EMBEDDING_DIM for v in vectors):
             res["stopped_reason"] = STOP_EMBEDDING_UNAVAILABLE
             break
@@ -286,6 +322,7 @@ def index_missing(
     OpenAI outage without walking the whole history every night.
     """
     _require_caps(max_sources=max_sources, max_usd=max_usd, max_added_mb=max_added_mb)
+    _require_db_ceiling(max_db_mb)
     if recent_days is not None and recent_days < 0:
         raise ValueError(f"recent_days must be non-negative, got {recent_days!r}")
     _require_semantic()
@@ -301,20 +338,39 @@ def index_missing(
             s for s in inv_svc.missing_sources(db, now=now, since=since) if s.category == "indexable"
         ]
         avg_ok = inv_svc.avg_ok_embedding_bytes(db)
+    # A source written in the last `SETTLE` may have its own post-pass in
+    # flight (`_ingest_filings` commits the row, then indexes it). Indexing
+    # it here too would race that post-pass: `doc_chunks` has no unique key
+    # and `upsert_source` takes no lock, so under READ COMMITTED both chunk
+    # sets survive. A post-pass that failed is not in flight, so waiting out
+    # the window costs at most one night. Wall clock, not `now`: `fetched_at`
+    # is stamped from it.
+    settled_before = datetime.utcnow() - SETTLE
+    in_flight = [s for s in candidates if s.fetched_at is not None and s.fetched_at > settled_before]
+    in_flight_keys = {(s.kind, s.id) for s in in_flight}
+    candidates = [s for s in candidates if (s.kind, s.id) not in in_flight_keys]
     candidates.sort(key=lambda s: (s.date or date.min, s.id), reverse=True)
-    per_chunk = avg_ok + inv_svc.VECTOR_COLUMN_BYTES + inv_svc.CHUNK_TEXT_BYTES
+    per_chunk = avg_ok + inv_svc.vector_row_bytes(vector_store.pgvector_available()) + inv_svc.CHUNK_TEXT_BYTES
 
     res: dict[str, Any] = {
         "class": "index-missing", "receipt": receipt, "candidates": len(candidates),
         "sources_indexed": 0, "chunks_written": 0, "tokens": 0, "tokens_estimated": 0,
         "usd": 0.0, "added_bytes_est": 0, "stopped_reason": None,
         "indexed": [], "empty": [], "skipped_changed": [], "failures": [], "deferred": [],
+        "in_flight": [s.identity for s in in_flight],
     }
+    # `max_sources` counts sources that did indexing work (indexed, or
+    # failed trying). One that turned out to have nothing to embed, or that
+    # gained chunks since the census, costs no slot: a slot spent on it is
+    # a real source deferred for nothing.
     attempted = 0
+    estimated_done = 0
     for i, src in enumerate(candidates):
         if attempted >= max_sources:
             res["stopped_reason"] = STOP_MAX_SOURCES
-        elif emb_svc.tokens_to_usd(res["tokens"] + src.est_tokens) > max_usd:
+        elif emb_svc.tokens_to_usd(
+            res["tokens"] + src.est_tokens * _billing_ratio(res["tokens"], estimated_done)
+        ) > max_usd:
             res["stopped_reason"] = STOP_MAX_USD
         elif res["added_bytes_est"] + src.est_chunks * per_chunk > max_added:
             res["stopped_reason"] = STOP_MAX_ADDED_MB
@@ -323,7 +379,6 @@ def index_missing(
         if res["stopped_reason"]:
             res["deferred"] = [s.identity for s in candidates[i:]]
             break
-        attempted += 1
         row = _load_detached(src.kind, src.id)
         if row is None:
             res["skipped_changed"].append(src.identity)
@@ -342,17 +397,21 @@ def index_missing(
         del row
         res["tokens"] += meter.total_tokens
         res["tokens_estimated"] += meter.estimated_tokens
+        if meter.total_tokens:
+            estimated_done += src.est_tokens
         if error == STOP_EMBEDDING_UNAVAILABLE:
             # The provider is down: every later source would fail the same way.
             res["stopped_reason"] = STOP_EMBEDDING_UNAVAILABLE
             res["deferred"] = [s.identity for s in candidates[i:]]
             break
         if error:
+            attempted += 1
             res["failures"].append(f"{src.identity}:{error}")
             continue
         if not written:
             res["empty"].append(src.identity)
             continue
+        attempted += 1
         res["sources_indexed"] += 1
         res["chunks_written"] += int(written)
         res["added_bytes_est"] += int(written) * per_chunk
@@ -384,12 +443,15 @@ def run(
     """One CLI invocation → one receipt. `exit_code`: 0 done, 1 stopped
     early (a cap, the DB ceiling, or the provider), 2 refused."""
     now = now or datetime.utcnow()
+    caps: dict[str, Any] = {"max_usd": max_usd, "max_rows": max_rows, "max_sources": max_sources,
+                            "max_added_mb": max_added_mb, "max_db_mb": max_db_mb}
     receipt: dict[str, Any] = {
         "receipt_id": new_receipt_id(now), "mode": mode, "class": klass,
         "openai_configured": emb_svc._is_openai_available(),
         "semantic_embeddings": emb_svc.semantic_available(),
-        "caps": {"max_usd": max_usd, "max_rows": max_rows, "max_sources": max_sources,
-                 "max_added_mb": max_added_mb, "max_db_mb": max_db_mb},
+        # A non-finite cap is echoed as text: `json.dumps` would print a bare
+        # NaN/Infinity token, which strict JSON parsers reject.
+        "caps": {k: (v if v is None or math.isfinite(v) else str(v)) for k, v in caps.items()},
         "stopped_reason": None,
     }
     classes = CLASSES if klass == "all" else (klass,)
@@ -413,6 +475,15 @@ def run(
         refusal = "no semantic embedding provider (OpenAI key missing, or demo-only mode)"
     elif max_db_mb is None:
         refusal = "--apply needs --max-db-mb: an absolute database size ceiling"
+    else:
+        # Before the census: a bad cap must refuse (exit 2) with a receipt,
+        # not escape as a traceback (exit 1, which means "stopped, resumable").
+        try:
+            _require_caps(max_usd=max_usd, max_added_mb=max_added_mb,
+                          **({"max_rows": max_rows} if klass == "reembed" else {"max_sources": max_sources}))
+            _require_db_ceiling(max_db_mb)
+        except ValueError as exc:
+            refusal = str(exc)
     if refusal:
         receipt["refused"] = refusal
         receipt["exit_code"] = 2

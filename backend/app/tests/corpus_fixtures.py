@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -26,6 +26,12 @@ from app.services import corpus_inventory, corpus_repair, filing_memory, vector_
 from app.services import embeddings as emb_svc
 
 NOW = datetime(2026, 9, 24, 12, 0, 0)
+
+
+def settled() -> datetime:
+    """A `fetched_at` safely past `corpus_repair.SETTLE` on the wall clock
+    (the settle check reads the real clock, since ingest stamps from it)."""
+    return datetime.utcnow() - corpus_repair.SETTLE - timedelta(hours=1)
 
 
 @dataclass
@@ -64,18 +70,20 @@ class CorpusDB:
                                 universe_tier=tier))
 
     def filing(self, *, ticker="AAA", accession=None, filed=date(2026, 9, 1), words=400,
-               sections=None, fetch_error=None):
+               sections=None, fetch_error=None, fetched_at=None, filing_type="10-Q"):
         secs = sections if sections is not None else {"mda": "Revenue rose. " * max(1, words // 2)}
         if fetch_error:
             secs = {**secs, "_source_metadata": {"text_fetch_error": fetch_error}}
         return self.add(FilingDoc(
             ticker=ticker, accession_number=accession or f"{ticker}-{filed.isoformat()}-{words}",
-            filing_type="10-Q", filing_date=filed, sections=secs, word_count=words,
+            filing_type=filing_type, filing_date=filed, sections=secs, word_count=words,
+            fetched_at=fetched_at or settled(),
         ))
 
-    def transcript(self, *, ticker="AAA", period="2026Q2", called=date(2026, 8, 1), words=50):
+    def transcript(self, *, ticker="AAA", period="2026Q2", called=date(2026, 8, 1), words=50, fetched_at=None):
         return self.add(EarningsTranscript(
             ticker=ticker, period=period, call_date=called, word_count=words,
+            fetched_at=fetched_at or settled(),
             blocks=[{"speaker": "CFO", "segment": "prepared", "text": "Margins expanded. " * 20}],
             full_text="Margins expanded. " * 20,
         ))
@@ -154,3 +162,49 @@ def embedding_value_refs(statement: str) -> list[str]:
     identifiers and never match the word boundary."""
     stripped = _ALLOWED_EMBEDDING_REFS.sub("", statement)
     return re.findall(r"\bembedding\b", stripped, flags=re.IGNORECASE)
+
+
+# An 8-K as EDGAR serves it: Item 2.02 / 9.01, none of which is a section key.
+EIGHT_K = (
+    "UNITED STATES SECURITIES AND EXCHANGE COMMISSION\nFORM 8-K\nCURRENT REPORT\n"
+    "Item 2.02 Results of Operations and Financial Condition.\n"
+    + "On July 30, 2026 the Company issued a press release announcing results. " * 60
+    + "\nItem 9.01 Financial Statements and Exhibits.\n(d) Exhibits. 99.1 Press release.\n"
+)
+
+
+def ingest_sec_filings(db: CorpusDB, ticker: str, specs: list[tuple[str, date, str, str]]) -> list[int]:
+    """Store filings through the real ingest path, shaped as
+    `SECEdgarProvider.get_filings` shapes a fetched body, and return their
+    ids. `fetched_at` is then backdated past the settle window, as for a
+    filing ingested on an earlier night."""
+    from app.providers.sec_edgar_provider import _extract_sections
+    from app.services import history_service
+
+    filings = []
+    for accession, filed, form, text in specs:
+        f: dict[str, Any] = {
+            "accession_number": accession, "type": form, "filing_date": filed.isoformat(),
+            "url": "https://example.invalid/filing", "raw_text": text, "text_truncated": False,
+            "text_observed_chars": len(text), "text_retained_chars": len(text),
+            "text_bytes_read": len(text), "html_oversized_tokens": 0,
+        }
+        sections, risks = _extract_sections(text)
+        if sections.get("business_description"):
+            f["business_description"] = sections["business_description"][:4000]
+        if sections.get("mda"):
+            f["mda"] = sections["mda"][:8000]
+        if sections.get("risk_factors"):
+            f["risk_factors"] = risks
+        if sections.get("legal_or_regulatory"):
+            f["legal_or_regulatory"] = [sections["legal_or_regulatory"][:2000]]
+        filings.append(f)
+    with db.Session() as s:
+        history_service._ingest_filings(s, ticker, filings)
+        s.commit()
+        rows = s.query(FilingDoc).filter(FilingDoc.accession_number.in_([a for a, *_ in specs])).all()
+        for r in rows:
+            r.fetched_at = settled()
+        s.commit()
+        by_acc = {r.accession_number: r.id for r in rows}
+    return [by_acc[a] for a, *_ in specs]
