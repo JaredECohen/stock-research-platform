@@ -1,0 +1,7 @@
+# Vendored tiktoken BPE ranks (FIX-012). These bytes must reach disk exactly
+# as committed: tiktoken checks them against a pinned SHA-256 and, on a
+# mismatch, DELETES the cache file and re-fetches it over the network. Any
+# end-of-line normalisation (core.autocrlf, a `* text=auto` rule added later)
+# would change the hash, so opt the directory out of text handling entirely.
+# `-diff` keeps a 1.6 MB rank table out of `git diff` / `git log -p`.
+backend/app/data/tiktoken/* -text -diff
