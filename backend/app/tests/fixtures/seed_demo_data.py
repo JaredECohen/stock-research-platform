@@ -15,9 +15,11 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Set
 
+from ...config import settings
 from ...database import init_db, session_scope
 from ...models import Company, ScreenerScore
 from ...services.screener_service import compute_universe_scores
+from ..dbguard import NonLocalDatabase, ensure_local
 from .demo_dataset import build_dataset
 
 log = logging.getLogger(__name__)
@@ -132,6 +134,12 @@ def seed_screener_scores() -> int:
 
 
 def run_full_seed() -> dict:
+    # Checked here rather than in each caller: this overwrites every demo
+    # Company row (refresh=True), resets universe_tier across the table and
+    # deletes the theme-less ScreenerScore rows, and it is reachable from
+    # scripts (measure_live_cost, this module's __main__) that pytest's
+    # conftest guard never sees. FIX-003.
+    ensure_local(settings.database_url)
     init_db()
     n_companies = seed_companies(refresh=True)
     tier_counts = seed_universe_tiers()
@@ -144,7 +152,13 @@ def run_full_seed() -> dict:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    import sys
+
     logging.basicConfig(level=logging.INFO)
-    summary = run_full_seed()
+    try:
+        summary = run_full_seed()
+    except NonLocalDatabase as exc:
+        print(f"seed_demo_data: {exc}", file=sys.stderr)
+        sys.exit(2)
     log.info("Test-fixture seeded: %s", summary)
     print(summary)
