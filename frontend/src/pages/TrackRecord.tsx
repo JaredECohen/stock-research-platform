@@ -4,6 +4,7 @@ import RateLimitNotice from "@/components/RateLimitNotice";
 import UpgradePrompt from "@/components/UpgradePrompt";
 import type { EntitlementRefusal, RateLimitRefusal } from "@/types";
 import {
+  COUNTED_REASON_LABELS,
   EXCLUSION_REASON_LABELS,
   RATING_SOURCE_LABELS,
   type TrackRecordOut,
@@ -181,6 +182,8 @@ export default function TrackRecord() {
 
       {data && data.total > 0 && <Record data={data} />}
 
+      {data && <CountedNote data={data} />}
+
       {data && <ExclusionNote data={data} />}
 
       {data && data.total === 0 && (
@@ -280,6 +283,25 @@ function Record({ data }: { data: TrackRecordOut }) {
         )}
       </div>
     </>
+  );
+}
+
+function CountedNote({ data }: { data: TrackRecordOut }) {
+  const disclosed = Object.entries(data.eligibility.eligible_by_reason).filter(
+    ([reason, n]) => n > 0 && reason in COUNTED_REASON_LABELS,
+  );
+  if (disclosed.length === 0) return null;
+  return (
+    <div className="card-tight text-xs text-slate-400 space-y-0.5" aria-label="Outcomes counted with a caveat">
+      <div>Counted, with a caveat (of {data.total} outcomes above):</div>
+      <ul className="list-disc pl-5">
+        {disclosed.map(([reason, n]) => (
+          <li key={reason}>
+            {n} outcomes on {COUNTED_REASON_LABELS[reason]}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

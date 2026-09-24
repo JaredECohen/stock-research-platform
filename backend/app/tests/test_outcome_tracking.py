@@ -631,7 +631,7 @@ def test_unclassified_only_when_due(w6, monkeypatch):
         out = real(**kwargs)
         if not arrivals:
             with sessions() as other:
-                late = add_snapshot(other, ticker="LATEW6", generated_at=datetime(2026, 5, 1))
+                late = add_snapshot(other, ticker="LATEW6", generated_at=datetime(2026, 5, 20))
                 other.commit()
                 arrivals.append(late.id)
         return out

@@ -52,4 +52,7 @@ def test_fixture_exercises_every_page_state():
         "demo_dev_copy_2026_05_04": 3, "generation_mode_unrecorded": 1,
     }
     assert established["coverage"]["late_evaluation_candidates"] == 1
+    # Owner default 3c: the laptop live-mode memos count, and are named apart.
+    assert provisional["eligibility"]["eligible_by_reason"]["live_dev_copy_2026_05_04"] == 1
+    assert "live_dev_copy_2026_05_04" not in established["eligibility"]["eligible_by_reason"]
     assert set(established["rating_mix_by_source"]) == {"keyword_pm", "llm_pm"}

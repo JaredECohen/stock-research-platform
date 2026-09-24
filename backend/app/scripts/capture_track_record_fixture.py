@@ -34,6 +34,8 @@ capture is deterministic):
 * 3 dev-copy demo snapshots (enumerated evidence ids, 2026-05-03/04) with
   30d and 90d outcomes, and 1 snapshot with no generation mode: the
   exclusion note's rows;
+* 1 live-mode snapshot the laptop copy carried (id 500, 2026-05-04) with a
+  30-day outcome only: counted, but disclosed on the 30-day page;
 * nothing at 365 days: the empty state.
 """
 from __future__ import annotations
@@ -143,6 +145,18 @@ def seed(db: Any) -> dict[str, int]:
     db.add(legacy)
     db.flush()
     outcome(legacy, 90, 0.05)
+    # Last, with an explicit id, so every autoincrement id above is unchanged.
+    # Not an evidence id: those must classify as the demo dev copy.
+    laptop_live = MemoSnapshot(
+        id=500, ticker="CO36", version=1, trigger="full_reanalysis", revision_log=[],
+        generated_at=datetime(2026, 5, 4, 6, 0),
+        memo_json={"ticker": "CO36", "rating_label": "Bullish", "generation_mode": "live",
+                   "generated_at": "2026-05-04T06:00:00", "sector": "Energy",
+                   "final_pm_view": KEYWORD_VIEW.format(rating="Bullish")},
+    )
+    db.add(laptop_live)
+    db.flush()
+    outcome(laptop_live, 30, 0.04)
     db.commit()
     summary = classify_pending(db=db)
     return {"classified": summary["classified"]}

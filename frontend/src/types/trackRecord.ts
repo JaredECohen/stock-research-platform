@@ -107,6 +107,15 @@ export const EXCLUSION_REASON_LABELS: Record<string, string> = {
   patch_parent_missing: "news patches whose original memo is missing",
 };
 
+/** Eligible reasons the page discloses by name. They ARE counted; the owner's
+ *  default for the live-mode memos copied from the development laptop is
+ *  "eligible, and disclosed", so the page says how much of the record they
+ *  are. Reasons not listed here (plain `live_generation`) need no caveat. */
+export const COUNTED_REASON_LABELS: Record<string, string> = {
+  live_dev_copy_2026_05_04:
+    "live-mode memos generated on a development machine and copied to production on 2026-05-04",
+};
+
 export const RATING_SOURCE_LABELS: Record<string, string> = {
   llm_pm: "LLM PM",
   keyword_pm: "deterministic keyword PM",

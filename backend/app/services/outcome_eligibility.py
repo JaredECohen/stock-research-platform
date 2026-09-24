@@ -76,6 +76,12 @@ FIXTURE_BEFORE = datetime(2026, 5, 5)
 
 # --- Reasons (String(48)) ----------------------------------------------------
 REASON_LIVE = "live_generation"                          # eligible
+# Eligible, but NAMED apart from production live memos: the owner's default
+# for the ~20 live-mode memos the 2026-05-04 copy carried from the laptop is
+# "eligible, and disclosed" (integration plan §owner questions 3c; design-w6
+# §8 Q3). About 42% of the post-exclusion record, all keyword-PM rated, so a
+# lump `live_generation` count would hide where the record comes from.
+REASON_LIVE_DEV_COPY = "live_dev_copy_2026_05_04"        # eligible, listed and disclosed
 REASON_LABEL_PREDATES_FIX = "demo_label_predates_fix"    # eligible, listed in receipts
 REASON_TEST_FIXTURE = "test_fixture_migrated_2026_05_04"  # excluded (FIX-003)
 REASON_BACKTEST = "backtest"                             # excluded (as_of_date set)
@@ -85,9 +91,9 @@ REASON_UNRECOGNIZED = "generation_mode_unrecognized"     # excluded (fail closed
 REASON_DEV_COPY = "demo_dev_copy_2026_05_04"             # excluded (owner decision)
 REASON_NO_LLM_OR_DEMO = "no_llm_or_demo_generation"      # excluded (demo data or no LLM)
 
-ELIGIBLE_REASONS = frozenset({REASON_LIVE, REASON_LABEL_PREDATES_FIX})
+ELIGIBLE_REASONS = frozenset({REASON_LIVE, REASON_LIVE_DEV_COPY, REASON_LABEL_PREDATES_FIX})
 ALL_REASONS = frozenset({
-    REASON_LIVE, REASON_LABEL_PREDATES_FIX, REASON_TEST_FIXTURE, REASON_BACKTEST,
+    REASON_LIVE, REASON_LIVE_DEV_COPY, REASON_LABEL_PREDATES_FIX, REASON_TEST_FIXTURE, REASON_BACKTEST,
     REASON_PATCH_PARENT_MISSING, REASON_UNRECORDED, REASON_UNRECOGNIZED,
     REASON_DEV_COPY, REASON_NO_LLM_OR_DEMO,
 })
@@ -191,6 +197,14 @@ def classify_snapshot(
     if not mode:
         return Classification(False, REASON_UNRECORDED)
     if mode == "live":
+        # Same copy boundary as the demo dev-copy rule below; only the name
+        # differs, eligibility does not.
+        if (
+            analysis_generated_at is not None
+            and snapshot_id <= DEV_COPY_MAX_SNAPSHOT_ID
+            and analysis_generated_at < DEV_COPY_BEFORE
+        ):
+            return Classification(True, REASON_LIVE_DEV_COPY)
         return Classification(True, REASON_LIVE)
     if mode != "demo":
         return Classification(False, REASON_UNRECOGNIZED)
@@ -537,8 +551,9 @@ def _check_expected(facts: _Facts, result: Classification) -> str | None:
 
 
 # Reasons whose snapshots the summary names by id, for owner visibility (the
-# W6 receipt lists them): eligible despite a demo label, and post-fix demo.
-_LISTED_REASONS = (REASON_LABEL_PREDATES_FIX, REASON_NO_LLM_OR_DEMO)
+# W6 receipt lists them): eligible despite a demo label, eligible laptop-live
+# memos from the copy, and post-fix demo.
+_LISTED_REASONS = (REASON_LABEL_PREDATES_FIX, REASON_LIVE_DEV_COPY, REASON_NO_LLM_OR_DEMO)
 _LISTED_CAP = 200
 
 

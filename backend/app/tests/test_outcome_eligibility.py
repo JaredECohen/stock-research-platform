@@ -90,7 +90,12 @@ EXCL_DEV = Classification(False, oe.REASON_DEV_COPY)
     (dict(sid=700, analysis=None, generated=datetime(2026, 7, 1)), (False, oe.REASON_NO_LLM_OR_DEMO)),
     # Mode normalisation and fail-closed modes.
     (dict(sid=700, analysis=datetime(2026, 7, 1), mode="LIVE "), (True, oe.REASON_LIVE)),
-    (dict(sid=300, analysis=datetime(2026, 5, 4), mode="live"), (True, oe.REASON_LIVE)),  # laptop live memo
+    # Laptop live-mode memos the copy carried: eligible, but named apart so
+    # they are disclosed (owner default 3c). Same boundary as the dev copy.
+    (dict(sid=300, analysis=datetime(2026, 5, 4), mode="live"), (True, oe.REASON_LIVE_DEV_COPY)),
+    (dict(sid=582, analysis=datetime(2026, 5, 11, 23, 59), mode="live"), (True, oe.REASON_LIVE_DEV_COPY)),
+    (dict(sid=583, analysis=datetime(2026, 5, 4), mode="live"), (True, oe.REASON_LIVE)),
+    (dict(sid=17, analysis=datetime(2026, 5, 12, 23, 53), mode="live"), (True, oe.REASON_LIVE)),
     (dict(sid=700, analysis=datetime(2026, 7, 1), mode=None), (False, oe.REASON_UNRECORDED)),
     (dict(sid=700, analysis=datetime(2026, 7, 1), mode=""), (False, oe.REASON_UNRECORDED)),
     (dict(sid=700, analysis=datetime(2026, 7, 1), mode="backtest"), (False, oe.REASON_UNRECOGNIZED)),
@@ -109,7 +114,7 @@ EXCL_DEV = Classification(False, oe.REASON_DEV_COPY)
      (False, oe.REASON_TEST_FIXTURE)),
     # ...but only for rows the copy could have carried.
     (dict(sid=700, ticker="TSTONE", analysis=datetime(2026, 6, 20), mode="live"), (True, oe.REASON_LIVE)),
-    (dict(sid=562, ticker="TSTONE", analysis=datetime(2026, 5, 6), mode="live"), (True, oe.REASON_LIVE)),
+    (dict(sid=562, ticker="TSTONE", analysis=datetime(2026, 5, 6), mode="live"), (True, oe.REASON_LIVE_DEV_COPY)),
     (dict(sid=562, ticker="TSTONEX", analysis=datetime(2026, 1, 4), mode=None), (False, oe.REASON_UNRECORDED)),
 ])
 def test_rule_table(kwargs, expected):
@@ -227,12 +232,16 @@ def test_sweep_resolves_lineage_and_fixtures(iso):
                                 as_of_date=datetime(2025, 6, 30))
         fixture = add_snapshot(db, id=562, ticker="TSTONE", generated_at=datetime(2026, 1, 4, 8, 2, 41), mode=None)
         same_ticker_later = add_snapshot(db, id=620, ticker="TSTONE", version=2, generated_at=datetime(2026, 6, 20))
+        laptop_live = add_snapshot(db, id=499, ticker="NVDA", version=499, generated_at=datetime(2026, 5, 4, 7),
+                                   memo_generated_at="2026-05-04T07:00:00")
+        laptop_patch = add_snapshot(db, id=630, ticker="NVDA", version=6000, parent_version=499,
+                                    trigger="incremental_patch", generated_at=datetime(2026, 7, 5))
         db.commit()
         summary = oe.classify_pending(db=db, batch_size=3)
     ledger = _ledger(sessions)
     got = {s.id: (ledger[s.id].eligible, ledger[s.id].reason, ledger[s.id].inherited_from_snapshot_id)
            for s in (nvda, bac, nvda_patch, msft, msft_patch, msft_patch2, orphan_patch, gap_parent, gap_patch,
-                     native, worker_no_llm, backtest, fixture, same_ticker_later)}
+                     native, worker_no_llm, backtest, fixture, same_ticker_later, laptop_live, laptop_patch)}
     assert got == {
         nvda.id: (False, oe.REASON_DEV_COPY, None),
         bac.id: (False, oe.REASON_DEV_COPY, None),
@@ -248,8 +257,11 @@ def test_sweep_resolves_lineage_and_fixtures(iso):
         backtest.id: (False, oe.REASON_BACKTEST, None),
         fixture.id: (False, oe.REASON_TEST_FIXTURE, None),
         same_ticker_later.id: (True, oe.REASON_LIVE, None),
+        laptop_live.id: (True, oe.REASON_LIVE_DEV_COPY, None),
+        laptop_patch.id: (True, oe.REASON_LIVE_DEV_COPY, laptop_live.id),
     }
-    assert summary["classified"] == 14
+    assert summary["classified"] == 16
+    assert summary["listed"][oe.REASON_LIVE_DEV_COPY] == [laptop_live.id, laptop_patch.id]
     assert summary["listed"][oe.REASON_LABEL_PREDATES_FIX] == sorted([gap_parent.id, gap_patch.id, native.id])
     assert summary["listed"][oe.REASON_NO_LLM_OR_DEMO] == [worker_no_llm.id]
     # Identity columns are the snapshot's own.
@@ -314,7 +326,7 @@ def test_expected_set_guard_catches_under_exclusion(iso):
     with sessions() as db:
         _dev_copy(db, MSFT_DEV_ID, mode="live")   # the exact evidence row, but not demo
         db.commit()
-        with pytest.raises(oe.ExclusionSetMismatch, match="classified as live_generation"):
+        with pytest.raises(oe.ExclusionSetMismatch, match="classified as live_dev_copy_2026_05_04"):
             oe.classify_pending(db=db)
     assert _ledger(sessions) == {}
 

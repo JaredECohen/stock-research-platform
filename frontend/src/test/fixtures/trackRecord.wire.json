@@ -63,16 +63,16 @@
   },
   "coverage": {
    "universe_companies": 38,
-   "memos_any_horizon": 108,
-   "companies_any_horizon": 36,
+   "memos_any_horizon": 109,
+   "companies_any_horizon": 37,
    "late_evaluation_candidates": 1,
    "horizons": [
     {
      "horizon_days": 30,
-     "memos": 8,
-     "companies": 8,
-     "directional": 8,
-     "universe_pct": 0.21052631578947367,
+     "memos": 9,
+     "companies": 9,
+     "directional": 9,
+     "universe_pct": 0.23684210526315788,
      "late_evaluation_candidates": 0
     },
     {
@@ -125,40 +125,40 @@
  },
  "provisional_30d": {
   "horizon_days": 30,
-  "total": 8,
-  "directional_evaluations": 8,
-  "thesis_hit_rate": 0.375,
-  "avg_forward_return": 0.02125,
-  "avg_alpha": -0.00875,
+  "total": 9,
+  "directional_evaluations": 9,
+  "thesis_hit_rate": 0.4444444444444444,
+  "avg_forward_return": 0.02666666666666667,
+  "avg_alpha": -0.003333333333333334,
   "ticker_filter": null,
   "sector_filter": null,
   "benchmark": "SPY",
   "alpha": {
-   "n": 8,
+   "n": 9,
    "unavailable": 0,
-   "mean": -0.00875,
+   "mean": -0.003333333333333334,
    "median": 0.0,
-   "directional_n": 8,
-   "directional_median": -0.035,
-   "beat_benchmark_rate": 0.125,
-   "company_weighted_median": -0.035
+   "directional_n": 9,
+   "directional_median": 0.0,
+   "beat_benchmark_rate": 0.2222222222222222,
+   "company_weighted_median": 0.0
   },
   "base_rate": {
-   "always_bullish_hit_rate": 0.625,
-   "always_bullish_n": 8,
-   "positive_alpha_rate": 0.25,
-   "positive_alpha_n": 8
+   "always_bullish_hit_rate": 0.6666666666666666,
+   "always_bullish_n": 9,
+   "positive_alpha_rate": 0.3333333333333333,
+   "positive_alpha_n": 9
   },
   "rating_mix": {
    "Bearish": 1,
-   "Bullish": 4,
+   "Bullish": 5,
    "Very Bearish": 1,
    "Very Bullish": 2
   },
   "rating_mix_by_source": {
    "keyword_pm": {
     "Bearish": 1,
-    "Bullish": 4
+    "Bullish": 5
    },
    "llm_pm": {
     "Very Bearish": 1,
@@ -167,16 +167,16 @@
   },
   "coverage": {
    "universe_companies": 38,
-   "memos_any_horizon": 108,
-   "companies_any_horizon": 36,
+   "memos_any_horizon": 109,
+   "companies_any_horizon": 37,
    "late_evaluation_candidates": 0,
    "horizons": [
     {
      "horizon_days": 30,
-     "memos": 8,
-     "companies": 8,
-     "directional": 8,
-     "universe_pct": 0.21052631578947367,
+     "memos": 9,
+     "companies": 9,
+     "directional": 9,
+     "universe_pct": 0.23684210526315788,
      "late_evaluation_candidates": 0
     },
     {
@@ -207,13 +207,14 @@
   },
   "eligibility": {
    "rule_version": 1,
-   "eligible": 8,
+   "eligible": 9,
    "excluded": 3,
    "unclassified": 0,
    "excluded_by_reason": {
     "demo_dev_copy_2026_05_04": 3
    },
    "eligible_by_reason": {
+    "live_dev_copy_2026_05_04": 1,
     "live_generation": 8
    }
   },
@@ -225,8 +226,8 @@
    ],
    "min_companies": 30,
    "min_directional": 100,
-   "companies": 8,
-   "directional": 8
+   "companies": 9,
+   "directional": 9
   }
  },
  "empty_365d": {
@@ -259,16 +260,16 @@
   "rating_mix_by_source": {},
   "coverage": {
    "universe_companies": 38,
-   "memos_any_horizon": 108,
-   "companies_any_horizon": 36,
+   "memos_any_horizon": 109,
+   "companies_any_horizon": 37,
    "late_evaluation_candidates": 0,
    "horizons": [
     {
      "horizon_days": 30,
-     "memos": 8,
-     "companies": 8,
-     "directional": 8,
-     "universe_pct": 0.21052631578947367,
+     "memos": 9,
+     "companies": 9,
+     "directional": 9,
+     "universe_pct": 0.23684210526315788,
      "late_evaluation_candidates": 0
     },
     {

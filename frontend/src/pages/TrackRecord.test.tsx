@@ -83,6 +83,21 @@ describe("TrackRecord (W6 provisional record)", () => {
     expect(note.textContent).toContain("1 outcomes on memos with no recorded generation mode");
   });
 
+  it("discloses counted live-mode memos from the development machine by name", async () => {
+    mount();
+    await screen.findByText("Memos evaluated");
+    // None at 90 days in the capture: no caveat to show.
+    expect(screen.queryByLabelText("Outcomes counted with a caveat")).toBeNull();
+    await pick(30);
+    const note = await screen.findByLabelText("Outcomes counted with a caveat");
+    const n = wire.provisional_30d.eligibility.eligible_by_reason.live_dev_copy_2026_05_04;
+    expect(n).toBe(1);
+    expect(note.textContent).toContain(`of ${wire.provisional_30d.total} outcomes above`);
+    expect(note.textContent).toContain(
+      `${n} outcomes on live-mode memos generated on a development machine and copied to production on 2026-05-04`,
+    );
+  });
+
   it("discloses rating sources and late-evaluation candidates", async () => {
     mount();
     await screen.findByText("Memos evaluated");
