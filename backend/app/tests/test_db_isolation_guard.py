@@ -3,7 +3,7 @@
 Fixture tickers reached production because the suite and the
 sqlite-to-postgres migration shared one database file and nothing checked
 where a run was pointed. These tests pin the refusal at every entry point
-that writes: the pytest session and the CI smoke test.
+that writes: the pytest session, the CI smoke test and the migration.
 """
 from __future__ import annotations
 
@@ -12,6 +12,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from sqlalchemy import create_engine, select
+
+from app.database import Base
+from app.models import Company
 from app.tests.dbguard import OPT_IN, refusal
 
 BACKEND = Path(__file__).resolve().parents[2]
@@ -96,3 +100,55 @@ def test_smoke_test_refuses_remote_database():
     )
     assert result.returncode == 2, result.stdout + result.stderr
     _assert_redacted_refusal(result.stderr)
+
+
+def _tickers(url: str) -> list[str]:
+    engine = create_engine(url)
+    try:
+        with engine.connect() as conn:
+            return sorted(conn.execute(select(Company.ticker)).scalars())
+    finally:
+        engine.dispose()
+
+
+def _seed(url: str, ticker: str) -> None:
+    engine = create_engine(url)
+    try:
+        Base.metadata.create_all(engine)
+        with engine.begin() as conn:
+            conn.execute(Company.__table__.insert(), [{
+                "ticker": ticker, "company_name": ticker, "sector": "Tech", "industry": "Software",
+            }])
+    finally:
+        engine.dispose()
+
+
+def test_migrate_refuses_nonempty_target_and_requires_source(tmp_path):
+    source, target = tmp_path / "source.db", tmp_path / "target.db"
+    target_url = f"sqlite:///{target}"
+    _seed(f"sqlite:///{source}", "SRCONLY")
+    _seed(target_url, "KEEPME")
+    # The script imports app.* (and so builds the app engine): keep that on a
+    # scratch file rather than whatever DATABASE_URL this session inherited.
+    base = _child_env(DATABASE_URL=f"sqlite:///{tmp_path / 'app.db'}", TARGET_POSTGRES_URL=target_url)
+
+    def run(**overrides: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "scripts.migrate_sqlite_to_postgres"],
+            cwd=BACKEND, env={**base, **overrides}, capture_output=True, text=True, timeout=120,
+        )
+
+    refused = run(SOURCE_SQLITE=str(source))
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "not empty" in refused.stderr
+    assert _tickers(target_url) == ["KEEPME"]
+
+    no_source = run()
+    assert no_source.returncode == 1
+    assert "SOURCE_SQLITE must be set" in no_source.stderr
+    assert _tickers(target_url) == ["KEEPME"]
+
+    # The deliberate overwrite still works.
+    allowed = run(SOURCE_SQLITE=str(source), MM_MIGRATE_OVERWRITE_TARGET="1")
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert _tickers(target_url) == ["SRCONLY"]
