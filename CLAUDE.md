@@ -34,8 +34,9 @@ Two things to know before you trust a local run:
 - **Blank the LLM keys.** A developer `.env` carries live `OPENAI_API_KEY` /
   `ANTHROPIC_API_KEY`, and the memo tests will spend real money against them.
   CI has no keys, so pass `OPENAI_API_KEY="" ANTHROPIC_API_KEY="" GEMINI_API_KEY=""`
-  to match it. Doing so makes `test_config_load_order` fail — that failure is an
-  artifact of the blanking, not a regression.
+  to match it. Blanking breaks no test: `test_config_load_order` used to fail
+  under it, but since FIX-010 it takes `OPENAI_API_KEY` out of the environment
+  itself, so a failure there is now a real regression.
 - **The harness blocks outbound sockets.** `app/tests/netguard.py` (installed by
   `conftest.py`) refuses every non-loopback connect and DNS lookup and lists the
   tests that reached for the network in the terminal summary. Providers are

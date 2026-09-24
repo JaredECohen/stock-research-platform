@@ -591,7 +591,10 @@ def test_scorecard_config_defaults():
     assert settings.scorecard_min_sector_n == 5
     assert settings.scorecard_min_leg_n == 15
     assert settings.scorecard_daily_retention_days == 45
-    assert settings.scorecard_export_token == ""
+    # Compared as a bool: the operand of a failing assert is printed, and
+    # this one would be a configured export token.
+    export_token_set = bool(settings.scorecard_export_token)
+    assert export_token_set is False, "SCORECARD_EXPORT_TOKEN must default to empty"
 
 
 # ---------------------------------------------------------------------------

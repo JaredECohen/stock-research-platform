@@ -64,10 +64,15 @@ NOW = datetime(2026, 7, 1, 12, 0, 0)
 
 @pytest.fixture(autouse=True)
 def _blank_keys_guard():
-    assert not settings.has_llm, (
-        "test_scorecard_memo_integration must run with blank LLM keys "
-        "(OPENAI_API_KEY='' ANTHROPIC_API_KEY='' GEMINI_API_KEY='')"
-    )
+    # Not `assert not settings.has_llm`: pytest prints a failing assert's
+    # operands, here the Settings object, and this guard fails precisely
+    # when a developer .env with live keys is loaded.
+    if settings.has_llm:
+        pytest.fail(
+            "test_scorecard_memo_integration must run with blank LLM keys "
+            "(OPENAI_API_KEY='' ANTHROPIC_API_KEY='' GEMINI_API_KEY='')",
+            pytrace=False,
+        )
     yield
 
 
