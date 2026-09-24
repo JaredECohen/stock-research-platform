@@ -16,6 +16,7 @@ import pytest
 from app.database import SessionLocal
 from app.models import MemoOutcome, MemoPostmortem, MemoSnapshot
 from app.services import calibration_service as cal
+from app.tests.eligibility_helpers import mark
 
 H = 7                                   # horizon reserved for this file
 PREFIX = "TSTCAL"
@@ -48,11 +49,12 @@ def _seed(
     ticker: str, rating: str, *, alpha: float | None,
     verdict: str | None = None, attribution=None, regime: str | None = None,
     realized: float | None = None, bench: float | None = None,
+    eligible: bool = True, reason: str = "live_generation",
 ) -> None:
     with SessionLocal() as db:
         snap = MemoSnapshot(
             ticker=ticker, version=1, trigger="first_run",
-            memo_json={"ticker": ticker, "rating_label": rating}, revision_log=[],
+            memo_json={"ticker": ticker, "rating_label": rating, "generation_mode": "live"}, revision_log=[],
             generated_at=datetime.utcnow() - timedelta(days=30),
         )
         db.add(snap)
@@ -68,6 +70,8 @@ def _seed(
                 realized_return=realized, benchmark_return=bench, regime_at_memo=regime,
             ))
         db.commit()
+        # W6: every calibration view reads only eligible snapshots.
+        mark(db, snap.id, eligible=eligible, reason=reason)
 
 
 EMPTY_BUCKET = {"n": 0, "mean_alpha": None, "median": None, "p25": None, "p75": None, "win_rate": None}
@@ -182,3 +186,46 @@ def test_percentile_helper():
     assert cal._percentile([1.0, 2.0, 3.0, 4.0], 0.5) == 2.5
     assert cal._percentile([4.0, 1.0, 3.0, 2.0], 0.0) == 1.0
     assert cal._percentile([4.0, 1.0, 3.0, 2.0], 1.0) == 4.0
+
+
+# ---------------------------------------------------------------------------
+# W6 / FIX-007 — calibration and reliability read only eligible rows
+# ---------------------------------------------------------------------------
+
+def test_views_exclude_ineligible(seeded):
+    """An excluded snapshot with an extreme alpha and verdict moves nothing.
+
+    Regime accuracy and reliability feed the PM prompt, so a demo dev-copy
+    call leaking in here would be learned by live memos.
+    """
+    before = cal.summary(horizon_days=H)
+    _seed(f"{PREFIX}DEV", "Very Bullish", alpha=9.0, verdict="right",
+          attribution={"sector": 1.0, "valuation": 1.0}, regime="recession",
+          realized=9.0, bench=0.0, eligible=False, reason="demo_dev_copy_2026_05_04")
+    assert cal.summary(horizon_days=H) == before
+
+
+def test_specialist_reliability_excludes_ineligible(tmp_path, monkeypatch):
+    from app.services import influence_feedback
+    from app.tests.eligibility_helpers import add_snapshot, isolated_sessions
+
+    sessions, engine = isolated_sessions(tmp_path, monkeypatch, influence_feedback)
+    try:
+        with sessions() as db:
+            ok = add_snapshot(db, ticker="RELOK", generated_at=datetime(2026, 6, 1),
+                              agent_influence={"valuation": 0.5})
+            dev = add_snapshot(db, ticker="RELDEV", generated_at=datetime(2026, 6, 1),
+                               agent_influence={"valuation": 0.5, "sector": -0.9})
+            db.add(MemoPostmortem(memo_snapshot_id=ok.id, ticker=ok.ticker, horizon_days=90,
+                                  verdict="right", created_at=datetime(2026, 9, 1)))
+            # Newer, so without the predicate it would be first in the lookback.
+            db.add(MemoPostmortem(memo_snapshot_id=dev.id, ticker=dev.ticker, horizon_days=90,
+                                  verdict="wrong", created_at=datetime(2026, 9, 2)))
+            db.commit()
+            mark(db, ok.id)
+            mark(db, dev.id, eligible=False, reason="demo_dev_copy_2026_05_04")
+        out = influence_feedback.specialist_reliability(lookback=1)
+        assert out["n"] == 1
+        assert out["per_agent"] == {"valuation": {"reliability": 1.0, "n_evaluated": 1}}
+    finally:
+        engine.dispose()

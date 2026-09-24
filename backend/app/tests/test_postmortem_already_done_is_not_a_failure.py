@@ -50,6 +50,7 @@ from app.database import SessionLocal
 from app.models import MemoOutcome, MemoPostmortem, MemoSnapshot
 from app.monitoring import postmortem_loop
 from app.services import postmortem_service as pm
+from app.tests.eligibility_helpers import mark
 
 
 @pytest.fixture(autouse=True)
@@ -104,6 +105,7 @@ def _seed(ticker: str, *, versions: int, horizon: int) -> list[int]:
                 memo_json={
                     "ticker": ticker, "rating_label": ratings[v % len(ratings)],
                     "confidence_score": 70.0, "sector": "Technology",
+                    "generation_mode": "live",  # W6: eligibility is fail-closed
                 },
                 revision_log=[],
                 generated_at=datetime.utcnow() - timedelta(days=200 - v),
@@ -118,6 +120,11 @@ def _seed(ticker: str, *, versions: int, horizon: int) -> list[int]:
             ))
             ids.append(snap.id)
         db.commit()
+        # W6: `_scan_due` reads only snapshots with an eligible ledger row;
+        # tests that call it directly (not through run_postmortems' sweep)
+        # need the row to exist.
+        for id_ in ids:
+            mark(db, id_)
     return ids
 
 
@@ -369,7 +376,7 @@ def test_the_policy_dedupe_is_counted_rather_than_only_logged(memory_dir, _no_ll
             snap = MemoSnapshot(
                 ticker=ticker, version=v, trigger="first_run",
                 memo_json={"ticker": ticker, "rating_label": "Bullish",
-                           "confidence_score": 70.0},
+                           "confidence_score": 70.0, "generation_mode": "live"},
                 revision_log=[],
                 generated_at=datetime.utcnow() - timedelta(days=200 - v),
             )

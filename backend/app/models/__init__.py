@@ -53,6 +53,7 @@ from .jobs import CatalystEvent, CronLoopRun, RegenJob, ThemeExposure
 from .market_data import DailyPrice, FinancialDataRepair, MarketDataSync
 from .memo import (
     MemoOutcome,
+    MemoOutcomeEligibility,
     MemoPostmortem,
     MemoRunCheckpoint,
     MemoSnapshot,
@@ -103,6 +104,7 @@ __all__ = [
     "MemoSnapshot",
     "MemoRunCheckpoint",
     "MemoOutcome",
+    "MemoOutcomeEligibility",
     "MemoPostmortem",
     "MispricingAudit",
     # dcf

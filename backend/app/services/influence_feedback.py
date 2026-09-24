@@ -37,6 +37,7 @@ from sqlalchemy import select
 
 from ..database import SessionLocal
 from ..models import MemoPostmortem, MemoSnapshot
+from .outcome_eligibility import eligible_only
 
 log = logging.getLogger(__name__)
 
@@ -70,9 +71,15 @@ def specialist_reliability(*, lookback: int = 30) -> dict[str, Any]:
     """
     rows: list[dict[str, Any]] = []
     with SessionLocal() as db:
+        # W6: the last N ELIGIBLE postmortems. This block feeds the PM
+        # prompt, so an ineligible (demo dev-copy / fixture) verdict must not
+        # count toward a specialist's reliability.
         pm_rows = db.execute(
-            select(MemoPostmortem)
-            .where(MemoPostmortem.verdict.in_(["right", "wrong"]))
+            eligible_only(
+                select(MemoPostmortem)
+                .where(MemoPostmortem.verdict.in_(["right", "wrong"])),
+                MemoPostmortem.memo_snapshot_id,
+            )
             .order_by(MemoPostmortem.created_at.desc())
             .limit(lookback)
         ).scalars().all()

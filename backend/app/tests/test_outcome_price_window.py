@@ -115,6 +115,7 @@ def _seed(
             memo_json={
                 "ticker": ticker, "rating_label": rating,
                 "confidence_score": 70.0, "sector": "Technology",
+                "generation_mode": "live",  # W6: eligibility is fail-closed
             },
             revision_log=[],
             generated_at=datetime.combine(memo_date, datetime.min.time()).replace(hour=13),

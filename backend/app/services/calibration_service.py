@@ -18,6 +18,12 @@ dashboards the design review §13.4-13.5 calls for:
 
 All read-only — never mutates the memo / outcome / postmortem
 tables. Powers the upcoming track-record dashboard.
+
+W6 / FIX-007: every view reads only ELIGIBLE outcomes and postmortems
+(`outcome_eligibility.eligible_only`). Regime accuracy and specialist
+reliability feed the PM synthesis prompt, so learning from the 2026-05-04
+demo dev copy or the migrated test fixtures would put their calls into
+live memos. Excluded rows stay in the tables; they are just not read here.
 """
 from __future__ import annotations
 
@@ -28,7 +34,8 @@ from typing import Any
 from sqlalchemy import select
 
 from ..database import SessionLocal
-from ..models import MemoOutcome, MemoPostmortem, MemoSnapshot
+from ..models import MemoOutcome, MemoPostmortem
+from .outcome_eligibility import eligible_only
 
 log = logging.getLogger(__name__)
 
@@ -87,18 +94,22 @@ def calibration_by_rating(*, horizon_days: int = 90) -> dict[str, Any]:
     """
     buckets: dict[str, list[float]] = {r: [] for r in RATING_ORDER}
     with SessionLocal() as db:
+        # `rating_at_memo` is the evaluator's copy of the same
+        # `memo_json["rating_label"]`, so bucketing on it keeps the semantics
+        # and drops a full memo-body load per outcome.
         rows = db.execute(
-            select(MemoOutcome, MemoSnapshot)
-            .join(MemoSnapshot, MemoOutcome.memo_snapshot_id == MemoSnapshot.id)
-            .where(MemoOutcome.horizon_days == horizon_days)
+            eligible_only(
+                select(MemoOutcome.rating_at_memo, MemoOutcome.alpha)
+                .where(MemoOutcome.horizon_days == horizon_days),
+                MemoOutcome.memo_snapshot_id,
+            )
         ).all()
-        for outcome, snap in rows:
-            if outcome.alpha is None:
+        for rating_at_memo, alpha in rows:
+            if alpha is None:
                 continue
-            memo = snap.memo_json or {}
-            rating = (memo.get("rating_label") or "").strip() if isinstance(memo, dict) else ""
+            rating = (rating_at_memo or "").strip()
             if rating in buckets:
-                buckets[rating].append(float(outcome.alpha))
+                buckets[rating].append(float(alpha))
 
     out_buckets: dict[str, dict[str, Any]] = {}
     for rating in RATING_ORDER:
@@ -143,8 +154,11 @@ def per_agent_attribution(*, horizon_days: int = 90) -> dict[str, Any]:
 
     with SessionLocal() as db:
         rows = db.execute(
-            select(MemoPostmortem)
-            .where(MemoPostmortem.horizon_days == horizon_days)
+            eligible_only(
+                select(MemoPostmortem)
+                .where(MemoPostmortem.horizon_days == horizon_days),
+                MemoPostmortem.memo_snapshot_id,
+            )
         ).scalars().all()
         for row in rows:
             attribution = row.agent_attribution or {}
@@ -196,8 +210,11 @@ def regime_conditional_accuracy(*, horizon_days: int = 90) -> dict[str, Any]:
     by_regime: dict[str, dict[str, Any]] = {}
     with SessionLocal() as db:
         rows = db.execute(
-            select(MemoPostmortem)
-            .where(MemoPostmortem.horizon_days == horizon_days)
+            eligible_only(
+                select(MemoPostmortem)
+                .where(MemoPostmortem.horizon_days == horizon_days),
+                MemoPostmortem.memo_snapshot_id,
+            )
         ).scalars().all()
         for row in rows:
             regime = (row.regime_at_memo or "unknown").strip().lower()

@@ -152,6 +152,19 @@ def main() -> int:
     # asynchronous; jobs and loops may see the existing stored universe while
     # enrichment is in progress.
     def _seed() -> None:
+        # W6 / FIX-007 first: DB-only and fast (one ledger row per snapshot,
+        # JSON-path projections, no provider or LLM), while the provider seed
+        # below takes minutes. The track record is correct within seconds of
+        # boot. On failure the 02:30 outcome loop sweeps again and goes red if
+        # it still cannot. Web never classifies on boot or on a GET.
+        try:
+            from .database import SessionLocal
+            from .services import outcome_eligibility
+            with SessionLocal() as db:
+                log.info("worker outcome eligibility: %s", outcome_eligibility.classify_pending(db=db))
+        except Exception as exc:
+            log.warning("worker outcome eligibility failed (continuing): %s", type(exc).__name__)
+
         try:
             from .seed_universe import run_full_seed
             log.info("worker seed: %s", run_full_seed())

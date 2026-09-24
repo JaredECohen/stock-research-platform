@@ -3,17 +3,17 @@ import { api, isApiError } from "@/api/client";
 import RateLimitNotice from "@/components/RateLimitNotice";
 import UpgradePrompt from "@/components/UpgradePrompt";
 import type { EntitlementRefusal, RateLimitRefusal } from "@/types";
+import {
+  COUNTED_REASON_LABELS,
+  EXCLUSION_REASON_LABELS,
+  RATING_SOURCE_LABELS,
+  type TrackRecordOut,
+} from "@/types/trackRecord";
 
-type TR = {
-  horizon_days: number;
-  total: number;
-  directional_evaluations: number;
-  thesis_hit_rate: number | null;
-  avg_forward_return: number;
-  avg_alpha: number | null;
-  ticker_filter: string | null;
-  sector_filter: string | null;
-};
+// W6 / FIX-007 (owner decision 2026-09-24): the record stays visible but is
+// PROVISIONAL until coverage clears the server's thresholds. It shows
+// coverage and SPY-relative alpha beside the absolute hit rate, and it says
+// which outcomes it does not count and that they were kept, not deleted.
 
 const HORIZONS = [30, 90, 180, 365];
 
@@ -22,11 +22,25 @@ function fmtPct(v: number | null | undefined, digits = 1): string {
   return `${(v * 100).toFixed(digits)}%`;
 }
 
+function fmtSignedPct(v: number | null | undefined, digits = 1): string {
+  if (v === null || v === undefined) return "—";
+  const s = (v * 100).toFixed(digits);
+  return v > 0 ? `+${s}%` : `${s}%`;
+}
+
+/** "Bullish 54 · Neutral 11": largest first, name as the tie-break. */
+function countLine(counts: Record<string, number>, label: (k: string) => string = (k) => k): string {
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([k, n]) => `${label(k)} ${n}`)
+    .join(" · ");
+}
+
 export default function TrackRecord() {
   const [horizon, setHorizon] = useState(90);
   const [ticker, setTicker] = useState("");
   const [sector, setSector] = useState("");
-  const [data, setData] = useState<TR | null>(null);
+  const [data, setData] = useState<TrackRecordOut | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
@@ -86,18 +100,19 @@ export default function TrackRecord() {
       <div>
         <div className="text-2xl font-semibold tracking-tight">Track record</div>
         <div className="text-sm text-slate-400 mt-1">
-          Realized forward-return scoring for every memo recommendation. SPY-relative
-          alpha + thesis-held rate. Wave 4A.
+          Realized forward returns for every eligible memo. Hit rate uses absolute return;
+          alpha is measured against SPY over the same sessions.
         </div>
       </div>
 
       <div className="card-tight">
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
-            <label className="text-xs uppercase tracking-widest text-slate-500">
+            <label className="text-xs uppercase tracking-widest text-slate-500" htmlFor="tr-horizon">
               Horizon (days)
             </label>
             <select
+              id="tr-horizon"
               className="bg-ink-800 border border-ink-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
               value={horizon}
               onChange={(e) => setHorizon(Number(e.target.value))}
@@ -165,25 +180,11 @@ export default function TrackRecord() {
         </div>
       )}
 
-      {data && (
-        <div className="grid md:grid-cols-3 gap-4">
-          <Stat
-            label="Total evaluations"
-            value={String(data.total)}
-            sub={`(${data.horizon_days}d horizon)`}
-          />
-          <Stat
-            label="Thesis hit rate"
-            value={fmtPct(data.thesis_hit_rate, 0)}
-            sub={`${data.directional_evaluations} directional calls`}
-          />
-          <Stat
-            label="Avg alpha vs SPY"
-            value={data.avg_alpha === null ? "—" : fmtPct(data.avg_alpha)}
-            sub={`avg return ${fmtPct(data.avg_forward_return)}`}
-          />
-        </div>
-      )}
+      {data && data.total > 0 && <Record data={data} />}
+
+      {data && <CountedNote data={data} />}
+
+      {data && <ExclusionNote data={data} />}
 
       {data && data.total === 0 && (
         <div className="card-tight border-warn-500/40 bg-warn-500/5 text-warn-500 text-sm">
@@ -191,6 +192,133 @@ export default function TrackRecord() {
           evaluate any memos whose forward window has come of age.
         </div>
       )}
+    </div>
+  );
+}
+
+function Record({ data }: { data: TrackRecordOut }) {
+  const row = data.coverage.horizons.find((h) => h.horizon_days === data.horizon_days);
+  const companies = row?.companies ?? data.provisional.companies;
+  const universePct = fmtPct(row?.universe_pct ?? null, 0);
+  const sources = data.rating_mix_by_source;
+  const sourceTotals: Record<string, number> = {};
+  for (const [source, mix] of Object.entries(sources)) {
+    sourceTotals[source] = Object.values(mix ?? {}).reduce((a, b) => a + b, 0);
+  }
+  const llmShare = data.total ? (sourceTotals.llm_pm ?? 0) / data.total : 0;
+  return (
+    <>
+      {data.provisional.is_provisional && (
+        <div role="status" className="card-tight border-warn-500/40 bg-warn-500/5 text-warn-500 text-sm">
+          <strong>Provisional:</strong> {data.provisional.companies} companies ({universePct} of the{" "}
+          {data.coverage.universe_companies}-company universe) and {data.provisional.directional} directional
+          calls evaluated at {data.horizon_days} days. This record stays provisional until at least{" "}
+          {data.provisional.min_companies} companies and {data.provisional.min_directional} directional calls
+          are evaluated. Several memos on one company are not independent calls.
+        </div>
+      )}
+
+      <div className="grid md:grid-cols-4 gap-4">
+        <Stat
+          label="Memos evaluated"
+          value={String(data.total)}
+          sub={`${companies} companies · ${universePct} of universe`}
+        />
+        <Stat
+          label="Thesis hit rate"
+          value={fmtPct(data.thesis_hit_rate, 0)}
+          sub={`absolute return · always-Bullish would score ${fmtPct(data.base_rate.always_bullish_hit_rate, 0)}`}
+        />
+        <Stat
+          label={`Beat ${data.benchmark}`}
+          value={fmtPct(data.alpha.beat_benchmark_rate, 0)}
+          sub={`median alpha ${fmtSignedPct(data.alpha.directional_median)} · per-company ${fmtSignedPct(data.alpha.company_weighted_median)}`}
+        />
+        <Stat
+          label={`Avg alpha vs ${data.benchmark}`}
+          value={fmtSignedPct(data.avg_alpha)}
+          sub={`avg return ${fmtSignedPct(data.avg_forward_return)}`}
+        />
+      </div>
+
+      <div className="card-tight text-sm text-slate-300 space-y-1">
+        <div>Ratings: {countLine(data.rating_mix)}</div>
+        <div>Rated by: {countLine(sourceTotals, (k) => RATING_SOURCE_LABELS[k] ?? k)}</div>
+        {llmShare < 0.5 && (
+          <div className="text-slate-400">
+            Most of these calls were rated by the deterministic keyword PM or a news patch, not the LLM
+            committee, so this record mostly measures that process.
+          </div>
+        )}
+      </div>
+
+      <div className="card-tight overflow-x-auto">
+        <table className="w-full text-sm" aria-label="Coverage by horizon">
+          <thead>
+            <tr className="text-left text-xs uppercase tracking-widest text-slate-500">
+              <th className="py-1 pr-4">Horizon</th>
+              <th className="py-1 pr-4">Memos</th>
+              <th className="py-1 pr-4">Companies</th>
+              <th className="py-1 pr-4">Directional calls</th>
+              <th className="py-1">% of universe</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.coverage.horizons.map((h) => (
+              <tr key={h.horizon_days} className="border-t border-ink-700">
+                <td className="py-1 pr-4">{h.horizon_days}d</td>
+                <td className="py-1 pr-4">{h.memos}</td>
+                <td className="py-1 pr-4">{h.companies}</td>
+                <td className="py-1 pr-4">{h.directional}</td>
+                <td className="py-1">{fmtPct(h.universe_pct, 0)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {data.coverage.late_evaluation_candidates > 0 && (
+          <div className="text-xs text-slate-400 mt-2">
+            {data.coverage.late_evaluation_candidates} of the {data.horizon_days}-day outcomes were evaluated
+            well after their horizon (late-evaluation candidates); their baselines have not been verified.
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function CountedNote({ data }: { data: TrackRecordOut }) {
+  const disclosed = Object.entries(data.eligibility.eligible_by_reason).filter(
+    ([reason, n]) => n > 0 && reason in COUNTED_REASON_LABELS,
+  );
+  if (disclosed.length === 0) return null;
+  return (
+    <div className="card-tight text-xs text-slate-400 space-y-0.5" aria-label="Outcomes counted with a caveat">
+      <div>Counted, with a caveat (of {data.total} outcomes above):</div>
+      <ul className="list-disc pl-5">
+        {disclosed.map(([reason, n]) => (
+          <li key={reason}>
+            {n} outcomes on {COUNTED_REASON_LABELS[reason]}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ExclusionNote({ data }: { data: TrackRecordOut }) {
+  const { excluded, unclassified, excluded_by_reason } = data.eligibility;
+  if (excluded + unclassified === 0) return null;
+  return (
+    <div className="card-tight text-xs text-slate-400 space-y-0.5" aria-label="Outcomes not counted">
+      <div>Not counted (kept, not deleted):</div>
+      <ul className="list-disc pl-5">
+        {Object.entries(excluded_by_reason).map(([reason, n]) => (
+          <li key={reason}>
+            {n} outcomes on {EXCLUSION_REASON_LABELS[reason] ?? reason}
+          </li>
+        ))}
+        {unclassified > 0 && <li>{unclassified} awaiting classification</li>}
+      </ul>
     </div>
   );
 }

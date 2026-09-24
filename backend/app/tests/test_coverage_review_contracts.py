@@ -31,7 +31,7 @@ def _due(sessions, ticker, *, version=1, rating="Bullish"):
     with sessions() as db:
         snap = MemoSnapshot(
             ticker=ticker, version=version,
-            memo_json={"ticker": ticker, "rating_label": rating},
+            memo_json={"ticker": ticker, "rating_label": rating, "generation_mode": "live"},
         )
         db.add(snap)
         db.flush()

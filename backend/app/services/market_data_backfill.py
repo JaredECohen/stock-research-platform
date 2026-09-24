@@ -8,7 +8,15 @@ from typing import Any
 from sqlalchemy import func, or_, select, update
 
 from ..database import SessionLocal
-from ..models import Company, DailyPrice, FinancialPeriod, MarketDataSync, MemoOutcome, MemoSnapshot
+from ..models import (
+    Company,
+    DailyPrice,
+    FinancialPeriod,
+    MarketDataSync,
+    MemoOutcome,
+    MemoOutcomeEligibility,
+    MemoSnapshot,
+)
 from .price_history_service import backfill_prices, minimum_start, price_coverage
 
 log = logging.getLogger(__name__)
@@ -23,6 +31,17 @@ def backfill_plan(*, today: date | None = None) -> dict:
         companies = dict(db.execute(select(Company.ticker, Company.company_name)).all())
         snapshots = db.execute(select(MemoSnapshot.id, MemoSnapshot.ticker, MemoSnapshot.generated_at).where(MemoSnapshot.as_of_date.is_(None))).all()
         recorded = set(db.execute(select(MemoOutcome.memo_snapshot_id, MemoOutcome.horizon_days)).all())
+        # W6 / FIX-003: a snapshot the eligibility ledger EXCLUDES will never
+        # be evaluated, so it needs no pending pair and no price range (the
+        # migrated fixtures would otherwise keep asking for TST* series).
+        # Unclassified snapshots stay in the plan, the conservative reading
+        # for backfill scope; the plan never classifies (it is read-only).
+        from .outcome_eligibility import identity_matches
+        excluded = set(db.execute(
+            select(MemoOutcomeEligibility.memo_snapshot_id)
+            .join(MemoSnapshot, identity_matches())
+            .where(MemoOutcomeEligibility.eligible.is_(False))
+        ).scalars())
         syncs = {ticker: {"status": status, "started_at": started.isoformat(),
                           "completed_at": completed.isoformat() if completed else None}
                  for ticker, status, started, completed in db.execute(select(
@@ -33,7 +52,7 @@ def backfill_plan(*, today: date | None = None) -> dict:
     starts[DEFAULT_BENCHMARK] = floor
     pending = []
     for snapshot_id, ticker, generated_at in snapshots:
-        if generated_at is None:
+        if generated_at is None or snapshot_id in excluded:
             continue
         generated = generated_at.date()
         required = generated - timedelta(days=7)
@@ -53,6 +72,7 @@ def backfill_plan(*, today: date | None = None) -> dict:
     return {"as_of": today.isoformat(), "minimum_years": 2, "company_count": len(companies),
             "target_count": len(targets), "targets": targets,
             "pending_outcome_pair_count": len(pending), "pending_outcome_pairs": pending,
+            "ineligible_snapshots_skipped": len(excluded),
             "read_only": True, "memo_generation_requests": 0}
 
 
