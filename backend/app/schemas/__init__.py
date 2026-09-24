@@ -117,7 +117,19 @@ from .industry import (
     TaxonomyOut,
 )
 from .macro import MacroScenarioRequest, MacroScenarioResult, MacroSeries, MacroSeriesPoint
-from .memo import MispricingThesis, StockMemoOut, ValuationVerdict
+from .memo import (
+    ConfidenceAssessment,
+    ConfidenceCap,
+    MemoQuality,
+    MispricingThesis,
+    NumberCheck,
+    NumberClaim,
+    RatingReconciliation,
+    SectionAvailability,
+    StockMemoOut,
+    ValuationVerdict,
+    WithheldItem,
+)
 from .portfolio import ModelPortfolio, PortfolioBrief, PortfolioHolding, PortfolioRequest
 
 # Phase 6 (`schemas/scorecard.py`). Reachable as `app.schemas.ScorecardSummary`
@@ -222,6 +234,15 @@ __all__ = [
     "MispricingThesis",
     "ValuationVerdict",
     "StockMemoOut",
+    # memo contract C1 (S2): W2a section availability + W2b quality record
+    "SectionAvailability",
+    "NumberClaim",
+    "WithheldItem",
+    "NumberCheck",
+    "RatingReconciliation",
+    "ConfidenceCap",
+    "ConfidenceAssessment",
+    "MemoQuality",
     # chat
     "ChatMessage",
     "ChatRequest",

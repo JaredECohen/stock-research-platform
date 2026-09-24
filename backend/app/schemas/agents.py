@@ -220,6 +220,12 @@ class EarningsStructured(BaseModel):
     forward_catalysts: list[dict[str, str]] = Field(default_factory=list)  # [{event, expected_quarter, materiality}]
 
 
+# W2b 7(b): the critic's read of a PM rating that diverges from the
+# valuation evidence. Shared with `memo.RatingReconciliation.critic_assessment`
+# so the two can never disagree on vocabulary.
+DivergenceAssessment = Literal["supported", "unsupported", "not_assessed"]
+
+
 class CriticReview(BaseModel):
     overall_assessment: str
     # Older stored reviews lack provenance; do not relabel them as live.
@@ -228,6 +234,10 @@ class CriticReview(BaseModel):
     underweighted_risks: list[str] = Field(default_factory=list)
     suggested_revisions: list[str] = Field(default_factory=list)
     advice_compliance_check: str = "Output framed as research/education only."
+    # W2b 7(b). Expand-only (S2): nothing writes it yet. "not_assessed" is
+    # the truth for every stored review and for any run with no divergence,
+    # so the default reads old snapshots without relabelling them.
+    valuation_divergence_assessment: DivergenceAssessment = "not_assessed"
 
 
 # ---------------------------------------------------------------------------
