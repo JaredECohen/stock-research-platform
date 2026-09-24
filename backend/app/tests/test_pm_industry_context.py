@@ -192,7 +192,11 @@ def test_chat_tool_answers_for_a_portfolio_of_tickers_from_stored_artifacts_only
     by_slug = tools["get_industry_context"](code=il.slug(jpm))
     assert by_slug["code"] == explicit["code"] and [g["code"] for g in by_slug["groups"]] == [il.slug(jpm)]
     bad = tools["get_industry_context"](tickers=[], code="9999")
-    assert "not found" in bad["code"]["error"] and bad["groups"] == []
+    assert "no industry group" in bad["code"]["error"] and bad["groups"] == []
+    assert "not found" in tools["get_industry_context"](code="no-such-group")["code"]["error"]
+    # A sector's code is not a group, and the refusal does not quote it back.
+    sector = tools["get_industry_context"](code=jpm[:2])
+    assert sector["groups"] == [] and f"'{jpm[:2]}'" not in sector["code"]["error"]
 
 
 def test_chat_tool_reports_missing_snapshot_and_taxonomy_honestly(clean, tools, monkeypatch):

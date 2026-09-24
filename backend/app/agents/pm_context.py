@@ -159,8 +159,13 @@ def industry_context_payload(
             explicit = {"code": node.code, "name": industry_labels.label(node.code)}
             codes.append(node.code)
         except gics_registry.UnknownNode:
-            explicit = {"code": str(code), "error": f"industry group {code!r} not found in taxonomy "
-                                                    f"{industry_labels.public_version_key(info.version_key)}"}
+            # Never quote a digit string back: it may be a sector, industry
+            # or sub-industry code, and this answer is public.
+            asked = str(code)
+            explicit = {"code": asked, "error": (
+                f"industry group {asked!r} not found" if not asked.isdigit()
+                else "no industry group has that code"
+            ) + f" in taxonomy {industry_labels.public_version_key(info.version_key)}"}
     for c in detail["own"] + [item["code"] for item in detail["linked"]]:
         if c not in codes:
             codes.append(c)
