@@ -8,6 +8,9 @@ methodology order or opening on a KPI forecast.
 from __future__ import annotations
 
 import copy
+import json
+import re
+from pathlib import Path
 
 import pytest
 
@@ -273,7 +276,17 @@ def test_errors_are_deduplicated():
         "scenarios": {"bull": {"text": "Bull: +9.9%.", "falsifiers": ["+9.9%"]}},
     }
     errs = v.validate(p, _facts())
-    assert errs.count("outlook: number '+9.9%' is not in the facts") == 1
+    # The outlook's own messages (registered-assumption contract): one for
+    # the section text, one for the scenario, each once.
+    assert errs.count("outlook: number '+9.9%' is not in the facts or a registered assumption") == 1
+    assert errs.count(
+        "outlook: scenario bull number '+9.9%' is not the value or anchor of an assumption it lists") == 1
+    # A backward-looking section repeats the defect three times, reports it once.
+    p["sections"]["risks"]["interpretation"] = {
+        "text": "Returned +9.9%. Returned +9.9% again.",
+        "claims": [{"type": "observed_fact", "text": "Returned +9.9%.", "basis": ["x"], "falsifier": ""}],
+    }
+    assert v.validate(p, _facts()).count("risks: number '+9.9%' is not in the facts") == 1
 
 
 @pytest.mark.parametrize("text, token", [
@@ -320,3 +333,471 @@ def test_a_large_non_integer_fact_does_not_license_its_hundredfold():
     p = _payload(facts)
     p["sections"]["performance"]["interpretation"] = _interp("Spreads widened 2650 bps.")
     assert any("number '2650 bps' is not in the facts" in e for e in v.validate(p, facts))
+
+
+# --- registered forecast assumptions (owner decision 1; rules F1-F10) ---------
+#
+# The outlook may state a forward number only as a declared assumption,
+# anchored to an observed fact of the same unit family. Each rule has a
+# passing and a failing case; the failing case names the rule's own message,
+# because that message is what the retry's repair hint hands the model.
+
+REPO = Path(__file__).resolve().parents[3]
+OP_MARGIN = "statistics.fundamentals.op_margin.median"
+EV_EBITDA = "statistics.valuation.ev_ebitda.median"
+
+
+def _fa_facts() -> dict:
+    """`_facts()` plus the observations an assumption can anchor to: a
+    median operating margin of 23.4% and a median EV/EBITDA of 26.5x."""
+    facts = _facts()
+    facts["statistics"]["fundamentals"] = {"op_margin": {"median": 0.234, "p25": 0.18, "n": 17}}
+    facts["statistics"]["valuation"] = {"ev_ebitda": {"median": 26.5, "n": 17}}
+    return facts
+
+
+def _fa(**over) -> dict:
+    claim = {
+        "type": "forecast_assumption", "id": "FA1",
+        "text": "Base case assumes group median operating margin of 21% over the next 4 quarters, "
+                "against 23.4% observed.",
+        "value": "21%", "horizon": "next 4 quarters", "anchor": OP_MARGIN,
+        "basis": [OP_MARGIN, "mandate:capital_cycle"],
+        "falsifier": "A later weekly statistics row shows the group median operating margin moving away "
+                     "from the assumed level.",
+    }
+    claim.update(over)
+    return claim
+
+
+def _outlook(claims: list[dict], *, text: str = "Reported consensus n/a (none).",
+             scenarios: dict | None = None) -> dict:
+    return {"text": text, "claims": claims,
+            "scenarios": scenarios if scenarios is not None else
+            {"base": {"text": "Base scenario: unchanged.", "falsifiers": ["n/a"]}}}
+
+
+def _check(outlook: dict, facts: dict | None = None, *, section: str = "outlook") -> list[str]:
+    facts = facts if facts is not None else _fa_facts()
+    p = _payload(facts)
+    p["sections"][section]["interpretation"] = outlook
+    return v.validate(p, facts)
+
+
+def test_a_registered_assumption_is_accepted():
+    assert _check(_outlook([_fa()])) == []
+
+
+# F1
+def test_forecast_assumption_outside_outlook_is_rejected():
+    errs = _check(_outlook([_fa()]), section="risks")
+    assert "risks: forecast_assumption claims are accepted only in outlook" in errs
+    assert _check(_outlook([_fa()])) == []
+
+
+# F2
+@pytest.mark.parametrize("bad_id", [None, "", "FA0", "FA13", "fa1", "A1", "FA1 "])
+def test_assumption_ids_must_be_fa1_to_fa12(bad_id):
+    errs = _check(_outlook([_fa(id=bad_id)]))
+    assert f"outlook: forecast assumption id {bad_id!r} is missing, malformed or repeated" in errs
+    assert _check(_outlook([_fa(id="FA12")])) == []
+
+
+def test_a_repeated_id_and_more_than_twelve_assumptions_are_rejected():
+    errs = _check(_outlook([_fa(), _fa()]))
+    assert "outlook: forecast assumption id 'FA1' is missing, malformed or repeated" in errs
+    many = [_fa(id=f"FA{i}") for i in range(1, 13)] + [_fa(id="FA1")]
+    assert any("13 forecast assumptions declared; at most 12" in e for e in _check(_outlook(many)))
+    assert _check(_outlook([_fa(id=f"FA{i}") for i in range(1, 13)])) == []
+
+
+# F3
+@pytest.mark.parametrize("value", ["21", "21% to 22%", "about 21%", "21 m", "", None])
+def test_value_must_be_one_rate_or_multiple(value):
+    errs = _check(_outlook([_fa(value=value)]))
+    assert f"outlook: FA1 value {value!r} is not a single rate or multiple" in errs
+
+
+def test_rate_and_multiple_values_are_accepted():
+    assert _check(_outlook([_fa(value="-240 bps", text=(
+        "Base case assumes the median operating margin moves -240 bps over the next 4 quarters, "
+        "against 23.4% observed."))])) == []
+    assert _check(_outlook([_fa(value="22x", anchor=EV_EBITDA, basis=[EV_EBITDA], text=(
+        "Base case assumes the median EV/EBITDA de-rates to 22x over the next 4 quarters, "
+        "against 26.5x observed."))])) == []
+
+
+def test_unanchored_currency_is_rejected():
+    """A commodity price has no anchor in the facts: it can be neither an
+    assumption's value nor a number anywhere in the outlook."""
+    errs = _check(_outlook([_fa(value="$70")]))
+    assert "outlook: FA1 value '$70' is not a single rate or multiple" in errs
+    errs = _check(_outlook([_fa()], text="Base case assumes oil at $70 over the next 4 quarters."))
+    assert "outlook: number '$70' is not in the facts or a registered assumption" in errs
+    scenarios = {"bear": {"text": "Bear scenario: oil at $70.", "falsifiers": [], "assumption_ids": ["FA1"]}}
+    errs = _check(_outlook([_fa()], scenarios=scenarios))
+    assert "outlook: scenario bear number '$70' is not the value or anchor of an assumption it lists" in errs
+
+
+# F4
+@pytest.mark.parametrize("horizon", [
+    "soon", "", None, "over the cycle", "next 4 quarters at 20% growth",
+    # REGRESSION (review of S8): F4 searched for a horizon phrase and then
+    # let any bare integer ride beside it, and the field prints verbatim.
+    "next 4 quarters, oil 95", "next 4 quarters to 5000", "next 4 quarters to 75",
+    "next 4 quarters for GICS group 4530", "next 4 quarters vs 453010",
+    "next 4 quarters; strong buy", "next 4 quarters; we recommend buying",
+    # A count the prose rule would not exempt: the field and the text must agree.
+    "next 18 months", "next 24 months", "next 26 weeks",
+])
+def test_horizon_must_be_explicit_and_carry_no_measurement(horizon):
+    assert "outlook: FA1 has no explicit horizon" in _check(_outlook([_fa(horizon=horizon)]))
+
+
+@pytest.mark.parametrize("horizon", [
+    "next 4 quarters", "next 12 months", "FY2027", "Q4 2027", "next 2 years", "next quarter",
+    "over the next 4 quarters", "FY27", "H2 2027", "by end of 2027", "Next 4 Quarters.",
+])
+def test_explicit_horizons_are_accepted(horizon):
+    assert _check(_outlook([_fa(horizon=horizon)])) == []
+
+
+@pytest.mark.parametrize("horizon", ["next 4 quarters", "next 12 months", "next 2 years", "FY2027", "Q4 2027"])
+def test_a_horizon_the_field_accepts_can_be_quoted_in_prose(horizon):
+    """REGRESSION (review of S8): F4 accepted "next 24 months", and quoting
+    that horizon in the assumption's own text or a scenario then failed as
+    an unregistered "24" — a rejection with a misleading repair note. Every
+    horizon the field accepts is one the prose may repeat."""
+    fa = _fa(horizon=horizon, text=f"Base case assumes group median operating margin of 21% over the {horizon}, "
+                                   "against 23.4% observed.")
+    scenarios = {"base": {"text": f"Base scenario: margins ease to 21% over the {horizon}.",
+                          "falsifiers": [], "assumption_ids": ["FA1"]}}
+    assert _check(_outlook([fa], scenarios=scenarios)) == []
+
+
+def test_advice_phrasing_in_a_printed_assumption_field_is_rejected():
+    """The value, horizon and anchor print on the page beside the prose,
+    so the advice scan covers them too — not only F3-F5."""
+    errs = _check(_outlook([_fa(horizon="next 4 quarters; strong buy")]))
+    assert "outlook: advice phrasing 'strong buy'" in errs
+    errs = _check(_outlook([_fa(value="21% price target")]))
+    assert "outlook: advice phrasing 'price target'" in errs
+
+
+# F5
+@pytest.mark.parametrize("anchor, family", [
+    ("overview.n_constituents", "rate"),                    # a count, and not in the catalogue
+    ("statistics.fundamentals.op_margin.n", "rate"),        # a count leaf under an anchor prefix
+    ("statistics.fundamentals.fcf_margin.median", "rate"),  # does not resolve
+    (EV_EBITDA, "rate"),                                    # a multiple cannot anchor a rate
+    ("", "rate"),
+])
+def test_anchor_must_be_an_observed_fact_of_the_same_family(anchor, family):
+    errs = _check(_outlook([_fa(anchor=anchor)]))
+    assert f"outlook: FA1 anchor {anchor!r} is not an observed {family} in this edition's facts" in errs
+
+
+def test_a_reason_keyed_count_is_not_a_rate_anchor():
+    """REGRESSION (review of S8): breadth's `excluded_by_reason` maps a
+    reason code to a NUMBER OF CONSTITUENTS
+    (industry_analytics.compute_group_stats). The count-leaf rule only
+    looked at the leaf key, so "window_too_short: 2" entered the rate
+    catalogue, anchored a "150%" assumption, and printed as "200.00%"."""
+    facts = _fa_facts()
+    facts["statistics"]["breadth"] = {
+        "1w": {"pct_positive": 0.6, "n": 5},
+        "above_50d_mean": {"share": 0.5, "n": 4, "window_sessions": 50,
+                           "excluded_by_reason": {"window_too_short": 2, "closes_too_sparse": 1}},
+    }
+    catalogue, _ = v.anchor_catalog(facts)
+    paths = {a["path"] for a in catalogue}
+    assert "statistics.breadth.above_50d_mean.share" in paths
+    assert not any("excluded_by_reason" in p for p in paths), paths
+    path = "statistics.breadth.above_50d_mean.excluded_by_reason.window_too_short"
+    fa = _fa(anchor=path, value="150%", basis=[path],
+             text="Base case assumes 150% over the next 4 quarters, against 2 observed.")
+    assert f"outlook: FA1 anchor {path!r} is not an observed rate in this edition's facts" in _check(
+        _outlook([fa]), facts)
+
+
+def test_anchor_resolves_in_the_server_facts_not_the_payload():
+    """The anchor is looked up in the SERVER's facts: a payload that plants
+    its own observation is a mutation, and the anchor still fails."""
+    facts = _facts()  # no fundamentals on file
+    p = _payload(facts)
+    p["sections"]["statistics"]["facts"]["fundamentals"] = {"op_margin": {"median": 0.234}}
+    p["sections"]["outlook"]["interpretation"] = _outlook([_fa()])
+    errs = v.validate(p, facts)
+    assert "facts mutated: statistics" in errs
+    assert f"outlook: FA1 anchor {OP_MARGIN!r} is not an observed rate in this edition's facts" in errs
+
+
+# F6
+@pytest.mark.parametrize("text", [
+    "Base case assumes group median operating margin of 21% over the next 4 quarters.",  # no anchor value
+    "Group median operating margin was 23.4% observed; it may ease over the next 4 quarters.",  # no value
+    "Base case assumes 21x against 23.4% observed.",  # the value in the wrong unit family
+])
+def test_text_must_state_value_and_anchor(text):
+    assert "outlook: FA1 text must state its value and its anchor's observed value" in _check(
+        _outlook([_fa(text=text)]))
+
+
+def test_assumption_value_matches_prose_at_displayed_precision():
+    """The prose may round the declared value to the precision it shows —
+    "21.25%" read as "21.3%" or "21%" — and may state it in another unit of
+    the same family ("150 bps" is 1.5%); it may not state a different
+    number, or claim precision the declaration does not carry."""
+    def fa_text(shown: str, value: str = "21.25%") -> list[str]:
+        return _check(_outlook([_fa(value=value, text=f"Base case assumes {shown} over the next 4 quarters, "
+                                                     "against 23.4% observed.")]))
+
+    assert fa_text("21.25%") == []
+    assert fa_text("21.3%") == []
+    assert fa_text("21%") == []
+    assert any("FA1 text must state its value" in e for e in fa_text("21.4%"))
+    assert any("FA1 text must state its value" in e for e in fa_text("21.26%"))
+    assert fa_text("150 bps", value="1.5%") == []
+    assert any("FA1 text must state its value" in e for e in fa_text("160 bps", value="1.5%"))
+    # The same rule for the outlook's other prose (F8).
+    fa = _fa(value="21.25%", text="Base case assumes 21.25% over the next 4 quarters, against 23.4% observed.")
+    assert _check(_outlook([fa], text="Margins ease to 21.3% in the base case.")) == []
+    errs = _check(_outlook([fa], text="Margins ease to 21.4% in the base case."))
+    assert "outlook: number '21.4%' is not in the facts or a registered assumption" in errs
+
+
+@pytest.mark.parametrize("text", [
+    # A "%" token is the anchor in percent, never the raw decimal: 0.2% is
+    # not 23.4% (|0.234 - 0.2| used to fit the 1-dp tolerance).
+    "Base case assumes group median operating margin of 21% over the next 4 quarters, against 0.2% observed.",
+    # Basis points are hundredths of a percentage point: 23.4% is 2340 bps.
+    "Base case assumes group median operating margin of 21% over the next 4 quarters, against 23.4 bps observed.",
+])
+def test_the_anchor_is_stated_in_the_unit_the_text_shows(text):
+    """REGRESSION (review of S8): `states_anchor` compared every token with
+    the raw stored decimal and its percent form whatever unit the token
+    carried, so an assumption could misstate the observation it departs
+    from by 100x and still pass F6, the scenario rule and the falsifier
+    rule — defeating "the size of the departure is visible"."""
+    assert "outlook: FA1 text must state its value and its anchor's observed value" in _check(
+        _outlook([_fa(text=text)]))
+
+
+def test_anchor_units_scale_correctly_and_a_count_is_not_an_anchor():
+    # 0.15% observed is 15 bps; the right figure passes.
+    facts = _fa_facts()
+    facts["statistics"]["fundamentals"]["op_margin"]["median"] = 0.0015
+    fa = _fa(value="10 bps", text="Base case assumes a margin of 10 bps over the next 4 quarters, "
+                                  "against 15 bps observed.")
+    assert _check(_outlook([fa]), facts) == []
+    # A multiple is quoted at face value, never scaled by 100.
+    fa = _fa(value="22x", anchor=EV_EBITDA, basis=[EV_EBITDA],
+             text="Base case assumes the median EV/EBITDA de-rates to 22x over the next 4 quarters, "
+                  "against 2650x observed.")
+    assert "outlook: FA1 text must state its value and its anchor's observed value" in _check(_outlook([fa]))
+    # The "4" of "the next 4 quarters" is a count, not a statement of a 4% anchor.
+    facts = _fa_facts()
+    facts["statistics"]["fundamentals"]["op_margin"]["median"] = 0.04
+    fa = _fa(value="6%", text="Base case assumes a margin of 6% over the next 4 quarters.")
+    assert "outlook: FA1 text must state its value and its anchor's observed value" in _check(
+        _outlook([fa]), facts)
+    assert _check(_outlook([dict(fa, text="Base case assumes a margin of 6% over the next 4 quarters, "
+                                           "against 4% observed.")]), facts) == []
+
+
+def test_a_scenario_and_outlook_prose_state_an_anchor_in_its_own_unit():
+    scenarios = {"base": {"text": "Base scenario: margin eases to 21% from 0.2%.",
+                          "falsifiers": [], "assumption_ids": ["FA1"]}}
+    errs = _check(_outlook([_fa()], scenarios=scenarios))
+    assert "outlook: scenario base number '0.2%' is not the value or anchor of an assumption it lists" in errs
+    fa_multiple = _fa(value="22x", anchor=EV_EBITDA, basis=[EV_EBITDA],
+                      text="Base case assumes the median EV/EBITDA de-rates to 22x over the next 4 quarters, "
+                           "against 26.5x observed.")
+    scenarios = {"base": {"text": "Base scenario: the group de-rates to 22x from 2650x.",
+                          "falsifiers": [], "assumption_ids": ["FA1"]}}
+    errs = _check(_outlook([fa_multiple], scenarios=scenarios))
+    assert "outlook: scenario base number '2650x' is not the value or anchor of an assumption it lists" in errs
+    # The outlook's other prose meets the same rule for an anchor.
+    errs = _check(_outlook([_fa()], text="Margins are observed at 0.2% today."))
+    assert "outlook: number '0.2%' is not in the facts or a registered assumption" in errs
+    assert _check(_outlook([_fa()], text="Margins are observed at 23.4% today.")) == []
+
+
+# F7
+@pytest.mark.parametrize("falsifier", ["", "n/a", "tbd", "margins fall"])
+def test_assumption_needs_a_usable_falsifier(falsifier):
+    assert "outlook: FA1 has no usable falsifier" in _check(_outlook([_fa(falsifier=falsifier)]))
+
+
+def test_fa_falsifier_bounds_accepted():
+    """Option (a) of the W1 critique: a threshold in a falsifier is a
+    declared number — the assumption's `bounds`, in its own unit family."""
+    fa = _fa(bounds=["18%", "25%"], falsifier=(
+        "Two consecutive weekly statistics rows show the group median operating margin above 25% or below 18%."))
+    assert _check(_outlook([fa])) == []
+    # Its value and its anchor's observed value may be named there too.
+    fa = _fa(falsifier="The group median operating margin holds at 23.4% instead of easing to 21%.")
+    assert _check(_outlook([fa])) == []
+
+
+def test_fa_falsifier_unbounded_number_rejected():
+    fa = _fa(falsifier=(
+        "Two consecutive weekly statistics rows show the group median operating margin above 25% or below 18%."))
+    errs = _check(_outlook([fa]))
+    assert "outlook: FA1 falsifier number '25%' is not its bounds, value or anchor value" in errs
+    assert "outlook: FA1 falsifier number '18%' is not its bounds, value or anchor value" in errs
+    # REGRESSION (review of S8): bounds are named in their OWN unit family;
+    # the same digits as a multiple are a different number.
+    fa_bounded = dict(fa, bounds=["18%", "25%"], falsifier=(
+        "Two consecutive weekly statistics rows show the group median operating margin above 25x or below 18x."))
+    errs = _check(_outlook([fa_bounded]))
+    assert "outlook: FA1 falsifier number '25x' is not its bounds, value or anchor value" in errs
+    assert "outlook: FA1 falsifier number '18x' is not its bounds, value or anchor value" in errs
+    # Bounds must be in the value's family, ordered, and around the value.
+    for bounds in (["18x", "25x"], ["22%", "25%"], ["25%", "18%"], ["18%"], "18%-25%"):
+        errs = _check(_outlook([dict(fa, bounds=bounds)]))
+        assert "outlook: FA1 bounds must be [lo, hi] in its value's unit family, around its value" in errs, bounds
+
+
+# F8
+def test_outlook_numbers_come_from_its_own_facts_or_registered_assumptions():
+    """A number that is in ANOTHER section's facts does not support the
+    outlook: "17" is the sample size in overview, and the whole pack used
+    to license it here."""
+    assert _check(_outlook([_fa()], text="Base case: margins ease to 21% from 23.4%.")) == []
+    errs = _check(_outlook([_fa()], text="Base case: margins ease to 22% across 17 names."))
+    assert "outlook: number '22%' is not in the facts or a registered assumption" in errs
+    assert "outlook: number '17' is not in the facts or a registered assumption" in errs
+    # The same "17" is still fine where it is an observation of that section.
+    p = _payload()
+    p["sections"]["overview"]["interpretation"] = _interp("The group has 17 constituents.")
+    assert v.validate(p, _facts()) == []
+    # A declared value licenses its own unit family only.
+    assert "outlook: number '21x' is not in the facts or a registered assumption" in _check(
+        _outlook([_fa()], text="Base case: 21x."))
+    # REGRESSION (review of S8): the outlook skips the whole-pack check, so
+    # these are the ONLY guards on a stage's text and on a non-assumption
+    # claim's falsifier.
+    causal = {"type": "causal_inference", "text": "Margins ease as capacity returns.",
+              "basis": [OP_MARGIN], "falsifier": "Group median operating margin falls below 63.7% within two quarters."}
+    errs = _check(_outlook([_fa(), causal]))
+    assert "outlook: number '63.7%' is not in the facts or a registered assumption" in errs
+    assert _check(_outlook([_fa(), dict(causal, falsifier=(
+        "Group median operating margin falls below 21% within two quarters."))])) == []
+    staged = _outlook([_fa()])
+    staged["stages"] = [{"id": "world_change", "text": "Capacity grows 63.7% as fabs return."}]
+    assert "outlook: number '63.7%' is not in the facts or a registered assumption" in _check(staged)
+    staged["stages"] = [{"id": "world_change", "text": "Capacity returns while margins sit at 23.4%."}]
+    assert _check(staged) == []
+
+
+def test_the_anchors_catalogue_licenses_no_number_outside_the_outlook():
+    """REGRESSION (review of S8): the catalogue's truncation count (about
+    22 on a full row) joined the whole-pack whitelist, so every
+    backward-looking section could publish "22%" with no unit check."""
+    facts = _fa_facts()
+    facts["outlook"]["anchors"] = v.anchor_catalog(facts)[0]
+    facts["outlook"]["anchors_truncated"] = 29
+    p = _payload(facts)
+    p["sections"]["risks"]["interpretation"] = _interp("Revenue fell 29% last year.")
+    assert "risks: number '29%' is not in the facts" in v.validate(p, facts)
+    # ... nor inside the outlook itself.
+    assert "outlook: number '29%' is not in the facts or a registered assumption" in _check(
+        _outlook([_fa()], text="Base case: 29%."), facts)
+
+
+def test_undeclared_scenario_number_coinciding_with_a_fact_is_rejected():
+    """REGRESSION (W1 critique, high): the outlook was checked against the
+    WHOLE facts pack, so a scenario could publish an undeclared forecast
+    whenever its number happened to coincide with any fact. In the captured
+    UI fixture "75%" is a breadth reading, "90%" rides on a closing price of
+    90.02 and "45x" on the sector code "45" — none is a forecast anyone
+    registered, and all three used to pass."""
+    wire = json.loads((REPO / "frontend/src/test/fixtures/industry.wire.json").read_text())
+    payload = wire["report"]["payload"]
+    facts = {name: s["facts"] for name, s in payload["sections"].items()}
+    whole_pack = v._numbers(facts)
+    for token in ("75%", "90%", "45x"):
+        [(raw, value, decimals)] = v.numeric_tokens(token)
+        assert v._supported(raw, value, decimals, whole_pack), f"{token} no longer coincides with a fixture fact"
+    payload["sections"]["outlook"]["interpretation"]["scenarios"]["bull"] = {
+        "text": "Bull scenario: breadth holds at 75%, margins reach 90% and the group re-rates to 45x.",
+        "falsifiers": ["Breadth falls below 75% for two weekly rows."],
+    }
+    outlook_errors = [e for e in v.validate(payload, facts) if e.startswith("outlook:")]
+    for token in ("75%", "90%", "45x"):
+        assert (f"outlook: scenario bull number {token!r} is not the value or anchor of an assumption it lists"
+                in outlook_errors), outlook_errors
+
+
+def test_a_scenario_may_quote_only_the_assumptions_it_lists():
+    scenarios = {"base": {"text": "Base scenario: margins ease to 21% from 23.4%.",
+                          "falsifiers": ["Margins hold at 23.4% or higher through the horizon."],
+                          "assumption_ids": ["FA1"]}}
+    assert _check(_outlook([_fa()], scenarios=scenarios)) == []
+    # REGRESSION (review of S8): an anchor is quoted in its own family; a
+    # rate anchor's digits as a multiple are not the observation.
+    wrong_family = {"base": {"text": "Base scenario: the group re-rates to 23.4x.",
+                             "falsifiers": [], "assumption_ids": ["FA1"]}}
+    errs = _check(_outlook([_fa()], scenarios=wrong_family))
+    assert "outlook: scenario base number '23.4x' is not the value or anchor of an assumption it lists" in errs
+    # Declared, but not listed by THIS scenario: rejected.
+    scenarios["base"]["assumption_ids"] = []
+    errs = _check(_outlook([_fa()], scenarios=scenarios))
+    assert "outlook: scenario base number '21%' is not the value or anchor of an assumption it lists" in errs
+    # A bound belongs to the assumption's own falsifier, not the scenario's.
+    scenarios = {"base": {"text": "Base scenario: margins ease to 21%.",
+                          "falsifiers": ["Margins fall below 18%."], "assumption_ids": ["FA1"]}}
+    errs = _check(_outlook([_fa(bounds=["18%", "25%"])], scenarios=scenarios))
+    assert "outlook: scenario base number '18%' is not the value or anchor of an assumption it lists" in errs
+
+
+# F9
+def test_outlook_causal_basis_must_name_something_checkable():
+    sentence = "Margins ease because capacity returns."
+    causal = {"type": "causal_inference", "text": sentence, "basis": ["analyst judgement"],
+              "falsifier": "Utilization rises while margins hold."}
+    errs = _check(_outlook([causal], text=sentence))
+    assert ("outlook: causal claim basis names nothing in the facts, the mandate or a registered assumption"
+            in errs)
+    for basis in (["mandate:capital_cycle"], ["FA1"], ["outlook.expectations_ledger"], [OP_MARGIN]):
+        assert _check(_outlook([_fa(), dict(causal, basis=basis)], text=sentence)) == [], basis
+    # A bare section name is not a fact path, and an undeclared id is not an assumption.
+    for basis in (["outlook"], ["FA2"], ["mandate:"]):
+        assert any("causal claim basis names nothing" in e
+                   for e in _check(_outlook([_fa(), dict(causal, basis=basis)], text=sentence))), basis
+    # Backward-looking sections keep their existing gate.
+    p = _payload()
+    p["sections"]["risks"]["interpretation"] = {"text": sentence, "claims": [dict(causal, basis=["x"])]}
+    assert v.validate(p, _facts()) == []
+
+
+# F10
+def test_scenario_assumption_ids_must_be_declared():
+    scenarios = {"bull": {"text": "Bull scenario: unchanged.", "falsifiers": [], "assumption_ids": ["FA2"]}}
+    assert "outlook: scenario bull references undeclared assumption FA2" in _check(
+        _outlook([_fa()], scenarios=scenarios))
+    scenarios["bull"]["assumption_ids"] = ["FA1"]
+    assert _check(_outlook([_fa()], scenarios=scenarios)) == []
+    scenarios["bull"]["assumption_ids"] = "FA1"
+    assert "outlook: scenario bull assumption_ids is not a list" in _check(_outlook([_fa()], scenarios=scenarios))
+
+
+def test_prompt_example_is_a_valid_registration():
+    """The contract's worked example in `prompts/industry_report.md` must
+    pass the contract. The design's first draft named 25% and 18% in the
+    falsifier with no bounds declared — an example the validator rejects."""
+    prompt = (Path(v.__file__).resolve().parent.parent / "prompts" / "industry_report.md").read_text()
+    [block] = re.findall(r"```json\n(.*?)\n```", prompt, re.S)
+    example = json.loads(block)
+    assert any(c.get("bounds") for c in example["claims"])
+    assert _check(_outlook(example["claims"], scenarios=example["scenarios"])) == []
+
+
+def test_resolve_fact_path_handles_dotted_keys_and_list_indices():
+    facts = {"performance": {"benchmark_relative": {"KFR.MKT_RF.D": {"1w": {"value": 0.01}}}},
+             "companies": {"leaders": [{"ret_1m": 0.05}]}}
+    assert v.resolve_fact_path(facts, "performance.benchmark_relative.KFR.MKT_RF.D.1w.value") == 0.01
+    assert v.resolve_fact_path(facts, "companies.leaders.0.ret_1m") == 0.05
+    assert v.resolve_fact_path(facts, "companies.leaders.3.ret_1m") is v._MISSING
+    assert v.resolve_fact_path(facts, "nope") is v._MISSING

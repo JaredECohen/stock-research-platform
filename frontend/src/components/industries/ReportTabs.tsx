@@ -1,8 +1,8 @@
 import React, { useMemo, useRef } from "react";
-import type { IndustryInterpretation, IndustryReport } from "@/types/industries";
+import type { IndustryAnchor, IndustryClaim, IndustryInterpretation, IndustryReport } from "@/types/industries";
 import { INDUSTRY_FACTS_ONLY_SECTIONS, INDUSTRY_SECTIONS, INDUSTRY_SECTION_LABELS } from "@/types/industries";
 import FactsView from "./FactsView";
-import { humanize, na } from "./format";
+import { fmtByPath, fmtPctSigned, humanize, isNum, na, unitFor } from "./format";
 
 /**
  * The edition's sections, one tab each, with the two layers separated by
@@ -23,6 +23,11 @@ import { humanize, na } from "./format";
  * `display.hidden_sections` and its interpretation is replaced by the
  * server's `hidden_reason`; its observed facts still render.
  *
+ * The outlook's forward numbers are registered forecast assumptions
+ * (owner decision 1): a table labelled "Analyst assumptions — not
+ * observed data" prints each beside the observation it is anchored to,
+ * and every such claim is badged "Analyst assumption", never as a fact.
+ *
  * Keyboard: the tablist is a roving tabindex — Left/Right move and
  * select, Home/End reach the ends. Only the selected tab is tabbable, so
  * Tab from the page moves past the strip rather than through thirteen
@@ -31,15 +36,133 @@ import { humanize, na } from "./format";
 
 const FACTS_HEADING = "Observed data";
 const INTERPRETATION_HEADING = "Analyst interpretation";
+/** The label every registered forward number carries (owner decision 1):
+ *  it is the analyst's assumption, printed beside the observation it
+ *  departs from, and never presented as data. */
+const ASSUMPTIONS_HEADING = "Analyst assumptions — not observed data";
+const ASSUMPTION_BADGE = "Analyst assumption";
 
 function sectionLabel(name: string): string {
   return (INDUSTRY_SECTION_LABELS as Record<string, string>)[name] ?? humanize(name);
 }
 
+/** The outlook's anchors catalogue (`facts.anchors`), or none. Read
+ *  defensively: an edition written before the catalogue existed has none,
+ *  and neither does any other section. */
+function anchorsOf(facts: Record<string, unknown> | undefined): IndustryAnchor[] {
+  const raw = facts?.anchors;
+  return Array.isArray(raw)
+    ? raw.filter((a): a is IndustryAnchor => !!a && typeof (a as IndustryAnchor).path === "string")
+    : [];
+}
+
+/** A forecast assumption the contract registered: it carries the id,
+ *  value, horizon and anchor the table prints. Stored editions are never
+ *  rewritten, so a pre-contract edition (served as the fallback when a
+ *  week fails) still has `forecast_assumption` claims with none of these;
+ *  they keep their badge in the claims list but get no table row of
+ *  blank cells. */
+function isRegistered(c: IndustryClaim): boolean {
+  return (
+    c.type === "forecast_assumption" &&
+    [c.id, c.value, c.horizon, c.anchor].every((f) => typeof f === "string" && f.trim() !== "")
+  );
+}
+
+function claimBadge(type: string): string {
+  return type === "forecast_assumption" ? ASSUMPTION_BADGE : humanize(type);
+}
+
+/** An anchor's observed value in its family's unit. A multiple prints at
+ *  the same two decimals as a rate ("26.54x") — the facts store medians to
+ *  six digits, and "26.543218x" is precision nobody observed; a rate takes
+ *  the unit its path claims, and a rate path the formatter does not
+ *  recognise is still a rate, never a bare decimal. */
+function fmtAnchor(anchor: IndustryAnchor): string {
+  if (!isNum(anchor.value)) return na("not on file");
+  if (anchor.family === "multiple") return `${anchor.value.toFixed(2)}x`;
+  return unitFor(anchor.path) === "plain" ? fmtPctSigned(anchor.value) : fmtByPath(anchor.path, anchor.value);
+}
+
+/** The outlook's registered forecast assumptions, one row each: the
+ *  assumed value and horizon, the observed fact it is measured against
+ *  (read from the edition's own anchors catalogue — the page does not
+ *  resolve fact paths itself), what would break it, and which scenarios
+ *  rest on it. */
+function AssumptionsTable({
+  assumptions,
+  anchors,
+  scenarios,
+}: {
+  assumptions: IndustryClaim[];
+  anchors: IndustryAnchor[];
+  scenarios: IndustryInterpretation["scenarios"];
+}) {
+  const byPath = new Map(anchors.map((a) => [a.path, a]));
+  const usedBy = (id: string) =>
+    Object.entries(scenarios ?? {})
+      .filter(([, s]) => (s.assumption_ids ?? []).includes(id))
+      .map(([name]) => humanize(name));
+  return (
+    <div className="space-y-1 text-xs" data-testid="assumptions-table">
+      <div className="text-slate-500 uppercase tracking-widest text-[10px]">{ASSUMPTIONS_HEADING}</div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left">
+          <thead className="text-slate-500">
+            <tr>
+              <th scope="col" className="pr-2 font-normal">Assumption</th>
+              <th scope="col" className="pr-2 font-normal">Horizon</th>
+              <th scope="col" className="pr-2 font-normal">Measured against (observed)</th>
+              <th scope="col" className="pr-2 font-normal">Falsifier</th>
+              <th scope="col" className="font-normal">Scenarios</th>
+            </tr>
+          </thead>
+          <tbody>
+            {assumptions.map((a, i) => {
+              const anchor = a.anchor ? byPath.get(a.anchor) : undefined;
+              const used = a.id ? usedBy(a.id) : [];
+              return (
+                <tr key={a.id || i} className="align-top border-t border-ink-800" data-testid={`assumption-${a.id ?? i}`}>
+                  <td className="pr-2 text-slate-200">
+                    <span className="text-slate-500 mr-1">{a.id}</span>
+                    {a.value}
+                  </td>
+                  <td className="pr-2 text-slate-300">{a.horizon}</td>
+                  <td className="pr-2 text-slate-300">
+                    {anchor ? (
+                      <>
+                        {humanize(anchor.path)}: {fmtAnchor(anchor)}
+                      </>
+                    ) : (
+                      na("anchor not in this edition's catalogue")
+                    )}
+                  </td>
+                  <td className="pr-2 text-slate-400">{a.falsifier}</td>
+                  <td className="text-slate-400">{used.length > 0 ? used.join(", ") : na("no scenario lists it")}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 /** The analyst layer: prose, the eight-stage spine when the section is
- *  ordered by it, scenarios (labelled as scenarios), and each claim with
- *  the evidence it rests on and what would break it. */
-function Interpretation({ interp, mode }: { interp: IndustryInterpretation; mode: string }) {
+ *  ordered by it, the registered forecast assumptions (outlook), scenarios
+ *  (labelled as scenarios), and each claim with the evidence it rests on
+ *  and what would break it. */
+function Interpretation({
+  interp,
+  mode,
+  anchors = [],
+}: {
+  interp: IndustryInterpretation;
+  mode: string;
+  anchors?: IndustryAnchor[];
+}) {
+  const assumptions = (interp.claims ?? []).filter(isRegistered);
   return (
     <div className="text-sm space-y-3" data-testid="interpretation-view">
       <p className="text-slate-200 whitespace-pre-line">{interp.text}</p>
@@ -55,6 +178,10 @@ function Interpretation({ interp, mode }: { interp: IndustryInterpretation; mode
         </ol>
       )}
 
+      {assumptions.length > 0 && (
+        <AssumptionsTable assumptions={assumptions} anchors={anchors} scenarios={interp.scenarios} />
+      )}
+
       {interp.scenarios && Object.keys(interp.scenarios).length > 0 && (
         <div className="space-y-1 text-xs" data-testid="interpretation-scenarios">
           <div className="text-slate-500 uppercase tracking-widest text-[10px]">
@@ -65,6 +192,12 @@ function Interpretation({ interp, mode }: { interp: IndustryInterpretation; mode
               <li key={name}>
                 <span className="text-slate-400">{humanize(name)}:</span>{" "}
                 <span className="text-slate-300">{s.text}</span>
+                {s.assumption_ids && s.assumption_ids.length > 0 && (
+                  <span className="text-slate-500" data-testid={`scenario-uses-${name}`}>
+                    {" "}
+                    (uses {s.assumption_ids.join(", ")})
+                  </span>
+                )}
                 {s.falsifiers && s.falsifiers.length > 0 && (
                   <div className="text-slate-500">
                     Falsifier{s.falsifiers.length === 1 ? "" : "s"}: {s.falsifiers.join("; ")}
@@ -84,7 +217,7 @@ function Interpretation({ interp, mode }: { interp: IndustryInterpretation; mode
           <ul className="mt-1 space-y-1">
             {interp.claims.map((c, i) => (
               <li key={i} className="border-l border-ink-800 pl-2">
-                <span className="badge text-[10px] border-ink-700 text-slate-400 mr-1">{humanize(c.type)}</span>
+                <span className="badge text-[10px] border-ink-700 text-slate-400 mr-1">{claimBadge(c.type)}</span>
                 <span className="text-slate-300">{c.text}</span>
                 <div className="text-slate-500">
                   Basis: {c.basis.length > 0 ? c.basis.join(", ") : na("no basis recorded")}
@@ -237,7 +370,7 @@ export default function ReportTabs({ report, section, onSelect, extras = {}, cla
                   {report.display?.hidden_reason || "Analyst interpretation unavailable in this version."}
                 </p>
               ) : body.interpretation ? (
-                <Interpretation interp={body.interpretation} mode={narrativeMode} />
+                <Interpretation interp={body.interpretation} mode={narrativeMode} anchors={anchorsOf(body.facts)} />
               ) : (
                 <p className="text-xs text-slate-400" data-testid="interpretation-absent">
                   {na(
@@ -255,4 +388,4 @@ export default function ReportTabs({ report, section, onSelect, extras = {}, cla
   );
 }
 
-export { FACTS_HEADING, INTERPRETATION_HEADING };
+export { ASSUMPTION_BADGE, ASSUMPTIONS_HEADING, FACTS_HEADING, INTERPRETATION_HEADING };

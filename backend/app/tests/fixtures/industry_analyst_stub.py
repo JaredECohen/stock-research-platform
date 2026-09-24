@@ -21,6 +21,12 @@ The relabel is visible on purpose: every string that said
 "Deterministic edition (...)" says ``LABEL`` instead, so a fixture
 captured with the stub can never be mistaken for a real analyst's words.
 
+One addition to the template: the outlook registers ONE forecast
+assumption (``registered_assumption``), anchored on the edition's first
+rate anchor and holding it at its own observed value, and the base
+scenario lists it — so a published edition exercises the registered-
+assumption contract end to end without the stub inventing a number.
+
 ``sections`` restricts which sections the stub "writes" (the rest come
 back empty, exactly as a model that skipped them) — how a test builds an
 analyst edition too thin to publish.
@@ -62,6 +68,43 @@ def _relabel(obj: Any) -> Any:
     return obj
 
 
+ASSUMPTION_ID = "FA1"
+ASSUMPTION_HORIZON = "next 4 quarters"
+ASSUMPTION_FALSIFIER = (
+    "A later weekly statistics row shows this observed measure moving away from the level "
+    "the assumption holds it at."
+)
+
+
+def registered_assumption(outlook_facts: dict[str, Any]) -> dict[str, Any] | None:
+    """The one forecast assumption the stub registers in an outlook.
+
+    The registered-assumption contract (owner decision 1) needs a published
+    edition that carries one, or the assumptions table has nothing real to
+    render. The stub still invents no number: it anchors on the FIRST rate
+    anchor in the edition's own catalogue and assumes that observation
+    simply persists — the value IS the anchor's value, rendered as a
+    percentage. ``None`` when the catalogue has no rate anchor (the
+    no-prices week), exactly as a model with nothing to anchor to must
+    declare nothing.
+    """
+    anchor = next((a for a in outlook_facts.get("anchors") or [] if a.get("family") == "rate"), None)
+    if anchor is None:
+        return None
+    value = f"{float(anchor['value']) * 100:.1f}%"
+    return {
+        "type": "forecast_assumption",
+        "id": ASSUMPTION_ID,
+        "text": (f"{LABEL} assumption: the first observed rate anchor holds at {value} over the "
+                 f"{ASSUMPTION_HORIZON}, against {value} observed."),
+        "value": value,
+        "horizon": ASSUMPTION_HORIZON,
+        "anchor": anchor["path"],
+        "basis": [anchor["path"]],
+        "falsifier": ASSUMPTION_FALSIFIER,
+    }
+
+
 def make_llm_call(sections: Iterable[str] | None = None):
     """A replacement for ``industry_report_writer._llm_call``. ``sections``
     (default: all) are the ones the stub answers for."""
@@ -76,6 +119,11 @@ def make_llm_call(sections: Iterable[str] | None = None):
         interp = writer._deterministic_interpretation(facts, analyst, writer.NARRATIVE_LLM)
         out = {name: _relabel(interp[name]) for name in requested
                if name in interp and (allowed is None or name in allowed)}
+        if "outlook" in out:
+            fa = registered_assumption(facts.get("outlook") or {})
+            if fa is not None:
+                out["outlook"]["claims"].append(fa)
+                out["outlook"]["scenarios"]["base"]["assumption_ids"] = [ASSUMPTION_ID]
         return out or None
 
     return _stub
