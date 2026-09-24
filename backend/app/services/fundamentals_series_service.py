@@ -64,6 +64,10 @@ from . import market_data_service
 
 log = logging.getLogger(__name__)
 
+# Must equal `fundamental_history_service.PRIMARY_PROVIDER` (pinned by a
+# test); a literal keeps this page read free of the provider-chain imports.
+_PRIMARY_PROVIDER = "fmp"
+
 NOT_BACKFILLED_REMEDY = (
     "No financial history is stored for this company yet. Run research on it — "
     "the memo job backfills its statement history."
@@ -320,7 +324,11 @@ def _load_rows(
         ))
 
     for t, td in data.items():
-        for year, r in _classify_rows(td, raw[t]):
+        # Primary provider first (owner decision 2026-09-24, FMP): when two
+        # accepted rows fill one (year, line) bucket, FMP's value is shown
+        # regardless of the unordered SELECT. Stable, so ties keep DB order.
+        accepted = sorted(_classify_rows(td, raw[t]), key=lambda item: item[1].source != _PRIMARY_PROVIDER)
+        for year, r in accepted:
             bucket = td.by_year.setdefault(year, {})
             # The unique index makes (period, statement, line) unique, but two
             # statements could in principle both carry a line; last write wins

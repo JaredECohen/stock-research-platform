@@ -62,6 +62,10 @@ STATEMENT_INCOME = "income"
 STATEMENT_BALANCE = "balance"
 STATEMENT_CASH = "cash"
 _STATEMENTS = (STATEMENT_INCOME, STATEMENT_BALANCE, STATEMENT_CASH)
+# Owner decision 2026-09-24: FMP is the primary fundamentals provider. Kept
+# as a literal (not imported from services) so the engine stays pure; it must
+# equal `fundamental_history_service.PRIMARY_PROVIDER`.
+_PRIMARY_PROVIDER = "fmp"
 
 # Cap on interest coverage: a name paying almost no interest would
 # otherwise post a ratio in the thousands and own the whole z-scale even
@@ -173,9 +177,14 @@ def pit_snapshot(rows: Iterable[Sequence[Any]], as_of: date) -> PitSnapshot:
 
     Duplicates are real: two period labels for one fiscal year (``FY2024``
     from FMP, ``2024`` from Alpha Vantage) both land in ``financial_periods``
-    across provider fallbacks. The winner is the row with the latest
+    across provider fallbacks. The winner is a primary-provider (FMP) row
+    when one is visible (owner decision 2026-09-24; rows without source
+    metadata are non-primary), then the row with the latest
     ``available_at`` (a later fill or restatement supersedes an earlier
-    one), then the greater period label, then the greater value. Because
+    one), then the greater period label, then the greater value. Adding the
+    primary rank changes ``inputs_hash`` once, only for tickers where a
+    non-primary duplicate used to win, so their next scoring run is not
+    skipped as unchanged. Because
     the choice depends only on the rows, the snapshot — and therefore
     ``inputs_hash`` — is identical for any ordering of the same rows,
     which the persistence slice's ``(version_key, as_of, inputs_hash)``
@@ -193,8 +202,8 @@ def pit_snapshot(rows: Iterable[Sequence[Any]], as_of: date) -> PitSnapshot:
         "available_before_period_end": 0,
         "period_end_after_as_of": 0,
     }
-    # (fiscal_year, statement, line_item) -> (available_at, period label, value)
-    chosen: dict[tuple[int, str, str], tuple[date, str, float]] = {}
+    # (fiscal_year, statement, line_item) -> (is primary, available_at, period label, value)
+    chosen: dict[tuple[int, str, str], tuple[bool, date, str, float]] = {}
     period_end_by_year: dict[int, date | None] = {}
     excluded_rows: list[dict[str, Any]] = []
 
@@ -238,7 +247,8 @@ def pit_snapshot(rows: Iterable[Sequence[Any]], as_of: date) -> PitSnapshot:
             continue
         fy = int(fy)
         key = (fy, statement, line_item)
-        candidate = (avail, "" if _period is None else str(_period), float(value))
+        candidate = (metadata.get("source") == _PRIMARY_PROVIDER, avail,
+                     "" if _period is None else str(_period), float(value))
         incumbent = chosen.get(key)
         if incumbent is not None:
             notes["duplicate_rows"] += 1
@@ -256,7 +266,7 @@ def pit_snapshot(rows: Iterable[Sequence[Any]], as_of: date) -> PitSnapshot:
     available_by_year: dict[int, date] = {}
     for key in sorted(chosen):
         fy, statement, line_item = key
-        avail, _label, val = chosen[key]
+        _primary, avail, _label, val = chosen[key]
         stmts = by_year.setdefault(fy, {s: {} for s in _STATEMENTS})
         stmts[statement][line_item] = val
         prev_avail = available_by_year.get(fy)
