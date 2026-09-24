@@ -245,6 +245,18 @@ def main() -> int:
     else:
         log.info("industry reports disabled (ENABLE_INDUSTRY_REPORTS=false)")
 
+    # FIX-006 — the one-time FMP-primary re-pull. Not a monitoring loop: a
+    # daemon thread that dry-runs every company, records the exact plan in a
+    # `financial_data_repairs` ledger, and executes only after the owner
+    # authorizes that reviewed plan (see `services/fmp_repull_ledger.py`).
+    # It no-ops without a configured FMP history provider.
+    if settings.enable_monitoring:
+        try:
+            from .services.fmp_repull_ledger import start_thread as start_repull_thread
+            start_repull_thread(_shutdown)
+        except Exception as exc:
+            log.warning("fundamentals repull thread failed to start: %s", type(exc).__name__)
+
     # Heartbeat immediately, then every 5 minutes. Without this, nothing
     # outside the container can tell a healthy worker from a crash-looping
     # one until a loop happens to fire — and the earliest, edgar_poller, is
