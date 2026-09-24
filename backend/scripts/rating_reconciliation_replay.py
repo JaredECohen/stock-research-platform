@@ -110,6 +110,10 @@ def normalize(headers: dict[str, Any], memo: dict[str, Any], *, name: str = "") 
         "trigger": str(trigger),
         "generated_at": str(memo.get("generated_at") or headers.get("x-memo-generated-at") or ""),
         "mode": str(memo.get("generation_mode") or ""),
+        # The comps vote is withheld for sectors where EV is not meaningful.
+        # Stored bodies carry the premium but not the multiples, so the
+        # negative-multiple guard can only use the premium's own bound.
+        "sector": str(memo.get("sector") or ""),
         "rating": str(memo.get("rating_label") or ""),
         "thesis": str(memo.get("one_sentence_thesis") or ""),
         "family_pct": cat.get("percentile"),
@@ -138,6 +142,7 @@ def replay_one(r: dict[str, Any]) -> dict[str, Any]:
         family_pct=r["family_pct"], family_coverage=r["family_coverage"],
         comps_premium=r["comps_premium"], dcf_initial_upside=r["dcf_initial"],
         dcf_initial_tv_clamped=r["dcf_tv_clamped"], dcf_final_upside=r["dcf_final"],
+        sector=r.get("sector") or None,
     )
     critic = CriticReview(
         overall_assessment="replay", review_mode=r["critic_mode"]

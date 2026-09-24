@@ -1798,7 +1798,9 @@ def _evidence_verdict(inputs: MemoInputs, dcf_stage: DCFStage) -> ValuationVerdi
 
     * valuation family: the fs-v1 scorecard row's valuation category
       (universe percentile; its own coverage, else the row's);
-    * comps: the EV/EBITDA premium to the peer median;
+    * comps: the EV/EBITDA premium to the peer median, with both
+      multiples and the sector so a negative multiple or a bank/REIT
+      (where EV is not meaningful) records the premium without a vote;
     * DCF: the INITIAL (consensus-anchored) model votes, the PM-adjusted
       one is recorded — the PM who rates the name also moved that model;
     * `factor_valuation`: the identical call `_build_scores_dict` makes, so
@@ -1815,7 +1817,10 @@ def _evidence_verdict(inputs: MemoInputs, dcf_stage: DCFStage) -> ValuationVerdi
             fam_pct = float(cat.percentile)
             cov = cat.coverage if cat.coverage is not None else summary.coverage
             fam_cov = float(cov) if cov is not None else None
-    prem = (inputs.comps.premium_discount or {}).get("ev_ebitda") if inputs.comps is not None else None
+    comps = inputs.comps
+    prem = (comps.premium_discount or {}).get("ev_ebitda") if comps is not None else None
+    target_multiple = comps.target.ev_ebitda if comps is not None else None
+    median_multiple = comps.median.ev_ebitda if comps is not None else None
     initial = dcf_stage.initial_dcf
     init_summary = _summarize_dcf(initial)
     ratios = inputs.ratios or {}
@@ -1826,6 +1831,8 @@ def _evidence_verdict(inputs: MemoInputs, dcf_stage: DCFStage) -> ValuationVerdi
         dcf_final_upside=_summarize_dcf(dcf_stage.dcf).get("base_upside"),
         factor_valuation=fs.valuation_score(
             ratios.get("EV_EBITDA"), ratios.get("PFCF"), ratios.get("FCF_yield")),
+        comps_target_multiple=target_multiple, comps_peer_median_multiple=median_multiple,
+        sector=(inputs.profile or {}).get("sector"),
     )
 
 

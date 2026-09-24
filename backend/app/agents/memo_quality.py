@@ -30,6 +30,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..finance import scorecard_spec
 from ..schemas import (
     ConfidenceAssessment,
     ConfidenceCap,
@@ -64,6 +65,18 @@ FAMILY_CHEAP_PCT = 80.0
 FAMILY_RICH_PCT = 20.0
 # Comps EV/EBITDA premium versus the peer median (ratio: 0.15 = 15%).
 COMPS_BAND = 0.15
+# Sectors where the comps EV/EBITDA premium never votes: enterprise value is
+# not meaningful for banks, insurers or REITs. Read from the scorecard's own
+# `ebitda_ev_yield` exclusion so the two valuation reads cannot drift apart.
+COMPS_EXCLUDED_SECTORS: frozenset[str] = frozenset(next(
+    f.exclude_sectors for f in scorecard_spec.FEATURE_SPEC if f.name == "ebitda_ev_yield"))
+# `comps.compute_comps` divides by |peer median|, so a negative multiple
+# (negative EBITDA or EV) on either side yields a large, meaningless
+# "discount" or "premium". Comps is the pivotal vote (the DCF may only agree
+# with it), so a meaningless multiple must not vote. A discount of 100% or
+# more is only reachable with a negative target multiple: the guard for
+# stored bodies that carry the premium but not the multiples.
+COMPS_MIN_PREMIUM = -1.0
 # The INITIAL (consensus-anchored) DCF is a corroborating vote only: the
 # raw DCF sign is biased negative across the covered names (median base
 # upside -36% over the 25 live runs), so it counts only when it is large,
@@ -127,13 +140,19 @@ def valuation_evidence_verdict(
     dcf_initial_tv_clamped: bool = False,
     dcf_final_upside: float | None = None,
     factor_valuation: float | None = None,
+    comps_target_multiple: float | None = None,
+    comps_peer_median_multiple: float | None = None,
+    sector: str | None = None,
 ) -> ValuationVerdict:
     """The memo's valuation verdict from evidence alone. Never reads a rating.
 
     Votes (+1 cheap, -1 rich, 0 inside the band):
       * valuation family: universe percentile >= 80 -> +1, <= 20 -> -1,
         counted only at coverage >= 0.6;
-      * comps: EV/EBITDA premium <= -15% -> +1, >= +15% -> -1;
+      * comps: EV/EBITDA premium <= -15% -> +1, >= +15% -> -1; no vote
+        (recorded with the reason) when either multiple is <= 0, the
+        premium is <= -100%, or the sector is one where EV is not
+        meaningful (`COMPS_EXCLUDED_SECTORS`);
       * initial DCF: +/-1 only when |upside| >= 40%, no terminal-value
         clamp, and the same sign as a non-zero comps vote.
     `overvalued` needs >= 2 rich votes and no cheap one; `undervalued` is the
@@ -167,10 +186,17 @@ def valuation_evidence_verdict(
     comps_vote = 0
     if prem is not None:
         available.append(SIGNAL_COMPS)
-        comps_vote = 1 if prem <= -COMPS_BAND else (-1 if prem >= COMPS_BAND else 0)
-        votes[SIGNAL_COMPS] = comps_vote
-        signals[SIGNAL_COMPS] = {"premium": prem, "vote": comps_vote, "display": _comps_display(prem)}
-        parts.append(f"EV/EBITDA {_comps_display(prem)} vs peers{_tag(comps_vote)}")
+        no_vote = _comps_no_vote(prem, comps_target_multiple, comps_peer_median_multiple, sector)
+        if no_vote:
+            # No "display": the number is not a valuation read, so the PM
+            # prompt must not list it as one (and nothing can quote it).
+            signals[SIGNAL_COMPS] = {"premium": prem, "vote": None, "no_vote": no_vote}
+            parts.append(f"EV/EBITDA vs peers not meaningful ({no_vote}; no vote)")
+        else:
+            comps_vote = 1 if prem <= -COMPS_BAND else (-1 if prem >= COMPS_BAND else 0)
+            votes[SIGNAL_COMPS] = comps_vote
+            signals[SIGNAL_COMPS] = {"premium": prem, "vote": comps_vote, "display": _comps_display(prem)}
+            parts.append(f"EV/EBITDA {_comps_display(prem)} vs peers{_tag(comps_vote)}")
 
     u = _num(dcf_initial_upside)
     if u is not None:
@@ -231,6 +257,16 @@ def valuation_evidence_verdict(
         factor_valuation=_num(factor_valuation),
         summary=summary,
     )
+
+
+def _comps_no_vote(prem: float, target: Any, median: Any, sector: str | None) -> str | None:
+    """Why the comps premium cannot vote, or None when it can."""
+    if scorecard_spec.normalize_sector(sector) in COMPS_EXCLUDED_SECTORS:
+        return "enterprise value is not meaningful for banks, insurers or REITs"
+    t, m = _num(target), _num(median)
+    if (t is not None and t <= 0) or (m is not None and m <= 0) or prem <= COMPS_MIN_PREMIUM:
+        return "negative EV/EBITDA multiple"
+    return None
 
 
 def _tag(vote: int) -> str:
@@ -316,32 +352,64 @@ _SIGNAL_NAME_RE: dict[str, re.Pattern[str]] = {
     SIGNAL_DCF: re.compile(r"\b(?:dcf|discounted[- ]cash[- ]flow|intrinsic value|fair value)\b", re.I),
 }
 # A number as printed: optional sign, digits (comma groups), decimals, and a
-# unit the value check reads ("%", "percent", an ordinal suffix).
+# unit the value check reads ("%", "percent", an ordinal suffix, "percentile").
 _NUMBER_RE = re.compile(
-    r"(?<![\w.])[-+−]?(?P<num>\d{1,3}(?:,\d{3})+|\d+)(?P<dec>\.\d+)?"
-    r"(?P<unit>\s*%|\s*percent\b|\s*pct\b|st\b|nd\b|rd\b|th\b)?",
+    r"(?<![\w.])(?P<sign>[-+−])?(?P<num>\d{1,3}(?:,\d{3})+|\d+)(?P<dec>\.\d+)?"
+    r"(?P<unit>\s*%|\s*percent\b|\s*pct\b|st\b|nd\b|rd\b|th\b|\s+percentile\b)?",
     re.I,
 )
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’-]*")
+_PERCENT_UNITS = frozenset({"%", "percent", "pct"})
+_RANK_UNITS = frozenset({"st", "nd", "rd", "th", "percentile"})
+# A quoted number counts only this close (characters) to a mention of the
+# signal it quotes: "10 years" at the far end of the reason is not the
+# 10th-percentile rank.
+QUOTE_WINDOW = 60
+# The word right after a quoted magnitude that states its direction, as
+# (word when the value is positive, word when negative).
+_DIRECTION_WORDS: dict[str, tuple[str, str]] = {
+    SIGNAL_COMPS: ("premium", "discount"),
+    SIGNAL_DCF: ("upside", "downside"),
+}
+_DIRECTION_LOOKAHEAD = 30
 
 
-def _quotes(text: str, expected: float, *, percent_unit: bool) -> bool:
-    """True when `text` prints `expected` at the precision it prints it.
+def _quotes(text: str, expected: float, *, name_re: re.Pattern[str], percent_unit: bool,
+            directions: tuple[str, str] | None = None) -> bool:
+    """True when `text` prints `expected`, at the precision it prints it,
+    within `QUOTE_WINDOW` characters of a mention of the signal (`name_re`).
 
-    `percent_unit=True` needs a "%"/"percent" after the number (comps and
-    DCF magnitudes, compared as absolute percentages: prose drops signs,
-    "a 44% premium" and "-54% to fair value" are both quotes); otherwise any
-    unit or an ordinal is accepted (the percentile)."""
+    `percent_unit=True` (comps and DCF) needs a "%"/"percent" after the
+    number and compares magnitudes, since prose often drops the sign ("a 44%
+    premium"), but a printed sign must agree ("+54%" is not a -54% DCF) and
+    so must a direction word right after it ("54% upside" is not a -54%
+    DCF, "44% discount" is not a 44% premium). Otherwise (the percentile)
+    the number must carry an ordinal or "percentile" unit: "10 years" is
+    not the 10th percentile."""
+    names = [m.span() for m in name_re.finditer(text)]
     for m in _NUMBER_RE.finditer(text):
         unit = (m["unit"] or "").strip().lower()
-        if percent_unit and unit not in ("%", "percent", "pct"):
+        if unit not in (_PERCENT_UNITS if percent_unit else _RANK_UNITS):
             continue
         digits = m["num"].replace(",", "")
         dec = (m["dec"] or "")[1:]
         places = min(len(dec), 2)
         printed = f"{digits}.{dec[:places]}" if places else digits
-        if f"{abs(expected):.{places}f}" == printed:
-            return True
+        if f"{abs(expected):.{places}f}" != printed:
+            continue
+        lo, hi = m.span()
+        if not any(n_lo - QUOTE_WINDOW <= hi and lo <= n_hi + QUOTE_WINDOW for n_lo, n_hi in names):
+            continue
+        if percent_unit and expected != 0:
+            if m["sign"] and (m["sign"] == "+") != (expected > 0):
+                continue
+            if directions is not None:
+                pos_word, neg_word = directions
+                ahead = re.search(rf"\b({pos_word}|{neg_word})\b",
+                                  text[hi:hi + _DIRECTION_LOOKAHEAD], re.I)
+                if ahead and ahead.group(1).lower() != directions[0 if expected > 0 else 1]:
+                    continue
+        return True
     return False
 
 
@@ -359,8 +427,10 @@ def assess_divergence_reason(reason: str, *, verdict: ValuationVerdict, rating: 
       words and 80 characters. "Quality deserves a premium" is not a reason.
     * `names_signal`: names a signal that voted against the rating.
     * `quotes_value`: quotes that same signal's value at display precision,
-      checked against `verdict.signals` — a reason must engage with the
-      number it overrides, not just its name.
+      near a mention of it, with the right unit and (for comps and DCF) no
+      contradicting sign or direction word, checked against
+      `verdict.signals` — a reason must engage with the number it
+      overrides, not just its name (`_quotes`).
     Raises on malformed input; `reconcile_rating` turns that into a
     fail-closed downgrade."""
     from .industry_report_validator import is_real_falsifier
@@ -378,12 +448,15 @@ def assess_divergence_reason(reason: str, *, verdict: ValuationVerdict, rating: 
             continue
         names = True
         entry = verdict.signals[key]
+        name_re = _SIGNAL_NAME_RE[key]
         if key == SIGNAL_FAMILY:
-            ok = _quotes(text, float(entry["percentile"]), percent_unit=False)
+            ok = _quotes(text, float(entry["percentile"]), name_re=name_re, percent_unit=False)
         elif key == SIGNAL_COMPS:
-            ok = _quotes(text, float(entry["premium"]) * 100.0, percent_unit=True)
+            ok = _quotes(text, float(entry["premium"]) * 100.0, name_re=name_re, percent_unit=True,
+                         directions=_DIRECTION_WORDS[key])
         else:
-            ok = _quotes(text, float(entry["upside"]) * 100.0, percent_unit=True)
+            ok = _quotes(text, float(entry["upside"]) * 100.0, name_re=name_re, percent_unit=True,
+                         directions=_DIRECTION_WORDS[key])
         if ok:
             quotes = True
             break

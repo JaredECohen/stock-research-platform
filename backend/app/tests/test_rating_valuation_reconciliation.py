@@ -167,6 +167,86 @@ def test_absolute_factor_never_votes():
     assert "factor" not in " ".join(vv.signals["votes"]) and vv.verdict == "fairly_priced"
 
 
+@pytest.mark.parametrize("kw, votes", [
+    # The spec's bands are inclusive: >= 80 cheap, <= 20 rich, +/-15%, |u| >= 40%.
+    (dict(family_pct=80.0, family_coverage=1.0), {"valuation_family": 1}),
+    (dict(family_pct=79.9, family_coverage=1.0), {"valuation_family": 0}),
+    (dict(family_pct=20.0, family_coverage=1.0), {"valuation_family": -1}),
+    (dict(family_pct=20.1, family_coverage=1.0), {"valuation_family": 0}),
+    (dict(comps_premium=0.15), {"comps_ev_ebitda": -1}),
+    (dict(comps_premium=0.149), {"comps_ev_ebitda": 0}),
+    (dict(comps_premium=-0.15), {"comps_ev_ebitda": 1}),
+    (dict(comps_premium=0.20, dcf_initial_upside=-0.40), {"comps_ev_ebitda": -1, "dcf_initial": -1}),
+    (dict(comps_premium=-0.20, dcf_initial_upside=0.40), {"comps_ev_ebitda": 1, "dcf_initial": 1}),
+    (dict(comps_premium=0.20, dcf_initial_upside=-0.399), {"comps_ev_ebitda": -1, "dcf_initial": 0}),
+])
+def test_vote_thresholds_at_their_boundaries(kw, votes):
+    assert ev(**kw).signals["votes"] == votes
+
+
+@pytest.mark.parametrize("kw, why", [
+    # Negative target EBITDA: (-40 - 20) / 20 = -300%, a "discount" that is
+    # really a loss-maker. With a +50% DCF it used to read undervalued.
+    (dict(comps_premium=-3.0, comps_target_multiple=-40.0, comps_peer_median_multiple=20.0),
+     "negative EV/EBITDA multiple"),
+    # Negative peer median: (20 - -10) / 10 = +300%, a meaningless "premium".
+    (dict(comps_premium=3.0, comps_target_multiple=20.0, comps_peer_median_multiple=-10.0),
+     "negative EV/EBITDA multiple"),
+    # Stored bodies carry the premium only: <= -100% implies a negative multiple.
+    (dict(comps_premium=-1.0), "negative EV/EBITDA multiple"),
+    # EV is not meaningful for banks, insurers or REITs (the scorecard's rule).
+    (dict(comps_premium=0.40, sector="Financial Services"), "not meaningful for banks"),
+    (dict(comps_premium=-0.40, sector="Real Estate"), "not meaningful for banks"),
+])
+def test_comps_never_votes_on_a_meaningless_multiple(kw, why):
+    """Comps is the pivotal vote (the DCF may only agree with it), so a
+    meaningless premium plus a large DCF used to make a directional verdict
+    that 7(b) then enforced against a Bearish or Bullish rating."""
+    dcf = 0.50 if kw["comps_premium"] < 0 else -0.50
+    vv = ev(dcf_initial_upside=dcf, **kw)
+    assert vv.verdict == "fairly_priced", vv.summary
+    assert "comps_ev_ebitda" not in vv.signals["votes"]
+    assert vv.signals["votes"]["dcf_initial"] == 0
+    entry = vv.signals["comps_ev_ebitda"]
+    assert entry["vote"] is None and why in entry["no_vote"] and "display" not in entry
+    assert "not meaningful" in vv.summary and "300%" not in vv.summary
+    # Not listed as a value in the PM's evidence block, and nothing to enforce.
+    assert "EV/EBITDA premium to peers" not in memo_quality.valuation_evidence_block(vv)
+    rating = "Bearish" if dcf > 0 else "Bullish"
+    rec = _reconcile(rating, vv)
+    assert (rec.outcome, rec.final_rating) == ("consistent", rating)
+
+
+def test_positive_multiples_outside_financials_still_vote():
+    vv = ev(comps_premium=-0.30, comps_target_multiple=14.0, comps_peer_median_multiple=20.0,
+            sector="Technology", dcf_initial_upside=0.50)
+    assert vv.signals["votes"] == {"comps_ev_ebitda": 1, "dcf_initial": 1}
+    assert vv.verdict == "undervalued"
+
+
+def test_compose_stage_passes_the_multiples_and_sector(monkeypatch):
+    """`graph._evidence_verdict` hands the rule both multiples and the
+    profile's sector, so the guards above bind the pipeline."""
+    from app.services.valuation_service import build_comps, build_dcf
+
+    dcf = build_dcf("NVDA")
+    comps = build_comps("NVDA")
+    assert comps is not None
+    stage = DCFStage(dcf=dcf, initial_dcf=dcf)
+    neg = comps.model_copy(update={
+        "target": comps.target.model_copy(update={"ev_ebitda": -40.0}),
+        "premium_discount": {**comps.premium_discount, "ev_ebitda": -3.0},
+    })
+    vv = graph._evidence_verdict(make_inputs("NVDA", comps=neg, dcf=dcf), stage)
+    assert vv.signals["comps_ev_ebitda"]["no_vote"] == "negative EV/EBITDA multiple"
+    bank = make_inputs("NVDA", comps=comps, dcf=dcf)
+    bank.profile = {**bank.profile, "sector": "Financials"}
+    vv = graph._evidence_verdict(bank, stage)
+    assert "banks" in vv.signals["comps_ev_ebitda"]["no_vote"]
+    assert "no_vote" not in graph._evidence_verdict(make_inputs("NVDA", comps=comps, dcf=dcf),
+                                                    stage).signals["comps_ev_ebitda"]
+
+
 def _dcf_with_base(dcf: DCFResult, upside: float) -> DCFResult:
     data = dcf.model_dump()
     data["base"]["upside_pct"] = upside
@@ -299,6 +379,64 @@ def test_reason_must_quote_the_overridden_signal():
     assert rec.outcome == "downgraded" and "quotes_value" in rec.note
 
 
+SHORT_QUOTING = "The EV/EBITDA premium of 44% is fine."
+LONG_NO_SIGNAL = (
+    "Cloud revenue grew 44% in the latest quarter while operating margin widened to 41%, and "
+    "management guided to another year of double-digit growth across every segment."
+)
+PLACEHOLDER_LONG = (
+    "n/a — the EV/EBITDA premium of 44% to peers is noted, but no further reason is given here "
+    "for the rating, which the team will revisit at the next full review of the name."
+)
+
+
+@pytest.mark.parametrize("reason, expected", [
+    (GOOD_BULL_REASON, {"substantive": True, "names_signal": True, "quotes_value": True}),
+    # Only `substantive` fails: too short, though it names and quotes the signal.
+    (SHORT_QUOTING, {"substantive": False, "names_signal": True, "quotes_value": True}),
+    # Only `substantive` fails: long, names and quotes, but opens as a placeholder.
+    (PLACEHOLDER_LONG, {"substantive": False, "names_signal": True, "quotes_value": True}),
+    # Long, carries the right figure, names no signal (so quotes nothing).
+    (LONG_NO_SIGNAL, {"substantive": True, "names_signal": False, "quotes_value": False}),
+])
+def test_each_reason_check_isolated(reason, expected):
+    vv = ev(**OVERVALUED)
+    assert memo_quality.assess_divergence_reason(reason, verdict=vv, rating="Bullish") == expected
+    rec = _reconcile("Bullish", vv, reason)
+    assert rec.reason_checks == expected
+    assert rec.outcome == ("accepted" if all(expected.values()) else "downgraded")
+
+
+def test_quote_must_be_the_signal_not_any_number():
+    """A figure counts only as the signal's value: near its name, with the
+    rank's unit for the percentile, and without a contradicting sign or
+    direction word for comps and the DCF."""
+    fam = ev(family_pct=10.0, family_coverage=1.0, **OVERVALUED)   # family rich too
+    prose = ("The scorecard rank ignores that this business compounded earnings for 10 years "
+             "straight and should keep doing so given its moat and pricing power in every market.")
+    assert memo_quality.assess_divergence_reason(prose, verdict=fam, rating="Bullish") == {
+        "substantive": True, "names_signal": True, "quotes_value": False}
+    ranked = prose.replace("ignores that", "at the 10th percentile ignores that")
+    assert memo_quality.assess_divergence_reason(ranked, verdict=fam, rating="Bullish")["quotes_value"]
+    # Far from the signal's name: not a quote of it.
+    far = ("The consensus DCF is anchored on a stale growth path that the latest quarter already "
+           "broke, with cloud revenue accelerating and operating margin widening again to 54% here.")
+    vv = ev(**OVERVALUED)                     # DCF -54%, comps +44.4%
+    assert not memo_quality.assess_divergence_reason(far, verdict=vv, rating="Bullish")["quotes_value"]
+    base = ("The consensus DCF shows {q}, but it anchors on a growth path that ignores the 32% "
+            "cloud growth and 41% operating margin reported this quarter.")
+    for q, ok in (("54% downside", True), ("-54% to fair value", True), ("54% upside", False),
+                  ("+54% to fair value", False)):
+        got = memo_quality.assess_divergence_reason(base.format(q=q), verdict=vv, rating="Bullish")
+        assert got["quotes_value"] is ok, q
+    comps = ("We override the EV/EBITDA {q} to peers: cloud revenue grew 32% in the latest quarter "
+             "while operating margin widened to 41%, which the peer multiple does not price.")
+    assert memo_quality.assess_divergence_reason(
+        comps.format(q="premium of 44%"), verdict=vv, rating="Bullish")["quotes_value"]
+    assert not memo_quality.assess_divergence_reason(
+        comps.format(q="level, a 44% discount"), verdict=vv, rating="Bullish")["quotes_value"]
+
+
 def test_record_mode_records_without_enforcing():
     rec = _reconcile("Bullish", ev(**OVERVALUED), "", enforce=False)
     assert rec.outcome == "downgraded" and rec.final_rating == "Bullish"
@@ -381,6 +519,38 @@ def test_review_uses_the_live_critic_assessment(monkeypatch):
 
 def test_kill_switch_record_mode_leaves_the_published_rating(monkeypatch):
     monkeypatch.setattr(settings, "llm_rating_weight", 1.0)
+    monkeypatch.setattr(settings, "rating_reconciliation_mode", "record")
+    memo = _reviewable_memo("Bullish", 50.0, verdict=ev(**OVERVALUED))
+    _review(memo, DegradationLog())
+    assert memo.rating_label == "Bullish"
+    assert memo.quality.rating_reconciliation.outcome == "downgraded"
+
+
+def test_review_stage_fails_closed_when_the_rule_itself_crashes(monkeypatch):
+    """`graph._reconcile_rating`'s own guard, not the reason checker's:
+    a crash in the rule leaves a divergent rating Neutral and says so."""
+    monkeypatch.setattr(settings, "llm_rating_weight", 1.0)
+
+    def boom(**kw):
+        raise RuntimeError("rule exploded")
+
+    monkeypatch.setattr(memo_quality, "reconcile_rating", boom)
+    memo = _reviewable_memo("Bullish", 50.0, verdict=ev(**OVERVALUED), reason=GOOD_BULL_REASON)
+    log = DegradationLog()
+    _review(memo, log, critic=LIVE_SUPPORTED)
+    rec = memo.quality.rating_reconciliation
+    assert memo.rating_label == "Neutral"
+    assert (rec.outcome, rec.final_rating, rec.blended_rating) == ("downgraded", "Neutral", "Bullish")
+    assert rec.reason_checks.get("check_failed") is True and rec.divergence is True
+    assert "Rating Check" in log.degraded_agents()
+    # A non-divergent rating is left alone, still with the banner entry.
+    memo = _reviewable_memo("Bearish", 50.0, verdict=ev(**OVERVALUED))
+    log = DegradationLog()
+    _review(memo, log)
+    assert memo.rating_label == "Bearish"
+    assert memo.quality.rating_reconciliation.outcome == "not_applicable"
+    assert "Rating Check" in log.degraded_agents()
+    # Record mode: recorded as downgraded, published as blended.
     monkeypatch.setattr(settings, "rating_reconciliation_mode", "record")
     memo = _reviewable_memo("Bullish", 50.0, verdict=ev(**OVERVALUED))
     _review(memo, DegradationLog())
@@ -506,6 +676,26 @@ def test_accepted_divergence_is_never_rewritten():
     out = _verdict_out(memo)
     assert not out.thesis_rewrite_fired
     assert out.one_sentence_thesis.startswith("TEST is undervalued")
+
+
+def test_accepted_divergence_thesis_contradicting_both_is_kept():
+    """The case the guard exists for: an accepted Bullish-on-overvalued memo
+    whose thesis says "fairly priced" contradicts both the rating's word
+    (undervalued) and the evidence (overvalued), and would be rewritten if
+    the accepted divergence were not exempt."""
+    thesis = "TEST is fairly priced — the multiple already reflects cloud leverage."
+    memo = make_memo(
+        rating_label="Bullish", valuation_verdict=ev(**OVERVALUED), one_sentence_thesis=thesis,
+        quality=MemoQuality(rating_reconciliation=RatingReconciliation(
+            outcome="accepted", pm_rating="Bullish", blended_rating="Bullish", final_rating="Bullish",
+            valuation_verdict="overvalued", divergence=True, reason=GOOD_BULL_REASON)),
+    )
+    out = _verdict_out(memo)
+    assert out.thesis_rewrite_fired is False
+    assert out.one_sentence_thesis.startswith(thesis.rstrip("."))
+    # Without the accepted outcome the same thesis IS rewritten.
+    plain = memo.model_copy(update={"quality": None})
+    assert _verdict_out(plain).thesis_rewrite_fired is True
 
 
 def test_anti_pattern_still_rewrites_with_the_evidence_word():

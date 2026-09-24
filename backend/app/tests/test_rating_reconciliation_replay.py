@@ -24,13 +24,17 @@ _THESIS = "PROSE-MUST-NOT-LEAK: the thesis text of a stored memo."
 def _body(ticker: str, version: int, *, rating: str, trigger: str = "full_reanalysis",
           generated: str = "2026-09-15T10:00:00", mode: str = "live", family: float | None = None,
           prem: float | None = None, dcf: float | None = None, wrapped: bool = True,
-          thesis: str = _THESIS) -> dict[str, Any]:
+          thesis: str = _THESIS, dcf_initial: float | None = None,
+          sector: str | None = None) -> dict[str, Any]:
     memo: dict[str, Any] = {
         "ticker": ticker, "rating_label": rating, "generation_mode": mode,
         "generated_at": generated, "one_sentence_thesis": thesis,
         "valuation_verdict": {"verdict": "fairly_priced", "comps_ev_ebitda_premium": prem},
         "dcf_summary": {"base_upside": dcf, "tv_clamped": False},
-        "dcf_initial_summary": {},
+        # Empty when no PM adjustment fired (the initial model IS the final one).
+        "dcf_initial_summary": ({"base_upside": dcf_initial, "tv_clamped": False}
+                                if dcf_initial is not None else {}),
+        "sector": sector,
         "risk_committee_challenge": {"overall_assessment": "x", "review_mode": "rule_based"},
         "scorecard": ({"coverage": 1.0, "categories": {"valuation": {"percentile": family, "coverage": 1.0}}}
                       if family is not None else None),
@@ -138,3 +142,39 @@ def test_unusable_input_is_an_error_not_a_smaller_sample(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     assert replay.main(["--bodies", str(empty)]) == 2
+
+
+def test_replay_votes_on_the_initial_dcf_not_the_pm_adjusted_one(tmp_path):
+    """The PM who rates the name also moved the adjusted model, so only the
+    INITIAL model may vote, exactly as in the pipeline."""
+    bodies = [
+        # Initial -21% (inside the band), PM-adjusted -45%: comps alone -> fairly priced.
+        _body("I1", 1, rating="Bullish", prem=0.54, dcf_initial=-0.21, dcf=-0.45),
+        # Initial -45%, PM-adjusted -21%: the initial agrees with comps -> overvalued.
+        _body("I2", 1, rating="Bullish", prem=0.54, dcf_initial=-0.45, dcf=-0.21),
+    ]
+    rows = {r["ticker"]: r for r in replay.replay(replay.load_bodies(_write(tmp_path, bodies)))["full_run_rows"]}
+    assert rows["I1"]["verdict"] == "fairly_priced" and rows["I1"]["dcf_initial"] == -0.21
+    assert rows["I2"]["verdict"] == "overvalued" and rows["I2"]["outcome"] == "downgraded"
+
+
+def test_replay_withholds_the_comps_vote_for_financials(tmp_path):
+    bodies = [_body("BK", 1, rating="Bullish", prem=0.40, dcf=-0.60, sector="Financial Services"),
+              _body("TK", 1, rating="Bullish", prem=0.40, dcf=-0.60, sector="Technology")]
+    rows = {r["ticker"]: r for r in replay.replay(replay.load_bodies(_write(tmp_path, bodies)))["full_run_rows"]}
+    assert rows["BK"]["verdict"] == "fairly_priced" and "comps_ev_ebitda" not in rows["BK"]["votes"]
+    assert rows["TK"]["verdict"] == "overvalued"
+
+
+def test_stop_when_only_the_stored_memos_are_overvalued_majority(tmp_path):
+    """Full runs below both thresholds; the latest stored versions (patches
+    outside the window) are overvalued-majority: stop for that reason alone."""
+    rich = dict(prem=0.40, dcf=-0.60)
+    fair = dict(prem=0.02, dcf=-0.05)
+    bodies = [_body(f"S{i}", 1, rating="Neutral", **fair) for i in range(3)]
+    bodies += [_body(f"S{i}", 2, rating="Neutral", trigger="incremental_patch", **rich) for i in range(3)]
+    report = replay.replay(replay.load_bodies(_write(tmp_path, bodies)))
+    assert report["full_runs"]["verdicts"]["overvalued"] == 0
+    assert report["stored_live"]["verdicts"]["overvalued"] == 3
+    assert report["stop"] is True
+    assert report["stop_reasons"] == ["overvalued is the majority verdict over the stored live memos"]
