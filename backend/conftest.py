@@ -1,6 +1,6 @@
 """Pytest config.
 
-Three responsibilities:
+Four responsibilities:
 
 1. Ensure the `backend/` directory is on `sys.path` so `app.*` imports work
    regardless of where pytest is launched from.
@@ -14,6 +14,7 @@ Three responsibilities:
    real provider APIs. They are skipped by default; set `RUN_LIVE_TESTS=1`
    to opt in. Tests under that marker also flip `ENABLE_LIVE_DATA=true`
    on a per-test basis via the `live_settings` fixture.
+4. Refuse a non-local DATABASE_URL (FIX-003). See `app/tests/dbguard.py`.
 """
 import os
 import sys
@@ -44,7 +45,20 @@ _RUN_LIVE = os.environ.get("RUN_LIVE_TESTS", "").lower() in ("1", "true", "yes")
 
 
 def pytest_configure(config):
-    """Register the `live` marker so tests can opt into real API calls."""
+    """Refuse a non-local database, then register the `live` marker."""
+    # Before any DB I/O: app/tests/conftest.py::pytest_sessionstart already
+    # runs a SELECT, and the session fixtures run init_db (create_all +
+    # ALTERs) — sessionstart is too late. Reads the resolved `settings`, not
+    # os.environ, because a DATABASE_URL in a developer's .env is the
+    # realistic way a run ends up pointed at production. Imported here so
+    # the env setdefaults above precede the first `app.config` import.
+    from app.config import settings
+    from app.tests import dbguard
+
+    reason = dbguard.refusal(settings.database_url)
+    if reason:
+        pytest.exit(reason, returncode=pytest.ExitCode.USAGE_ERROR)
+
     config.addinivalue_line(
         "markers",
         "live: integration test that hits real provider APIs. Skipped "
