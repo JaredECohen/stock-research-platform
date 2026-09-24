@@ -31,7 +31,9 @@ from app.services import industry_classification as ic
 from app.tests.gating_helpers import seed_demo_universe
 from app.tests.test_memo_industry_labels import _leaks, _leaky_prose
 
-TICKERS = ("MSFT", "NVDA", "JPM")
+# CAT sits in a year-shaped group (Capital Goods, 2010): a "GICS 2010"
+# falsifier is the case the bare prefix rule's year guard cannot see.
+TICKERS = ("MSFT", "NVDA", "JPM", "CAT")
 
 
 @pytest.fixture(scope="module", autouse=True)

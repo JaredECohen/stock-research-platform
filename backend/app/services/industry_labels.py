@@ -321,6 +321,15 @@ _LONG_CODE_RE = re.compile(r"(\s?)" + _TOKEN_GUARD_BEFORE + r"(\d{6}|\d{8})" + _
 _INTERNAL_KEY_RE = re.compile(r"\bgics-\d{4}-\d{2}\b", re.IGNORECASE)
 _BRAND_BEFORE_WORD_RE = re.compile(r"\bGICS\b®?\s+(?=[A-Za-z])", re.IGNORECASE)
 _BRAND_RE = re.compile(r"\bGICS\b®?", re.IGNORECASE)
+# The brand followed directly by a code or a list of codes ("GICS 4010",
+# "GICS® 2030", "GICS 4510, 4520", "GICS 4510/451020"). Longest width
+# first, so a 4-digit code is never read as a 2-digit one plus a remainder.
+_CODE_TOKEN = r"(?:\d{8}|\d{6}|\d{4}|\d{2})"
+_BRAND_CODES_RE = re.compile(
+    r"\b(GICS\b®?)(\s+)(" + _CODE_TOKEN + r"(?:\s*[,;/]\s*" + _CODE_TOKEN + r")*)" + _TOKEN_GUARD_AFTER,
+    re.IGNORECASE,
+)
+_CODE_LIST_SPLIT_RE = re.compile(r"(\s*[,;/]\s*)")
 _MULTISPACE_RE = re.compile(r"[ \t]{2,}")
 # The lookbehind pins a match to the START of a space run, so a long run not
 # followed by punctuation is scanned once rather than once per position.
@@ -342,6 +351,19 @@ _SECTOR_CODE_NOUNS = frozenset({
     "constituents", "companies", "stocks", "equities", "peers", "members", "index",
     "indices", "benchmark", "analyst", "analysts", "coverage", "universe", "exposure",
     "weighting", "weight", "cohort", "basket", "classification", "code",
+})
+# After the brand, one number followed by one of these counts taxonomy
+# levels ("the GICS 11 sectors"; "GICS 10 sectors" before 2016) rather than
+# naming one. "sub" is what _NEXT_WORD_RE reads from "sub-industries".
+_TAXONOMY_COUNT_NOUNS = frozenset({
+    "sectors", "groups", "industries", "sub", "subindustries", "levels", "tiers", "codes",
+})
+# A year after the brand that names a revision of the standard ("the GICS
+# 2020 changes") is a year, even where it is also a group code.
+_REVISION_NOUNS = frozenset({
+    "revision", "revisions", "reclassification", "reclassifications", "restructuring",
+    "change", "changes", "update", "updates", "methodology", "structure", "edition",
+    "version", "review", "reshuffle", "overhaul",
 })
 
 
@@ -427,22 +449,26 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
     c. ``name (code)`` / ``code name`` pairs → our label (sector/group) or
        nothing (industry/sub-industry); ``Industry Group Analyst dddd`` →
        the public display name; ``sector 45`` / ``group 4530`` → ``sector
-       Technology`` / ``group Chips & Chipmaking Equipment``;
+       Technology`` / ``group Chips & Chipmaking Equipment``; the brand
+       as a code's own prefix (``GICS 4010``, ``GICS® 2030``, ``GICS 4510,
+       4520``) → ``industry <label>`` per 2/4-digit code, 6/8-digit codes
+       in the run removed;
     d. standalone known 6/8-digit codes → removed. A bare 4-digit token is
        never touched (2020 and 2030 are years as well as group codes);
     e. multi-word registry sector/group names containing ``&`` or ``,`` →
        our label (case-sensitive);
     f. the internal taxonomy key → the public key; any remaining "GICS" is
        dropped before a noun ("the GICS sector" → "the sector") and
-       otherwise read as "industry", after which rule c's prefix form runs
-       once more ("GICS 4010" → "industry 4010" → "industry <label>").
+       otherwise read as "industry".
 
     Years (``19xx``/``20xx``) and numbers followed by ``%``, ``.d``, ``,d``
     or a hyphenated word are never altered by the contextual rules (b,
     c-prefix, d); a prefixed code followed by a unit word is a quantity,
     and a 2-digit one must be followed by punctuation, the end of the text
-    or a taxonomy noun. The one year-shaped rewrite is rule c's pair form,
-    where the registry name next to the bracketed code proves it is one.
+    or a taxonomy noun. A year-shaped number is rewritten only where
+    something next to it proves it is a code: the registry name (rule c's
+    pair form) or the brand (rule c's brand form, unless a revision noun
+    follows: "the GICS 2020 changes").
     """
     if not isinstance(text, str) or not text:
         return text
@@ -460,6 +486,13 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
         out = _ANALYST_RE.sub(
             lambda m: public_display_name(m.group(1)) if labels.entry(m.group(1)) else m.group(0), out,
         )
+        if "gics" in out.lower():
+            # Before the bracket, prefix and long-code rules and before rule
+            # f: the brand is the one evidence that "2030" in "GICS 2030" is
+            # a code and not a year. Once rule f rewrites it to "industry",
+            # or rule d strips a 6-digit member out of a list, that evidence
+            # is gone and the code stays next to our own noun.
+            out = _BRAND_CODES_RE.sub(lambda m: _brand_codes_sub(m, idx, labels), out)
         out = _BRACKET_RE.sub(lambda m: _bracket_sub(m, idx.names), out)
         out = _PREFIX_RE.sub(lambda m: _prefix_sub(m, labels), out)
         out = _LONG_CODE_RE.sub(lambda m: "" if m.group(2) in idx.names else m.group(0), out)
@@ -471,18 +504,52 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
     if "gics" in out.lower():
         out = _BRAND_BEFORE_WORD_RE.sub("", out)
         out = _BRAND_RE.sub("industry", out)
-        # The brand used as a prefix ("GICS 4010 rerates", "GICS® 4510")
-        # becomes "industry <code>" only here, after rule c already ran, so
-        # the code survived next to our own noun. Run the prefix rule once
-        # more over what the brand rewrite produced; its year, unit and
-        # length guards apply unchanged ("GICS 2030 targets" keeps its year).
-        if any(ch.isdigit() for ch in out):
-            out = _PREFIX_RE.sub(lambda m: _prefix_sub(m, labels), out)
     if out != text:
         # Only a string this function changed is tidied, so a caller's own
         # spacing survives untouched text.
         out = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", _MULTISPACE_RE.sub(" ", out))
     return out
+
+
+def _brand_codes_sub(m: re.Match[str], idx: _Index, labels: Labels) -> str:
+    """``GICS <code>[, <code>...]`` → ``industry <label>[, <label>...]``.
+
+    The brand proves the number is a code, so neither the year guard nor
+    the 2-digit noun guard of the bare prefix form applies ("GICS 2030
+    rerates", "GICS 45 names"). A single number followed by a unit word, a
+    taxonomy count ("GICS 11 sectors") or, when year-shaped, a revision
+    noun ("GICS 2020 changes") is left for rule f. Codes are rewritten left
+    to right; from the first token that is not a known code on, the run
+    stays as written, since a list that stops being codes is not a code
+    list."""
+    brand, gap, run = m.group(1), m.group(2), m.group(3)
+    parts = _CODE_LIST_SPLIT_RE.split(run)
+    tokens, seps = parts[0::2], parts[1::2]
+    if len(tokens) == 1:
+        nxt = _NEXT_WORD_RE.match(m.string, m.end())
+        word = (nxt.group(1) if nxt else "").lower()
+        if word in _UNIT_WORDS or word in _TAXONOMY_COUNT_NOUNS:
+            return m.group(0)
+        if _is_year(run) and word in _REVISION_NOUNS:
+            return m.group(0)
+    rewritten: list[str] = []
+    rest = ""
+    for i, tok in enumerate(tokens):
+        entry = labels.entry(tok)
+        if tok not in idx.names or (len(tok) <= 4 and entry is None):
+            # The unrecognised remainder, with the separator before it.
+            rest = "".join(parts[2 * i - 1:]) if i else run
+            break
+        if entry is not None:
+            rewritten.append(entry[0])
+        # A 6/8-digit code has no entry and is removed outright (rule d).
+    if not rewritten:
+        # Nothing to label: the brand is left for rule f and the remainder
+        # as written ("GICS 45301020 names" → "GICS names" → "names").
+        return f"{brand}{gap}{rest}" if rest else brand
+    # Between the surviving labels, the list's own first separator.
+    joiner = seps[0] if seps else ", "
+    return f"industry{gap}{joiner.join(rewritten)}{rest}"
 
 
 def _prefix_sub(m: re.Match[str], labels: Labels) -> str:

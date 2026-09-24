@@ -197,7 +197,26 @@ SCRUB_TABLE = [
     # stayed on the page next to our noun ("industry 4010 rerates").
     ("GICS 4010 rerates", f"industry {_B} rerates"),
     ("the GICS® 4530 group", f"the industry {_C} group"),
-    ("GICS 2030 targets", "industry 2030 targets"),
+    # REGRESSION (review of fb2d135): the brand is the evidence the number
+    # is a code, so the year guard and the 2-digit noun guard of the bare
+    # prefix form do not apply after it; and every code in a branded list
+    # goes, not just the first. Each of these kept a code before.
+    ("GICS 2030 targets", f"industry {il.label('2030')} targets"),
+    ("GICS 2010 multiples", f"industry {il.label('2010')} multiples"),
+    ("GICS® 2020 peers", f"industry {il.label('2020')} peers"),
+    ("GICS 45 names", f"industry {_T} names"),
+    ("the GICS 4510, 4530 groups", f"the industry {il.label('4510')}, {_C} groups"),
+    ("GICS 4510/4530", f"industry {il.label('4510')}/{_C}"),
+    ("GICS 4530, 453010 leads", f"industry {_C} leads"),
+    ("GICS 45301020 names", "names"),
+    # ...while after the brand a quantity, a count of levels and a named
+    # revision of the standard stay numbers
+    ("the GICS 11 sectors", "the industry 11 sectors"),
+    ("GICS 10 sectors", "industry 10 sectors"),
+    ("GICS 20 years", "industry 20 years"),
+    ("GICS 2020 changes", "industry 2020 changes"),
+    ("GICS 45% weight", "industry 45% weight"),
+    ("GICS 4530, 2026 outlook", f"industry {_C}, 2026 outlook"),
     ("taxonomy gics-2026-04", "taxonomy mm-2026-04"),
     # ordinary English is left alone — a count or a year before a name is
     # not a code
