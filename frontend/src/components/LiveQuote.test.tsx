@@ -45,6 +45,17 @@ describe("LiveQuote", () => {
     expect(screen.getByTestId("live-quote").dataset.source).toBe("live");
   });
 
+  it("live and open, but timed in an earlier session: shows that day, not a bare time", async () => {
+    // Just after the open a delayed feed can still answer with Tuesday's close.
+    const prior: QuotesOut = {
+      ...liveOpen,
+      quotes: [{ ...liveOpen.quotes[0], price_time: "2026-09-22T20:00:00Z", as_of: "2026-09-22T20:00:00Z" }],
+    };
+    await renderWith(prior);
+    expect(liveOpen.market.session_date).toBe("2026-09-23");
+    expect(chipText()).toContain("· Tue Sep 22, 4:00 PM ET · may be delayed up to 15 min");
+  });
+
   it("live after the close: 'At close' with the session's date and 4:00 PM ET", async () => {
     await renderWith(liveAtClose);
     expect(chipText()).toContain("$88.10 · At close, Wed Sep 23, 4:00 PM ET");
@@ -128,6 +139,51 @@ describe("LiveQuote", () => {
       await Promise.resolve();
     });
     expect(apiMock.getQuotes).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not poll while the tab is hidden, even with the market open", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-23T14:45:00Z"));
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      await renderWith(liveOpen);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POLL_MS * 2);
+      });
+      expect(apiMock.getQuotes).toHaveBeenCalledTimes(1);
+      // Becoming visible again is what refetches.
+      visibility.mockReturnValue("visible");
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+      expect(apiMock.getQuotes).toHaveBeenCalledTimes(2);
+    } finally {
+      visibility.mockRestore();
+    }
+  });
+
+  it("throttles visibility refetches to one a minute, and ignores the tab being hidden", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-23T21:00:00Z"));
+    await renderWith(liveAtClose);
+    vi.setSystemTime(new Date("2026-09-23T21:00:30Z"));  // 30 s after the fetch
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+    expect(apiMock.getQuotes).toHaveBeenCalledTimes(1);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      vi.setSystemTime(new Date("2026-09-23T21:05:00Z"));
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+      expect(apiMock.getQuotes).toHaveBeenCalledTimes(1);
+    } finally {
+      visibility.mockRestore();
+    }
   });
 
   it("reports the quote to its parent", async () => {

@@ -24,6 +24,7 @@ import EarningsBreakdown from "./EarningsBreakdown";
 import MacroRegimeBanner from "./MacroRegimeBanner";
 import { Markdown } from "./Markdown";
 import PMDCFAdjustments from "./PMDCFAdjustments";
+import { fmtEtDate } from "./LiveQuote";
 import type { EarningsStructured } from "@/types";
 
 /**
@@ -812,7 +813,9 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
                   </span>
                   {memo.generated_at && (
                     <span className="text-[10px] text-slate-500">
-                      as of memo, {memo.generated_at.slice(0, 10)}
+                      {/* ET, like the chip's "memo price …" date: the UTC
+                          slice put evening-ET memos on the next day. */}
+                      as of memo, {fmtEtDate(memo.generated_at)}
                     </span>
                   )}
                   {dcf.tv_clamped === true && <TerminalClampBadge className="ml-auto" />}

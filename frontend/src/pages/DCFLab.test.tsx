@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import DCFLab from "@/pages/DCFLab";
 import type { DCFAssumptions, DCFResult, DCFScenario, DCFSensitivity } from "@/types";
 import type { QuotesOut } from "@/types/quotes";
-import { liveOpen } from "@/test/fixtures/quotes";
+import { eodClose, liveOpen, staleQuote } from "@/test/fixtures/quotes";
 
 // The lab loads assumptions and runs the engine through `api` on mount;
 // the whole surface is driven by those responses, so the mock IS the
@@ -190,6 +190,41 @@ describe("DCFLab", () => {
     expect(apiMock.dcfDefaults).not.toHaveBeenCalled();
     expect(screen.getByText(/saved v3, 2026-08-01/)).toBeInTheDocument();
     expect(screen.getByTestId("live-quote")).toHaveTextContent("$123.45");
+  });
+
+  it("never labels the upside against a stored close or a stale quote as 'live'", async () => {
+    // The captured eod_close / stale bodies, addressed to the lab's ticker.
+    const asMsft = (body: QuotesOut): QuotesOut => ({ ...body, quotes: [{ ...body.quotes[0], ticker: "MSFT" }] });
+    primeApi(result());
+    apiMock.getQuotes.mockResolvedValue(asMsft(eodClose));
+    const view = render(<DCFLab />);
+    // Base $132 against the stored close $45.67.
+    await waitFor(() => expect(screen.getByTestId("vs-live-base")).toHaveTextContent("+189.0% vs last close"));
+    expect(screen.queryByText(/vs live price/)).not.toBeInTheDocument();
+    expect(screen.getByText("Latest price")).toBeInTheDocument();
+    expect(screen.queryByText("Live price")).not.toBeInTheDocument();
+    view.unmount();
+
+    primeApi(result());
+    apiMock.getQuotes.mockResolvedValue(asMsft(staleQuote));
+    render(<DCFLab />);
+    await waitFor(() => expect(screen.getByTestId("vs-live-base")).toHaveTextContent("vs last quote"));
+    expect(screen.queryByText(/vs live price/)).not.toBeInTheDocument();
+  });
+
+  it("calls the summary's price the model price, not 'current' (a saved run's is the save-date price)", async () => {
+    primeApi(result({ current_price: 100, summary: "Base case implied price $132.00 vs current $100.00 (+32.0%). Bull $150.00" }));
+    apiMock.dcfSaved.mockResolvedValue({
+      has_saved: true, version: 3, trigger: "memo_rebuild", generated_at: "2026-08-02T01:30:00",
+      assumption_changes: [], assumptions: { ...ASSUMPTIONS, current_price: 100 },
+    });
+    render(<DCFLab />);
+    await waitFor(() =>
+      expect(screen.getByText("Base case implied price $132.00 vs model price $100.00 (+32.0%). Bull $150.00")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/vs current/)).not.toBeInTheDocument();
+    // Saved at 01:30 UTC on Aug 2 = 9:30 PM ET on Aug 1: the ET date, as the chip dates things.
+    expect(screen.getByText(/saved v3, 2026-08-01/)).toBeInTheDocument();
   });
 
   it("runs the engine defaults unchanged on the Defaults source", async () => {

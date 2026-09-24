@@ -6,6 +6,8 @@
 // time is how a months-old memo number used to read as "Current":
 //
 //   live, market open   $123.45  +2.45 (+2.02%) · 10:44 AM ET · may be delayed up to 15 min
+//                       (the day too, "Tue Sep 22, 4:00 PM ET", when the provider's
+//                        time is from an earlier session)
 //   live, market closed $88.10 · At close, Wed Sep 23, 4:00 PM ET
 //                       ("At close" only when the provider's own time is at or
 //                        after the session close; otherwise "last quote …")
@@ -53,6 +55,13 @@ export function fmtEtTime(iso: string): string {
 export function fmtEtDay(iso: string): string {
   // "Wed, Sep 23" -> "Wed Sep 23"
   return dayFmt.format(parseUtc(iso)).replace(",", "");
+}
+
+/** "2026-09-22": the New York calendar date of a UTC instant. Memo and model
+ *  save times are naive UTC, so `iso.slice(0, 10)` is the UTC date, a day
+ *  ahead for anything saved after 8 PM ET; this is the date the chip shows. */
+export function fmtEtDate(iso: string): string {
+  return etDateKey.format(parseUtc(iso));
 }
 
 function signed(v: number, digits = 2): string {
@@ -147,6 +156,10 @@ export default function LiveQuote({
   let tone = "text-slate-400";
   if (quote.source === "live" && market.is_open) {
     const up = quote.change ?? 0;
+    // Just after the open a delayed feed can still answer with the prior
+    // session's print (and its change): a bare "4:00 PM ET" would read as
+    // today, so an as_of outside today's session carries its day.
+    const today = quote.as_of != null && fmtEtDate(quote.as_of) === market.session_date;
     detail = (
       <>
         {quote.change != null && (
@@ -155,7 +168,9 @@ export default function LiveQuote({
             {quote.change_pct != null && ` (${signed(quote.change_pct)}%)`}
           </span>
         )}
-        {quote.as_of && <span> · {fmtEtTime(quote.as_of)}</span>}
+        {quote.as_of && (
+          <span> · {today ? fmtEtTime(quote.as_of) : `${fmtEtDay(quote.as_of)}, ${fmtEtTime(quote.as_of)}`}</span>
+        )}
         {quote.delayed && <span> · may be delayed up to 15 min</span>}
       </>
     );
@@ -173,7 +188,7 @@ export default function LiveQuote({
     );
   } else if (quote.source === "stale") {
     tone = "text-warn-500";
-    const sameDay = quote.as_of != null && etDateKey.format(parseUtc(quote.as_of)) === market.session_date;
+    const sameDay = quote.as_of != null && fmtEtDate(quote.as_of) === market.session_date;
     const when = quote.as_of ? (sameDay ? fmtEtTime(quote.as_of) : `${fmtEtDay(quote.as_of)}, ${fmtEtTime(quote.as_of)}`) : "time unknown";
     detail = <span>· last quote {when}, live quote unavailable</span>;
   } else {
