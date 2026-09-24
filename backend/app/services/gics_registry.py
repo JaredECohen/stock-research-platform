@@ -21,10 +21,12 @@ Two processes share only Postgres, so:
   structure is a different version with a new id), so a per-id cache can
   never be wrong, in either process.
 
-Display: codes and names, with ``ATTRIBUTION``. Company mappings are
-labelled with ``MAPPING_CAVEAT`` wherever they are shown. No S&P/MSCI
-constituent files are ever imported; ``internal_labels`` display mode is
-reserved and not built.
+Display: internally, codes and names with ``ATTRIBUTION``; company
+mappings are labelled with ``MAPPING_CAVEAT``. Publicly, MarketMosaic's own
+labels (owner decision 2026-09-24, licensing): ``display()`` returns the
+``industry_labels`` label in ``internal_labels`` mode, and every public
+surface projects through ``industry_labels`` whatever the mode says. No
+S&P/MSCI constituent files are ever imported.
 """
 from __future__ import annotations
 
@@ -154,16 +156,42 @@ def _utcnow() -> datetime:
 
 
 def display_mode() -> str:
-    """The configured display mode, validated. Only ``codes_and_names`` is
-    built; an unknown value is reported as the default rather than acted on."""
+    """The configured display mode, validated; an unknown value is reported
+    as the default rather than acted on."""
     mode = (settings.gics_display_mode or "").strip()
     return mode if mode in DISPLAY_MODES else DISPLAY_MODES[0]
 
 
+# One warning per process, not per call: `display()` can run per row.
+_CODES_AND_NAMES_WARNED = False
+
+
 def display(node: NodeInfo) -> str:
-    """``"Semiconductors & Semiconductor Equipment (4530)"`` — name and code.
-    ``internal_labels`` mode is reserved and renders identically until it
-    is built; a rename mode must never change what is stored."""
+    """How a node is named.
+
+    ``internal_labels``: MarketMosaic's own label (``industry_labels``). A
+    sector or group gets its own label; an industry or sub-industry is
+    never named publicly, so it is shown as the label of the group it rolls
+    up to.
+
+    ``codes_and_names``: ``"Semiconductors & Semiconductor Equipment (4530)"``,
+    with a one-time WARNING — that rendering carries licensed names and codes
+    and is for internal/admin use only; the public projection runs regardless
+    of this setting (licensing is not a toggle). A display mode never changes
+    what is stored."""
+    global _CODES_AND_NAMES_WARNED
+    if display_mode() == "internal_labels":
+        # Imported here: `industry_labels` reads this module's constants
+        # for its scrub table, so a top-level import would be circular.
+        from . import industry_labels
+
+        return industry_labels.label(node.code if len(node.code) <= 4 else node.code[:4])
+    if not _CODES_AND_NAMES_WARNED:
+        _CODES_AND_NAMES_WARNED = True
+        log.warning(
+            "gics_display_mode=codes_and_names renders taxonomy codes and names; "
+            "public surfaces must project through industry_labels (owner decision 2026-09-24)"
+        )
     return f"{node.name} ({node.code})"
 
 
