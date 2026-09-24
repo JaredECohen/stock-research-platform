@@ -21,6 +21,9 @@ from app.services import checkpoint_store, memo_store
 from app.services import regen_lease as lease
 from app.services import regen_worker as worker
 
+# The fixture below stubs symbol introduction; the first-contact test needs the real one.
+_INTRODUCE_TICKER = worker._introduce_ticker
+
 
 @pytest.fixture
 def database(tmp_path, monkeypatch):
@@ -345,3 +348,57 @@ def test_pull_through_runs_before_memo_only_when_due(database, monkeypatch):
     worker.enqueue("LEASE")
     assert worker.process_next_job()["status"] == "succeeded"
     assert events == ["memo:LEASE"]
+
+
+def test_introduced_ticker_first_contact_is_pulled_through_before_its_memo(database, monkeypatch):
+    """A job that introduces a new symbol requests its durable fundamentals
+    import (first_contact), and the pull-through runs it before the memo."""
+    from app.models import Company
+    from app.services import fundamental_history_service as fhs
+    from app.services import fundamental_refresh as refresh
+
+    for module in (refresh, fhs):
+        monkeypatch.setattr(module, "SessionLocal", database[0])
+    monkeypatch.setattr(worker, "_introduce_ticker", _INTRODUCE_TICKER)
+    monkeypatch.setattr(refresh, "history_capable", lambda: True)
+
+    def introduce(ticker):
+        with database[0]() as db:
+            db.add(Company(ticker=ticker, company_name=ticker, sector="Test", industry="Test",
+                           universe_tier="analyzed_on_demand"))
+            db.commit()
+        return {"ticker": ticker}
+    monkeypatch.setattr(worker, "ensure_company_in_universe", introduce)
+    monkeypatch.setattr(worker, "backfill_ticker", lambda t: None)
+    events: list[str] = []
+    monkeypatch.setattr(refresh, "_run", lambda t, s: events.append(f"refresh:{t}:{s['trigger']}") or
+                        {"success": True, "committed": False, "attempts": [], "coverage": {}})
+
+    def graph(ticker, **kwargs):
+        events.append(f"memo:{ticker}")
+        memo = fake_memo(ticker)
+        memo_store.save_memo(memo)
+        return memo
+    monkeypatch.setattr(worker, "run_stock_memo", graph)
+    worker.enqueue("NEWSYM")
+    assert worker.process_next_job()["status"] == "succeeded"
+    assert events == ["refresh:NEWSYM:first_contact", "memo:NEWSYM"]
+
+
+def test_pull_through_failure_never_fails_the_memo_job(database, monkeypatch):
+    from app.services import fundamental_refresh as refresh
+
+    def broken(ticker):
+        raise RuntimeError("fundamental refresh state NEWSYM: compare-and-set kept conflicting")
+    monkeypatch.setattr(refresh, "refresh_if_due", broken)
+    ran: list[str] = []
+
+    def graph(ticker, **kwargs):
+        ran.append(ticker)
+        memo = fake_memo(ticker)
+        memo_store.save_memo(memo)
+        return memo
+    monkeypatch.setattr(worker, "run_stock_memo", graph)
+    worker.enqueue("LEASE")
+    assert worker.process_next_job()["status"] == "succeeded"
+    assert ran == ["LEASE"]

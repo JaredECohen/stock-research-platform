@@ -588,3 +588,280 @@ def test_explorer_names_a_filed_fiscal_year_that_is_not_stored(env, monkeypatch)
     with env.factory() as db:
         late = fss.build_series([T], ["revenue"], db=db).series[0].provenance
     assert late.stale and "FY ending 2026-12-31 was filed (10-K, 2027-02-20) and is not stored yet" in late.stale_reason
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (S6 fixer)
+# ---------------------------------------------------------------------------
+
+def income_only(through: date = date(2026, 6, 30)) -> dict:
+    """FMP published the new quarter's income statement, not yet its balance sheet or cash flow."""
+    published, lagging = statements(through=through), statements()
+    return {"income": published["income"], "balance": lagging["balance"], "cash": lagging["cash"]}
+
+
+def test_income_only_publication_keeps_the_filing_retry_until_every_statement_has_it(env, monkeypatch):
+    """Coverage requires the filed period in all three statements. Deciding
+    "stored" from revenue alone let this ticker go idle after night 1 with
+    coverage blocking, never retried or named until its next filing."""
+    seed(env, monkeypatch)
+    current = {"payload": income_only()}
+    calls = chain(monkeypatch, ("fmp", lambda: current["payload"]))
+    fr.observe_many([(T, [ten_q(date(2026, 6, 30), date(2026, 7, 31))])])
+
+    env.clock.night(date(2026, 8, 2))
+    first = fr.drain()
+    assert (first["refreshed"], first["satisfied"], first["pending"]) == (1, 0, 1)
+    assert first["missing"] and first["missing"][0].startswith(f"{T}:quarterly:2026-06-30")
+    row = state(env)
+    assert (row["status"], row["trigger"], row["attempts"]) == ("pending", "filing", 1)
+    with env.factory() as db:
+        assert fr._stored_newest(db, [T])[T]["quarterly"] == date(2026, 3, 30)
+
+    current["payload"] = statements(through=date(2026, 6, 30))
+    env.clock.night(date(2026, 8, 3))
+    second = fr.drain()
+    assert (second["refreshed"], second["satisfied"]) == (1, 1) and len(calls) == 2
+    assert state(env)["status"] == "idle"
+    env.clock.now = datetime(2026, 8, 6, 12)
+    assert fhs.fundamental_coverage(T, date(2024, 8, 1))["success"]
+
+
+def test_stored_period_ignores_rows_coverage_rejects(env, monkeypatch):
+    """A row with an invalid currency or no value is not "stored" for the
+    refresh either, the same way `_coverage` skips it."""
+    seed(env, monkeypatch)
+    with env.factory() as db:
+        for statement, line in fhs.PRIMARY.items():
+            db.add(FinancialPeriod(ticker=T, period="2026Q2", statement=statement, line_item=line,
+                                   value=None if statement == "cash" else 1.0,
+                                   currency="XXX" if statement == "income" else "USD",
+                                   period_end=date(2026, 6, 30), fiscal_year=2026, fiscal_quarter=2, source="fmp"))
+        db.commit()
+        assert fr._stored_newest(db, [T])[T]["quarterly"] == date(2026, 3, 30)
+
+
+def test_etf_is_never_scheduled_for_fundamentals(env, monkeypatch):
+    """An ETF files no statements: requesting its import can never succeed,
+    and used to fail the nightly loop once and be named every night after."""
+    seed(env, monkeypatch, through=date(2026, 6, 30))
+    calls = chain(monkeypatch, ("fmp", statements(through=date(2026, 6, 30))))
+    with env.factory() as db:
+        db.add(Company(ticker="SPYX", company_name="An ETF", sector="ETF", industry="ETF",
+                       universe_tier="analyzed_on_demand", is_etf=True))
+        db.commit()
+    assert fr.request("SPYX", "first_contact") is None
+    assert state(env, "SPYX") == {}
+    for n in range(12):
+        env.clock.night(date(2026, 8, 2) + timedelta(days=n))
+        result = fr.nightly()
+        assert "SPYX" not in result["scheduled"]["first_import"] and result["stuck"] == []
+    assert ("fmp", "SPYX") not in calls and state(env, "SPYX") == {}
+
+
+def test_bare_idle_row_without_named_rows_still_gets_its_first_import(env, monkeypatch):
+    """Scheduling covers every fundamentals_required company. An admin sync
+    that took the lease (creating a bare idle row) and then failed left an
+    out-of-tier company that was never scheduled again."""
+    seed(env, monkeypatch, through=date(2026, 6, 30))
+    with env.factory() as db:
+        db.add(Company(ticker="NEWCO", company_name="New Co", sector="Test", industry="Test",
+                       universe_tier="analyzed_on_demand"))
+        db.add(FinancialPeriod(ticker="NEWCO", period="FY2019", statement="income", line_item="revenue", value=1.0,
+                               period_end=date(2019, 12, 31), fiscal_year=2019, source="live", currency="USD"))
+        db.commit()
+    assert fr.claim("NEWCO")
+    fr.release("NEWCO")
+    assert (state(env, "NEWCO")["status"], state(env, "NEWCO")["first_due_at"]) == ("idle", None)
+    calls = chain(monkeypatch, ("fmp", statements(through=date(2026, 6, 30))))
+    env.clock.night(date(2026, 8, 2))
+    result = fr.nightly()
+    assert result["scheduled"]["first_import"] == ["NEWCO"] and result["refreshed"] == 1
+    assert calls == [("fmp", "NEWCO")]
+    with env.factory() as db:
+        assert fr._stored_newest(db, ["NEWCO"])["NEWCO"]["quarterly"] == date(2026, 6, 30)
+    assert state(env, "NEWCO")["status"] == "idle"
+    env.clock.night(date(2026, 8, 3))
+    assert fr.nightly()["scheduled"] == {"calendar": [], "sweep": [], "first_import": []} and len(calls) == 1
+
+
+def test_first_import_scheduled_for_out_of_tier_company_with_no_state_row(env, monkeypatch):
+    """The first_import branch: an out-of-tier company holding only legacy
+    (anonymous) rows and no state row gets one durable import, once."""
+    with env.factory() as db:
+        db.get(Company, T).universe_tier = "analyzed_on_demand"
+        db.add(FinancialPeriod(ticker=T, period="FY2019", statement="income", line_item="revenue", value=1.0,
+                               period_end=date(2019, 12, 31), fiscal_year=2019, source="live", currency="USD"))
+        db.commit()
+    calls = chain(monkeypatch, ("fmp", statements(through=date(2026, 6, 30))))
+    env.clock.night(date(2026, 8, 2))
+    first = fr.nightly()
+    assert first["scheduled"]["first_import"] == [T] and first["satisfied"] == 1 and calls == [("fmp", T)]
+    env.clock.now = datetime(2026, 8, 2, 12)
+    assert fhs.fundamental_coverage(T, date(2024, 8, 1))["success"]
+    env.clock.night(date(2026, 8, 3))
+    assert fr.nightly()["scheduled"] == {"calendar": [], "sweep": [], "first_import": []} and len(calls) == 1
+
+
+def test_abandoned_filing_retries_stay_abandoned_under_the_nightly_calendar(env, monkeypatch):
+    """After 45 days only weekly calendar checks run. The first calendar
+    request used to clear `first_due_at`, restarting the full retry cycle
+    (21 FMP runs in 90 nights, repeating every ~45 days)."""
+    seed(env, monkeypatch)
+    calls = chain(monkeypatch, ("fmp", statements()))
+    fr.observe_many([(T, [ten_q(date(2026, 6, 30), date(2026, 7, 31))])])
+    ran: list[int] = []
+    rows: list[dict] = []
+    for n in range(100):
+        env.clock.night(date(2026, 8, 2) + timedelta(days=n))
+        result = fr.nightly()
+        assert result["errors"] == []
+        if result["refreshed"]:
+            ran.append(n + 1)
+        rows.append(state(env))
+    assert ran[:11] == [1, 2, 3, 5, 9, 16, 23, 30, 37, 44, 51] and rows[50]["last_result"]["abandoned"]
+    # Night 52: the first calendar check (the stored quarter is overdue),
+    # then one a week, each going straight back to idle.
+    assert ran[11:] == [52, 59, 66, 73, 80, 87, 94], ran
+    assert len(calls) == len(ran)
+    for row in rows[50:]:
+        assert row["attempts"] == 11 and row["status"] == "idle" and row["first_due_at"] == rows[0]["first_due_at"]
+    assert rows[-1]["last_result"]["trigger"] == "calendar" and rows[-1]["last_result"]["abandoned"]
+
+
+def test_newer_filing_restarts_an_abandoned_ticker(env, monkeypatch):
+    """Abandonment is per filed period: a newer 10-Q starts a new retry cycle."""
+    seed(env, monkeypatch)
+    chain(monkeypatch, ("fmp", statements()))
+    fr.observe_many([(T, [ten_q(date(2026, 6, 30), date(2026, 7, 31))])])
+    nights(env, date(2026, 8, 2), 51)
+    assert state(env)["last_result"]["abandoned"]
+    env.clock.now = datetime(2026, 11, 1, 12)
+    fr.observe_many([(T, [ten_q(date(2026, 9, 30), date(2026, 10, 30), acc="0000000001-26-000500"),
+                          ten_q(date(2026, 6, 30), date(2026, 7, 31))])])
+    row = state(env)
+    assert (row["status"], row["trigger"], row["attempts"]) == ("pending", "filing", 0)
+    assert row["first_due_at"] == fr.drain_slot(env.clock.now + fr.PUBLICATION_LAG)
+
+
+def test_period_end_within_52_53_week_tolerance_is_stored(env, monkeypatch):
+    """A 52/53-week filer's EDGAR reportDate can fall a few days after the
+    end FMP stores. That period is stored, not missing: without the
+    tolerance it would be retried until stuck and fail the loop."""
+    seed(env, monkeypatch, through=date(2026, 6, 30))
+    fr.observe_many([(T, [ten_q(date(2026, 7, 3), date(2026, 8, 1))])])
+    assert state(env)["status"] == "idle"
+    fr.observe_many([(T, [ten_q(date(2026, 7, 8), date(2026, 8, 2), acc="0000000001-26-000101"),
+                          ten_q(date(2026, 7, 3), date(2026, 8, 1))])])
+    assert state(env)["status"] == "pending"  # 8 days is outside the 7-day tolerance
+
+
+def test_failed_sweep_is_not_repeated_for_a_week(env, monkeypatch):
+    seed(env, monkeypatch, through=date(2026, 6, 30))
+    with env.factory() as db:
+        for row in db.execute(select(FinancialPeriod)).scalars():
+            row.fetched_at = datetime(2026, 4, 14, 3, 15)
+        db.commit()
+    calls = chain(monkeypatch, ("fmp", RuntimeError("FMP down")))
+    env.clock.night(date(2026, 8, 12))
+    swept = fr.nightly()
+    assert swept["scheduled"]["sweep"] == [T] and len(calls) == 1 and swept["errors"] == []
+    for n in range(1, 7):
+        env.clock.night(date(2026, 8, 12) + timedelta(days=n))
+        assert fr.nightly()["scheduled"]["sweep"] == [], n
+    assert len(calls) == 1
+    env.clock.night(date(2026, 8, 19))
+    assert fr.nightly()["scheduled"]["sweep"] == [T] and len(calls) == 2
+
+
+# --- unattended takeover and the S5 re-pull -----------------------------------
+
+def with_net_income(payload: dict, value: float, periods: set[str] | None = None) -> dict:
+    income = [{**row, "net_income": value} if periods is None or row["period"] in periods else row
+              for row in payload["income"]]
+    return {**payload, "income": income}
+
+
+def add_conflicting_rows(env, periods: list[tuple[str, date]], value: float = 3.0) -> None:
+    with env.factory() as db:
+        for period, end in periods:
+            fy, fq = (int(period[2:]), None) if period.startswith("FY") else (int(period[:4]), int(period[-1]))
+            db.add(FinancialPeriod(ticker=T, period=period, statement="income", line_item="net_income", value=value,
+                                   period_end=end, fiscal_year=fy, fiscal_quarter=fq, currency="USD",
+                                   source="alpha_vantage", fetched_at=datetime(2026, 7, 1)))
+        db.commit()
+
+
+def secondary_rows(env) -> int:
+    with env.factory() as db:
+        return db.execute(select(func.count()).select_from(FinancialPeriod).where(
+            FinancialPeriod.ticker == T, FinancialPeriod.source == "alpha_vantage")).scalar_one()
+
+
+@pytest.mark.parametrize("entry", ["drain", "refresh_if_due"])
+def test_scheduled_refresh_is_unattended_beyond_the_auto_quarantine_limits(env, monkeypatch, entry):
+    """Scheduled refreshes run unattended: a takeover beyond S5's
+    auto-quarantine limits is recorded as a planned repair and moves no
+    row. A supervised run here would quarantine 21 rows with nobody
+    reviewing them."""
+    seed(env, monkeypatch)
+    # 21 value conflicts (a safe reason) exceed the 20-row auto limit.
+    conflicting = quarters(date(2026, 3, 30)) + [(f"FY{y}", date(y, 12, 31)) for y in range(2022, 2026)]
+    assert len(conflicting) > fhs.QUARANTINE_AUTO_MAX_ROWS
+    add_conflicting_rows(env, conflicting)
+    chain(monkeypatch, ("fmp", with_net_income(statements(through=date(2026, 6, 30)), 4.0)))
+    fr.observe_many([(T, [ten_q(date(2026, 6, 30), date(2026, 7, 31))])])
+    env.clock.night(date(2026, 8, 2))
+    if entry == "drain":
+        result = fr.drain()
+        assert result["rows_quarantined"] == 0 and result["satisfied"] == 1
+    else:
+        assert fr.refresh_if_due(T)["satisfied"]
+    assert secondary_rows(env) == len(conflicting)
+    planned = state(env)["last_result"]["planned_repair_id"]
+    assert planned and state(env)["last_result"]["rows_quarantined"] == 0
+    if entry == "drain":
+        from app.monitoring.history_backfill import _fundamentals_note
+        assert result["repair_ids"] == [f"{T}:{planned}"] and f"{T}:{planned}" in _fundamentals_note(result)
+    from app.models import FinancialDataRepair
+    with env.factory() as db:
+        repair = db.get(FinancialDataRepair, planned)
+        assert repair.status == "planned" and repair.plan["mode"] == "unattended"
+
+
+def test_scheduled_refresh_applies_a_small_safe_quarantine(env, monkeypatch):
+    seed(env, monkeypatch)
+    add_conflicting_rows(env, [("FY2025", date(2025, 12, 31))])
+    chain(monkeypatch, ("fmp", with_net_income(statements(through=date(2026, 6, 30)), 4.0, {"FY2025"})))
+    fr.observe_many([(T, [ten_q(date(2026, 6, 30), date(2026, 7, 31))])])
+    env.clock.night(date(2026, 8, 2))
+    result = fr.drain()
+    assert result["rows_quarantined"] == 1 and secondary_rows(env) == 0
+    assert result["repair_ids"] and result["repair_ids"][0].startswith(f"{T}:")
+
+
+# --- first-contact requests -----------------------------------------------------
+
+def test_lazy_universe_route_requests_first_contact_and_never_fails_on_it(env, monkeypatch):
+    from app.api import routes_stocks
+    from app.services import industry_classification
+
+    def introduce(t):
+        with env.factory() as db:
+            db.add(Company(ticker=t, company_name=t, sector="Test", industry="Test", universe_tier="analyzed_on_demand"))
+            db.commit()
+        return {"ticker": t}
+
+    monkeypatch.setattr(routes_stocks, "SessionLocal", env.factory)
+    monkeypatch.setattr(routes_stocks, "ensure_company_in_universe", introduce)
+    monkeypatch.setattr(routes_stocks, "backfill_ticker", lambda t: None)
+    monkeypatch.setattr(industry_classification, "classify_ticker", lambda t, **k: None)
+    assert routes_stocks._ensure_lazy_universe("zzfc") == "analyzed_on_demand"
+    row = state(env, "ZZFC")
+    assert (row["status"], row["trigger"], row["attempts"]) == ("pending", "first_contact", 0)
+    assert row["due_at"] == row["first_due_at"] == fr.drain_slot(START)
+
+    def boom(*a, **k):
+        raise RuntimeError("state table unavailable")
+    monkeypatch.setattr(fr, "request", boom)
+    assert routes_stocks._ensure_lazy_universe("zzfd") == "analyzed_on_demand"

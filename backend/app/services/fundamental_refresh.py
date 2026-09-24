@@ -38,16 +38,19 @@ calendar check once a period is overdue, and by a 120-day sweep.
 Every run goes through S5's FMP-primary `backfill_fundamentals` with
 `mode="unattended"`, so a scheduled refresh quarantines only small, safe
 sets and records a planned repair for anything else.
+
+ETFs are never scheduled: they file no statements (`request` refuses them).
 """
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Callable, Iterable
 from datetime import date, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, Table, inspect, or_, select, update
+from sqlalchemy import CursorResult, Table, func, inspect, or_, select, update
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
@@ -216,23 +219,70 @@ def _cas(db: Session, ticker: str, compute: Callable[[dict[str, Any] | None], di
 # What is stored, what is filed, what is missing
 # ---------------------------------------------------------------------------
 
-def _stored_newest(db: Session, tickers: list[str]) -> dict[str, dict[str, date | None]]:
-    """Newest named-provider revenue period end per cadence; absent = no rows."""
-    out: dict[str, dict[str, date | None]] = {}
+def _stored_primary(db: Session, tickers: list[str]) -> dict[str, dict[str, Any]]:
+    """Newest usable named-provider period per statement and cadence.
+
+    Usable the way `fhs._coverage` judges it: each statement's PRIMARY line
+    (income revenue, balance total assets, cash from operations), a named
+    source, a valid currency and a finite value. Per ticker:
+    `{"ends": {statement: {cadence: (period_end, fiscal_quarter)}},
+    "fetched": newest fetched_at}`; absent = no usable named rows at all.
+    """
+    out: dict[str, dict[str, Any]] = {}
     if not tickers or not inspect(db.connection()).has_table(FinancialPeriod.__tablename__):
         return out
+    primary_lines = or_(*[(FinancialPeriod.statement == statement) & (FinancialPeriod.line_item == line)
+                          for statement, line in fhs.PRIMARY.items()])
     for chunk in _chunks(tickers):
-        rows = db.execute(select(FinancialPeriod.ticker, FinancialPeriod.fiscal_quarter.is_(None),
-                                 FinancialPeriod.period_end)
-                          .where(FinancialPeriod.ticker.in_(chunk), FinancialPeriod.statement == "income",
-                                 FinancialPeriod.line_item == fhs.PRIMARY["income"],
+        rows = db.execute(select(FinancialPeriod.ticker, FinancialPeriod.statement, FinancialPeriod.fiscal_quarter,
+                                 FinancialPeriod.period_end, FinancialPeriod.value, FinancialPeriod.currency,
+                                 FinancialPeriod.fetched_at)
+                          .where(FinancialPeriod.ticker.in_(chunk), primary_lines,
                                  FinancialPeriod.source.not_in(fhs.LEGACY_SOURCES),
-                                 FinancialPeriod.period_end.is_not(None))).all()
-        for ticker, annual, end in rows:
-            newest = out.setdefault(ticker, {"quarterly": None, "annual": None})
-            cadence = "annual" if annual else "quarterly"
-            if newest[cadence] is None or end > newest[cadence]:
-                newest[cadence] = end
+                                 FinancialPeriod.period_end.is_not(None), FinancialPeriod.value.is_not(None))).all()
+        for ticker, statement, quarter, end, value, currency, fetched in rows:
+            if not fhs._valid_currency(currency) or not math.isfinite(value):
+                continue
+            fact = out.setdefault(ticker, {"ends": {}, "fetched": None})
+            per = fact["ends"].setdefault(statement, {})
+            cadence = "annual" if quarter is None else "quarterly"
+            if cadence not in per or end > per[cadence][0]:
+                per[cadence] = (end, quarter)
+            if fetched is not None and (fact["fetched"] is None or fetched > fact["fetched"]):
+                fact["fetched"] = fetched
+    return out
+
+
+def _lagging_end(fact: dict[str, Any], cadence: str, *, strict: bool) -> tuple[date, int | None] | None:
+    """The period every statement holds for `cadence`: the minimum newest end.
+
+    `strict`: a statement with no row for the cadence makes it None (nothing
+    is stored for all three). Otherwise the statements that have the cadence
+    decide (the calendar's overdue anchor).
+    """
+    ends = [per.get(cadence) for per in (fact["ends"].get(s, {}) for s in fhs.PRIMARY)]
+    if strict and any(e is None for e in ends):
+        return None
+    present = [e for e in ends if e is not None]
+    return min(present, key=lambda e: e[0]) if present else None
+
+
+def _stored_newest(db: Session, tickers: list[str]) -> dict[str, dict[str, date | None]]:
+    """Newest period stored in ALL three statements per cadence; absent = no rows.
+
+    Coverage judges a filed period current only when income, balance sheet
+    and cash flow all hold it (`fhs._coverage` per statement). Deciding
+    "stored" from revenue alone let a ticker whose FMP balance sheet or cash
+    flow lagged its income statement go idle with coverage still blocking,
+    never retried or named until the next filing.
+    """
+    out: dict[str, dict[str, date | None]] = {}
+    for ticker, fact in _stored_primary(db, tickers).items():
+        newest: dict[str, date | None] = {}
+        for cadence in ("quarterly", "annual"):
+            end = _lagging_end(fact, cadence, strict=True)
+            newest[cadence] = end[0] if end else None
+        out[ticker] = newest
     return out
 
 
@@ -333,8 +383,9 @@ def _observe_changes(ticker: str, cur: dict[str, Any] | None, summary: dict[str,
         if _is_pending(cur):
             changes.update(trigger="amendment", due_at=min(state.get("due_at") or due, due), requested_at=now)
         else:
-            changes.update(status="pending", trigger="amendment", attempts=0, due_at=due, first_due_at=None,
-                           requested_at=now)
+            # `first_due_at` and `attempts` are left alone: an abandoned row
+            # keeps its abandonment (see `request`).
+            changes.update(status="pending", trigger="amendment", due_at=due, requested_at=now)
     return changes
 
 
@@ -390,9 +441,18 @@ def observe_many(observations: list[tuple[str, list[dict]]], *, now: datetime | 
     return failed
 
 
+def _is_etf(db: Session, ticker: str) -> bool:
+    return bool(db.execute(select(Company.is_etf).where(Company.ticker == ticker)).scalar_one_or_none())
+
+
 def request(ticker: str, trigger: str, *, due_at: datetime | None = None, now: datetime | None = None,
             db: Session | None = None) -> dict[str, Any] | None:
-    """Ask for a refresh. Keeps an existing request that is due sooner or ranks higher."""
+    """Ask for a refresh. Keeps an existing request that is due sooner or ranks higher.
+
+    An ETF is refused (returns None, nothing written): it files no income
+    statement, so a fundamentals import can never succeed and would only
+    spend ~10 FMP runs over 45 days and fail the nightly loop once.
+    """
     if trigger not in TRIGGER_PRIORITY:
         raise ValueError(f"unknown fundamentals refresh trigger {trigger!r}")
     ticker = ticker.strip().upper()
@@ -411,13 +471,23 @@ def request(ticker: str, trigger: str, *, due_at: datetime | None = None, now: d
             if cur.get("due_at") is None or due < cur["due_at"]:
                 return {"due_at": due, "requested_at": now}
             return None
-        return {"status": "pending", "trigger": trigger, "due_at": due, "attempts": 0, "requested_at": now,
-                "first_due_at": due if trigger in RETRY_TRIGGERS else None}
+        changes = {"status": "pending", "trigger": trigger, "due_at": due, "requested_at": now}
+        if trigger in RETRY_TRIGGERS or cur is None:
+            changes.update(attempts=0, first_due_at=due if trigger in RETRY_TRIGGERS else None)
+        # Otherwise `first_due_at` and `attempts` are kept. On an idle row
+        # they are non-zero only when filing retries were abandoned, and
+        # `record_result` measures abandonment from `first_due_at`: clearing
+        # it here let the next weekly calendar check restart 45 days of
+        # retries, forever.
+        return changes
 
     own = db is None
     session = db or SessionLocal()
     try:
         _ensure_table(session)
+        if _is_etf(session, ticker):
+            log.info("fundamentals refresh not requested for %s: an ETF has no statements to import", ticker)
+            return None
         state = _cas(session, ticker, compute)
         session.commit()
         return state
@@ -661,37 +731,32 @@ def schedule_calendar_and_sweep(tickers: list[str], *, now: datetime | None = No
     with SessionLocal() as db:
         _ensure_table(db)
         states: dict[str, dict[str, Any]] = {}
-        facts: dict[str, dict[str, Any]] = {}
         for chunk in _chunks(tickers):
             for row in db.execute(select(_TABLE).where(_TABLE.c.ticker.in_(chunk))).mappings():
                 states[row["ticker"]] = dict(row)
-            if not inspect(db.connection()).has_table(FinancialPeriod.__tablename__):
-                continue
-            for ticker, end, quarter, fetched in db.execute(
-                    select(FinancialPeriod.ticker, FinancialPeriod.period_end, FinancialPeriod.fiscal_quarter,
-                           FinancialPeriod.fetched_at)
-                    .where(FinancialPeriod.ticker.in_(chunk), FinancialPeriod.statement == "income",
-                           FinancialPeriod.line_item == fhs.PRIMARY["income"],
-                           FinancialPeriod.source.not_in(fhs.LEGACY_SOURCES),
-                           FinancialPeriod.period_end.is_not(None))):
-                f = facts.setdefault(ticker, {"q": None, "fq": None, "a": None, "fetched": None})
-                if quarter is not None and (f["q"] is None or end > f["q"]):
-                    f["q"], f["fq"] = end, quarter
-                if quarter is None and (f["a"] is None or end > f["a"]):
-                    f["a"] = end
-                if fetched is not None and (f["fetched"] is None or fetched > f["fetched"]):
-                    f["fetched"] = fetched
+        stored = _stored_primary(db, tickers)
         db.commit()
         for ticker in tickers:
             state = states.get(ticker)
             if _is_pending(state) or fhs.reporting_ended_on(ticker) is not None:
                 continue
-            fact = facts.get(ticker)
-            if fact is None:
-                if state is None:
+            stored_fact = stored.get(ticker)
+            if stored_fact is None:
+                # Nothing named is stored. Request the durable import unless
+                # an earlier one was abandoned (it keeps `first_due_at`). A
+                # bare idle row, left by an admin sync that took the lease
+                # and then failed or found its sync claim held, is not an
+                # answer: without this the company was never scheduled again.
+                if state is None or state.get("first_due_at") is None:
                     request(ticker, "first_import", now=now, db=db)
                     out["first_import"].append(ticker)
                 continue
+            # The overdue anchor is the statement that lags: a balance sheet
+            # FMP has not published yet is as missing as the income line.
+            quarter = _lagging_end(stored_fact, "quarterly", strict=False)
+            annual = _lagging_end(stored_fact, "annual", strict=False)
+            fact = {"q": quarter[0] if quarter else None, "fq": quarter[1] if quarter else None,
+                    "a": annual[0] if annual else None, "fetched": stored_fact["fetched"]}
             foreign = (state or {}).get("filed_annual_form") in FOREIGN_ANNUAL_FORMS
             annual_deadline = FOREIGN_ANNUAL_DEADLINE_DAYS if foreign else ANNUAL_DEADLINE_DAYS
             interim_deadline = FOREIGN_INTERIM_DEADLINE_DAYS if foreign else QUARTERLY_DEADLINE_DAYS
@@ -820,8 +885,10 @@ def _report_stuck(result: dict[str, Any], now: datetime) -> None:
 
 
 def _company_tickers() -> list[str]:
+    """Every company that can have fundamentals: ETFs file no statements."""
     with SessionLocal() as db:
-        return [t for (t,) in db.execute(select(Company.ticker).order_by(Company.ticker)).all()]
+        return [t for (t,) in db.execute(select(Company.ticker).where(func.coalesce(Company.is_etf, False).is_(False))
+                                         .order_by(Company.ticker)).all()]
 
 
 def nightly(*, now: datetime | None = None) -> dict[str, Any]:
