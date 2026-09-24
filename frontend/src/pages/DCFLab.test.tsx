@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import DCFLab from "@/pages/DCFLab";
 import type { DCFAssumptions, DCFResult, DCFScenario, DCFSensitivity } from "@/types";
+import type { QuotesOut } from "@/types/quotes";
+import { liveOpen } from "@/test/fixtures/quotes";
 
 // The lab loads assumptions and runs the engine through `api` on mount;
 // the whole surface is driven by those responses, so the mock IS the
@@ -12,6 +14,7 @@ const apiMock = vi.hoisted(() => ({
   dcfSaved: vi.fn(),
   dcfDefaults: vi.fn(),
   runDCF: vi.fn(),
+  getQuotes: vi.fn(),
 }));
 
 vi.mock("@/api/client", () => ({ api: apiMock }));
@@ -117,7 +120,12 @@ function primeApi(res: DCFResult) {
   apiMock.dcfSaved.mockResolvedValue({ has_saved: false });
   apiMock.dcfDefaults.mockResolvedValue(ASSUMPTIONS);
   apiMock.runDCF.mockResolvedValue(res);
+  // No quote by default: the lab must render without one.
+  apiMock.getQuotes.mockRejectedValue(new Error("no quote in this test"));
 }
+
+// The captured live body (test/fixtures/quotes.ts), addressed to the lab's ticker.
+const LIVE_MSFT: QuotesOut = { ...liveOpen, quotes: [{ ...liveOpen.quotes[0], ticker: "MSFT" }] };
 
 describe("DCFLab", () => {
   beforeEach(() => {
@@ -129,8 +137,8 @@ describe("DCFLab", () => {
     render(<DCFLab />);
     // Base card + the sensitivity cell both print $132.00.
     await waitFor(() => expect(screen.getAllByText("$132.00")).toHaveLength(2));
-    expect(screen.getByText("+10.0% vs current")).toBeInTheDocument();
-    expect(screen.getByText("-20.0% vs current")).toBeInTheDocument();
+    expect(screen.getByText("+10.0% vs model price")).toBeInTheDocument();
+    expect(screen.getByText("-20.0% vs model price")).toBeInTheDocument();
     expect(screen.queryByText("Terminal value clamped")).not.toBeInTheDocument();
     expect(screen.queryByText("n/a")).not.toBeInTheDocument();
   });
@@ -145,9 +153,10 @@ describe("DCFLab", () => {
       summary: "Base case implied price n/a vs current n/a (n/a).",
     }));
     render(<DCFLab />);
-    await waitFor(() => expect(screen.getAllByText("n/a vs current")).toHaveLength(3));
-    // Three scenario prices + one 5x5-style cell + three cross-check cells.
-    expect(screen.getAllByText("n/a")).toHaveLength(7);
+    await waitFor(() => expect(screen.getAllByText("n/a vs model price")).toHaveLength(3));
+    // Three scenario prices + one 5x5-style cell + three cross-check cells
+    // + the "Price used in model" line.
+    expect(screen.getAllByText("n/a")).toHaveLength(8);
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
     expect(screen.queryByText(/\+0\.0%/)).not.toBeInTheDocument();
   });
@@ -161,5 +170,42 @@ describe("DCFLab", () => {
     const holder = badge.closest("[title]");
     expect(holder).not.toBeNull();
     expect(holder?.getAttribute("title")).toMatch(/0\.5% floor/);
+  });
+
+  it("keeps saved assumptions verbatim and shows the live upside for display only (W5b)", async () => {
+    primeApi(result({ current_price: 100 }));
+    const saved = { ...ASSUMPTIONS, current_price: 100 };
+    apiMock.dcfSaved.mockResolvedValue({
+      has_saved: true, version: 3, trigger: "memo_rebuild", generated_at: "2026-08-01T12:00:00",
+      assumption_changes: [], assumptions: saved,
+    });
+    apiMock.getQuotes.mockResolvedValue(LIVE_MSFT);
+    render(<DCFLab />);
+    // Base implied $132 against the live $123.45: +6.9%, computed in the browser.
+    await waitFor(() => expect(screen.getByTestId("vs-live-base")).toHaveTextContent("+6.9% vs live price"));
+    expect(screen.getByTestId("vs-live-bear")).toHaveTextContent("-22.2% vs live price");
+    // What was POSTed is the saved set, save-date price included: nothing re-priced.
+    expect(apiMock.runDCF).toHaveBeenCalledTimes(1);
+    expect(apiMock.runDCF.mock.calls[0][1]).toEqual(saved);
+    expect(apiMock.dcfDefaults).not.toHaveBeenCalled();
+    expect(screen.getByText(/saved v3, 2026-08-01/)).toBeInTheDocument();
+    expect(screen.getByTestId("live-quote")).toHaveTextContent("$123.45");
+  });
+
+  it("runs the engine defaults unchanged on the Defaults source", async () => {
+    primeApi(result());
+    apiMock.getQuotes.mockResolvedValue(LIVE_MSFT);
+    render(<DCFLab />);
+    await waitFor(() => expect(apiMock.runDCF).toHaveBeenCalledTimes(1));
+    // No saved DCF: the lab falls through to the defaults and posts them as served.
+    expect(apiMock.runDCF.mock.calls[0][1]).toEqual(ASSUMPTIONS);
+  });
+
+  it("still renders the DCF when the quote request fails, without a live upside", async () => {
+    primeApi(result());
+    render(<DCFLab />);
+    await waitFor(() => expect(screen.getByText("+10.0% vs model price")).toBeInTheDocument());
+    expect(screen.queryByText(/vs live price/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("live-quote")).not.toBeInTheDocument();
   });
 });

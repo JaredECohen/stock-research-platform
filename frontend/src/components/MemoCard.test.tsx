@@ -167,6 +167,13 @@ describe("MemoCard", () => {
       expect(screen.queryByText("-100.0%")).not.toBeInTheDocument();
     });
 
+    it("labels the stored DCF price as the memo's, never as 'Current' (W5b)", () => {
+      renderCard(makeMemo({ dcf_summary: PRICED_DCF_SUMMARY, generated_at: "2026-09-03T14:00:00" }));
+      expect(screen.getByText("Price used in DCF")).toBeInTheDocument();
+      expect(screen.queryByText("Current")).not.toBeInTheDocument();
+      expect(screen.getByText("as of memo, 2026-09-03")).toBeInTheDocument();
+    });
+
     it("shows the terminal-clamp badge with an explanatory tooltip when tv_clamped is set", () => {
       renderCard(makeMemo({ dcf_summary: CLAMPED_DCF_SUMMARY }));
       const badge = screen.getByText("Terminal value clamped").closest("[title]");

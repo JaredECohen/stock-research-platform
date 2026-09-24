@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, isApiError } from "@/api/client";
 import MemoCard from "@/components/MemoCard";
+import LiveQuote from "@/components/LiveQuote";
 import RateLimitNotice from "@/components/RateLimitNotice";
 import UpgradePrompt from "@/components/UpgradePrompt";
 import { AgentTrace } from "@/components/AgentTrace";
@@ -349,10 +350,18 @@ export default function Research() {
       {memo && (
         <div className="grid lg:grid-cols-[1fr_280px] gap-4">
           <div className="space-y-3">
-            <div className="flex justify-end">
+            <div className="flex items-end justify-between gap-3 flex-wrap">
+              {/* W5b: today's price, labelled with its age, and the drift
+                  since the memo's own frozen price. Everything in the memo
+                  below is as of the memo, not now. */}
+              <LiveQuote
+                ticker={memo.ticker}
+                priceAtMemo={memo.price_at_memo}
+                memoAt={memo.price_at_memo_at ?? memo.generated_at}
+              />
               <button
                 type="button"
-                className="px-3 py-1.5 text-sm rounded-md bg-accent-600 hover:bg-accent-500 text-white font-medium shadow"
+                className="ml-auto px-3 py-1.5 text-sm rounded-md bg-accent-600 hover:bg-accent-500 text-white font-medium shadow"
                 onClick={() => setFullMemoOpen(true)}
                 title="Open the full structured investment memo (with PDF download)"
               >

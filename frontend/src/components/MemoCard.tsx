@@ -803,13 +803,18 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
             return (
               <div className="space-y-3 text-sm">
                 <div className="flex items-baseline gap-2 flex-wrap">
-                  <span className="text-xs text-slate-500">Current</span>
+                  {/* W5b: this is the quote the memo's DCF ran on, frozen
+                      in the stored memo; it was labelled "Current" and could
+                      be months old. Today's price is the live chip above. */}
+                  <span className="text-xs text-slate-500">Price used in DCF</span>
                   <span className="font-mono text-base text-slate-100">
                     {fmtPrice(current)}
                   </span>
-                  <span className="text-[10px] text-slate-500">
-                    Δ vs DCF below
-                  </span>
+                  {memo.generated_at && (
+                    <span className="text-[10px] text-slate-500">
+                      as of memo, {memo.generated_at.slice(0, 10)}
+                    </span>
+                  )}
                   {dcf.tv_clamped === true && <TerminalClampBadge className="ml-auto" />}
                 </div>
                 <div className="grid grid-cols-3 gap-3">
