@@ -253,6 +253,7 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
         totals["fund_over_cap"] = len(fund["over_cap"])
         totals["fund_errors"] = len(fund["errors"])
         totals["fund_stuck"] = len(fund["stuck"])
+        totals["fund_held"] = len(fund.get("held") or [])
     return totals
 
 
@@ -273,6 +274,8 @@ def _fundamentals_note(fund: dict) -> str:
         note += f"; fundamentals over the {MAX_DRAIN_SECONDS}s drain budget: {note_names(fund['over_budget'])}"
     if fund["leased"]:
         note += f"; fundamentals leased elsewhere: {note_names(fund['leased'])}"
+    if fund.get("held"):
+        note += f"; fundamentals held for the FMP re-pull execution: {note_names(fund['held'])}"
     if fund["missing"]:
         note += f"; fundamentals missing filed periods: {note_names(fund['missing'])}"
     if fund["stuck"]:

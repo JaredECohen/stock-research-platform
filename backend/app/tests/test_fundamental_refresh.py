@@ -840,6 +840,71 @@ def test_scheduled_refresh_applies_a_small_safe_quarantine(env, monkeypatch):
     assert result["repair_ids"] and result["repair_ids"][0].startswith(f"{T}:")
 
 
+def test_drain_holds_a_dry_run_ticker_until_the_repull_executes_it(env, monkeypatch):
+    """S5's re-pull executes each ticker against its reviewed dry run and
+    aborts on any difference. A drain between the two used to quarantine
+    the conflicting row first, so the execute failed with
+    repull_plan_mismatch and the owner's backup gate was bypassed."""
+    from app.models import FinancialDataRepair
+    from app.services import fmp_repull_ledger as ledger
+
+    monkeypatch.delenv(ledger.ENABLE_ENV, raising=False)
+    seed(env, monkeypatch)
+    add_conflicting_rows(env, [("FY2025", date(2025, 12, 31))])
+    payload = with_net_income(statements(through=date(2026, 6, 30)), 4.0, {"FY2025"})
+    calls = chain(monkeypatch, ("fmp", payload))
+    dry = fhs.backfill_fundamentals(T, date(2024, 8, 1), True, dry_run=True)
+    reviewed = fhs.plan_identity(dry)
+    assert reviewed["quarantine"], reviewed
+    with env.factory() as db:
+        db.add(FinancialDataRepair(id=ledger.DRY_RUN_ID, digest="d", status="complete", plan={"mode": "dry_run"},
+                                   result={"tickers": {T: {"status": "ok"}}}))
+        db.commit()
+    fr.observe_many([(T, [ten_q(date(2026, 6, 30), date(2026, 7, 31))])])
+    before = len(calls)
+
+    env.clock.night(date(2026, 8, 2))
+    held = fr.drain()
+    assert held["held"] == [T] and held["refreshed"] == 0 and len(calls) == before
+    assert fr.refresh_if_due(T) is None and len(calls) == before
+    assert secondary_rows(env) == 1 and state(env)["status"] == "pending"
+    from app.monitoring.history_backfill import _fundamentals_note
+    note = _fundamentals_note(held)
+    assert f"fundamentals held for the FMP re-pull execution: {T}" in note and "deferred" not in note
+
+    with env.factory() as db:  # authorized, not yet reached: still held
+        db.add(FinancialDataRepair(id=ledger.EXECUTE_ID, digest="e", status="running", plan={"mode": "execute"},
+                                   result={"tickers": {}}))
+        db.commit()
+    env.clock.night(date(2026, 8, 3))
+    assert fr.drain()["held"] == [T] and len(calls) == before
+
+    executed = fhs.backfill_fundamentals(T, date(2024, 8, 1), True, expected_plan=reviewed)
+    assert not [i for i in executed["issues"] if i["kind"] == "repull_plan_mismatch"]
+    assert executed["rows_quarantined"] == 1
+    with env.factory() as db:
+        row = db.get(FinancialDataRepair, ledger.EXECUTE_ID)
+        row.result = {"tickers": {T: {"status": "ok"}}}
+        db.commit()
+    env.clock.night(date(2026, 8, 4))
+    released = fr.drain()
+    assert released["held"] == [] and released["refreshed"] == 1 and state(env)["status"] == "idle"
+
+
+def test_repull_turned_off_holds_nothing(env, monkeypatch):
+    from app.models import FinancialDataRepair
+    from app.services import fmp_repull_ledger as ledger
+
+    with env.factory() as db:
+        db.add(FinancialDataRepair(id=ledger.DRY_RUN_ID, digest="d", status="complete", plan={"mode": "dry_run"},
+                                   result={"tickers": {T: {"status": "ok"}}}))
+        db.commit()
+        monkeypatch.delenv(ledger.ENABLE_ENV, raising=False)
+        assert fr.repull_hold(db, T) == fr.REPULL_HOLD_REASON and fr.repull_hold(db, "OTHER") is None
+        monkeypatch.setenv(ledger.ENABLE_ENV, "off")
+        assert fr.repull_hold(db, T) is None
+
+
 # --- first-contact requests -----------------------------------------------------
 
 def test_lazy_universe_route_requests_first_contact_and_never_fails_on_it(env, monkeypatch):

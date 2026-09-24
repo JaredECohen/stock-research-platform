@@ -37,7 +37,9 @@ calendar check once a period is overdue, and by a 120-day sweep.
 
 Every run goes through S5's FMP-primary `backfill_fundamentals` with
 `mode="unattended"`, so a scheduled refresh quarantines only small, safe
-sets and records a planned repair for anything else.
+sets and records a planned repair for anything else. A ticker S5's
+one-time re-pull has dry-run but not yet executed is held (`repull_hold`)
+so the owner-reviewed plan still matches when it executes.
 
 ETFs are never scheduled: they file no statements (`request` refuses them).
 """
@@ -782,12 +784,48 @@ def schedule_calendar_and_sweep(tickers: list[str], *, now: datetime | None = No
 def _empty_result() -> dict[str, Any]:
     return {"refreshed": 0, "satisfied": 0, "pending": 0, "rows_written": 0, "rows_quarantined": 0,
             "repair_ids": [], "over_cap": [], "over_budget": [], "leased": [], "missing": [], "stuck": [],
-            "still_missing": [], "errors": [], "entitlement_denied": [], "skipped_reason": None}
+            "still_missing": [], "errors": [], "entitlement_denied": [], "held": [], "skipped_reason": None}
+
+
+REPULL_HOLD_REASON = "awaiting the reviewed FMP re-pull execution"
+
+
+def repull_hold(db: Session, ticker: str) -> str | None:
+    """Why an unattended refresh must not touch `ticker` yet, or None.
+
+    S5's one-time FMP re-pull (`fmp_repull_ledger`, owner decision 3)
+    executes each ticker against the exact plan its dry run recorded and
+    aborts with `repull_plan_mismatch` if stored rows changed in between.
+    An unattended refresh applies quarantines, adoptions and restatements,
+    so running one on a ticker the dry run has recorded, before the execute
+    ledger has recorded it, both breaks that execution (a mismatched ticker
+    is recorded as done and needs a manual re-run) and applies quarantines
+    ahead of the owner's backup-then-re-pull gate. Held tickers stay
+    pending and due, and are named nightly. A ticker the dry run has not
+    reached yet is safe to refresh: the dry run will see the result.
+    `FUNDAMENTALS_REPULL=off` (the owner turned the re-pull off) holds
+    nothing.
+    """
+    from ..models import FinancialDataRepair
+    from .fmp_repull_ledger import DRY_RUN_ID, EXECUTE_ID, enabled
+    if not enabled() or not inspect(db.connection()).has_table(FinancialDataRepair.__tablename__):
+        return None
+    dry = db.get(FinancialDataRepair, DRY_RUN_ID)
+    if dry is None or ticker not in ((dry.result or {}).get("tickers") or {}):
+        return None
+    execute = db.get(FinancialDataRepair, EXECUTE_ID)
+    if execute is not None and (execute.status == "complete"
+                                or ticker in ((execute.result or {}).get("tickers") or {})):
+        return None
+    return REPULL_HOLD_REASON
 
 
 def _refresh_one(ticker: str, result: dict[str, Any]) -> dict[str, Any] | None:
     """Claimed-run-recorded-released for one due ticker; None if not run."""
     with SessionLocal() as db:
+        if repull_hold(db, ticker) is not None:
+            result["held"].append(ticker)
+            return None
         if not claim(ticker, now=_now(), db=db):
             result["leased"].append(ticker)
             return None
