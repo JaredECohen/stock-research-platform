@@ -12,16 +12,29 @@ production run is in-app code the worker executes, gated on the owner:
    ledger row `DRY_RUN_ID` records, per ticker, the exact row ids per
    quarantine reason, adoptions, restatements and entitlement denials, and
    a log line is written per ticker and on completion.
+   A transient FMP failure leaves the ticker pending and retries it after
+   the others (at most `MAX_DRY_RUN_ATTEMPTS`), so one timeout does not
+   become the reviewed plan.
 2. **Review.** `GET /api/admin/market-data/fmp-repull` returns the
    ledger with a review list and its `result_digest`.
-3. **Authorize.** Only the owner starts execution, by
+3. **Back up (owner decision 3).** Before authorizing, the owner backs up
+   the evidence archive (FIX-011, item 6: it holds the before-state) and
+   dumps `financial_periods` + `financial_data_repairs`. Authorization
+   requires the backup manifest's SHA-256 and records it.
+4. **Authorize.** Only the owner starts execution, by
    `POST /api/admin/market-data/fmp-repull/authorize` with that
-   `result_digest`, or by setting `FUNDAMENTALS_REPULL_EXECUTE=<result_digest>`
-   on the worker in the Render dashboard. Either creates `EXECUTE_ID`.
-4. **Execute.** Ticker by ticker, supervised, each in one transaction that
-   aborts (`repull_plan_mismatch`, nothing written) when the quarantine set
-   differs from the reviewed dry run. Quarantines, adoptions and
-   restatements are audited and reversible (`fundamental_quarantine`).
+   `result_digest` and `evidence_backup_sha256`, or by setting
+   `FUNDAMENTALS_REPULL_EXECUTE=<result_digest>` and
+   `FUNDAMENTALS_REPULL_BACKUP_SHA256=<manifest sha256>` on the worker in the
+   Render dashboard. Either creates `EXECUTE_ID`.
+5. **Execute.** Ticker by ticker, supervised, each in one transaction that
+   aborts (`repull_plan_mismatch`, nothing written) when what it would do to
+   stored rows (quarantines, adoptions, restatement values, relabels, and
+   whether FMP answered) differs from the reviewed dry run. Inserts of
+   periods nothing stores are not fenced: they overwrite nothing. A ticker
+   whose dry run never reached FMP is skipped and named for the manual
+   path. Quarantines, adoptions and restatements are audited and reversible
+   (`fundamental_quarantine`).
 
 Bounded for the 512 MiB worker: at most `MAX_TICKERS_PER_PASS` tickers and
 `PASS_BUDGET_SECONDS` per pass, `PACE_SECONDS` between tickers, and no work in
@@ -54,8 +67,12 @@ log = logging.getLogger(__name__)
 LEDGER_KIND = "fmp_repull_ledger"
 DRY_RUN_ID = "fmp-repull-2026-09-dry-run"
 EXECUTE_ID = "fmp-repull-2026-09-execute"
+WORKER_VIEW_ID = "fmp-repull-2026-09-worker"
 ENABLE_ENV = "FUNDAMENTALS_REPULL"
 EXECUTE_ENV = "FUNDAMENTALS_REPULL_EXECUTE"
+BACKUP_ENV = "FUNDAMENTALS_REPULL_BACKUP_SHA256"
+MIN_DIGEST_PREFIX = 12
+MAX_DRY_RUN_ATTEMPTS = 3
 MAX_TICKERS_PER_PASS = 6
 PASS_BUDGET_SECONDS = 180.0
 PACE_SECONDS = 1.0
@@ -75,7 +92,10 @@ KNOWN_CASES = {"MDT": 32, "MSFT": 128, "NVDA": 128, "ANSS": 149, "LULU": 2, "BK"
 UNEXERCISED_ENDPOINT_NOTE = (
     "The re-pull calls only the income, balance-sheet and cash-flow statement endpoints. "
     "The 401/402/403 behaviour of ratios, key-metrics, analyst-estimates and earnings "
-    "was never evidenced; their refusals are logged as 'FMP <path> -> <status> symbol=<s>'.")
+    "was never evidenced by it. Every FMP endpoint's refusal is classified as "
+    "provider_entitlement_denied per endpoint: see worker_view.fmp_entitlement_denials "
+    "(the worker process, which runs memo generation) and the log line "
+    "'FMP <path> -> <status> symbol=<s>'.")
 
 
 def _now() -> datetime:
@@ -97,24 +117,60 @@ def primary_history_capable() -> bool:
     return False
 
 
+def _primary_outcome(report: dict[str, Any], fundamentals: dict[str, Any]) -> str:
+    """Did FMP answer: received, denied (401/402/403), no_data, or error (transient)."""
+    from .fundamental_history_service import PRIMARY_PROVIDER
+    attempts = [a for a in fundamentals.get("attempts") or [] if a.get("provider") == PRIMARY_PROVIDER]
+    if any(a.get("received") for a in attempts):
+        return "received"
+    issues = [i for i in fundamentals.get("issues") or [] if i.get("provider") == PRIMARY_PROVIDER]
+    if (report.get("status") == "error" or not fundamentals
+            or any(i.get("kind") == "persistence_or_read_error" for i in fundamentals.get("issues") or [])
+            or any(i.get("kind") == "provider_error" for i in issues)):
+        return "error"
+    if any(i.get("kind") == "provider_entitlement_denied" and not i.get("resolved") for i in issues):
+        return "denied"
+    return "no_data"
+
+
+def expected_plan_from(compact: dict[str, Any]) -> dict[str, Any]:
+    """The plan identity an execution must reproduce, from a reviewed dry-run record."""
+    from .fundamental_history_service import normalize_plan
+    return {**normalize_plan({"quarantine": compact.get("quarantine"), "adoptions": compact.get("adoption_ids"),
+                              "restatements": compact.get("restatements"),
+                              "relabels": {k: v["to"] for k, v in (compact.get("relabels") or {}).items()}}),
+            "primary_received": compact.get("primary_outcome") == "received"}
+
+
 def compact_report(report: dict[str, Any]) -> dict[str, Any]:
-    """The reviewable per-ticker record: counts plus exact row ids."""
+    """The reviewable per-ticker record: counts plus exact row ids.
+
+    Row changes are listed only for a dry run (the plan) or a committed run;
+    a run that failed and rolled back changed nothing and reports nothing.
+    """
+    from .fundamental_history_service import BLOCKING_ISSUES, normalize_plan, plan_identity
     fundamentals = report.get("fundamentals") or {}
     issues = fundamentals.get("issues") or []
     open_issues = [i for i in issues if not i.get("resolved")]
-    quarantine = {str(q["id"]): q["reason"] for q in fundamentals.get("quarantined") or []}
-    from .fundamental_history_service import BLOCKING_ISSUES
+    dry = bool(report.get("dry_run"))
+    counted = dry or bool(fundamentals.get("committed"))
+    identity = plan_identity(fundamentals) if counted else normalize_plan(None)
+    quarantine = identity["quarantine"]
+    relabels = {str(r["id"]): {"from": r["old_period"], "to": r["new_period"]}
+                for r in fundamentals.get("period_relabels") or []} if counted else {}
     denied = [i for i in issues if i.get("kind") == "provider_entitlement_denied"]
     mismatch = next((i for i in issues if i.get("kind") == "repull_plan_mismatch"), None)
-    dry = bool(report.get("dry_run"))
     return {
         "status": report.get("status"), "success": bool(report.get("success")), "dry_run": dry,
         "fundamentals_success": bool(fundamentals.get("success")),
+        "primary_outcome": _primary_outcome(report, fundamentals),
         "rows_written": fundamentals.get("rows_written", 0), "rows_refreshed": fundamentals.get("rows_refreshed", 0),
         "rows_inserted": fundamentals.get("rows_inserted", 0), "rows_quarantined": len(quarantine),
         "quarantine": quarantine, "quarantine_counts": dict(Counter(quarantine.values())),
-        "adoption_ids": sorted({a["id"] for a in fundamentals.get("adoptions") or []}),
-        "restatement_ids": sorted({r["id"] for r in fundamentals.get("restatements") or []}),
+        "adoption_ids": identity["adoptions"],
+        "restatement_ids": sorted(int(k) for k in identity["restatements"]),
+        "restatements": identity["restatements"],
+        "relabels": relabels, "rows_relabelled": len(relabels),
         "secondary_rows_skipped": fundamentals.get("secondary_rows_skipped", 0),
         # Audit ids are real only when the run committed.
         "quarantine_repair_id": None if dry else fundamentals.get("quarantine_repair_id"),
@@ -138,7 +194,7 @@ def summarize(compacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Totals and the review list the owner reads before authorizing (pure)."""
     reasons: Counter[str] = Counter()
     endpoints: dict[str, list[str]] = {}
-    review, failed, mismatched = [], [], []
+    review, failed, mismatched, unreviewed = [], [], [], []
     for ticker, item in sorted(compacts.items()):
         counts = item.get("quarantine_counts") or {}
         reasons.update(counts)
@@ -148,6 +204,8 @@ def summarize(compacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
             review.append({"ticker": ticker, "rows_quarantined": count, "unexpected_reasons": unexpected})
         if item.get("plan_mismatch"):
             mismatched.append(ticker)
+        elif item.get("status") == "skipped_unreviewed":
+            unreviewed.append(ticker)
         elif not item.get("fundamentals_success", item.get("success")):
             failed.append({"ticker": ticker, "status": item.get("status"),
                            "blocking_issue_kinds": item.get("blocking_issue_kinds", []), "error": item.get("error")})
@@ -160,10 +218,14 @@ def summarize(compacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "rows_inserted": sum(i.get("rows_inserted", 0) for i in compacts.values()),
         "adoptions": sum(len(i.get("adoption_ids") or []) for i in compacts.values()),
         "restatements": sum(len(i.get("restatement_ids") or []) for i in compacts.values()),
+        "relabels": sum(i.get("rows_relabelled", 0) for i in compacts.values()),
         "quarantine_reasons": dict(reasons),
         "known_cases": {t: {"expected_quarantines": n, "actual": compacts.get(t, {}).get("rows_quarantined")}
                         for t, n in KNOWN_CASES.items()},
         "review_list": review, "failed": failed, "plan_mismatch": mismatched,
+        # Dry run never reached FMP (after retries): not executed; use the
+        # admin path after a fresh single-ticker dry run.
+        "skipped_unreviewed": unreviewed,
         "entitlement_denied_by_endpoint": {k: sorted(v) for k, v in sorted(endpoints.items())},
         "unexercised_endpoints_note": UNEXERCISED_ENDPOINT_NOTE,
     }
@@ -191,33 +253,84 @@ def _view(ledger: FinancialDataRepair | None) -> dict[str, Any] | None:
     done = result.get("tickers") or {}
     return {"id": ledger.id, "status": ledger.status, "digest": ledger.digest, "mode": plan.get("mode"),
             "created_at": plan.get("created_at"), "authorized_by": plan.get("authorized_by"),
+            "evidence_backup_sha256": plan.get("evidence_backup_sha256"),
             "dry_run_result_digest": plan.get("dry_run_result_digest"),
             "targets": len(targets), "done": len(done), "remaining": [t["ticker"] for t in targets if t["ticker"] not in done],
             "result_digest": result.get("result_digest"), "summary": result.get("summary"),
             "completed_at": result.get("completed_at"), "tickers": done}
 
 
+AUTHORIZE_HINT = (
+    "First back up the evidence archive (owner decision 3 / FIX-011: it holds the before-state) and "
+    "pg_dump financial_periods + financial_data_repairs. Then POST /api/admin/market-data/fmp-repull/authorize "
+    "{\"result_digest\": <dry_run.result_digest>, \"evidence_backup_sha256\": <backup manifest sha256>}.")
+
+
+def observe_worker_env(outcome: dict[str, Any] | None = None, *, is_enabled: bool | None = None) -> None:
+    """Record what the WORKER process sees, for the web-served GET.
+
+    The GET runs on web, whose environment says nothing about the worker's
+    `FUNDAMENTALS_REPULL*` variables (cross-process state belongs in the
+    database). Best-effort: a failure here never stops the worker.
+    """
+    from ..providers.fmp_provider import entitlement_denials
+    view = {"observed_at": _now().isoformat(), "enabled": enabled() if is_enabled is None else is_enabled,
+            "execute_env_set": bool(os.environ.get(EXECUTE_ENV, "").strip()),
+            "backup_env_set": bool(os.environ.get(BACKUP_ENV, "").strip()),
+            "last_pass": {k: v for k, v in (outcome or {}).items() if k in {"mode", "skipped_reason", "remaining"}},
+            "fmp_entitlement_denials": entitlement_denials()}
+    try:
+        with SessionLocal() as db:
+            FinancialDataRepair.__table__.create(bind=db.get_bind(), checkfirst=True)
+            row = db.get(FinancialDataRepair, WORKER_VIEW_ID)
+            if row is None:
+                plan = {"kind": LEDGER_KIND, "mode": "worker_view", "created_at": view["observed_at"]}
+                db.add(FinancialDataRepair(id=WORKER_VIEW_ID, digest=_digest(plan), status="observed", plan=plan,
+                                           result=view, created_at=_now()))
+            else:
+                row.result = view
+            db.commit()
+    except Exception as exc:
+        log.warning("fundamentals repull worker view not recorded: %s", type(exc).__name__)
+
+
 def repull_status(*, db: Session | None = None) -> dict[str, Any]:
-    """Read-only view of both ledgers for the owner's review."""
+    """Read-only view of both ledgers for the owner's review.
+
+    `worker_view` is what the worker process last recorded about its own
+    environment; this (web) process's environment is never reported.
+    """
     own = db is None
     db = db or SessionLocal()
     try:
         FinancialDataRepair.__table__.create(bind=db.get_bind(), checkfirst=True)
-        return {"enabled": enabled(), "execute_env_set": bool(os.environ.get(EXECUTE_ENV, "").strip()),
+        worker = db.get(FinancialDataRepair, WORKER_VIEW_ID)
+        return {"worker_view": worker.result if worker is not None else None,
                 "dry_run": _view(db.get(FinancialDataRepair, DRY_RUN_ID)),
                 "execute": _view(db.get(FinancialDataRepair, EXECUTE_ID)),
-                "authorize": "POST /api/admin/market-data/fmp-repull/authorize {\"result_digest\": <dry_run.result_digest>}",
-                "read_only": True}
+                "authorize": AUTHORIZE_HINT, "read_only": True}
     finally:
         if own:
             db.close()
 
 
-def authorize_execution(result_digest: str, *, authorized_by: str = "admin", db: Session | None = None) -> dict[str, Any]:
+def _valid_sha256(value: str | None) -> str | None:
+    value = (value or "").strip().lower()
+    return value if len(value) == 64 and all(c in "0123456789abcdef" for c in value) else None
+
+
+def authorize_execution(result_digest: str, *, evidence_backup_sha256: str, authorized_by: str = "admin",
+                        db: Session | None = None) -> dict[str, Any]:
     """Create the execute ledger from a completed, reviewed dry run.
 
+    `evidence_backup_sha256` is the owner's attestation that the evidence
+    archive backup (owner decision 3) exists: its manifest SHA-256, recorded
+    in the execute ledger. The app cannot verify the backup; it refuses to
+    execute without the attestation.
+
     LookupError: no dry run. RuntimeError: dry run incomplete, digest does not
-    match what was reviewed, or execution already authorized.
+    match what was reviewed, no valid backup attestation, or execution
+    already authorized.
     """
     own = db is None
     db = db or SessionLocal()
@@ -230,19 +343,23 @@ def authorize_execution(result_digest: str, *, authorized_by: str = "admin", db:
         if dry.status != "complete" or not expected:
             raise RuntimeError("The dry run has not completed")
         candidate = (result_digest or "").strip().lower()
-        if len(candidate) < 12 or not expected.startswith(candidate):
+        if len(candidate) < MIN_DIGEST_PREFIX or not expected.startswith(candidate):
             raise RuntimeError("Digest does not match the reviewed dry run")
+        backup = _valid_sha256(evidence_backup_sha256)
+        if backup is None:
+            raise RuntimeError("Back up the evidence archive first: evidence_backup_sha256 must be its manifest SHA-256")
         if db.get(FinancialDataRepair, EXECUTE_ID) is not None:
             raise RuntimeError("Execution was already authorized")
         tickers = dry.result.get("tickers") or {}
         plan = {"kind": LEDGER_KIND, "mode": "execute", "created_at": _now().isoformat(),
                 "authorized_by": authorized_by, "dry_run_id": DRY_RUN_ID, "dry_run_result_digest": expected,
+                "evidence_backup_sha256": backup,
                 "targets": [t for t in dry.plan["targets"] if t["ticker"] in tickers]}
         ledger = _create(db, EXECUTE_ID, plan)
         if own:
             db.commit()
-        log.info("fundamentals repull execution authorized by=%s dry_run_digest=%s targets=%d",
-                 authorized_by, expected, len(plan["targets"]))
+        log.info("fundamentals repull execution authorized by=%s dry_run_digest=%s evidence_backup_sha256=%s targets=%d",
+                 authorized_by, expected, backup, len(plan["targets"]))
         return _view(ledger) or {}
     except Exception:
         if own:
@@ -264,6 +381,20 @@ def _record(ledger_id: str, ticker: str, compact: dict[str, Any]) -> None:
         result["updated_at"] = _now().isoformat()
         ledger.result = result  # reassigned: JSON columns do not track in-place mutation
         db.commit()
+
+
+def _bump_attempt(ledger_id: str, ticker: str) -> int:
+    """Count a dry-run attempt that could not reach FMP; returns the new count."""
+    with SessionLocal() as db:
+        ledger = db.execute(select(FinancialDataRepair).where(FinancialDataRepair.id == ledger_id)
+                            .with_for_update()).scalar_one()
+        result = dict(ledger.result or {})
+        attempts = dict(result.get("unreached_attempts") or {})
+        attempts[ticker] = int(attempts.get(ticker, 0)) + 1
+        result["unreached_attempts"] = attempts
+        ledger.result = result
+        db.commit()
+        return attempts[ticker]
 
 
 def _finish(ledger_id: str) -> dict[str, Any]:
@@ -321,7 +452,7 @@ def run_pass(*, now: datetime | None = None, max_tickers: int = MAX_TICKERS_PER_
         dry_complete = dry.status == "complete"
     if execute is None and dry_complete and env_digest:
         try:
-            authorize_execution(env_digest, authorized_by="env")
+            authorize_execution(env_digest, evidence_backup_sha256=os.environ.get(BACKUP_ENV, ""), authorized_by="env")
         except (LookupError, RuntimeError) as exc:
             log.warning("fundamentals repull %s not accepted: %s", EXECUTE_ENV, exc)
     with SessionLocal() as db:
@@ -334,7 +465,11 @@ def run_pass(*, now: datetime | None = None, max_tickers: int = MAX_TICKERS_PER_
             return {"skipped_reason": state, "remaining": 0 if execute is not None else 1}
         ledger_id, mode = ledger.id, ledger.plan["mode"]
         done = set((ledger.result or {}).get("tickers") or {})
-        pending = [t["ticker"] for t in ledger.plan["targets"] if t["ticker"] not in done]
+        unreached = dict((ledger.result or {}).get("unreached_attempts") or {})
+        # A ticker whose FMP call failed goes behind the rest, so a retry
+        # comes after the others rather than within the same minute.
+        pending = sorted((t["ticker"] for t in ledger.plan["targets"] if t["ticker"] not in done),
+                         key=lambda t: int(unreached.get(t, 0)))
         reviewed = (dry.result or {}).get("tickers") or {} if dry is not None else {}
     started = monotonic()
     processed: list[str] = []
@@ -343,22 +478,38 @@ def run_pass(*, now: datetime | None = None, max_tickers: int = MAX_TICKERS_PER_
             break
         compact: dict[str, Any]
         if mode == "execute":
-            committed_id = quarantine.repair_id_for(ledger_id, quarantine.QUARANTINE_KIND, ticker)
+            # Any of the ticker's deterministic audits means its transaction
+            # committed (a ticker with only adoptions has no quarantine audit).
+            audit_ids = {kind: quarantine.repair_id_for(ledger_id, kind, ticker)
+                         for kind in (quarantine.QUARANTINE_KIND, quarantine.ADOPTION_KIND, quarantine.RESTATEMENT_KIND)}
             with SessionLocal() as db:
-                committed = db.get(FinancialDataRepair, committed_id) is not None
+                committed = {kind: rid for kind, rid in audit_ids.items() if db.get(FinancialDataRepair, rid) is not None}
             if committed:
-                compact = {"status": "already_applied", "success": True, "quarantine_repair_id": committed_id,
+                compact = {"status": "already_applied", "success": True,
+                           "quarantine_repair_id": committed.get(quarantine.QUARANTINE_KIND),
+                           "adoption_repair_id": committed.get(quarantine.ADOPTION_KIND),
+                           "restatement_repair_id": committed.get(quarantine.RESTATEMENT_KIND),
                            "note": "committed before an interrupted pass; not re-run"}
                 _record(ledger_id, ticker, compact)
                 processed.append(ticker)
                 continue
-            expected = {int(k): v for k, v in ((reviewed.get(ticker) or {}).get("quarantine") or {}).items()}
+            review = reviewed.get(ticker) or {}
+            if review.get("primary_outcome") == "error" or review.get("status") in {None, "error", "not_in_plan"}:
+                # The dry run never saw what FMP would do here; executing
+                # against an empty expected plan would apply unreviewed writes.
+                compact = {"status": "skipped_unreviewed", "success": False,
+                           "note": "the dry run could not reach FMP for this ticker; use the admin path "
+                                   "(fresh single-ticker dry run, then the real run)"}
+                _record(ledger_id, ticker, compact)
+                processed.append(ticker)
+                continue
+            expected = expected_plan_from(review)
         try:
             if mode == "dry_run":
                 report = sync_ticker(ticker, force_refresh=True, scope="fundamentals", dry_run=True)
             else:
                 report = sync_ticker(ticker, force_refresh=True, scope="fundamentals",
-                                     expected_quarantine=expected, audit_key=ledger_id)
+                                     expected_plan=expected, audit_key=ledger_id)
         except LookupError:
             report = {"status": "not_in_plan", "success": False}
         except Exception as exc:
@@ -367,6 +518,14 @@ def run_pass(*, now: datetime | None = None, max_tickers: int = MAX_TICKERS_PER_
             log.info("fundamentals repull %s ticker=%s deferred: an import holds the claim", mode, ticker)
             break
         compact = compact_report(report)
+        if mode == "dry_run" and compact["primary_outcome"] == "error":
+            tries = _bump_attempt(ledger_id, ticker)
+            if tries < MAX_DRY_RUN_ATTEMPTS:
+                log.info("fundamentals repull dry_run ticker=%s could not reach FMP (attempt %d of %d); retried later",
+                         ticker, tries, MAX_DRY_RUN_ATTEMPTS)
+                sleep(PACE_SECONDS)
+                continue
+            compact["unreached_attempts"] = tries
         _record(ledger_id, ticker, compact)
         processed.append(ticker)
         log.info("fundamentals repull %s ticker=%s status=%s quarantined=%d counts=%s adoptions=%d restatements=%d "
@@ -375,7 +534,10 @@ def run_pass(*, now: datetime | None = None, max_tickers: int = MAX_TICKERS_PER_
                  len(compact["restatement_ids"]), compact["rows_inserted"], compact["entitlement_denied"],
                  bool(compact["plan_mismatch"]))
         sleep(PACE_SECONDS)
-    remaining = len(pending) - len(processed)
+    with SessionLocal() as db:
+        current = db.get(FinancialDataRepair, ledger_id)
+        recorded = set(((current.result or {}) if current is not None else {}).get("tickers") or {})
+    remaining = len([t for t in pending if t not in recorded])
     result: dict[str, Any] = {"ledger": ledger_id, "mode": mode, "processed": processed, "remaining": remaining}
     if remaining == 0:
         result["result"] = _finish(ledger_id)
@@ -391,6 +553,7 @@ def _loop(shutdown: threading.Event) -> None:
         except Exception as exc:  # the thread must survive a bad pass
             log.warning("fundamentals repull pass failed: %s", type(exc).__name__)
             outcome = {"remaining": 1}
+        observe_worker_env(outcome)
         if outcome.get("skipped_reason") == "complete" or (
                 outcome.get("remaining") == 0 and outcome.get("skipped_reason", "").endswith("=off")):
             log.info("fundamentals repull thread finished: %s", outcome.get("skipped_reason"))
@@ -404,6 +567,7 @@ def start_thread(shutdown: threading.Event) -> threading.Thread | None:
     """Start the worker's re-pull thread (daemon; per-ticker transactions make a kill safe)."""
     if not enabled():
         log.info("fundamentals repull disabled (%s=off)", ENABLE_ENV)
+        observe_worker_env({"skipped_reason": f"{ENABLE_ENV}=off"}, is_enabled=False)
         return None
     thread = threading.Thread(target=_loop, args=(shutdown,), name="fmp-repull", daemon=True)
     thread.start()

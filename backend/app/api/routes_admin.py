@@ -141,6 +141,9 @@ def market_data_backfill(
 
 class FundamentalsRepullAuthorizeRequest(BaseModel):
     result_digest: str = Field(..., pattern=r"^[0-9a-f]{64}$")
+    # Owner decision 3: the evidence archive is backed up BEFORE the re-pull.
+    # The manifest's SHA-256 is the owner's attestation, recorded in the ledger.
+    evidence_backup_sha256: str = Field(..., pattern=r"^[0-9a-f]{64}$")
 
 
 @router.get("/api/admin/market-data/fmp-repull")
@@ -152,10 +155,12 @@ def fundamentals_repull_status() -> dict:
 
 @router.post("/api/admin/market-data/fmp-repull/authorize")
 def authorize_fundamentals_repull(body: FundamentalsRepullAuthorizeRequest) -> dict:
-    """Owner-only: let the worker execute the reviewed dry run (digest-bound)."""
+    """Owner-only: let the worker execute the reviewed dry run (digest-bound),
+    after the evidence-archive backup whose manifest SHA-256 it records."""
     from ..services.fmp_repull_ledger import authorize_execution
     try:
-        return authorize_execution(body.result_digest, authorized_by="admin")
+        return authorize_execution(body.result_digest, evidence_backup_sha256=body.evidence_backup_sha256,
+                                   authorized_by="admin")
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="No FMP re-pull dry run exists yet.") from exc
     except RuntimeError as exc:

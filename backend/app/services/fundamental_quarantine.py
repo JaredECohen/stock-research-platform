@@ -176,6 +176,10 @@ def _load(db: Session, repair_id: str) -> FinancialDataRepair:
     return repair
 
 
+def _key(snapshot: dict) -> tuple:
+    return snapshot["period"], snapshot["statement"], snapshot["line_item"]
+
+
 def _without(snapshot: dict, *keys: str) -> dict:
     return {k: v for k, v in snapshot.items() if k not in keys}
 
@@ -256,7 +260,9 @@ def restore_repair(repair_id: str, *, db: Session | None = None) -> dict[str, An
     replacements) are moved into a new `restore_displaced` quarantine with its
     own audit, then the originals return. In-place audits: every row must
     still equal its after-image (a later fetch timestamp is allowed) and is
-    set back to its before-image. Any mismatch aborts the whole restore.
+    set back to its before-image, including a pre-run label (a relabel the
+    same run made), after moving that key's occupant aside the same way.
+    Any mismatch aborts the whole restore.
     """
     own = db is None
     db = db or SessionLocal()
@@ -298,6 +304,26 @@ def restore_repair(repair_id: str, *, db: Session | None = None) -> dict[str, An
                 row = rows.get(action["id"])
                 if (row is None or _without(_snapshot(row), "fetched_at") != _without(action["after"], "fetched_at")):
                     raise QuarantineFenceError("financial audit fence: row changed since the audited write")
+            # An adoption's before-image predates a relabel the same run made,
+            # so restoring it moves the row back to its old label. Whatever
+            # now occupies that key (FMP's own row for the old label) is moved
+            # aside with its own audit, as a quarantine restore does.
+            relabelled = [a for a in plan["actions"] if _key(a["before"]) != _key(_snapshot(rows[a["id"]]))]
+            if relabelled:
+                keys = {_key(a["before"]) for a in relabelled}
+                occupants = [r for r in db.execute(select(FinancialPeriod).where(FinancialPeriod.ticker == ticker)
+                                                   .with_for_update()).scalars()
+                             if r.id not in rows and (r.period, r.statement, r.line_item) in keys]
+                if occupants:
+                    displaced = quarantine_rows(db, ticker=ticker, kind=RESTORE_DISPLACED_KIND,
+                                                actions=[{"row": r, "reason": "displaced_by_restore"} for r in occupants],
+                                                extra={"restores": repair_id})
+                    restored_by["displaced_repair_id"] = displaced["repair_id"]
+                    restored_by["displaced_ids"] = sorted(r.id for r in occupants)
+                # Temporary keys first: restored labels may swap or chain.
+                for action in relabelled:
+                    rows[action["id"]].period = "~" + uuid.uuid4().hex[:15]
+                db.flush()
             for action in plan["actions"]:
                 row = rows[action["id"]]
                 for name, value in action["before"].items():

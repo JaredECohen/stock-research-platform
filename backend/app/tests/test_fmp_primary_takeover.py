@@ -350,6 +350,11 @@ def test_quarantine_fence_rolls_back_on_concurrent_change(database, monkeypatch)
     assert not report["success"] and not report["committed"] and report["rows_quarantined"] == 0
     assert any(i["kind"] == "persistence_or_read_error" and i["error_type"] == "QuarantineFenceError" for i in report["issues"])
     assert all_rows(database) == before and repairs(database) == []
+    # Nothing it listed persisted, so no consumer may count it as done.
+    assert report["quarantined"] == [] and report["adoptions"] == [] and report["restatements"] == []
+    assert len(report["rolled_back_plan"]["quarantined"]) == 36
+    from app.services.fmp_repull_ledger import compact_report
+    assert compact_report({"status": "incomplete", "fundamentals": report})["rows_quarantined"] == 0
 
 
 def test_expected_quarantine_mismatch_aborts_whole_ticker(database, monkeypatch):
@@ -358,13 +363,15 @@ def test_expected_quarantine_mismatch_aborts_whole_ticker(database, monkeypatch)
     before = all_rows(database)
     providers(monkeypatch, ("fmp", payload()))
     reviewed = {r["id"]: "value_conflicts_with_primary" for r in before[:-1]}  # one row short
-    report = svc.backfill_fundamentals("TEST", START, True, expected_quarantine=reviewed)
+    plan = {"quarantine": reviewed, "primary_received": True}
+    report = svc.backfill_fundamentals("TEST", START, True, expected_plan=plan)
     assert not report["success"] and report["rows_written"] == 0
     mismatch = next(i for i in report["issues"] if i["kind"] == "repull_plan_mismatch")
-    assert set(mismatch["actual"]) - set(mismatch["expected"]) == {str(before[-1]["id"])}
+    assert mismatch["differs"] == ["quarantine"]
+    assert set(mismatch["actual"]["quarantine"]) - set(mismatch["expected"]["quarantine"]) == {str(before[-1]["id"])}
     assert all_rows(database) == before and repairs(database) == []
-    exact = {r["id"]: "value_conflicts_with_primary" for r in before}
-    assert svc.backfill_fundamentals("TEST", START, True, expected_quarantine=exact)["rows_quarantined"] == 36
+    exact = {"quarantine": {r["id"]: "value_conflicts_with_primary" for r in before}, "primary_received": True}
+    assert svc.backfill_fundamentals("TEST", START, True, expected_plan=exact)["rows_quarantined"] == 36
 
 
 def test_unattended_label_shift_writes_planned_repair_and_moves_nothing(database, monkeypatch):
@@ -549,3 +556,234 @@ def test_entitlement_denial_under_one_spelling_is_resolved_by_another(database, 
 def test_primary_provider_constant_is_shared_by_every_tie_break():
     assert svc.PRIMARY_PROVIDER == fq.PRIMARY_PROVIDER == "fmp"
     assert scorecard_features._PRIMARY_PROVIDER == fundamentals_series_service._PRIMARY_PROVIDER == svc.PRIMARY_PROVIDER
+
+
+# ---------------------------------------------------------------------------
+# Unattended guard limits, planned repairs, fences (review findings)
+# ---------------------------------------------------------------------------
+
+def test_unattended_safe_reasons_over_the_row_cap_are_planned(database, monkeypatch):
+    providers(monkeypatch, ("alpha_vantage", payload(value=90)))
+    svc.backfill_fundamentals("TEST", START)
+    before = all_rows(database)
+    providers(monkeypatch, ("fmp", payload()))
+    report = svc.backfill_fundamentals("TEST", START, True, mode="unattended")
+    # 36 value conflicts: every reason is safe, but 36 > QUARANTINE_AUTO_MAX_ROWS.
+    assert {q["reason"] for q in report["quarantined"]} <= svc.SAFE_AUTO_REASONS
+    planned = next(i for i in report["issues"] if i["kind"] == "primary_takeover_planned")
+    assert planned["reason"] == "exceeds_unattended_limits" and planned["rows"] == 36 > svc.QUARANTINE_AUTO_MAX_ROWS
+    assert report["rows_quarantined"] == 0 and all_rows(database) == before
+    [plan] = repairs(database, "fmp_primary_takeover")
+    assert plan.status == "planned"
+
+
+def test_unattended_safe_reasons_over_the_share_cap_are_planned_and_block(database, monkeypatch):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", START)
+    drifted = [add(database, period=p, period_end=date(int(p[2:]), 12, 31), line_item="net_income", value=3.0,
+                   source="alpha_vantage") for p in ("FY2023", "FY2024", "FY2025")]
+    before = all_rows(database)
+    fmp = payload(extra={(p, "income"): {"net_income": 4.0} for p in ("FY2023", "FY2024", "FY2025")})
+    providers(monkeypatch, ("fmp", fmp))
+    report = svc.backfill_fundamentals("TEST", START, True, mode="unattended")
+    # 3 rows is under the 20-row cap but over 5% of the ticker's 39 rows.
+    assert len(before) == 39 and 3 > svc.QUARANTINE_AUTO_MAX_SHARE * 39
+    planned = next(i for i in report["issues"] if i["kind"] == "primary_takeover_planned")
+    assert planned["reason"] == "exceeds_unattended_limits" and planned["rows"] == 3
+    assert all(fields(database, i)["ticker"] == "TEST" for i in drifted)
+    # Coverage is complete and fresh: the planned repair alone blocks success.
+    blocking = {i["kind"] for i in report["issues"] if not i.get("resolved") and i["kind"] in svc.BLOCKING_ISSUES}
+    assert blocking == {"primary_takeover_planned"} and not report["success"]
+
+
+def test_apply_planned_refuses_wrong_digest_changed_row_and_non_planned_status(database, monkeypatch):
+    legacy = [add(database, period="FY2024", period_end=date(2024, 4, 30), statement=s, line_item=p, value=5.0)
+              for s, p in svc.PRIMARY.items()]
+    providers(monkeypatch, ("fmp", payload(extra={("FY2024", s): {"period_end": "2024-04-26"} for s in svc.PRIMARY})))
+    svc.backfill_fundamentals("TEST", START, True, mode="unattended")
+    [plan] = repairs(database, "fmp_primary_takeover")
+    snapshot = all_rows(database)
+    with pytest.raises(RuntimeError, match="digest"):
+        fq.apply_planned(plan.id, "0" * 64)
+    assert all_rows(database) == snapshot and repairs(database, "fmp_primary_takeover")[0].status == "planned"
+    with database() as db:
+        db.get(FinancialPeriod, legacy[0]).value = 6.0  # changed after review
+        db.commit()
+    changed = all_rows(database)
+    with pytest.raises(fq.QuarantineFenceError):
+        fq.apply_planned(plan.id, plan.digest)
+    assert all_rows(database) == changed and repairs(database, "fmp_primary_takeover")[0].status == "planned"
+    with database() as db:
+        db.get(FinancialPeriod, legacy[0]).value = 5.0
+        db.commit()
+    assert fq.apply_planned(plan.id, plan.digest)["rows_quarantined"] == 3
+    fq.restore_repair(plan.id)
+    restored = all_rows(database)
+    with pytest.raises(RuntimeError, match="planned"):
+        fq.apply_planned(plan.id, plan.digest)  # a restored plan is never re-applied
+    assert all_rows(database) == restored
+
+
+def test_bk_repair_apply_route_dispatches_planned_takeovers_and_refuses_records(database, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.config import settings
+    from app.main import app
+
+    monkeypatch.setattr(settings, "admin_api_token", "test-takeover-token")
+    http, headers = TestClient(app), {"Authorization": "Bearer test-takeover-token"}
+    for statement, line in svc.PRIMARY.items():
+        add(database, period="FY2024", period_end=date(2024, 4, 30), statement=statement, line_item=line, value=5.0)
+    shifted = payload(extra={("FY2024", statement): {"period_end": "2024-04-26"} for statement in svc.PRIMARY})
+    providers(monkeypatch, ("fmp", shifted))
+    svc.backfill_fundamentals("TEST", START, True, mode="unattended")
+    [plan] = repairs(database, "fmp_primary_takeover")
+    url = "/api/admin/market-data/bk-repair/{}/apply"
+    assert http.post(url.format(plan.id), headers=headers, json={"digest": "0" * 64}).status_code == 409
+    applied = http.post(url.format(plan.id), headers=headers, json={"digest": plan.digest})
+    assert applied.status_code == 200 and applied.json()["rows_quarantined"] == 3
+    # Ledgers and in-place audits are records, not applicable plans.
+    svc.backfill_fundamentals("TEST", START, True)
+    providers(monkeypatch, ("fmp", payload(value=101, extra={
+        ("FY2024", statement): {"period_end": "2024-04-26"} for statement in svc.PRIMARY})))
+    svc.backfill_fundamentals("TEST", START, True)
+    [audit] = repairs(database, "restatement")
+    with database() as db:
+        db.add(FinancialDataRepair(id="fmp-repull-2026-09-dry-run", digest="d" * 64, status="complete",
+                                   plan={"kind": "fmp_repull_ledger"}, result={}, created_at=datetime(2026, 9, 24)))
+        db.commit()
+    snapshot = all_rows(database)
+    for record_id, digest in (("fmp-repull-2026-09-dry-run", "d" * 64), (audit.id, audit.digest)):
+        assert http.post(url.format(record_id), headers=headers, json={"digest": digest}).status_code == 400
+    assert all_rows(database) == snapshot
+
+
+def test_restore_of_an_adoption_refuses_a_row_restated_since(database, monkeypatch):
+    providers(monkeypatch, ("alpha_vantage", payload()))
+    svc.backfill_fundamentals("TEST", START)
+    providers(monkeypatch, ("fmp", payload()))
+    adopted = svc.backfill_fundamentals("TEST", START, True)
+    providers(monkeypatch, ("fmp", payload(value=101)))
+    svc.backfill_fundamentals("TEST", START, True)
+    snapshot = all_rows(database)
+    # The adoption's after-image (fmp, 100) no longer matches: restoring it
+    # would overwrite FMP's later restatement with the stale before-image.
+    with pytest.raises(fq.QuarantineFenceError):
+        fq.restore_repair(adopted["adoption_repair_id"])
+    assert all_rows(database) == snapshot
+    assert repairs(database, "primary_adoption")[0].status == "applied"
+
+
+def test_restoring_an_adoption_also_reverses_its_relabel(database, monkeypatch):
+    # A legacy FY2024 row whose period end is FMP's FY2025 is relabelled to
+    # FY2025 and adopted in the same run; FMP's own FY2024 then takes the
+    # old key. Restore puts the row back as it was and moves FMP's aside.
+    legacy = add(database, period="FY2024", period_end=date(2025, 12, 31), value=100.0,
+                 available_at=date(2026, 2, 15), available_at_source="provider")
+    original = fields(database, legacy)
+    providers(monkeypatch, ("fmp", payload()))
+    report = svc.backfill_fundamentals("TEST", START, True)
+    assert [(r["id"], r["old_period"], r["new_period"]) for r in report["period_relabels"]] == [
+        (legacy, "FY2024", "FY2025")]
+    assert legacy in {a["id"] for a in report["adoptions"]}
+    [audit] = repairs(database, "primary_adoption")
+    assert next(a for a in audit.plan["actions"] if a["id"] == legacy)["before"]["period"] == "FY2024"
+    [fmp_fy2024] = live_rows(database, period="FY2024", statement="income", line_item="revenue")
+    result = fq.restore_repair(report["adoption_repair_id"])
+    assert fields(database, legacy) == original
+    assert result["displaced_ids"] == [fmp_fy2024.id] and fields(database, fmp_fy2024.id)["ticker"].startswith("~Q")
+    [displaced] = repairs(database, "restore_displaced")
+    assert displaced.plan["restores"] == report["adoption_repair_id"]
+
+
+def test_executed_plan_must_match_adoptions_restatements_and_relabels(database, monkeypatch):
+    legacy = add(database, period="FY2024", period_end=date(2025, 12, 31), value=100.0)
+    providers(monkeypatch, ("fmp", payload()))
+    dry = svc.backfill_fundamentals("TEST", START, True, dry_run=True)
+    plan = svc.plan_identity(dry)
+    assert plan["relabels"] == {str(legacy): "FY2025"} and plan["adoptions"] == [legacy]
+    assert plan["primary_received"] is True
+    before = all_rows(database)
+    for component, wrong in (("relabels", {}), ("adoptions", []), ("restatements", {str(legacy): 7.0})):
+        report = svc.backfill_fundamentals("TEST", START, True, expected_plan={**plan, component: wrong})
+        mismatch = next(i for i in report["issues"] if i["kind"] == "repull_plan_mismatch")
+        assert component in mismatch["differs"] and not report["success"]
+        assert all_rows(database) == before and repairs(database) == []
+    assert svc.backfill_fundamentals("TEST", START, True, expected_plan=plan)["success"]
+    assert fields(database, legacy)["period"] == "FY2025"
+
+
+def test_named_currency_conflict_is_a_safe_unattended_quarantine(database, monkeypatch):
+    providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", START)
+    eur = add(database, period="FY2025", period_end=date(2025, 12, 31), line_item="net_income", value=4.0,
+              currency="EUR", source="alpha_vantage")
+    providers(monkeypatch, ("fmp", payload(extra={("FY2025", "income"): {"net_income": 4.0}})))
+    report = svc.backfill_fundamentals("TEST", START, True, mode="unattended")
+    assert {q["id"]: q["reason"] for q in report["quarantined"]} == {eur: "currency_conflicts_with_primary"}
+    assert report["planned_repair_id"] is None and fields(database, eur)["ticker"].startswith("~Q")
+    [replacement] = live_rows(database, period="FY2025", line_item="net_income")
+    assert (replacement.source, replacement.currency, replacement.value) == ("fmp", "USD", 4.0)
+
+
+def test_invalid_availability_is_a_safe_unattended_quarantine_never_carried(database, monkeypatch):
+    providers(monkeypatch, ("fmp", payload(skip=("FY2025",))))
+    svc.backfill_fundamentals("TEST", START)
+    impossible = date(2025, 6, 1)  # before the FY2025 period end
+    equal = add(database, period="FY2025", period_end=date(2025, 12, 31), value=100.0, source="alpha_vantage",
+                available_at=impossible, available_at_source="provider")
+    providers(monkeypatch, ("fmp", payload()))
+    report = svc.backfill_fundamentals("TEST", START, True, mode="unattended")
+    assert {q["id"]: q["reason"] for q in report["quarantined"]} == {equal: "invalid_availability_precedes_period_end"}
+    assert report["planned_repair_id"] is None and fields(database, equal)["ticker"].startswith("~Q")
+    [replacement] = live_rows(database, period="FY2025", line_item="revenue")
+    # FMP's filing date (period end + 30 days), not the impossible date.
+    assert (replacement.source, replacement.available_at) == ("fmp", date(2026, 1, 30))
+
+
+def test_value_conflict_replacement_does_not_carry_an_invalid_availability(database, monkeypatch):
+    conflict = add(database, period="FY2025", period_end=date(2025, 12, 31), statement="balance",
+                   line_item="total_assets", value=90.0, source="alpha_vantage", available_at=date(2025, 6, 1),
+                   available_at_source="provider")
+    valid = add(database, period="FY2024", period_end=date(2024, 12, 31), value=90.0, source="alpha_vantage",
+                available_at=date(2025, 2, 20), available_at_source="provider")
+    providers(monkeypatch, ("fmp", payload()))
+    report = svc.backfill_fundamentals("TEST", START, True)
+    assert {q["id"]: q["reason"] for q in report["quarantined"]} == {
+        conflict: "value_conflicts_with_primary", valid: "value_conflicts_with_primary"}
+    [invalid_replacement] = live_rows(database, period="FY2025", statement="balance", line_item="total_assets")
+    [carried] = live_rows(database, period="FY2024", statement="income", line_item="revenue")
+    assert invalid_replacement.available_at == date(2026, 1, 30)
+    assert carried.available_at == date(2025, 2, 20)  # a valid original availability is carried
+
+
+def test_entitlement_denials_resolve_only_under_another_spelling_of_the_same_provider(database, monkeypatch):
+    from app.services.fmp_repull_ledger import compact_report
+
+    def denial(statement, cadence="quarterly"):
+        return {"kind": "provider_entitlement_denied", "status": 402, "statement": statement, "cadence": cadence,
+                "endpoint": {"income": "/income-statement", "cash": "/cash-flow-statement"}[statement]}
+
+    def served(symbol, start):
+        if symbol == "BRK.B":
+            return {s: [] for s in svc.LINES} | {"_history_issues": [denial("income", "annual")]}
+        return payload(quarterly=False) | {"_history_issues": [denial("cash")]}
+
+    fallback = payload()
+    chain = [SimpleNamespace(name="fmp", get_financial_history=served),
+             SimpleNamespace(name="alpha_vantage", get_financial_history=lambda symbol, start: fallback)]
+    monkeypatch.setattr(svc, "get_data_service", lambda: SimpleNamespace(_live_chain=lambda cap: chain))
+    single = svc.backfill_fundamentals("TEST", START, dry_run=True)
+    [cash] = [i for i in single["issues"] if i["kind"] == "provider_entitlement_denied"]
+    # The same spelling answered other statements: a real endpoint gap. A
+    # fallback provider's answer does not resolve FMP's refusal either.
+    assert cash["symbol"] == "TEST" and not cash.get("resolved")
+    assert any(a["provider"] == "alpha_vantage" and a["received"] for a in single["attempts"])
+    assert compact_report({"dry_run": True, "fundamentals": single})["entitlement_denied"] == [
+        "/cash-flow-statement:quarterly:402:TEST"]
+    brk = svc.backfill_fundamentals("BRK.B", START, dry_run=True)
+    denied = {i["symbol"]: i for i in brk["issues"] if i["kind"] == "provider_entitlement_denied"}
+    assert denied["BRK.B"]["resolved_by_symbol"] == "BRK-B" and not denied["BRK-B"].get("resolved")
+    record = compact_report({"dry_run": True, "fundamentals": brk})
+    assert record["entitlement_denied"] == ["/cash-flow-statement:quarterly:402:BRK-B"]
+    assert record["entitlement_resolved_by_symbol"] == ["/income-statement:BRK.B->BRK-B"]

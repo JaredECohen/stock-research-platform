@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import func, or_, select, update
 
@@ -100,14 +101,14 @@ SYNC_SCOPES = ("all", "fundamentals")
 
 
 def sync_ticker(ticker: str, *, force_refresh: bool = False, scope: str = "all", dry_run: bool = False,
-                expected_quarantine: dict[int, str] | None = None, audit_key: str | None = None) -> dict:
+                expected_plan: dict[str, Any] | None = None, audit_key: str | None = None) -> dict:
     """Import one planned target. `scope="fundamentals"` skips prices.
 
     `dry_run` (fundamentals only) returns the exact FMP-primary plan from a
     rolled-back run: no `market_data_syncs` claim, no cache invalidation, no
     financial rows or audits persist. The FMP re-pull ledger passes
-    `expected_quarantine`/`audit_key` so an executed ticker must match its
-    reviewed dry run.
+    `expected_plan`/`audit_key` so an executed ticker must change stored rows
+    exactly as its reviewed dry run said it would.
     """
     from .fundamental_history_service import backfill_fundamentals
     if scope not in SYNC_SCOPES:
@@ -154,7 +155,7 @@ def sync_ticker(ticker: str, *, force_refresh: bool = False, scope: str = "all",
     for kind, action in (
         ("prices", lambda: backfill_prices(ticker, start, force_refresh=force_refresh)),
         ("fundamentals", lambda: backfill_fundamentals(ticker, start, force_refresh=force_refresh,
-                                                       expected_quarantine=expected_quarantine, audit_key=audit_key)),
+                                                       expected_plan=expected_plan, audit_key=audit_key)),
     ):
         if kind == "prices" and scope == "fundamentals":
             report[kind] = {"status": "not_requested", "success": True}

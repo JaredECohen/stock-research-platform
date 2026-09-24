@@ -13,7 +13,12 @@ It GETs `/api/admin/market-data/plan`, POSTs
 `/api/admin/market-data/backfill?ticker=T&force_refresh=true&scope=fundamentals[&dry_run=true]`
 for every `fundamentals_required` target sequentially, writes `<out>/<T>.json`,
 skips tickers already written (resumable), records HTTP failures and
-continues, then writes `<out>/summary.json` from `summarize`. The bearer
+continues, then writes `<out>/summary.json` from `summarize`. Only a
+completed answer is written as `<T>.json`; a failure (HTTP error, timeout, a
+held import claim) goes to `<out>/failures/<T>.json` and is retried on the
+next run. Each file records its mode, and a run refuses (exit 2) an `--out`
+directory written in the other mode, so a real run can never "resume" from
+dry-run files and execute nothing. Use a separate `--out` per mode. The bearer
 token comes from `ADMIN_API_TOKEN` and is never printed or written.
 `--in-process` calls `sync_ticker` directly; use it only from a Render *web*
 shell (the 512 MiB worker must not host a second interpreter).
@@ -46,6 +51,18 @@ def summarize(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
         else:
             compacts[ticker] = compact_report(report)
     return {"per_ticker": compacts, **_summarize_compacts(compacts)}
+
+
+MODE_KEY = "repull_mode"
+
+
+def _mode(dry_run: bool) -> str:
+    return "dry_run" if dry_run else "execute"
+
+
+def _completed(report: dict[str, Any]) -> bool:
+    """A resumable answer: not a transport failure and not a held claim."""
+    return "http_error" not in report and report.get("status") not in {"running", "error"}
 
 
 def _parse_tickers(raw: str | None) -> set[str] | None:
@@ -99,12 +116,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     plan, sync = _in_process() if args.in_process else _http(args.base_url)
     wanted = _parse_tickers(args.tickers)
+    mode = _mode(args.dry_run)
     args.out.mkdir(parents=True, exist_ok=True)
+    failures = args.out / "failures"
+    failures.mkdir(exist_ok=True)
+    for existing in args.out.glob("*.json"):
+        if existing.name == "summary.json":
+            continue
+        if json.loads(existing.read_text()).get(MODE_KEY) != mode:
+            print(f"{existing} was not written by a {mode} run; use a separate --out per mode", file=sys.stderr)
+            return 2
     targets = [t["ticker"] for t in plan()["targets"] if t["fundamentals_required"]
                and (wanted is None or t["ticker"] in wanted)]
     reports: dict[str, dict[str, Any]] = {}
     for ticker in targets:
-        path = args.out / f"{ticker.replace('/', '_')}.json"
+        name = f"{ticker.replace('/', '_')}.json"
+        path = args.out / name
         if path.exists():
             reports[ticker] = json.loads(path.read_text())
             continue
@@ -112,7 +139,12 @@ def main(argv: list[str] | None = None) -> int:
             report = sync(ticker, args.dry_run)
         except Exception as exc:  # recorded and continued; text may quote a URL
             report = {"http_error": type(exc).__name__}
-        path.write_text(json.dumps(report, indent=2, sort_keys=True, default=str))
+        report = {**report, MODE_KEY: mode}
+        # Only a completed answer is resumable; a failure is retried next run.
+        target = path if _completed(report) else failures / name
+        target.write_text(json.dumps(report, indent=2, sort_keys=True, default=str))
+        if target == path:
+            (failures / name).unlink(missing_ok=True)
         reports[ticker] = report
         print(f"{ticker}: {report.get('status', report.get('http_error'))}", flush=True)
         time.sleep(args.pace)

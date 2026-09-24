@@ -84,12 +84,44 @@ KNOWN_DEFINITION_BREAKS: dict[tuple[str, str, str], dict[str, Any]] = {
 }
 
 
-class PlanMismatch(RuntimeError):
-    """An executed re-pull would quarantine a different set than its reviewed dry run."""
+# The parts of a re-pull plan that change or move a STORED row, each keyed by
+# row id so a reviewed dry run and its execution can be compared exactly.
+# Inserts of periods nothing stores are deliberately not part of it: they
+# overwrite nothing, and a quarter FMP publishes between review and
+# execution (earnings season) must not abort a ticker. `primary_received`
+# says whether FMP answered: a reviewed plan made with FMP must not execute
+# on fallback data after a transient FMP failure, nor the reverse.
+PLAN_COMPONENTS = ("quarantine", "adoptions", "restatements", "relabels", "primary_received")
 
-    def __init__(self, expected: dict[int, str], actual: dict[int, str]) -> None:
+
+class PlanMismatch(RuntimeError):
+    """An executed re-pull would change stored rows differently from its reviewed dry run."""
+
+    def __init__(self, expected: dict[str, Any], actual: dict[str, Any]) -> None:
         super().__init__("fundamentals repull plan mismatch")
         self.expected, self.actual = expected, actual
+        self.differs = [c for c in PLAN_COMPONENTS if expected.get(c) != actual.get(c)]
+
+
+def normalize_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """JSON-stable form of a plan identity (string row ids, sorted adoptions)."""
+    plan = plan or {}
+    return {"quarantine": {str(k): v for k, v in (plan.get("quarantine") or {}).items()},
+            "adoptions": sorted(int(i) for i in plan.get("adoptions") or []),
+            "restatements": {str(k): v for k, v in (plan.get("restatements") or {}).items()},
+            "relabels": {str(k): v for k, v in (plan.get("relabels") or {}).items()},
+            "primary_received": bool(plan.get("primary_received"))}
+
+
+def plan_identity(report: dict[str, Any]) -> dict[str, Any]:
+    """What a run did (or, dry, would do) to stored rows, from its report."""
+    return normalize_plan({
+        "quarantine": {q["id"]: q["reason"] for q in report.get("quarantined") or []},
+        "adoptions": {a["id"] for a in report.get("adoptions") or []},
+        "restatements": {r["id"]: r["new_value"] for r in report.get("restatements") or []},
+        "relabels": {r["id"]: r["new_period"] for r in report.get("period_relabels") or []},
+        "primary_received": any(a.get("provider") == PRIMARY_PROVIDER and a.get("received")
+                                for a in report.get("attempts") or [])})
 
 
 def _has_blockers(issues: list[dict]) -> bool:
@@ -725,7 +757,7 @@ def _takeover_reason(row: FinancialPeriod, facts: dict, observations: dict, peri
 
 
 def _primary_takeover(db: Session, ticker: str, rows: list, payloads: list[dict], report: dict, *,
-                      mode: TakeoverMode, pre_images: dict[int, dict], expected: dict[int, str] | None,
+                      mode: TakeoverMode, pre_images: dict[int, dict], expected: dict[str, Any] | None,
                       audit_key: str | None) -> tuple[dict[tuple, tuple], set[tuple]]:
     """Quarantine (or plan) every stored row that contradicts an FMP observation.
 
@@ -739,8 +771,8 @@ def _primary_takeover(db: Session, ticker: str, rows: list, payloads: list[dict]
 
     facts = _primary_facts(payloads)
     if not facts:
-        if expected:
-            raise PlanMismatch(expected, {})
+        if expected is not None and expected["quarantine"]:
+            raise PlanMismatch(expected, {**expected, "quarantine": {}})
         return {}, set()
     observations: dict[tuple, list] = {}
     period_ends: dict[tuple, set] = {}
@@ -763,9 +795,11 @@ def _primary_takeover(db: Session, ticker: str, rows: list, payloads: list[dict]
             actions.append({"row": row, "reason": reason, "primary_fact": _fact_evidence(fact),
                             "pre_run": before if before is not None and before != quarantine._snapshot(row) else None,
                             "fact": fact})
-    actual = {a["row"].id: a["reason"] for a in actions}
-    if expected is not None and actual != expected:
-        raise PlanMismatch(expected, actual)
+    # Checked before anything moves; the rest of the plan is compared once
+    # the write loop has run (`backfill_fundamentals`).
+    actual = {str(a["row"].id): a["reason"] for a in actions}
+    if expected is not None and actual != expected["quarantine"]:
+        raise PlanMismatch(expected, {**expected, "quarantine": actual})
     if not actions:
         return {}, set()
     for action in actions:
@@ -816,7 +850,7 @@ def _primary_takeover(db: Session, ticker: str, rows: list, payloads: list[dict]
 
 def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = False, *, db: Session | None = None,
                           dry_run: bool = False, mode: TakeoverMode = "supervised",
-                          expected_quarantine: dict[int, str] | None = None, audit_key: str | None = None) -> dict:
+                          expected_plan: dict[str, Any] | None = None, audit_key: str | None = None) -> dict:
     """Populate durable fundamentals only, with explicit complete/partial coverage.
 
     With an external session, writes are flushed but its caller owns commit and
@@ -828,8 +862,9 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
     the report is the exact plan (quarantines, adoptions, restatements) and
     nothing persists; it needs an owned session. `mode="unattended"` (scheduled
     refreshes) quarantines only small safe sets and otherwise records a planned
-    repair. `expected_quarantine` ({row id: reason} from a reviewed dry run)
-    aborts the whole ticker transaction when the executed set differs.
+    repair. `expected_plan` (a reviewed dry run's `plan_identity`: quarantine
+    reasons, adoptions, restatement values and relabels, by row id) aborts
+    the whole ticker transaction when the executed plan differs in any part.
     """
     from . import fundamental_quarantine as quarantine
 
@@ -841,6 +876,7 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         raise ValueError("mode must be supervised or unattended")
     if dry_run and db is not None:
         raise ValueError("dry_run needs an owned session so it can roll back")
+    expected = normalize_plan(expected_plan) if expected_plan is not None else None
     own = db is None
     db = db or SessionLocal()
     report: dict[str, Any] = {"ticker": ticker, "requested_start": start.isoformat(), "requested_end": _today().isoformat(),
@@ -891,7 +927,7 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         _relabel_legacy_periods(db, ticker, existing_rows, payloads, report)
         available_override, blocked_keys = _primary_takeover(
             db, ticker, existing_rows, payloads, report, mode=mode, pre_images=pre_images,
-            expected=expected_quarantine, audit_key=audit_key)
+            expected=expected, audit_key=audit_key)
         quarantined_ids = {q["id"] for q in report["quarantined"]} if report["rows_quarantined"] else set()
         for r in existing_rows:
             aliases.setdefault((_canonical(r.period), r.statement, r.line_item), []).append(r)
@@ -987,7 +1023,9 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                                 if source == PRIMARY_PROVIDER:
                                     # Equal FMP verification adopts the observation;
                                     # its id and availability are kept.
-                                    before_image = quarantine._snapshot(prior)
+                                    # The pre-run image, so restoring the adoption also
+                                    # reverses a relabel this run made to the row.
+                                    before_image = pre_images.get(prior.id) or quarantine._snapshot(prior)
                                     report["adoptions"].append({"id": prior.id, "statement": statement, "period": period,
                                         "line_item": line, "old_source": prior.source, "new_source": source})
                                     report["source_upgrades"].append({"ticker": ticker, "id": prior.id, "statement": statement,
@@ -1023,7 +1061,8 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                                 if source == PRIMARY_PROVIDER and prior is not None and prior_image is not None:
                                     # A legacy upgrade is an adoption: equal value,
                                     # a filled NULL, or a currency-only correction.
-                                    adoption_audit.append((prior, prior_image))
+                                    # Pre-run image: restore also undoes a relabel.
+                                    adoption_audit.append((prior, pre_images.get(prior.id) or prior_image))
                                     report["adoptions"].append({"id": prior.id, "statement": statement, "period": period,
                                         "line_item": line, "old_source": upgrade["old_source"], "new_source": source})
                             elif prior is not None and prior.source == source and old_value != row[line] and prior_image is not None:
@@ -1045,6 +1084,8 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
                             report["rows_written"] += 1
                             report["rows_refreshed"] += 1
         db.flush()
+        if expected is not None and (actual_plan := plan_identity(report)) != expected:
+            raise PlanMismatch(expected, actual_plan)
         audit_extra = {"dry_run": True} if dry_run else None
         adoption = quarantine.record_in_place(db, ticker=ticker, kind=quarantine.ADOPTION_KIND, entries=adoption_audit,
             repair_id=quarantine.repair_id_for(audit_key, quarantine.ADOPTION_KIND, ticker), extra=audit_extra)
@@ -1108,13 +1149,20 @@ def backfill_fundamentals(ticker: str, start_date: date, force_refresh: bool = F
         if own:
             db.rollback()
         log.warning("fundamentals history %s failed: %s", ticker, type(exc).__name__)
+        # Nothing the run listed persisted. Keep it for diagnosis under its own
+        # key, so no consumer (the re-pull ledger, the admin response) counts
+        # rolled-back quarantines, adoptions or restatements as done.
+        rolled_back = {key: report[key] for key in ("quarantined", "adoptions", "restatements", "source_upgrades",
+                                                    "period_relabels") if report[key]}
+        if rolled_back:
+            report["rolled_back_plan"] = rolled_back
         report.update(success=False, rows_written=0, rows_refreshed=0, rows_relabelled=0, rows_quarantined=0,
                       rows_inserted=0, quarantine_repair_id=None, adoption_repair_id=None, restatement_repair_id=None,
-                      planned_repair_id=None)
+                      planned_repair_id=None, quarantined=[], adoptions=[], restatements=[], source_upgrades=[],
+                      period_relabels=[], new_period_ends={s: {"annual": [], "quarterly": []} for s in LINES})
         if isinstance(exc, PlanMismatch):
-            report["issues"].append({"kind": "repull_plan_mismatch", "ticker": ticker,
-                "expected": {str(k): v for k, v in sorted(exc.expected.items())},
-                "actual": {str(k): v for k, v in sorted(exc.actual.items())}})
+            report["issues"].append({"kind": "repull_plan_mismatch", "ticker": ticker, "differs": exc.differs,
+                                     "expected": exc.expected, "actual": exc.actual})
         else:
             report["issues"].append({"kind": "persistence_or_read_error", "error_type": type(exc).__name__})
         return report
