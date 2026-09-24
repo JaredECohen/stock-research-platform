@@ -41,17 +41,36 @@ describe("CompaniesTable", () => {
     expect(screen.getByRole("columnheader", { name: /Market cap/ })).toHaveAttribute("aria-sort", "none");
   });
 
-  it("shows the sub-industry name and code from the classification row", () => {
+  // Owner decision 2026-09-24: a company's industry is the DATA PROVIDER's
+  // own label. The taxonomy's industry / sub-industry levels are never
+  // named or coded publicly, so the column is "Provider industry".
+  it("names each company's industry by the provider's own label, under 'Provider industry'", () => {
     render(<CompaniesTable companies={fx.companies} />);
-    const cell = screen.getByTestId(`sub-industry-${mapped.ticker}`);
-    expect(cell).toHaveTextContent(mapped.sub_industry_name!);
-    expect(cell).toHaveTextContent(mapped.sub_industry_code!);
+    expect(screen.getByRole("columnheader", { name: /Provider industry/ })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /Sub-industry/ })).toBeNull();
+    const cell = screen.getByTestId(`provider-industry-${mapped.ticker}`);
+    expect(mapped.provider_industry).toBeTruthy();
+    expect(cell).toHaveTextContent(mapped.provider_industry!);
+    expect(cell.textContent).not.toMatch(/\d{6,8}/);
   });
 
-  it("says n/a with a reason for a row that has no sub-industry, rather than a blank", () => {
+  it("says n/a with a reason for a company the provider gave no industry, rather than a blank", () => {
+    const companies = {
+      ...fx.companies,
+      items: fx.companies.items.map((r) => (r.ticker === derived.ticker ? { ...r, provider_industry: null } : r)),
+    };
+    render(<CompaniesTable companies={companies} />);
+    expect(screen.getByTestId(`provider-industry-${derived.ticker}`)).toHaveTextContent(
+      "n/a (the provider reports no industry for this company)",
+    );
+  });
+
+  it("captions the group by its name alone, never a code", () => {
     render(<CompaniesTable companies={fx.companies} />);
-    expect(derived.sub_industry_name).toBeNull();
-    expect(screen.getByTestId(`sub-industry-${derived.ticker}`)).toHaveTextContent("n/a (no sub-industry on this row)");
+    const caption = screen.getByTestId("companies-caption");
+    expect(caption).toHaveTextContent(fx.companies.name);
+    expect(caption.textContent).not.toContain(`(${fx.companies.code})`);
+    expect(caption.textContent).not.toMatch(/\(\d{2,8}\)/);
   });
 
   it("badges the source and carries the API's own label verbatim as the title", () => {
@@ -59,7 +78,8 @@ describe("CompaniesTable", () => {
     const research = screen.getByTestId(`source-badge-${mapped.ticker}`);
     expect(research).toHaveTextContent("Research map");
     expect(research).toHaveAttribute("title", mapped.classification.source_label);
-    expect(research.getAttribute("title")).toContain("not licensed issuer GICS mapping");
+    expect(research.getAttribute("title")).toContain("not an issuer classification");
+    expect(research.getAttribute("title")).not.toMatch(/gics/i);
 
     const provider = screen.getByTestId(`source-badge-${derived.ticker}`);
     expect(provider).toHaveTextContent("Provider-derived");

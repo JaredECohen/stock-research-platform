@@ -262,6 +262,7 @@ def capture(*, stub_analyst: bool = True) -> dict[str, Any]:
     from app.services import gics_registry as reg
     from app.services import industry_analytics as ia
     from app.services import industry_classification as ic
+    from app.services import industry_labels
     from app.services import industry_report_store as rs
     from app.services import industry_report_worker as jobs
     from app.tests.fixtures import industry_analyst_stub
@@ -309,6 +310,9 @@ def capture(*, stub_analyst: bool = True) -> dict[str, Any]:
     )
 
     universe = sorted({t for tickers in by_group.values() for t in tickers})
+    # The page requests a group by its public slug (the API also accepts the
+    # internal code, for old links), so the capture does too.
+    slug = industry_labels.slug
 
     # A capture starts from no editions: a leftover row from an earlier
     # run would make the "first week has no prices" edition v2.
@@ -348,7 +352,7 @@ def capture(*, stub_analyst: bool = True) -> dict[str, Any]:
                 # different weeks — and neither body has to be hand-edited to
                 # make the two counts disagree.
                 with _reading_at(read_at[PRIOR_PERIOD]):
-                    out["companies_warming_up"] = _get(client, f"/api/industries/{code}/companies")
+                    out["companies_warming_up"] = _get(client, f"/api/industries/{slug(code)}/companies")
 
     latest = rs.latest_good(code, version=info)
     if latest is None:
@@ -360,18 +364,18 @@ def capture(*, stub_analyst: bool = True) -> dict[str, Any]:
     print("latest good edition:", latest["version"])
 
     for name, path in [
-        ("report", f"/api/industries/{code}/report"),
-        ("companies", f"/api/industries/{code}/companies"),
-        ("history", f"/api/industries/{code}/history"),
-        ("changes", f"/api/industries/{code}/changes"),
+        ("report", f"/api/industries/{slug(code)}/report"),
+        ("companies", f"/api/industries/{slug(code)}/companies"),
+        ("history", f"/api/industries/{slug(code)}/history"),
+        ("changes", f"/api/industries/{slug(code)}/changes"),
         # The two below-the-floor editions, so the UI can be tested against
         # the real shapes rather than a hand-edited copy of them: the first
         # week of the big group (membership clears the floor, no prices
         # yet — transient) and the thin group's priced week (every member
         # priced and still short — structural).
-        ("report_warming_up", f"/api/industries/{code}/report?version=1"),
-        ("report_universe_short", f"/api/industries/{short_code}/report"),
-        ("report_missing", f"/api/industries/{empty_code}/report"),
+        ("report_warming_up", f"/api/industries/{slug(code)}/report?version=1"),
+        ("report_universe_short", f"/api/industries/{slug(short_code)}/report"),
+        ("report_missing", f"/api/industries/{slug(empty_code)}/report"),
     ]:
         with _reading_at(read_at[PERIOD]):
             out[name] = _get(client, path, expect=404 if name == "report_missing" else 200, name=name)
@@ -385,9 +389,9 @@ def capture(*, stub_analyst: bool = True) -> dict[str, Any]:
     print("enqueued (model down)", OUTAGE_PERIOD, res["enqueued"])
     _print_drained(drain_through_retries(jobs))
     with _reading_at(read_at[OUTAGE_PERIOD]):
-        out["report_not_updated"] = _get(client, f"/api/industries/{short_code}/report",
+        out["report_not_updated"] = _get(client, f"/api/industries/{slug(short_code)}/report",
                                          name="report_not_updated")
-        out["report_no_agentic"] = _get(client, f"/api/industries/{no_agentic_code}/report", expect=404,
+        out["report_no_agentic"] = _get(client, f"/api/industries/{slug(no_agentic_code)}/report", expect=404,
                                         name="report_no_agentic")
         # Last, so the picker pointers describe the final state (the thin
         # group's pointer names its analyst edition and the newer attempt).
@@ -397,13 +401,17 @@ def capture(*, stub_analyst: bool = True) -> dict[str, Any]:
     for name in ("report", "report_warming_up", "report_universe_short", "report_not_updated"):
         for path, n in trim_weekly_closes(out[name]).items():
             trimmed[f"{name}.{path}"] = n
+    # The fixture is public data like every body in it: groups are named by
+    # their public SLUG and the taxonomy by its public key (owner decision
+    # 2026-09-24), so the UI's own fixture walk can assert that nothing in
+    # the file is a taxonomy code.
     meta = {
         "generated_by": GENERATED_BY,
-        "taxonomy_version": info.version_key,
-        "code": code,
-        "short_code": short_code,
-        "empty_code": empty_code,
-        "no_agentic_code": no_agentic_code,
+        "taxonomy_version": industry_labels.public_version_key(info.version_key),
+        "code": industry_labels.slug(code),
+        "short_code": industry_labels.slug(short_code),
+        "empty_code": industry_labels.slug(empty_code),
+        "no_agentic_code": industry_labels.slug(no_agentic_code),
         "outage_period": OUTAGE_PERIOD,
         "read_at": {p: t.isoformat() for p, t in read_at.items()},
         "min_sample": floor,

@@ -403,10 +403,13 @@ class Settings(BaseSettings):
     # ACTIVE version is always read from the database (two processes share
     # nothing else), never from this value.
     gics_taxonomy_version: str = "gics-2026-04"
-    # Display policy. Only `codes_and_names` is built; `internal_labels` is
-    # reserved for the licensing decision (owner decision 5) and is not
-    # implemented — the value is validated by the registry, not acted on.
-    gics_display_mode: str = "codes_and_names"
+    # Display policy (owner decision 2026-09-24: our own labels publicly, no
+    # licensed names or codes). `internal_labels` names a node by
+    # `industry_labels`; `codes_and_names` is for internal/admin rendering
+    # only and logs a warning. Public API bodies are projected through
+    # `industry_labels.project_public` whatever this says — licensing is
+    # not a toggle — so the setting only decides `gics_registry.display()`.
+    gics_display_mode: str = "internal_labels"
     # Memo pipeline: when on, a mapped company's memo runs the Industry
     # Group Analyst (one per memo) alongside the sector analyst. Off until a
     # production A/B is read; the sector analyst stays primary either way.

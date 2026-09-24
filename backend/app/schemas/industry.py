@@ -24,6 +24,12 @@ them, and every field name is chosen to keep them visible:
   (`stale_reason`, `exclusion`, `reason`), never zero and never a bare
   `n/a`. A truncated list reports how many entries it dropped.
 
+On the public read models, `code` / `sector_code` hold a public SLUG and
+`name` MarketMosaic's own label, never a taxonomy code or registry name
+(owner decision 2026-09-24; `routes_industries` projects every body
+through `industry_labels.project_public`). The admin models keep the
+internal codes.
+
 Research and education only: every forward-looking line in a report is a
 scenario, not a recommendation.
 """
@@ -79,7 +85,7 @@ class TaxonomyVersionOut(BaseModel):
     node_counts: dict[str, int] = Field(default_factory=dict)
     provenance: dict[str, Any] = Field(default_factory=dict)
     attribution: str = ""
-    display_mode: str = "codes_and_names"
+    display_mode: str = "internal_labels"
     mapping_caveat: str = ""
     imported_at: str | None = None
     activated_at: str | None = None
@@ -365,14 +371,14 @@ class CompanyClassificationOut(BaseModel):
 
 
 class IndustryCompanyRowOut(BaseModel):
+    """One constituent. Its industry is the DATA PROVIDER's own label
+    (`provider_industry`): the taxonomy's industry and sub-industry levels
+    are never named or coded publicly (owner decision 2026-09-24), so the
+    row carries no `industry_code` / `sub_industry_*` fields at all."""
     ticker: str
     company_name: str | None = None
     is_active: bool = True
-    industry_code: str | None = None
-    industry_name: str | None = None
-    sub_industry_code: str | None = None
-    sub_industry_name: str | None = None
-    sub_industry_codes: list[str] = Field(default_factory=list)
+    provider_industry: str | None = None
     classification: CompanyClassificationOut
     market_cap: float | None = None
     weight_mcw: float | None = None

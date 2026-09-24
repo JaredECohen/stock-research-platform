@@ -208,4 +208,19 @@ describe("ReportTabs", () => {
     expect(within(claims).getByText(/Basis:/)).toBeInTheDocument();
     expect(within(claims).getAllByText(/Falsifier:/).length).toBeGreaterThan(0);
   });
+
+  // Owner decision 2026-09-24. A claim's basis is printed verbatim, and the
+  // writer records mandate references by group — so the API serves them as
+  // `mandate:<slug>`, never `mandate:<code>`. Every interpreted section of
+  // the captured edition is rendered and read back.
+  it("prints no taxonomy code or brand in any section's prose, claims or bases", () => {
+    for (const section of ORDER) {
+      if ((INDUSTRY_FACTS_ONLY_SECTIONS as readonly string[]).includes(section)) continue;
+      const { unmount } = render(<ReportTabs report={fx.report} section={section} onSelect={vi.fn()} />);
+      const text = document.body.textContent ?? "";
+      expect([section, /(?<![A-Za-z])gics(?![A-Za-z])/i.test(text)]).toEqual([section, false]);
+      expect([section, /mandate:\d|\(\d{4}\)|\[\d{6}/.test(text)]).toEqual([section, false]);
+      unmount();
+    }
+  });
 });

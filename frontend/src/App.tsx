@@ -54,7 +54,9 @@ function LegacyRedirect({ to }: { to: string }) {
 }
 
 /** `/industries/:code` → `/app/industries/:code`, keeping `?version=` and
- *  `?tab=` — the parts of the URL that make an edition citable. */
+ *  `?tab=` — the parts of the URL that make an edition citable. `:code` is
+ *  the group's public slug; an old link's internal code still resolves,
+ *  and IndustryAnalysis replaces it with the slug the API answers with. */
 function LegacyIndustryRedirect() {
   const { code = "" } = useParams();
   return <LegacyRedirect to={`/app/industries/${encodeURIComponent(code)}`} />;
@@ -107,8 +109,9 @@ export default function App() {
           <Route key={p} path={p} element={<LegacyRedirect to={`/app${p}`} />} />
         ))}
         {/* The only legacy path with a segment under it: a shared
-            /industries/4530 link has to keep the code, and the flat map
-            above cannot carry one. */}
+            /industries/<group> link (a slug, or an old internal code) has
+            to keep that segment, and the flat map above cannot carry one.
+            The page then canonicalises an old code to the public slug. */}
         <Route path="/industries/:code" element={<LegacyIndustryRedirect />} />
 
         <Route path="*" element={<NotFound />} />

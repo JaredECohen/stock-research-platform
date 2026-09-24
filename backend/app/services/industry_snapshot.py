@@ -41,7 +41,7 @@ from sqlalchemy import select
 from ..config import settings
 from ..database import SessionLocal
 from ..models import CatalystEvent, CrossIndustrySnapshot, ResearchSnapshot
-from . import gics_registry, industry_analytics, industry_classification
+from . import gics_registry, industry_analytics, industry_classification, industry_labels
 from .gics_registry import VersionInfo
 
 log = logging.getLogger(__name__)
@@ -712,9 +712,15 @@ def render_pm_block(snapshot: CrossIndustrySnapshot | dict[str, Any] | None, max
         f"Cross-industry snapshot {doc.get('period_key')} (as of {str(doc.get('as_of') or '')[:10]}; "
         f"{cov.get('n_with_stats', 0)}/{cov.get('n_groups', 0)} groups with stats; macro regime: {regime})."
     )
+    # Groups are named by OUR labels, never by code or registry name, and
+    # the taxonomy by its public key (owner decision 2026-09-24): the PM
+    # writes public memo prose from this block, and prose cannot echo a
+    # code it never saw. The snapshot row itself keeps the internal codes.
+    taxonomy_key = payload.get("taxonomy_version")
     legend = (
-        f"Observed data from stored rows (taxonomy {payload.get('taxonomy_version')}); n = constituents with "
-        "prices; regime labels are rule-based reads. Columns: code name | 1W/1M/YTD EW | rel-1M vs universe "
+        f"Observed data from stored rows (taxonomy "
+        f"{industry_labels.public_version_key(taxonomy_key) if taxonomy_key else 'n/a'}); n = constituents with "
+        "prices; regime labels are rule-based reads. Columns: industry group | 1W/1M/YTD EW | rel-1M vs universe "
         "| breadth-1M | EV/EBITDA median | regime | n"
     )
     groups = list(payload.get("groups") or [])
@@ -730,7 +736,7 @@ def render_pm_block(snapshot: CrossIndustrySnapshot | dict[str, Any] | None, max
             # spend budget saying the same thing.
             continue
         lines.append(
-            f"{r.get('code')} {_short(str(r.get('name') or ''))} | "
+            f"{_short(industry_labels.label(r.get('code')))} | "
             f"{_pct(r.get('ret_1w_ew'))}/{_pct(r.get('ret_1m_ew'))}/{_pct(r.get('ret_ytd_ew'))} | "
             f"{_pct(r.get('rel_1m_vs_universe'), pp=True)} | {_share(r.get('breadth_1m'))} | "
             f"{_mult(r.get('val_median_ev_ebitda'))} | {r.get('regime_label')} | n={r.get('n') if r.get('n') is not None else 'n/a'}"
@@ -738,16 +744,23 @@ def render_pm_block(snapshot: CrossIndustrySnapshot | dict[str, Any] | None, max
     missing = payload.get("missing_groups") or []
     tail: list[str] = []
     if missing:
-        codes = ", ".join(m["code"] for m in missing[:8]) + (" …" if len(missing) > 8 else "")
+        # Older snapshots stored bare codes here, newer ones {code, name, reason}.
+        codes = ", ".join(
+            industry_labels.label(m["code"] if isinstance(m, dict) else m) for m in missing[:8]
+        ) + (" …" if len(missing) > 8 else "")
         tail.append(f"No stats this period for {len(missing)} group(s): {codes}.")
     active = [s for s in (payload.get("spillovers") or []) if s.get("signal") == "active"]
     if active:
         parts = []
         for s in active[:4]:
             moved = ", ".join(
-                f"{m['code']} {_pct(m.get('ret_1m_ew'))}" for m in s.get("moves", []) if m.get("ret_1m_ew") is not None
+                f"{industry_labels.label(m['code'])} {_pct(m.get('ret_1m_ew'))}"
+                for m in s.get("moves", []) if m.get("ret_1m_ew") is not None
             )
-            parts.append(f"{s['id']} {_short(s.get('label') or '', 40)} [{s.get('source')}]: {moved}")
+            # A link label is analyst prose from the dependency atlas and may
+            # quote a registry group name; it is scrubbed like any prose.
+            link_label = _short(industry_labels.scrub_text(str(s.get("label") or ""), rollup=True), 40)
+            parts.append(f"{s['id']} {link_label} [{s.get('source')}]: {moved}")
         tail.append("Dependency links with a ≥5% 1M move (analyst hypotheses, not correlations): " + "; ".join(parts) + ".")
     window_days = payload.get("events_window_days", EVENT_WINDOW_DAYS)
     channel_bits = []

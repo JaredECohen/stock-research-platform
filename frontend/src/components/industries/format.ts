@@ -220,7 +220,6 @@ const ACRONYMS: Record<string, string> = {
   mcw: "MCW",
   qtd: "QTD",
   ytd: "YTD",
-  gics: "GICS",
   llm: "LLM",
   id: "ID",
   us: "US",

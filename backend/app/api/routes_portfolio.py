@@ -21,17 +21,21 @@ router = APIRouter()
 
 
 def industry_exposure_block(portfolio: ModelPortfolio) -> dict[str, Any]:
-    """FEAT-003 — exposure by GICS industry group for the built holdings.
+    """FEAT-003 — exposure by industry group for the built holdings.
 
     Reads only: one SELECT for the holdings' current classifications, the
-    registry's cached node list for names, and the latest persisted
-    cross-industry snapshot (one row) for the exposed groups' rows.
-    Never raises into the build — a missing taxonomy or a read failure is
-    reported as a labelled state, and the portfolio still returns.
+    registry's cached node list, and the latest persisted cross-industry
+    snapshot (one row) for the exposed groups' rows. Never raises into the
+    build — a missing taxonomy or a read failure is reported as a labelled
+    state, and the portfolio still returns.
+
+    Public: groups are named by MarketMosaic's own labels and addressed by
+    slug, and the block is projected through `industry_labels` before it
+    leaves (owner decision 2026-09-24 — no licensed names or codes).
     """
     tickers = [h.ticker for h in portfolio.holdings]
     try:
-        from ..services import gics_registry, industry_classification, industry_snapshot
+        from ..services import gics_registry, industry_classification, industry_labels, industry_snapshot
 
         info = gics_registry.active_version()
         if info is None:
@@ -39,11 +43,11 @@ def industry_exposure_block(portfolio: ModelPortfolio) -> dict[str, Any]:
                 {"ticker": t.upper(), "weight": None, "state": "unclassified"} for t in tickers
             ]}
         current = industry_classification.current_for(tickers, version=info) if tickers else {}
-        names = {n.code: n.name for n in gics_registry.industry_groups(version=info)}
+        names = {n.code: industry_labels.label(n.code) for n in gics_registry.industry_groups(version=info)}
         block = industry_group_exposure(portfolio.holdings, current, names)
         block["status"] = "ok"
         block["taxonomy_version"] = info.version_key
-        block["mapping_caveat"] = gics_registry.MAPPING_CAVEAT
+        block["mapping_caveat"] = industry_labels.PUBLIC_MAPPING_CAVEAT
         snapshot = industry_snapshot.latest_snapshot(version=info)
         codes = [g["code"] for g in block["by_group"]]
         if snapshot is None:
@@ -60,7 +64,10 @@ def industry_exposure_block(portfolio: ModelPortfolio) -> dict[str, Any]:
             "weights are the portfolio's own; group statistics are observed weekly data "
             "and regime labels are rule-based reads — scenario context, not advice"
         )
-        return block
+        # The industry surfaces' projection (with the rollup): this block is
+        # built from the same snapshot rows the industry routes serve.
+        public: dict[str, Any] = industry_labels.project_public(block, rollup=True)
+        return public
     except Exception as exc:
         log_safely(log, "industry exposure block failed (portfolio still returned)", exc, level=logging.DEBUG)
         return {"status": "unavailable", "reason": type(exc).__name__, "by_group": [], "unmapped": []}
@@ -77,9 +84,10 @@ def build(
     the feature adds a two-in-flight lease per user and the `llm_light`
     rate scope because the brief extraction is an LLM call.
 
-    FEAT-003: the response carries `industry_exposure` — weight by GICS
-    industry group from the stored classifications plus the exposed
-    groups' rows of the latest cross-industry snapshot (reads only)."""
+    FEAT-003: the response carries `industry_exposure` — weight by
+    industry group (our own labels and slugs) from the stored
+    classifications plus the exposed groups' rows of the latest
+    cross-industry snapshot (reads only)."""
     principal = current_principal(request)
     with llm_call_context(user_id=principal.user_id, feature="portfolio"):
         portfolio = build_model_portfolio(req)

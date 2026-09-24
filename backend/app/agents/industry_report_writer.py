@@ -45,7 +45,7 @@ from typing import Any
 from ..config import settings
 from ..memory import SectorMemory
 from ..prompts import load_prompt
-from ..services import industry_classification, industry_knowledge
+from ..services import industry_classification, industry_knowledge, industry_labels
 from ..services.industry_group_knowledge import primary_sources, thesis_stages
 from ..services.llm_metrics import cost_per_run, estimate_cost_usd
 from . import llm, prompts
@@ -145,6 +145,12 @@ def _overview_facts(analyst: IndustryAnalyst, stats: Any, sample: dict[str, Any]
     return {
         "code": analyst.code,
         "name": analyst.name,
+        # What prose may call the group and its sector: MarketMosaic's own
+        # labels (owner decision 2026-09-24). The code and registry name
+        # above stay for provenance; the model is sent a projection with
+        # neither (`project_for_prompt`), and the page never shows them.
+        "group_label": industry_labels.label(analyst.code),
+        "sector_label": industry_labels.label(analyst.sector_code),
         "sector": {"code": analyst.sector_code, "name": analyst.sector_name},
         "taxonomy_version": analyst.taxonomy_version_key,
         "boundaries": [{"code": i["code"], "name": i["name"]} for i in m.industries],
@@ -709,7 +715,11 @@ def _fmt_pct(value: Any) -> str:
 
 
 def _items_text(items: list[dict[str, Any]], limit: int = 4) -> str:
-    return "; ".join(f"{i['text']} [{','.join(i.get('industry_codes') or [])}]" for i in items[:limit])
+    """Mandate items as prose. Without their `[industry codes]`: those were
+    six-digit taxonomy codes printed on the page, which L1 now rejects and
+    the owner's licensing decision rules out; the facts keep the
+    provenance."""
+    return "; ".join(str(i["text"]) for i in items[:limit])
 
 
 def _forward_items_text(items: list[dict[str, Any]] | None, limit: int, *, marker_free: bool = False) -> str:
@@ -751,11 +761,17 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
     # overview
     claims: list[dict[str, Any]] = []
     n = ov.get("n_constituents")
+    # Named by our labels, never "4530 Semiconductors & ..." — the audit
+    # copy must pass L1 like any edition (it is validated before it is
+    # stored).
     text = (
-        f"{label}: {analyst.code} {analyst.name} spans {len(ov['boundaries'])} industries and "
-        f"{len(ov['sub_industries'])} sub-industries in sector {analyst.sector_code} {analyst.sector_name}. "
+        f"{label}: {ov['group_label']} spans {len(ov['boundaries'])} industries and "
+        f"{len(ov['sub_industries'])} sub-industries in the {ov['sector_label']} sector. "
         + (f"Constituents in the sample: {n}." if isinstance(n, int) else "Constituent count: n/a (no statistics row).")
-        + (f" Research priority {m.research_priority}/5 (set by {m.research_priority_source})."
+        # The industry that set the priority is named in the facts
+        # (`research_priority_source`, "451030 Software"), not here: its
+        # code and taxonomy name are exactly what L1 keeps off the page.
+        + (f" Research priority {m.research_priority}/5 (the highest score among the group's industries)."
            if m.research_priority is not None else "")
     )
     claims.append(_claim(text, "observed_fact", ["overview.boundaries", "overview.n_constituents"]))
@@ -801,7 +817,7 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
         "KPIs the mandate tests first: " + (_items_text(kp.get("core_kpis") or [], 5) or "n/a") + ". "
         "Leading indicators: " + (_items_text(kp.get("leading_indicators") or [], 4) or "n/a") + ". "
         + ("Highest-EVI questions: " + " | ".join(
-            f"[{q['industry_code']}] {q['question']}" for q in (kp.get("highest_evi_questions") or [])[:2]
+            str(q["question"]) for q in (kp.get("highest_evi_questions") or [])[:2]
         ) + "." if kp.get("highest_evi_questions") else "")
     )
     text = _register_causal(text, claims, ["kpis.core_kpis", f"mandate:{analyst.code}"], mandate_falsifier)
@@ -843,8 +859,8 @@ def _deterministic_interpretation(facts: dict[str, dict[str, Any]], analyst: Ind
            + (" (further names in companies.unpriced). " if len(unpriced) > 8 else ". "))
     )
     text = (
-        f"Constituents on file: {n_c}, from {co.get('membership_source')} (mapping derived from provider "
-        "classification, not licensed GICS security assignments). "
+        f"Constituents on file: {n_c}, from {co.get('membership_source')} "
+        f"({industry_labels.PUBLIC_MAPPING_CAVEAT}). "
         + coverage
         + (f"Largest: {', '.join(str(x.get('ticker', x)) if isinstance(x, dict) else str(x) for x in co['largest'][:5])}. "
            if co.get("largest") else "Largest / leaders / laggards: n/a (no statistics row). ")
@@ -1066,10 +1082,15 @@ def _llm_call(analyst: IndustryAnalyst, facts: dict[str, dict[str, Any]], sectio
     """One bounded chat_json call for `sections`; records tokens and cost."""
     report_rules = load_prompt("industry_report") or ""
     system = analyst.system_prompt() + ("\n\n" + report_rules if report_rules else "")
+    # The model sees the label projection of the facts: no taxonomy code,
+    # registry name or brand, so it cannot echo one into prose (L1 would
+    # reject it, and a retry costs a call). The stored and validated facts
+    # are the unprojected ones — this changes only what is sent.
     prompt = (
         f"Sections to interpret now: {', '.join(sections)}.\n"
         "Facts payload (observed; do not restate numbers that are not here):\n"
-        + json.dumps({s: facts[s] for s in sections}, default=str)[: settings.max_agent_context_chars]
+        + json.dumps({s: industry_labels.project_for_prompt(facts[s]) for s in sections},
+                     default=str)[: settings.max_agent_context_chars]
         + _repair_block(repair_notes)
     )
     # Each registered assumption costs the outlook batch roughly 120-150

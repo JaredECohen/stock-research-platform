@@ -19,6 +19,10 @@ import { na } from "./format";
  * Counts are whatever the response carries — the number of sectors,
  * groups and constituents comes from the registry on every call and is
  * never hardcoded here.
+ *
+ * Groups and sectors are shown by name only: `code` is the public slug the
+ * URL and the option values use, and no taxonomy code is ever printed
+ * (owner decision 2026-09-24 — our own labels, no licensed codes).
  */
 
 const NARROW_QUERY = "(max-width: 767px)";
@@ -167,10 +171,10 @@ export default function SectorGroupPicker({ taxonomy, value, onSelect, className
           >
             <option value="">Choose an industry group…</option>
             {taxonomy.sectors.map((sector) => (
-              <optgroup key={sector.code} label={`${sector.code} ${sector.name}`}>
+              <optgroup key={sector.code} label={sector.name}>
                 {sector.industry_groups.map((g) => (
                   <option key={g.code} value={g.code}>
-                    {g.code} {g.name} — {g.constituent_count} in universe
+                    {g.name} — {g.constituent_count} in universe
                     {notCoverableNote(g) ? " · too few to report on" : ""} · {pointerSummary(g)}
                   </option>
                 ))}
@@ -195,9 +199,9 @@ export default function SectorGroupPicker({ taxonomy, value, onSelect, className
         className="max-h-[28rem] overflow-y-auto rounded-lg border border-ink-800 bg-ink-900/40 focus:outline-none focus:ring-2 focus:ring-accent-600/50"
       >
         {taxonomy.sectors.map((sector) => (
-          <li key={sector.code} role="group" aria-label={`${sector.code} ${sector.name}`}>
+          <li key={sector.code} role="group" aria-label={sector.name}>
             <div className="px-3 py-1 text-[10px] uppercase tracking-widest text-slate-500 bg-ink-900/70 sticky top-0">
-              {sector.code} {sector.name}
+              {sector.name}
             </div>
             <ul role="presentation">
               {sector.industry_groups.map((g) => {
@@ -222,10 +226,7 @@ export default function SectorGroupPicker({ taxonomy, value, onSelect, className
                     }`}
                   >
                     <div className="flex items-baseline justify-between gap-2">
-                      <span>
-                        <span className="font-mono text-xs text-slate-500 mr-2">{g.code}</span>
-                        {g.name}
-                      </span>
+                      <span>{g.name}</span>
                       <span className="text-[11px] text-slate-500 whitespace-nowrap">
                         {g.constituent_count} in universe
                       </span>

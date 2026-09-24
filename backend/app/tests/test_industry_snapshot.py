@@ -12,6 +12,7 @@ supplies the group list so no count is ever typed here.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -23,6 +24,7 @@ from app.database import SessionLocal
 from app.models import CrossIndustrySnapshot
 from app.services import gics_registry as reg
 from app.services import industry_classification as ic
+from app.services import industry_labels as il
 from app.services import industry_snapshot as isn
 from app.tests.fixtures.demo_dataset import COMPANY_PROFILES
 from app.tests.gating_helpers import seed_demo_universe
@@ -145,6 +147,34 @@ def test_spillovers_carry_their_source_and_a_signal_never_a_correlation(_taxonom
     assert {s["id"]: s for s in row.payload["spillovers"]}[edge["id"]]["signal"] == "dormant"
 
 
+def test_the_dependency_line_names_moved_groups_by_label_never_by_code(_taxonomy):
+    """The PM writes public memo prose from this block, and memo prose has
+    no L1 gate, so the "Dependency links" line is the only guard: every
+    moved group by OUR label, no 4-digit group code anywhere, and a link
+    label that quotes a registry group name relabelled (a legacy row's
+    label, or an atlas edit, can)."""
+    graph = isn.dependency_graph()
+    edge = next(link for link in graph["links"] if link["kind"] == "edge")
+    stats = {c: _stats(c, sid=i + 1, ret_1m=0.07 - 0.06 * i) for i, c in enumerate(edge["codes"])}
+    row = isn.compute_cross_snapshot(PERIOD, AS_OF, version=_taxonomy, persist=False, loaders=_loaders(stats))
+    doc = isn.snapshot_dict(row)
+    payload = dict(doc["payload"])
+    spill = [dict(s) for s in payload["spillovers"]]
+    active = next(s for s in spill if s["id"] == edge["id"])
+    assert active["signal"] == "active"
+    # A legacy row's link label quoting a registry group name.
+    active["label"] = "Semiconductors & Semiconductor Equipment to peers"
+    payload["spillovers"] = spill
+    doc["payload"] = payload
+    block = isn.render_pm_block(doc, max_chars=100_000)
+    line = next(line for line in block.split("\n") if line.startswith("Dependency links"))
+    for code in edge["codes"]:
+        assert f"{il.label(code)} " in line, (code, line)
+    assert "Semiconductors & Semiconductor" not in line and f"{il.label('4530')} to peers" in line, line
+    group_codes = {g.code for g in reg.industry_groups(version=_taxonomy) if not re.match(r"^(?:19|20)\d\d$", g.code)}
+    assert not [c for c in group_codes if re.search(rf"(?<!\d){c}(?!\d)", block)], block
+
+
 def test_events_are_counted_per_group_and_macro_regime_is_carried(_taxonomy):
     a, b = _codes(2)
     stats = {a: _stats(a, sid=1, ret_1m=0.02, tickers=("AAA", "BBB")), b: _stats(b, sid=2, ret_1m=0.0, tickers=("CCC",))}
@@ -198,15 +228,21 @@ def test_render_shows_missing_evidence_as_n_a_and_names_missing_groups(_taxonomy
     stats = {a: _stats(a, sid=1, ret_1m=None, breadth=None), b: _stats(b, sid=2, ret_1m=0.0, status="insufficient_sample")}
     row = isn.compute_cross_snapshot(PERIOD, AS_OF, version=_taxonomy, persist=False, loaders=_loaders(stats))
     block = isn.render_pm_block(row)
-    line_a = next(line for line in block.split("\n") if line.startswith(a))
+    # Lines lead with OUR label (owner decision 2026-09-24): the PM writes
+    # public prose from this block, so it carries no code to echo.
+    line_a = next(line for line in block.split("\n") if line.startswith(isn._short(il.label(a)) + " |"))
     assert "n/a" in line_a and "0.0%" not in line_a.split("|")[1]
-    line_b = next(line for line in block.split("\n") if line.startswith(b))
+    line_b = next(line for line in block.split("\n") if line.startswith(isn._short(il.label(b)) + " |"))
     assert "insufficient_sample" in line_b
     n_missing = len(reg.industry_groups(version=_taxonomy)) - 2
     assert f"No stats this period for {n_missing} group(s)" in block
-    # Groups without stats are named in the tail, not padded into the table.
+    # Groups without stats are named in the tail — by label — not padded
+    # into the table.
     absent = next(m["code"] for m in row.payload["missing_groups"])
-    assert not any(line.startswith(absent + " ") for line in block.split("\n")[1:])
+    assert not any(line.startswith(isn._short(il.label(absent)) + " |") for line in block.split("\n")[1:])
+    assert il.label(absent) in block.split("No stats this period")[1]
+    assert "gics" not in block.lower() and il.PUBLIC_TAXONOMY_KEY in block
+    assert not [c for c in (a, b, absent) if re.search(rf"(?<!\d){c}(?!\d)", block)]
 
 
 # --- relevance ------------------------------------------------------------------
@@ -250,7 +286,13 @@ def test_render_never_exceeds_its_budget_and_always_counts_what_it_dropped(_taxo
     stats = {g.code: _stats(g.code, sid=i + 1, ret_1m=0.03 * (i % 5 - 2)) for i, g in enumerate(with_stats)}
     row = isn.compute_cross_snapshot(PERIOD, AS_OF, version=_taxonomy, persist=False, loaders=_loaders(stats))
     whole = set(isn.render_pm_block(row, max_chars=100_000).split("\n"))
-    n_lines = sum(1 for line in whole if line[:4].isdigit() and "|" in line)
+    # A group line leads with the group's label (never its code).
+    labels = {isn._short(il.label(g.code)) for g in groups}
+
+    def is_group_line(line: str) -> bool:
+        return " | " in line and line.split(" | ")[0] in labels
+
+    n_lines = sum(1 for line in whole if is_group_line(line))
     assert n_lines == len(with_stats)
 
     for budget in range(240, 2400, 11):
@@ -261,7 +303,7 @@ def test_render_never_exceeds_its_budget_and_always_counts_what_it_dropped(_taxo
             if line.startswith("… omitted for length:") or line == "… truncated for length.":
                 continue
             assert line in whole, f"budget {budget} emitted a partial line: {line!r}"
-            if line[:4].isdigit() and "|" in line:
+            if is_group_line(line):
                 shown += 1
         if shown < n_lines:
             assert "omitted for length" in block, f"budget {budget} dropped {n_lines - shown} line(s) silently"

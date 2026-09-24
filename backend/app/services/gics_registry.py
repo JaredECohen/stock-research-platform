@@ -156,10 +156,12 @@ def _utcnow() -> datetime:
 
 
 def display_mode() -> str:
-    """The configured display mode, validated; an unknown value is reported
-    as the default rather than acted on."""
+    """The configured display mode, validated. An unknown value (a typo in
+    the environment) reads as `internal_labels`, the default: failing
+    open would put licensed names and codes on whatever calls
+    `display()`."""
     mode = (settings.gics_display_mode or "").strip()
-    return mode if mode in DISPLAY_MODES else DISPLAY_MODES[0]
+    return mode if mode in DISPLAY_MODES else "internal_labels"
 
 
 # One warning per process, not per call: `display()` can run per row.

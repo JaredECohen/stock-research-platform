@@ -49,6 +49,14 @@ describe("Methodology", () => {
     expect(screen.getByRole("heading", { name: "Blank means not obtained, not zero" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "See the ledger on a real sample" })).toHaveAttribute("href", "/samples");
   });
+
+  it("describes industry coverage in our own words, never the licensed classification's brand", () => {
+    // Owner decision 2026-09-24: no third-party classification branding on
+    // any public page. Letters on neither side, so "biologics" is not it.
+    stubFetch();
+    renderWithProviders(<Methodology />);
+    expect(document.body.textContent).not.toMatch(/(?<![A-Za-z])gics(?![A-Za-z])/i);
+  });
 });
 
 describe("FAQ page", () => {

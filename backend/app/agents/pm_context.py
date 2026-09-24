@@ -112,8 +112,13 @@ def industry_context_payload(
     excerpts for the groups relevant to ``tickers`` (their own groups plus
     the capped dependency-linked ones) and/or the explicit ``code``. This
     is what the chat tool returns and what the block below renders;
-    nothing here fetches prices, runs analytics or calls an LLM."""
-    from ..services import gics_registry
+    nothing here fetches prices, runs analytics or calls an LLM.
+
+    The answer reaches a user through chat, so it is PUBLIC: groups are
+    named by our labels and addressed by slug, and the whole payload goes
+    through ``industry_labels.project_public`` (owner decision 2026-09-24).
+    ``code`` accepts a slug or, for old callers, an internal group code."""
+    from ..services import gics_registry, industry_labels
     from ..services.industry_report_store import access_policy, last_attempted_periods, latest_publishable_many
     from ..services.industry_snapshot import group_rows, latest_snapshot, relevant_groups_detail
 
@@ -135,8 +140,10 @@ def industry_context_payload(
         log.debug("industry context: taxonomy read failed: %s", type(exc).__name__)
         info = None
     if info is None:
-        return {"status": "taxonomy_not_imported", "tickers": symbols, "code": code, "groups": [],
-                "access": access}
+        public_none: dict[str, Any] = industry_labels.project_public(
+            {"status": "taxonomy_not_imported", "tickers": symbols, "code": code, "groups": [], "access": access},
+            rollup=True)
+        return public_none
 
     detail = relevant_groups_detail(symbols, version=info) if symbols else {
         "tickers": [], "own": [], "linked": [], "unmapped": [], "cap": 0, "by_ticker": {},
@@ -145,18 +152,28 @@ def industry_context_payload(
     explicit: dict[str, Any] | None = None
     if code:
         try:
-            node = gics_registry.group(str(code), version=info)
-            explicit = {"code": node.code, "name": node.name}
+            internal = industry_labels.code_for(code)
+        except industry_labels.UnknownLabel:
+            internal = str(code)   # the registry words the refusal below
+        try:
+            node = gics_registry.group(internal, version=info)
+            explicit = {"code": node.code, "name": industry_labels.label(node.code)}
             codes.append(node.code)
         except gics_registry.UnknownNode:
-            explicit = {"code": str(code), "error": f"industry group {code!r} not found in taxonomy {info.version_key}"}
+            # Never quote a digit string back: it may be a sector, industry
+            # or sub-industry code, and this answer is public.
+            asked = str(code)
+            explicit = {"code": asked, "error": (
+                f"industry group {asked!r} not found" if not asked.isdigit()
+                else "no industry group has that code"
+            ) + f" in taxonomy {industry_labels.public_version_key(info.version_key)}"}
     for c in detail["own"] + [item["code"] for item in detail["linked"]]:
         if c not in codes:
             codes.append(c)
 
     snapshot = latest_snapshot(version=info)
     rows = group_rows(snapshot, codes) if snapshot else []
-    names = {n.code: n.name for n in gics_registry.industry_groups(version=info)}
+    names = {n.code: industry_labels.label(n.code) for n in gics_registry.industry_groups(version=info)}
     # A constant number of queries for every group's edition — a portfolio
     # question can put a dozen groups in scope and this runs on a web
     # request. Analyst editions only; the attempted periods say which of
@@ -176,7 +193,7 @@ def industry_context_payload(
         if entry["relation"] == "linked":
             entry["via"] = next((item["via"] for item in detail["linked"] if item["code"] == c), [])
         groups.append(entry)
-    return {
+    payload = {
         "status": "ok",
         "taxonomy_version": info.version_key,
         "tickers": symbols,
@@ -191,10 +208,14 @@ def industry_context_payload(
         } if snapshot else {"status": "no_snapshot"},
         "groups": groups,
         "access": access,
-        "attribution": gics_registry.ATTRIBUTION,
-        "mapping_caveat": gics_registry.MAPPING_CAVEAT,
+        "attribution": industry_labels.PUBLIC_ATTRIBUTION,
+        "mapping_caveat": industry_labels.PUBLIC_MAPPING_CAVEAT,
         "note": "stored weekly artifacts (observed statistics + labelled interpretation); scenarios, not recommendations",
     }
+    # rollup: the payload quotes industry-report editions, legacy ones
+    # included, so it gets the industry surfaces' projection.
+    public: dict[str, Any] = industry_labels.project_public(payload, rollup=True)
+    return public
 
 
 def industry_context_block(
@@ -207,6 +228,7 @@ def industry_context_block(
     excerpts follow for the companies' own groups only (the linked
     groups are already lines in the snapshot), so the block is bounded
     by the render cap plus one excerpt per own group."""
+    from ..services import industry_labels
     from ..services.industry_report_store import last_attempted_periods, latest_publishable_many
     from ..services.industry_snapshot import latest_snapshot, relevant_groups_detail, render_pm_block
 
@@ -223,26 +245,38 @@ def industry_context_block(
         detail = relevant_groups_detail(scope)
         editions = latest_publishable_many(detail["own"]) if detail["own"] else {}
         attempted = last_attempted_periods(detail["own"]) if detail["own"] else {}
+        # Groups by OUR label only — no code, no edition number — because
+        # the PM writes public memo prose from this block and cannot echo
+        # an identifier it never saw (owner decision 2026-09-24). A legacy
+        # analyst edition's own prose may still quote one, so the excerpt
+        # texts are scrubbed too — with the industry rollup, since they are
+        # report prose (an industry name there reads as its group's label).
         for code in detail["own"]:
+            group = industry_labels.label(code)
             excerpt = _excerpt_from(code, editions.get(code), newer_period=attempted.get(code))
             if excerpt is None:
-                parts.append(f"Industry group {code}: no published Industry Analysis edition yet.")
+                parts.append(f"Industry group {group}: no published Industry Analysis edition yet.")
                 continue
-            degraded = f" (degraded edition: {', '.join(excerpt['degraded'])})" if excerpt["degraded"] else ""
+            degraded = (
+                " (degraded edition: "
+                f"{', '.join(industry_labels.scrub_text(d, rollup=True) for d in excerpt['degraded'])})"
+                if excerpt["degraded"] else ""
+            )
             stale = (
                 f" (not updated this week; newest analyst edition is {excerpt['period_key']}, "
                 f"the {excerpt['not_updated']} refresh produced none)"
                 if excerpt["not_updated"] else ""
             )
             parts.append(
-                f"Industry group {code} — edition v{excerpt['version']} {excerpt['period_key']}{degraded}{stale}. "
-                f"Analyst view: {excerpt['analyst_view'] or 'n/a'} "
-                f"What changed: {excerpt['what_changed'] or 'n/a'}"
+                f"Industry group {group} — edition of {excerpt['period_key']}{degraded}{stale}. "
+                f"Analyst view: {industry_labels.scrub_text(excerpt['analyst_view'], rollup=True) or 'n/a'} "
+                f"What changed: {industry_labels.scrub_text(excerpt['what_changed'], rollup=True) or 'n/a'}"
             )
         if detail["linked"]:
             parts.append(
                 "Linked groups (dependency graph, analyst hypotheses): "
-                + "; ".join(f"{item['code']} via {', '.join(v['id'] for v in item['via'])}" for item in detail["linked"])
+                + "; ".join(f"{industry_labels.label(item['code'])} via {', '.join(v['id'] for v in item['via'])}"
+                            for item in detail["linked"])
             )
         if detail["unmapped"]:
             parts.append(

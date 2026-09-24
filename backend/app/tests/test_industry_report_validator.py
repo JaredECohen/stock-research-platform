@@ -154,7 +154,12 @@ def test_dates_weeks_versions_and_codes_are_not_measurements():
     p["sections"]["overview"]["interpretation"] = _interp(
         "As of 2026-09-04 (week 2026-W36, schema v1.0.0), group 4530 with industry 453010."
     )
-    assert v.validate(p, _facts()) == []
+    # Not measurements, so the NUMBER rule is silent. The codes are still
+    # taxonomy leaks, and since L1 (owner decision 2026-09-24) that is the
+    # one rejection this prose earns.
+    errs = v.validate(p, _facts())
+    assert [e for e in errs if "number" in e] == []
+    assert errs == [f"overview: {v.L1_MESSAGE} (industry or sub-industry code, the group's own code)"]
 
 
 def test_advice_phrasing_is_rejected():
@@ -715,6 +720,11 @@ def test_undeclared_scenario_number_coinciding_with_a_fact_is_rejected():
     registered, and all three used to pass."""
     wire = json.loads((REPO / "frontend/src/test/fixtures/industry.wire.json").read_text())
     payload = wire["report"]["payload"]
+    # The fixture is the PUBLIC projection (owner decision 2026-09-24): the
+    # sector is a slug there. The stored edition the validator reads keeps
+    # the internal sector code, which is what licensed "45x" — put it back.
+    sector = payload["sections"]["overview"]["facts"]["sector"]
+    sector["code"] = "45"
     facts = {name: s["facts"] for name, s in payload["sections"].items()}
     whole_pack = v._numbers(facts)
     for token in ("75%", "90%", "45x"):
@@ -801,3 +811,111 @@ def test_resolve_fact_path_handles_dotted_keys_and_list_indices():
     assert v.resolve_fact_path(facts, "companies.leaders.0.ret_1m") == 0.05
     assert v.resolve_fact_path(facts, "companies.leaders.3.ret_1m") is v._MISSING
     assert v.resolve_fact_path(facts, "nope") is v._MISSING
+
+
+# --- L1: no licensed taxonomy in new prose (owner decision 2026-09-24) ------------
+#
+# Each rule is a pass/fail pair: the leak is rejected with the L1 message,
+# and the nearest clean phrasing (our label, a year, a count, an ordinary
+# word) is not — a false positive costs a retry of a paid model call.
+
+
+def _l1(section: str, text: str, facts: dict | None = None) -> list[str]:
+    p = _payload(facts)
+    p["sections"][section]["interpretation"] = _interp(text)
+    return v.validate(p, facts if facts is not None else _facts())
+
+
+def _l1_errors(errs: list[str]) -> list[str]:
+    return [e for e in errs if v.L1_MESSAGE in e]
+
+
+@pytest.mark.parametrize("text, reason", [
+    ("The GICS group has 17 constituents in the sample.", "classification brand"),
+    ("Per gics_industries the group has 17 constituents in the sample.", "classification brand"),
+    ("Utilization [453010] is the KPI the mandate tests first.", "bracketed code list"),
+    ("Utilization (453010, 452020) is the KPI the mandate tests first.", "bracketed code list"),
+    ("Industry 453010 has 17 constituents in the sample.", "industry or sub-industry code"),
+    ("The group (4530) has 17 constituents in the sample.", "the group's own code"),
+    ("Group 4530 has 17 constituents in the sample.", "the group's own code"),
+    ("Industry Group Analyst 4530 counts 17 constituents in the sample.", "the group's own code"),
+    ("Semiconductor Materials & Equipment names: 17 constituents in the sample.",
+     "industry or sub-industry registry name"),
+    ("Application Software names: 17 constituents in the sample.", "industry or sub-industry registry name"),
+    # registry names that CONTAIN one of our label words ("Technology",
+    # "Banking"): blanking the labels first used to hide them
+    ("Health Care Technology names: 17 constituents in the sample.",
+     "industry or sub-industry registry name 'Health Care Technology'"),
+    ("Technology Distributors names: 17 constituents in the sample.",
+     "industry or sub-industry registry name 'Technology Distributors'"),
+    ("Investment Banking & Brokerage names: 17 constituents in the sample.",
+     "industry or sub-industry registry name 'Investment Banking & Brokerage'"),
+])
+def test_l1_rejects_marks_codes_and_registry_names(text, reason):
+    errs = _l1("overview", text)
+    assert _l1_errors(errs) and all(reason in e for e in _l1_errors(errs)), errs
+    assert _l1_errors(errs)[0].startswith(f"overview: {v.L1_MESSAGE} (")
+
+
+@pytest.mark.parametrize("text", [
+    # our own labels — one of them contains an industry's registry name
+    # ("IT Services"), and a label is what prose is asked to say
+    "Chips & Chipmaking Equipment has 17 constituents in the sample.",
+    "Software & IT Services has 17 constituents in the sample.",
+    # single registry words are ordinary English; the mandate uses them
+    "Semiconductors and software names: 17 constituents in the sample.",
+    # a sector/group registry name is the projection's to relabel, not L1's
+    "Semiconductors & Semiconductor Equipment has 17 constituents in the sample.",
+    # counts, note marks, a lowercase phrase
+    "The group has 17 constituents in the sample [12].",
+    "application software names: 17 constituents in the sample.",
+    # our label words on their own, next to a lower-case description
+    "Technology and Banking names, and health care technology: 17 constituents in the sample.",
+])
+def test_l1_accepts_labels_ordinary_words_and_counts(text):
+    assert _l1_errors(_l1("overview", text)) == []
+
+
+def test_a_registry_name_rejection_quotes_the_phrase():
+    """The L1 reason is all a repair retry is told. "registry name" alone
+    does not say which words to change, so the phrase is quoted — and the
+    writer's repair block carries it to the model verbatim."""
+    from app.agents import industry_report_writer as w
+
+    errs = _l1_errors(_l1("overview", "Office REITs lease space under multi-year contracts; 17 constituents."))
+    assert errs == [f"overview: {v.L1_MESSAGE} (industry or sub-industry registry name 'Office REITs')"], errs
+    assert "'Office REITs'" in w._repair_block("\n".join(errs))
+
+
+def test_year_tokens_are_not_taxonomy_leaks():
+    """Three group codes are also years (2010, 2020, 2030). For a group
+    whose own code is 2030, "(2030)" and "group 2030" read as years far
+    more often than as the code, so L1 never flags a year-shaped token —
+    and years are exempt from the number rule, so the edition passes."""
+    facts = _facts()
+    facts["overview"] = {"n_constituents": 17, "code": "2030"}
+    for text in ("Capacity plans run to (2030) and beyond.",
+                 "The group 2030 capex plan and 2020 base year are unchanged.",
+                 "Airport concessions renew in 2030; the 2010 cycle is the comparison."):
+        assert v.taxonomy_leaks(text, group_code="2030") == [], text
+        assert _l1("overview", text, facts) == [], text
+
+
+def test_l1_scans_the_structured_claim_fields_too():
+    """The page prints an assumption's value, horizon and anchor and every
+    basis beside the prose, so L1 (and the advice scan) read them too."""
+    leaky_basis = _fa(basis=[OP_MARGIN, "GICS mandate"])
+    assert any(v.L1_MESSAGE in e and "classification brand" in e for e in _check(_outlook([leaky_basis])))
+    coded_basis = _fa(basis=[OP_MARGIN, "industry 453010"])
+    assert any(v.L1_MESSAGE in e for e in _check(_outlook([coded_basis])))
+    advice_basis = _fa(basis=[OP_MARGIN, "strong buy"])
+    assert "outlook: advice phrasing 'strong buy'" in _check(_outlook([advice_basis]))
+    # A mandate reference by the internal group code is a basis the public
+    # projection rewrites (mandate:<slug>); it is not prose.
+    assert _check(_outlook([_fa(basis=[OP_MARGIN, "mandate:4530"])])) == []
+
+
+def test_l1_applies_to_every_interpreted_section():
+    for section in v.INTERPRETED_SECTIONS:
+        errs = _l1(section, "The GICS view is n/a (none).")
+        assert _l1_errors(errs) == [f"{section}: {v.L1_MESSAGE} (classification brand)"], (section, errs)

@@ -305,9 +305,10 @@ def _build_chat_agent() -> Any | None:
             tickers: list[str] | None = None, code: str | None = None,
         ) -> dict[str, Any]:
             """Return the stored weekly Industry Analysis context for the
-            GICS industry group(s) of `tickers` (a single name or a whole
-            portfolio — the tool takes a list) and/or an explicit 4-digit
-            industry-group `code`: each group's row from the latest
+            industry group(s) of `tickers` (a single name or a whole
+            portfolio — the tool takes a list) and/or an explicit
+            industry-group `code` (the group's slug, e.g. as returned in a
+            previous answer): each group's row from the latest
             cross-industry snapshot (1W/1M/YTD equal-weight returns,
             relative-to-universe, breadth, valuation median, regime label,
             sample size) and a short excerpt of its latest published
@@ -317,7 +318,9 @@ def _build_chat_agent() -> Any | None:
             Use for "how is the industry doing", "what's my portfolio's
             industry exposure", or cross-industry market-colour questions.
             Returns `status: taxonomy_not_imported` or `snapshot: {status:
-            no_snapshot}` when nothing has been published yet."""
+            no_snapshot}` when nothing has been published yet. Groups are
+            named by their labels; refer to them by those labels, never by
+            a numeric code or a third-party classification name."""
             from .pm_context import industry_context_payload
             try:
                 return industry_context_payload(tickers=list(tickers or []), code=code)
@@ -477,7 +480,7 @@ def _build_chat_agent() -> Any | None:
                 "  • `get_industry_context(tickers?, code?)` — stored "
                 "    weekly industry-group statistics, regime reads and "
                 "    report excerpts for one name, a portfolio (pass the "
-                "    list) or an explicit group code. Observed data; "
+                "    list) or an explicit group slug. Observed data; "
                 "    treat analyst views as scenarios.\n"
                 "Live specialist follow-ups (use sparingly — ~$0.05 "
                 "each, max 2 per turn):\n"

@@ -12,10 +12,16 @@
 // row records how many points it lost in `weekly_closes_dropped`
 // (`meta.trimmed` carries the total). The UI never reads them.
 //
-// The captured group (4530 Semiconductors & Semiconductor Equipment) is
-// deliberately mixed: five classified members, four of them priced, one
-// assigned from the research map with an 8-digit sub-industry and four
-// derived from the provider's industry label — so the table's provenance
+// Everything in it is PUBLIC data (owner decision 2026-09-24): groups are
+// addressed by slug and named by MarketMosaic's own labels, `meta` names
+// them by slug too, and `FactsView.test.tsx` (like the backend's
+// `test_industry_ui_fixture_contract`) walks it to assert that no taxonomy
+// code or third-party brand is anywhere in it.
+//
+// The captured group (chips-chipmaking-equipment) is deliberately mixed:
+// five classified members, four of them priced, one assigned from the
+// research map and four derived from the provider's industry label — so
+// the table's provenance
 // column, its unpriced row and its "membership is not coverage" caption
 // all have real data behind them. Edition v1 is the honest
 // `insufficient_sample` week (no price history yet), v2 the priced one.
@@ -236,7 +242,7 @@ export function gatedTaxonomy(tier: "pro" = "pro"): IndustryTaxonomy {
  *  remedy and the access policy still attached. */
 export const notImportedDetail: TaxonomyNotImportedDetail = {
   code: "taxonomy_not_imported",
-  message: "the GICS taxonomy has not been imported on this deployment yet",
-  remedy: "POST /api/admin/industries/taxonomy/import (or python -m app.scripts.import_gics_taxonomy --activate)",
+  message: "the industry taxonomy has not been imported on this deployment yet",
+  remedy: "an operator must import the taxonomy (POST /api/admin/industries/taxonomy/import)",
   access: { ...clone(taxonomy.access), allowed: false },
 };

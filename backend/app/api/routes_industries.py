@@ -38,6 +38,16 @@ What the shapes are careful about:
   rejected model prose a validator message carries.
 * **Truncation is counted.** Any list this API caps reports how many
   entries it dropped.
+* **Nothing public carries the licensed taxonomy** (owner decision
+  2026-09-24). Every response body — 404/422/503 refusals included — goes
+  through `industry_labels.project_public` before it is served: groups
+  and sectors are named by MarketMosaic's own labels and addressed by
+  slug, industries and sub-industries are never named (a company row
+  shows the data provider's own industry string), and no code, brand or
+  internal taxonomy key survives. `{code}` accepts a slug or an internal
+  code (old links) and the response always answers with the slug.
+  Internal codes stay what the store, the registry and the admin surface
+  key on.
 
 Access is the `entitlements_industry` seam: `latest` follows
 `INDUSTRY_ANALYSIS_ACCESS`, `history` / `changes` are Pro, the snapshot
@@ -49,9 +59,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from ..config import settings
@@ -67,8 +78,13 @@ from ..schemas.industry import (
     IndustrySnapshotOut,
     TaxonomyOut,
 )
-from ..services import gics_registry, industry_analytics, industry_classification, industry_snapshot
-from ..services import industry_knowledge as knowledge
+from ..services import (
+    gics_registry,
+    industry_analytics,
+    industry_classification,
+    industry_labels,
+    industry_snapshot,
+)
 from ..services import industry_report_store as store
 from .entitlements_industry import (
     SURFACE_CHANGES,
@@ -82,6 +98,7 @@ from .gating import rate_scope
 
 log = logging.getLogger(__name__)
 router = APIRouter()
+_M = TypeVar("_M", bound=BaseModel)
 
 # The membership states that make a company a constituent. A `fallback`
 # row knows its sector, not its group, and must never inflate a cohort;
@@ -212,7 +229,7 @@ def _universe_coverage_explanation(
 
 _SOURCE_LABELS = {
     industry_classification.SOURCE_RESEARCH_MAP:
-        "research map (economic research examples; not licensed issuer GICS mapping)",
+        "research map (economic research examples; not an issuer classification)",
     industry_classification.SOURCE_PROVIDER_ALIAS:
         "provider label crosswalk (derived from provider classification)",
     industry_classification.SOURCE_NONE: "unresolved",
@@ -236,8 +253,31 @@ def _error(status: int, error_code: str, message: str, **extra: Any) -> HTTPExce
     """A structured refusal: `code` + `message` plus whatever names the
     state (the group, the remedy, the failed attempt). The first argument
     is `error_code`, not `code`, so a caller can pass the industry-group
-    `code=` in `extra` without colliding with it."""
-    return HTTPException(status_code=status, detail={"code": error_code, "message": message, **extra})
+    `code=` in `extra` without colliding with it.
+
+    The refusal is a public body like any success, so it is projected the
+    same way. Callers pass `name=_label(node)` explicitly: the projection
+    renames a `name` only beside a `code` key, and next to
+    `industry_group_code` a registry name would otherwise be served as
+    written ("Banks" has no `&` for the scrubber to recognise)."""
+    detail = industry_labels.project_public({"message": message, **extra}, rollup=True)
+    return HTTPException(status_code=status, detail={"code": error_code, **detail})
+
+
+def _label(node: gics_registry.NodeInfo) -> str:
+    """The public name of a group, for messages and refusal extras."""
+    return industry_labels.label(node.code)
+
+
+def _public(model: type[_M], **fields: Any) -> _M:
+    """Build `model`, then serve its public projection.
+
+    Validated twice on purpose: once on the internal shape (so a route
+    that builds a malformed response fails here, not in the projection)
+    and once on what is actually served (so the projection can never emit
+    a body the response model would not accept)."""
+    built = model(**fields)
+    return model.model_validate(industry_labels.project_public(built.model_dump(by_alias=True), rollup=True))
 
 
 def _taxonomy_or_503(access: dict[str, Any]) -> gics_registry.VersionInfo:
@@ -255,17 +295,31 @@ def _taxonomy_or_503(access: dict[str, Any]) -> gics_registry.VersionInfo:
     except gics_registry.TaxonomyNotImported:
         raise _error(
             503, "taxonomy_not_imported",
-            "the GICS taxonomy has not been imported on this deployment yet",
+            "the industry taxonomy has not been imported on this deployment yet",
             access={**access, "allowed": False},
-            remedy="POST /api/admin/industries/taxonomy/import (or python -m app.scripts.import_gics_taxonomy --activate)",
+            # The admin route, not the import script: the script's module
+            # name spells the licensed taxonomy, and this body is public.
+            remedy="an operator must import the taxonomy (POST /api/admin/industries/taxonomy/import)",
         ) from None
 
 
 def _group_or_404(code: str, info: gics_registry.VersionInfo) -> gics_registry.NodeInfo:
+    """The group a public slug (or, for old links, an internal code) names."""
     try:
-        return gics_registry.group(code, version=info)
-    except gics_registry.UnknownNode as exc:
-        raise _error(404, "unknown_industry_group", str(exc), industry_group_code=str(code),
+        internal = industry_labels.code_for(code)
+    except industry_labels.UnknownLabel:
+        internal = str(code)   # let the registry word the refusal
+    try:
+        return gics_registry.group(internal, version=info)
+    except gics_registry.UnknownNode:
+        # Worded here rather than from the registry's exception, which
+        # quotes the INTERNAL code a slug resolved to ("technology" -> '45').
+        # A digit string the caller typed is not echoed either: it may be an
+        # industry or sub-industry code, which is never shown publicly.
+        requested = str(code)
+        message = (f"no industry group {requested!r} in this taxonomy" if not requested.isdigit()
+                   else "no industry group has that code in this taxonomy")
+        raise _error(404, "unknown_industry_group", message, industry_group_code=requested,
                      taxonomy_version=info.version_key) from None
 
 
@@ -401,7 +455,8 @@ def get_industry_taxonomy(
         {"code": n.code, "name": n.name, "industry_groups": groups_by_sector.get(n.code, [])}
         for n in nodes if n.level == "sector"
     ]
-    return TaxonomyOut(
+    return _public(
+        TaxonomyOut,
         taxonomy_version=info.as_dict(),
         sectors=sectors,
         node_counts=gics_registry.counts(version=info),
@@ -431,8 +486,8 @@ def get_industry_taxonomy(
         },
         reports={"groups_with_a_published_edition": len(latest), "groups": len(groups)},
         access=IndustryAccessOut(**access),
-        attribution=gics_registry.ATTRIBUTION,
-        mapping_caveat=gics_registry.MAPPING_CAVEAT,
+        attribution=industry_labels.PUBLIC_ATTRIBUTION,
+        mapping_caveat=industry_labels.PUBLIC_MAPPING_CAVEAT,
         disclaimer=store.DISCLAIMER,
     )
 
@@ -488,8 +543,8 @@ def get_industry_report(
     except store.EditionWithheld as exc:
         raise _error(
             404, "edition_withheld",
-            f"edition {exc.version} of {node.name} ({node.code}) is kept for audit only and is not published",
-            industry_group_code=node.code, name=node.name, taxonomy_version=info.version_key,
+            f"edition {exc.version} of {_label(node)} is kept for audit only and is not published",
+            industry_group_code=node.code, name=_label(node), taxonomy_version=info.version_key,
             version=exc.version,
         ) from None
     if report is None:
@@ -497,23 +552,24 @@ def get_industry_report(
         if version == "latest":
             raise _error(
                 404, "no_report",
-                f"no analyst-written edition has been published for {node.name} ({node.code}) in "
+                f"no analyst-written edition has been published for {_label(node)} in "
                 f"taxonomy {info.version_key}",
-                industry_group_code=node.code, name=node.name, taxonomy_version=info.version_key,
+                industry_group_code=node.code, name=_label(node), taxonomy_version=info.version_key,
                 reason="no_validated_analyst_edition",
                 withheld_editions=store.withheld_count(node.code, version=info),
                 last_attempt=attempt,
             )
         raise _error(
             404, "no_report",
-            f"no edition {version} for {node.name} ({node.code}) in taxonomy {info.version_key}",
-            industry_group_code=node.code, name=node.name, taxonomy_version=info.version_key,
+            f"no edition {version} for {_label(node)} in taxonomy {info.version_key}",
+            industry_group_code=node.code, name=_label(node), taxonomy_version=info.version_key,
             last_attempt=attempt,
         )
 
     fresh = store.freshness(node.code, version=info, report=report)
     stats, stats_reason = _stats_projection(report.get("stats_id"))
-    return IndustryReportOut(
+    return _public(
+        IndustryReportOut,
         code=node.code,
         name=node.name,
         sector_code=node.code[:2],
@@ -541,8 +597,8 @@ def get_industry_report(
         generated_at=report.get("generated_at"),
         access=IndustryAccessOut(**access),
         disclaimer=report.get("disclaimer") or store.DISCLAIMER,
-        attribution=report.get("attribution") or gics_registry.ATTRIBUTION,
-        mapping_caveat=report.get("mapping_caveat") or gics_registry.MAPPING_CAVEAT,
+        attribution=report.get("attribution") or industry_labels.PUBLIC_ATTRIBUTION,
+        mapping_caveat=report.get("mapping_caveat") or industry_labels.PUBLIC_MAPPING_CAVEAT,
         display=store.display_block(report, fresh),
     )
 
@@ -569,7 +625,8 @@ def get_industry_history(
     node = _group_or_404(code, info)
     page = store.history_page(node.code, limit=limit, version=info)
     items = page["items"]
-    return IndustryHistoryOut(
+    return _public(
+        IndustryHistoryOut,
         code=node.code,
         name=node.name,
         taxonomy_version=info.version_key,
@@ -614,7 +671,7 @@ def _parent_version_or_404(
         if parent is None:
             raise _error(
                 404, "no_prior_edition",
-                f"{node.name} ({node.code}) edition {target['version']} records edition id "
+                f"{_label(node)} edition {target['version']} records edition id "
                 f"{parent_id} as the one it replaced, but that row is no longer on file; "
                 "pass ?from=<version> to choose a basis explicitly",
                 industry_group_code=node.code, version=target["version"],
@@ -638,7 +695,7 @@ def _parent_version_or_404(
     if earlier:
         raise _error(
             404, "no_prior_edition",
-            f"{node.name} ({node.code}) edition {target['version']} replaced no published "
+            f"{_label(node)} edition {target['version']} replaced no published "
             f"edition ({earlier} earlier edition(s) exist but none was published); "
             "pass ?from=<version> to compare with one of them anyway",
             industry_group_code=node.code, version=target["version"],
@@ -647,14 +704,14 @@ def _parent_version_or_404(
     if withheld:
         raise _error(
             404, "no_prior_edition",
-            f"{node.name} ({node.code}) edition {target['version']} is the first analyst-written "
+            f"{_label(node)} edition {target['version']} is the first analyst-written "
             f"edition; the {withheld} earlier edition(s) are kept for audit only and are not published",
             industry_group_code=node.code, version=target["version"], earlier_editions=0,
             withheld_editions=withheld,
         )
     raise _error(
         404, "no_prior_edition",
-        f"{node.name} ({node.code}) edition {target['version']} is the first on file; "
+        f"{_label(node)} edition {target['version']} is the first on file; "
         "there is no prior edition to compare it with",
         industry_group_code=node.code, version=target["version"], earlier_editions=0,
         withheld_editions=0,
@@ -685,7 +742,7 @@ def get_industry_changes(
     def withheld_404(exc: store.EditionWithheld) -> HTTPException:
         return _error(
             404, "edition_withheld",
-            f"edition {exc.version} of {node.name} ({node.code}) is kept for audit only and is not published",
+            f"edition {exc.version} of {_label(node)} is kept for audit only and is not published",
             industry_group_code=node.code, version=exc.version,
         )
 
@@ -694,7 +751,7 @@ def get_industry_changes(
     except store.EditionWithheld as exc:
         raise withheld_404(exc) from None
     if target is None:
-        raise _error(404, "no_report", f"no edition {to!r} for {node.name} ({node.code})",
+        raise _error(404, "no_report", f"no edition {to!r} for {_label(node)}",
                      industry_group_code=node.code, taxonomy_version=info.version_key)
     source_version = from_version
     if source_version is None:
@@ -703,9 +760,18 @@ def get_industry_changes(
         delta = store.diff(node.code, source_version, to, version=info)
     except store.EditionWithheld as exc:
         raise withheld_404(exc) from None
-    except store.ReportNotFound as exc:
-        raise _error(404, "no_report", str(exc), industry_group_code=node.code) from None
-    return IndustryChangesOut(
+    except store.ReportNotFound:
+        # Worded here, never `str(exc)`: the store's message names the group
+        # by its internal code ("industry report 4530 version 99 ..."), and
+        # the projection leaves a bare 4-digit token alone because it can be
+        # a year. `to` resolved just above, so the missing side is `from`.
+        raise _error(
+            404, "no_report", f"no edition {source_version} of {_label(node)} to compare from",
+            industry_group_code=node.code, name=_label(node), taxonomy_version=info.version_key,
+            version=source_version,
+        ) from None
+    return _public(
+        IndustryChangesOut,
         code=node.code,
         name=node.name,
         taxonomy_version=delta["taxonomy_version"],
@@ -776,8 +842,11 @@ def get_industry_companies(
     which of them the latest statistics row could price.
 
     Three queries: the active version, one membership join, one statistics
-    read. Sub-industry names come from the cached registry nodes, so the
-    8-digit layer costs nothing extra.
+    read. A row names its company's industry by the DATA PROVIDER's own
+    label (`provider_industry`, `Company.industry`), never by the
+    taxonomy's industry or sub-industry: those levels are never named
+    publicly (owner decision 2026-09-24), and the provider's string is
+    already public on the Research page.
     """
     info = _taxonomy_or_503(access)
     node = _group_or_404(code, info)
@@ -805,21 +874,11 @@ def get_industry_companies(
     for classification, company in rows[:limit]:
         stat = per_ticker.get(classification.ticker) or {}
         priced = _is_priced(stat)
-        sub_code = classification.sub_industry_code
-        sub_node = gics_registry.node(sub_code, version=info, include_inactive=True) if sub_code else None
-        industry_node = (
-            gics_registry.node(classification.industry_code, version=info, include_inactive=True)
-            if classification.industry_code else None
-        )
         items.append({
             "ticker": classification.ticker,
             "company_name": company.company_name,
             "is_active": bool(company.is_active),
-            "industry_code": classification.industry_code,
-            "industry_name": industry_node.name if industry_node else None,
-            "sub_industry_code": sub_code,
-            "sub_industry_name": sub_node.name if sub_node else None,
-            "sub_industry_codes": list(classification.sub_industry_codes or []),
+            "provider_industry": (company.industry or "").strip() or None,
             "classification": {
                 "state": classification.state,
                 "source": classification.source,
@@ -829,7 +888,7 @@ def get_industry_companies(
                 "as_of": classification.source_as_of or "",
                 "confidence": classification.confidence,
                 "classified_at": classification.classified_at.isoformat() if classification.classified_at else None,
-                "mapping_caveat": gics_registry.MAPPING_CAVEAT,
+                "mapping_caveat": industry_labels.PUBLIC_MAPPING_CAVEAT,
             },
             "market_cap": stat.get("market_cap"),
             "weight_mcw": stat.get("weight_mcw"),
@@ -848,7 +907,8 @@ def get_industry_companies(
                 )
             ),
         })
-    return IndustryCompaniesOut(
+    return _public(
+        IndustryCompaniesOut,
         code=node.code,
         name=node.name,
         sector_code=node.code[:2],
@@ -868,9 +928,9 @@ def get_industry_companies(
         items=items,
         excluded=list(((stats or {}).get("sample") or {}).get("excluded") or []),
         access=IndustryAccessOut(**access),
-        attribution=gics_registry.ATTRIBUTION,
-        mapping_caveat=gics_registry.MAPPING_CAVEAT,
-        security_reference_caveat=knowledge.SECURITY_REFERENCE_CAVEAT,
+        attribution=industry_labels.PUBLIC_ATTRIBUTION,
+        mapping_caveat=industry_labels.PUBLIC_MAPPING_CAVEAT,
+        security_reference_caveat=industry_labels.PUBLIC_SECURITY_REFERENCE_CAVEAT,
         disclaimer=store.DISCLAIMER,
     )
 
@@ -903,7 +963,8 @@ def get_industry_snapshot(
             + (f" period {period_key}" if period_key else ""),
             taxonomy_version=info.version_key, period_key=period_key,
         )
-    return IndustrySnapshotOut(
+    return _public(
+        IndustrySnapshotOut,
         id=row["id"],
         taxonomy_version=info.version_key,
         period_key=row["period_key"],
