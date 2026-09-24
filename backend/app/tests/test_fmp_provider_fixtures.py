@@ -566,3 +566,26 @@ def test_ratios_keys_unchanged_by_fmp_primary(router, provider, caplog):
         degraded = provider.get_ratios("acme")
     assert degraded is not None and set(degraded) == RATIO_KEYS and degraded["EV_EBITDA"] is None
     assert "FMP /key-metrics -> 402 symbol=ACME" in caplog.text and FAKE_KEY not in caplog.text
+
+
+def test_every_endpoint_classifies_entitlement_refusals(router, provider, monkeypatch):
+    """C4 covers every FMP endpoint, not only the statement-history calls:
+    ratios, key-metrics, estimates and earnings keep their return shapes
+    (decision 7(d)) and record the refusal per endpoint instead."""
+    monkeypatch.setattr(fmp, "_ENTITLEMENT_DENIALS", {})
+    _happy_router(router)
+    router.add("/key-metrics", '{"Error Message": "Restricted"}', status=402)
+    router.add("/analyst-estimates", '{"Error Message": "Restricted"}', status=403)
+    router.add("/earnings", "[]", status=401)
+    ratios = provider.get_ratios("acme")
+    assert set(ratios or {}) == RATIO_KEYS and "revenue_growth" not in (ratios or {})
+    provider.get_estimates("acme")
+    provider.get_earnings("zzz")
+    router.add("/quote", "[]", status=500)  # not an entitlement status
+    provider.get_quote("acme")
+    denied = {d["endpoint"]: d for d in fmp.entitlement_denials()}
+    assert set(denied) == {"/key-metrics", "/analyst-estimates", "/earnings"}
+    assert (denied["/key-metrics"]["status"], denied["/key-metrics"]["symbols"]) == (402, ["ACME"])
+    assert denied["/analyst-estimates"]["status"] == 403 and denied["/earnings"]["last_symbol"] == "ZZZ"
+    assert all(d["kind"] == "provider_entitlement_denied" and d["provider"] == "fmp" for d in denied.values())
+    assert FAKE_KEY not in repr(denied)
