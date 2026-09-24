@@ -344,7 +344,13 @@ def _pair_subs(text: str, idx: _Index, labels: Labels) -> str:
             continue
         entry = labels.entry(code)
         replacement = entry[0] if entry is not None else ""
-        for form in (f"{name} ({code})", f"{name} [{code}]", f"{code} {name}"):
+        forms = [f"{name} ({code})", f"{name} [{code}]"]
+        # "code name" is only trusted where the number cannot be a count or
+        # a year: "top 10 Energy names" and "in 2010 Capital Goods ..." are
+        # prose, "453010 Semiconductors & ..." is not.
+        if len(code) >= 4 and not _is_year(code):
+            forms.append(f"{code} {name}")
+        for form in forms:
             if form in text:
                 text = text.replace(form, replacement)
     return text

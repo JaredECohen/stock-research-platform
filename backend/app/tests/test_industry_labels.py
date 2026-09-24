@@ -188,8 +188,11 @@ SCRUB_TABLE = [
     ("the GICS® sector", "the sector"),
     ("GICS industry group 4530", f"industry group {_C}"),
     ("taxonomy gics-2026-04", "taxonomy mm-2026-04"),
-    # ordinary English is left alone
+    # ordinary English is left alone — a count or a year before a name is
+    # not a code
     ("Banks and energy names rallied", "Banks and energy names rallied"),
+    ("the top 10 Energy names", "the top 10 Energy names"),
+    ("in 2010 Capital Goods orders fell", "in 2010 Capital Goods orders fell"),
     ("", ""),
 ]
 
