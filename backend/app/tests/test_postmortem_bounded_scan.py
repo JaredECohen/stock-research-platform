@@ -9,14 +9,15 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
-from app.models import MemoOutcome, MemoPostmortem, MemoSnapshot
+from app.models import MemoOutcome, MemoOutcomeEligibility, MemoPostmortem, MemoSnapshot
 from app.services import postmortem_service as pm
+from app.tests.eligibility_helpers import classify_all
 
 
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{tmp_path / 'bounded.db'}")
-    for model in (MemoSnapshot, MemoOutcome, MemoPostmortem):
+    for model in (MemoSnapshot, MemoOutcome, MemoPostmortem, MemoOutcomeEligibility):
         model.__table__.create(engine)
     sessions = sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setattr(pm, "SessionLocal", sessions)
@@ -31,7 +32,7 @@ def seed(sessions, ticker, version=1, rating="Bullish", *, outcome=True):
     with sessions() as db:
         snap = MemoSnapshot(
             ticker=ticker, version=version, generated_at=datetime(2026, 1, 1),
-            memo_json={"ticker": ticker, "rating_label": rating, "one_sentence_thesis": "actual full memo", "unused_body": "x" * (128 * 1024)},
+            memo_json={"ticker": ticker, "rating_label": rating, "generation_mode": "live", "one_sentence_thesis": "actual full memo", "unused_body": "x" * (128 * 1024)},
             revision_log=["y" * (128 * 1024)],
         )
         db.add(snap)
@@ -42,6 +43,13 @@ def seed(sessions, ticker, version=1, rating="Bullish", *, outcome=True):
         return snap.id
 
 
+def classify(sessions):
+    """`_scan_due` reads only eligible snapshots (W6); `run_postmortems`
+    sweeps on its own, a direct `_scan_due` call needs the sweep first."""
+    with sessions() as db:
+        classify_all(db)
+
+
 def test_scan_never_loads_full_current_or_prior_memos_and_preserves_all_omissions(isolated):
     sessions, engine = isolated
     ids = [seed(sessions, f"BOUND{i:03}") for i in range(130)]
@@ -50,6 +58,7 @@ def test_scan_never_loads_full_current_or_prior_memos_and_preserves_all_omission
         db.add(MemoPostmortem(memo_snapshot_id=ids[1], ticker="BOUND001", horizon_days=90, lesson="z" * (128 * 1024), created_at=datetime.utcnow()))
         db.commit()
     recent = seed(sessions, "BOUND001", version=2, rating="Bearish")
+    classify(sessions)
     loaded = []
 
     def record_load(target, _context):
@@ -105,6 +114,7 @@ def test_driver_hydrates_only_current_eligible_memo_and_does_not_retain_selected
 def test_disappearing_selected_snapshot_reports_its_identity_without_a_model_call(isolated, monkeypatch):
     sessions, _ = isolated
     id_ = seed(sessions, "DISAPPEARED")
+    classify(sessions)
     scan = pm._scan_due(90, limit=1)
     with sessions() as db:
         db.query(MemoSnapshot).filter(MemoSnapshot.id == id_).delete()
@@ -125,6 +135,7 @@ def test_projected_rating_preserves_defensive_policy_semantics(isolated, rating)
     sessions, _ = isolated
     seed(sessions, "ODDRATING", outcome=False, rating=rating)
     seed(sessions, "ODDRATING", version=2, rating=rating)
+    classify(sessions)
     scan = pm._scan_due(90, limit=1)
     expected = str(rating or "").strip()
     assert len(scan.deduped) == bool(expected)

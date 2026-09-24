@@ -16,6 +16,7 @@ from app.models import CronLoopRun, MemoOutcome, MemoPostmortem, MemoSnapshot
 from app.monitoring import postmortem_loop
 from app.services import market_data_service, outcome_service
 from app.services import postmortem_service as pm
+from app.tests.eligibility_helpers import classify_all
 
 
 @pytest.fixture
@@ -42,7 +43,7 @@ def _seed(sessions, ticker="PMMEMORY", *, outcome=True, horizon=90):
     with sessions() as db:
         snap = MemoSnapshot(
             ticker=ticker, version=1, generated_at=datetime(2026, 1, 2),
-            memo_json={"ticker": ticker, "sector": "Technology", "rating_label": "Bullish"},
+            memo_json={"ticker": ticker, "sector": "Technology", "rating_label": "Bullish", "generation_mode": "live"},
         )
         db.add(snap)
         db.flush()
@@ -221,6 +222,10 @@ def test_loop_persists_distinct_memory_outcomes_and_every_identity(isolated, mon
 def test_parse_failure_names_the_skipped_snapshot(isolated, invalid):
     snap = _seed(isolated, horizon=30)
     with isolated() as db:
+        # W6: classify from the memo as written, then corrupt the body. A
+        # body that is unreadable at postmortem time is what this test is
+        # about; eligibility was already settled when it was readable.
+        classify_all(db)
         db.get(MemoSnapshot, snap.id).memo_json = invalid
         db.commit()
     report = pm.run_postmortems(horizon_days=30)

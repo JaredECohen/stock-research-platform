@@ -13,7 +13,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import MemoOutcome, MemoSnapshot
+from ..models import MemoOutcome, MemoOutcomeEligibility, MemoSnapshot
+from .outcome_eligibility import identity_matches
 from .outcome_service import DEFAULT_HORIZONS, PRICE_DATE_TOLERANCE_DAYS
 
 _BASELINE = re.compile(r"(?:^|,\s*)baseline=([^,]+)")
@@ -98,13 +99,40 @@ def _classify(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _dev_copy_set_check(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Directly classified dev-copy rows versus the enumerated evidence set."""
+    from .outcome_eligibility import REASON_DEV_COPY
+    from .outcome_eligibility_evidence import DEV_COPY_SNAPSHOTS
+
+    expected = {sid for sid, _, _ in DEV_COPY_SNAPSHOTS}
+    observed_rows = [
+        row for row in rows
+        if row.get("eligibility_reason") == REASON_DEV_COPY and row.get("eligibility_inherited_from") is None
+    ]
+    observed = {row["memo_snapshot_id"] for row in observed_rows}
+    return {
+        "expected_snapshots": len(expected),
+        "observed_snapshots": len(observed),
+        "observed_rows": len(observed_rows),
+        "matches": observed == expected,
+        "missing_snapshot_ids": sorted(expected - observed),
+        "unexpected_snapshot_ids": sorted(observed - expected),
+    }
+
+
 def audit_outcomes(db: Session) -> dict[str, Any]:
     """SELECT only: no table creation, provider fetch, evaluation, or write.
 
     One outer-joined statement observes all rows in a consistent statement
     snapshot on Postgres, without loading memo_json blobs. No limit or date
     filter is applied. Totals are computed from the same rows we return.
+
+    W6: each row is ANNOTATED with its track-record eligibility (identity-
+    valid ledger row, else null = unclassified). The audit never filters on
+    it: every stored row is listed whatever its eligibility, which is what
+    lets a before/after receipt prove exclusion changed no outcome.
     """
+    led = MemoOutcomeEligibility
     statement = select(
         *MemoOutcome.__table__.c,
         MemoSnapshot.id.label("snapshot_id"),
@@ -112,12 +140,32 @@ def audit_outcomes(db: Session) -> dict[str, Any]:
         MemoSnapshot.version.label("snapshot_version"),
         MemoSnapshot.generated_at,
         MemoSnapshot.as_of_date,
+        led.eligible.label("track_record_eligible"),
+        led.reason.label("eligibility_reason"),
+        led.generation_mode.label("generation_mode_observed"),
+        led.rating_source.label("rating_source"),
+        led.inherited_from_snapshot_id.label("eligibility_inherited_from"),
     ).outerjoin(
         MemoSnapshot, MemoSnapshot.id == MemoOutcome.memo_snapshot_id,
+    ).outerjoin(
+        led, identity_matches(led, MemoSnapshot),
     ).order_by(MemoOutcome.id)
     with db.no_autoflush:
         rows = [_classify(dict(row)) for row in db.execute(statement).mappings()]
     counts = Counter(row["status"] for row in rows)
+    # Kept OUTSIDE `counts`: consumers iterate `counts` as the triage statuses.
+    eligibility_reasons = Counter(
+        row.get("eligibility_reason") or "unclassified" for row in rows
+    )
+    track_record_eligibility = {
+        "eligible": sum(1 for row in rows if row.get("track_record_eligible") is True),
+        "excluded": sum(1 for row in rows if row.get("track_record_eligible") is False),
+        "unclassified": sum(1 for row in rows if row.get("track_record_eligible") is None),
+        "by_reason": dict(sorted(eligibility_reasons.items())),
+        # The W6 receipt check: the dev-copy exclusion compared as an
+        # enumerated snapshot-id set, not as a single row count.
+        "dev_copy_set": _dev_copy_set_check(rows),
+    }
     reasons = Counter(reason for row in rows for reason in row["reasons"])
     by_horizon: dict[str, dict[str, int]] = {}
     for row in rows:
@@ -146,6 +194,7 @@ def audit_outcomes(db: Session) -> dict[str, Any]:
             "without_baseline_metadata": sum(not row["baseline_metadata_present"] for row in rows),
         },
         "reason_counts": dict(sorted(reasons.items())),
+        "track_record_eligibility": track_record_eligibility,
         "by_horizon": by_horizon,
         "predicate": {
             "expression": "evaluated_at - generated_at > (horizon_days + 30) * 7.0 / 5.0 days",
@@ -163,7 +212,8 @@ def audit_outcomes(db: Session) -> dict[str, Any]:
             "Legacy rows lack baseline dates and historical provider/window provenance. "
             "Recorded baseline dates alone do not verify prices, benchmark alignment, or total returns.",
             "All stored rows are included, including new evaluations, backtests, and missing snapshots. "
-            "No outcome or headline KPI is changed.",
+            "Every stored row is listed whatever its eligibility; the track record counts only "
+            "eligible rows (W6). No outcome is changed.",
         ],
         "rows": rows,
     }

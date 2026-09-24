@@ -47,6 +47,7 @@ def _summarize(report: dict) -> str:
         f"already_done={report.get('already_done', 0)} "
         f"deduped={report.get('deduped', 0)} skipped={report.get('skipped', 0)} "
         f"deferred={report.get('deferred', 0)} "
+        f"ineligible={report.get('ineligible', 0)} "
         f"memory_written={report.get('memory_written', 0)} "
         f"memory_disabled={report.get('memory_disabled', 0)} "
         f"memory_failed={report.get('memory_failed', 0)} "

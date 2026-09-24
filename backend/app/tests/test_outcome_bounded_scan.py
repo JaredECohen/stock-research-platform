@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
-from app.models import MemoOutcome, MemoSnapshot
+from app.models import MemoOutcome, MemoOutcomeEligibility, MemoSnapshot
 from app.services import market_data_service
 from app.services import outcome_service as svc
 
@@ -20,7 +20,7 @@ TODAY = date(2026, 5, 1)
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{tmp_path / 'outcomes.db'}")
-    for model in (MemoSnapshot, MemoOutcome):
+    for model in (MemoSnapshot, MemoOutcome, MemoOutcomeEligibility):
         model.__table__.create(engine)
     sessions = sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setattr(svc, "SessionLocal", sessions)
@@ -36,7 +36,7 @@ def seed(sessions, ticker, *, generated=GENERATED, recorded=False, backtest=Fals
         snap = MemoSnapshot(
             ticker=ticker, version=7, generated_at=generated,
             as_of_date=generated if backtest else None,
-            memo_json={"ticker": ticker, "rating_label": "Bullish", "confidence_score": 73.0,
+            memo_json={"ticker": ticker, "rating_label": "Bullish", "confidence_score": 73.0, "generation_mode": "live",
                        "macro_regime_at_memo": "expansion", "unused_body": "x" * (128 * 1024)},
             revision_log=["y" * (128 * 1024)],
         )
@@ -48,6 +48,19 @@ def seed(sessions, ticker, *, generated=GENERATED, recorded=False, backtest=Fals
                                note="immutable existing legacy result"))
         db.commit()
         return snap.id
+
+
+def classify_all(sessions):
+    """Run the W6 eligibility sweep BEFORE capturing reads.
+
+    The sweep projects JSON paths out of `memo_json` once per snapshot, by
+    design; these tests are about what the *evaluator* reads for skipped
+    work. With every snapshot classified, the evaluator's own sweep finds
+    nothing pending and issues only its anti-join id query.
+    """
+    from app.tests.eligibility_helpers import classify_all as _classify_all
+    with sessions() as db:
+        _classify_all(db)
 
 
 def capture_reads(engine):
@@ -84,6 +97,7 @@ def test_skipped_work_reads_no_bodies_and_existing_outcome_stays_unchanged(isola
         return []
 
     monkeypatch.setattr(market_data_service, "get_price_series", missing)
+    classify_all(sessions)
     queries, capture = capture_reads(engine)
     try:
         report = svc.evaluate_all_due(horizons=[30], today=TODAY)
@@ -118,6 +132,7 @@ def test_only_scored_snapshot_body_is_loaded_once_across_horizons(isolated, monk
         return result
 
     monkeypatch.setattr(svc, "_evaluate_one", observe)
+    classify_all(sessions)
     queries, capture = capture_reads(engine)
     try:
         report = svc.evaluate_all_due(horizons=[30, 90], today=TODAY)
@@ -157,6 +172,7 @@ def test_metadata_paging_survives_commits_rollback_and_excludes_new_snapshot(iso
         return out
 
     monkeypatch.setattr(svc, "_evaluate_one", evaluate)
+    classify_all(sessions)
     queries, capture = capture_reads(engine)
     try:
         report = svc.evaluate_all_due(horizons=[30], today=TODAY)
@@ -168,7 +184,9 @@ def test_metadata_paging_survives_commits_rollback_and_excludes_new_snapshot(iso
     assert report["error_pairs"] == [f"PAGE100:snap={ids[100]}:30d:OperationalError"]
     assert added and added[0] not in seen
     assert len(body_queries(queries)) == 204
-    pages = [statement for statement, _ in queries if "memo_snapshots.generated_at" in statement]
+    # The evaluator's metadata pages. The W6 sweep's pending-id query also
+    # names generated_at (its identity guard) but orders by id, not date.
+    pages = [statement for statement, _ in queries if "ORDER BY memo_snapshots.generated_at" in statement]
     assert len(pages) == 4 and all("LIMIT" in statement for statement in pages)
     with sessions() as db:
         actual = set(db.execute(select(MemoOutcome.memo_snapshot_id)).scalars())

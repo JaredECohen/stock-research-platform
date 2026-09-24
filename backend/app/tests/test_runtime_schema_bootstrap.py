@@ -44,11 +44,18 @@ def test_silent_reconciliation_failure_cannot_pass_readiness(old_schema, monkeyp
 def test_worker_repairs_schema_before_still_running_async_seed_and_queue(old_schema, monkeypatch):
     from app import worker
     from app.config import settings
-    from app.services import memory_probe, regen_worker, scorecard_service, vector_store
+    from app.services import memory_probe, outcome_eligibility, regen_worker, scorecard_service, vector_store
 
     seed_started, release_seed = threading.Event(), threading.Event()
     events = []
     seed_threads = []
+
+    def classify(*, db):
+        # W6: the seed thread's FIRST step, DB-only; it must finish before
+        # the minutes-long provider seed starts and never block the queue.
+        assert threading.current_thread() is not threading.main_thread()
+        events.append("eligibility_classified")
+        return {}
 
     def seed():
         seed_threads.append(threading.current_thread())
@@ -73,6 +80,7 @@ def test_worker_repairs_schema_before_still_running_async_seed_and_queue(old_sch
     monkeypatch.setattr(settings, "enable_monitoring", False)
     monkeypatch.setattr(settings, "enable_industry_reports", False)
     monkeypatch.setattr("app.seed_universe.run_full_seed", seed)
+    monkeypatch.setattr(outcome_eligibility, "classify_pending", classify)
     monkeypatch.setattr(vector_store, "backfill_and_index", lambda: {"skipped": True})
     monkeypatch.setattr(scorecard_service, "ensure_version_registered", lambda: {})
     monkeypatch.setattr(regen_worker, "start_worker", start_queue)
@@ -82,7 +90,7 @@ def test_worker_repairs_schema_before_still_running_async_seed_and_queue(old_sch
     monkeypatch.setattr(worker, "_heartbeat", lambda: None)
     try:
         assert worker.main() == 0
-        assert events == ["queue_started_with_seed_pending"]
+        assert events == ["eligibility_classified", "queue_started_with_seed_pending"]
     finally:
         release_seed.set()
         for thread in seed_threads:

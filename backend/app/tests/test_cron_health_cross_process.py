@@ -324,6 +324,41 @@ def test_postmortem_loop_records_failure_before_reraising(monkeypatch):
     assert "RuntimeError" in calls[0][1]["note"]
 
 
+def test_outcome_loop_records_failure_on_exception(monkeypatch):
+    """W6: an exception inside evaluate_all_due (now including a failed
+    eligibility sweep) must be persisted as a failed run before it re-raises.
+
+    Before, `outcome_loop.run_once` had no handler: the exception reached
+    APScheduler, `record_run` never ran, and cron-health — served by the
+    OTHER process — kept showing the previous night's success. This reads
+    the failure back through the database and the endpoint, the path the
+    web process actually uses.
+    """
+    import app.monitoring as monitoring
+    from app.api.routes_admin import cron_health_endpoint
+    from app.monitoring import outcome_loop
+
+    def fail():
+        raise RuntimeError("synthetic eligibility sweep failure")
+
+    monkeypatch.setattr(outcome_loop, "evaluate_all_due", fail)
+    try:
+        with pytest.raises(RuntimeError, match="synthetic eligibility sweep failure"):
+            outcome_loop.run_once()
+        monitoring._LAST_RUNS.pop("outcome_loop", None)  # force the DB path
+        with SessionLocal() as db:
+            row = db.query(CronLoopRun).filter(CronLoopRun.loop_name == "outcome_loop").one()
+            assert row.success is False
+            assert row.note.startswith("failed: RuntimeError: synthetic eligibility sweep failure")
+        public = next(r for r in cron_health_endpoint()["loops"] if r["loop"] == "outcome_loop")
+        assert public["success"] is False
+    finally:
+        monitoring._LAST_RUNS.pop("outcome_loop", None)
+        with SessionLocal() as db:
+            db.query(CronLoopRun).filter(CronLoopRun.loop_name == "outcome_loop").delete()
+            db.commit()
+
+
 def test_postmortem_loop_marks_skipped_work_as_failed(monkeypatch):
     from app.monitoring import postmortem_loop
 

@@ -188,3 +188,50 @@ def test_admin_endpoint_is_guarded_and_serves_actual_audit(db, monkeypatch):
         assert report["rows"][0]["alpha"] == -0.3
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+def test_audit_reports_eligibility_without_filtering(db):
+    """W6: every row is listed WITH its eligibility; nothing is filtered out.
+
+    Still one SELECT and still no memo body, so the before/after receipt can
+    prove exclusion changed no stored outcome.
+    """
+    from app.services.outcome_eligibility import REASON_DEV_COPY, REASON_LIVE
+    from app.tests.eligibility_helpers import mark
+
+    eligible = _seed(db, version=1)
+    excluded = _seed(db, version=2)
+    unclassified = _seed(db, version=3)
+    mark(db, eligible.memo_snapshot_id)
+    mark(db, excluded.memo_snapshot_id, eligible=False, reason=REASON_DEV_COPY)
+    statements = []
+
+    def select_only(conn, cursor, statement, parameters, context, executemany):
+        assert statement.lstrip().upper().startswith("SELECT"), statement
+        statements.append(statement)
+
+    event.listen(db.get_bind(), "before_cursor_execute", select_only)
+    try:
+        report = audit_outcomes(db)
+    finally:
+        event.remove(db.get_bind(), "before_cursor_execute", select_only)
+    assert len(statements) == 1 and "memo_json" not in statements[0]
+    assert report["total_rows"] == 3
+    rows = {row["id"]: row for row in report["rows"]}
+    assert (rows[eligible.id]["track_record_eligible"], rows[eligible.id]["eligibility_reason"]) == (True, REASON_LIVE)
+    assert rows[eligible.id]["generation_mode_observed"] == "live"
+    assert (rows[excluded.id]["track_record_eligible"], rows[excluded.id]["eligibility_reason"]) == (
+        False, REASON_DEV_COPY)
+    assert rows[unclassified.id]["track_record_eligible"] is None
+    tre = report["track_record_eligibility"]
+    assert (tre["eligible"], tre["excluded"], tre["unclassified"]) == (1, 1, 1)
+    assert tre["by_reason"] == {REASON_DEV_COPY: 1, REASON_LIVE: 1, "unclassified": 1}
+    # The enumerated-set check (this sqlite has none of the production ids).
+    check = tre["dev_copy_set"]
+    assert check["expected_snapshots"] == 300 and check["matches"] is False
+    assert check["unexpected_snapshot_ids"] == [excluded.memo_snapshot_id]
+    assert "eligible rows (W6)" in report["limitations"][-1]
+    assert set(report["counts"]) == {
+        "candidate", "indeterminate", "not_flagged", "late_evaluation_candidates", "missing_snapshot",
+        "recorded_baseline_outside_tolerance", "without_baseline_metadata",
+    }

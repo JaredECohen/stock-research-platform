@@ -18,6 +18,10 @@ Usage from `backend/`:
     python -m scripts.postmortem_backfill --horizon 30       # 30d only
     python -m scripts.postmortem_backfill --limit 20         # cap one run
     python -m scripts.postmortem_backfill --dry-run          # report only
+
+`--dry-run` classifies outcome eligibility first (W6; the only write, to the
+derived `memo_outcome_eligibility` ledger) and exits 1 if any snapshot is
+still unclassified. Only eligible snapshots are ever postmortem'd.
 """
 from __future__ import annotations
 
@@ -26,6 +30,49 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def _dry_run(horizons: list[int], limit: int) -> int:
+    """Report what a real run would postmortem. Writes only the W6 ledger.
+
+    Classification runs first, as the real run does: without it every
+    snapshot is unclassified, so the eligible-only scan would report nothing
+    due and the dry run would understate what the next nightly run spends.
+    The ledger is derived data (no memo, outcome or postmortem row changes);
+    after the W6 deploy this lists the live memos the eligible-only prior
+    dedupe newly lets through, which is bounded strong-route LLM spend
+    (limit per horizon per night, 14-day per-ticker rate limit).
+    """
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.models import MemoOutcomeEligibility, MemoSnapshot
+    from app.services import outcome_eligibility
+    from app.services.postmortem_service import _scan_due
+
+    with SessionLocal() as db:
+        print(f"eligibility: {outcome_eligibility.classify_pending(db=db)}")
+        unclassified = list(db.execute(
+            select(MemoSnapshot.id, MemoSnapshot.ticker)
+            .outerjoin(MemoOutcomeEligibility, MemoOutcomeEligibility.memo_snapshot_id == MemoSnapshot.id)
+            .where(outcome_eligibility.pending_condition())
+            .order_by(MemoSnapshot.id)
+        ).all())
+    print(f"unclassified snapshots = {len(unclassified)}")
+    for sid, ticker in unclassified[:20]:
+        print(f"  - {ticker} #{sid}")
+    for h in horizons:
+        scan = _scan_due(h, limit=limit)
+        print(
+            f"horizon={h}d  due (after dedupe) = {len(scan.items)}  "
+            f"deduped={len(scan.deduped)}  deferred={len(scan.deferred)}  ineligible={scan.ineligible}"
+        )
+        for item in scan.items[:10]:
+            snap = item["snapshot"]
+            print(f"  - {snap.ticker} v{snap.version} (snapshot #{snap.id})")
+        if len(scan.items) > 10:
+            print(f"  ... +{len(scan.items) - 10} more")
+    return 1 if unclassified else 0
 
 
 def main() -> int:
@@ -46,23 +93,14 @@ def main() -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Report counts; do not write anything.",
+        help="Report counts; writes only the derived W6 eligibility ledger.",
     )
     args = parser.parse_args()
 
     horizons = [args.horizon] if args.horizon else [30, 90]
 
     if args.dry_run:
-        from app.services.postmortem_service import _due_memos
-        for h in horizons:
-            due = _due_memos(h, limit=args.limit)
-            print(f"horizon={h}d  due (after dedupe) = {len(due)}")
-            for item in due[:10]:
-                snap = item["snapshot"]
-                print(f"  - {snap.ticker} v{snap.version} (gen {snap.generated_at.date()})")
-            if len(due) > 10:
-                print(f"  ... +{len(due) - 10} more")
-        return 0
+        return _dry_run(horizons, args.limit)
 
     from app.services.postmortem_service import run_postmortems
     total_written = 0
