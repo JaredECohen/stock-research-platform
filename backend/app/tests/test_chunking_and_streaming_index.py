@@ -102,8 +102,7 @@ def test_a_word_budget_would_have_blown_the_token_budget_on_this_text():
 
 def test_the_encoding_follows_the_embedding_model_rather_than_a_hardcoded_name():
     enc = emb._encoding()
-    if enc is None:
-        pytest.skip("tiktoken encoding unavailable in this environment")
+    assert enc is not None, "vendored cl100k_base failed to load"
     import tiktoken
     assert enc.name == tiktoken.encoding_for_model(emb.EMBEDDING_MODEL).name
 
@@ -401,8 +400,7 @@ def test_no_single_token_count_ever_encodes_the_whole_document():
 
     seen: list[int] = []
     real_encoding = emb._encoding()
-    if real_encoding is None:
-        pytest.skip("tiktoken encoding unavailable in this environment")
+    assert real_encoding is not None, "vendored cl100k_base failed to load"
 
     class Spy:
         name = real_encoding.name
@@ -591,15 +589,10 @@ def test_dense_unsplittable_runs_respect_measured_budget_without_losing_text(uni
     assert all(emb.count_tokens(chunk) <= 500 for chunk in chunks)
 
 
-@pytest.mark.skipif(
-    emb._encoding() is None,
-    reason=(
-        "asserts a property of the real encoder: without tiktoken's cl100k_base "
-        "ranks (not cached, and the netguard blocks the fetch) count_tokens IS a "
-        "code-point heuristic, so there is nothing here to measure"
-    ),
-)
 def test_short_unicode_is_measured_in_tokens_not_code_points():
+    # A property of the real encoder: on the character heuristic count_tokens
+    # IS a code-point count, so the vendored ranks must have loaded.
+    assert emb._encoding() is not None, "vendored cl100k_base failed to load"
     text = "🚀" * 100
     assert len(text) <= 120 < emb.count_tokens(text)
     assert not emb._fits(text, 120)
