@@ -309,3 +309,39 @@ def test_completion_uses_owned_snapshot_not_a_later_other_publication(database, 
     with database[0]() as db:
         rows = list(db.execute(select(MemoSnapshot).order_by(MemoSnapshot.version)).scalars())
         assert [row.version for row in rows] == [1, 2] and rows[1].memo_json == {"other": True}
+
+
+def test_pull_through_runs_before_memo_only_when_due(database, monkeypatch):
+    """W5a Phase B: a memo started after FMP published a filed period, but
+    before the 03:15 drain, refreshes that ticker first. Only a pending, due
+    refresh runs; a memo job never requests or waits for anything else."""
+    from app.services import fundamental_history_service as fhs
+    from app.services import fundamental_refresh as refresh
+
+    for module in (refresh, fhs):
+        monkeypatch.setattr(module, "SessionLocal", database[0])
+    monkeypatch.setattr(refresh, "history_capable", lambda: True)
+    events: list[str] = []
+    monkeypatch.setattr(refresh, "_run", lambda t, s: events.append(f"refresh:{t}:{s['trigger']}") or
+                        {"success": True, "committed": False, "attempts": [], "coverage": {}})
+
+    def graph(ticker, **kwargs):
+        events.append(f"memo:{ticker}")
+        memo = fake_memo(ticker)
+        memo_store.save_memo(memo)
+        return memo
+    monkeypatch.setattr(worker, "run_stock_memo", graph)
+
+    refresh.request("LEASE", "first_contact")  # pending and due now
+    worker.enqueue("LEASE")
+    assert worker.process_next_job()["status"] == "succeeded"
+    assert events == ["refresh:LEASE:first_contact", "memo:LEASE"]
+    with database[0]() as db:
+        progress = [p["step"] for p in db.execute(select(RegenJob)).scalars().one().progress]
+    assert progress.index("fundamentals_refreshed satisfied=False") < progress.index("calling_run_stock_memo")
+
+    # Still missing (nothing stored), so it backs off: the next memo does not pull.
+    events.clear()
+    worker.enqueue("LEASE")
+    assert worker.process_next_job()["status"] == "succeeded"
+    assert events == ["memo:LEASE"]

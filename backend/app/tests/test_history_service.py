@@ -316,12 +316,12 @@ def test_upsert_refuses_period_end_change_under_available_at():
         ("period_end_change_refused", "2025-02-02", None)]
 
 
-def test_provider_owned_ticker_ingests_only_periods_newer_than_named_history(monkeypatch):
-    """The anonymous, cache-backed annual read must not write inside durable
-    provider-owned history, but until S6's filing-driven refresh ships it is
-    the only scheduled writer of NEW periods, so those still arrive (the raw
-    readers would otherwise freeze at the one-time re-pull). First-contact
-    tickers keep the whole legacy ingest."""
+def test_provider_owned_ticker_makes_no_statements_read_and_writes_no_periods(monkeypatch):
+    """FIX-005/FIX-006 (§3.12): the anonymous, cache-backed annual read never
+    touches a ticker with provider-owned durable history, not even for newer
+    periods: the filing-driven refresh (`fundamental_refresh`) fetches those
+    from FMP when EDGAR shows them filed. First-contact tickers keep the
+    whole legacy ingest."""
     from datetime import date
 
     from app.services.data_service import get_data_service
@@ -346,12 +346,9 @@ def test_provider_owned_ticker_ingests_only_periods_newer_than_named_history(mon
     monkeypatch.setattr(ds, "get_financial_statements", spy)
     owned = history_service.backfill_ticker("NVDA")
     first_contact = history_service.backfill_ticker("MSFT")
-    assert owned["fundamentals"] == "durable" and owned["legacy_periods_skipped"] == 2
-    assert owned["financial_periods"] == 1
+    assert owned["fundamentals"] == "durable" and owned["financial_periods"] == 0
     assert first_contact["financial_periods"] > 0 and "fundamentals" not in first_contact
-    assert asked == ["NVDA", "MSFT"]
+    assert asked == ["MSFT"]
     with SessionLocal() as db:
         rows = {(r.period, r.source, r.value) for r in db.query(FinancialPeriod).filter_by(ticker="NVDA")}
-    # FY2025 (2 days from FMP's end) and the older FY2024 stay FMP's; only
-    # the period after the named history is added, as an unidentified row.
-    assert rows == {("FY2025", "fmp", 1.0), ("FY2026", "live", 11.0)}
+    assert rows == {("FY2025", "fmp", 1.0)}

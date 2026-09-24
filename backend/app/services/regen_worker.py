@@ -320,7 +320,32 @@ def _introduce_ticker(job_id: int, ticker: str) -> None:
         backfill_ticker(ticker)
     except Exception as exc:
         log.warning("backfill for %s failed before regen job %d: %s", ticker, job_id, type(exc).__name__)
+    # FIX-005: request the durable FMP-primary import; the pull-through in
+    # `execute_job` runs it before this job's memo when history is available.
+    try:
+        from . import fundamental_refresh
+        fundamental_refresh.request(ticker, "first_contact")
+    except Exception as exc:
+        log.warning("fundamentals first-contact request for %s failed: %s", ticker, type(exc).__name__)
     _append_progress(job_id, "ticker_introduced")
+
+
+def _pull_fundamentals_through(job_id: int, ticker: str) -> None:
+    """Run a pending, due fundamentals refresh before this memo (W5a Phase B).
+
+    WHY: a memo requested after FMP has published a filed period but before
+    the 03:15 UTC drain would otherwise be written from the previous
+    period. One ticker, only when its refresh is already pending and due;
+    this never requests a memo. Best-effort: a refresh failure is recorded
+    in the refresh state and must not fail the memo job.
+    """
+    try:
+        from . import fundamental_refresh
+        pulled = fundamental_refresh.refresh_if_due(ticker)
+        if pulled:
+            _append_progress(job_id, f"fundamentals_refreshed satisfied={pulled['satisfied']}")
+    except Exception as exc:
+        log.warning("fundamentals pull-through failed for %s: %s", ticker, type(exc).__name__)
 
 
 def recover_orphans(*, report_legacy: bool = True) -> dict[str, Any]:
@@ -467,6 +492,7 @@ def execute_job(claim: JobClaim) -> dict[str, Any]:
             if settings.app_env.lower() == "production" and not settings.llm_enabled:
                 raise RuntimeError("Production memo generation requires a configured LLM and live data")
             _introduce_ticker(claim.job_id, ticker)
+            _pull_fundamentals_through(claim.job_id, ticker)
             _append_progress(claim.job_id, "calling_run_stock_memo")
             with llm_call_context(user_id=job.requested_by_user_id, feature="research_run", run_id=run_id):
                 memo = run_stock_memo(ticker, scenario=scenario, force_refresh=True, run_id=run_id)

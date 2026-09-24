@@ -351,6 +351,57 @@ def test_an_uncapped_pass_still_reports_no_deferrals(fake_index, runs):
     assert note.startswith("3 new filings")
 
 
+def test_poller_records_filed_periods_without_changing_event_semantics(fake_index, runs, monkeypatch):
+    """FIX-005: the index now also carries 20-F / 10-Q/A / 25-NSE rows for
+    `fundamental_refresh`. They must never fire `on_filing_event` or enter
+    the seen-set (that would re-fire the universe on deploy), the note is
+    unchanged, and `observe_many` is called once per pass with every index
+    the pass read."""
+    from app.services import fundamental_refresh
+
+    tickers = [f"ZZOBS{_suffix()}{i:02d}" for i in range(2)]
+    observed: list[list[tuple[str, list[dict]]]] = []
+    monkeypatch.setattr(fundamental_refresh, "observe_many", lambda obs: observed.append(list(obs)) or [])
+    _prime(fake_index, tickers)
+    runs.clear()
+    observed.clear()
+    extras = [
+        {"type": "20-F", "period_end": "2025-12-31", "filing_date": "2026-04-28", "accession_number": _accession(7)},
+        {"type": "10-Q/A", "period_end": "2026-06-30", "filing_date": "2026-08-15", "accession_number": _accession(8)},
+        {"type": "25-NSE", "period_end": None, "filing_date": "2026-08-10", "accession_number": _accession(9)},
+    ]
+    for t in tickers:
+        fake_index[t].extend(extras)
+
+    with patch("app.services.update_orchestrator.on_filing_event") as handler:
+        handler.return_value = {"kind": "skipped"}
+        assert edgar_poller.run_once(tickers) == []
+        assert handler.call_count == 0
+
+    (note,) = _notes(runs)
+    assert note == "0 new filings"
+    assert len(observed) == 1 and [t for t, _ in observed[0]] == tickers
+    assert all({f["type"] for f in filings} == {"10-K", "20-F", "10-Q/A", "25-NSE"} for _, filings in observed[0])
+    for t in tickers:
+        assert cache_get(t, "edgar_seen_accessions").payload["accessions"] == [_accession(1)]
+
+
+def test_refresh_state_failure_is_named_and_fails_the_pass(fake_index, runs, monkeypatch):
+    from app.services import fundamental_refresh
+
+    tickers = [f"ZZRSE{_suffix()}"]
+    monkeypatch.setattr(fundamental_refresh, "observe_many", lambda obs: [tickers[0]])
+    _prime(fake_index, tickers)
+    assert runs[-1]["success"] is False
+    assert f"refresh-state errors on 1: {tickers[0]}" in runs[-1]["note"]
+    monkeypatch.setattr(fundamental_refresh, "observe_many",
+                        lambda obs: (_ for _ in ()).throw(RuntimeError("db down")))
+    with patch("app.services.update_orchestrator.on_filing_event") as handler:
+        handler.return_value = {"kind": "skipped"}
+        edgar_poller.run_once(tickers)
+    assert runs[-1]["success"] is False and "refresh-state errors on 1: pass" in runs[-1]["note"]
+
+
 @pytest.mark.parametrize("failure", ["index", "handler", "gate", "invalidation", "persist"])
 def test_failed_ticker_retains_seen_and_retries_on_next_pass(fake_index, runs, monkeypatch, failure, caplog):
     tickers = [f"ZZFAIL{_suffix()}", f"ZZGOOD{_suffix()}"]

@@ -85,6 +85,14 @@ def _ensure_lazy_universe(ticker: str) -> str:
         backfill_ticker(t)
     except Exception as exc:  # preserve optional behavior, expose the failure
         log.warning("symbol introduction backfill failed ticker=%s error_type=%s", t, type(exc).__name__)
+    # FIX-005: the legacy ingest above is anonymous and annual-only; ask the
+    # worker's fundamentals drain for the durable FMP-primary import. One DB
+    # row, no provider call here. Best-effort, like the backfill.
+    try:
+        from ..services import fundamental_refresh
+        fundamental_refresh.request(t, "first_contact")
+    except Exception as exc:
+        log.warning("fundamentals first-contact request failed ticker=%s error_type=%s", t, type(exc).__name__)
     return "analyzed_on_demand"
 
 
