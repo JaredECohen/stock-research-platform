@@ -106,6 +106,37 @@ RECLASSIFY_RUN_ID = "reclassify_industry_editions:v1"
 RECLASSIFY_REVERT_RUN_ID = "reclassify_industry_editions:v1:revert"
 RECLASSIFY_PERIOD_KEY = "RECLASSIFY-V1"
 
+# The EXPECTED population of the reclassification, pinned independently of
+# the rule that plans it. The plan re-derives its rows from the live table,
+# so its own compare-and-set and post-write checks can only catch a race,
+# never "this is not the set we meant to touch". These can: a plan that
+# breaks any of them is aborted whole, nothing is written, no ledger row is
+# left, and the owner decides from the dry run.
+#
+# * Which weeks: the first production edition is 2026-W37 (industry jobs
+#   1..52 in the 2026-09-21 closeout are W37 and W38, all weekly_cron). The
+#   rule was written in W39; the pre-rule code keeps writing until it
+#   deploys, so the window runs to W40. A later deploy leaves legacy rows
+#   past it — the automatic run then aborts and the owner passes
+#   `--last-legacy-period` after reading the dry run.
+# * Which moves: the pre-rule code only ever left `succeeded`+latest (the
+#   newest row) or `superseded` (older rows); `pending_review` is never
+#   touched. So a withheld row can only go from one of those two to
+#   `audit_only`, and a publishable row can only be RESTORED from
+#   `superseded` to latest. Anything else — a publishable row demoted, an
+#   `audit_only` row holding the flag — is not legacy state, and aborts.
+# * How many: 25 groups x 4 legacy weeks = 100 weekly editions, each moved
+#   at most once, plus at most one restore per group: 125.
+RECLASSIFY_FIRST_LEGACY_PERIOD = "2026-W37"
+RECLASSIFY_LAST_LEGACY_PERIOD = "2026-W40"
+RECLASSIFY_MAX_CHANGES = 125
+RECLASSIFY_ALLOWED_TRANSITIONS: frozenset[tuple[bool, tuple[str, bool], tuple[str, bool]]] = frozenset({
+    # (row is publishable, before (status, is_latest_good), after)
+    (False, (STATUS_SUCCEEDED, True), (STATUS_AUDIT_ONLY, False)),
+    (False, (STATUS_SUPERSEDED, False), (STATUS_AUDIT_ONLY, False)),
+    (True, (STATUS_SUPERSEDED, False), (STATUS_SUCCEEDED, True)),
+})
+
 DISCLAIMER = (
     "Research and education only. Industry statistics are observed data; the "
     "analyst narrative is interpretation and every forward view is a scenario, "
@@ -1055,7 +1086,7 @@ def _target_state(meta: Any, newest_publishable_id: int | None) -> tuple[str, bo
 def _reclassification_plan(db, version_id: int, *, lock: bool) -> list[dict[str, Any]]:
     q = select(
         IndustryReport.id, IndustryReport.industry_group_code, IndustryReport.version,
-        IndustryReport.status, IndustryReport.is_latest_good,
+        IndustryReport.period_key, IndustryReport.status, IndustryReport.is_latest_good,
         IndustryReport.generation, IndustryReport.degraded,
     ).where(IndustryReport.taxonomy_version_id == version_id).order_by(
         IndustryReport.industry_group_code, IndustryReport.version,
@@ -1080,11 +1111,34 @@ def _reclassification_plan(db, version_id: int, *, lock: bool) -> list[dict[str,
             continue
         plan.append({
             "row_id": int(m.id), "code": str(m.industry_group_code), "version": int(m.version),
+            "period_key": str(m.period_key or ""),
             "before": {"status": before[0], "is_latest_good": before[1]},
             "after": {"status": target[0], "is_latest_good": target[1]},
             "edition_kind": edition_kind(m.generation),
+            "publishable": bool(content_publishable(m.generation, m.degraded)),
         })
     return plan
+
+
+def _plan_violations(plan: list[dict[str, Any]], *, last_legacy_period: str) -> list[str]:
+    """Every way ``plan`` departs from the pinned expected population
+    (``RECLASSIFY_*`` above). Empty means the plan is the set we meant."""
+    out: list[str] = []
+    if len(plan) > RECLASSIFY_MAX_CHANGES:
+        out.append(f"{len(plan)} changes planned, more than the pinned ceiling of {RECLASSIFY_MAX_CHANGES}")
+    for e in plan:
+        move = (bool(e["publishable"]),
+                (e["before"]["status"], bool(e["before"]["is_latest_good"])),
+                (e["after"]["status"], bool(e["after"]["is_latest_good"])))
+        if move not in RECLASSIFY_ALLOWED_TRANSITIONS:
+            out.append(f"row {e['row_id']} ({e['code']} v{e['version']}): "
+                       f"{'publishable' if move[0] else 'withheld'} {move[1]} -> {move[2]} is not a legacy transition")
+        # ISO-week keys order lexicographically, year turns included.
+        period = str(e.get("period_key") or "")
+        if not RECLASSIFY_FIRST_LEGACY_PERIOD <= period <= last_legacy_period:
+            out.append(f"row {e['row_id']} ({e['code']} v{e['version']}): period {period or '(none)'} is outside "
+                       f"the legacy window {RECLASSIFY_FIRST_LEGACY_PERIOD}..{last_legacy_period}")
+    return out
 
 
 def _active_group_jobs(db, version_id: int, *, lock: bool) -> list[int]:
@@ -1106,26 +1160,64 @@ def _plan_counts(plan: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
-def reclassification_ledger(*, version: VersionInfo | str | int | None = None,
-                            run_id: str = RECLASSIFY_RUN_ID) -> dict[str, Any] | None:
-    """The newest ledger row for ``run_id`` (the apply by default), as a
-    dict with its manifest, or ``None`` when it has never run."""
+# Which earlier apply makes a new one "already done". The deployed worker
+# is one-shot for ever (`ONCE_EVER`): once any apply has written, it never
+# writes again — not after a restart, and not after the owner reverted it,
+# because a revert is the owner saying "not this". The owner's CLI
+# (`ONCE_UNLESS_REVERTED`) may re-apply after a revert, never on top of a
+# live apply; `--force` (``None``) skips the check.
+ONCE_EVER = "ever"
+ONCE_UNLESS_REVERTED = "unless_reverted"
+
+
+def _ledger_rows(db, version_id: int, run_id: str) -> list[IndustryReportJob]:
+    return list(db.execute(
+        select(IndustryReportJob).where(
+            IndustryReportJob.taxonomy_version_id == version_id,
+            IndustryReportJob.kind == RECLASSIFY_KIND,
+            IndustryReportJob.run_id == run_id,
+            IndustryReportJob.status == "succeeded",
+        ).order_by(IndustryReportJob.id.desc())
+    ).scalars().all())
+
+
+def _ledger_entry(row: IndustryReportJob) -> dict[str, Any]:
+    return (list(row.progress or []) or [{}])[-1]
+
+
+def _live_apply(db, version_id: int, once: str) -> IndustryReportJob | None:
+    """The apply ledger that makes a new apply redundant under ``once``.
+
+    Only applies that WROTE count: an empty manifest is not an apply (none
+    is written any more, and one left by an earlier build must not shadow
+    the real manifest)."""
+    applies = [r for r in _ledger_rows(db, version_id, RECLASSIFY_RUN_ID) if _ledger_entry(r).get("manifest")]
+    if not applies:
+        return None
+    newest = applies[0]
+    if once == ONCE_UNLESS_REVERTED:
+        reverts = _ledger_rows(db, version_id, RECLASSIFY_REVERT_RUN_ID)
+        if reverts and reverts[0].id > newest.id:
+            return None
+    return newest
+
+
+def reclassification_ledger(*, version: VersionInfo | str | int | None = None) -> dict[str, Any] | None:
+    """The newest apply ledger that actually changed rows — what
+    ``--revert-from-ledger`` undoes — or ``None`` when nothing was ever
+    applied. ``reverted`` says a later revert already undid it."""
     info = gics_registry.resolve_version(version)
     with SessionLocal() as db:
-        row = db.execute(
-            select(IndustryReportJob).where(
-                IndustryReportJob.taxonomy_version_id == info.id,
-                IndustryReportJob.kind == RECLASSIFY_KIND,
-                IndustryReportJob.run_id == run_id,
-                IndustryReportJob.status == "succeeded",
-            ).order_by(IndustryReportJob.id.desc())
-        ).scalars().first()
-        if row is None:
+        applies = [r for r in _ledger_rows(db, info.id, RECLASSIFY_RUN_ID) if _ledger_entry(r).get("manifest")]
+        if not applies:
             return None
-        entry = (list(row.progress or []) or [{}])[-1]
+        row = applies[0]
+        entry = _ledger_entry(row)
+        reverts = _ledger_rows(db, info.id, RECLASSIFY_REVERT_RUN_ID)
         return {"ledger_id": row.id, "source": row.source,
                 "finished_at": row.finished_at.isoformat() if row.finished_at else None,
-                "manifest": list(entry.get("manifest") or []), "counts": dict(entry.get("counts") or {})}
+                "manifest": list(entry.get("manifest") or []), "counts": dict(entry.get("counts") or {}),
+                "reverted": bool(reverts and reverts[0].id > row.id)}
 
 
 def _write_ledger(db, version_id: int, *, run_id: str, source: str, step: str,
@@ -1144,19 +1236,31 @@ def _write_ledger(db, version_id: int, *, run_id: str, source: str, step: str,
 
 
 def reclassify_legacy_editions(*, apply: bool = False, source: str = "cli",
-                               version: VersionInfo | str | int | None = None) -> dict[str, Any]:
+                               version: VersionInfo | str | int | None = None,
+                               once: str | None = ONCE_UNLESS_REVERTED,
+                               last_legacy_period: str = RECLASSIFY_LAST_LEGACY_PERIOD) -> dict[str, Any]:
     """Plan (and with ``apply``, perform) the flag normalisation.
 
     Template rows in ``succeeded``/``superseded`` → ``audit_only``; each
     group's newest publishable row → ``succeeded`` + latest-good; other
-    publishable rows → ``superseded``; ``pending_review`` untouched. Refuses
-    (``ReclassifyRefused``) while any group-report job is queued or running,
-    checked under ``FOR UPDATE`` inside the same transaction as the writes.
-    Every change is a compare-and-set against the planned before-state, and
-    the plan is recomputed after the writes and must be empty; either check
-    failing rolls the whole transaction back (``ReclassifyAborted``). An
-    apply writes a ledger row carrying the manifest in the same commit.
-    Idempotent: a second apply changes nothing."""
+    publishable rows → ``superseded``; ``pending_review`` untouched.
+
+    Guards, all inside ONE transaction, any failure rolling it back whole:
+
+    * refuses (``ReclassifyRefused``) while any group-report job is queued
+      or running, checked under ``FOR UPDATE``;
+    * the plan must be the pinned expected population
+      (``_plan_violations``) — otherwise ``ReclassifyAborted`` before any
+      write; a dry run reports the violations instead;
+    * ``already_done`` (no write) when an earlier apply is live under
+      ``once``, checked AFTER the row locks, so a second runner that waited
+      on the first sees its ledger;
+    * every change is a compare-and-set against the planned before-state,
+      and the plan is recomputed after the writes and must be empty.
+
+    An apply that changes rows writes a ledger row carrying the manifest in
+    the same commit; an empty plan writes nothing (an empty ledger row
+    would shadow the real manifest for ``--revert-from-ledger``)."""
     info = gics_registry.resolve_version(version)
     with SessionLocal() as db:
         active = _active_group_jobs(db, info.id, lock=apply)
@@ -1168,11 +1272,29 @@ def reclassify_legacy_editions(*, apply: bool = False, source: str = "cli",
             )
         plan = _reclassification_plan(db, info.id, lock=apply)
         counts = _plan_counts(plan)
+        violations = _plan_violations(plan, last_legacy_period=last_legacy_period)
         result: dict[str, Any] = {
-            "taxonomy_version": info.version_key, "applied": False, "counts": counts, "manifest": plan,
+            "taxonomy_version": info.version_key, "applied": False, "status": "planned",
+            "counts": counts, "manifest": plan, "violations": violations,
+            "last_legacy_period": last_legacy_period,
         }
         if not apply:
             db.rollback()
+            return result
+        done = _live_apply(db, info.id, once) if once else None
+        if done is not None:
+            db.rollback()
+            result.update(status="already_done", ledger_id=done.id, counts={"changed": 0}, manifest=[])
+            return result
+        if violations:
+            db.rollback()
+            raise ReclassifyAborted(
+                f"reclassification not applied: the plan is not the expected legacy population "
+                f"({len(violations)} violation(s)): {violations[:10]}"
+            )
+        if not plan:
+            db.rollback()
+            result["status"] = "nothing_to_do"
             return result
         mismatched: list[int] = []
         for entry in plan:
@@ -1197,24 +1319,26 @@ def reclassify_legacy_editions(*, apply: bool = False, source: str = "cli",
         result["ledger_id"] = _write_ledger(db, info.id, run_id=RECLASSIFY_RUN_ID, source=source,
                                             step="reclassified", manifest=plan, counts=counts)
         db.commit()
-        result["applied"] = True
+        result.update(applied=True, status="applied")
     log.warning("industry reclassification applied (%s, source=%s): %s", info.version_key, source, counts)
     return result
 
 
 def run_legacy_reclassification_once(*, source: str,
                                      version: VersionInfo | str | int | None = None) -> dict[str, Any]:
-    """The deployed worker's entry point: apply once, recorded by the ledger.
+    """The deployed worker's entry point: apply once EVER, recorded by the
+    ledger, against the pinned legacy window only.
 
-    ``already_done`` when the ledger row exists (from this runner or from
-    the owner's shell). ``ReclassifyRefused`` propagates so the caller can
-    retry later; ``ReclassifyAborted`` propagates so the caller can stop."""
+    ``already_done`` when an apply ledger exists (from this runner or from
+    the owner's shell, reverted or not); ``nothing_to_do`` when no row
+    disagrees with the rule. ``ReclassifyRefused`` propagates so the caller
+    can retry later; ``ReclassifyAborted`` propagates so the caller can stop."""
     info = gics_registry.resolve_version(version)
     done = reclassification_ledger(version=info)
     if done is not None:
         return {"status": "already_done", "ledger_id": done["ledger_id"], "counts": done["counts"]}
-    out = reclassify_legacy_editions(apply=True, source=source, version=info)
-    return {"status": "applied", "ledger_id": out.get("ledger_id"), "counts": out["counts"],
+    out = reclassify_legacy_editions(apply=True, source=source, version=info, once=ONCE_EVER)
+    return {"status": out["status"], "ledger_id": out.get("ledger_id"), "counts": out["counts"],
             "manifest": out["manifest"]}
 
 
@@ -1223,9 +1347,13 @@ def revert_reclassification(manifest: list[dict[str, Any]], *, apply: bool = Fal
     """Replay a manifest backwards: each row goes from its ``after`` state
     back to its ``before`` state, compare-and-set, all or nothing. A row
     that has moved on since (a newer save flipped it) aborts the revert
-    rather than being overwritten. Same active-job refusal as the apply."""
+    rather than being overwritten. Same active-job refusal as the apply.
+    An empty manifest is refused: "reverted 0 rows" must never read as a
+    successful rollback."""
     info = gics_registry.resolve_version(version)
     entries = [e for e in manifest if isinstance(e, dict)]
+    if not entries:
+        raise ReclassifyRefused("the manifest is empty: there is nothing to revert")
     for e in entries:
         if not {"row_id", "before", "after"} <= set(e):
             raise ValueError(f"manifest entry is missing row_id/before/after: {e!r}")

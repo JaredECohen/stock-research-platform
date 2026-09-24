@@ -1202,8 +1202,15 @@ def reclassify_legacy_editions_once() -> dict[str, Any] | None:
     while any group job is queued or running (checked ``FOR UPDATE`` in the
     same transaction) and this retries on the next heartbeat. The ledger row
     makes it one-shot across restarts and against the owner's CLI. An
-    aborted run (a compare-and-set or post-write invariant failed; nothing
-    was written) is logged at ERROR and not retried by this process.
+    aborted run (the plan was not the pinned legacy population, or a
+    compare-and-set or post-write invariant failed; nothing was written) is
+    logged at ERROR and not retried by this process.
+
+    It never raises. It runs on the drainer's heartbeat, so an exception
+    escaping it would skip the heartbeat and every job behind it, on every
+    pass, for as long as the error lasted — a housekeeping step stopping
+    the queue. Anything unexpected is logged at ERROR and retried on the
+    next heartbeat.
     ``INDUSTRY_RECLASSIFY_LEGACY_EDITIONS=false`` switches it off."""
     global _reclassify_settled
     if _reclassify_settled or not settings.industry_reclassify_legacy_editions:
@@ -1219,11 +1226,16 @@ def reclassify_legacy_editions_once() -> dict[str, Any] | None:
         _reclassify_settled = True
         log.error("industry reclassification ABORTED, nothing written: %s", exc)
         return {"status": "aborted", "reason": str(exc)}
+    except Exception as exc:
+        log.error("industry reclassification failed (%s); retrying on the next heartbeat", safe_exc(exc))
+        return {"status": "error", "reason": safe_exc(exc)}
     _reclassify_settled = True
     if out["status"] == "applied":
         # The manifest is the audit trail; it is also on the ledger row.
         log.warning("industry reclassification applied by the worker: ledger=%s counts=%s manifest=%s",
                     out.get("ledger_id"), out.get("counts"), out.get("manifest"))
+    else:
+        log.info("industry reclassification: %s (ledger=%s)", out["status"], out.get("ledger_id"))
     return out
 
 
@@ -1242,9 +1254,11 @@ def _worker_loop() -> None:
             if last_beat == 0.0 or (now.timestamp() - last_beat) >= HEARTBEAT_SECONDS:
                 if last_beat != 0.0:
                     recover_orphans(now)  # name legacy claims made during overlap after boot
-                reclassify_legacy_editions_once()
                 heartbeat(now)
                 last_beat = now.timestamp()
+                # After the heartbeat, and it never raises: housekeeping
+                # must not be what stops the drainer or silences it.
+                reclassify_legacy_editions_once()
             if process_next_job(book=book) is None:
                 book.drop()  # nothing queued: release the period's prices
                 _stop_event.wait(POLL_SECONDS)

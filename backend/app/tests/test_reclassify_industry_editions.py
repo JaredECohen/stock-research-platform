@@ -13,13 +13,20 @@ test that pins each:
 * a partial write — `test_a_compare_and_set_miss_rolls_back_everything`;
 * no way back — `test_reclassify_revert_restores_manifest` (and the
   revert refusing a row that has moved on since);
+* a way back that silently does nothing — a later empty apply hiding the
+  real manifest: `test_worker_apply_then_cli_apply_then_revert_from_ledger_restores`;
+* rows nobody meant to touch — the pinned expected population
+  (`test_*_aborts_the_whole_apply`);
 * needing a production shell at all — the deployed worker runs it once,
   recorded by the ledger, deferring while jobs are active:
-  `test_the_worker_runs_it_once_and_only_once`.
+  `test_the_worker_runs_it_once_and_only_once`;
+* housekeeping stopping the queue — `test_an_unexpected_error_never_stops_the_heartbeat_or_the_queue`.
 """
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import datetime
 
 import pytest
@@ -66,11 +73,12 @@ def clean(info):
 
 
 def _row(info, code: str, version: int, *, status: str, latest: bool, generation: dict,
-         degraded: list[str] | None = None) -> int:
+         degraded: list[str] | None = None, period_key: str | None = None) -> int:
+    # Versions 1..4 land in W37..W40: the pinned legacy window.
     with SessionLocal() as db:
         row = IndustryReport(
             taxonomy_version_id=info.id, industry_group_code=code, version=version,
-            period_key=f"2026-W{30 + version}", as_of=AS_OF, status=status, is_latest_good=latest,
+            period_key=period_key or f"2026-W{36 + version}", as_of=AS_OF, status=status, is_latest_good=latest,
             payload={"sections": {}}, generation=generation, degraded=list(degraded or []), generated_at=AS_OF,
         )
         db.add(row)
@@ -151,7 +159,11 @@ def test_apply_is_idempotent(info, capsys):
     assert cli.main(["--apply"]) == cli.EXIT_OK
     again = json.loads(capsys.readouterr().out)
     assert again["counts"] == {"changed": 0} and again["manifest"] == []
+    assert again["status"] == "already_done" and again["applied"] is False
     assert _state(info) == before
+    # A second apply leaves no second ledger row: one would carry an empty
+    # manifest and hide the real one from --revert-from-ledger.
+    assert len(_ledgers(info)) == 1
 
 
 @pytest.mark.parametrize("status", ["queued", "running"])
@@ -186,6 +198,9 @@ def test_a_compare_and_set_miss_rolls_back_everything(info, monkeypatch, capsys)
         return plan
 
     monkeypatch.setattr(rs, "_reclassification_plan", stale_plan)
+    # That stale entry is also not a legacy transition, which the expected-
+    # set check would catch first; switch that off to reach the CAS itself.
+    monkeypatch.setattr(rs, "_plan_violations", lambda plan, **_: [])
     assert cli.main(["--apply"]) == cli.EXIT_ABORTED
     err = json.loads(capsys.readouterr().err)
     assert err["written"] is False and "compare-and-set" in err["aborted"]
@@ -280,3 +295,250 @@ def test_the_ledger_row_is_invisible_to_the_queue_and_the_report_reads(info):
     code = reg.industry_groups(version=info)[0].code
     assert rs.last_attempt(code, version=info) is None
     assert rs.last_attempted_periods([code], version=info) == {}
+
+
+# --- the ledger is the one way back -------------------------------------------
+
+
+def test_worker_apply_then_cli_apply_then_revert_from_ledger_restores(info, capsys):
+    """The production order: the worker applies on its first heartbeat
+    after deploy, then the owner runs the documented `--apply`. That
+    second apply must not write an (empty) ledger row, or
+    `--revert-from-ledger` reverts nothing and still exits 0."""
+    _legacy(info)
+    before = _state(info)
+    assert jobs.reclassify_legacy_editions_once()["status"] == "applied"
+    applied = _state(info)
+
+    assert cli.main(["--apply"]) == cli.EXIT_OK
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "already_done" and out["applied"] is False
+    assert _state(info) == applied
+    assert [(r.run_id, len(r.progress[-1]["manifest"])) for r in _ledgers(info)] == [(rs.RECLASSIFY_RUN_ID, 3)]
+
+    assert cli.main(["--revert-from-ledger", "--apply"]) == cli.EXIT_OK
+    reverted = json.loads(capsys.readouterr().out)
+    assert reverted["counts"] == {"reverted": 3} and reverted["applied"] is True
+    assert _state(info) == before
+
+    # Reverting the same apply twice is refused, not a silent no-op.
+    assert cli.main(["--revert-from-ledger", "--apply"]) == cli.EXIT_REFUSED
+    assert "already reverted" in json.loads(capsys.readouterr().err)["error"]
+    assert _state(info) == before
+
+
+def test_an_empty_ledger_row_from_an_earlier_build_never_shadows_the_manifest(info, capsys):
+    """Belt and braces for rows already written: the revert target is the
+    newest apply that CHANGED rows, not merely the newest row."""
+    _legacy(info)
+    before = _state(info)
+    assert cli.main(["--apply"]) == cli.EXIT_OK
+    capsys.readouterr()
+    with SessionLocal() as db:
+        rs._write_ledger(db, info.id, run_id=rs.RECLASSIFY_RUN_ID, source="old_build", step="reclassified",
+                         manifest=[], counts={"changed": 0})
+        db.commit()
+    assert rs.reclassification_ledger(version=info)["counts"]["changed"] == 3
+    assert cli.main(["--revert-from-ledger", "--apply"]) == cli.EXIT_OK
+    assert _state(info) == before
+
+
+def test_a_revert_refuses_an_empty_manifest(info, tmp_path, capsys):
+    _legacy(info)
+    empty = tmp_path / "empty.json"
+    empty.write_text(json.dumps({"manifest": []}))
+    assert cli.main(["--revert", str(empty), "--apply"]) == cli.EXIT_REFUSED
+    assert "nothing to revert" in json.loads(capsys.readouterr().err)["refused"]
+    assert _ledgers(info) == []
+
+
+def test_the_worker_never_reapplies_after_the_owner_reverted(info, capsys):
+    """A revert is the owner saying "not this": a worker restart must not
+    undo it. The owner may re-apply by hand."""
+    _legacy(info)
+    before = _state(info)
+    assert jobs.reclassify_legacy_editions_once()["status"] == "applied"
+    assert cli.main(["--revert-from-ledger", "--apply"]) == cli.EXIT_OK
+    capsys.readouterr()
+    jobs._reclassify_settled = False  # a restart
+    assert jobs.reclassify_legacy_editions_once()["status"] == "already_done"
+    assert _state(info) == before
+    assert cli.main(["--apply"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["status"] == "applied"
+    assert _state(info) != before
+
+
+def test_the_revert_refuses_with_a_queued_job(info, capsys):
+    _legacy(info)
+    assert cli.main(["--apply"]) == cli.EXIT_OK
+    capsys.readouterr()
+    applied = _state(info)
+    code = reg.industry_groups(version=info)[0].code
+    with SessionLocal() as db:
+        db.add(IndustryReportJob(kind="group_report", taxonomy_version_id=info.id, industry_group_code=code,
+                                 period_key="2026-W41", run_id="r", status="queued", attempts=0, max_attempts=3,
+                                 enqueued_at=AS_OF))
+        db.commit()
+    assert cli.main(["--revert-from-ledger", "--apply"]) == cli.EXIT_REFUSED
+    assert "queued or running" in json.loads(capsys.readouterr().err)["refused"]
+    assert _state(info) == applied
+    assert {r.run_id for r in _ledgers(info)} == {rs.RECLASSIFY_RUN_ID}
+
+
+# --- the pinned expected population -------------------------------------------
+
+
+def test_a_row_outside_the_legacy_window_aborts_the_whole_apply(info, capsys):
+    """A row the pre-rule code could not have written is not legacy state:
+    the automatic run writes NOTHING (not even the in-window rows), leaves
+    no ledger, and is not retried; the owner reads the dry run and widens
+    the window by hand."""
+    ids = _legacy(info)
+    code = reg.industry_groups(version=info)[2].code
+    late = _row(info, code, 1, status="succeeded", latest=True, generation=TEMPLATE, period_key="2026-W41")
+    before = _state(info)
+
+    aborted = jobs.reclassify_legacy_editions_once()
+    assert aborted["status"] == "aborted" and "legacy window" in aborted["reason"]
+    assert _state(info) == before and _ledgers(info) == []
+    assert jobs.reclassify_legacy_editions_once() is None, "an abort is not retried by this process"
+
+    assert cli.main([]) == cli.EXIT_ABORTED
+    dry = json.loads(capsys.readouterr().out)
+    assert any(f"row {late}" in v for v in dry["violations"])
+    assert cli.main(["--apply"]) == cli.EXIT_ABORTED
+    capsys.readouterr()
+    assert _state(info) == before and _ledgers(info) == []
+
+    assert cli.main(["--apply", "--last-legacy-period", "2026-W41"]) == cli.EXIT_OK
+    capsys.readouterr()
+    assert _state(info)[late] == ("audit_only", False)
+    assert _state(info)[ids["a2"]] == ("audit_only", False)
+
+
+def test_a_non_legacy_transition_aborts_the_whole_apply(info):
+    """An audit-only row holding the flag is not something the pre-rule
+    code wrote; the rule would "fix" it, the expected set refuses to."""
+    ids = _legacy(info)
+    code = reg.industry_groups(version=info)[2].code
+    _row(info, code, 1, status="audit_only", latest=True, generation=TEMPLATE)
+    before = _state(info)
+    with pytest.raises(rs.ReclassifyAborted, match="not a legacy transition"):
+        rs.reclassify_legacy_editions(apply=True, version=info)
+    assert _state(info) == before and _ledgers(info) == []
+    assert ids
+
+
+def test_more_rows_than_the_pinned_ceiling_aborts_the_whole_apply(info, monkeypatch):
+    _legacy(info)
+    before = _state(info)
+    monkeypatch.setattr(rs, "RECLASSIFY_MAX_CHANGES", 2)
+    with pytest.raises(rs.ReclassifyAborted, match="pinned ceiling"):
+        rs.reclassify_legacy_editions(apply=True, version=info)
+    assert _state(info) == before and _ledgers(info) == []
+
+
+# --- every guard aborts the whole transaction ---------------------------------
+
+
+def test_rows_still_disagreeing_after_the_writes_roll_everything_back(info, monkeypatch, capsys):
+    _legacy(info)
+    before = _state(info)
+    real_plan = rs._reclassification_plan
+    calls = {"n": 0}
+
+    def plan_that_survives_the_writes(db, version_id, *, lock):
+        calls["n"] += 1
+        plan = real_plan(db, version_id, lock=lock)
+        if calls["n"] == 2:  # the post-write recomputation
+            return [{"row_id": -1}]
+        return plan
+
+    monkeypatch.setattr(rs, "_reclassification_plan", plan_that_survives_the_writes)
+    assert cli.main(["--apply"]) == cli.EXIT_ABORTED
+    err = json.loads(capsys.readouterr().err)
+    assert err["written"] is False and "still disagree" in err["aborted"]
+    assert _state(info) == before and _ledgers(info) == []
+
+
+def test_the_apply_compare_and_set_checks_the_flag_too(info, monkeypatch, capsys):
+    """A row whose status matches the plan but whose flag does not has
+    moved: that is a miss, and nothing is written."""
+    ids = _legacy(info)
+    before = _state(info)
+    real_plan = rs._reclassification_plan
+    calls = {"n": 0}
+
+    def flag_drifted(db, version_id, *, lock):
+        calls["n"] += 1
+        plan = real_plan(db, version_id, lock=lock)
+        if calls["n"] == 1:
+            plan = [{**e, "before": {**e["before"], "is_latest_good": not e["before"]["is_latest_good"]}}
+                    if e["row_id"] == ids["a2"] else e for e in plan]
+        return plan
+
+    monkeypatch.setattr(rs, "_reclassification_plan", flag_drifted)
+    # The drifted entry is not a legacy transition either; isolate the CAS.
+    monkeypatch.setattr(rs, "_plan_violations", lambda plan, **_: [])
+    assert cli.main(["--apply"]) == cli.EXIT_ABORTED
+    assert "compare-and-set" in json.loads(capsys.readouterr().err)["aborted"]
+    assert _state(info) == before and _ledgers(info) == []
+
+
+def test_the_revert_compare_and_set_checks_the_flag_too(info, capsys):
+    ids = _legacy(info)
+    assert cli.main(["--apply"]) == cli.EXIT_OK
+    capsys.readouterr()
+    with SessionLocal() as db:
+        db.get(IndustryReport, ids["a2"]).is_latest_good = True  # status still audit_only
+        db.commit()
+    moved = _state(info)
+    assert cli.main(["--revert-from-ledger", "--apply"]) == cli.EXIT_ABORTED
+    capsys.readouterr()
+    assert _state(info) == moved
+    assert {r.run_id for r in _ledgers(info)} == {rs.RECLASSIFY_RUN_ID}
+
+
+# --- the worker hook never stops the drainer ----------------------------------
+
+
+def test_an_unexpected_error_never_stops_the_heartbeat_or_the_queue(info, monkeypatch):
+    """A housekeeping step on the heartbeat must not be what silences the
+    drainer: an exception there used to skip the heartbeat and every job,
+    on every pass, for as long as it lasted."""
+    calls = {"reclassify": 0, "heartbeat": 0, "process": 0}
+
+    def boom(**_):
+        calls["reclassify"] += 1
+        raise RuntimeError("could not serialize access")
+
+    def beat(now=None):
+        calls["heartbeat"] += 1
+        return "ok"
+
+    def process(**_):
+        calls["process"] += 1
+        return None
+
+    monkeypatch.setattr(rs, "run_legacy_reclassification_once", boom)
+    # The direct call reports it and stays unsettled (retried next beat).
+    assert jobs.reclassify_legacy_editions_once()["status"] == "error"
+    assert jobs._reclassify_settled is False
+
+    monkeypatch.setattr(jobs, "recover_orphans", lambda *a, **k: {})
+    monkeypatch.setattr(jobs, "heartbeat", beat)
+    monkeypatch.setattr(jobs, "process_next_job", process)
+    monkeypatch.setattr(jobs, "POLL_SECONDS", 0.01)
+    monkeypatch.setattr(jobs, "HEARTBEAT_SECONDS", 0)
+    jobs._stop_event.clear()
+    thread = threading.Thread(target=jobs._worker_loop, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and min(calls.values()) < 3:
+            time.sleep(0.01)
+    finally:
+        jobs._stop_event.set()
+        thread.join(timeout=5)
+        jobs._stop_event.clear()
+    assert calls["reclassify"] >= 3 and calls["heartbeat"] >= 3 and calls["process"] >= 3, calls
