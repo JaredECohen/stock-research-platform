@@ -436,12 +436,22 @@ def get_stock_memory(
         and not any(probe in (e.body or "") for probe in hidden)
     ]
     entries = list(shown[-limit:])
+    # The condensed block folds old entries in as one-line takeaways (the
+    # first 160 characters of each body), so it can quote the same template
+    # text; the same probes apply line by line.
+    context_lines = (cm.historical_context or "").split("\n")
+    context_kept = [
+        line for line in context_lines
+        if not memo_sections.is_condensed_reflection_template(line)
+        and not any(probe in line for probe in hidden)
+    ]
     return {
         "ticker": ticker.upper(),
         "path": str(company_memory_path(ticker.upper())),
         "entry_count": len(cm.entries),
         "suppressed_count": len(cm.entries) - len(shown),
-        "historical_context": cm.historical_context or "",
+        "historical_context": "\n".join(context_kept) if cm.historical_context else "",
+        "historical_context_suppressed": len(context_lines) - len(context_kept),
         "entries": [
             {
                 "date": e.date,
@@ -469,7 +479,9 @@ def _hidden_memo_texts(ticker: str) -> list[str]:
         return []
     texts: list[str] = []
     for key, entry in presented.section_availability.items():
-        if entry.status != "unavailable" or entry.reason == "not_produced":
+        if (entry.status != "unavailable" or entry.reason == "not_produced"
+                or key.endswith(".long_form_report")):
+            # A drill-down body is never quoted by a reflection entry.
             continue
         if key in ("final_pm_view", "one_sentence_thesis", "final_verdict"):
             texts.append(getattr(raw, key) or "")

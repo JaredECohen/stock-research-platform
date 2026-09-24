@@ -725,3 +725,246 @@ def test_catalysts_and_critic_rules():
     assert shown.risk_committee_challenge.overall_assessment == UNAVAILABLE_TEXT
     assert shown.risk_committee_challenge.review_mode == "unavailable"
     assert shown.key_risks == []
+
+
+# ---------------------------------------------------------------------------
+# Fixer round: rules the first pass left untested or applied partially
+# ---------------------------------------------------------------------------
+
+_DET_BODY = "Synthetic deterministic drill-down body"
+
+
+@pytest.mark.parametrize("name", ["msft_live", "meta_v1", "aapl_demo", "googl_live_prepflag"])
+def test_round_findings_follow_the_long_form_rule(name):
+    """Critique delta 1 applies to every drill-down a client can read, and
+    GET /memo serves round_findings: a shown round finding keeps only the
+    analyst's expansion, never the deterministic body in front of it."""
+    raw = _fixture(name)
+    shown = present_memo(raw)
+    for r_raw, r_shown in zip(raw.round_findings, shown.round_findings, strict=True):
+        for key, f in r_shown.findings.items():
+            before = r_raw.findings[key].long_form_report
+            if f.headline == UNAVAILABLE_TEXT:
+                assert f.long_form_report is None
+            elif before:
+                assert f.long_form_report == ms._long_form_expansion(before), (r_shown.round, key)
+    assert _DET_BODY not in json.dumps([r.model_dump(mode="json") for r in shown.round_findings])
+
+
+def test_round_copies_inherit_the_grid_verdict_and_lose_the_template_block():
+    """Round 0 is the fan-out of the grid views (and an agent's last round is
+    its final finding): a copy of a finding the grid hides by memo-level
+    evidence is hidden too, and a template bull/bear block never survives in
+    a round sector copy."""
+    raw = _fixture("meta_v1")
+    sector_top = raw.sector_agent_view
+    banner = raw.model_copy(update={"degraded_agents": [*raw.degraded_agents, "Sector Analyst"]})
+    assert raw.round_findings[0].findings["sector"].headline == sector_top.headline
+    av = compute_availability(banner)
+    assert _status(av, "sector_agent_view") == ("unavailable", "template_fallback")
+    shown = present_memo(banner)
+    assert shown.sector_agent_view.headline == UNAVAILABLE_TEXT
+    assert shown.round_findings[0].findings["sector"].headline == UNAVAILABLE_TEXT
+    assert sector_top.headline not in shown.model_dump_json()
+
+    # Sector view shown, synthesis hidden by the parse flag: the grid AND the
+    # round copy drop the block.
+    parse_failed = raw.model_copy(deep=True)
+    parse_failed.sector_agent_view.data["bull_bear_parse_failed"] = True
+    parse_failed.round_findings[0].findings["sector"].data["bull_bear_parse_failed"] = True
+    av = compute_availability(parse_failed)
+    assert av["sector_agent_view"].status == "available"
+    assert _status(av, "sector_synthesis") == ("unavailable", "template_fallback")
+    shown = present_memo(parse_failed)
+    assert "bull_bear_analysis" not in shown.sector_agent_view.data
+    assert "bull_bear_analysis" not in shown.round_findings[0].findings["sector"].data
+    # META itself (LLM block) keeps both.
+    clean = present_memo(raw)
+    assert "bull_bear_analysis" in clean.round_findings[0].findings["sector"].data
+
+
+def test_template_bull_bear_block_dropped_from_an_available_sector_view():
+    """The sector card renders `data.bull_bear_analysis` (MemoCard's
+    BullBearAnalysisBlock). An LLM sector view with a canned block keeps the
+    view and loses the block, whichever trigger marks the block."""
+    base = _fixture("meta_v1")
+    bb = base.sector_agent_view.data["bull_bear_analysis"]
+
+    def with_data(**extra: Any) -> StockMemoOut:
+        m = base.model_copy(deep=True)
+        m.sector_agent_view.data.update(extra)
+        return m
+
+    cases = {
+        "signature": with_data(bull_bear_analysis={**bb, "key_disagreement": KD}),
+        "parse_failed": with_data(bull_bear_parse_failed=True),
+        "llm_off": base.model_copy(update={"section_provenance": {"v": 1, "llm_configured": False}}),
+    }
+    for label, memo in cases.items():
+        av = compute_availability(memo)
+        assert av["sector_synthesis"].status == "unavailable", label
+        shown = present_memo(memo)
+        assert "bull_bear_analysis" not in shown.sector_agent_view.data, label
+        if label != "llm_off":  # llm_off hides every LLM analyst view
+            assert av["sector_agent_view"].status == "available", label
+            assert shown.sector_agent_view.headline == base.sector_agent_view.headline, label
+    assert "bull_bear_analysis" in present_memo(base).sector_agent_view.data
+
+
+def test_number_check_paths_follow_dropped_items():
+    """Dropping items from a list section moves every later item up: a claim
+    on a dropped item goes, a later claim's index is renumbered, and a
+    withheld item whose text is template is dropped like a stored one."""
+    raw = _fixture("msft_live")
+    plan = ms._classify(raw, patched_fields=frozenset(), base=None, chain_complete=True)
+    gone = plan.list_hidden["key_risks"]
+    assert gone and plan.avail["key_risks"].status == "degraded"
+    last = len(raw.key_risks) - 1
+    assert last not in gone
+    first_gone = gone[0]
+    claims = [
+        NumberClaim(field=f"key_risks[{first_gone}].detail", start=0, end=1, raw="1", status="traced"),
+        NumberClaim(field=f"key_risks[{last}].detail", start=0, end=1, raw="1", status="traced"),
+        NumberClaim(field="dcf_summary.base_implied_price", start=0, end=1, raw="1", status="traced"),
+    ]
+    withheld = [
+        WithheldItem(field="key_risks", index=9, text=SIG["case_bear_last_resort"].text),
+        WithheldItem(field="key_risks", index=10, text="A real risk whose figure did not trace."),
+    ]
+    memo = raw.model_copy(update={"quality": MemoQuality(number_check=NumberCheck(
+        checked=True, claims=claims, withheld=withheld))})
+    shown = present_memo(memo)
+    nc = shown.quality.number_check
+    moved = last - sum(1 for g in gone if g < last)
+    assert [c.field for c in nc.claims] == [f"key_risks[{moved}].detail", "dcf_summary.base_implied_price"]
+    assert shown.key_risks[moved] == raw.key_risks[last]
+    assert [w.text for w in nc.withheld] == ["A real risk whose figure did not trace."]
+    # Case key points and a hidden case headline follow the same rule.
+    assert ms._renumbered("bull_case.key_points[3]", {"bull_case": [0, 2]}, set()) == "bull_case.key_points[1]"
+    assert ms._renumbered("bull_case.key_points[2]", {"bull_case": [0, 2]}, set()) is None
+    assert ms._renumbered("bull_case.headline", {}, {"bull_case"}) is None
+    assert ms._renumbered("bull_case.headline", {}, set()) == "bull_case.headline"
+
+
+def _builder_base() -> StockMemoOut:
+    """An LLM-PM memo whose thesis the verdict guard rewrote with the builder
+    (no LLM headline claimed), so the thesis is hidden and the confidence is
+    not; the final verdict quotes the thesis verbatim."""
+    base = _fixture("meta_v1")
+    thesis = ("META screens undervalued on the blended read, though no single specialist headline "
+              "defines the call. The market is under-pricing the durable part of the franchise.")
+    return base.model_copy(update={
+        "one_sentence_thesis": thesis,
+        "final_verdict": f"PM final view: Bullish (confidence 62). {thesis} Watch items: none flagged.",
+        "section_provenance": {"v": 1, "llm_configured": True, "thesis": "rewrite", "mispricing": "pm"},
+    })
+
+
+def test_patched_thesis_does_not_unhide_the_base_verdict():
+    """A news patch may replace the thesis but never the final verdict, which
+    still quotes the base thesis: that verdict stays hidden."""
+    base = _builder_base()
+    av_base = compute_availability(base)
+    assert av_base["one_sentence_thesis"].status == "unavailable"
+    assert av_base["confidence_score"].status == "available"
+    assert av_base["final_verdict"].status == "unavailable"
+    patched = base.model_copy(update={"one_sentence_thesis": "Ad pricing held through the quarter."})
+    fields = frozenset({"one_sentence_thesis"})
+    av = compute_availability(patched, patched_fields=fields, base=base)
+    assert av["one_sentence_thesis"].status == "available"
+    assert _status(av, "final_verdict") == ("unavailable", "derived_from_hidden")
+    assert av["final_verdict"].basis == ["derived:base_thesis"]
+    shown = present_memo(patched, patched_fields=fields, base=base)
+    assert shown.final_verdict == UNAVAILABLE_TEXT
+    assert base.one_sentence_thesis not in shown.model_dump_json()
+    # An unknown base errs toward hiding; an LLM base thesis keeps the verdict.
+    av = compute_availability(patched, patched_fields=fields, base=None, chain_complete=False)
+    assert av["final_verdict"].status == "unavailable"
+    meta = _fixture("meta_v1")
+    meta_patched = meta.model_copy(update={"one_sentence_thesis": "A patched thesis."})
+    av = compute_availability(meta_patched, patched_fields=fields, base=meta)
+    assert av["final_verdict"].status == compute_availability(meta)["final_verdict"].status != "unavailable"
+
+
+def test_patched_fallback_card_found_by_the_base_thesis_it_quotes():
+    """Critique delta 6, isolated: over an LLM base (so the template-PM rule
+    cannot decide), the legacy fallback card quotes the BASE thesis, which a
+    patch replaced; the base-thesis match alone hides it."""
+    base = _fixture("meta_v1").model_copy(update={"mispricing_thesis": MispricingThesis(
+        consensus_view="The street sees a steady compounder.",
+        our_view=_fixture("meta_v1").one_sentence_thesis,
+        gap="The blended read calls the name undervalued.")})
+    assert compute_availability(base)["mispricing_thesis"].status == "unavailable"
+    patched = base.model_copy(update={"one_sentence_thesis": "A patched thesis after the news."})
+    av = compute_availability(patched, patched_fields=frozenset({"one_sentence_thesis"}), base=base)
+    assert av["final_pm_view"].status == "available"  # the PM is not a template
+    assert _status(av, "mispricing_thesis") == ("unavailable", "template_fallback")
+    # Without the base, the patched thesis no longer matches the card.
+    assert compute_availability(patched)["mispricing_thesis"].status == "available"
+
+
+def test_final_verdict_strips_hidden_watch_items_and_sector_lean():
+    """`graph._build_verdict` ends with the thesis breakers' titles and may
+    carry the canned sector lean; a hidden breaker's title and a template
+    lean are stripped, the rest of the verdict kept."""
+    meta = _fixture("meta_v1")
+    real = RiskItem(title="Cloud price war", detail="Hyperscalers cut prices into a slowdown.")
+    template = RiskItem(title="Cohort positioning", detail=SIG["case_bear_last_resort"].text)
+    head = f"PM final view: Neutral (confidence 55). {meta.one_sentence_thesis}"
+    memo = meta.model_copy(update={
+        "thesis_breakers": [template, real],
+        "final_verdict": f"{head} Watch items: Cohort positioning, Cloud price war",
+    })
+    av = compute_availability(memo)
+    assert av["thesis_breakers"].status == "degraded"
+    assert _status(av, "final_verdict") == ("degraded", "partial_template")
+    assert "stripped:watch_items" in av["final_verdict"].basis
+    shown = present_memo(memo)
+    assert shown.final_verdict == f"{head} Watch items: Cloud price war"
+    assert [r.title for r in shown.thesis_breakers] == ["Cloud price war"]
+    only_template = memo.model_copy(update={
+        "thesis_breakers": [template], "final_verdict": f"{head} Watch items: Cohort positioning"})
+    assert present_memo(only_template).final_verdict == f"{head} Watch items: none flagged."
+
+    bb = meta.sector_agent_view.data["bull_bear_analysis"]
+    lean_memo = meta.model_copy(deep=True)
+    lean_memo.sector_agent_view.data["bull_bear_analysis"] = {**bb, "key_disagreement": KD,
+                                                              "sector_lean": "bearish"}
+    lean_memo.final_verdict = f"{head} Sector lean: bearish. Watch items: none flagged."
+    av = compute_availability(lean_memo)
+    assert "stripped:sector_lean" in av["final_verdict"].basis
+    assert present_memo(lean_memo).final_verdict == f"{head} Watch items: none flagged."
+
+
+def test_earned_confidence_is_shown_over_a_template_pm():
+    """The W2b contract hook: a write-time `section_provenance.confidence ==
+    "earned"` shows the confidence even when the PM view was a template."""
+    memo = _fixture("googl_live_prepflag").model_copy(update={"section_provenance": {"confidence": "earned"}})
+    av = compute_availability(memo)
+    assert av["final_pm_view"].status == "unavailable"
+    assert av["confidence_score"].status == "available"
+    assert av["confidence_score"].basis == ["provenance:confidence=earned"]
+    assert compute_availability(_fixture("googl_live_prepflag"))["confidence_score"].status == "unavailable"
+
+
+def test_is_reflection_template_pins_the_no_llm_entry(no_llm):
+    """Pinned to the producer: the deterministic branch of
+    `reflection_agent._compose_company_entry` is a template entry, the LLM
+    branch's labelled entry is not."""
+    from app.agents import reflection_agent
+    memo = _fixture("meta_v1")
+    det = reflection_agent._compose_company_entry(memo, [{"label": "memo run"}])
+    assert ms.is_reflection_template(det)
+    llm_entry = ("**Trigger:** memo run\n\n**Observation:** Ads grew faster than the model assumed.\n\n"
+                 "**Update to thesis:** Held the view; confidence unchanged.\n\n**Watch next:** capex.")
+    assert not ms.is_reflection_template(llm_entry)
+
+
+def test_condensed_history_line_template_probe():
+    det_obs = "Technology / Internet Content regime read: mixed. Cohort of 5 peers selected on sub_indus"
+    assert ms.is_condensed_reflection_template(
+        f"- 2026-09-01 (memo_run): **Trigger:** memo run  **Observation:** {det_obs}")
+    assert not ms.is_condensed_reflection_template(
+        "- 2026-09-01 (memo_run): **Trigger:** memo run  **Observation:** Ads grew faster than modelled.")
+    assert not ms.is_condensed_reflection_template(
+        "**Condensed 2026-08-01 → 2026-09-01** (3 entries; memo_run=3)")

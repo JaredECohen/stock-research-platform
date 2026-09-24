@@ -392,6 +392,27 @@ def is_reflection_template(body: str) -> bool:
     )
 
 
+# A line `longterm._deterministic_summary` folds a reflection entry into:
+# "- <date> (<trigger>): <first 160 chars of the body>".
+_CONDENSED_LINE = re.compile(r"^- \S+ \([^)]*\): (?P<takeaway>.*)$")
+# The start of `sector_agents.run_sector_agent`'s deterministic summary
+# (signature `sector_det_summary`), which the condenser truncates before the
+# "Cohort of N peers" clause the full signature needs.
+_SECTOR_DET_PREFIX = re.compile(r"^[^/*]+ / [^*]+ regime read: ")
+
+
+def is_condensed_reflection_template(line: str) -> bool:
+    """True for a condensed-history line that folded in a deterministic
+    reflection entry whose observation is the template sector summary.
+    The frame alone does not decide (the LLM branch writes the same
+    `**Trigger:**`/`**Observation:**` labels); the observation text does."""
+    m = _CONDENSED_LINE.match(line or "")
+    if m is None:
+        return False
+    _, sep, obs = m.group("takeaway").partition("**Observation:** ")
+    return bool(sep) and _SECTOR_DET_PREFIX.match(obs.strip()) is not None
+
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
@@ -419,7 +440,13 @@ class _Plan:
     case_hidden: dict[str, tuple[bool, list[int]]] = field(default_factory=dict)
     list_hidden: dict[str, list[int]] = field(default_factory=dict)
     round_hidden: set[tuple[int, str]] = field(default_factory=set)
+    round_bb_drop: set[tuple[int, str]] = field(default_factory=set)
     final_verdict: str | None = None                                # replacement text
+    # What `_case_item_template` needs, kept so the number-check filter can
+    # judge a withheld item's text by the same rules as a stored item.
+    fragments: set[str] = field(default_factory=set)
+    scenarios_templated: bool = False
+    llm_bb: bool = False
 
 
 @dataclass
@@ -605,6 +632,7 @@ def _classify(memo: StockMemoOut, *, patched_fields: frozenset[str], base: Stock
     # --- analyst views --------------------------------------------------------
     unavailable_findings: list[AgentFinding] = []
     available_findings: list[AgentFinding] = []
+    hidden_identities: set[tuple[str, str, str]] = set()
     for key, finding, computed in _finding_fields(memo):
         verdict = _classify_finding(finding, ctx, computed=computed)
         av[key] = verdict
@@ -612,6 +640,7 @@ def _classify(memo: StockMemoOut, *, patched_fields: frozenset[str], base: Stock
             continue
         if verdict.status == "unavailable":
             plan.hidden_findings.add(key)
+            hidden_identities.add(_identity(finding))
             # Only a stand-in's text is template. A skipped analyst's
             # "summary" is the PM's intake rationale, which other sections
             # may legitimately echo, so it seeds no fragments.
@@ -725,6 +754,7 @@ def _classify(memo: StockMemoOut, *, patched_fields: frozenset[str], base: Stock
     # --- bull / bear / risks / catalysts --------------------------------------
     llm_bb = bb is not None and not bb_template
     scenarios_templated = ctx.llm_off or "DCF Scenarios" in ctx.presence
+    plan.fragments, plan.scenarios_templated, plan.llm_bb = fragments, scenarios_templated, llm_bb
     hidden_case_texts: set[str] = set()
     for key in ("bull_case", "bear_case"):
         case = getattr(memo, key)
@@ -835,7 +865,8 @@ def _classify(memo: StockMemoOut, *, patched_fields: frozenset[str], base: Stock
 
     # --- final verdict ---------------------------------------------------------
     _classify_final_verdict(memo, plan, fragments, bb if bb_template else None,
-                            sector_hidden=av["sector_agent_view"].status == "unavailable")
+                            sector_hidden=av["sector_agent_view"].status == "unavailable",
+                            embedded_thesis=_embedded_thesis_verdict(memo, patched_fields, base))
 
     # --- diligence rounds --------------------------------------------------------
     # Every round's findings are blanked by the same rules (round 0 holds the
@@ -846,14 +877,71 @@ def _classify(memo: StockMemoOut, *, patched_fields: frozenset[str], base: Stock
     for r_i, rnd in enumerate(memo.round_findings or []):
         for k, f in (rnd.findings or {}).items():
             computed = k in COMPUTED_ROSTER_KEYS
-            v = _classify_finding(f, ctx, computed=computed, refire=computed and rnd.round >= 1,
-                                  memo_level=False)
-            if v.status == "unavailable":
+            if f is not None and _identity(f) in hidden_identities:
+                # The same finding the grid hides (round 0 is the fan-out,
+                # and an agent's last round IS its final finding): it
+                # inherits the memo-level verdict, which the degradation
+                # log may have decided on its own.
+                hidden = True
+            else:
+                v = _classify_finding(f, ctx, computed=computed, refire=computed and rnd.round >= 1,
+                                      memo_level=False)
+                hidden = v.status == "unavailable"
+            if hidden:
                 plan.round_hidden.add((r_i, k))
                 hidden_rounds += int(rnd.round >= 1)
+            elif f is not None and _round_bb_template(f, ctx, plan.drop_bull_bear_block):
+                plan.round_bb_drop.add((r_i, k))
     av["round_findings"] = (_av("degraded", "partial_template", ["rounds:hidden_findings"],
                                 hidden_items=hidden_rounds) if hidden_rounds else _AVAILABLE.model_copy())
     return plan
+
+
+def _identity(f: AgentFinding) -> tuple[str, str, str]:
+    return (f.agent or "", f.headline or "", f.summary or "")
+
+
+def _round_bb_template(f: AgentFinding, ctx: _Ctx, grid_block_dropped: bool) -> bool:
+    """True when a shown round finding carries a template sector bull/bear
+    block. A sector copy loses it whenever the grid's block was dropped (it
+    is the same block, or an earlier draft of it), and otherwise by the
+    same flags and signature the grid is judged on."""
+    d = f.data if isinstance(f.data, dict) else {}
+    bb = d.get("bull_bear_analysis")
+    if not isinstance(bb, dict):
+        return False
+    if grid_block_dropped and (f.agent or "") == "Sector Analyst":
+        return True
+    return bool(
+        d.get("bull_bear_parse_failed") or ctx.llm_off
+        or SIG["bb_key_disagreement"].matches((bb.get("key_disagreement") or "").strip())
+    )
+
+
+def _embedded_thesis_verdict(memo: StockMemoOut, patched_fields: frozenset[str],
+                             base: StockMemoOut | None) -> list[str]:
+    """Basis for hiding the final verdict because it quotes a hidden BASE thesis.
+
+    `graph._build_verdict` embeds the thesis verbatim, and a news patch may
+    replace `one_sentence_thesis` but never `final_verdict`. So after a
+    thesis patch the verdict still carries the base memo's thesis, which the
+    current thesis rules no longer see. Judge that base thesis on the base
+    snapshot; an unknown base errs toward hiding."""
+    if "one_sentence_thesis" not in patched_fields or "final_verdict" in patched_fields:
+        return []
+    if base is None:
+        return ["patch_chain:incomplete"]
+    base_thesis = (base.one_sentence_thesis or "").strip()
+    if not base_thesis or base_thesis not in (memo.final_verdict or ""):
+        # The verdict does not quote the base thesis (a producer change, or
+        # a base with no thesis): nothing of it to hide.
+        return []
+    try:
+        status = _classify(base, patched_fields=frozenset(), base=None,
+                           chain_complete=True).avail["one_sentence_thesis"].status
+    except Exception:
+        return ["unclassified:base_thesis"]
+    return ["derived:base_thesis"] if status == "unavailable" else []
 
 
 def _long_form_expansion(text: str) -> str | None:
@@ -964,7 +1052,8 @@ def _classify_mispricing(memo: StockMemoOut, ctx: _Ctx, pm_template: bool,
 
 
 def _classify_final_verdict(memo: StockMemoOut, plan: _Plan, fragments: set[str],
-                            template_bb: dict[str, Any] | None, *, sector_hidden: bool) -> None:
+                            template_bb: dict[str, Any] | None, *, sector_hidden: bool,
+                            embedded_thesis: list[str]) -> None:
     av = plan.avail
     text = memo.final_verdict or ""
     if not text.strip():
@@ -974,6 +1063,10 @@ def _classify_final_verdict(memo: StockMemoOut, plan: _Plan, fragments: set[str]
             or av["confidence_score"].status == "unavailable"):
         # The thesis and confidence are embedded verbatim (graph._build_verdict).
         av["final_verdict"] = _av("unavailable", "derived_from_hidden", ["derived:thesis_or_confidence"])
+        return
+    if embedded_thesis:
+        # A patched thesis is shown, but the verdict still quotes the base's.
+        av["final_verdict"] = _av("unavailable", "derived_from_hidden", embedded_thesis)
         return
     stripped = text
     basis: list[str] = []
@@ -1161,9 +1254,17 @@ def present_memo(
         setattr(out, key, [x for i, x in enumerate(getattr(out, key)) if i not in drop])
 
     # Diligence rounds.
-    for r_i, k in plan.round_hidden:
-        rnd = out.round_findings[r_i]
-        rnd.findings[k] = _blank_finding(rnd.findings[k])
+    for r_i, rnd in enumerate(out.round_findings or []):
+        for k, f in list((rnd.findings or {}).items()):
+            if (r_i, k) in plan.round_hidden:
+                rnd.findings[k] = _blank_finding(f)
+                continue
+            # The same drill-down rule as the grid (critique delta 1): only
+            # the analyst's expansion is shown, in every round.
+            if f.long_form_report:
+                f.long_form_report = _long_form_expansion(f.long_form_report)
+            if (r_i, k) in plan.round_bb_drop:
+                f.data = {dk: dv for dk, dv in (f.data or {}).items() if dk != "bull_bear_analysis"}
 
     # The compatibility event carries the legacy list verbatim; filter the
     # same template points out of it (critique delta 10).
@@ -1186,8 +1287,56 @@ def present_memo(
     nc = out.quality.number_check if out.quality is not None else None
     if nc is not None:
         hidden = unavailable_keys(av)
-        nc.claims = [c for c in nc.claims if _section_of_field(c.field) not in hidden]
-        nc.withheld = [w for w in nc.withheld if _section_of_field(w.field) not in hidden]
+        dropped: dict[str, list[int]] = {
+            **{k: sorted(v[1]) for k, v in plan.case_hidden.items()},
+            **{k: sorted(v) for k, v in plan.list_hidden.items()},
+        }
+        hidden_heads = {k for k, (h, _) in plan.case_hidden.items() if h}
+        claims = []
+        for c in nc.claims:
+            if _section_of_field(c.field) in hidden:
+                continue
+            moved = _renumbered(c.field, dropped, hidden_heads)
+            if moved is not None:
+                claims.append(c if moved == c.field else c.model_copy(update={"field": moved}))
+        nc.claims = claims
+        # A withheld item was removed before storage, so its index refers to
+        # the pre-check list and is left alone; its TEXT is judged by the
+        # same rules as a stored item of that list.
+        nc.withheld = [
+            w for w in nc.withheld
+            if _section_of_field(w.field) not in hidden
+            and not (_section_of_field(w.field) in _LIST_SECTIONS
+                     and _case_item_template(w.text, plan.fragments, plan.scenarios_templated,
+                                             plan.llm_bb))
+        ]
 
     out.section_availability = av
     return out
+
+
+_LIST_SECTIONS = frozenset({"key_risks", "thesis_breakers", "catalysts", "bull_case", "bear_case"})
+_LIST_ITEM_PATH = re.compile(
+    r"^(?P<section>key_risks|thesis_breakers|catalysts|(?:bull|bear)_case)"
+    r"(?P<mid>\.key_points)?\[(?P<index>\d+)\](?P<rest>.*)$"
+)
+
+
+def _renumbered(path: str, dropped: dict[str, list[int]], head_hidden: set[str]) -> str | None:
+    """A number-check field path after the presenter drops list items: None
+    when it pointed at a dropped item (or a hidden case headline), else the
+    path with its index moved down past the dropped items before it."""
+    section = _section_of_field(path)
+    if section in head_hidden and path.startswith(f"{section}.headline"):
+        return None
+    m = _LIST_ITEM_PATH.match(path)
+    gone = dropped.get(section) or []
+    if m is None or not gone:
+        return path
+    if section in ("bull_case", "bear_case") and m.group("mid") is None:
+        return path  # not a key_points path
+    i = int(m.group("index"))
+    if i in gone:
+        return None
+    new = i - sum(1 for g in gone if g < i)
+    return f"{section}{m.group('mid') or ''}[{new}]{m.group('rest')}"

@@ -93,6 +93,55 @@ def test_memory_trail_suppresses_template_reflection(tmp_path, monkeypatch):
         purge_memos("ZZMEMR")
 
 
+def test_memory_trail_template_rule_stands_alone(tmp_path, monkeypatch):
+    """The reflection-template rule on its own: the latest memo hides no
+    prose (META v1), and the template entry was composed from an OLDER,
+    different memo, so no hidden-field probe can match it. It is still left
+    out, and so is its line in the condensed history block."""
+    import json
+    from pathlib import Path
+
+    from app.agents import reflection_agent
+    from app.config import settings
+    from app.schemas import StockMemoOut
+    from app.services import memo_sections, memo_store
+    from app.tests.gating_helpers import purge_memos
+
+    monkeypatch.setattr(settings, "memory_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    fixtures = Path(__file__).parent / "fixtures" / "memo_sections"
+    latest = StockMemoOut.model_validate(json.loads((fixtures / "meta_v1.json").read_text()))
+    latest = latest.model_copy(update={"ticker": "ZZMEMS"})
+    older = StockMemoOut.model_validate(json.loads((fixtures / "googl_live_prepflag.json").read_text()))
+    older = older.model_copy(update={"ticker": "ZZMEMS"})
+    purge_memos("ZZMEMS")
+    memo_store.save_memo(latest)
+    try:
+        shown = memo_store.present_snapshot(memo_store.latest_memo("ZZMEMS"))
+        assert not {k for k, v in shown.section_availability.items()
+                    if v.status == "unavailable" and v.reason != "not_produced"
+                    and k in ("final_pm_view", "one_sentence_thesis", "final_verdict")}
+        template = reflection_agent._compose_company_entry(older, [{"label": "memo run"}])
+        assert memo_sections.is_reflection_template(template)
+        cm = CompanyMemory.for_ticker("ZZMEMS")
+        cm.append_entry(MemoryEntry(date="2026-09-01", trigger="memo_run", body=template))
+        real_line = "- 2026-08-01 (earnings): Ads grew faster than the model assumed."
+        folded = "- 2026-08-02 (memo_run): " + template[:160].strip().replace("\n", " ")
+        cm.historical_context = "\n".join(
+            ["**Condensed 2026-08-01 → 2026-08-02** (2 entries)", real_line, folded])
+        cm.save()
+
+        body = TestClient(app).get("/api/stocks/ZZMEMS/memory").json()
+        assert body["suppressed_count"] == 1 and body["entries"] == []
+        assert real_line in body["historical_context"]
+        assert folded not in body["historical_context"]
+        assert "regime read" not in body["historical_context"]
+        assert body["historical_context_suppressed"] == 1
+    finally:
+        purge_memos("ZZMEMS")
+
+
 def test_stock_memory_endpoint_empty_for_unknown_ticker(tmp_path, monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "memory_dir", str(tmp_path))

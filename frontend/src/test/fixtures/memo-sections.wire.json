@@ -153,7 +153,7 @@
         "FCF yield: 2.1% vs peers 1.8%.",
         "Op margin vs own 8y median 30% — +7% delta."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+       "long_form_report": null,
        "sources": [],
        "summary": "Peer set: MSFT, GOOGL, META. Trades at a +72.7% premium to peers on EV/EBITDA. Operating margin trails peer median, which weakens the case for a premium. Growth is below peer median. Own-history context: Operating margin running above its own multi-year median."
       },
@@ -197,7 +197,7 @@
        "evidence": [],
        "headline": "Risk profile for AAPL",
        "key_points": [],
-       "long_form_report": "Synthetic deterministic drill-down body for the aapl_demo fixture.",
+       "long_form_report": null,
        "sources": [],
        "summary": "Quantitative risk profile looks moderate. 1 structured rec(s) applied to the memo (see data.recommendations)."
       },
@@ -1166,7 +1166,7 @@
        "evidence": [],
        "headline": "Insufficient peer data for comps.",
        "key_points": [],
-       "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+       "long_form_report": null,
        "sources": [],
        "summary": "No peer set defined for this ticker in the demo dataset."
       },
@@ -1210,7 +1210,7 @@
        "evidence": [],
        "headline": "Risk profile for ABBV",
        "key_points": [],
-       "long_form_report": "Synthetic deterministic drill-down body for the abbv_v7_patch fixture.",
+       "long_form_report": null,
        "sources": [],
        "summary": "Leverage at 3.6x debt/EBITDA is elevated. 1 structured rec(s) applied to the memo (see data.recommendations)."
       },
@@ -1970,7 +1970,7 @@
         "FCF yield: 1.7% vs peers 1.8%.",
         "Op margin vs own 8y median 27% — +19% delta."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "long_form_report": "Synthetic analyst expansion for the googl_live_prepflag fixture.",
        "sources": [],
        "summary": "Peer set: META, MSFT, AMZN. Trades at a +44.4% premium to peers on EV/EBITDA. Operating margin trails peer median, which weakens the case for a premium. Growth is below peer median. Own-history context: Operating margin running above its own multi-year median."
       },
@@ -1992,7 +1992,7 @@
         "Synthetic analyst point 11 for the googl_live_prepflag fixture.",
         "Synthetic analyst point 12 for the googl_live_prepflag fixture."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "long_form_report": "Synthetic analyst expansion for the googl_live_prepflag fixture.",
        "sources": [],
        "summary": "Synthetic analyst summary 2 for the googl_live_prepflag fixture."
       },
@@ -2030,7 +2030,7 @@
         "Synthetic analyst point 38 for the googl_live_prepflag fixture.",
         "Synthetic analyst point 39 for the googl_live_prepflag fixture."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "long_form_report": "Synthetic analyst expansion for the googl_live_prepflag fixture.",
        "sources": [],
        "summary": "Synthetic analyst summary 34 for the googl_live_prepflag fixture."
       },
@@ -2041,7 +2041,7 @@
        "evidence": [],
        "headline": "Risk profile for GOOGL",
        "key_points": [],
-       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "long_form_report": "Synthetic analyst expansion for the googl_live_prepflag fixture.",
        "sources": [],
        "summary": "Low FCF yield reduces downside support. 1 structured rec(s) applied to the memo (see data.recommendations)."
       },
@@ -2200,7 +2200,7 @@
         "Synthetic analyst point 21 for the googl_live_prepflag fixture.",
         "Synthetic analyst point 22 for the googl_live_prepflag fixture."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "long_form_report": "Synthetic analyst expansion for the googl_live_prepflag fixture.",
        "sources": [],
        "summary": "Synthetic analyst summary 14 for the googl_live_prepflag fixture."
       },
@@ -2220,7 +2220,7 @@
         "Synthetic analyst point 31 for the googl_live_prepflag fixture.",
         "Synthetic analyst point 32 for the googl_live_prepflag fixture."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the googl_live_prepflag fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the googl_live_prepflag fixture.",
+       "long_form_report": "Synthetic analyst expansion for the googl_live_prepflag fixture.",
        "sources": [],
        "summary": "Synthetic analyst summary 24 for the googl_live_prepflag fixture."
       }
@@ -2949,7 +2949,7 @@
         "FCF yield: 2.8% vs peers 1.8%.",
         "Op margin vs own 8y median 39% — +7% delta."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
        "sources": [],
        "summary": "Peer set: GOOGL, MSFT, AMZN. Trades at a -15.0% discount to peers on EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median. Own-history context: Operating margin running above its own multi-year median."
       },
@@ -3011,7 +3011,7 @@
         "Synthetic analyst point 62 for the meta_v1 fixture.",
         "Synthetic analyst point 63 for the meta_v1 fixture."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
        "sources": [],
        "summary": "Synthetic analyst summary 58 for the meta_v1 fixture."
       },
@@ -3022,7 +3022,7 @@
        "evidence": [],
        "headline": "Risk profile for META",
        "key_points": [],
-       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
        "sources": [],
        "summary": "Quantitative risk profile looks moderate. 1 structured rec(s) applied to the memo (see data.recommendations)."
       },
@@ -3168,7 +3168,7 @@
         "Synthetic analyst point 24 for the meta_v1 fixture.",
         "Synthetic analyst point 25 for the meta_v1 fixture."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
        "sources": [],
        "summary": "Synthetic analyst summary 18 for the meta_v1 fixture."
       },
@@ -3202,7 +3202,7 @@
         "Synthetic analyst point 55 for the meta_v1 fixture.",
         "Synthetic analyst point 56 for the meta_v1 fixture."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
        "sources": [],
        "summary": "Synthetic analyst summary 48 for the meta_v1 fixture."
       }
@@ -3232,7 +3232,7 @@
         "Synthetic analyst point 36 for the meta_v1 fixture.",
         "Synthetic analyst point 37 for the meta_v1 fixture."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
        "sources": [],
        "summary": "Synthetic analyst summary 27 for the meta_v1 fixture."
       },
@@ -3251,7 +3251,7 @@
         "Synthetic analyst point 45 for the meta_v1 fixture.",
         "Synthetic analyst point 46 for the meta_v1 fixture."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the meta_v1 fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the meta_v1 fixture.",
+       "long_form_report": "Synthetic analyst expansion for the meta_v1 fixture.",
        "sources": [],
        "summary": "Synthetic analyst summary 39 for the meta_v1 fixture."
       }
@@ -4114,7 +4114,7 @@
         "Op margin vs own 9y median 42% — +12% delta.",
         "Revenue growth at 88th percentile of own 9y range."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+       "long_form_report": "Synthetic analyst expansion for the msft_live fixture.",
        "sources": [],
        "summary": "Peer set: GOOGL, AMZN, ORCL, META. In-line with peer median EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median. Own-history context: Operating margin running above its own multi-year median. Revenue growth in the top quartile of its own 9y range."
       },
@@ -4174,7 +4174,7 @@
        "evidence": [],
        "headline": "Risk profile for MSFT",
        "key_points": [],
-       "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+       "long_form_report": "Synthetic analyst expansion for the msft_live fixture.",
        "sources": [],
        "summary": "Quantitative risk profile looks moderate."
       },
@@ -4370,7 +4370,7 @@
         "Synthetic analyst point 13 for the msft_live fixture.",
         "Synthetic analyst point 14 for the msft_live fixture."
        ],
-       "long_form_report": "Synthetic deterministic drill-down body for the msft_live fixture.\n\n### Analyst expansion\nSynthetic analyst expansion for the msft_live fixture.",
+       "long_form_report": "Synthetic analyst expansion for the msft_live fixture.",
        "sources": [],
        "summary": "Synthetic analyst summary 2 for the msft_live fixture."
       },
