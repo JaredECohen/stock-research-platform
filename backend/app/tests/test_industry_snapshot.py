@@ -147,6 +147,34 @@ def test_spillovers_carry_their_source_and_a_signal_never_a_correlation(_taxonom
     assert {s["id"]: s for s in row.payload["spillovers"]}[edge["id"]]["signal"] == "dormant"
 
 
+def test_the_dependency_line_names_moved_groups_by_label_never_by_code(_taxonomy):
+    """The PM writes public memo prose from this block, and memo prose has
+    no L1 gate, so the "Dependency links" line is the only guard: every
+    moved group by OUR label, no 4-digit group code anywhere, and a link
+    label that quotes a registry group name relabelled (a legacy row's
+    label, or an atlas edit, can)."""
+    graph = isn.dependency_graph()
+    edge = next(link for link in graph["links"] if link["kind"] == "edge")
+    stats = {c: _stats(c, sid=i + 1, ret_1m=0.07 - 0.06 * i) for i, c in enumerate(edge["codes"])}
+    row = isn.compute_cross_snapshot(PERIOD, AS_OF, version=_taxonomy, persist=False, loaders=_loaders(stats))
+    doc = isn.snapshot_dict(row)
+    payload = dict(doc["payload"])
+    spill = [dict(s) for s in payload["spillovers"]]
+    active = next(s for s in spill if s["id"] == edge["id"])
+    assert active["signal"] == "active"
+    # A legacy row's link label quoting a registry group name.
+    active["label"] = "Semiconductors & Semiconductor Equipment to peers"
+    payload["spillovers"] = spill
+    doc["payload"] = payload
+    block = isn.render_pm_block(doc, max_chars=100_000)
+    line = next(line for line in block.split("\n") if line.startswith("Dependency links"))
+    for code in edge["codes"]:
+        assert f"{il.label(code)} " in line, (code, line)
+    assert "Semiconductors & Semiconductor" not in line and f"{il.label('4530')} to peers" in line, line
+    group_codes = {g.code for g in reg.industry_groups(version=_taxonomy) if not re.match(r"^(?:19|20)\d\d$", g.code)}
+    assert not [c for c in group_codes if re.search(rf"(?<!\d){c}(?!\d)", block)], block
+
+
 def test_events_are_counted_per_group_and_macro_regime_is_carried(_taxonomy):
     a, b = _codes(2)
     stats = {a: _stats(a, sid=1, ret_1m=0.02, tickers=("AAA", "BBB")), b: _stats(b, sid=2, ret_1m=0.0, tickers=("CCC",))}

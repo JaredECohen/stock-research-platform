@@ -11,6 +11,7 @@ identity, so the closure stays a plain callable.
 """
 from __future__ import annotations
 
+import re
 import sys
 import types
 from datetime import datetime
@@ -152,6 +153,27 @@ def tools(monkeypatch) -> dict[str, Any]:
     agent = chat_sdk._build_chat_agent()
     assert agent is not None
     return {t.__name__: t for t in agent.tools}
+
+
+def test_chat_tool_description_and_instructions_are_label_only(monkeypatch):
+    """The tool's description and the agent's instructions are what the
+    chat model reads before it names a group to a user: no brand, no
+    "4-digit code" wording, and the group addressed by its slug."""
+    built: dict[str, Any] = {}
+    fake = types.ModuleType("agents")
+    fake.Agent = lambda **kwargs: built.update(kwargs) or types.SimpleNamespace(**kwargs)
+    fake.function_tool = lambda fn: fn
+    monkeypatch.setitem(sys.modules, "agents", fake)
+    monkeypatch.setattr(chat_sdk, "_can_use_sdk", lambda: True)
+    assert chat_sdk._build_chat_agent() is not None
+    tool = next(t for t in built["tools"] if t.__name__ == "get_industry_context")
+    doc = " ".join((tool.__doc__ or "").split())
+    instructions = " ".join(str(built["instructions"]).split())
+    for text in (doc, instructions):
+        assert not il.has_brand(text), text
+        assert not re.search(r"\d-digit|industry-group code", text, re.I), text
+    assert "slug" in doc and "never by a numeric code" in doc
+    assert "explicit group slug" in instructions
 
 
 def test_chat_tool_answers_for_a_portfolio_of_tickers_from_stored_artifacts_only(clean, tools, monkeypatch):
