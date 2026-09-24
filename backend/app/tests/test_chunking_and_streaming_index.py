@@ -110,10 +110,11 @@ def test_the_encoding_follows_the_embedding_model_rather_than_a_hardcoded_name()
 def test_chunking_survives_an_unloadable_tokenizer(monkeypatch):
     """The worker must not die because a tokenizer download failed.
 
-    `tiktoken` fetches BPE ranks over the network on first use. A worker
-    that boots without that cache and without egress would otherwise take
-    the whole process down inside a filing index — so the degraded path is
-    a calibrated character heuristic, never an exception.
+    The BPE ranks are vendored (FIX-012), but if that file is missing or
+    corrupt — or an operator points `TIKTOKEN_CACHE_DIR` at a cold dir —
+    `tiktoken` fetches them over the network. A worker without egress would
+    otherwise take the whole process down inside a filing index — so the
+    degraded path is a calibrated character heuristic, never an exception.
     """
     monkeypatch.setattr(emb, "_encoding", lambda: None)
 
@@ -287,10 +288,11 @@ def _sentence_filling(budget: int) -> str:
 
     Built to the *measured* size rather than to a fixed clause count. A
     clause count only lands near the budget for one tokenizer: where
-    `count_tokens` falls back to its character heuristic (no tiktoken BPE
-    cache and no egress to fetch one — the state every CI runner starts
-    in), the same 38 clauses measure 506 tokens instead of 461 and the
-    fixture stops fitting a chunk. Measuring keeps the case this test
+    `count_tokens` falls back to its character heuristic (only when the
+    vendored ranks fail to load, which the encoder tests turn into a
+    failure — before FIX-012 it was the state every CI runner started in),
+    the same 38 clauses measure 506 tokens instead of 461 and the fixture
+    stops fitting a chunk. Measuring keeps the case this test
     exists for — a sentence that nearly fills a chunk — true under either
     counter, instead of reporting an encoder-availability problem as a
     failure of the carry cap.
