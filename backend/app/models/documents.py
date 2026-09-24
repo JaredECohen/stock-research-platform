@@ -175,7 +175,7 @@ class DocChunk(Base):
     HNSW index. Until then `vector_store.search` scores the JSON embeddings
     in Python; it never falls back to BM25 itself — BM25 over filing text
     (`retrieval_service`) is the filing analyst's own fallback when the
-    vector search returns nothing.
+    vector search returns nothing, fails, or is skipped for lack of a ticker.
 
     `source_type` ∈ {filing, transcript, memo, news}. `source_id` is
     the foreign-key into the originating table (FilingDoc.id,

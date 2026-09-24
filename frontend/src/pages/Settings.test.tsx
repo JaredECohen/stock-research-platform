@@ -7,8 +7,9 @@ import { okJson, renderWithProviders, stubFetch } from "@/test/providers";
 // off", but no retrieval code reads the flag. The backend now sends a note
 // beside the boolean; the page must show it, and still render older payloads.
 const NOTE =
-  "Not consulted by retrieval: the filing and earnings analysts always search the vector index first; " +
-  "the filing analyst falls back to BM25 keyword search only when that search returns nothing.";
+  "Not consulted by retrieval: the filing and earnings analysts search the vector index first " +
+  "whenever the ticker is known; the filing analyst falls back to BM25 keyword search when that " +
+  "search returns nothing, fails, or is skipped for lack of a ticker.";
 
 function status(extra: Record<string, unknown> = {}) {
   return {

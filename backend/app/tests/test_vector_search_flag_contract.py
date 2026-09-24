@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 import app as app_pkg
 from app.agents import earnings_agent, filing_agent
+from app.api.routes_health import FEATURE_FLAG_NOTES
 from app.config import Settings, settings
 from app.main import app
 from app.services import retrieval_service, vector_store
@@ -67,3 +68,47 @@ def test_status_notes_the_vector_flag_and_retrieval_really_ignores_it(monkeypatc
                 for n in ast.walk(ast.parse(p.read_text(encoding="utf-8"))))
     )
     assert readers == ["api/routes_health.py"]
+
+
+def _filing_layers(monkeypatch, ticker: str, vector) -> list[str]:
+    monkeypatch.setattr(Settings, "has_llm", PropertyMock(return_value=False))
+    layers: list[str] = []
+
+    def _vector(*a, **k):
+        layers.append("vector")
+        return vector()
+
+    monkeypatch.setattr(vector_store, "search", _vector)
+    monkeypatch.setattr(retrieval_service, "search",
+                        lambda *a, **k: layers.append("bm25") or [])
+    filing_agent.run_filing_agent(
+        {"ticker": ticker, "sector": "Technology"},
+        [{"type": "10-K", "url": "", "risk_factors": ["r1"], "mda": "m"}],
+    )
+    return layers
+
+
+def test_note_names_every_route_to_the_bm25_fallback(monkeypatch):
+    """The first note said BM25 ran "only when that search returns nothing",
+    which is exactly the misreading the note exists to prevent: an index
+    that raises, or a missing ticker, also lands on BM25. Each route the
+    note names is driven here, so dropping one from the code or the text
+    fails the test."""
+    note = FEATURE_FLAG_NOTES["enable_vector_search"]
+
+    def _raise():
+        raise RuntimeError("index down")
+
+    routes = {
+        "returns nothing": _filing_layers(monkeypatch, "AAPL", lambda: []),
+        "fails": _filing_layers(monkeypatch, "AAPL", _raise),
+        "lack of a ticker": _filing_layers(monkeypatch, "", lambda: []),
+    }
+    assert routes == {
+        "returns nothing": ["vector", "bm25"],
+        "fails": ["vector", "bm25"],
+        "lack of a ticker": ["bm25"],
+    }
+    for phrase in routes:
+        assert phrase in note, phrase
+    assert "only when" not in note and "always" not in note

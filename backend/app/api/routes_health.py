@@ -124,9 +124,10 @@ def health() -> dict:
 # this payload can draw that conclusion again.
 FEATURE_FLAG_NOTES: dict[str, str] = {
     "enable_vector_search": (
-        "Not consulted by retrieval: the filing and earnings analysts always "
-        "search the vector index first; the filing analyst falls back to BM25 "
-        "keyword search only when that search returns nothing."
+        "Not consulted by retrieval: the filing and earnings analysts search "
+        "the vector index first whenever the ticker is known; the filing "
+        "analyst falls back to BM25 keyword search when that search returns "
+        "nothing, fails, or is skipped for lack of a ticker."
     ),
 }
 

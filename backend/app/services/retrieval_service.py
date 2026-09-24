@@ -3,7 +3,8 @@
 Keyword-scores chunks built from filings, transcripts and news. It never
 delegates to an embeddings index. In the memo pipeline the filing analyst
 calls `search` only as a fallback, when `vector_store.search` returns no
-passages or fails; the earnings analyst does not call it (`agents.tools.
+passages, fails, or is skipped for lack of a ticker; the earnings analyst
+does not call it (`agents.tools.
 retrieve` also wraps it). No setting chooses between the two paths —
 `settings.enable_vector_search` is reported on `/api/providers/status`
 but read by no retrieval code.
