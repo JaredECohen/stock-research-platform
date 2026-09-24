@@ -16,6 +16,7 @@ import pytest
 
 from app.services import industry_group_knowledge as igk
 from app.services import industry_knowledge as ik
+from app.services import industry_labels as il
 
 
 def _industry(code: str, name: str, **fields: str) -> dict:
@@ -286,6 +287,83 @@ def test_no_budget_is_ever_overrun_for_any_real_group():
         for budget in (0, 1, 2, 40, 120, 400, 1200, 3300, igk.PROMPT_BLOCK_MAX_CHARS):
             assert len(m.as_prompt_block(max_chars=budget)) <= budget, (g["code"], budget)
             assert len(m.sub_industry_block(budget)) <= budget, (g["code"], budget)
+
+
+def _registry_nodes_of(group_code: str) -> dict[str, str]:
+    """Every registry code -> name at or under this group, plus its sector."""
+    payload = ik.load_industry_knowledge()
+    out: dict[str, str] = {}
+    for sector in payload["sectors"]:
+        for group in sector["industry_groups"]:
+            if group["code"] != group_code:
+                continue
+            out[sector["code"]] = sector["name"]
+            out[group["code"]] = group["name"]
+            for industry in group["industries"]:
+                out[industry["code"]] = industry["name"]
+                for sub in industry.get("sub_industries") or []:
+                    out[sub["code"]] = sub["name"]
+    return out
+
+
+def test_public_prompt_block_has_no_code_or_registry_name():
+    """Owner decision 2026-09-24: the mandate every reader-facing model
+    prompt carries names our label only. No 2/4/6/8-digit taxonomy code (in
+    brackets or bare), no "Industries:" line, no registry name as a heading
+    or a brief's name, no "GICS", no internal taxonomy key — at every
+    budget, for every real group. The default ("codes") is unchanged."""
+    ranked_names = [n for s in ik.load_industry_knowledge()["sectors"]
+                    for n in [s["name"], *(g["name"] for g in s["industry_groups"])]
+                    if "&" in n or "," in n]
+    omission_prefix = igk._omission_line(1).split("1", 1)[0]
+    for g in ik.list_industry_groups():
+        m = igk.group_mandate(g["code"])
+        nodes = _registry_nodes_of(g["code"])
+        public_lines = {"- " + il.scrub_text(f"{b.economics} | Advantage test: {b.advantage_test}")
+                        for b in m.sub_industries}
+        for budget in (400, 1200, 2600, igk.PROMPT_BLOCK_MAX_CHARS):
+            block = m.as_prompt_block(max_chars=budget, provenance="public")
+            where = (g["code"], budget)
+            assert len(block) <= budget, where
+            assert block.startswith(f"## Industry Group mandate — {il.label(g['code'])} "
+                                    f"({il.label(g['code'][:2])})"), where
+            assert "Industries:" not in block and "gics" not in block.lower(), where
+            assert m.version_key not in block and "(set by" not in block, where
+            assert not re.search(r"\[\s*\d[\d,\s]*\]", block), where        # no provenance brackets
+            for code, name in nodes.items():
+                if len(code) in (4, 6, 8):
+                    assert not re.search(rf"(?<!\d){code}(?!\d)", block), (where, code)
+                else:
+                    assert f"sector {code}" not in block and f"({code})" not in block, (where, code)
+                # The codes edition renders a brief as "- {code} {name} [industry …]".
+                # The public one names nothing; the author's own prose may still
+                # use an ordinary word such as "Restaurants" as its subject.
+                assert f"{code} {name}" not in block and f"{name} [industry" not in block, (where, code)
+            for name in ranked_names:
+                assert name not in block, (where, name)
+            if igk.PUBLIC_SUB_INDUSTRY_HEADER in block:
+                briefs = block.split(igk.PUBLIC_SUB_INDUSTRY_HEADER, 1)[1].split("\nAttribution:", 1)[0]
+                # Every line is EXACTLY an unnamed brief (or the omission
+                # count): a line that led with the registry sub-industry name
+                # ("- Systems Software: ...") passed the old prefix check.
+                for line in briefs.strip("\n").split("\n"):
+                    assert line in public_lines or line.startswith(omission_prefix), (where, line)
+                    for b in m.sub_industries:
+                        assert not re.match(rf"- {re.escape(b.name)}(:| —| \()", line), (where, line)
+            assert block.rstrip().endswith(f"Attribution: {il.PUBLIC_BRIEF_ATTRIBUTION}"), where
+        # The codes edition is untouched by the new mode.
+        assert m.as_prompt_block() == m.as_prompt_block(provenance="codes")
+        assert f"## Industry Group mandate — {g['code']} " in m.as_prompt_block()
+    with pytest.raises(ValueError):
+        igk.group_mandate("4530").as_prompt_block(provenance="names")
+
+
+def test_public_prompt_block_never_overruns_its_budget():
+    for g in ik.list_industry_groups():
+        m = igk.group_mandate(g["code"], version_key="sweep")
+        for budget in (0, 1, 2, 40, 120, 400, 1200, 3300, igk.PROMPT_BLOCK_MAX_CHARS):
+            assert len(m.as_prompt_block(max_chars=budget, provenance="public")) <= budget, (g["code"], budget)
+            assert len(m.sub_industry_block(budget, public=True)) <= budget, (g["code"], budget)
 
 
 def test_universal_rules_and_sources_are_loaded_not_retyped():

@@ -25,6 +25,7 @@ from ..schemas import (
     BullBearCase,
     FalsifiableTest,
 )
+from ..services import industry_labels
 from ..services.data_service import get_data_service
 from ..services.sector_research_service import run_sector_research
 from . import industry_analysts, llm, prompts, sector_tools
@@ -308,9 +309,41 @@ def _industry_group_context(
         return industry_analysts.sector_prompt_block(profile, industry_group)
     except Exception as exc:
         log_safely(log, f"industry group block unavailable for {profile.get('ticker')}", exc)
-        summary = industry_analysts.industry_group_summary(industry_group, None)
-        summary["error"] = "industry group block unavailable"
+        # Built by a helper that cannot raise: the summary used to be built
+        # right here, and whatever broke the block (a label the file lacks,
+        # a malformed row) broke it again INSIDE the handler, so the whole
+        # sector card became a crash stub instead of a sector-only read.
+        summary = industry_analysts.unavailable_group_summary(
+            industry_group, "industry group block unavailable",
+        )
         return "", summary, None
+
+
+# The sector LLM output fields a reader sees. When the industry-group block
+# was spliced into the prompt the model saw our labels only, but it knows
+# the taxonomy from pretraining and can still write "GICS" or a code.
+_SPLICED_PROSE_FIELDS = ("headline", "summary", "key_points", "bull_bear_analysis", "macro_alignment")
+
+
+def _scrub_spliced_output(llm_out: dict, *, provider_industry: str | None = None) -> dict:
+    """`industry_labels.scrub_strings` over the displayed prose fields of a
+    sector LLM answer, structure untouched. A scrub failure keeps the
+    model's text and logs: losing the sector card to a provenance filter
+    would be a worse outcome than the rare unscrubbed string.
+
+    The provider's industry string (shown on this card's provenance block)
+    is left as written: it is public, and where it spells a registry name
+    rewriting it would make the prose disagree with the provenance."""
+    keep = (provider_industry,) if provider_industry else ()
+    out = dict(llm_out)
+    for key in _SPLICED_PROSE_FIELDS:
+        if key not in out:
+            continue
+        try:
+            out[key] = industry_labels.scrub_strings(out[key], keep=keep)
+        except Exception as exc:
+            log_safely(log, f"sector output scrub failed on {key}; model text kept", exc)
+    return out
 
 
 def run_sector_agent(
@@ -478,6 +511,12 @@ def run_sector_agent(
     )
 
     if llm_out:
+        if industry_analyst is not None and isinstance(llm_out, dict):
+            # Only when the industry block was spliced in: the routing-off
+            # (and unmapped) prompt is unchanged, so its output is too.
+            llm_out = _scrub_spliced_output(
+                llm_out, provider_industry=(industry_summary or {}).get("provider_industry"),
+            )
         cross_sector = llm_out.get("cross_sector_relevance") or []
         if not cross_sector:
             cross_sector = _cross_sector_relevance_heuristic(ticker, sector)
