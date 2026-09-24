@@ -261,6 +261,9 @@ def _divergent_memo(*, rating: str, outcome: str, assessment: str = "not_assesse
     ("Bullish", "accepted", "supported", False),
     # Downgraded to Neutral: no divergence ships.
     ("Neutral", "downgraded", "not_assessed", False),
+    # The cap reads the PUBLISHED rating: if it no longer diverges, a stale
+    # "accepted" record caps nothing.
+    ("Neutral", "accepted", "not_assessed", False),
     # Record mode: downgraded but not applied. The kill switch leaves
     # confidence alone too, and "a reason no live critic reviewed" would
     # misdescribe a missing or critic-rejected reason.
