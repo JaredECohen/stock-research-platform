@@ -55,9 +55,16 @@ class ValuationVerdict(BaseModel):
     # keeps a rollback safe: if the writer is reverted, memos it already
     # stored still validate instead of turning into `memo_unreadable`.
     verdict: Literal["undervalued", "fairly_priced", "overvalued", "mixed"] = "fairly_priced"
-    # How `verdict` was reached. Every memo stored before W2b derived it
-    # from the rating (`graph._verdict_word`), so the default is the truth
-    # for them; W2b's evidence-only verdict records "evidence".
+    # How `verdict` was reached. Every verdict `graph._build_valuation_verdict`
+    # produced before W2b came from the rating (`graph._verdict_word`), so the
+    # default is the truth for those; W2b's evidence-only verdict records
+    # "evidence". Not every verdict was produced, though: the guarded fallback
+    # in graph.py (`_guarded(..., fallback=ValuationVerdict())`) and memos
+    # stored before this object existed (the `default_factory` on
+    # StockMemoOut) both carry the bare placeholder, which also reads as
+    # basis="rating". That placeholder is only recognisable by its empty
+    # `summary`, so consumers must treat an empty summary as "not produced"
+    # (W2a §4.3) whatever `basis` says.
     basis: Literal["rating", "evidence"] = "rating"
     # The evidence votes and inputs behind an "evidence" verdict (W2b).
     # Free-form so the vote set can evolve without a schema bump.

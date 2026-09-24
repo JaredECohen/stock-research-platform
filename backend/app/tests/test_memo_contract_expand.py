@@ -42,7 +42,7 @@ from app.schemas import (
     ValuationVerdict,
     WithheldItem,
 )
-from app.services import memo_store
+from app.services import memo_store, public_samples, regen_lease
 from app.tests.gating_helpers import purge_memos
 from app.tests.test_memo_store import _stub_memo
 from app.tests.test_memo_unreadable import ABBV_BEAR, AMBIGUOUS, LINZESS
@@ -53,7 +53,7 @@ PRE_S2 = Path(__file__).parent / "fixtures" / "memo_contract" / "pre_s2_memo.jso
 
 NEW_TOP_LEVEL = {"section_provenance", "section_availability", "quality"}
 
-TICKERS = ("ZZC1QUAL", "ZZC1PRES", "ZZC1BACK", "ZZC1MIX")
+TICKERS = ("ZZC1QUAL", "ZZC1PRES", "ZZC1BACK", "ZZC1MIX", "ZZC1OWN", "ZZC1SAMP")
 
 
 @pytest.fixture(autouse=True)
@@ -267,6 +267,45 @@ def test_save_memo_refuses_presented_memo():
     with pytest.raises(ValueError, match="presented memo"):
         memo_store.save_memo(memo)
     assert _row_count("ZZC1PRES") == 0
+
+
+def test_save_memo_refuses_presented_memo_before_any_db_work(monkeypatch):
+    # The refusal must come before the lease check and the insert, not merely
+    # before the commit: a caller that passes its own session and commits
+    # after catching the error would otherwise persist the presented memo.
+    def _db_work(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("save_memo touched the DB before refusing a presented memo")
+
+    monkeypatch.setattr(regen_lease, "assert_current", _db_work)
+    monkeypatch.setattr(memo_store, "_next_version", _db_work)
+    memo = _stub_memo("ZZC1OWN")
+    memo.section_availability = {
+        "bull_case": SectionAvailability(status="degraded", reason="template_fallback"),
+    }
+    with SessionLocal() as db:
+        with pytest.raises(ValueError, match="presented memo"):
+            memo_store.save_memo(memo, db=db)
+        assert not db.new and not db.dirty
+        db.commit()
+    assert _row_count("ZZC1OWN") == 0
+
+
+def test_public_sample_payload_never_carries_section_availability():
+    # public_samples stores a memo dump of its own. The W2a serve path treats
+    # a sample row WITHOUT the key as built before presentation and presents
+    # it; an empty map stored here would pass for "already presented".
+    memo = _stub_memo("ZZC1SAMP")
+    memo.section_provenance = {"v": 1, "llm_configured": True, "thesis": "pm"}
+    memo_store.save_memo(memo)
+    with SessionLocal() as db:
+        payload, source_ref, degraded = public_samples._build_memo("ZZC1SAMP", db)
+    assert payload is not None and degraded == []
+    assert source_ref is not None and source_ref.startswith("memo_snapshot:")
+    assert "section_availability" not in payload
+    # Write-time facts still reach the sample, and it still reads as a memo.
+    assert payload["section_provenance"] == memo.section_provenance
+    assert "quality" in payload
+    assert StockMemoOut.model_validate(payload).section_availability == {}
 
 
 def test_save_memo_never_persists_section_availability():
