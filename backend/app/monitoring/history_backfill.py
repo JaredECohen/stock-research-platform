@@ -41,7 +41,8 @@ plus calendar and sweep checks), under their own cap of 30 per night and a
 15-minute budget. Filings and transcripts stay reconciliation-only, and a
 provider-owned ticker's statements are never read here any more.
 
-Last, when OpenAI embeddings are live, a bounded re-index retry (W7): the
+Last, on the worker's scheduled run only and when OpenAI embeddings are
+live, a bounded re-index retry (W7): the
 newest zero-chunk in-scope filings and transcripts of the last 14 days are
 indexed again — at most 10 sources, $0.10 and 20 MB a night, never a
 post-pass — so a post-pass that failed on an embedding outage is not lost.
@@ -112,8 +113,15 @@ def _rotated(tickers: list[str], day: int) -> list[str]:
     return tickers[offset:] + tickers[:offset]
 
 
-def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, int]:
+def run_once(ticker: str | None = None, *, day: int | None = None, reindex: bool = False) -> dict[str, int]:
     """Backfill `ticker` (one) or every tier-1 name. Returns aggregate counts.
+
+    `reindex=True` adds the bounded W7 re-index retry, and only the worker's
+    scheduled job passes it (`register`). `POST /api/admin/run-backfill`
+    calls this function on the *web* process: there the retry would be
+    embedding spend and `doc_chunks` writes outside the worker, per call
+    rather than per night, racing the worker's own 03:15 run with nothing
+    serialising the two.
 
     Wave 8E: classify per-ticker failures so a wedged provider (rate-
     limit, auth, network) shows up in the loop status note rather than
@@ -199,7 +207,7 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
             fund = fundamental_refresh.nightly()
         except Exception as exc:  # nightly() never raises; this keeps record_run below
             fund = {**fundamental_refresh._empty_result(), "errors": [f"nightly:{type(exc).__name__}"]}
-    reindex = _reindex_retry() if not single else None
+    retry = _reindex_retry() if reindex and not single else None
     note_parts = [
         f"tickers={len(tickers) - len(deferred)}",
         f"fp={totals['financial_periods']}",
@@ -211,9 +219,9 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
         note_parts.append(f"cold={cold}")
     if fund is not None:
         note_parts.append(f"fund_refreshed={fund['refreshed']} fund_pending={fund['pending']}")
-    if reindex is not None:
-        note_parts.append(f"reindexed={reindex.get('sources_indexed', 0)} "
-                          f"reindex_deferred={len(reindex.get('deferred') or [])}")
+    if retry is not None:
+        note_parts.append(f"reindexed={retry.get('sources_indexed', 0)} "
+                          f"reindex_deferred={len(retry.get('deferred') or [])}")
     if rate_limited:
         note_parts.append(f"rate_limited={rate_limited}")
     if auth_errors:
@@ -240,8 +248,8 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
         note += f"; bounded filing sources={len(truncated_filings)}: " + truncated_filing_note(truncated_filings)
     if fund is not None:
         note += _fundamentals_note(fund)
-    if reindex is not None:
-        note += _reindex_note(reindex)
+    if retry is not None:
+        note += _reindex_note(retry)
     log.info("history_backfill: %s", note)
     # A filed period still missing after its secondary attempt (≈ night 9)
     # is the FIX-005 regression signal: it fails the loop on the night the
@@ -251,7 +259,7 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
     # The re-index retry fails the loop only if it crashed outright. A source
     # it could not index already failed its own post-pass night, and an
     # OpenAI outage is the case this retry exists to absorb.
-    reindex_failed = reindex is not None and bool(reindex.get("crashed"))
+    reindex_failed = retry is not None and bool(retry.get("crashed"))
     record_run("history_backfill",
                success=(errors == 0 and not post_pass_failures and not fetch_failures
                         and not fund_failed and not reindex_failed), note=note)
@@ -271,9 +279,9 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
         totals["fund_errors"] = len(fund["errors"])
         totals["fund_stuck"] = len(fund["stuck"])
         totals["fund_held"] = len(fund.get("held") or [])
-    if reindex is not None:
-        totals["reindexed"] = int(reindex.get("sources_indexed", 0))
-        totals["reindex_deferred"] = len(reindex.get("deferred") or [])
+    if retry is not None:
+        totals["reindexed"] = int(retry.get("sources_indexed", 0))
+        totals["reindex_deferred"] = len(retry.get("deferred") or [])
     return totals
 
 
@@ -332,6 +340,9 @@ def _reindex_note(reindex: dict) -> str:
         note += f"; reindex failures: {note_names(reindex['failures'])}"
     if reindex.get("empty"):
         note += f"; reindex wrote no chunks: {note_names(reindex['empty'])}"
+    if reindex.get("in_flight"):
+        # Written within the settle window: their own post-pass may be running.
+        note += f"; reindex waiting on a fresh post-pass: {note_names(reindex['in_flight'])}"
     return note
 
 
@@ -374,5 +385,7 @@ def register(scheduler) -> None:
     # the LLM log GC, both of which run at top-of-hour by default.
     scheduler.add_job(
         run_once, "cron", hour=3, minute=15,
+        # The re-index retry belongs to this scheduled run only (see run_once).
+        kwargs={"reindex": True},
         id="history_backfill", replace_existing=True,
     )

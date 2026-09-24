@@ -48,7 +48,7 @@ def _seed_recent(db):  # noqa: F811
 
 def test_history_backfill_retries_recent_zero_chunk_sources_bounded(corpus_db, live_openai, loop):  # noqa: F811
     recent, old = _seed_recent(corpus_db)
-    totals = history_backfill.run_once(day=0)
+    totals = history_backfill.run_once(day=0, reindex=True)
     run = loop[-1]
     assert run["success"] is True
     assert "reindexed=10 reindex_deferred=2" in run["note"]
@@ -61,7 +61,7 @@ def test_history_backfill_retries_recent_zero_chunk_sources_bounded(corpus_db, l
     assert set(recent[:10]) <= indexed and old not in indexed and not set(recent[10:]) & indexed
     assert f"AAA:filing:{old}" not in run["note"]  # outside the 14-day window: not a candidate
     # The next night drains the remainder.
-    history_backfill.run_once(day=1)
+    history_backfill.run_once(day=1, reindex=True)
     assert "reindexed=2 reindex_deferred=0" in loop[-1]["note"]
 
 
@@ -69,7 +69,7 @@ def test_retry_runs_with_the_nightly_caps(corpus_db, live_openai, loop, monkeypa
     seen = []
     monkeypatch.setattr(corpus_repair, "index_missing", lambda **kw: seen.append(kw) or {
         "sources_indexed": 0, "deferred": [], "indexed": []})
-    history_backfill.run_once(day=0)
+    history_backfill.run_once(day=0, reindex=True)
     assert len(seen) == 1
     caps = {k: seen[0][k] for k in ("recent_days", "max_sources", "max_usd", "max_added_mb")}
     assert caps == {"recent_days": 14, "max_sources": 10, "max_usd": 0.10, "max_added_mb": 20}
@@ -78,7 +78,7 @@ def test_retry_runs_with_the_nightly_caps(corpus_db, live_openai, loop, monkeypa
 def test_openai_outage_is_named_and_does_not_fail_the_loop(corpus_db, live_openai, loop):  # noqa: F811
     recent, _ = _seed_recent(corpus_db)
     live_openai.fail = TimeoutError("sk-live-SECRET timed out")
-    history_backfill.run_once(day=0)
+    history_backfill.run_once(day=0, reindex=True)
     run = loop[-1]
     assert run["success"] is True
     assert "reindexed=0 reindex_deferred=12" in run["note"]
@@ -89,14 +89,14 @@ def test_openai_outage_is_named_and_does_not_fail_the_loop(corpus_db, live_opena
 def test_crashed_retry_fails_the_loop(corpus_db, live_openai, loop, monkeypatch):  # noqa: F811
     monkeypatch.setattr(corpus_repair, "index_missing",
                         lambda **kw: (_ for _ in ()).throw(ValueError("bug")))
-    history_backfill.run_once(day=0)
+    history_backfill.run_once(day=0, reindex=True)
     assert loop[-1]["success"] is False and "reindex crashed: ValueError" in loop[-1]["note"]
 
 
 def test_demo_or_keyless_process_does_not_retry(corpus_db, loop, monkeypatch):  # noqa: F811
     # CI's own configuration: no key, demo data. Its vectors would be hash.
     monkeypatch.setattr(corpus_repair, "index_missing", lambda **kw: pytest.fail("retried without OpenAI"))
-    history_backfill.run_once(day=0)
+    history_backfill.run_once(day=0, reindex=True)
     assert "reindex" not in loop[-1]["note"] and loop[-1]["success"] is True
 
 
@@ -104,8 +104,27 @@ def test_single_ticker_admin_run_does_not_retry(corpus_db, live_openai, loop, mo
     monkeypatch.setattr(corpus_repair, "index_missing", lambda **kw: pytest.fail("single-ticker run retried"))
     monkeypatch.setattr(history_backfill, "backfill_ticker",
                         lambda t, **k: {"financial_periods": 0, "filings": 0, "transcripts": 0})
-    totals = history_backfill.run_once("AAA")
+    totals = history_backfill.run_once("AAA", reindex=True)
     assert "reindexed" not in totals and "reindex" not in loop[-1]["note"]
+
+
+def test_admin_triggered_run_does_not_retry(corpus_db, live_openai, loop, monkeypatch):  # noqa: F811
+    """`POST /api/admin/run-backfill` calls `run_once(ticker=None)` on the web
+    process. The retry's spend and writes belong to the worker's schedule."""
+    monkeypatch.setattr(corpus_repair, "index_missing", lambda **kw: pytest.fail("admin run retried"))
+    totals = history_backfill.run_once(ticker=None)
+    assert "reindexed" not in totals and "reindex" not in loop[-1]["note"]
+
+
+def test_only_the_scheduled_job_asks_for_the_retry():
+    jobs = []
+
+    class Scheduler:
+        def add_job(self, fn, trigger, **kw):
+            jobs.append((fn, kw))
+
+    history_backfill.register(Scheduler())
+    assert [(fn, kw.get("kwargs")) for fn, kw in jobs] == [(history_backfill.run_once, {"reindex": True})]
 
 
 def test_no_new_loop():
