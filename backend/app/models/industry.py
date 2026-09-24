@@ -262,9 +262,13 @@ class IndustryReport(Base):
     edition and the read API composes ``stale`` + ``last_attempt`` from the
     jobs table. A succeeded edition with a non-empty ``degraded`` list is a
     labelled deterministic/partial edition, not a failure.
-    ``status`` ∈ succeeded | pending_review | superseded (``pending_review``
-    is reachable only under ``INDUSTRY_REPORTS_REQUIRE_REVIEW``, which has
-    no publish endpoint yet — owner decision 4).
+    ``status`` ∈ succeeded | pending_review | superseded | audit_only
+    (``pending_review`` is reachable only under
+    ``INDUSTRY_REPORTS_REQUIRE_REVIEW``, which has no publish endpoint yet —
+    owner decision 4; ``audit_only`` is a template edition, kept for audit
+    and never displayed — owner decision 1 of 2026-09-24). Readers apply
+    ``industry_report_store.is_publishable`` and never read
+    ``is_latest_good``, which is maintained for admin views only.
     """
     __tablename__ = "industry_reports"
 

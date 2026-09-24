@@ -30,6 +30,12 @@ What the shapes are careful about:
   an as-of older than `INDUSTRY_REPORT_STALE_AFTER_DAYS`, or a refresh
   attempt that failed after this edition was generated — with
   `last_attempt` naming the failure. A failed week never blanks the page.
+* **Only analyst-written editions are served** (owner decision 1,
+  2026-09-24; the rule is `industry_report_store.is_publishable`). A week
+  that produced only an audit-only template leaves the last analyst
+  edition up, `stale` with "not updated this week" and
+  `display.not_updated` naming the week; `last_attempt` never quotes the
+  rejected model prose a validator message carries.
 * **Truncation is counted.** Any list this API caps reports how many
   entries it dropped.
 
@@ -46,7 +52,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from ..config import settings
 from ..database import SessionLocal
@@ -316,10 +322,10 @@ def get_industry_taxonomy(
     which groups are merely un-warmed; that half is
     `stats.sample.sample_floor` on the report.
 
-    Five reads: the active version, the version's nodes (cached per
-    version id — they are immutable after import), one constituent count
-    query, one uncounted-rows query and one bulk latest-edition query.
-    Never a query per group.
+    Reads: the active version, the version's nodes (cached per version id
+    — they are immutable after import), one constituent count query, one
+    uncounted-rows query, the two bulk latest-publishable-edition queries
+    and one grouped attempted-periods query. Never a query per group.
     """
     info = _taxonomy_or_503(access)
     nodes = gics_registry.nodes(version=info)
@@ -332,7 +338,12 @@ def get_industry_taxonomy(
     uncounted = industry_classification.uncounted_rows(version=info)
 
     groups = [n for n in nodes if n.level == "industry_group"]
-    latest = store.latest_good_many([g.code for g in groups], version=info)
+    # Publishable editions only (owner decision 1): a group whose newest
+    # edition is an audit-only template points at its last ANALYST edition,
+    # and the attempted-periods read (one grouped query) says it is older
+    # than the week that was attempted.
+    latest = store.latest_publishable_many([g.code for g in groups], version=info)
+    attempted = store.last_attempted_periods([g.code for g in groups], version=info)
     industries_by_group: dict[str, int] = {}
     subs_by_group: dict[str, int] = {}
     for node in nodes:
@@ -352,6 +363,8 @@ def get_industry_taxonomy(
         pointer = None
         if edition is not None:
             age = _age(edition.get("as_of"), now)
+            newer = attempted.get(node.code)
+            newer = newer if newer and newer > str(edition.get("period_key") or "") else None
             pointer = {
                 "version": edition["version"],
                 "period_key": edition.get("period_key") or "",
@@ -362,6 +375,8 @@ def get_industry_taxonomy(
                 "degraded_reasons": list(edition.get("degraded") or []),
                 "stale_by_age": _stale_by_age(age, stale_after),
                 "age_days": None if age is None else age.days,
+                "not_updated": newer is not None,
+                "newer_attempt_period_key": newer,
             }
         constituent_count = len(by_group.get(node.code, []))
         coverage = _group_universe_coverage(constituent_count, floor, uncounted, node.code)
@@ -454,19 +469,44 @@ def get_industry_report(
     freshness and — when a later refresh failed — the attempt that
     failed. A failed week leaves the previous edition in place and is
     reported as `stale` with `last_attempt`, never as a blank page.
+
+    Only analyst-written editions are served (owner decision 1). `latest`
+    is the newest publishable one; a group that has never had one answers
+    404 `no_report` with `reason: no_validated_analyst_edition` and a count
+    of the audit-only editions it does hold. An explicit `version=N` that
+    names an audit-only edition answers 404 `edition_withheld`. Sections a
+    template filled inside an analyst edition come back with a null
+    `interpretation` and are listed in `display.hidden_sections`.
     """
     info = _taxonomy_or_503(access)
     node = _group_or_404(code, info)
     if version != "latest" and not version.isdigit():
         raise _error(422, "bad_version", "version must be `latest` or an edition number", version=version)
 
-    report = store.get(node.code, version, version=info)
+    try:
+        report = store.get(node.code, version, version=info)
+    except store.EditionWithheld as exc:
+        raise _error(
+            404, "edition_withheld",
+            f"edition {exc.version} of {node.name} ({node.code}) is kept for audit only and is not published",
+            industry_group_code=node.code, name=node.name, taxonomy_version=info.version_key,
+            version=exc.version,
+        ) from None
     if report is None:
-        attempt = store.last_attempt(node.code, version=info)
+        attempt = store.public_attempt(store.last_attempt(node.code, version=info))
+        if version == "latest":
+            raise _error(
+                404, "no_report",
+                f"no analyst-written edition has been published for {node.name} ({node.code}) in "
+                f"taxonomy {info.version_key}",
+                industry_group_code=node.code, name=node.name, taxonomy_version=info.version_key,
+                reason="no_validated_analyst_edition",
+                withheld_editions=store.withheld_count(node.code, version=info),
+                last_attempt=attempt,
+            )
         raise _error(
             404, "no_report",
-            f"no {'published edition' if version == 'latest' else f'edition {version}'} for "
-            f"{node.name} ({node.code}) in taxonomy {info.version_key}",
+            f"no edition {version} for {node.name} ({node.code}) in taxonomy {info.version_key}",
             industry_group_code=node.code, name=node.name, taxonomy_version=info.version_key,
             last_attempt=attempt,
         )
@@ -487,8 +527,8 @@ def get_industry_report(
         report_schema_version=int(report.get("report_schema_version") or 1),
         stale=fresh["stale"],
         stale_reason=fresh["stale_reason"],
-        last_attempt=fresh["last_attempt"],
-        payload=report.get("payload") or {},
+        last_attempt=store.public_attempt(fresh["last_attempt"]),
+        payload=store.public_payload(report),
         stats=stats,
         stats_unavailable_reason=stats_reason,
         coverage=report.get("coverage") or {},
@@ -503,6 +543,7 @@ def get_industry_report(
         disclaimer=report.get("disclaimer") or store.DISCLAIMER,
         attribution=report.get("attribution") or gics_registry.ATTRIBUTION,
         mapping_caveat=report.get("mapping_caveat") or gics_registry.MAPPING_CAVEAT,
+        display=store.display_block(report, fresh),
     )
 
 
@@ -517,28 +558,27 @@ def get_industry_history(
     _rate: None = Depends(rate_scope("data")),
 ) -> IndustryHistoryOut:
     """Prior editions, newest first, metadata only (no payloads). Pro when
-    the login wall is on."""
+    the login wall is on.
+
+    Audit-only editions are not listed (owner decision 1); `withheld`
+    counts them, because they are why the version numbers can skip. A
+    truncated list must say how much it dropped, and "len(items) == limit,
+    so probably more" is a guess: `truncated` comes from the same filtered
+    metadata read as the items, so withheld rows never inflate it."""
     info = _taxonomy_or_503(access)
     node = _group_or_404(code, info)
-    items = store.history(node.code, limit=limit, version=info)
-    # A truncated list must say how much it dropped, and "len(items) ==
-    # limit, so probably more" is a guess. One COUNT gives the real number.
-    with SessionLocal() as db:
-        total = int(db.execute(
-            select(func.count(IndustryReport.id)).where(
-                IndustryReport.taxonomy_version_id == info.id,
-                IndustryReport.industry_group_code == node.code,
-            )
-        ).scalar() or 0)
+    page = store.history_page(node.code, limit=limit, version=info)
+    items = page["items"]
     return IndustryHistoryOut(
         code=node.code,
         name=node.name,
         taxonomy_version=info.version_key,
         count=len(items),
         limit=limit,
-        truncated=max(0, total - len(items)),
+        truncated=max(0, page["total"] - len(items)),
+        withheld=page["withheld"],
         items=items,
-        last_attempt=store.last_attempt(node.code, version=info),
+        last_attempt=store.public_attempt(store.last_attempt(node.code, version=info)),
         access=IndustryAccessOut(**access),
         disclaimer=store.DISCLAIMER,
     )
@@ -559,19 +599,19 @@ def _parent_version_or_404(
     ever seen. And when the parent is None it is not proof the target is
     first on file — the earlier editions may simply all be unpublished —
     so that refusal counts them before making the claim.
+
+    A parent that is kept for audit only (a legacy template that was
+    latest-good when this edition was saved) is never a basis — its prose
+    is exactly what decision 1 keeps off the page — so the newest
+    publishable edition older than the target stands in for it. Audit-only
+    editions are counted apart (`withheld_editions`) and never offered as
+    an explicit `?from=` either.
     """
     parent_id = target.get("parent_report_id")
-    with SessionLocal() as db:
-        if parent_id is not None:
-            parent_version = db.execute(
-                select(IndustryReport.version).where(
-                    IndustryReport.id == int(parent_id),
-                    IndustryReport.taxonomy_version_id == info.id,
-                    IndustryReport.industry_group_code == node.code,
-                )
-            ).scalar_one_or_none()
-            if parent_version is not None:
-                return int(parent_version)
+    parent = None
+    if parent_id is not None:
+        parent = store.edition_meta_by_id(int(parent_id), code=node.code, version=info)
+        if parent is None:
             raise _error(
                 404, "no_prior_edition",
                 f"{node.name} ({node.code}) edition {target['version']} records edition id "
@@ -580,13 +620,21 @@ def _parent_version_or_404(
                 industry_group_code=node.code, version=target["version"],
                 parent_report_id=int(parent_id),
             )
-        earlier = int(db.execute(
-            select(func.count(IndustryReport.id)).where(
+        if not parent["withheld"]:
+            return int(parent["version"])
+        fallback = store.newest_publishable_below(node.code, int(target["version"]), version=info)
+        if fallback is not None:
+            return fallback
+    with SessionLocal() as db:
+        metas = db.execute(
+            select(IndustryReport.status, IndustryReport.generation, IndustryReport.degraded).where(
                 IndustryReport.taxonomy_version_id == info.id,
                 IndustryReport.industry_group_code == node.code,
                 IndustryReport.version < int(target["version"]),
             )
-        ).scalar() or 0)
+        ).all()
+    withheld = sum(1 for m in metas if store.is_withheld(m))
+    earlier = len(metas) - withheld
     if earlier:
         raise _error(
             404, "no_prior_edition",
@@ -594,13 +642,22 @@ def _parent_version_or_404(
             f"edition ({earlier} earlier edition(s) exist but none was published); "
             "pass ?from=<version> to compare with one of them anyway",
             industry_group_code=node.code, version=target["version"],
-            earlier_editions=earlier,
+            earlier_editions=earlier, withheld_editions=withheld,
+        )
+    if withheld:
+        raise _error(
+            404, "no_prior_edition",
+            f"{node.name} ({node.code}) edition {target['version']} is the first analyst-written "
+            f"edition; the {withheld} earlier edition(s) are kept for audit only and are not published",
+            industry_group_code=node.code, version=target["version"], earlier_editions=0,
+            withheld_editions=withheld,
         )
     raise _error(
         404, "no_prior_edition",
         f"{node.name} ({node.code}) edition {target['version']} is the first on file; "
         "there is no prior edition to compare it with",
         industry_group_code=node.code, version=target["version"], earlier_editions=0,
+        withheld_editions=0,
     )
 
 
@@ -625,7 +682,17 @@ def get_industry_changes(
     if to != "latest" and not to.isdigit():
         raise _error(422, "bad_version", "`to` must be `latest` or an edition number", to=to)
 
-    target = store.get(node.code, to, version=info)
+    def withheld_404(exc: store.EditionWithheld) -> HTTPException:
+        return _error(
+            404, "edition_withheld",
+            f"edition {exc.version} of {node.name} ({node.code}) is kept for audit only and is not published",
+            industry_group_code=node.code, version=exc.version,
+        )
+
+    try:
+        target = store.get(node.code, to, version=info)
+    except store.EditionWithheld as exc:
+        raise withheld_404(exc) from None
     if target is None:
         raise _error(404, "no_report", f"no edition {to!r} for {node.name} ({node.code})",
                      industry_group_code=node.code, taxonomy_version=info.version_key)
@@ -634,6 +701,8 @@ def get_industry_changes(
         source_version = _parent_version_or_404(node, info, target)
     try:
         delta = store.diff(node.code, source_version, to, version=info)
+    except store.EditionWithheld as exc:
+        raise withheld_404(exc) from None
     except store.ReportNotFound as exc:
         raise _error(404, "no_report", str(exc), industry_group_code=node.code) from None
     return IndustryChangesOut(

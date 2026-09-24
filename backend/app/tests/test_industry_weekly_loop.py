@@ -157,6 +157,42 @@ def test_a_published_week_is_skipped_unless_forced(info, runs, enabled, monkeypa
             db.commit()
 
 
+def test_note_carries_previous_period_outcome(info, runs, enabled, monkeypatch):
+    """This tick's `record_run` clears the progress row the drainer wrote
+    all last week, so last week's verdict has to ride in THIS note — every
+    count, not just a boolean — while `success` stays about the enqueue."""
+    from app.models import IndustryReport
+
+    monkeypatch.setattr(ia, "warm_up_prices", _warm_stub([]))
+    prev = "2026-W35"
+    groups = [g.code for g in reg.industry_groups(version=info)][:3]
+    try:
+        agentic = rs.save_report(code=groups[0], period_key=prev, as_of=AS_OF - timedelta(days=7), payload={},
+                                 version=info, generation={"generation_mode": "llm"})
+        template = rs.save_report(code=groups[1], period_key=prev, as_of=AS_OF - timedelta(days=7), payload={},
+                                  version=info, generation={"generation_mode": "deterministic"})
+        with SessionLocal() as db:
+            for code, status, rid in ((groups[0], "succeeded", agentic.id), (groups[1], "succeeded", template.id),
+                                      (groups[2], "failed", None)):
+                db.add(IndustryReportJob(kind="group_report", taxonomy_version_id=info.id,
+                                         industry_group_code=code, period_key=prev, run_id="r", status=status,
+                                         attempts=3, max_attempts=3, enqueued_at=SUNDAY, report_id=rid))
+            db.commit()
+        summary = loop.run_once(now=SUNDAY, codes=[])
+        name, success, note = runs[-1]
+        assert success is True, "success is about this week's enqueue, unchanged"
+        for token in (f"prev_period={prev}", "prev_agentic=1", "prev_template=1", "prev_failed=1",
+                      "prev_pending=0", "prev_not_updated_rate=0.6667", "prev_healthy=False",
+                      f"prev_not_updated_codes={','.join(sorted(groups[1:3]))}"):
+            assert token in note, note
+        assert summary["previous_period"]["period_key"] == prev
+    finally:
+        with SessionLocal() as db:
+            db.execute(delete(IndustryReport).where(IndustryReport.taxonomy_version_id == info.id,
+                                                    IndustryReport.industry_group_code.in_(groups)))
+            db.commit()
+
+
 def test_a_first_run_with_nothing_classified_bootstraps_and_says_so(info, runs, enabled, monkeypatch):
     """The daily classification loop owns membership. On a database that
     has never run it, the weekly loop bootstraps once rather than

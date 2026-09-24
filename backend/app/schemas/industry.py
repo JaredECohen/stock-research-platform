@@ -107,6 +107,11 @@ class LatestReportOut(BaseModel):
     stale_by_age: bool = False
     age_days: int | None = None
     stale_basis: str = "as_of age only; failed-refresh staleness is on the report endpoint"
+    #: A newer week's refresh FINISHED after this edition's week without
+    #: producing a validated analyst edition, so the pointer names an older
+    #: edition on purpose. `newer_attempt_period_key` is that week.
+    not_updated: bool = False
+    newer_attempt_period_key: str | None = None
 
 
 class GroupUniverseCoverageOut(BaseModel):
@@ -206,8 +211,15 @@ class TaxonomyOut(BaseModel):
 
 
 class LastAttemptOut(BaseModel):
+    """The newest refresh attempt, as a reader may see it. `outcome` is
+    what it produced: `published`, `withheld_template` (an audit-only
+    edition that is never displayed), `failed` or `in_progress`. A
+    validator rejection's message is a count of problems, never the
+    rejected model sentences it quotes internally, and `report_id` is null
+    when it would name an audit-only row."""
     job_id: int
     status: str
+    outcome: str = ""
     at: str | None = None
     period_key: str = ""
     attempts: int = 0
@@ -266,6 +278,13 @@ class IndustryReportOut(BaseModel):
     disclaimer: str = ""
     attribution: str = ""
     mapping_caveat: str = ""
+    #: How to present this edition (owner decision 1): `edition_kind`
+    #: (always `agentic` on a served edition), `hidden_sections` — the
+    #: template-filled sections whose `interpretation` this response
+    #: nulled, with `hidden_reason` to print instead — and `not_updated`
+    #: (`{period_key, outcome}`) when a newer week finished without a
+    #: validated analyst edition. The stored payload is never modified.
+    display: dict[str, Any] = Field(default_factory=dict)
 
 
 class IndustryReportHistoryItemOut(BaseModel):
@@ -289,6 +308,9 @@ class IndustryHistoryOut(BaseModel):
     count: int = 0
     limit: int = 26
     truncated: int = 0
+    #: Editions kept for audit only (templates) and therefore never listed.
+    #: They are why version numbers can skip; counted so a gap is explained.
+    withheld: int = 0
     items: list[IndustryReportHistoryItemOut] = Field(default_factory=list)
     last_attempt: LastAttemptOut | None = None
     access: IndustryAccessOut

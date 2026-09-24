@@ -26,11 +26,18 @@ numbers is exactly the shape of report that has hidden an outage here
 before. ``success=False`` whenever the week could not be enqueued in
 full, including when there is no active taxonomy or no classified
 constituent to report on.
+
+The note also carries the PREVIOUS week's outcome (``prev_agentic``,
+``prev_template``, ``prev_failed``, ``prev_not_updated_rate``,
+``prev_healthy`` — ``industry_report_worker.period_outcome``). During the
+week the drainer records that outcome as this loop's progress; this tick's
+``record_run`` clears the progress, so the note is where last week's
+verdict survives. ``success`` stays about the enqueue.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from ..agents.log_safety import safe_exc
@@ -104,6 +111,16 @@ def run_once(
                 budget=settings.industry_price_warmup_budget, version=info,
             )
 
+        # Last week's verdict, read BEFORE this tick's `record_run` clears
+        # the progress row that carried it: success here stays about the
+        # enqueue (unchanged semantics), and the previous week's outcome
+        # rides in the note so it outlives the week it described.
+        prev_key = industry_analytics.period_key_for(as_of - timedelta(days=7))
+        try:
+            previous = jobs.period_outcome(prev_key, info)
+        except Exception as exc:  # telemetry — never the reason a week is not enqueued
+            previous = {"period_key": prev_key, "error": safe_exc(exc)}
+
         result = jobs.enqueue_period(period_key, codes, source="weekly_cron",
                                      force=force, version=info)
     except Exception as exc:
@@ -153,6 +170,11 @@ def run_once(
         "warm_remaining_missing": warm.get("remaining_missing"),
         "bootstrapped_classification": int(bootstrapped),
     })
+    summary["previous_period"] = previous
+    note = f"{note} " + (
+        f"prev_period={previous['period_key']} prev_error={previous['error']}" if "error" in previous
+        else jobs.period_outcome_note(previous, prefix="prev_")
+    )
     summary["note"] = note
     record_run(LOOP_NAME, success=healthy, note=note)
     log.info("industry weekly loop: %s", note)

@@ -149,11 +149,15 @@ def _seed_stats(node, taxonomy, *, period_key: str, ret_1m: float | None,
         return row.id
 
 
-def _seed_report(node, taxonomy, *, period_key: str, stats_id: int | None, **kw):
+def _seed_report(node, taxonomy, *, period_key: str, stats_id: int | None, mode: str = "llm", **kw):
+    """An edition as the worker saves one. `mode="llm"` (default) is an
+    analyst-written edition — the only kind served (owner decision 1);
+    any other mode is a template, stored audit-only."""
+    kw.setdefault("payload", {"sections": {
+        "overview": {"facts": {"n_constituents": 3}, "interpretation": {"text": "x"}}}})
     return store.save_report(
         code=node.code, period_key=period_key, as_of=AS_OF, version=taxonomy,
-        payload={"sections": {"overview": {"facts": {"n_constituents": 3}, "interpretation": {"text": "x"}}}},
-        stats_id=stats_id, generation={"cost_usd": 0.12, "llm_calls": 2}, **kw,
+        stats_id=stats_id, generation={"cost_usd": 0.12, "llm_calls": 2, "generation_mode": mode}, **kw,
     )
 
 
@@ -454,6 +458,7 @@ def test_report_404_names_the_group_and_the_last_attempt(client, group, taxonomy
     assert resp.status_code == 404
     detail = resp.json()["detail"]
     assert detail["code"] == "no_report"
+    assert detail["reason"] == "no_validated_analyst_edition" and detail["withheld_editions"] == 0
     assert group.name in detail["message"]
     assert detail["last_attempt"]["status"] == "failed"
     assert detail["last_attempt"]["error_type"] == "ValidatorRejected"
@@ -893,6 +898,169 @@ def test_snapshot_serves_the_stored_row(client, taxonomy):
             db.execute(delete(CrossIndustrySnapshot).where(
                 CrossIndustrySnapshot.taxonomy_version_id == taxonomy.id))
             db.commit()
+
+
+# ---------------------------------------------------------------------------
+# The display rule (owner decision 1): template editions are never served
+# ---------------------------------------------------------------------------
+
+
+def _seed_attempt(node, taxonomy, *, period_key: str, status: str, at: datetime,
+                  report_id: int | None = None, error_type: str = "", error_message: str = "") -> None:
+    with SessionLocal() as db:
+        db.add(IndustryReportJob(
+            kind="group_report", taxonomy_version_id=taxonomy.id, industry_group_code=node.code,
+            period_key=period_key, run_id="run-x", status=status, attempts=3, max_attempts=3,
+            enqueued_at=at, started_at=at, finished_at=at if status in ("succeeded", "failed") else None,
+            source="weekly_cron", report_id=report_id, error_type=error_type, error_message=error_message,
+        ))
+        db.commit()
+
+
+def _legacy_row(node, taxonomy, *, version: int, period_key: str, status: str, latest: bool, mode: str,
+                parent_id: int | None = None) -> int:
+    """A row as the pre-rule code left it, written directly."""
+    with SessionLocal() as db:
+        row = IndustryReport(
+            taxonomy_version_id=taxonomy.id, industry_group_code=node.code, version=version,
+            parent_report_id=parent_id, period_key=period_key, as_of=AS_OF, status=status,
+            is_latest_good=latest, generation={"generation_mode": mode}, degraded=[], generated_at=NOW,
+            payload={"sections": {"outlook": {"facts": {}, "interpretation": {"text": f"{mode} v{version}"}}}},
+        )
+        db.add(row)
+        db.commit()
+        return row.id
+
+
+def test_report_latest_with_only_template_editions_is_no_report_with_the_reason(client, group, taxonomy):
+    template = _seed_report(group, taxonomy, period_key="2026-W36", stats_id=None, mode="deterministic")
+    _seed_attempt(group, taxonomy, period_key="2026-W36", status="succeeded", at=NOW, report_id=template.id)
+    resp = client.get(f"/api/industries/{group.code}/report")
+    assert resp.status_code == 404
+    detail = resp.json()["detail"]
+    assert detail["code"] == "no_report" and detail["reason"] == "no_validated_analyst_edition"
+    assert detail["withheld_editions"] == 1
+    assert detail["last_attempt"]["outcome"] == "withheld_template"
+    assert detail["last_attempt"]["report_id"] is None, "the public attempt never names an audit-only row"
+
+
+def test_report_version_n_that_is_withheld_is_404_edition_withheld(client, group, taxonomy):
+    _seed_report(group, taxonomy, period_key="2026-W35", stats_id=None)
+    _seed_report(group, taxonomy, period_key="2026-W36", stats_id=None, mode="llm_unavailable")
+    resp = client.get(f"/api/industries/{group.code}/report?version=2")
+    assert resp.status_code == 404
+    detail = resp.json()["detail"]
+    assert detail["code"] == "edition_withheld" and detail["version"] == 2
+    assert "kept for audit only" in detail["message"]
+    # `latest` is the analyst edition, and the page is told it was not updated.
+    assert client.get(f"/api/industries/{group.code}/report").json()["version"] == 1
+
+
+def test_report_hides_template_sections_but_keeps_their_facts(client, group, taxonomy):
+    payload = {"sections": {
+        "overview": {"facts": {"n_constituents": 3}, "interpretation": {"text": "model prose"}},
+        "themes": {"facts": {"n_themes": 2}, "interpretation": {"text": "TEMPLATE PROSE"}},
+    }}
+    _seed_report(group, taxonomy, period_key="2026-W36", stats_id=None, payload=payload,
+                 degraded=["analyst_narrative:themes:deterministic"])
+    body = client.get(f"/api/industries/{group.code}/report").json()
+    assert body["display"]["edition_kind"] == "agentic"
+    assert body["display"]["hidden_sections"] == ["themes"]
+    assert body["display"]["hidden_reason"] == store.HIDDEN_SECTION_REASON
+    assert body["payload"]["sections"]["themes"] == {"facts": {"n_themes": 2}, "interpretation": None}
+    assert body["payload"]["sections"]["overview"]["interpretation"] == {"text": "model prose"}
+    assert "TEMPLATE PROSE" not in str(body)
+
+
+def test_report_not_updated_banner_names_the_week(client, group, taxonomy, monkeypatch):
+    monkeypatch.setattr(store, "_utcnow", lambda: NOW)
+    _seed_report(group, taxonomy, period_key="2026-W36", stats_id=None)
+    template = _seed_report(group, taxonomy, period_key="2026-W37", stats_id=None, mode="deterministic")
+    _seed_attempt(group, taxonomy, period_key="2026-W37", status="succeeded", at=NOW, report_id=template.id)
+    body = client.get(f"/api/industries/{group.code}/report").json()
+    assert body["version"] == 1 and body["period_key"] == "2026-W36"
+    assert body["stale"] is True and "not updated this week" in body["stale_reason"]
+    assert body["display"]["not_updated"] == {"period_key": "2026-W37", "outcome": "withheld_template"}
+    assert body["last_attempt"]["outcome"] == "withheld_template" and body["last_attempt"]["report_id"] is None
+    pointer = _pointer(client, group)
+    assert pointer["version"] == 1 and pointer["not_updated"] is True
+    assert pointer["newer_attempt_period_key"] == "2026-W37"
+
+
+def test_public_last_attempt_hides_rejected_prose(client, group, taxonomy):
+    _seed_report(group, taxonomy, period_key="2026-W36", stats_id=None)
+    raw = "2 validation problem(s): drivers: unsupported causal claim 'The model invented this'"
+    _seed_attempt(group, taxonomy, period_key="2026-W37", status="failed", at=NOW,
+                  error_type="ReportRejected", error_message=raw)
+    for path in ("report", "history"):
+        body = client.get(f"/api/industries/{group.code}/{path}").json()
+        assert body["last_attempt"]["error_message"] == "the analyst draft did not pass validation (2 problems)"
+        assert "invented" not in str(body)
+
+
+def test_public_flags_follow_publishable_rule_before_backfill(client, group, taxonomy):
+    """Legacy rows, no backfill: the analyst edition the pre-rule code
+    marked `superseded` is what every public read serves AS the published
+    latest; the template it flagged latest-good is nowhere."""
+    v1 = _legacy_row(group, taxonomy, version=1, period_key="2026-W35", status="superseded", latest=False,
+                     mode="llm")
+    _legacy_row(group, taxonomy, version=2, period_key="2026-W36", status="succeeded", latest=True,
+                mode="deterministic", parent_id=v1)
+    report = client.get(f"/api/industries/{group.code}/report").json()
+    assert (report["version"], report["status"], report["is_latest_good"]) == (1, "succeeded", True)
+    history = client.get(f"/api/industries/{group.code}/history").json()
+    assert [(i["version"], i["status"], i["is_latest_good"]) for i in history["items"]] == [(1, "succeeded", True)]
+    assert history["withheld"] == 1 and history["truncated"] == 0
+    pointer = _pointer(client, group)
+    assert (pointer["version"], pointer["status"]) == (1, "succeeded")
+    assert "deterministic v2" not in str(report)
+
+
+def test_history_excludes_withheld_editions_and_counts_them(client, group, taxonomy):
+    for week, mode in (("2026-W35", "llm"), ("2026-W36", "deterministic"), ("2026-W37", "llm"),
+                       ("2026-W38", "llm_unavailable")):
+        _seed_report(group, taxonomy, period_key=week, stats_id=None, mode=mode)
+    body = client.get(f"/api/industries/{group.code}/history?limit=1").json()
+    assert [i["version"] for i in body["items"]] == [3]
+    # Truncation counts only what the filter admits; withheld rows are counted apart.
+    assert body["truncated"] == 1 and body["withheld"] == 2
+
+
+def test_changes_skips_a_template_parent(client, group, taxonomy):
+    """Legacy: an analyst edition whose recorded parent is a template. The
+    default basis is the newest analyst edition before it, never the
+    template, and the analyst views quoted are model-written ones."""
+    a = _seed_stats(group, taxonomy, period_key="2026-W35", ret_1m=0.01)
+    c = _seed_stats(group, taxonomy, period_key="2026-W37", ret_1m=0.04)
+    v1 = _legacy_row(group, taxonomy, version=1, period_key="2026-W35", status="superseded", latest=False,
+                     mode="llm")
+    v2 = _legacy_row(group, taxonomy, version=2, period_key="2026-W36", status="superseded", latest=False,
+                     mode="deterministic", parent_id=v1)
+    v3 = _legacy_row(group, taxonomy, version=3, period_key="2026-W37", status="succeeded", latest=True,
+                     mode="llm", parent_id=v2)
+    with SessionLocal() as db:
+        db.get(IndustryReport, v1).stats_id = a
+        db.get(IndustryReport, v3).stats_id = c
+        db.commit()
+    body = client.get(f"/api/industries/{group.code}/changes").json()
+    assert body["from"]["version"] == 1 and body["to"]["version"] == 3
+    assert body["facts_delta"]["returns.1m.ew"]["delta"] == pytest.approx(0.03)
+    assert "deterministic" not in str(body["analyst_view"])
+    # Naming the withheld edition explicitly is refused, either side.
+    for query in ("from=2&to=3", "from=1&to=2"):
+        resp = client.get(f"/api/industries/{group.code}/changes?{query}")
+        assert resp.status_code == 404 and resp.json()["detail"]["code"] == "edition_withheld", query
+
+
+def test_changes_with_only_withheld_predecessors_says_so(client, group, taxonomy):
+    _seed_report(group, taxonomy, period_key="2026-W35", stats_id=None, mode="deterministic")
+    _seed_report(group, taxonomy, period_key="2026-W36", stats_id=None)
+    resp = client.get(f"/api/industries/{group.code}/changes")
+    assert resp.status_code == 404
+    detail = resp.json()["detail"]
+    assert detail["code"] == "no_prior_edition"
+    assert detail["withheld_editions"] == 1 and detail["earlier_editions"] == 0
+    assert "kept for audit only" in detail["message"]
 
 
 # ---------------------------------------------------------------------------

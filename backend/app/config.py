@@ -449,6 +449,24 @@ class Settings(BaseSettings):
     # status (`pending_review`) exists; no publish endpoint is built while
     # this stays False.
     industry_reports_require_review: bool = False
+    # Owner decision 1 (2026-09-24): template editions are stored for audit
+    # only and never displayed, so a week in which a group produced no
+    # validated analyst edition leaves that group "not updated". The weekly
+    # health verdict is the share of finished groups in that state: with 25
+    # groups, 0.10 tolerates two and calls three or more an unhealthy week
+    # (FIX-002: "a run where more than 1-2 groups land deterministic is a
+    # failed run"). A rate rather than a count, so a taxonomy revision
+    # needs no code change.
+    industry_report_not_updated_unhealthy_rate: float = 0.10
+    # Output-token cap for the writer batch that carries `outlook`. Declared
+    # here with its sibling (this block has one owner per deploy wave); the
+    # forecast-assumption slice is the consumer.
+    industry_report_outlook_max_tokens: int = 4000
+    # The deployed worker's drainer runs the legacy-edition reclassification
+    # (template rows -> audit_only, flags re-derived) once, recorded by a
+    # ledger row, so nobody needs a production shell for it. Reads never
+    # depend on it; this is the switch that stops the automatic run.
+    industry_reclassify_legacy_editions: bool = True
 
     @property
     def industry_benchmarks_list(self) -> list[str]:
