@@ -780,13 +780,50 @@ def test_pm_synthesis_reads_the_routed_read_ahead_of_the_capped_json(monkeypatch
     assert prompt.index(routed.headline) < prompt.index(_FINDINGS)
     label = routed.data["industry_group"]["label"]
     assert f"{_DIGEST_HEAD} — {label} (Industry Group Analyst)" in prompt
-    # Never in the JSON: there it would be cut (or, on a small memo, read twice).
+    # The capped JSON is still the cap. (Its content cannot show whether the
+    # read was left out: the padded sector entry fills it before any entry
+    # after it. The unpadded case below does.)
+    assert len(prompt.split(_FINDINGS, 1)[1]) == cap
+
+    # On a small memo, where the whole JSON fits, the read is still never a
+    # JSON entry: it would be read twice, once as the digest and once raw.
+    small = {"sector": AgentFinding(agent="Sector Analyst", headline="Sector read", summary="s"),
+             "industry_group": routed}
+    graph._pm_synthesis(_PROFILE, small, None)
+    prompt = seen["pm"][-1]
+    assert prompt.index(_DIGEST_HEAD) < prompt.index(_FINDINGS)
     assert _JSON_ENTRY not in prompt
-    json_part = prompt.split(_FINDINGS, 1)[1]
-    assert len(json_part) == cap and "industry_group" not in json_part
+    assert prompt.count(routed.headline) == 1
 
 
-def test_pm_digest_is_bounded_and_shaped():
+def test_a_digested_read_casts_no_keyword_vote_in_the_no_llm_rating(monkeypatch):
+    """Design §3.2: the no-LLM keyword heuristic counts only the JSON set.
+    A routed read reaches the PM model as its digest, but it must not move
+    the deterministic rating: `_ROUTED_READ.summary` says "premium", a
+    bullish keyword, so a digested read that voted would lift a Neutral
+    fallback (it did on the base commit: Neutral 55 → Bullish 60)."""
+    routed = _routed_finding(monkeypatch)
+    assert ia.pm_digest(routed)                     # digested, not withheld
+    sector = AgentFinding(agent="Sector Analyst", headline="Sector read", summary="Neutral.")
+    _spy_llm(monkeypatch)                           # the PM model answers nothing
+    alone = graph._pm_synthesis(_PROFILE, {"sector": sector}, None)
+    with_read = graph._pm_synthesis(_PROFILE, {"sector": sector, "industry_group": routed}, None)
+    assert (with_read["rating_label"], with_read["confidence_score"]) == (
+        alone["rating_label"], alone["confidence_score"])
+
+
+def test_pm_digest_is_bounded_and_shaped(monkeypatch):
+    # Per-field bounds, checked against literal fixture content rather than
+    # against pm_digest's own output: at most 5 key points, at most 3
+    # falsifiers, the summary clipped to 600 characters.
+    digest = ia.pm_digest(_routed_finding(monkeypatch))
+    assert "Routed point 5" in digest and "Routed point 6" not in digest
+    assert "Fee income stalls" in digest and "A fourth falsifier" not in digest
+    clipped = ia.pm_digest(_routed_finding(monkeypatch, summary="w" * 1_000, key_points=["a"]))
+    (summary_line,) = [ln for ln in clipped.splitlines() if ln.startswith("Summary: ")]
+    assert len(summary_line) == len("Summary: ") + 600 and summary_line.endswith("…")
+    assert len(clipped) < ia.PM_DIGEST_MAX_CHARS
+
     long = AgentFinding(
         agent=ia.AGENT_NAME, headline="H" * 300, summary="S" * 5_000,
         key_points=["k" * 400] * 8, confidence=0.7,
@@ -936,12 +973,18 @@ def _factory_raises(monkeypatch):
     monkeypatch.setattr(ia, "get_industry_analyst", boom)
 
 
-@pytest.mark.parametrize("break_it", [_lookup_raises, _factory_raises], ids=["lookup", "factory"])
+@pytest.mark.parametrize("break_it", [_lookup_raises, _factory_raises], ids=["lookup-coverage", "factory"])
 def test_routing_failures_degrade_the_memo_instead_of_failing_it(monkeypatch, break_it):
     """The two failure paths no test covered: the gather-stage read raises,
     or the factory cannot build the analyst (a code the registry or the
     knowledge base does not carry). The memo completes, the banner names the
-    analyst, and nothing of it reaches the PM or the influence map."""
+    analyst, and nothing of it reaches the PM or the influence map.
+
+    `factory` is the regression case and fails on the base commit.
+    `lookup-coverage` is a
+    characterization of behaviour S13 does not change (a raising lookup
+    never produced an industry finding, so it passes on the base commit
+    too); it pins that path now that routing is on in production."""
     monkeypatch.setattr(settings, "enable_industry_analyst_routing", True)
     break_it(monkeypatch)
     seen = _spy_llm(monkeypatch)
