@@ -45,6 +45,23 @@ real data exercises:
   priced count and the live membership read disagreeing — and both bodies
   are what the API said, so neither has to be edited into disagreement.
 
+* **the display rule's states** (owner decision 1: template editions are
+  stored for audit only and never shown). ``report_not_updated`` is the
+  structurally-short group after a later week whose only product was an
+  audit-only template — the page serves the last analyst edition with a
+  "not updated" banner; ``report_no_agentic`` is a group whose only
+  edition is audit-only — the 404 that says no analyst edition has been
+  published yet, and counts the withheld one.
+
+The analyst model is the deterministic stand-in in
+``app/tests/fixtures/industry_analyst_stub.py`` unless ``--no-stub-analyst``
+(the capture must run with blank keys, and without a model every edition
+would be an audit-only template with nothing to render). The stub returns
+the writer's own template prose relabelled "Fixture analyst (stubbed
+model)", so no analyst text in the fixture is invented; ``meta.analyst_stub``
+says so. The two display-rule states are produced by running those weeks
+with the stub OFF — a real model outage.
+
 Two edits are made after the capture, and both are declared in ``meta``:
 per-ticker ``weekly_closes`` arrays are emptied (each row keeps a
 ``weekly_closes_dropped`` count and ``meta.trimmed`` the total — a
@@ -93,6 +110,11 @@ DEFAULT_OUT = REPO / "frontend" / "src" / "test" / "fixtures" / "industry.wire.j
 # key by the worker, so it is not a knob here.
 PRIOR_PERIOD = "2026-W35"
 PERIOD = "2026-W36"
+# The week the model is "down" for the display-rule states.
+OUTAGE_PERIOD = "2026-W37"
+# Sections the stub analyst deliberately does not write, per week, so the
+# published edition carries a real template-filled (hidden) section.
+NOT_WRITTEN: dict[str, tuple[str, ...]] = {PERIOD: ("what_changed",)}
 LAST_CLOSE = date(2026, 9, 4)
 SESSIONS = 400
 
@@ -120,6 +142,7 @@ def _refuse_unsafe_database() -> str | None:
     taxonomy version. That is fine on a scratch sqlite file and a disaster
     anywhere else, so it is checked rather than trusted."""
     from app.config import settings
+    from app.tests import dbguard
 
     if settings.enable_live_data or not settings.use_demo_data:
         return (
@@ -131,7 +154,22 @@ def _refuse_unsafe_database() -> str | None:
             f"refusing to delete rows in {settings.database_url.split('://')[0]} — point "
             'DATABASE_URL at a throwaway sqlite file, e.g. sqlite:////tmp/industry-fixture.db'
         )
-    return None
+    # The repo's shared database guard as well (it never prints credentials).
+    return dbguard.refusal(settings.database_url)
+
+
+def drain_through_retries(jobs: Any, *, attempts: int = 3) -> list[dict[str, Any]]:
+    """Drain, stepping the claim clock past each retry's backoff, so a week
+    in which the model is down runs every attempt (the non-final ones raise
+    AnalystUnavailable and back off; the final one stores the audit-only
+    template) instead of stopping at the first deferral."""
+    from datetime import datetime
+
+    done: list[dict[str, Any]] = []
+    for step in range(attempts):
+        now = datetime.utcnow() + timedelta(hours=2 * step)
+        done.extend(jobs.drain(limit=40, now=now))
+    return done
 
 
 def seed_prices(tickers: list[str], *, skip: str) -> int:
@@ -188,7 +226,29 @@ def _get(client: Any, path: str, *, expect: int = 200, name: str = "") -> Any:
     return r.json()
 
 
-def capture() -> dict[str, Any]:
+def _reading_at(when: Any):
+    """Serve the reads as if at ``when``. Staleness-by-age is ``now -
+    as_of``, so a capture read on the wall clock would make the SAME
+    fixture fresh one week and stale the next; the read clock is pinned to
+    two days after the week's as-of instead (declared in ``meta.read_at``)."""
+    from unittest import mock
+
+    from app.services import industry_report_store as rs
+
+    return mock.patch.object(rs, "_utcnow", lambda: when)
+
+
+def _print_drained(done: list[dict[str, Any]]) -> None:
+    for drained in done:
+        print(
+            "drained",
+            {k: drained.get(k) for k in ("id", "kind", "code", "status", "note", "error_type", "error_message")},
+        )
+
+
+def capture(*, stub_analyst: bool = True) -> dict[str, Any]:
+    import contextlib
+
     from fastapi.testclient import TestClient
     from sqlalchemy import delete
 
@@ -200,6 +260,7 @@ def capture() -> dict[str, Any]:
     from app.services import industry_classification as ic
     from app.services import industry_report_store as rs
     from app.services import industry_report_worker as jobs
+    from app.tests.fixtures import industry_analyst_stub
     from app.tests.fixtures.seed_demo_data import run_full_seed
 
     run_full_seed()
@@ -234,10 +295,13 @@ def capture() -> dict[str, Any]:
     # written yet" state the page renders beside the membership table. A
     # group with NO members would exercise a different, emptier path.
     empty_code = next(c for c, _ in reversed(ranked) if c not in (code, short_code))
+    # A group whose ONLY edition is an audit-only template: the 404 that
+    # says no analyst edition has been published and counts the withheld one.
+    no_agentic_code = next(c for c, _ in reversed(ranked) if c not in (code, short_code, empty_code))
     print(
         "group", code, f"({len(by_group[code])} members)",
         "· structurally short", short_code, f"({len(by_group[short_code])} of {floor} needed)",
-        "· empty group", empty_code,
+        "· empty group", empty_code, "· template-only group", no_agentic_code,
     )
 
     universe = sorted({t for tickers in by_group.values() for t in tickers})
@@ -251,37 +315,47 @@ def capture() -> dict[str, Any]:
 
     client = TestClient(app)
     out: dict[str, Any] = {}
+    read_at = {p: jobs.as_of_for_period(p) + timedelta(days=2) for p in (PRIOR_PERIOD, PERIOD, OUTAGE_PERIOD)}
 
     for period in (PRIOR_PERIOD, PERIOD):
-        if period == PERIOD:
-            print("seeded prices for", seed_prices(universe, skip=UNPRICED), "tickers")
-        codes = [code] if period == PRIOR_PERIOD else [code, short_code]
-        res = jobs.enqueue_period(period, codes=codes, version=info, source="fixture")
-        print("enqueued", period, res["enqueued"], res["cross_snapshot"])
-        for drained in jobs.drain(limit=20):
-            print(
-                "drained",
-                {k: drained.get(k) for k in ("id", "kind", "code", "status", "note", "error_type", "error_message")},
-            )
-        if period == PRIOR_PERIOD:
-            # `/companies` prices its rows from the LATEST statistics row,
-            # so read once here, while the latest row is the un-priced
-            # week's. Paired with the published edition below it is the
-            # real race the page has to survive — two reads that landed in
-            # different weeks — and neither body has to be hand-edited to
-            # make the two counts disagree.
-            out["companies_warming_up"] = _get(client, f"/api/industries/{code}/companies")
+        # In the priced week the stub leaves `what_changed` unwritten, as a
+        # model whose second call came back without it would: the published
+        # edition then carries a REAL template-filled section, which the page
+        # must hide ("unavailable in this version") and the diff must not
+        # quote. Declared in meta.analyst_stub.sections_not_written.
+        skip = NOT_WRITTEN.get(period, ())
+        analyst = (
+            industry_analyst_stub.stubbed_analyst(
+                sections=[s for s in rs.INTERPRETED_SECTIONS if s not in skip]) if stub_analyst
+            else contextlib.nullcontext()
+        )
+        with analyst:
+            if period == PERIOD:
+                print("seeded prices for", seed_prices(universe, skip=UNPRICED), "tickers")
+            codes = [code] if period == PRIOR_PERIOD else [code, short_code]
+            res = jobs.enqueue_period(period, codes=codes, version=info, source="fixture")
+            print("enqueued", period, res["enqueued"], res["cross_snapshot"])
+            _print_drained(drain_through_retries(jobs))
+            if period == PRIOR_PERIOD:
+                # `/companies` prices its rows from the LATEST statistics row,
+                # so read once here, while the latest row is the un-priced
+                # week's. Paired with the published edition below it is the
+                # real race the page has to survive — two reads that landed in
+                # different weeks — and neither body has to be hand-edited to
+                # make the two counts disagree.
+                with _reading_at(read_at[PRIOR_PERIOD]):
+                    out["companies_warming_up"] = _get(client, f"/api/industries/{code}/companies")
 
     latest = rs.latest_good(code, version=info)
     if latest is None:
         raise SystemExit(
             f"no published edition for {code} after draining both periods — read the `drained` "
             "lines above; a validator rejection there is the bug to fix, not to capture around"
+            + ("" if stub_analyst else " (with --no-stub-analyst and no model, nothing ever publishes)")
         )
     print("latest good edition:", latest["version"])
 
     for name, path in [
-        ("taxonomy", "/api/industries/taxonomy"),
         ("report", f"/api/industries/{code}/report"),
         ("companies", f"/api/industries/{code}/companies"),
         ("history", f"/api/industries/{code}/history"),
@@ -295,10 +369,28 @@ def capture() -> dict[str, Any]:
         ("report_universe_short", f"/api/industries/{short_code}/report"),
         ("report_missing", f"/api/industries/{empty_code}/report"),
     ]:
-        out[name] = _get(client, path, expect=404 if name == "report_missing" else 200, name=name)
+        with _reading_at(read_at[PERIOD]):
+            out[name] = _get(client, path, expect=404 if name == "report_missing" else 200, name=name)
+
+    # The model is DOWN for a week (no stub): every attempt falls back to the
+    # template, the non-final ones are retried, the final one is stored
+    # audit-only. The thin group keeps its analyst edition, marked not
+    # updated; the template-only group has no analyst edition at all.
+    res = jobs.enqueue_period(OUTAGE_PERIOD, codes=[short_code, no_agentic_code], version=info,
+                              source="fixture", include_cross_snapshot=False)
+    print("enqueued (model down)", OUTAGE_PERIOD, res["enqueued"])
+    _print_drained(drain_through_retries(jobs))
+    with _reading_at(read_at[OUTAGE_PERIOD]):
+        out["report_not_updated"] = _get(client, f"/api/industries/{short_code}/report",
+                                         name="report_not_updated")
+        out["report_no_agentic"] = _get(client, f"/api/industries/{no_agentic_code}/report", expect=404,
+                                        name="report_no_agentic")
+        # Last, so the picker pointers describe the final state (the thin
+        # group's pointer names its analyst edition and the newer attempt).
+        out["taxonomy"] = _get(client, "/api/industries/taxonomy", name="taxonomy")
 
     trimmed: dict[str, int] = {}
-    for name in ("report", "report_warming_up", "report_universe_short"):
+    for name in ("report", "report_warming_up", "report_universe_short", "report_not_updated"):
         for path, n in trim_weekly_closes(out[name]).items():
             trimmed[f"{name}.{path}"] = n
     meta = {
@@ -307,7 +399,17 @@ def capture() -> dict[str, Any]:
         "code": code,
         "short_code": short_code,
         "empty_code": empty_code,
+        "no_agentic_code": no_agentic_code,
+        "outage_period": OUTAGE_PERIOD,
+        "read_at": {p: t.isoformat() for p, t in read_at.items()},
         "min_sample": floor,
+        "analyst_stub": {
+            "enabled": bool(stub_analyst),
+            "label": industry_analyst_stub.LABEL,
+            "model": industry_analyst_stub.MODEL,
+            "reason": industry_analyst_stub.REASON,
+            "sections_not_written": {k: list(v) for k, v in NOT_WRITTEN.items()} if stub_analyst else {},
+        },
         "trimmed": trimmed,
         "trimmed_note": TRIMMED_NOTE,
         "omitted_responses": OMITTED,
@@ -319,6 +421,8 @@ def capture() -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT, help=f"default: {DEFAULT_OUT}")
+    parser.add_argument("--stub-analyst", action=argparse.BooleanOptionalAction, default=True,
+                        help="use the deterministic stand-in analyst model (default on; see the module docstring)")
     args = parser.parse_args(argv)
 
     refusal = _refuse_unsafe_database()
@@ -326,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
         print(refusal, file=sys.stderr)
         return 2
 
-    payload = capture()
+    payload = capture(stub_analyst=args.stub_analyst)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=1, sort_keys=False) + "\n")
     print(

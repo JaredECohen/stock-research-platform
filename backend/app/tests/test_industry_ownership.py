@@ -72,9 +72,13 @@ def capture(database):
                 for row in db.scalars(select(IndustryReportJob).order_by(IndustryReportJob.id))]
 
 
-def report(receipt):
+def report(receipt, generation=None):
+    # An analyst-written edition by default: only those take the
+    # latest-good flag (owner decision 1), and these tests are about the
+    # publication receipt, not the display rule.
     return store.save_report(code="4510", period_key=PERIOD, as_of=AS_OF,
-                             payload={"original": "facts"}, job_id=receipt.job_id)
+                             payload={"original": "facts"}, job_id=receipt.job_id,
+                             generation=generation or {"generation_mode": "llm"})
 
 
 def cross(payload=None):
@@ -281,6 +285,17 @@ def test_legacy_operator_recovery_rejects_any_changed_attempt(database, field):
     result = legacy.recover_legacy_jobs([expected], "Verified predecessor stopped")
     assert result["recovered"] == 0 and result["results"][0]["action"] == "rejected"
     assert capture(database) == before
+
+
+def test_legacy_recovery_accepts_an_audit_only_receipt(database):
+    """A final attempt that stored an audit-only template DID write its
+    output; the receipt is as real as a published one and must not be
+    rejected as inconsistent because of its status."""
+    expected = legacy_job(database)
+    saved = report(SimpleNamespace(job_id=expected["id"]), generation={"generation_mode": "deterministic"})
+    assert saved.status == "audit_only"
+    result = legacy.recover_legacy_jobs([expected], "Verified predecessor stopped")
+    assert [r["action"] for r in result["results"]] == ["published_recovered"]
 
 
 def test_legacy_recovery_requires_unique_exact_publication_and_never_guesses_cross_receipt(database):

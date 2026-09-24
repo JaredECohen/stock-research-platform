@@ -14,6 +14,7 @@ from sqlalchemy import select, update
 from ..agents.log_safety import redact_unbounded
 from ..database import SessionLocal
 from ..models import CrossIndustrySnapshot, IndustryReport, IndustryReportJob
+from . import industry_report_store
 from . import industry_report_worker as worker
 
 log = logging.getLogger(__name__)
@@ -86,7 +87,9 @@ def recover_legacy_jobs(expected_jobs: list[dict], retirement_evidence: str) -> 
                     and report.industry_group_code == job.industry_group_code
                     and report.period_key == job.period_key
                     and report.as_of == expected_as_of
-                    and report.status in {"succeeded", "pending_review", "superseded"}
+                    # Every stored status is a receipt, audit_only included: a final
+                    # attempt that wrote an audit-only template DID publish its output.
+                    and report.status in industry_report_store.REPORT_STATUSES
                     and (job.report_id is None or job.report_id == report.id))
                 if expected_as_of is None:
                     result["reason"] = "invalid_stored_period"

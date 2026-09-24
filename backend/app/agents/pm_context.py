@@ -18,8 +18,12 @@ Assembles the markdown context block the PM reads on every synthesis
 
 - FEAT-003: the cross-industry snapshot the worker persisted for the PM
   (one indexed row read, rendered to ≤ 2,000 chars) plus a short excerpt
-  of the latest-good Industry Analysis edition for the company's own
-  group(s) — only when a snapshot exists; nothing is computed here.
+  of the latest ANALYST-WRITTEN Industry Analysis edition for the
+  company's own group(s) — only when a snapshot exists; nothing is
+  computed here. Template editions never reach the PM (owner decision 1),
+  template-filled sections inside an analyst edition read "n/a", and a
+  group whose newest week produced no analyst edition is marked
+  "not updated this week".
 
 Returns a single markdown string ready to splice into the PM system
 prompt or user message. Empty string when nothing is loaded — callers
@@ -44,15 +48,29 @@ def _clip(text: Any, limit: int) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
-def _excerpt_from(code: str, report: dict[str, Any] | None, *, max_chars: int = INDUSTRY_EXCERPT_MAX_CHARS) -> dict[str, Any] | None:
-    """The parts of a latest-good edition the PM needs: the analyst view,
-    what changed since the prior edition, and whether the edition was a
-    degraded (deterministic) one. ``None`` when the group has no edition."""
+def _excerpt_from(code: str, report: dict[str, Any] | None, *, max_chars: int = INDUSTRY_EXCERPT_MAX_CHARS,
+                  newer_period: str | None = None) -> dict[str, Any] | None:
+    """The parts of the latest ANALYST edition the PM needs: the analyst
+    view, what changed since the prior edition, and whether the edition
+    carries degradations. ``None`` when the group has no publishable
+    edition — the store's readers never return a template edition
+    (owner decision 1), so the PM never reads template prose as analysis.
+
+    Inside an analyst edition a section the template filled (the outlook
+    view or the what-changed line) is returned as ``""`` — "n/a" in the
+    block — never as the template's text. ``not_updated`` is the newer
+    week whose refresh finished without a validated analyst edition
+    (``newer_period``, from ``last_attempted_periods``), or ``None``."""
     if report is None:
         return None
+    from ..services.industry_report_store import hidden_sections
+
     sections = (report.get("payload") or {}).get("sections") or {}
+    hidden = set(hidden_sections(report))
 
     def text_of(section: str, *keys: str) -> str:
+        if section in hidden:
+            return ""
         interp = (sections.get(section) or {}).get("interpretation")
         if isinstance(interp, str):
             return interp
@@ -70,16 +88,21 @@ def _excerpt_from(code: str, report: dict[str, Any] | None, *, max_chars: int = 
         "as_of": report.get("as_of"),
         "analyst_view": _clip(text_of("outlook", "analyst_view", "text"), per_field),
         "what_changed": _clip(text_of("what_changed", "text"), per_field // 2),
+        "hidden_sections": sorted(hidden),
         "degraded": list(report.get("degraded") or []),
         "status": report.get("status"),
+        "not_updated": (
+            newer_period if newer_period and newer_period > str(report.get("period_key") or "") else None
+        ),
     }
 
 
 def _report_excerpt(code: str, *, max_chars: int = INDUSTRY_EXCERPT_MAX_CHARS) -> dict[str, Any] | None:
-    """One group's excerpt — one query. Use ``_excerpt_from`` with a
-    batched read when several groups are in scope."""
-    from ..services.industry_report_store import latest_good
-    return _excerpt_from(code, latest_good(code), max_chars=max_chars)
+    """One group's excerpt. Use ``_excerpt_from`` with the batched reads
+    when several groups are in scope."""
+    from ..services.industry_report_store import last_attempted_periods, latest_publishable
+    return _excerpt_from(code, latest_publishable(code), max_chars=max_chars,
+                         newer_period=last_attempted_periods([code]).get(code))
 
 
 def industry_context_payload(
@@ -91,7 +114,7 @@ def industry_context_payload(
     is what the chat tool returns and what the block below renders;
     nothing here fetches prices, runs analytics or calls an LLM."""
     from ..services import gics_registry
-    from ..services.industry_report_store import access_policy, latest_good_many
+    from ..services.industry_report_store import access_policy, last_attempted_periods, latest_publishable_many
     from ..services.industry_snapshot import group_rows, latest_snapshot, relevant_groups_detail
 
     symbols = [str(t).strip().upper() for t in (tickers or []) if str(t).strip()]
@@ -134,9 +157,12 @@ def industry_context_payload(
     snapshot = latest_snapshot(version=info)
     rows = group_rows(snapshot, codes) if snapshot else []
     names = {n.code: n.name for n in gics_registry.industry_groups(version=info)}
-    # One query for every group's edition — a portfolio question can put
-    # a dozen groups in scope and this runs on a web request.
-    editions = latest_good_many(codes, version=info) if codes else {}
+    # A constant number of queries for every group's edition — a portfolio
+    # question can put a dozen groups in scope and this runs on a web
+    # request. Analyst editions only; the attempted periods say which of
+    # them a newer week failed to replace.
+    editions = latest_publishable_many(codes, version=info) if codes else {}
+    attempted = last_attempted_periods(codes, version=info) if codes else {}
     groups = []
     for c in codes:
         entry: dict[str, Any] = {
@@ -145,7 +171,7 @@ def industry_context_payload(
             "relation": ("requested" if explicit and explicit.get("code") == c else
                          "own" if c in detail["own"] else "linked"),
             "snapshot_row": next((r for r in rows if r.get("code") == c), None) if snapshot else None,
-            "report": _excerpt_from(c, editions.get(c)),
+            "report": _excerpt_from(c, editions.get(c), newer_period=attempted.get(c)),
         }
         if entry["relation"] == "linked":
             entry["via"] = next((item["via"] for item in detail["linked"] if item["code"] == c), [])
@@ -181,7 +207,7 @@ def industry_context_block(
     excerpts follow for the companies' own groups only (the linked
     groups are already lines in the snapshot), so the block is bounded
     by the render cap plus one excerpt per own group."""
-    from ..services.industry_report_store import latest_good_many
+    from ..services.industry_report_store import last_attempted_periods, latest_publishable_many
     from ..services.industry_snapshot import latest_snapshot, relevant_groups_detail, render_pm_block
 
     snapshot = latest_snapshot()
@@ -195,15 +221,21 @@ def industry_context_block(
     ]
     if scope:
         detail = relevant_groups_detail(scope)
-        editions = latest_good_many(detail["own"]) if detail["own"] else {}
+        editions = latest_publishable_many(detail["own"]) if detail["own"] else {}
+        attempted = last_attempted_periods(detail["own"]) if detail["own"] else {}
         for code in detail["own"]:
-            excerpt = _excerpt_from(code, editions.get(code))
+            excerpt = _excerpt_from(code, editions.get(code), newer_period=attempted.get(code))
             if excerpt is None:
                 parts.append(f"Industry group {code}: no published Industry Analysis edition yet.")
                 continue
             degraded = f" (degraded edition: {', '.join(excerpt['degraded'])})" if excerpt["degraded"] else ""
+            stale = (
+                f" (not updated this week; newest analyst edition is {excerpt['period_key']}, "
+                f"the {excerpt['not_updated']} refresh produced none)"
+                if excerpt["not_updated"] else ""
+            )
             parts.append(
-                f"Industry group {code} — edition v{excerpt['version']} {excerpt['period_key']}{degraded}. "
+                f"Industry group {code} — edition v{excerpt['version']} {excerpt['period_key']}{degraded}{stale}. "
                 f"Analyst view: {excerpt['analyst_view'] or 'n/a'} "
                 f"What changed: {excerpt['what_changed'] or 'n/a'}"
             )

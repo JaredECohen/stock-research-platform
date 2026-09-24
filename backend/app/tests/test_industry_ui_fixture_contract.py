@@ -49,6 +49,7 @@ BODIES: tuple[tuple[str, type[BaseModel]], ...] = (
     ("report", IndustryReportOut),
     ("report_warming_up", IndustryReportOut),
     ("report_universe_short", IndustryReportOut),
+    ("report_not_updated", IndustryReportOut),
     ("companies", IndustryCompaniesOut),
     ("companies_warming_up", IndustryCompaniesOut),
     ("history", IndustryHistoryOut),
@@ -262,15 +263,67 @@ def test_the_captured_edition_is_the_shape_the_ui_renders(wire):
     from app.agents.industry_report_validator import INTERPRETED_SECTIONS, SECTION_ORDER
 
     payload = wire["report"]["payload"]
+    hidden = set(wire["report"]["display"]["hidden_sections"])
     assert payload["section_order"] == list(SECTION_ORDER)
     assert set(payload["sections"]) == set(SECTION_ORDER)
     for name, section in payload["sections"].items():
         assert set(section) == {"facts", "interpretation"}, name
         assert isinstance(section["facts"], dict), name
-        if name in INTERPRETED_SECTIONS:
+        if name in INTERPRETED_SECTIONS and name not in hidden:
             assert section["interpretation"] and section["interpretation"].get("text"), name
         else:
+            # Facts-only sections, and template-filled ones the response
+            # hid (owner decision 1) — whose facts stay.
             assert section["interpretation"] is None, name
+
+
+def test_the_capture_carries_the_display_rule_states(wire):
+    """Owner decision 1: template editions are never displayed. Every state
+    the page renders for that rule is in the capture, produced by the real
+    worker path (a model-outage week), not written by hand."""
+    from app.services import industry_report_store as rs
+
+    report = wire["report"]
+    assert report["display"]["edition_kind"] == "agentic"
+    # A REAL template-filled section inside an analyst edition: hidden, reason given.
+    assert report["display"]["hidden_sections"], "the capture has no hidden section; the UI's hidden text is untested"
+    assert report["display"]["hidden_reason"] == rs.HIDDEN_SECTION_REASON
+    assert report["display"]["not_updated"] is None
+    # ...and the diff refuses to quote it.
+    view = wire["changes"]["analyst_view"]
+    for key, reason in view["reasons"].items():
+        assert (view[key] is None) == bool(reason), key
+
+    stale = wire["report_not_updated"]
+    assert stale["display"]["not_updated"]["outcome"] == "withheld_template"
+    assert stale["display"]["not_updated"]["period_key"] == wire["meta"]["outage_period"]
+    assert stale["period_key"] < stale["display"]["not_updated"]["period_key"]
+    assert stale["last_attempt"]["outcome"] == "withheld_template" and stale["last_attempt"]["report_id"] is None
+
+    missing = wire["report_no_agentic"]["detail"]
+    assert missing["code"] == "no_report" and missing["reason"] == "no_validated_analyst_edition"
+    assert missing["withheld_editions"] >= 1
+    assert missing["last_attempt"]["outcome"] == "withheld_template"
+    from app.schemas.industry import LastAttemptOut
+    assert set(missing["last_attempt"]) == _serialised_keys(LastAttemptOut)
+
+    groups = {g["code"]: g for s in wire["taxonomy"]["sectors"] for g in s["industry_groups"]}
+    pointer = groups[wire["meta"]["short_code"]]["latest_report"]
+    assert pointer["not_updated"] is True
+    assert pointer["newer_attempt_period_key"] == wire["meta"]["outage_period"]
+
+
+def test_the_fixture_declares_the_stub_analyst(wire):
+    """The editions in the capture were "written" by the stand-in model,
+    which relabels the writer's own template prose. The fixture says so, so
+    nobody mistakes its text for a real analyst's."""
+    from app.tests.fixtures import industry_analyst_stub as stub
+
+    meta = wire["meta"]["analyst_stub"]
+    assert meta["enabled"] is True and meta["model"] == stub.MODEL and meta["reason"]
+    assert wire["report"]["generation"]["model"] == stub.MODEL
+    texts = json.dumps(wire["report"]["payload"])
+    assert stub.LABEL in texts and "Deterministic edition" not in texts
 
 
 def test_the_capture_covers_the_states_the_ui_has_to_render(wire):

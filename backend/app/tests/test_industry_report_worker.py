@@ -30,6 +30,7 @@ from app.services import industry_analytics as ia
 from app.services import industry_classification as ic
 from app.services import industry_report_store as rs
 from app.services import industry_report_worker as jobs
+from app.tests.fixtures import industry_analyst_stub
 from app.tests.gating_helpers import seed_demo_universe
 
 # A Sunday 06:30 UTC tick and the Friday close it publishes.
@@ -124,6 +125,16 @@ def _wipe(env):
     clean()
 
 
+@pytest.fixture()
+def analyst(monkeypatch):
+    """The deterministic stand-in analyst model (see
+    `fixtures/industry_analyst_stub.py`). Without it the test environment
+    has no LLM, every edition is a template, and templates are stored
+    audit-only (owner decision 1) — a test that needs a PUBLISHED edition
+    asks for this fixture."""
+    industry_analyst_stub.install(monkeypatch)
+
+
 def _job(job_id: int) -> dict[str, Any]:
     with SessionLocal() as db:
         row = db.get(IndustryReportJob, job_id)
@@ -194,7 +205,7 @@ def test_enqueue_period_skips_a_published_week_unless_forced(env):
     assert forced["cross_snapshot"]["job_id"] is not None
 
 
-def test_a_week_held_in_review_is_not_generated_a_second_time(env, monkeypatch):
+def test_a_week_held_in_review_is_not_generated_a_second_time(env, analyst, monkeypatch):
     """With `INDUSTRY_REPORTS_REQUIRE_REVIEW` on, an edition lands as
     `pending_review` and never takes `is_latest_good`. A skip check that
     asks "is there a latest-good edition for this period" therefore sees
@@ -276,7 +287,7 @@ def test_a_deferred_job_is_not_claimed_before_its_not_before(env):
 # --- execution ----------------------------------------------------------------
 
 
-def test_a_drained_period_publishes_one_edition_per_group_and_one_snapshot(env):
+def test_a_drained_period_publishes_one_edition_per_group_and_one_snapshot(env, analyst):
     result = jobs.enqueue_period(PERIOD, env["codes"], version=env["info"])
     assert result["enqueued"] == len(env["codes"])
     assert result["cross_snapshot"]["created"] is True
@@ -287,9 +298,11 @@ def test_a_drained_period_publishes_one_edition_per_group_and_one_snapshot(env):
         edition = rs.latest_good(code, version=env["info"])
         assert edition["period_key"] == PERIOD and edition["version"] == 1
         assert edition["stats_id"] is not None
-        # No LLM in the test environment: the edition is published and says so.
-        assert edition["payload"]["analyst_narrative"] == "llm_unavailable"
-        assert "analyst_narrative:llm_unavailable" in edition["degraded"]
+        # Only an analyst-written edition publishes; the stub analyst wrote
+        # every section, and the edition says who it was.
+        assert edition["payload"]["analyst_narrative"] == "llm"
+        assert edition["generation"]["model"] == industry_analyst_stub.MODEL
+        assert not [d for d in edition["degraded"] if d.startswith("analyst_narrative:")]
         assert edition["coverage"]["n_constituents"] >= settings.industry_stats_min_sample
         assert edition["freshness"]["data_as_of"] == AS_OF.isoformat()
         assert rs.freshness(code, version=env["info"])["last_attempt"]["status"] == "succeeded"
@@ -301,7 +314,7 @@ def test_a_drained_period_publishes_one_edition_per_group_and_one_snapshot(env):
     assert jobs.drain() == []
 
 
-def test_one_analytics_context_is_shared_across_a_period_and_dropped_between_them(env, monkeypatch):
+def test_one_analytics_context_is_shared_across_a_period_and_dropped_between_them(env, analyst, monkeypatch):
     """The benchmark cohort is frozen when `load_context` returns. Two
     contexts for one period means two cohorts, so the groups of that week
     stop being comparable — and the whole universe's prices get re-read
@@ -329,7 +342,8 @@ def test_a_failure_backs_off_on_the_injected_clock_and_keeps_the_prior_edition(e
     store_clock = {"t": SUNDAY - timedelta(days=1)}
     monkeypatch.setattr(rs, "_utcnow", lambda: store_clock["t"])
     prior = rs.save_report(code=code, period_key="2026-W35", as_of=AS_OF - timedelta(days=7),
-                           payload={"sections": {}}, version=env["info"])
+                           payload={"sections": {}}, version=env["info"],
+                           generation={"generation_mode": "llm"})
     monkeypatch.setattr(jobs.writer, "write_report", _boom)
 
     clock = {"t": SUNDAY}
@@ -364,9 +378,11 @@ def test_a_failure_backs_off_on_the_injected_clock_and_keeps_the_prior_edition(e
     assert "refresh attempt failed" in fresh["stale_reason"]
 
 
-def test_the_final_attempt_runs_deterministic_so_a_week_never_ends_blank(env, monkeypatch):
-    """Two model failures must not cost the week. The last attempt runs the
-    writer that needs no LLM, and the edition is published labelled."""
+def test_the_final_attempt_runs_deterministic_and_is_stored_audit_only(env, monkeypatch):
+    """Two model failures still end the job: the last attempt runs the
+    writer that needs no LLM. Its edition is kept for audit and NEVER
+    published (owner decision 1) — the group has no analyst edition, so
+    nothing is the latest good one, and the attempt says what it produced."""
     code = env["codes"][0]
     seen: list[bool] = []
     real = jobs.writer.write_report
@@ -387,10 +403,210 @@ def test_the_final_attempt_runs_deterministic_so_a_week_never_ends_blank(env, mo
         clock["t"] = clock["t"] + timedelta(hours=1)  # past each backoff
     assert seen == [False, False, True]
     assert _job(job["id"])["status"] == "succeeded"
-    edition = rs.latest_good(code, version=env["info"])
-    assert edition["period_key"] == PERIOD
-    assert edition["payload"]["analyst_narrative"] == "deterministic"
+    assert rs.latest_good(code, version=env["info"]) is None
+    [edition] = rs.history(code, version=env["info"], include_withheld=True)
+    assert edition["period_key"] == PERIOD and edition["stored_status"] == "audit_only"
+    assert edition["is_latest_good"] is False
     assert "generation:deterministic_final_attempt:3" in edition["degraded"]
+    assert rs.history(code, version=env["info"]) == []
+    assert rs.last_attempt(code, version=env["info"])["outcome"] == "withheld_template"
+    assert "published=audit_only" in _job(job["id"])["progress"][-1]["step"]
+
+
+def test_non_final_template_attempt_is_retried_not_stored(env, monkeypatch):
+    """No LLM (or an open breaker, which answers in milliseconds) makes the
+    writer return the template. Storing it on attempt 1 would end the
+    group's week before the backoff gave the model another chance: a
+    non-final template attempt raises `AnalystUnavailable` before anything
+    is saved, and only the final attempt stores the audit-only copy."""
+    code = env["codes"][0]
+    clock = {"t": SUNDAY}
+    monkeypatch.setattr(jobs, "_utcnow", lambda: clock["t"])
+    monkeypatch.setattr(jobs.industry_lease, "utcnow", lambda: clock["t"])
+    job, _ = jobs.enqueue(code, PERIOD, version=env["info"])
+
+    for attempt in (1, 2):
+        assert jobs.process_next_job(now=clock["t"])["status"] == "queued"
+        row = _job(job["id"])
+        assert row["attempts"] == attempt and row["error_type"] == "AnalystUnavailable"
+        assert "only the final attempt stores an audit-only copy" in row["error_message"]
+        assert row["not_before"] == (clock["t"] + timedelta(minutes=jobs.BACKOFF_MINUTES * attempt)).isoformat()
+        assert rs.history(code, version=env["info"], include_withheld=True) == [], "nothing is stored"
+        # Not claimable before the backoff; claimable just after it.
+        assert jobs.claim_next_job(now=clock["t"] + timedelta(minutes=jobs.BACKOFF_MINUTES * attempt - 1)) is None
+        clock["t"] = clock["t"] + timedelta(minutes=jobs.BACKOFF_MINUTES * attempt + 1)
+
+    assert jobs.process_next_job(now=clock["t"])["status"] == "succeeded"
+    stored = rs.history(code, version=env["info"], include_withheld=True)
+    assert [e["stored_status"] for e in stored] == ["audit_only"]
+    assert rs.latest_good(code, version=env["info"]) is None
+
+
+def test_thin_agentic_attempt_is_retried_then_stored_audit_only(env, monkeypatch):
+    """A model that answers but writes too little (here: everything except
+    drivers and outlook) is not an analyst edition. Non-final → retried;
+    the final attempt is the deterministic template → audit-only."""
+    industry_analyst_stub.install(
+        monkeypatch, sections=[s for s in rs.INTERPRETED_SECTIONS if s not in ("drivers", "outlook")])
+    code = env["codes"][0]
+    clock = {"t": SUNDAY}
+    monkeypatch.setattr(jobs, "_utcnow", lambda: clock["t"])
+    monkeypatch.setattr(jobs.industry_lease, "utcnow", lambda: clock["t"])
+    job, _ = jobs.enqueue(code, PERIOD, version=env["info"])
+    jobs.process_next_job(now=clock["t"])
+    row = _job(job["id"])
+    assert row["error_type"] == "AnalystUnavailable" and "drivers, outlook" in row["error_message"]
+    for _ in range(2):
+        clock["t"] = clock["t"] + timedelta(hours=1)
+        jobs.process_next_job(now=clock["t"])
+    assert _job(job["id"])["status"] == "succeeded"
+    assert rs.latest_good(code, version=env["info"]) is None
+    assert [e["stored_status"] for e in rs.history(code, version=env["info"], include_withheld=True)] == ["audit_only"]
+
+
+def test_template_week_is_not_reenqueued(env):
+    """A week whose only product was an audit-only template has been
+    GENERATED; re-enqueueing it every Sunday would silently re-spend three
+    attempts. `force` is the deliberate retry."""
+    code = env["codes"][0]
+    template = rs.save_report(code=code, period_key=PERIOD, as_of=AS_OF, payload={"sections": {}},
+                              version=env["info"], generation={"generation_mode": "deterministic"})
+    assert template.status == "audit_only"
+    again = jobs.enqueue_period(PERIOD, [code], version=env["info"], include_cross_snapshot=False)
+    assert again["enqueued"] == 0 and again["skipped_published_codes"] == [code]
+    # ...but it is not published, and the result says which skips those are.
+    assert again["skipped_withheld"] == 1 and again["skipped_withheld_codes"] == [code]
+    forced = jobs.enqueue_period(PERIOD, [code], version=env["info"], force=True, include_cross_snapshot=False)
+    assert forced["enqueued"] == 1
+
+
+# --- the week's outcome -------------------------------------------------------
+
+
+def _outcome_job(code: str, info, *, status: str, report_id: int | None = None, period_key: str = PERIOD) -> None:
+    with SessionLocal() as db:
+        db.add(IndustryReportJob(
+            kind="group_report", taxonomy_version_id=info.id, industry_group_code=code, period_key=period_key,
+            run_id="r", status=status, attempts=1, max_attempts=3, enqueued_at=SUNDAY, report_id=report_id,
+        ))
+        db.commit()
+
+
+def test_period_outcome_counts_and_health(env, monkeypatch):
+    """Each group lands in exactly one bucket, and the verdict waits for the
+    week to finish: `healthy` is None while anything is pending."""
+    info = env["info"]
+    groups = [g.code for g in reg.industry_groups(version=info)]
+    agentic, template, failed, pending = groups[0], groups[1], groups[2], groups[3]
+    extra = groups[4:6]
+    with SessionLocal() as db:  # these groups are outside the fixture's wipe
+        db.execute(delete(IndustryReport).where(IndustryReport.taxonomy_version_id == info.id,
+                                                IndustryReport.industry_group_code.in_(groups[:6])))
+        db.commit()
+    try:
+        a = rs.save_report(code=agentic, period_key=PERIOD, as_of=AS_OF, payload={}, version=info,
+                           generation={"generation_mode": "llm"})
+        t = rs.save_report(code=template, period_key=PERIOD, as_of=AS_OF, payload={}, version=info,
+                           generation={"generation_mode": "deterministic"})
+        _outcome_job(agentic, info, status="succeeded", report_id=a.id)
+        _outcome_job(template, info, status="succeeded", report_id=t.id)
+        _outcome_job(failed, info, status="failed")
+        _outcome_job(pending, info, status="queued")
+        out = jobs.period_outcome(PERIOD, info)
+        assert (out["agentic"], out["template"], out["failed"], out["pending"], out["groups"]) == (1, 1, 1, 1, 4)
+        assert out["complete"] is False and out["healthy"] is None
+        assert out["template_rate"] == pytest.approx(1 / 3, abs=1e-4)
+        assert out["not_updated_rate"] == pytest.approx(2 / 3, abs=1e-4)
+        assert out["not_updated_codes"] == sorted([template, failed])
+
+        with SessionLocal() as db:  # the pending group finishes with an analyst edition
+            db.execute(delete(IndustryReportJob).where(IndustryReportJob.industry_group_code == pending))
+            db.commit()
+        for code in [pending, *extra]:
+            rid = rs.save_report(code=code, period_key=PERIOD, as_of=AS_OF, payload={}, version=info,
+                                 generation={"generation_mode": "llm"}).id
+            _outcome_job(code, info, status="succeeded", report_id=rid)
+        out = jobs.period_outcome(PERIOD, info)
+        assert (out["agentic"], out["template"], out["failed"], out["pending"]) == (4, 1, 1, 0)
+        assert out["not_updated_rate"] == pytest.approx(2 / 6, abs=1e-4)
+        assert out["healthy"] is False, "2 of 6 not updated is above the 0.10 default"
+        monkeypatch.setattr(settings, "industry_report_not_updated_unhealthy_rate", 0.5)
+        assert jobs.period_outcome(PERIOD, info)["healthy"] is True
+        note = jobs.period_outcome_note(out, prefix="prev_")
+        for token in ("prev_period=2026-W36", "prev_agentic=4", "prev_template=1", "prev_failed=1",
+                      "prev_pending=0", "prev_healthy=False", "prev_threshold=0.1"):
+            assert token in note, note
+    finally:
+        with SessionLocal() as db:
+            db.execute(delete(IndustryReport).where(IndustryReport.taxonomy_version_id == info.id,
+                                                    IndustryReport.industry_group_code.in_(groups[:6])))
+            db.commit()
+
+
+@pytest.fixture()
+def weekly_row():
+    """The weekly loop's shared CronLoopRun row, cleared before and after."""
+    from app.models import CronLoopRun
+    from app.monitoring import _LAST_RUNS
+    from app.monitoring.industry_weekly_loop import LOOP_NAME
+
+    def clear() -> None:
+        _LAST_RUNS.pop(LOOP_NAME, None)
+        with SessionLocal() as db:
+            db.execute(delete(CronLoopRun).where(CronLoopRun.loop_name == LOOP_NAME))
+            db.commit()
+
+    clear()
+    yield LOOP_NAME
+    clear()
+
+
+def _weekly_progress(loop_name: str):
+    """Read the row the way the web service's cron-health does: straight
+    from the database, in a fresh session — not from this process's memory."""
+    from app.models import CronLoopRun
+
+    with SessionLocal() as db:
+        row = db.query(CronLoopRun).filter(CronLoopRun.loop_name == loop_name).one_or_none()
+        return None if row is None else (row.progress_note, row.progress_success)
+
+
+def test_group_job_completion_records_weekly_progress(env, analyst, weekly_row, monkeypatch):
+    """The drainer (worker process) writes the week's outcome to the loop's
+    DB row as progress; cron-health (web process) reads it from there. A
+    module-level dict could not cross that boundary."""
+    monkeypatch.setattr(jobs, "_utcnow", lambda: SUNDAY)
+    monkeypatch.setattr(jobs.industry_lease, "utcnow", lambda: SUNDAY)
+    jobs.enqueue_period(PERIOD, env["codes"], version=env["info"], include_cross_snapshot=False)
+    jobs.process_next_job(now=SUNDAY)
+    note, success = _weekly_progress(weekly_row)
+    assert f"period={PERIOD}" in note and "pending=1" in note and success is None
+    jobs.process_next_job(now=SUNDAY)
+    note, success = _weekly_progress(weekly_row)
+    assert "agentic=2" in note and "template=0" in note and "pending=0" in note
+    assert "not_updated_rate=0.0" in note and success is True
+
+    from app.api import routes_admin
+    by_name = {r["loop"]: r for r in routes_admin.cron_health_endpoint()["loops"]}
+    assert by_name[weekly_row]["progress_note"] == note
+
+
+def test_progress_only_for_current_period(env, analyst, weekly_row, monkeypatch):
+    """A forced regenerate of an OLD week finishing mid-week must not write
+    that week's verdict over this week's."""
+    later = SUNDAY + timedelta(days=14)  # the current period is two weeks on
+    monkeypatch.setattr(jobs, "_utcnow", lambda: later)
+    monkeypatch.setattr(jobs.industry_lease, "utcnow", lambda: later)
+    assert jobs.period_for(later)[0] != PERIOD
+    jobs.enqueue(env["codes"][0], PERIOD, version=env["info"], force=True, source="admin")
+    assert jobs.process_next_job(now=later)["status"] == "succeeded"
+    assert _weekly_progress(weekly_row) is None
+    # …while a job for the current period does record.
+    current = jobs.period_for(later)[0]
+    jobs.enqueue(env["codes"][0], current, version=env["info"])
+    jobs.process_next_job(now=later)
+    note, _ = _weekly_progress(weekly_row)
+    assert f"period={current}" in note
 
 
 def test_a_rejected_edition_is_retried_and_counts_the_problems_it_cannot_show(env, monkeypatch):
@@ -505,7 +721,7 @@ def test_events_the_snapshots_global_cap_dropped_are_counted_not_published_as_ze
         "group_absent_from_snapshot")
 
 
-def test_the_edition_carries_the_event_provenance_and_counts_what_the_cap_dropped(env, monkeypatch):
+def test_the_edition_carries_the_event_provenance_and_counts_what_the_cap_dropped(env, analyst, monkeypatch):
     """End to end: the provenance reaches the saved edition's coverage, and
     a drop is named in `degraded` where a reader (and the UI) will see it."""
     code = env["codes"][0]
@@ -525,7 +741,7 @@ def test_the_edition_carries_the_event_provenance_and_counts_what_the_cap_droppe
 # --- the validator gets facts the payload did not supply ----------------------
 
 
-def test_the_validator_checks_against_independently_built_facts(env, monkeypatch):
+def test_the_validator_checks_against_independently_built_facts(env, analyst, monkeypatch):
     """The validator's first duty is to prove the published `facts` are the
     server's — an LLM never writes into facts, and every number the
     interpretation quotes must appear in them. Handing it the facts read

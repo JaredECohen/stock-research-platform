@@ -35,6 +35,20 @@ describe("HistoryPicker", () => {
     expect(screen.getByTestId("history-count")).toHaveTextContent("14 older not shown (limit 26)");
   });
 
+  it("explains the version gap audit-only editions leave, and stays quiet when there is none", () => {
+    // The captured history holds no withheld edition; the count line says nothing about one.
+    expect(fx.history.withheld).toBe(0);
+    render(<HistoryPicker history={fx.history} value="latest" onSelect={() => {}} />);
+    expect(screen.getByTestId("history-count")).not.toHaveTextContent("audit only");
+
+    const h = fx.clone(fx.history);
+    h.withheld = 2;
+    render(<HistoryPicker history={h} value="latest" onSelect={() => {}} />);
+    expect(screen.getAllByTestId("history-count")[1]).toHaveTextContent(
+      "2 editions were kept for audit only (no validated analyst edition) and are not published, so version numbers skip.",
+    );
+  });
+
   it("reports the last refresh attempt, or says none is on file", () => {
     render(<HistoryPicker history={fx.history} value="latest" onSelect={() => {}} />);
     expect(screen.getByTestId("history-count")).toHaveTextContent(`Last refresh attempt: ${fx.history.last_attempt!.status}`);

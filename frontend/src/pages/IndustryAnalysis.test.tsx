@@ -88,10 +88,22 @@ async function settle() {
 
 const location = () => screen.getByTestId("location").textContent;
 
+// Telemetry POSTs are not writes this page makes: `lib/logger` flushes on a
+// module-level 1.5 s timer, so a flush started by an EARLIER test can land
+// inside this one's spy. Counting it made "never writes" fail on timer
+// phase alone. `stubFetch` exempts the same two URLs.
+const TELEMETRY = ["/api/admin/ui-log", "/api/public/events"];
+
 /** The one assertion every test makes: the page reads, it never writes. */
 function expectNoWrites(fetchMock: ReturnType<typeof stubFetch>) {
-  const methods = fetchMock.mock.calls.map(([, init]) => String((init as RequestInit | undefined)?.method ?? "GET").toUpperCase());
-  expect(methods.filter((m) => m !== "GET" && m !== "HEAD")).toEqual([]);
+  const writes = fetchMock.mock.calls
+    .map(([input, init]) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      const method = String((init as RequestInit | undefined)?.method ?? "GET").toUpperCase();
+      return { url, method };
+    })
+    .filter(({ url, method }) => method !== "GET" && method !== "HEAD" && !TELEMETRY.some((t) => url.includes(t)));
+  expect(writes.map(({ method, url }) => `${method} ${url}`)).toEqual([]);
 }
 
 describe("IndustryAnalysis — index", () => {
@@ -305,7 +317,7 @@ describe("IndustryAnalysis — one group", () => {
     expect(screen.getByTestId("badge-stale")).toHaveTextContent(stale.stale_reason!);
     const attempt = screen.getByTestId("last-attempt");
     expect(attempt).toHaveTextContent("ReportRejected");
-    expect(attempt).toHaveTextContent("drivers section opened with a KPI forecast");
+    expect(attempt).toHaveTextContent("the analyst draft did not pass validation (1 problem)");
     // The edition itself is still on the page — a failed week does not
     // blank it.
     expect(screen.getByTestId("industry-report-tabs")).toBeInTheDocument();
@@ -337,12 +349,13 @@ describe("IndustryAnalysis — one group", () => {
             last_attempt: {
               job_id: 9,
               status: "failed",
+              outcome: "failed",
               at: "2026-09-06T07:00:00",
               period_key: "2026-W36",
               attempts: 3,
               max_attempts: 3,
               error_type: "ReportRejected",
-              error_message: "number '15' is not in the facts",
+              error_message: "the analyst draft did not pass validation (1 problem)",
               report_id: null,
               source: "weekly_cron",
             },
@@ -353,10 +366,77 @@ describe("IndustryAnalysis — one group", () => {
     ]);
     await settle();
 
-    expect(screen.getByTestId("industry-missing")).toHaveTextContent("No published edition yet");
+    expect(fx.noReportDetail.reason).toBe("no_validated_analyst_edition");
+    expect(screen.getByTestId("industry-missing")).toHaveTextContent("No analyst edition yet");
+    expect(screen.getByTestId("missing-no-analyst")).toHaveTextContent(
+      "No analyst-written edition has been published for this group yet.",
+    );
+    // Nothing withheld for this group: no audit-only sentence.
+    expect(screen.getByTestId("missing-no-analyst")).not.toHaveTextContent("audit only");
     expect(screen.getByTestId("missing-last-attempt")).toHaveTextContent("ReportRejected");
     // The group still has members; "no edition" is not "nothing here".
     expect(screen.getByTestId("companies-table")).toBeInTheDocument();
+  });
+
+  // --- owner decision 1: template editions are never displayed ----------
+
+  it("a group whose only edition is audit-only says so, and counts it", async () => {
+    const detail = fx.noAgenticDetail;
+    expect(detail.withheld_editions).toBeGreaterThan(0);
+    mount(`/app/industries/${fx.WIRE_META.no_agentic_code}`, [
+      ["/api/industries/taxonomy", () => okJson(fx.taxonomy)],
+      [/\/report/, () => errJson(404, detail)],
+      [/\/companies/, () => okJson(fx.companies)],
+      [/\/history/, () => okJson(fx.history)],
+    ]);
+    await settle();
+
+    const empty = screen.getByTestId("missing-no-analyst");
+    expect(empty).toHaveTextContent("No analyst-written edition has been published for this group yet.");
+    expect(empty).toHaveTextContent(
+      `${detail.withheld_editions} edition${detail.withheld_editions === 1 ? "" : "s"} without a validated analyst narrative`,
+    );
+    expect(empty).toHaveTextContent("kept for audit only and not shown");
+    expect(screen.getByTestId("missing-last-attempt")).toHaveTextContent("no validated analyst edition");
+    expect(screen.queryByTestId("industry-report-tabs")).not.toBeInTheDocument();
+    expect(screen.getByTestId("companies-table")).toBeInTheDocument();
+  });
+
+  it("an edition number kept for audit only renders as withheld, not as missing", async () => {
+    mount(`/app/industries/${fx.CODE}?version=3`, [
+      ["/api/industries/taxonomy", () => okJson(fx.taxonomy)],
+      [
+        /\/report/,
+        () =>
+          errJson(404, {
+            code: "edition_withheld",
+            message: "edition 3 is kept for audit only and is not published",
+            version: 3,
+          }),
+      ],
+      [/\/companies/, () => okJson(fx.companies)],
+      [/\/history/, () => okJson(fx.history)],
+    ]);
+    await settle();
+
+    expect(screen.getByTestId("industry-edition-withheld")).toHaveTextContent("This edition is kept for audit only.");
+    expect(screen.queryByTestId("industry-missing")).not.toBeInTheDocument();
+  });
+
+  it("a group a newer week did not update shows its last analyst edition under a banner", async () => {
+    mount(`/app/industries/${fx.SHORT_CODE}`, [
+      ["/api/industries/taxonomy", () => okJson(fx.taxonomy)],
+      [/\/report/, () => okJson(fx.notUpdatedReport)],
+      [/\/companies/, () => okJson(fx.companies)],
+      [/\/history/, () => okJson(fx.history)],
+    ]);
+    await settle();
+
+    expect(screen.getByTestId("not-updated-banner")).toHaveTextContent(
+      `The ${fx.OUTAGE_PERIOD} refresh did not produce a validated analyst edition.`,
+    );
+    // The edition's content stays: a week without an analyst edition does not blank the page.
+    expect(screen.getByTestId("industry-report-tabs")).toBeInTheDocument();
   });
 
   it("shows a loading state while the report is in flight", async () => {
