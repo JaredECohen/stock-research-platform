@@ -64,7 +64,8 @@ LABEL_TRUSTWORTHY_FROM = datetime(2026, 6, 15, 1, 0, 0)
 # (id <= 582, written before 2026-05-05); a later same-ticker snapshot is
 # classified by the ordinary rules. Expected ids: fix003-provenance-and-row-plan
 # §2 (223, 224, 225, 239, 411-413, 516-523, 525, 554-556, 562, 563, 565-571,
-# 577-582, plus any as_of fixture such as 524/564).
+# 577-582). A fixture-ticker row with as_of_date set (ASOFT1 v2, and the §4.0
+# candidates 524/564) is classified by the earlier backtest rule instead.
 FIXTURE_TICKERS = frozenset({
     "TSTONE", "TSTONE2", "TSTAA", "TSTBB", "TSTNEU", "TSTRFL", "TSTADM",
     "TSTSHORT", "TSTHALF", "TSTPATCH", "TSTNOMA", "TSTCAP", "RTRIP", "CHAIN",
@@ -162,8 +163,17 @@ def classify_snapshot(
     parent's body (including ``generation_mode`` and ``generated_at``) and
     edits a few fields, so its own label says nothing new about its data.
     """
-    # FIX-003 first: a migrated test fixture is not research in any mode, and
-    # naming it is more useful to the receipt than "unrecorded" or "backtest".
+    # Backtests first, as the integration plan orders the rule. Excluded
+    # either way, but the order decides the NAME, and `_check_expected` only
+    # accepts the 34 enumerated fixture ids under the fixture name: the copy
+    # also carried fixture-ticker backtests that never reached any log (ASOFT1
+    # v2 at 526 per test_as_of_date.py; FIX-003 §4.0 candidates 524, 564), so
+    # naming those as fixtures would abort the first production sweep.
+    if as_of_date is not None:
+        return Classification(False, REASON_BACKTEST)
+    # FIX-003 next, ahead of the patch and demo rules: a migrated test fixture
+    # is not research in any mode, and naming it is more useful to the
+    # receipt than "unrecorded" or an inherited reason.
     if (
         (ticker or "").upper() in FIXTURE_TICKERS
         and snapshot_id <= FIXTURE_MAX_SNAPSHOT_ID
@@ -171,8 +181,6 @@ def classify_snapshot(
         and snapshot_generated_at < FIXTURE_BEFORE
     ):
         return Classification(False, REASON_TEST_FIXTURE)
-    if as_of_date is not None:
-        return Classification(False, REASON_BACKTEST)
     if (trigger or "") == PATCH_TRIGGER:
         if parent_classification is None:
             return Classification(False, REASON_PATCH_PARENT_MISSING)

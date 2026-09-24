@@ -97,10 +97,14 @@ EXCL_DEV = Classification(False, oe.REASON_DEV_COPY)
     # Backtests are excluded whatever their mode.
     (dict(sid=700, analysis=datetime(2026, 7, 1), mode="live", as_of=datetime(2025, 6, 30)),
      (False, oe.REASON_BACKTEST)),
-    # FIX-003 fixtures take precedence over every other rule...
+    # FIX-003 fixtures take precedence over every rule but the backtest one...
     (dict(sid=562, ticker="TSTONE", analysis=datetime(2026, 1, 4, 8, 2), mode=None), (False, oe.REASON_TEST_FIXTURE)),
-    (dict(sid=525, ticker="ASOFT1", analysis=datetime(2026, 5, 4), mode="live", as_of=datetime(2025, 1, 1)),
-     (False, oe.REASON_TEST_FIXTURE)),
+    # ASOFT1 525 is test_as_of_date.py's v1 (no as_of_date, with pending
+    # 30d/90d pairs in FIX-003 §2); its v2 at 526 is a backtest the evaluator
+    # never logged, so it is named a backtest, not an unlisted fixture.
+    (dict(sid=525, ticker="ASOFT1", analysis=datetime(2026, 5, 4), mode="live"), (False, oe.REASON_TEST_FIXTURE)),
+    (dict(sid=526, ticker="ASOFT1", analysis=datetime(2026, 5, 4), mode="live", as_of=datetime(2025, 6, 30)),
+     (False, oe.REASON_BACKTEST)),
     (dict(sid=577, ticker="TSTPATCH", analysis=datetime(2026, 5, 4), trigger="incremental_patch"),
      (False, oe.REASON_TEST_FIXTURE)),
     # ...but only for rows the copy could have carried.
@@ -313,6 +317,30 @@ def test_expected_set_guard_catches_under_exclusion(iso):
         with pytest.raises(oe.ExclusionSetMismatch, match="classified as live_generation"):
             oe.classify_pending(db=db)
     assert _ledger(sessions) == {}
+
+
+def test_fixture_ticker_backtest_does_not_trip_the_fixture_guard(iso):
+    """The copy carried ASOFT1 v1 (525, enumerated) AND its v2 backtest (526).
+
+    526 never reached a log (the evaluator skips as_of rows), so it is not in
+    the enumerated fixture set. Named a fixture, it tripped the guard and the
+    first production sweep aborted, writing nothing.
+    """
+    sessions, _ = iso
+    with sessions() as db:
+        v1 = add_snapshot(db, id=525, ticker="ASOFT1", version=1, generated_at=datetime(2026, 5, 2, 12, 0))
+        v2 = add_snapshot(db, id=526, ticker="ASOFT1", version=2, parent_version=1,
+                          generated_at=datetime(2026, 5, 2, 12, 0, 1), as_of_date=datetime(2025, 6, 30))
+        live = add_snapshot(db, id=900, ticker="AAPL", generated_at=datetime(2026, 8, 1))
+        db.commit()
+        summary = oe.classify_pending(db=db)
+    assert summary["classified"] == 3
+    ledger = _ledger(sessions)
+    assert {sid: (row.eligible, row.reason) for sid, row in ledger.items()} == {
+        v1.id: (False, oe.REASON_TEST_FIXTURE),
+        v2.id: (False, oe.REASON_BACKTEST),
+        live.id: (True, oe.REASON_LIVE),
+    }
 
 
 def test_expected_set_guard_catches_unlisted_fixture(iso):
