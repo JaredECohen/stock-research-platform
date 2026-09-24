@@ -13,7 +13,11 @@ writes memos inline while FEAT-002 is dark. The code default stays `false`, so
 CI and development memos do not route. The PM synthesis reads the routed read as
 a bounded digest ahead of its capped findings JSON; a template or absent read
 (no mapping, deterministic fallback, crash stub, intake skip) is withheld from
-the PM and from `agent_influence`. The sector analyst still runs on every memo.
+the PM **synthesis** and from `agent_influence`. It is not withheld from the
+other PM-model calls: the deep-research PM critique and the PM DCF adjuster
+still receive every finding, template reads included, in compact blocks cut
+at 5,000 and 6,000 characters in roster order (a known gap, left for a FIX
+candidate). The sector analyst still runs on every memo.
 Post-deploy checks and the rollback are in §4 step 4 and §5. Report access is also separate from generation; the public/Pro policy
 and `AUTH_ENABLED` behavior are described in §1. The remaining owner decisions
 and rollout checks are in §1 and §4.
@@ -254,23 +258,26 @@ choices; this checklist is not an instruction to regenerate reports.
    `ENABLE_INDUSTRY_ANALYST_ROUTING: "true"` on web and worker, and
    `test_deploy_config` asserts it is explicit and `"true"` on both. A
    Blueprint sync may not apply a newly added key, so confirm the value each
-   process **loaded**, not the file. None of these reads needs a secret:
-   - web: `GET /health` → `"industry_analyst_routing": true`;
-   - worker (no HTTP port): the `worker_heartbeat` note in
+   process **loaded**, not the file. Only the web read is public; every
+   `/api/admin/*` read below takes the `ADMIN_API_TOKEN` bearer (the `$ADMIN`
+   snippet in §2) and is an **owner** step, never an agent's:
+   - web (no secret): `GET /health` → `"industry_analyst_routing": true`;
+   - worker (no HTTP port; owner, bearer): the `worker_heartbeat` note in
      `/api/admin/cron-health` → `industry_routing=on`;
    - if either says off, the owner reads that ONE key in the Render dashboard
      (or a single-key env read) and sets it there. Never dump a service's whole
      env list: it holds provider keys.
 
    Then wait for the next **organic** regen (about 06:00 UTC). Do not trigger a
-   memo. Read it without generating:
+   memo. Read it without generating (owner; the two admin reads take the bearer):
    - `GET /api/admin/regen-jobs` → the ticker, `run_id` and memo version;
    - `GET /api/stocks/{t}/memo?version=N` (a bare `GET /memo` can generate
      inline): `extra_agent_views.industry_group` exists, its
      `data.deterministic_fallback` is absent, "Industry Group Analyst" is not
      in `degraded_agents`, and the prose names our label, never "GICS" or a code;
-   - `GET /api/admin/llm-metrics?run_id=<run_id>`: one "Industry Group Analyst"
-     call, `success`, `tokens_out` below the 2,400 ceiling.
+   - `GET /api/admin/llm-metrics?run_id=<run_id>`: at least one "Industry Group
+     Analyst" call (a deep-research critique that re-fires the analyst adds a
+     second), each `success`, each `tokens_out` below the 2,400 ceiling.
    Watch the fallback rate for a week (`n_failures`, and `DeterministicFallback`
    on "Industry Group Analyst" in memo banners). A persistent rate above ~10%,
    or `tokens_out` at 2,400, means revisit the headroom and schema. Expected
