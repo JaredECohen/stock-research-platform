@@ -39,7 +39,14 @@ class CompsHistoryStats(BaseModel):
     own_p25: dict[str, float | None] = Field(default_factory=dict)
     own_p75: dict[str, float | None] = Field(default_factory=dict)
     current_percentile: dict[str, float] = Field(default_factory=dict)
+    # Relative change, (current - own median) / |own median|: 0.067 means 6.7%
+    # above the median, NOT 6.7 percentage points. For a margin or a rate the
+    # absolute gap is the comparison readers mean, so it is carried separately.
     current_vs_own_median: dict[str, float] = Field(default_factory=dict)
+    # Absolute gap in percentage points for rate-type metrics only (margins,
+    # growth, ROIC, FCF yield): 2.61 means 2.61 points above the own median.
+    # Empty on payloads saved before this field existed.
+    current_minus_own_median_pp: dict[str, float] = Field(default_factory=dict)
     interpretation: str = ""
 
 
