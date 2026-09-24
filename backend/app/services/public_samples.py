@@ -53,7 +53,11 @@ PAYLOAD_CAP_BYTES = 1_500_000
 # though the underlying rows did not change.
 #   v2: `prices` served as the plan's `[{date, close}]` list, not the
 #       stored `{points: [...]}` row shape.
-_ASSEMBLY_VERSION = "v2"
+#   v3: W2a — memo rows built before presentation existed are presented at
+#       serve time (template-filled sections read "Unavailable in this
+#       version."), their stored commentary is withheld, and the ledger
+#       reports a hidden mispricing card as unavailable.
+_ASSEMBLY_VERSION = "v3"
 
 # The admin "rebuild" trigger crosses the web→worker boundary through the
 # same table the samples live in: one control row keyed by a ticker no
@@ -207,11 +211,22 @@ def assemble(db: Session, ticker: str) -> tuple[dict[str, Any], str]:
     payload["sector"] = sector
     payload["built_at"] = newest.isoformat() if newest else None
 
+    # W2a: a memo row without `section_availability` was built before the
+    # presenter existed. Its commentary row was written by an LLM that read
+    # the unpresented memo (template thesis, mispricing and confidence
+    # included), so it is withheld until the next build rather than served.
+    memo_unpresented = (
+        isinstance(memo_payload, dict) and "section_availability" not in memo_payload
+    )
     for kind in KINDS:
         row = rows.get(kind)
         if row is None:
             payload[kind] = None
             degraded.append(f"{kind}: not built")
+            continue
+        if kind == "commentary" and memo_unpresented:
+            payload[kind] = None
+            degraded.append("commentary: withheld (built before section availability)")
             continue
         payload[kind] = _public_shape(kind, row.payload)
         if payload[kind] is None:
@@ -243,7 +258,30 @@ def _public_shape(kind: str, stored: Any) -> Any:
     if kind == "prices":
         points = stored.get("points") if isinstance(stored, dict) else stored
         return list(points) if isinstance(points, list) and points else None
+    if kind == "memo" and isinstance(stored, dict) and "section_availability" not in stored:
+        return _present_legacy_memo(stored)
     return stored
+
+
+def _present_legacy_memo(stored: dict[str, Any]) -> dict[str, Any]:
+    """Present a memo row built before W2a, at serve time.
+
+    Only `source_ref` survives in the row, not the snapshot's patch chain,
+    so no field is credited as patched: that errs toward hiding. A row that
+    no longer validates is served as stored (and logged) so the page never
+    breaks; the next weekly build replaces it with a presented copy.
+    """
+    from pydantic import ValidationError
+
+    from ..schemas import StockMemoOut
+    from .memo_sections import present_memo
+
+    try:
+        memo = StockMemoOut.model_validate(stored)
+    except ValidationError:
+        log.warning("public sample memo row does not validate; served unpresented until rebuilt")
+        return stored
+    return strip_for_public(present_memo(memo).model_dump(mode="json"))
 
 
 # --- expectations ledger ------------------------------------------------------
@@ -285,12 +323,23 @@ def build_expectations_ledger(memo: dict[str, Any] | None) -> dict[str, Any]:
         return ledger
 
     thesis = memo.get("mispricing_thesis") if isinstance(memo.get("mispricing_thesis"), dict) else {}
+    availability = memo.get("section_availability") if isinstance(memo.get("section_availability"), dict) else {}
+
+    def _hidden(section: str) -> bool:
+        entry = availability.get(section)
+        return isinstance(entry, dict) and entry.get("status") == "unavailable"
+
+    # W2a: a hidden mispricing card is the template, not the committee's
+    # view; say so instead of quoting the placeholder as a forecast.
+    mispricing_hidden = _hidden("mispricing_thesis")
 
     # Reported consensus — the PM's restatement of what the street expects.
     # It is written by the committee, so it is an interpretation of
     # consensus rather than a quoted estimate feed.
     consensus = (thesis.get("consensus_view") or "").strip()
-    if consensus:
+    if mispricing_hidden:
+        ledger["reported_consensus"] = _missing("not_captured", "unavailable in this version")
+    elif consensus:
         ledger["reported_consensus"] = _available([
             _cell("Consensus view", consensus, "interpretation", "mispricing_thesis.consensus_view"),
         ])
@@ -316,6 +365,8 @@ def build_expectations_ledger(memo: dict[str, Any] | None) -> dict[str, Any]:
         ))
     if items:
         ledger["management_guidance"] = _available(items)
+    elif _hidden("earnings_agent_view"):
+        ledger["management_guidance"] = _missing("not_captured", "unavailable in this version")
     else:
         ledger["management_guidance"] = _missing("not_captured", "not captured")
 
@@ -346,7 +397,9 @@ def build_expectations_ledger(memo: dict[str, Any] | None) -> dict[str, Any]:
     ours = (thesis.get("our_view") or "").strip()
     gap = (thesis.get("gap") or "").strip()
     falsifiers = [f for f in (thesis.get("falsifiers") or []) if isinstance(f, str) and f.strip()]
-    if ours or gap or falsifiers:
+    if mispricing_hidden:
+        ledger["our_forecast"] = _missing("not_captured", "unavailable in this version")
+    elif ours or gap or falsifiers:
         forecast_items = []
         if ours:
             forecast_items.append(_cell("Our view", ours, "interpretation", "mispricing_thesis.our_view"))
@@ -542,17 +595,16 @@ def _upsert_row(
 
 
 def _build_memo(ticker: str, db: Session) -> tuple[dict[str, Any] | None, str | None, list[str]]:
-    from .memo_store import latest_memo, memo_to_pydantic
+    from .memo_store import latest_memo, present_snapshot
 
     snap = latest_memo(ticker, db=db)
     if snap is None:
         return None, None, ["memo: no stored memo"]
-    # `section_availability` is the read-time presenter map (W2a) and is never
-    # stored, here any more than in memo_snapshots. The W2a serve path tells a
-    # sample row built before presentation existed by that key being ABSENT,
-    # so dumping the schema's empty default would make an unpresented row look
-    # already presented and serve template-filled sections publicly.
-    memo = memo_to_pydantic(snap).model_dump(mode="json", exclude={"section_availability"})
+    # The public copy is the PRESENTED memo (W2a): template-filled sections
+    # read "Unavailable in this version." and the map rides along. The serve
+    # path tells a row built before presentation existed by that key being
+    # ABSENT (`_public_shape`), so a presented row always carries it.
+    memo = present_snapshot(snap, db=db).model_dump(mode="json")
     return strip_for_public(memo), f"memo_snapshot:{snap.id}", []
 
 
@@ -675,15 +727,8 @@ def _build_commentary(ticker: str, memo: dict[str, Any] | None, *, now: datetime
 
     from ..agents import llm
 
-    thesis = memo.get("mispricing_thesis") if isinstance(memo.get("mispricing_thesis"), dict) else {}
-    verdict = memo.get("valuation_verdict") if isinstance(memo.get("valuation_verdict"), dict) else {}
-    prompt = (
-        f"Company: {memo.get('company_name') or ticker} ({ticker}), sector {memo.get('sector') or 'n/a'}.\n"
-        f"Rating: {memo.get('rating_label')}; confidence {memo.get('confidence_score')}.\n"
-        f"Thesis: {memo.get('one_sentence_thesis') or ''}\n"
-        f"Consensus view: {thesis.get('consensus_view') or 'not captured'}\n"
-        f"Our view: {thesis.get('our_view') or 'not captured'}\n"
-        f"Valuation verdict: {verdict.get('verdict') or 'n/a'} — {verdict.get('summary') or ''}\n\n"
+    prompt = _commentary_facts(ticker, memo) + (
+        "\n\n"
         "Write one paragraph (max 120 words) for a logged-out visitor explaining what this research "
         "memo concluded and what evidence would change the view. No recommendations, no price targets, "
         "no claims about returns."
@@ -704,6 +749,36 @@ def _build_commentary(ticker: str, memo: dict[str, Any] | None, *, now: datetime
         "generated_at": now.isoformat(),
         "model": f"{settings.active_llm_provider}:cheap",
     }, "llm:cheap", []
+
+
+def _commentary_facts(ticker: str, memo: dict[str, Any]) -> str:
+    """The memo facts the public commentary may rest on: only sections the
+    presented memo shows (W2a, critique delta 5). A hidden section is left
+    out entirely — never passed as its placeholder — so the model cannot
+    restate template text or a hidden confidence."""
+    availability = memo.get("section_availability") if isinstance(memo.get("section_availability"), dict) else {}
+
+    def shown(section: str) -> bool:
+        entry = availability.get(section)
+        return not (isinstance(entry, dict) and entry.get("status") == "unavailable")
+
+    thesis = memo.get("mispricing_thesis") if isinstance(memo.get("mispricing_thesis"), dict) else {}
+    verdict = memo.get("valuation_verdict") if isinstance(memo.get("valuation_verdict"), dict) else {}
+    rating = f"Rating: {memo.get('rating_label')}"
+    if shown("confidence_score"):
+        rating += f"; confidence {memo.get('confidence_score')}"
+    lines = [
+        f"Company: {memo.get('company_name') or ticker} ({ticker}), sector {memo.get('sector') or 'n/a'}.",
+        rating + ".",
+    ]
+    if shown("one_sentence_thesis"):
+        lines.append(f"Thesis: {memo.get('one_sentence_thesis') or ''}")
+    if shown("mispricing_thesis"):
+        lines.append(f"Consensus view: {thesis.get('consensus_view') or 'not captured'}")
+        lines.append(f"Our view: {thesis.get('our_view') or 'not captured'}")
+    if shown("valuation_verdict"):
+        lines.append(f"Valuation verdict: {verdict.get('verdict') or 'n/a'} — {verdict.get('summary') or ''}")
+    return "\n".join(lines)
 
 
 def build_for_ticker(

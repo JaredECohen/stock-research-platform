@@ -290,10 +290,13 @@ def test_save_memo_refuses_presented_memo_before_any_db_work(monkeypatch):
     assert _row_count("ZZC1OWN") == 0
 
 
-def test_public_sample_payload_never_carries_section_availability():
+def test_public_sample_payload_carries_the_presented_map():
     # public_samples stores a memo dump of its own. The W2a serve path treats
     # a sample row WITHOUT the key as built before presentation and presents
-    # it; an empty map stored here would pass for "already presented".
+    # it. Since S11 the build step stores the PRESENTED copy, so the key is
+    # present and never empty: an empty map would pass for "already
+    # presented" while hiding nothing. (This supersedes S2's pin that the key
+    # was absent, which held only while nothing presented the sample.)
     memo = _stub_memo("ZZC1SAMP")
     memo.section_provenance = {"v": 1, "llm_configured": True, "thesis": "pm"}
     memo_store.save_memo(memo)
@@ -301,11 +304,11 @@ def test_public_sample_payload_never_carries_section_availability():
         payload, source_ref, degraded = public_samples._build_memo("ZZC1SAMP", db)
     assert payload is not None and degraded == []
     assert source_ref is not None and source_ref.startswith("memo_snapshot:")
-    assert "section_availability" not in payload
+    assert payload["section_availability"]
     # Write-time facts still reach the sample, and it still reads as a memo.
     assert payload["section_provenance"] == memo.section_provenance
     assert "quality" in payload
-    assert StockMemoOut.model_validate(payload).section_availability == {}
+    assert StockMemoOut.model_validate(payload).section_availability
 
 
 def test_save_memo_never_persists_section_availability():

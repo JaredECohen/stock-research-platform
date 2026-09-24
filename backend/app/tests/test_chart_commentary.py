@@ -761,6 +761,42 @@ def test_cache_key_moves_with_every_input():
     assert k != cc.cache_key(**{**base, "fingerprint": "e" * 64})
 
 
+def test_commentary_cache_key_includes_presentation_version(monkeypatch):
+    """W2a: the excerpt is the PRESENTED memo, so a change to the rules that
+    hide sections must miss the cache like a prompt change does."""
+    from app.services import memo_sections
+    base = dict(tickers=["A"], metrics=["revenue"], years=None, normalize="none", fingerprint="f" * 64,
+                memo_versions={"A": {"version": 1, "generated_at": "x"}})
+    k = cc.cache_key(**base)
+    monkeypatch.setattr(memo_sections, "PRESENTATION_VERSION", memo_sections.PRESENTATION_VERSION + 1)
+    assert cc.cache_key(**base) != k
+
+
+def test_memo_excerpt_drops_hidden_fields(seeded):
+    """The model never relates the chart to text the memo page withholds:
+    the template thesis, the fallback mispricing card and the template case
+    headlines are left out; the rating and the computed verdict stay."""
+    import json as _json
+    from pathlib import Path
+
+    from app.schemas import StockMemoOut
+    from app.services import memo_sections, memo_store
+    raw = _json.loads((Path(__file__).parent / "fixtures" / "memo_sections"
+                       / "googl_live_prepflag.json").read_text())
+    memo = StockMemoOut.model_validate(raw).model_copy(update={"ticker": "FCMB"})
+    snap = memo_store.save_memo(memo)
+    _set_generated_at(snap, datetime(2025, 3, 1))
+    with SessionLocal() as db:
+        out = build_series(["FCMB"], ["revenue"], db=db)
+        e = cc.memo_excerpt("FCMB", out, db)
+    assert e is not None
+    names = [n for n, _ in e.block.fields]
+    assert names == ["rating", "valuation verdict"]
+    text, _ = P.render_memo_block(e.block, field_chars=P.MEMO_FIELD_CHARS, block_chars=P.MEMO_BLOCK_CHARS)
+    assert memo_sections.SIG["pm_view_tail"].text not in text
+    assert memo.one_sentence_thesis[:40] not in text and memo_sections.UNAVAILABLE_TEXT not in text
+
+
 def test_make_memo_round_trips_into_an_excerpt(seeded):
     """The excerpt quotes the memo fields the contract names, nothing else."""
     from app.services import memo_store
