@@ -21,6 +21,7 @@ from app.database import SessionLocal
 from app.main import app
 from app.models import MemoSnapshot
 from app.services import memo_store
+from app.tests.gating_helpers import purge_memos
 from app.tests.test_memo_store import _stub_memo
 
 ROUTE_LOGGER = "app.api.routes_stocks"
@@ -45,6 +46,22 @@ ABBV_BEAR = {
         "DCF bear case implies $191.95 (-8%).",
     ],
 }
+
+
+# Every ticker this module writes. The rows go straight into the shared
+# session database, and the unreadable ones crash any later test that walks
+# recent snapshots across tickers, so they are purged on both sides.
+TICKERS = (
+    *(f"ZZUNR{p}{i}" for p in ("VER", "LAT", "STO") for i in range(len(AMBIGUOUS))),
+    "ZZUNROK", "ZZABBV",
+)
+
+
+@pytest.fixture(autouse=True)
+def _purge_rows():
+    purge_memos(*TICKERS)
+    yield
+    purge_memos(*TICKERS)
 
 
 class _Grant:
@@ -114,7 +131,7 @@ def test_unreadable_stored_memo_is_structured_422_on_every_read_path(monkeypatch
     ticker = f"ZZUNR{path[:3].upper()}{AMBIGUOUS.index(value)}"
     snap_id, version, original = _store(ticker, bull_case=value)
     url = f"/api/stocks/{ticker}/memo" + (f"?version={version}" if path == "version" else "")
-    caplog.set_level(logging.ERROR, logger=ROUTE_LOGGER)
+    caplog.set_level(logging.ERROR)
     with TestClient(app) as client:
         r = client.get(url)
     assert r.status_code == 422, r.text
@@ -128,8 +145,10 @@ def test_unreadable_stored_memo_is_structured_422_on_every_read_path(monkeypatch
     assert all(g.released and not g.committed for g in grants)
     if path != "latest_inline":
         assert len(grants) == 1
-    errors = [rec for rec in caplog.records if rec.name == ROUTE_LOGGER and rec.levelno == logging.ERROR]
-    assert len(errors) == 1
+    # Once across all loggers, not just the route's: a second ERROR line
+    # from memo_store (or anywhere) would double-report the same row.
+    errors = [rec for rec in caplog.records if rec.levelno >= logging.ERROR]
+    assert [rec.name for rec in errors] == [ROUTE_LOGGER]
     line = errors[0].getMessage()
     for part in (f"ticker={ticker}", f"version={version}", f"snapshot_id={snap_id}", "fields=bull_case"):
         assert part in line
