@@ -23,8 +23,9 @@ system is marked **OWNER** and is not something an agent performs.
 
 - [ ] `backend/`: `ruff check app`, the Python 3.11 AST/compile check, `python -m mypy`
       (configured scope), `make lock-check`, `git diff --check`.
-- [ ] `backend/`: full suite with the CI flags and blank LLM keys; the only failure is
-      `test_config_load_order` (key-blanking artifact). The harness refuses outbound
+- [ ] `backend/`: full suite with the CI flags and blank LLM keys; no failures. (Before
+      FIX-010, `test_config_load_order` failed here as a key-blanking artifact. It no
+      longer does, so a failure there is real.) The harness refuses outbound
       sockets (`app/tests/netguard.py`) and lists any test that reached for the network.
 - [ ] `frontend/`: `npm run lint`, `npm test`, `npm run build`.
 - [ ] `test_deploy_config` passes: `ENABLE_MONITORING`/`ENABLE_REGEN_WORKER` false on web,
