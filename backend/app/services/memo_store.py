@@ -399,6 +399,11 @@ def patch_chain_for(
     one read of the base body. Only patch snapshots walk at all (pins only,
     at most `MAX_PATCHES_PER_DAY` a day). A database error returns the
     conservative incomplete chain rather than failing the read.
+
+    On a caller's session the walk runs inside a SAVEPOINT: on Postgres a
+    failed statement aborts the whole transaction, so swallowing the error
+    without rolling back would fail the caller's next statement (the
+    commentary cache lookup, the sample upsert, the next history row).
     """
     if getattr(snap, "trigger", None) != "incremental_patch":
         return NOT_A_PATCH
@@ -406,42 +411,11 @@ def patch_chain_for(
     own = db is None
     session = SessionLocal() if own else db
     assert session is not None
-    fields: set[str] = set()
     try:
-        ticker = snap.ticker
-        trigger, parent, log_entries = snap.trigger, snap.parent_version, snap.revision_log
-        for _ in range(max_hops):
-            patched = [
-                entry.get("fields_patched") for entry in (log_entries or [])
-                if isinstance(entry, dict) and isinstance(entry.get("fields_patched"), list)
-            ]
-            if not patched:
-                # Patches written before fields were logged (a59ff56): which
-                # fields changed is unknown, so none are credited.
-                return PatchChain(frozenset(fields), None, False)
-            for names in patched:
-                fields.update(str(n) for n in names or [])
-            if parent is None:
-                return PatchChain(frozenset(fields), None, False)
-            key = (ticker, parent)
-            if key not in cache:
-                row = session.execute(
-                    select(MemoSnapshot.trigger, MemoSnapshot.parent_version,
-                           MemoSnapshot.revision_log)
-                    .where(MemoSnapshot.ticker == ticker, MemoSnapshot.version == parent)
-                ).first()
-                cache[key] = tuple(row) if row is not None else None
-            hop = cache[key]
-            if hop is None:
-                return PatchChain(frozenset(fields), None, False)
-            trigger, next_parent, log_entries = hop
-            if trigger != "incremental_patch":
-                base = _base_memo(session, ticker, parent, cache)
-                if base is None:
-                    return PatchChain(frozenset(fields), None, False)
-                return PatchChain(frozenset(fields), base, True)
-            parent = next_parent
-        return PatchChain(frozenset(fields), None, False)
+        if own:
+            return _walk_chain(session, snap, max_hops, cache)
+        with session.begin_nested():
+            return _walk_chain(session, snap, max_hops, cache)
     except SQLAlchemyError as exc:
         log.warning("memo patch chain walk failed for %s v%s: %s",
                     snap.ticker, snap.version, type(exc).__name__)
@@ -449,6 +423,44 @@ def patch_chain_for(
     finally:
         if own:
             session.close()
+
+
+def _walk_chain(session: Session, snap: MemoSnapshot, max_hops: int, cache: ChainCache) -> PatchChain:
+    fields: set[str] = set()
+    ticker = snap.ticker
+    trigger, parent, log_entries = snap.trigger, snap.parent_version, snap.revision_log
+    for _ in range(max_hops):
+        patched = [
+            entry.get("fields_patched") for entry in (log_entries or [])
+            if isinstance(entry, dict) and isinstance(entry.get("fields_patched"), list)
+        ]
+        if not patched:
+            # Patches written before fields were logged (a59ff56): which
+            # fields this hop changed is unknown, so it credits none.
+            return PatchChain(frozenset(fields), None, False)
+        for names in patched:
+            fields.update(str(n) for n in names or [])
+        if parent is None:
+            return PatchChain(frozenset(fields), None, False)
+        key = (ticker, parent)
+        if key not in cache:
+            row = session.execute(
+                select(MemoSnapshot.trigger, MemoSnapshot.parent_version,
+                       MemoSnapshot.revision_log)
+                .where(MemoSnapshot.ticker == ticker, MemoSnapshot.version == parent)
+            ).first()
+            cache[key] = tuple(row) if row is not None else None
+        hop = cache[key]
+        if hop is None:
+            return PatchChain(frozenset(fields), None, False)
+        trigger, next_parent, log_entries = hop
+        if trigger != "incremental_patch":
+            base = _base_memo(session, ticker, parent, cache)
+            if base is None:
+                return PatchChain(frozenset(fields), None, False)
+            return PatchChain(frozenset(fields), base, True)
+        parent = next_parent
+    return PatchChain(frozenset(fields), None, False)
 
 
 def _base_memo(session: Session, ticker: str, version: int, cache: ChainCache) -> StockMemoOut | None:

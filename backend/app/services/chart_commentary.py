@@ -360,7 +360,10 @@ def memo_staleness(snap: MemoSnapshot, out: SeriesResponse, db: Session) -> tupl
     fiscal period end. Both reasons are kept when both apply."""
     reasons: list[str] = []
     try:
-        fresh = memo_store.memo_freshness(snap, db=db)
+        # SAVEPOINT: on Postgres a failed statement aborts the request's
+        # transaction, and `generate` reads the commentary cache next.
+        with db.begin_nested():
+            fresh = memo_store.memo_freshness(snap, db=db)
     except SQLAlchemyError as exc:
         # Freshness is a disclosure, not a gate: an unreadable filings
         # table must not turn a commentary into a 500. Say we could not check.
