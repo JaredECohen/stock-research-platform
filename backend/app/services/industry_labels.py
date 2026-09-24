@@ -12,12 +12,19 @@ the one place that turns the internal taxonomy into what a reader sees:
   string instead. One accessor contract, so no caller invents a label for a
   level that has none.
 * ``code_for(slug_or_code)`` — the inverse, for routes that accept either.
-* ``scrub_text(text)`` — the ONLY scrubber in the codebase (the W4 design's
-  second one was deliberately not built). It removes codes, the brand and
-  the registry's multi-word names from prose while never altering a year
-  (``19xx``/``20xx``) or a number followed by ``%``, ``.d`` or ``,d`` —
-  ``"industry 2030 targets"`` and ``"sector 20% share"`` are ordinary
-  English, and three group codes (2010/2020/2030) are also years.
+* ``scrub_text(text, keep=...)`` — the ONLY scrubber in the codebase (the
+  W4 design's second one was deliberately not built). It removes codes, the
+  brand and the registry's multi-word names from prose while leaving
+  ordinary numeric prose alone: a year (``19xx``/``20xx``), a number
+  followed by ``%``, ``.d``, ``,d`` or a hyphen (``10-K``, ``50-day``), and
+  a sector-sized number followed by a unit or an ordinary word (``sector
+  10 years``, ``sector 25 bps``). The one year-shaped rewrite is a group
+  code sitting in brackets right after its own registry name
+  (``"Transportation (2030)"``): the name proves it is a code, and three
+  group codes (2010/2020/2030) are also years. ``keep`` names phrases the
+  caller has already established as public (the data provider's own
+  industry string) so a provider string that happens to spell a registry
+  name is shown as the provider wrote it.
 * ``project_public(obj)`` / ``project_for_prompt(obj)`` — a JSON walker
   that applies the rules to a whole payload (keys as well as strings).
 
@@ -295,10 +302,16 @@ _YEAR_RE = re.compile(r"^(?:19|20)\d\d$")
 # tail of a decimal or thousands group, not the head of one, not a
 # percentage. This is what keeps "20% share", "453,010" and "2030.5" safe.
 _TOKEN_GUARD_BEFORE = r"(?<![\w$.,])"
-_TOKEN_GUARD_AFTER = r"(?![\w%]|[.,]\d)"
+# A hyphen/dash glued to a following letter or digit makes the number part
+# of a compound ("10-K", "50-day", "10-year") — ordinary prose, not a code.
+_TOKEN_GUARD_AFTER = r"(?![\w%]|[.,]\d|[-\u2010\u2011\u2013]\w)"
 _DIGITS_RE = re.compile(_TOKEN_GUARD_BEFORE + r"(\d{2}|\d{4}|\d{6}|\d{8})" + _TOKEN_GUARD_AFTER)
+# `(\s?)`, not `(\s*)`: an unanchored `\s*` rescans the rest of a whitespace
+# run from every position in it (quadratic on a long run of model output);
+# the one space it swallows is all the removal needs, and the multi-space
+# tidy below handles the rest.
 _BRACKET_RE = re.compile(
-    r"(\s*)([\[(])\s*(\d{2,8}(?:\s*[,;/]\s*\d{2,8})*)\s*([\])])"
+    r"(\s?)([\[(])\s*(\d{2,8}(?:\s*[,;/]\s*\d{2,8})*)\s*([\])])"
 )
 _ANALYST_RE = re.compile(r"\bIndustry Group Analyst (\d{4})" + _TOKEN_GUARD_AFTER)
 _PREFIX_RE = re.compile(
@@ -309,7 +322,27 @@ _INTERNAL_KEY_RE = re.compile(r"\bgics-\d{4}-\d{2}\b", re.IGNORECASE)
 _BRAND_BEFORE_WORD_RE = re.compile(r"\bGICS\b®?\s+(?=[A-Za-z])", re.IGNORECASE)
 _BRAND_RE = re.compile(r"\bGICS\b®?", re.IGNORECASE)
 _MULTISPACE_RE = re.compile(r"[ \t]{2,}")
-_SPACE_BEFORE_PUNCT_RE = re.compile(r"[ \t]+([,.;:)\]])")
+# The lookbehind pins a match to the START of a space run, so a long run not
+# followed by punctuation is scanned once rather than once per position.
+_SPACE_BEFORE_PUNCT_RE = re.compile(r"(?<![ \t])[ \t]+([,.;:)\]])")
+# What follows a prefixed code decides whether it is a code. A unit or time
+# word makes the number a quantity ("group 2550 units", "sector 25 bps");
+# a 2-digit sector code must additionally be followed by the end of the
+# text, punctuation or a taxonomy noun, because "sector 10 names" or "the
+# sector 20 largest" read as counts far more often than as codes.
+_NEXT_WORD_RE = re.compile(r"[ \t]*([A-Za-z]+|[^\sA-Za-z0-9]|$)")
+_UNIT_WORDS = frozenset({
+    "day", "days", "week", "weeks", "month", "months", "year", "years", "yr", "yrs",
+    "quarter", "quarters", "qtr", "qtrs", "hour", "hours", "minute", "minutes",
+    "bp", "bps", "basis", "percent", "pct", "percentage", "points", "pts", "pp",
+    "x", "times", "k", "q", "m", "mm", "b", "bn", "million", "billion", "trillion",
+    "thousand", "units", "dollars", "cents", "usd",
+})
+_SECTOR_CODE_NOUNS = frozenset({
+    "constituents", "companies", "stocks", "equities", "peers", "members", "index",
+    "indices", "benchmark", "analyst", "analysts", "coverage", "universe", "exposure",
+    "weighting", "weight", "cohort", "basket", "classification", "code",
+})
 
 
 def _is_year(token: str) -> bool:
@@ -324,14 +357,17 @@ def _bracket_sub(m: re.Match[str], names: dict[str, str]) -> str:
     for tok in tokens:
         if tok not in names or len(tok) not in (2, 4, 6, 8) or (len(tok) == 4 and _is_year(tok)):
             return m.group(0)
-        # A lone 2-digit number in parentheses is far more often a count
-        # than a sector ("(45)"); only square brackets are provenance marks.
-        if opener == "(" and len(tok) == 2:
+        # A bare 2-digit number in brackets is far more often a count
+        # ("(45)") or a note reference ("[10]") than a sector code. W1 rule
+        # (b) removes 6/8-digit provenance lists; 4-digit non-year group
+        # codes are unambiguous enough to join them. A 2-digit code is only
+        # trusted next to its own sector name (`_pair_subs`).
+        if len(tok) == 2:
             return m.group(0)
     return ""
 
 
-def _pair_subs(text: str, idx: _Index, labels: Labels) -> str:
+def _pair_subs(text: str, idx: _Index, labels: Labels, kept: frozenset[str] = frozenset()) -> str:
     """``"{name} ({code})"`` / ``"{code} {name}"`` → our label for a
     sector/group, or nothing for an industry/sub-industry. Only the codes
     actually present in the text are tried, so the common case costs one
@@ -343,8 +379,12 @@ def _pair_subs(text: str, idx: _Index, labels: Labels) -> str:
         if not name:
             continue
         entry = labels.entry(code)
-        replacement = entry[0] if entry is not None else ""
-        forms = [f"{name} ({code})", f"{name} [{code}]"]
+        # A kept name (the provider's own string) stays; only its code goes.
+        replacement = name if name in kept else entry[0] if entry is not None else ""
+        # A 2-digit number in parentheses after a sector name is usually a
+        # count ("Energy (10), Materials (15) names"); only the square-
+        # bracket provenance form is trusted at that width.
+        forms = [f"{name} [{code}]"] if len(code) == 2 else [f"{name} ({code})", f"{name} [{code}]"]
         # "code name" is only trusted where the number cannot be a count or
         # a year: "top 10 Energy names" and "in 2010 Capital Goods ..." are
         # prose, "453010 Semiconductors & ..." is not.
@@ -356,9 +396,30 @@ def _pair_subs(text: str, idx: _Index, labels: Labels) -> str:
     return text
 
 
-def scrub_text(text: str) -> str:
+def _keepable(phrase: Any) -> bool:
+    """A phrase a caller may exempt from scrubbing: non-blank text with no
+    digit and no brand — a provider industry string, never a code."""
+    return (isinstance(phrase, str) and bool(phrase.strip())
+            and not any(ch.isdigit() for ch in phrase) and "gics" not in phrase.lower())
+
+
+def _keep_set(keep: Any) -> frozenset[str]:
+    if isinstance(keep, str):
+        keep = (keep,)
+    return frozenset(p.strip() for p in (keep or ()) if _keepable(p))
+
+
+def scrub_text(text: str, *, keep: Any = ()) -> str:
     """Remove taxonomy codes, the brand and registry group names from
-    prose. Deterministic and idempotent; order matters:
+    prose. A registry name EQUAL to a ``keep`` phrase is left as written
+    (the caller's already-public provider industry string: "Household &
+    Personal Products" is FMP's industry for PG and ALSO a registry group
+    name, and rewriting it would report our label as the provider's); a
+    longer registry name that merely contains one ("Semiconductors &
+    Semiconductor Equipment" vs "Semiconductors") is still rewritten, and a
+    code next to a kept name is still removed. Keep phrases carry no digit
+    and no brand, so no other rule can touch them.
+    Deterministic and idempotent; order matters:
 
     a. fixed branded sentences → their public equivalents;
     b. bracketed code lists (``[453010]``, ``[451020,451030]``, ``(4530)``)
@@ -375,11 +436,16 @@ def scrub_text(text: str) -> str:
        dropped before a noun ("the GICS sector" → "the sector") and
        otherwise read as "industry".
 
-    Years (``19xx``/``20xx``) and numbers followed by ``%``, ``.d`` or
-    ``,d`` are never altered by the contextual rules (b, c-prefix, d).
+    Years (``19xx``/``20xx``) and numbers followed by ``%``, ``.d``, ``,d``
+    or a hyphenated word are never altered by the contextual rules (b,
+    c-prefix, d); a prefixed code followed by a unit word is a quantity,
+    and a 2-digit one must be followed by punctuation, the end of the text
+    or a taxonomy noun. The one year-shaped rewrite is rule c's pair form,
+    where the registry name next to the bracketed code proves it is one.
     """
     if not isinstance(text, str) or not text:
         return text
+    kept = _keep_set(keep)
     labels = load()
     idx = _index()
     out = text
@@ -389,7 +455,7 @@ def scrub_text(text: str) -> str:
     if any(ch.isdigit() for ch in out):
         # Pairs first: a bracket rule that ran earlier would strip the
         # "(4010)" off "Banks (4010)" and leave the registry name behind.
-        out = _pair_subs(out, idx, labels)
+        out = _pair_subs(out, idx, labels, kept)
         out = _ANALYST_RE.sub(
             lambda m: public_display_name(m.group(1)) if labels.entry(m.group(1)) else m.group(0), out,
         )
@@ -397,7 +463,9 @@ def scrub_text(text: str) -> str:
         out = _PREFIX_RE.sub(lambda m: _prefix_sub(m, labels), out)
         out = _LONG_CODE_RE.sub(lambda m: "" if m.group(2) in idx.names else m.group(0), out)
     if idx.public_names_re is not None:
-        out = idx.public_names_re.sub(lambda m: idx.public_names[m.group(0)], out)
+        out = idx.public_names_re.sub(
+            lambda m: m.group(0) if m.group(0) in kept else idx.public_names[m.group(0)], out,
+        )
     out = _INTERNAL_KEY_RE.sub(lambda m: public_version_key(m.group(0).lower()), out)
     if "gics" in out.lower():
         out = _BRAND_BEFORE_WORD_RE.sub("", out)
@@ -414,20 +482,26 @@ def _prefix_sub(m: re.Match[str], labels: Labels) -> str:
     want = 2 if noun.lower() == "sector" else 4
     if len(code) != want or (len(code) == 4 and _is_year(code)):
         return m.group(0)
+    nxt = _NEXT_WORD_RE.match(m.string, m.end())
+    word = (nxt.group(1) if nxt else "").lower()
+    if word in _UNIT_WORDS:
+        return m.group(0)
+    if want == 2 and word.isalpha() and word not in _SECTOR_CODE_NOUNS:
+        return m.group(0)
     entry = labels.entry(code)
     return f"{noun}{gap}{entry[0]}" if entry is not None else m.group(0)
 
 
-def scrub_strings(obj: Any) -> Any:
+def scrub_strings(obj: Any, *, keep: Any = ()) -> Any:
     """``scrub_text`` over every string inside a nested dict/list, keys and
     structure untouched — for LLM output whose SHAPE is a contract (the
     sector analyst's ``bull_bear_analysis``)."""
     if isinstance(obj, str):
-        return scrub_text(obj)
+        return scrub_text(obj, keep=keep)
     if isinstance(obj, dict):
-        return {k: scrub_strings(v) for k, v in obj.items()}
+        return {k: scrub_strings(v, keep=keep) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return [scrub_strings(v) for v in obj]
+        return [scrub_strings(v, keep=keep) for v in obj]
     return obj
 
 
@@ -448,9 +522,14 @@ _VERSION_KEYS = frozenset({"taxonomy_version", "key", "knowledge_version", "vers
 _SOURCE_LIST_KEYS = frozenset({"primary_sources", "map_sources"})
 _BRANDED_SOURCE_RE = re.compile(r"gics|msci\.com|spglobal\.com", re.IGNORECASE)
 _PUBLIC_REF = "MarketMosaic industry research knowledge base"
+# Values that are public by design and shown exactly as the source wrote
+# them (W1 §4.5: the provider's industry string stands in for the
+# sub-industry). Scrubbing one would rewrite a provider string that spells a
+# registry name into OUR label, and the card would misreport the provider.
+_PASSTHROUGH_KEYS = frozenset({"provider_industry"})
 
 
-def _code_list_slugs(values: list[Any], idx: _Index, labels: Labels) -> list[Any]:
+def _code_list_slugs(values: list[Any], idx: _Index, labels: Labels, keep: Any) -> list[Any]:
     """Each known code → the slug of its group (6/8-digit codes roll up to
     their 4-digit prefix); unknown values are kept; duplicates collapse."""
     out: list[Any] = []
@@ -462,13 +541,13 @@ def _code_list_slugs(values: list[Any], idx: _Index, labels: Labels) -> list[Any
                 continue
             v = entry[1]
         elif isinstance(v, str):
-            v = scrub_text(v)
+            v = scrub_text(v, keep=keep)
         if v not in out:
             out.append(v)
     return out
 
 
-def _constant_for(key: str, value: Any, labels: Labels) -> Any:
+def _constant_for(key: str, value: Any, labels: Labels, keep: Any) -> Any:
     default = {"attribution": labels.attribution, "mapping_caveat": labels.mapping_caveat,
                "security_reference_caveat": labels.security_reference_caveat}[key]
     if not isinstance(value, str):
@@ -479,10 +558,10 @@ def _constant_for(key: str, value: Any, labels: Labels) -> Any:
     exact = dict(_index().exact)
     if value in exact:
         return exact[value]
-    return default if "gics" in value.lower() else scrub_text(value)
+    return default if "gics" in value.lower() else scrub_text(value, keep=keep)
 
 
-def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels) -> dict[Any, Any]:
+def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels, keep: Any) -> dict[Any, Any]:
     out: dict[Any, Any] = {}
     drop: set[Any] = set()
     renamed: dict[Any, str] = {}
@@ -508,37 +587,39 @@ def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels) -> dict[Any,
             k = entry[1]
         if k in renamed:
             out[k] = renamed[k]
+        elif k in _PASSTHROUGH_KEYS and (v is None or _keepable(v)):
+            out[k] = v
         elif k in _CONSTANT_KEYS:
-            out[k] = _constant_for(k, v, labels)
+            out[k] = _constant_for(k, v, labels, keep)
         elif k == "provenance" and isinstance(v, dict):
             out[k] = {}
         elif k in _VERSION_KEYS and isinstance(v, str) and v.lower().startswith("gics-"):
             out[k] = public_version_key(v.lower())
         elif isinstance(k, str) and (k == "codes" or k.endswith("_codes")) and isinstance(v, list):
-            out[k] = _code_list_slugs(v, idx, labels)
+            out[k] = _code_list_slugs(v, idx, labels, keep)
         elif k in _SOURCE_LIST_KEYS and isinstance(v, list):
             kept = [s for s in v if not _BRANDED_SOURCE_RE.search(json.dumps(s, default=str))]
-            out[k] = [_project(s, idx, labels) for s in kept]
+            out[k] = [_project(s, idx, labels, keep) for s in kept]
             if len(kept) != len(v):
                 out[f"{k}_withheld"] = len(v) - len(kept)
         elif k == "ref" and isinstance(v, str) and "gics" in v.lower():
             out[k] = _PUBLIC_REF
         else:
-            out[k] = _project(v, idx, labels)
+            out[k] = _project(v, idx, labels, keep)
     return out
 
 
-def _project(obj: Any, idx: _Index, labels: Labels) -> Any:
+def _project(obj: Any, idx: _Index, labels: Labels, keep: Any = ()) -> Any:
     if isinstance(obj, str):
-        return scrub_text(obj)
+        return scrub_text(obj, keep=keep)
     if isinstance(obj, dict):
-        return _project_dict(obj, idx, labels)
+        return _project_dict(obj, idx, labels, keep)
     if isinstance(obj, (list, tuple)):
-        return [_project(v, idx, labels) for v in obj]
+        return [_project(v, idx, labels, keep) for v in obj]
     return copy.deepcopy(obj)
 
 
-def project_public(obj: Any) -> Any:
+def project_public(obj: Any, *, keep: Any = ()) -> Any:
     """A public copy of a JSON-shaped payload (the input is never mutated):
 
     1. ``code`` / ``sector_code`` / ``industry_group_code`` / ``group_code``
@@ -555,14 +636,15 @@ def project_public(obj: Any) -> Any:
     5. ``primary_sources`` / ``map_sources`` entries naming the brand or its
        publishers → removed, counted in ``<key>_withheld``; a branded
        ``ref`` → the knowledge-base reference.
-    6. every remaining string → ``scrub_text``.
+    6. ``provider_industry`` → kept verbatim (public by design).
+    7. every remaining string → ``scrub_text`` (with ``keep``).
     """
-    return _project(obj, _index(), load())
+    return _project(obj, _index(), load(), keep)
 
 
-def project_for_prompt(obj: Any) -> Any:
+def project_for_prompt(obj: Any, *, keep: Any = ()) -> Any:
     """The same projection, applied to facts sent to a model: a prompt that
     never contains a code or registry name cannot be echoed into prose.
     A separate name so a prompt-only rule can diverge without moving what
     API responses carry."""
-    return _project(obj, _index(), load())
+    return _project(obj, _index(), load(), keep)

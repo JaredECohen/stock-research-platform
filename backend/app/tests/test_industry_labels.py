@@ -12,8 +12,12 @@ integration plan):
   sub-industries raise, because they are never named publicly;
 - `code_for` round-trips every slug and passes known codes through;
 - `scrub_text` removes codes, the brand and registry group names while
-  leaving years and percentages alone ("industry 2030 targets", "sector 20%
-  share");
+  leaving ordinary numeric prose alone ("industry 2030 targets", "sector
+  20% share", "sector 10-year average", "sector 25 bps", "[10]" note
+  marks), the one year-shaped rewrite being a group code bracketed right
+  after its own registry name; a caller's `keep` phrase (the provider's
+  industry string) is never rewritten, and the scrub stays linear on long
+  whitespace runs;
 - `project_public` rewrites a payload's keys as well as its strings;
 - a missing or malformed file raises instead of falling back to names.
 """
@@ -21,6 +25,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -193,6 +198,26 @@ SCRUB_TABLE = [
     ("Banks and energy names rallied", "Banks and energy names rallied"),
     ("the top 10 Energy names", "the top 10 Energy names"),
     ("in 2010 Capital Goods orders fell", "in 2010 Capital Goods orders fell"),
+    # REGRESSION (review of d623e59): a sector-sized number in a hyphenated
+    # compound, before a unit or before an ordinary word is a quantity, and
+    # a bare 2-digit bracket is a note mark or a count. Each of these was
+    # rewritten into a sector label (or deleted) before the guards.
+    ("NVDA trades above its sector 10-year average P/E", "NVDA trades above its sector 10-year average P/E"),
+    ("above the sector 50-day moving average", "above the sector 50-day moving average"),
+    ("Across sector 10-K filings", "Across sector 10-K filings"),
+    ("The sector 30-day realized vol is 22%.", "The sector 30-day realized vol is 22%."),
+    ("spreads are sector 25 bps wider", "spreads are sector 25 bps wider"),
+    ("The sector 10 years ago traded at 12x.", "The sector 10 years ago traded at 12x."),
+    ("sector 20 percent of revenue", "sector 20 percent of revenue"),
+    ("group 2550 units shipped", "group 2550 units shipped"),
+    ("Peer filings [10] and [15] flag inventory build.", "Peer filings [10] and [15] flag inventory build."),
+    ("per the note [10], see also [15] and [20].", "per the note [10], see also [15] and [20]."),
+    ("Energy (10), Materials (15) and Industrials (20) names",
+     "Energy (10), Materials (15) and Industrials (20) names"),
+    # ...while a 2-digit code still goes where the context proves it is one
+    ("sector 45.", f"sector {_T}."),
+    ("sector 45", f"sector {_T}"),
+    ("Information Technology [45] leads", f"{_T} leads"),
     ("", ""),
 ]
 
@@ -213,6 +238,44 @@ def test_scrub_text_maps_the_fixed_branded_sentences_to_their_public_twins():
     assert il.scrub_text(text) == (
         f"Constituents on file: 9, from research_map ({il.PUBLIC_MAPPING_CAVEAT}). Largest: NVDA."
     )
+
+
+def test_keep_phrase_is_shown_as_the_provider_wrote_it():
+    """REGRESSION (review of d623e59): FMP's industry for PG and CL is
+    "Household & Personal Products", which is also a registry group name.
+    The Industry Group finding scrubbed it into OUR label and so reported
+    our label as the provider's industry, contradicting the sector card."""
+    provider = "Household & Personal Products"
+    assert il.scrub_text(f"provider industry: {provider}.") != f"provider industry: {provider}."
+    assert il.scrub_text(f"provider industry: {provider}.", keep=(provider,)) == f"provider industry: {provider}."
+    # A code next to the kept phrase still goes; other registry names still
+    # get our label; a str keep is one phrase, not its characters.
+    assert il.scrub_text(f"{provider} (3030) and Software & Services", keep=provider) == (
+        f"{provider} and {il.label('4510')}"
+    )
+    # A keep phrase can never carry a code or the brand past the scrubber.
+    assert il.scrub_text("GICS sector 45", keep=("GICS sector 45",)) == f"sector {_T}"
+    assert il.project_public({"provider_industry": provider, "note": provider}) == {
+        "provider_industry": provider, "note": il.label("3030"),
+    }
+    assert il.project_public({"note": provider}, keep=[provider]) == {"note": provider}
+    assert il.scrub_strings({"a": [provider]}, keep=(provider,)) == {"a": [provider]}
+
+
+@pytest.mark.parametrize("text", [
+    "Revenue grew 12%." + " " * 50_000 + "end",
+    "Revenue grew 12%." + "\n" * 50_000 + "end",
+    "KPIs [453010]" + " " * 50_000 + "matter",
+    "the GICS sector" + " " * 50_000 + "x",
+], ids=["spaces-before-text", "newlines-before-text", "spaces-after-bracket-code", "spaces-after-brand"])
+def test_scrub_text_is_linear_on_long_whitespace_runs(text):
+    """REGRESSION (review of d623e59): an unanchored `(\\s*)` before the
+    bracket rule (and `[ \\t]+` before the punctuation tidy) rescanned a
+    whitespace run from every position in it, so one degenerate model
+    string stalled a memo step for seconds (20k spaces: 2.7s)."""
+    start = time.perf_counter()
+    il.scrub_text(text)
+    assert time.perf_counter() - start < 0.5
 
 
 def test_scrub_text_leaves_untouched_text_byte_identical():
