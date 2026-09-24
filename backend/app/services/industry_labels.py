@@ -280,6 +280,22 @@ def _index() -> _Index:
         # ordinary English and rewriting them would mangle sentences.
         if entry is not None and ("&" in name or "," in name):
             public_names[name] = entry[0]
+    # An industry / sub-industry is never named publicly; a distinctive name
+    # of one ("Semiconductor Materials & Equipment") reads as the label of
+    # the group it rolls up to — what `gics_registry.display()` shows for
+    # those levels. This is the net for LEGACY analyst prose (new editions
+    # are rejected by the validator's L1 rule instead). A name that two
+    # groups share is ambiguous and left for L1; a sector/group name keeps
+    # its own mapping above.
+    rollup: dict[str, set[str]] = {}
+    for code, name in names.items():
+        if len(code) in (6, 8) and ("&" in name or "," in name) and name not in public_names:
+            group = labels.entry(code[:4])
+            if group is not None:
+                rollup.setdefault(name, set()).add(group[0])
+    for name, targets in rollup.items():
+        if len(targets) == 1:
+            public_names[name] = next(iter(targets))
     pattern = None
     if public_names:
         alternation = "|".join(re.escape(n) for n in sorted(public_names, key=len, reverse=True))
@@ -293,6 +309,13 @@ def clear_cache() -> None:
     The module constants keep the values read at import."""
     _default_labels.cache_clear()
     _index.cache_clear()
+
+
+def registry_names() -> dict[str, str]:
+    """Every known taxonomy code (2/4/6/8-digit, retired included) → its
+    registry name. A copy: the report validator's L1 rule and the
+    public-surface tests read it, and neither may edit the cached index."""
+    return dict(_index().names)
 
 
 # --- scrub_text ----------------------------------------------------------------
@@ -320,7 +343,30 @@ _PREFIX_RE = re.compile(
 _LONG_CODE_RE = re.compile(r"(\s?)" + _TOKEN_GUARD_BEFORE + r"(\d{6}|\d{8})" + _TOKEN_GUARD_AFTER)
 _INTERNAL_KEY_RE = re.compile(r"\bgics-\d{4}-\d{2}\b", re.IGNORECASE)
 _BRAND_BEFORE_WORD_RE = re.compile(r"\bGICS\b®?\s+(?=[A-Za-z])", re.IGNORECASE)
-_BRAND_RE = re.compile(r"\bGICS\b®?", re.IGNORECASE)
+# Letters only on either side, not `\b`: an underscore or a digit is a word
+# character, so `\bGICS\b` let the brand through inside an identifier
+# ("gics_industries_2026.json", "import_gics_taxonomy") — a string the
+# public surfaces did carry, in the taxonomy source and the 503 remedy.
+_BRAND_RE = re.compile(r"(?<![A-Za-z])GICS(?![A-Za-z])®?", re.IGNORECASE)
+
+
+def has_brand(text: Any) -> bool:
+    """Does `text` name the brand? Letters on neither side, so "Biologics"
+    (and any other word that happens to contain the four letters) is not
+    the brand: a substring test dropped a "biologics" primary source and
+    flagged a "Biologics production" dependency edge."""
+    return isinstance(text, str) and _BRAND_RE.search(text) is not None
+# A code in a basis or source reference: `mandate:4530`, `mapping:4530`,
+# `industry:453010`. The namespace is an allowlist because an arbitrary
+# `word:NN` is as often a count or a ratio as a code ("limit:10", "year:2020");
+# a taxonomy namespace proves the number is a code, including the three
+# year-shaped group codes (2010/2020/2030).
+_REF_NAMESPACES = ("mandate", "mapping", "industry", "industry_group", "group", "industry_knowledge",
+                   "sector", "gics", "taxonomy", "code")
+_REF_CODE_RE = re.compile(
+    r"(?<![\w:])(" + "|".join(_REF_NAMESPACES) + r"):(\d{8}|\d{6}|\d{4}|\d{2})" + _TOKEN_GUARD_AFTER,
+    re.IGNORECASE,
+)
 _MULTISPACE_RE = re.compile(r"[ \t]{2,}")
 # The lookbehind pins a match to the START of a space run, so a long run not
 # followed by punctuation is scanned once rather than once per position.
@@ -400,7 +446,7 @@ def _keepable(phrase: Any) -> bool:
     """A phrase a caller may exempt from scrubbing: non-blank text with no
     digit and no brand — a provider industry string, never a code."""
     return (isinstance(phrase, str) and bool(phrase.strip())
-            and not any(ch.isdigit() for ch in phrase) and "gics" not in phrase.lower())
+            and not any(ch.isdigit() for ch in phrase) and not has_brand(phrase))
 
 
 def _keep_set(keep: Any) -> frozenset[str]:
@@ -453,6 +499,10 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
         if old in out:
             out = out.replace(old, new)
     if any(ch.isdigit() for ch in out):
+        # References before everything else: the standalone-code rule would
+        # strip the 6-digit half of "industry:453010" and leave a dangling
+        # "industry:".
+        out = _REF_CODE_RE.sub(lambda m: _ref_sub(m, idx, labels), out)
         # Pairs first: a bracket rule that ran earlier would strip the
         # "(4010)" off "Banks (4010)" and leave the registry name behind.
         out = _pair_subs(out, idx, labels, kept)
@@ -475,6 +525,17 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
         # spacing survives untouched text.
         out = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", _MULTISPACE_RE.sub(" ", out))
     return out
+
+
+def _ref_sub(m: re.Match[str], idx: _Index, labels: Labels) -> str:
+    """``mandate:4530`` → ``mandate:<group slug>``; a 6/8-digit code rolls
+    up to its group's slug (the only level with a public name). An unknown
+    number is left alone — it is not a code this taxonomy has."""
+    namespace, code = m.group(1), m.group(2)
+    if code not in idx.names:
+        return m.group(0)
+    entry = labels.entry(code if len(code) <= 4 else code[:4])
+    return f"{namespace}:{entry[1]}" if entry is not None else m.group(0)
 
 
 def _prefix_sub(m: re.Match[str], labels: Labels) -> str:
@@ -520,7 +581,7 @@ _DROP_KEYS = frozenset({"industry_code", "sub_industry_code", "industry_name", "
 _CONSTANT_KEYS = ("attribution", "mapping_caveat", "security_reference_caveat")
 _VERSION_KEYS = frozenset({"taxonomy_version", "key", "knowledge_version", "version_key"})
 _SOURCE_LIST_KEYS = frozenset({"primary_sources", "map_sources"})
-_BRANDED_SOURCE_RE = re.compile(r"gics|msci\.com|spglobal\.com", re.IGNORECASE)
+_BRANDED_SOURCE_RE = re.compile(r"(?<![A-Za-z])gics(?![A-Za-z])|msci\.com|spglobal\.com", re.IGNORECASE)
 _PUBLIC_REF = "MarketMosaic industry research knowledge base"
 # Values that are public by design and shown exactly as the source wrote
 # them (W1 §4.5: the provider's industry string stands in for the
@@ -529,9 +590,19 @@ _PUBLIC_REF = "MarketMosaic industry research knowledge base"
 _PASSTHROUGH_KEYS = frozenset({"provider_industry"})
 
 
+# Lists that name groups by bare code under a key that does not end in
+# `_codes`: the cross-industry snapshot's `insufficient_sample_groups` is a
+# list of code strings, and `missing_groups` is one in older snapshots (a
+# list of `{code, name, reason}` in newer ones). A bare "4530" string is
+# never touched by `scrub_text` (four digits can be a year), so these keys
+# have to be named.
+_GROUP_LIST_KEYS = frozenset({"insufficient_sample_groups", "missing_groups"})
+
+
 def _code_list_slugs(values: list[Any], idx: _Index, labels: Labels, keep: Any) -> list[Any]:
     """Each known code → the slug of its group (6/8-digit codes roll up to
-    their 4-digit prefix); unknown values are kept; duplicates collapse."""
+    their 4-digit prefix); unknown values are kept (strings scrubbed, other
+    values projected); duplicates collapse."""
     out: list[Any] = []
     for v in values:
         key = _norm(v)
@@ -540,8 +611,8 @@ def _code_list_slugs(values: list[Any], idx: _Index, labels: Labels, keep: Any) 
             if entry is None:
                 continue
             v = entry[1]
-        elif isinstance(v, str):
-            v = scrub_text(v, keep=keep)
+        else:
+            v = _project(v, idx, labels, keep)
         if v not in out:
             out.append(v)
     return out
@@ -558,7 +629,7 @@ def _constant_for(key: str, value: Any, labels: Labels, keep: Any) -> Any:
     exact = dict(_index().exact)
     if value in exact:
         return exact[value]
-    return default if "gics" in value.lower() else scrub_text(value, keep=keep)
+    return default if has_brand(value) else scrub_text(value, keep=keep)
 
 
 def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels, keep: Any) -> dict[Any, Any]:
@@ -595,14 +666,15 @@ def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels, keep: Any) -
             out[k] = {}
         elif k in _VERSION_KEYS and isinstance(v, str) and v.lower().startswith("gics-"):
             out[k] = public_version_key(v.lower())
-        elif isinstance(k, str) and (k == "codes" or k.endswith("_codes")) and isinstance(v, list):
+        elif isinstance(k, str) and (k == "codes" or k.endswith("_codes") or k in _GROUP_LIST_KEYS) \
+                and isinstance(v, list):
             out[k] = _code_list_slugs(v, idx, labels, keep)
         elif k in _SOURCE_LIST_KEYS and isinstance(v, list):
             kept = [s for s in v if not _BRANDED_SOURCE_RE.search(json.dumps(s, default=str))]
             out[k] = [_project(s, idx, labels, keep) for s in kept]
             if len(kept) != len(v):
                 out[f"{k}_withheld"] = len(v) - len(kept)
-        elif k == "ref" and isinstance(v, str) and "gics" in v.lower():
+        elif k == "ref" and isinstance(v, str) and has_brand(v):
             out[k] = _PUBLIC_REF
         else:
             out[k] = _project(v, idx, labels, keep)
@@ -627,7 +699,9 @@ def project_public(obj: Any, *, keep: Any = ()) -> Any:
        sibling ``*name`` → our label; holding a 6/8-digit code → both keys
        removed.
     2. ``industry_code`` / ``sub_industry_code`` (and their names) → removed;
-       ``codes`` / ``*_codes`` lists → group slugs, de-duplicated.
+       ``codes`` / ``*_codes`` lists, and the snapshot's
+       ``insufficient_sample_groups`` / ``missing_groups`` → group slugs for
+       their bare-code entries, de-duplicated.
     3. dict keys equal to a known 2/4-digit code → slug; 6/8-digit keys →
        entry dropped.
     4. ``attribution`` / ``mapping_caveat`` / ``security_reference_caveat``

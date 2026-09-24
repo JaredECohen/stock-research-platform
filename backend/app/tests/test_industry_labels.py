@@ -218,6 +218,24 @@ SCRUB_TABLE = [
     ("sector 45.", f"sector {_T}."),
     ("sector 45", f"sector {_T}"),
     ("Information Technology [45] leads", f"{_T} leads"),
+    # S10: a code in a taxonomy-namespaced reference (a claim basis, an
+    # evidence ref) → the group slug; a year-shaped group code too, because
+    # the namespace proves it is a code. Other `word:NN` forms are counts.
+    ("mandate:4530", f"mandate:{il.slug('4530')}"),
+    ("mapping:4530", f"mapping:{il.slug('4530')}"),
+    ("industry:453010", f"industry:{il.slug('4530')}"),
+    ("mandate:2030", f"mandate:{il.slug('2030')}"),
+    ("gics:4530", f"industry:{il.slug('4530')}"),
+    ("limit:10 and year:2020", "limit:10 and year:2020"),
+    ("mandate:capital_cycle", "mandate:capital_cycle"),
+    # S10: the brand glued into an identifier is still the brand, and a
+    # word that merely contains the four letters is not it
+    ("see gics_industries_2026.json", "see industry_industries_2026.json"),
+    ("Biologics production → Bioprocess consumables", "Biologics production → Bioprocess consumables"),
+    # S10: a distinctive sub-industry name (legacy prose) reads as the
+    # label of the group it rolls up to — never named publicly itself
+    ("Semiconductor Materials & Equipment names", f"{_C} names"),
+    ("Oil & Gas Drilling rigs", f"{il.label('1010')} rigs"),
     ("", ""),
 ]
 
