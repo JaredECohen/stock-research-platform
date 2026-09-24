@@ -241,9 +241,10 @@ def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir, no_llm):
         "deduped_memos", "deferred", "deferred_memos", "ineligible",
         "skipped_memos", "memory_written", "memory_written_memos",
         "memory_failed", "memory_failed_memos", "memory_disabled", "memory_disabled_memos",
-        "memory_not_requested", "memory_not_requested_memos",
+        "memory_not_requested", "memory_not_requested_memos", "classification_error",
     }
     assert report["horizon_days"] == 90 and report["written"] >= 1
+    assert report["classification_error"] is None
     assert {"ticker": t, "horizon": 90} in no_llm       # the LLM was asked, and declined
 
     rows = _postmortems(t, 90)
@@ -386,3 +387,39 @@ def test_prior_demo_version_does_not_dedupe_live_memo(w6_pm):
     report = pm.run_postmortems(horizon_days=90, limit=25)
     assert report["deduped"] == 0, report["deduped_memos"]
     assert report["written"] == 1 and calls == ["NVDA"]
+
+
+def test_failed_sweep_still_postmortems_classified_memos(w6_pm, monkeypatch):
+    """An aborted eligibility sweep is reported and turns the loop red, but
+    memos the ledger already classifies still get their postmortems; the one
+    the sweep could not classify is skipped (fail closed). Before, the
+    exception escaped run_postmortems ahead of the scan."""
+    from app.monitoring import postmortem_loop
+    from app.services import outcome_eligibility as oe
+    from app.services.outcome_eligibility_evidence import DEV_COPY_SNAPSHOTS
+    from app.tests.eligibility_helpers import add_outcome, add_snapshot, classify_all
+
+    sessions, calls = w6_pm
+    dev_ids = {row[0] for row in DEV_COPY_SNAPSHOTS}
+    with sessions() as db:
+        live = add_snapshot(db, ticker="PMLIVE", generated_at=datetime(2026, 5, 20))
+        add_outcome(db, live, horizon=90, forward_return=0.2, alpha=0.1)
+        db.commit()
+        classify_all(db)
+        stray = add_snapshot(db, id=next(i for i in range(400, 583) if i not in dev_ids), ticker="PMSTRAY",
+                             generated_at=datetime(2026, 5, 4), mode="demo")
+        add_outcome(db, stray, horizon=90, forward_return=0.2, alpha=0.1)
+        db.commit()
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(postmortem_loop, "record_run", lambda *a, **k: recorded.append(k))
+    monkeypatch.setattr(postmortem_loop, "run_postmortems",
+                        lambda horizon_days, limit: pm.run_postmortems(horizon_days=horizon_days, limit=limit)
+                        if horizon_days == 90 else {"due": 0, "written": 0})
+    postmortem_loop.run_once()
+    assert calls == ["PMLIVE"]
+    assert recorded[0]["success"] is False
+    assert f"classification_error=ExclusionSetMismatch: dev-copy classification outside the enumerated set: " \
+           f"PMSTRAY#{stray.id}" in recorded[0]["note"]
+    with sessions() as db:
+        assert [r.memo_snapshot_id for r in db.query(MemoPostmortem).all()] == [live.id]
+        assert oe.lookup(db, stray.id) is None

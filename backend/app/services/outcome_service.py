@@ -589,8 +589,13 @@ def evaluate_all_due(
     ``unevaluable`` retains the legacy date-window status for compatibility;
     coverage classification remains delegated to ``_evaluate_one``.
 
-    W6: the eligibility sweep runs first (and its failure propagates, so the
-    loop records it). Snapshots the ledger marks ineligible are counted, not
+    W6: the eligibility sweep runs first. Its failure (for example an
+    ``ExclusionSetMismatch``) rolls the sweep back and is reported as
+    ``classification_error``, which fails the loop, but scoring carries on
+    over the ledger rows that already exist: one bad new snapshot must not
+    stop every eligible memo from being scored until a redeploy. Readers
+    already treat an unclassified snapshot as ineligible, so continuing is
+    still fail-closed. Snapshots the ledger marks ineligible are counted, not
     evaluated: ``ineligible`` counts their pairs and
     ``ineligible_snapshots_by_reason`` their snapshots, and neither enters
     ``due`` or ``data_unavailable`` (FIX-003: the fixture snapshots stop
@@ -606,7 +611,13 @@ def evaluate_all_due(
         db = SessionLocal()
     try:
         _ensure_table(db)
-        classification = outcome_eligibility.classify_pending(db=db)
+        classification_error: str | None = None
+        try:
+            classification: dict[str, Any] = outcome_eligibility.classify_pending(db=db)
+        except Exception as exc:
+            # classify_pending has rolled back and logged the named row.
+            classification_error = f"{type(exc).__name__}: {exc}"[:500]
+            classification = {}
         from .memory_probe import log_rss
         log_rss("outcome_scan_start")
         evaluated = 0
@@ -630,11 +641,15 @@ def evaluate_all_due(
         ineligible_by_reason: Counter[str] = Counter()
         unclassified_ids: list[int] = []
         for snap in _iter_outcome_snapshots(db):
-            if snap.eligible is None:
+            if snap.eligible is None and classification_error is None:
                 # Inserted after the sweep (the id fence is taken later), or
                 # its ledger row belongs to a reused sqlite id. Classify now,
-                # before deciding anything about it.
-                outcome_eligibility.classify_pending(db=db)
+                # before deciding anything about it. Not after a failed
+                # sweep: it would fail again, once per unclassified snapshot.
+                try:
+                    outcome_eligibility.classify_pending(db=db)
+                except Exception as exc:
+                    classification_error = f"{type(exc).__name__}: {exc}"[:500]
                 found = outcome_eligibility.lookup(db, snap.id)
                 if found is not None:
                     snap.eligible, snap.eligibility_reason = found.eligible, found.reason
@@ -720,6 +735,11 @@ def evaluate_all_due(
                 statuses["unclassified"], len(unclassified_ids),
                 ",".join(str(i) for i in unclassified_ids),
             )
+        if classification_error:
+            log.error(
+                "Outcome evaluation scored only already-classified snapshots: "
+                "eligibility sweep failed: %s", classification_error,
+            )
         if unevaluable:
             log.warning(
                 "Outcome evaluation returned %s legacy unevaluable pairs "
@@ -747,6 +767,7 @@ def evaluate_all_due(
             "unclassified": statuses["unclassified"],
             "unclassified_snapshot_ids": unclassified_ids,
             "classification": classification,
+            "classification_error": classification_error,
         }
     finally:
         if own:

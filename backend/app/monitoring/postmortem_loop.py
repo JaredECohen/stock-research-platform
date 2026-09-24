@@ -53,6 +53,8 @@ def _summarize(report: dict) -> str:
         f"memory_failed={report.get('memory_failed', 0)} "
         f"memory_not_requested={report.get('memory_not_requested', 0)}"
     )
+    if report.get("classification_error"):
+        summary += f"; classification_error={report['classification_error']}"
     for label in ("deduped", "deferred", "skipped", "memory_disabled", "memory_failed", "memory_not_requested"):
         memos = report.get(f"{label}_memos", [])
         if memos:
@@ -82,7 +84,12 @@ def run_once(*, limit_per_horizon: int = 25) -> dict[str, int]:
     # `deduped` are answers, not failures — folding them into `skipped` is
     # what had this loop reporting success=False every single night for a
     # backlog that was entirely fine.
-    success = sum(report.get(key, 0) for report in (early, full) for key in ("skipped", "memory_failed")) == 0
+    # A failed eligibility sweep is red too: the pass selected only from the
+    # ledger rows that already existed.
+    success = (
+        sum(report.get(key, 0) for report in (early, full) for key in ("skipped", "memory_failed")) == 0
+        and not any(report.get("classification_error") for report in (early, full))
+    )
     record_run("postmortem_loop", success=success, note=note)
     return {
         "early_due": early["due"], "early_written": early["written"],

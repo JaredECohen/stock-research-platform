@@ -498,13 +498,24 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
       `memory_failed` the new postmortem exists, but its requested memory
                       writes or their persisted completion flag failed.
       `memory_disabled` memory was disabled; no file was touched.
+      `classification_error` the eligibility sweep's failure, or None.
     """
     # W6: make sure every snapshot has an eligibility row before selecting
     # work. A no-op after the 02:30 outcome loop; it protects the admin
     # run-postmortems path and the backfill script. Its own session, so a test
     # that isolates this module's SessionLocal stays isolated.
-    with SessionLocal() as db:
-        outcome_eligibility.classify_pending(db=db)
+    #
+    # A failed sweep (rolled back, the named row logged) is reported, not
+    # raised: selection is `eligible_only`, so snapshots it could not
+    # classify are already skipped, and the rest keep their postmortems.
+    classification_error: str | None = None
+    try:
+        with SessionLocal() as db:
+            outcome_eligibility.classify_pending(db=db)
+    except Exception as exc:
+        classification_error = f"{type(exc).__name__}: {exc}"[:500]
+        log.error("postmortem %sd: eligibility sweep failed, selecting from the existing ledger: %s",
+                  horizon_days, classification_error)
     scan = _scan_due(horizon_days, limit=limit)
     due = scan.items
     written = 0
@@ -633,6 +644,7 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
         "ineligible": scan.ineligible,
         "skipped": len(skipped_memos),
         "skipped_memos": skipped_memos,
+        "classification_error": classification_error,
     }
     for status, identities in memory_memos.items():
         report[f"memory_{status}"] = len(identities)

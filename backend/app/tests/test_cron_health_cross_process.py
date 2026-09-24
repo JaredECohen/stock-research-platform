@@ -325,8 +325,9 @@ def test_postmortem_loop_records_failure_before_reraising(monkeypatch):
 
 
 def test_outcome_loop_records_failure_on_exception(monkeypatch):
-    """W6: an exception inside evaluate_all_due (now including a failed
-    eligibility sweep) must be persisted as a failed run before it re-raises.
+    """W6: an exception inside evaluate_all_due must be persisted as a failed
+    run before it re-raises. (A failed eligibility sweep no longer raises; it
+    is reported as `classification_error` and turns the run red.)
 
     Before, `outcome_loop.run_once` had no handler: the exception reached
     APScheduler, `record_run` never ran, and cron-health — served by the

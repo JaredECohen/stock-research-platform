@@ -24,8 +24,9 @@ def run_once() -> dict[str, Any]:
         res = evaluate_all_due()
     except Exception as exc:
         # Record before re-raising, as postmortem_loop does: an exception
-        # (now including a failed eligibility sweep) used to bypass
-        # record_run entirely, so cron-health showed a stale success.
+        # used to bypass record_run entirely, so cron-health showed a stale
+        # success. (A failed eligibility sweep no longer raises here; it is
+        # `classification_error` below.)
         record_run(
             "outcome_loop",
             success=False,
@@ -53,12 +54,19 @@ def run_once() -> dict[str, Any]:
         note += " ineligible_by_reason=" + ",".join(f"{k}:{v}" for k, v in sorted(by_reason.items()))
     if res.get("unclassified_snapshot_ids"):
         note += " unclassified_snapshot_ids=" + ",".join(str(i) for i in res["unclassified_snapshot_ids"])
+    if res.get("classification_error"):
+        note += f" classification_error={res['classification_error']}"
     for key in ("unevaluable_pairs", "unavailable_pairs", "error_pairs"):
         if res.get(key):
             note += f" {key}=" + ",".join(res[key])
     # A due pair on an unclassified snapshot means the eligibility sweep did
     # not cover it: fail-closed exclusion is still a failure to report.
-    success = res["errors"] == 0 and res["data_unavailable"] == 0 and res.get("unclassified", 0) == 0
+    # A failed sweep is red even when nothing due was left unclassified: the
+    # ledger it could not write is what the page and the learning loop read.
+    success = (
+        res["errors"] == 0 and res["data_unavailable"] == 0 and res.get("unclassified", 0) == 0
+        and not res.get("classification_error")
+    )
     record_run("outcome_loop", success=success, note=note)
     return res
 

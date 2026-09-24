@@ -516,6 +516,76 @@ def test_evaluate_all_due_skips_ineligible_snapshots(w6, monkeypatch):
         assert set(db.execute(select(MemoOutcome.memo_snapshot_id)).scalars()) == {live.id}
 
 
+def test_failed_sweep_still_scores_classified_snapshots(w6, monkeypatch):
+    """A sweep that aborts (ExclusionSetMismatch) turns the loop red but does
+    not stop scoring: snapshots with an existing ledger row are still
+    evaluated, and the one the sweep could not classify stays unscored.
+
+    Before, the exception escaped evaluate_all_due ahead of the scan, so one
+    unexpected snapshot stopped all outcome scoring until a redeploy.
+    """
+    from app.monitoring import outcome_loop
+    from app.services import market_data_service
+
+    sessions, _ = w6
+    dev_ids = {row[0] for row in DEV_COPY_SNAPSHOTS}
+    with sessions() as db:
+        live = add_snapshot(db, ticker="LIVEW6", generated_at=datetime(2026, 5, 1, 13))
+        db.commit()
+        classify_all(db)
+        # Demo, copy-era id and date, but not in the enumerated evidence.
+        stray = add_snapshot(db, id=next(i for i in range(400, 583) if i not in dev_ids), ticker="STRAYW6",
+                             generated_at=datetime(2026, 5, 4), mode="demo")
+        db.commit()
+    series = {
+        "LIVEW6": _series(live.generated_at, {0: 100.0, 30: 110.0, 90: 120.0}),
+        "SPY": _series(live.generated_at, {0: 500.0, 30: 505.0, 90: 510.0}),
+    }
+    requests: list[str] = []
+    monkeypatch.setattr(market_data_service, "get_price_series",
+                        lambda ticker, days=252: requests.append(ticker) or series.get(ticker, []))
+    calls: list[int] = []
+    real = oe.classify_pending
+
+    def counting(**kwargs):
+        calls.append(1)
+        return real(**kwargs)
+
+    monkeypatch.setattr(oe, "classify_pending", counting)
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(outcome_loop, "record_run", lambda *a, **k: recorded.append(k))
+    monkeypatch.setattr(outcome_service, "_maybe_write_reflection", lambda snap, out: False)
+    monkeypatch.setattr(outcome_loop, "evaluate_all_due",
+                        lambda: outcome_service.evaluate_all_due(today=W6_TODAY))
+    res = outcome_loop.run_once()
+    assert res["written"] == 2, "the classified live snapshot is still scored"
+    assert res["classification_error"].startswith("ExclusionSetMismatch")
+    assert f"STRAYW6#{stray.id}" in res["classification_error"]
+    assert res["unclassified_snapshot_ids"] == [stray.id] and res["unclassified"] == 2
+    assert "STRAYW6" not in requests
+    assert len(calls) == 1, "a failed sweep is not retried once per unclassified snapshot"
+    assert recorded[0]["success"] is False
+    assert "classification_error=ExclusionSetMismatch" in recorded[0]["note"]
+    with sessions() as db:
+        assert set(db.execute(select(MemoOutcome.memo_snapshot_id)).scalars()) == {live.id}
+        assert oe.lookup(db, stray.id) is None, "the aborted sweep wrote nothing"
+
+
+def test_sweep_failure_alone_turns_loop_red(w6, monkeypatch):
+    from app.monitoring import outcome_loop
+
+    def fail(**kwargs):
+        raise oe.ExclusionSetMismatch("synthetic")
+
+    monkeypatch.setattr(oe, "classify_pending", fail)
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(outcome_loop, "record_run", lambda *a, **k: recorded.append(k))
+    res = outcome_loop.run_once()
+    assert res["errors"] == 0 and res["unclassified"] == 0 and res["data_unavailable"] == 0
+    assert recorded[0]["success"] is False
+    assert "classification_error=ExclusionSetMismatch: synthetic" in recorded[0]["note"]
+
+
 def test_unclassified_snapshot_turns_loop_red(w6, monkeypatch):
     from app.monitoring import outcome_loop
     from app.services import market_data_service
