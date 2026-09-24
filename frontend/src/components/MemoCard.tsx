@@ -1,6 +1,21 @@
 import React from "react";
-import type { AgentFinding, BullBearAnalysis, StockMemoOut } from "@/types";
+import type {
+  AgentFinding,
+  BullBearAnalysis,
+  BullBearCase,
+  SectionAvailability,
+  StockMemoOut,
+} from "@/types";
 import { fmtPct, fmtPrice, fmtUpside, numOrNull, ratingBadgeClass } from "@/lib/format";
+import {
+  availability,
+  bannerCount,
+  bannerText,
+  intakeRationale,
+  isHidden,
+  isUnavailable,
+} from "@/lib/memoSections";
+import UnavailableSection, { DegradedNote } from "./UnavailableSection";
 import CrossSectorChips from "./CrossSectorChips";
 import TerminalClampBadge from "./TerminalClampBadge";
 import DiligenceDialog from "./DiligenceDialog";
@@ -24,13 +39,22 @@ import type { EarningsStructured } from "@/types";
  */
 function ScorecardRow({
   confidence,
+  confidenceAvailability,
   factorPmScore,
   rating,
 }: {
   confidence: number;
+  // W2a: when the presenter hid the confidence (its PM input was a
+  // template), the card shows the placeholder instead of the number and
+  // bar. The number is never rewritten server-side, so the card must not
+  // print it.
+  confidenceAvailability?: SectionAvailability;
   factorPmScore?: number;
   rating: string;
 }) {
+  const confidenceHidden =
+    confidenceAvailability?.status === "unavailable" &&
+    confidenceAvailability.reason !== "not_produced";
   const tone = (v: number) =>
     v >= 70 ? "text-accent-500"
     : v >= 50 ? "text-slate-100"
@@ -98,16 +122,27 @@ function ScorecardRow({
           </div>
           <div className="text-[9px] text-slate-600">agent certainty</div>
         </div>
-        <div className="mt-1.5 flex items-baseline gap-1">
-          <span className={`text-2xl font-mono ${tone(conf)}`}>{conf}</span>
-          <span className="text-[10px] text-slate-500">/ 100</span>
-        </div>
-        <div className="h-1 mt-2 rounded bg-ink-800 overflow-hidden">
-          <div
-            className={`h-full ${bar(conf)}`}
-            style={{ width: `${Math.max(0, Math.min(100, conf))}%` }}
+        {confidenceHidden ? (
+          <UnavailableSection
+            variant="inline"
+            section="confidence_score"
+            availability={confidenceAvailability}
+            className="mt-1.5"
           />
-        </div>
+        ) : (
+          <>
+            <div className="mt-1.5 flex items-baseline gap-1">
+              <span className={`text-2xl font-mono ${tone(conf)}`}>{conf}</span>
+              <span className="text-[10px] text-slate-500">/ 100</span>
+            </div>
+            <div className="h-1 mt-2 rounded bg-ink-800 overflow-hidden">
+              <div
+                className={`h-full ${bar(conf)}`}
+                style={{ width: `${Math.max(0, Math.min(100, conf))}%` }}
+              />
+            </div>
+          </>
+        )}
         <div className="mt-2 text-[11px] text-slate-400 leading-snug">
           PM's certainty in the <em>"{rating}"</em> call. Not a quality
           score — see Stock Score for fundamentals ranking.
@@ -282,19 +317,49 @@ function FindingBlock({
   body,
   footer,
   extra,
+  section,
+  memo,
 }: {
   title: string;
   body: AgentFinding | { headline: string; summary: string; key_points?: string[] };
   footer?: React.ReactNode;
   extra?: React.ReactNode;
+  // W2a: the finding's map key; with `memo`, it decides whether the card
+  // shows the analyst's view or the placeholder with its reason.
+  section?: string;
+  memo?: StockMemoOut;
 }) {
   const [showFull, setShowFull] = React.useState(false);
   // Long-form report only present on AgentFinding shape; the structurally-typed
   // alternative has no `long_form_report` field, so the cast is a no-op there.
   const longForm = (body as AgentFinding).long_form_report;
+  const av = section ? availability(memo, section) : undefined;
+  if (section && memo && isHidden(memo, section)) {
+    // A skipped analyst still gets its card, so the reader sees that the PM
+    // chose to skip it and why. `extra`/`footer` read the finding's data,
+    // which the presenter reduced to its allowlist — nothing left to show.
+    return (
+      <UnavailableSection
+        title={title}
+        section={section}
+        availability={av}
+        detail={
+          av?.reason === "skipped_by_intake"
+            ? intakeRationale(memo, body as AgentFinding) || undefined
+            : undefined
+        }
+      />
+    );
+  }
+  // The presenter hides a template drill-down on its own (only the
+  // analyst's expansion is ever shown); say so rather than dropping the
+  // button silently.
+  const drilldownHidden =
+    !!section && !!memo && isHidden(memo, `${section}.long_form_report`);
   return (
     <div className="card-tight">
       <div className="section-title mb-1">{title}</div>
+      <DegradedNote availability={av} className="mb-1" />
       <div className="text-sm font-medium text-slate-100">{body.headline}</div>
       <div className="text-sm text-slate-300 mt-1">{body.summary}</div>
       {body.key_points && body.key_points.length > 0 && (
@@ -321,7 +386,59 @@ function FindingBlock({
           )}
         </div>
       )}
+      {drilldownHidden && !longForm && (
+        <div className="mt-2 text-[11px] text-slate-500" data-testid="drilldown-unavailable">
+          Full report unavailable in this version.
+        </div>
+      )}
       {footer && <div className="mt-3 border-t border-ink-700 pt-2">{footer}</div>}
+    </div>
+  );
+}
+
+/**
+ * Bull or Bear card. The presenter removes template items and replaces a
+ * template headline with the placeholder; this renders its verdict: the
+ * placeholder and reason for an unavailable case (plus any computed item the
+ * presenter kept, such as "DCF bull case implies …" — numbers are never
+ * hidden), or the surviving items under a headline placeholder with an
+ * "N template items not shown" note for a partially templated case.
+ */
+function CaseCard({
+  title,
+  tone,
+  data,
+  section,
+  memo,
+}: {
+  title: string;
+  tone: "bull" | "bear";
+  data: BullBearCase;
+  section: "bull_case" | "bear_case";
+  memo: StockMemoOut;
+}) {
+  const av = availability(memo, section);
+  const hidden = isHidden(memo, section);
+  const headlineHidden = hidden || !!av?.headline_hidden;
+  const color = tone === "bull" ? "text-accent-500" : "text-danger-500";
+  return (
+    <div className="card-tight" data-testid={`case-${tone}`}>
+      <div className="section-title mb-1 flex items-center gap-2">{title}</div>
+      {headlineHidden ? (
+        // The reason line belongs to the whole card only when the whole
+        // card is unavailable; a hidden headline on a partial case is
+        // explained by the degraded note below.
+        <UnavailableSection variant="inline" section={section} availability={hidden ? av : undefined} />
+      ) : (
+        <div className={`text-sm font-medium ${color}`}>{data.headline}</div>
+      )}
+      {data.key_points.length > 0 && (
+        <ul className="text-sm text-slate-300 mt-2 list-disc pl-5 space-y-1">
+          {data.key_points.map((p, i) => <li key={i}>{p}</li>)}
+        </ul>
+      )}
+      {/* An unavailable case's placeholder already carries its item count. */}
+      {!hidden && <DegradedNote availability={av} className="mt-2" />}
     </div>
   );
 }
@@ -334,15 +451,32 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
   const crossSector = sectorData?.cross_sector_relevance ?? [];
   const macroBroadcast = sectorData?.macro_broadcast;
   const macroAlignment = sectorData?.macro_alignment;
+  // W2a: sections the presenter hid. A memo can have hidden sections and no
+  // degraded agents (a pre-flag template PM view carries no event), so the
+  // banner shows for either.
+  const hiddenCount = bannerCount(memo);
   return (
     <div className="space-y-4">
-      {degraded.length > 0 && (
-        <div className="card-tight border-warn-500/40 bg-warn-500/5 text-warn-500 text-sm">
+      {(degraded.length > 0 || hiddenCount > 0) && (
+        <div
+          className="card-tight border-warn-500/40 bg-warn-500/5 text-warn-500 text-sm"
+          data-testid="partial-result-banner"
+        >
           <span className="font-semibold">Partial result:</span>{" "}
-          {degraded.length} agent{degraded.length === 1 ? "" : "s"} degraded —{" "}
-          <span className="text-slate-200">{degraded.join(", ")}</span>. These
-          either failed or fell back to deterministic output; treat their
-          sections as thinner evidence.
+          {degraded.length > 0 && (
+            <>
+              {degraded.length} agent{degraded.length === 1 ? "" : "s"} degraded —{" "}
+              <span className="text-slate-200">{degraded.join(", ")}</span>. These
+              either failed or fell back to deterministic output; treat their
+              sections as thinner evidence.
+            </>
+          )}
+          {hiddenCount > 0 && (
+            <span data-testid="unavailable-count">
+              {degraded.length > 0 ? " · " : ""}
+              {bannerText(hiddenCount)}.
+            </span>
+          )}
         </div>
       )}
       <div className="card">
@@ -361,6 +495,13 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
             <span className={ratingBadgeClass(memo.rating_label)}>
               {memo.rating_label}
             </span>
+            {/* The rating is never hidden (60% of it is the quant factor
+                blend), but when its PM input was a template the reader is
+                told what it rests on. */}
+            <DegradedNote
+              availability={availability(memo, "rating_label")}
+              className="max-w-[16rem] text-right"
+            />
             <div
               className="text-[10px] uppercase tracking-widest text-slate-600"
               title={
@@ -379,9 +520,17 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
           <div className="text-[10px] uppercase tracking-widest text-accent-500 mb-1">
             One-sentence thesis
           </div>
-          <div className="text-base md:text-lg text-slate-100 leading-snug">
-            {memo.one_sentence_thesis}
-          </div>
+          {isHidden(memo, "one_sentence_thesis") ? (
+            <UnavailableSection
+              variant="inline"
+              section="one_sentence_thesis"
+              availability={availability(memo, "one_sentence_thesis")}
+            />
+          ) : (
+            <div className="text-base md:text-lg text-slate-100 leading-snug">
+              {memo.one_sentence_thesis}
+            </div>
+          )}
           {memo.valuation_verdict?.summary && (
             <div className="mt-2 pt-2 border-t border-ink-700 text-xs text-slate-300">
               <span className="text-[10px] uppercase tracking-widest text-slate-500 mr-2">
@@ -394,6 +543,7 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
 
         <ScorecardRow
           confidence={memo.confidence_score}
+          confidenceAvailability={availability(memo, "confidence_score")}
           factorPmScore={memo.scores?.factor_pm_score}
           rating={memo.rating_label}
         />
@@ -401,12 +551,30 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
         <FactorScorePanel scores={memo.scores} />
         <div className="border-t border-ink-700 mt-4 pt-3 text-sm text-slate-200">
           <div className="section-title mb-1">PM Final View</div>
-          <p>{memo.final_pm_view}</p>
+          {isHidden(memo, "final_pm_view") ? (
+            <UnavailableSection
+              variant="inline"
+              section="final_pm_view"
+              availability={availability(memo, "final_pm_view")}
+            />
+          ) : (
+            <p>{memo.final_pm_view}</p>
+          )}
           {crossSector.length > 0 && <CrossSectorChips tickers={crossSector} className="mt-3" />}
         </div>
       </div>
 
-      {memo.mispricing_thesis &&
+      {/* The one section whose `not_produced` also gets a placeholder: the
+          card used to vanish, which read as "no view" rather than "none
+          was produced". */}
+      {isUnavailable(memo, "mispricing_thesis") ? (
+        <UnavailableSection
+          title="Where We Differ From Consensus"
+          section="mispricing_thesis"
+          availability={availability(memo, "mispricing_thesis")}
+          className="border-accent-600/30"
+        />
+      ) : memo.mispricing_thesis &&
         (memo.mispricing_thesis.consensus_view ||
           memo.mispricing_thesis.our_view ||
           memo.mispricing_thesis.gap) && (
@@ -459,6 +627,8 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
         <FindingBlock
           title="Sector Analyst"
           body={memo.sector_agent_view}
+          section="sector_agent_view"
+          memo={memo}
           footer={
             crossSector.length > 0 ? <CrossSectorChips tickers={crossSector} /> : undefined
           }
@@ -466,6 +636,8 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
         <FindingBlock
           title="Earnings Analyst"
           body={memo.earnings_agent_view}
+          section="earnings_agent_view"
+          memo={memo}
           extra={
             memo.earnings_agent_view.data &&
             (memo.earnings_agent_view.data as { structured?: EarningsStructured }).structured ? (
@@ -477,12 +649,19 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
             ) : undefined
           }
         />
-        <FindingBlock title="Filing Analyst" body={memo.filing_agent_view} />
-        <FindingBlock title="Valuation Analyst" body={memo.valuation_agent_view} />
-        <FindingBlock title="Comps Analyst" body={memo.comps_agent_view} />
-        <FindingBlock title="Macro Analyst" body={memo.macro_sensitivity} />
+        <FindingBlock title="Filing Analyst" body={memo.filing_agent_view} section="filing_agent_view" memo={memo} />
+        <FindingBlock title="Valuation Analyst" body={memo.valuation_agent_view} section="valuation_agent_view" memo={memo} />
+        <FindingBlock title="Comps Analyst" body={memo.comps_agent_view} section="comps_agent_view" memo={memo} />
+        <FindingBlock title="Macro Analyst" body={memo.macro_sensitivity} section="macro_sensitivity" memo={memo} />
+        {/* A PM intake skip keeps its (blanked) finding, so this card still
+            renders and says why the analyst did not run. */}
         {memo.technical_agent_view && (
-          <FindingBlock title="Technical Analyst" body={memo.technical_agent_view} />
+          <FindingBlock
+            title="Technical Analyst"
+            body={memo.technical_agent_view}
+            section="technical_agent_view"
+            memo={memo}
+          />
         )}
       </div>
 
@@ -494,30 +673,39 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
 
 
       <div className="grid md:grid-cols-2 gap-4">
-        <div className="card-tight">
-          <div className="section-title mb-1 flex items-center gap-2">Bull Case</div>
-          <div className="text-sm font-medium text-accent-500">{memo.bull_case.headline}</div>
-          <ul className="text-sm text-slate-300 mt-2 list-disc pl-5 space-y-1">
-            {memo.bull_case.key_points.map((p, i) => <li key={i}>{p}</li>)}
-          </ul>
-        </div>
-        <div className="card-tight">
-          <div className="section-title mb-1 flex items-center gap-2">Bear Case</div>
-          <div className="text-sm font-medium text-danger-500">{memo.bear_case.headline}</div>
-          <ul className="text-sm text-slate-300 mt-2 list-disc pl-5 space-y-1">
-            {memo.bear_case.key_points.map((p, i) => <li key={i}>{p}</li>)}
-          </ul>
-        </div>
+        <CaseCard title="Bull Case" tone="bull" data={memo.bull_case} section="bull_case" memo={memo} />
+        <CaseCard title="Bear Case" tone="bear" data={memo.bear_case} section="bear_case" memo={memo} />
       </div>
 
-      {sectorData?.bull_bear_analysis && (
-        <BullBearAnalysisBlock analysis={sectorData.bull_bear_analysis} />
+      {/* The presenter drops a template synthesis block from the sector
+          finding's data; the placeholder says it existed and why it is gone. */}
+      {isHidden(memo, "sector_synthesis") ? (
+        <UnavailableSection
+          title="Sector synthesis · key disagreement"
+          section="sector_synthesis"
+          availability={availability(memo, "sector_synthesis")}
+        />
+      ) : (
+        sectorData?.bull_bear_analysis && (
+          <BullBearAnalysisBlock analysis={sectorData.bull_bear_analysis} />
+        )
       )}
 
-      {/* Empty-extraction memos (B4) must not render bare section headers. */}
-      {(memo.catalysts.length > 0 || memo.key_risks.length > 0) && (
+      {/* Empty-extraction memos (B4) must not render bare section headers.
+          A list the presenter emptied is not an empty extraction: it gets
+          the placeholder. */}
+      {(memo.catalysts.length > 0 ||
+        memo.key_risks.length > 0 ||
+        isHidden(memo, "catalysts") ||
+        isHidden(memo, "key_risks")) && (
         <div className="grid md:grid-cols-2 gap-4">
-          {memo.catalysts.length > 0 && (
+          {isHidden(memo, "catalysts") ? (
+            <UnavailableSection
+              title="Catalysts"
+              section="catalysts"
+              availability={availability(memo, "catalysts")}
+            />
+          ) : memo.catalysts.length > 0 && (
             <div className="card-tight">
               <div className="section-title mb-1">Catalysts</div>
               <ul className="text-sm text-slate-300 space-y-1">
@@ -529,9 +717,16 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
                   </li>
                 ))}
               </ul>
+              <DegradedNote availability={availability(memo, "catalysts")} className="mt-2" />
             </div>
           )}
-          {memo.key_risks.length > 0 && (
+          {isHidden(memo, "key_risks") ? (
+            <UnavailableSection
+              title="Key Risks & Thesis Breakers"
+              section="key_risks"
+              availability={availability(memo, "key_risks")}
+            />
+          ) : memo.key_risks.length > 0 && (
             <div className="card-tight">
               <div className="section-title mb-1">Key Risks & Thesis Breakers</div>
               <ul className="text-sm text-slate-300 space-y-1">
@@ -542,6 +737,7 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
                   </li>
                 ))}
               </ul>
+              <DegradedNote availability={availability(memo, "key_risks")} className="mt-2" />
             </div>
           )}
         </div>
@@ -549,6 +745,7 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
 
       <div className="card-tight">
         <div className="section-title mb-1">DCF Snapshot</div>
+        <DegradedNote availability={availability(memo, "dcf_summary")} className="mb-2" />
         {dcf && Object.keys(dcf).length > 0 ? (
           (() => {
             // null = the engine could not compute the number (no share
@@ -627,31 +824,48 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
         )}
       </div>
 
-      <div className="card-tight border-warn-500/30 bg-warn-500/5">
-        <div className="section-title mb-1 text-warn-500">Risk Committee Challenge</div>
-        <div className="text-sm text-slate-200">{memo.risk_committee_challenge.overall_assessment}</div>
-        {memo.risk_committee_challenge.challenges.length > 0 && (
-          <>
-            <div className="text-xs text-slate-400 mt-2">Challenges raised:</div>
-            <ul className="text-sm text-slate-300 list-disc pl-5 space-y-0.5">
-              {memo.risk_committee_challenge.challenges.map((c, i) => <li key={i}>{c}</li>)}
-            </ul>
-          </>
-        )}
-        {memo.risk_committee_challenge.suggested_revisions.length > 0 && (
-          <>
-            <div className="text-xs text-slate-400 mt-2">Suggested revisions:</div>
-            <ul className="text-sm text-slate-300 list-disc pl-5 space-y-0.5">
-              {memo.risk_committee_challenge.suggested_revisions.slice(0, 4).map((c, i) => <li key={i}>{c}</li>)}
-            </ul>
-          </>
-        )}
-      </div>
+      {isHidden(memo, "risk_committee_challenge") ? (
+        <UnavailableSection
+          title="Risk Committee Challenge"
+          section="risk_committee_challenge"
+          availability={availability(memo, "risk_committee_challenge")}
+        />
+      ) : (
+        <div className="card-tight border-warn-500/30 bg-warn-500/5">
+          <div className="section-title mb-1 text-warn-500">Risk Committee Challenge</div>
+          <div className="text-sm text-slate-200">{memo.risk_committee_challenge.overall_assessment}</div>
+          {memo.risk_committee_challenge.challenges.length > 0 && (
+            <>
+              <div className="text-xs text-slate-400 mt-2">Challenges raised:</div>
+              <ul className="text-sm text-slate-300 list-disc pl-5 space-y-0.5">
+                {memo.risk_committee_challenge.challenges.map((c, i) => <li key={i}>{c}</li>)}
+              </ul>
+            </>
+          )}
+          {memo.risk_committee_challenge.suggested_revisions.length > 0 && (
+            <>
+              <div className="text-xs text-slate-400 mt-2">Suggested revisions:</div>
+              <ul className="text-sm text-slate-300 list-disc pl-5 space-y-0.5">
+                {memo.risk_committee_challenge.suggested_revisions.slice(0, 4).map((c, i) => <li key={i}>{c}</li>)}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
 
-      <div className="card-tight">
-        <div className="section-title mb-1">Final Verdict</div>
-        <div className="text-sm text-slate-200">{memo.final_verdict}</div>
-      </div>
+      {isHidden(memo, "final_verdict") ? (
+        <UnavailableSection
+          title="Final Verdict"
+          section="final_verdict"
+          availability={availability(memo, "final_verdict")}
+        />
+      ) : (
+        <div className="card-tight">
+          <div className="section-title mb-1">Final Verdict</div>
+          <DegradedNote availability={availability(memo, "final_verdict")} className="mb-1" />
+          <div className="text-sm text-slate-200">{memo.final_verdict}</div>
+        </div>
+      )}
 
       <div className="text-[11px] text-slate-500 leading-snug">
         Sources: {memo.sources_used.slice(0, 8).join(" · ")}

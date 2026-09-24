@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import MemoCard from "@/components/MemoCard";
+import { REASON_TEXT, UNAVAILABLE_TEXT } from "@/lib/memoSections";
+import { PM_TEMPLATE_TAIL, presentedMemo } from "@/test/fixtures/memoSections";
 import {
   BLANK_MISPRICING,
   CLAMPED_DCF_SUMMARY,
@@ -163,5 +165,130 @@ describe("MemoCard", () => {
       expect(badge).not.toBeNull();
       expect(badge?.getAttribute("title")).toMatch(/0\.5% floor/);
     });
+  });
+});
+
+// W2a — the card renders the presenter's verdicts from the captured wire
+// fixture (the server's real output, pinned by
+// `test_memo_sections_fixture_contract.py`), never from hand-built maps.
+describe("MemoCard W2a placeholders (captured presenter output)", () => {
+  function placeholderSections(): string[] {
+    return screen
+      .queryAllByTestId("unavailable-section")
+      .map((el) => el.getAttribute("data-section") ?? "")
+      .sort();
+  }
+  function placeholder(section: string): HTMLElement {
+    const el = document.querySelector(`[data-testid="unavailable-section"][data-section="${section}"]`);
+    if (!el) throw new Error(`no placeholder for ${section}`);
+    return el as HTMLElement;
+  }
+
+  it("GOOGL: the template PM view and everything built on it read as unavailable, with reasons", () => {
+    const { container } = renderCard(presentedMemo("googl_live_prepflag"));
+    expect(placeholderSections()).toEqual([
+      "bear_case",
+      "bull_case",
+      "confidence_score",
+      "final_pm_view",
+      "final_verdict",
+      "mispricing_thesis",
+      "one_sentence_thesis",
+      "risk_committee_challenge",
+      "sector_agent_view",
+      "sector_synthesis",
+      "technical_agent_view",
+    ]);
+    for (const section of ["one_sentence_thesis", "final_pm_view", "confidence_score", "mispricing_thesis", "sector_agent_view"]) {
+      expect(within(placeholder(section)).getByText(UNAVAILABLE_TEXT)).toBeInTheDocument();
+      expect(within(placeholder(section)).getByText(REASON_TEXT.template_fallback)).toBeInTheDocument();
+    }
+    expect(within(placeholder("final_verdict")).getByText(REASON_TEXT.derived_from_hidden)).toBeInTheDocument();
+    expect(within(placeholder("sector_synthesis")).getByText(REASON_TEXT.derived_from_hidden)).toBeInTheDocument();
+    expect(within(placeholder("risk_committee_challenge")).getByText(REASON_TEXT.critic_not_run)).toBeInTheDocument();
+    // Nothing reads the placeholder twice (the stored field already holds it).
+    expect(within(placeholder("final_pm_view")).getAllByText(UNAVAILABLE_TEXT)).toHaveLength(1);
+    expect(container.textContent).not.toContain(PM_TEMPLATE_TAIL);
+  });
+
+  it("GOOGL: the confidence number is withheld and the rating says what it rests on", () => {
+    renderCard(presentedMemo("googl_live_prepflag"));
+    const card = screen.getByText("Confidence").closest(".card-tight") as HTMLElement;
+    expect(within(card).getByText(UNAVAILABLE_TEXT)).toBeInTheDocument();
+    expect(within(card).queryByText("59")).not.toBeInTheDocument();
+    expect(screen.getByText(REASON_TEXT.pm_view_unavailable)).toBeInTheDocument();
+  });
+
+  it("GOOGL: the case headlines are placeholders and removed template items are counted", () => {
+    renderCard(presentedMemo("googl_live_prepflag"));
+    const bull = screen.getByTestId("case-bull");
+    expect(within(bull).getByText(UNAVAILABLE_TEXT)).toBeInTheDocument();
+    expect(within(bull).getByText(/1 template item not shown/)).toBeInTheDocument();
+    // The analyst's own DCF-driver items survive.
+    expect(within(bull).getByText(/Synthetic driver 67/)).toBeInTheDocument();
+    expect(screen.getByText(/Key Risks & Thesis Breakers/).closest(".card-tight")).toHaveTextContent(
+      "1 template item not shown",
+    );
+  });
+
+  it("shows the PM's intake rationale in a skipped analyst's placeholder", () => {
+    renderCard(presentedMemo("googl_live_prepflag"));
+    const tech = placeholder("technical_agent_view");
+    expect(within(tech).getByText("Technical Analyst")).toBeInTheDocument();
+    expect(within(tech).getByText(REASON_TEXT.skipped_by_intake)).toBeInTheDocument();
+    expect(within(tech).getByText(/Synthetic intake rationale 40 for the googl_live_prepflag fixture\./)).toBeInTheDocument();
+  });
+
+  it("banner counts hidden sections but not template_always or intake skips", () => {
+    renderCard(presentedMemo("googl_live_prepflag"));
+    // No degraded agents on this memo: the banner shows for the hidden
+    // sections alone. 8 = thesis, PM view, confidence, mispricing, sector
+    // view, sector synthesis, critic, final verdict; not portfolio fit
+    // (template_always) and not technical (intake skip).
+    expect(screen.getByText("Partial result:")).toBeInTheDocument();
+    expect(screen.getByTestId("unavailable-count")).toHaveTextContent(
+      "8 sections unavailable in this version.",
+    );
+  });
+
+  it("AAPL: a demo memo's template sections are placeholders while computed numbers stay", () => {
+    renderCard(presentedMemo("aapl_demo"));
+    const bull = screen.getByTestId("case-bull");
+    expect(within(bull).getByText(REASON_TEXT.template_fallback)).toBeInTheDocument();
+    expect(within(bull).getByText("2 template items not shown")).toBeInTheDocument();
+    expect(within(bull).getByText("DCF bull case implies $150.20 (-55%).")).toBeInTheDocument();
+    const bear = screen.getByTestId("case-bear");
+    expect(within(bear).getByText(UNAVAILABLE_TEXT)).toBeInTheDocument();
+    expect(within(bear).getByText(/2 template items not shown/)).toBeInTheDocument();
+    expect(within(bear).getByText("Risk lens: DCF bear scenario maps explicit downside")).toBeInTheDocument();
+    // Every key risk was template-derived: the card stays, as a placeholder.
+    const risks = placeholder("key_risks");
+    expect(within(risks).getByText("Key Risks & Thesis Breakers")).toBeInTheDocument();
+    expect(within(risks).getByText("2 template items not shown")).toBeInTheDocument();
+    expect(within(placeholder("earnings_agent_view")).getByText(REASON_TEXT.no_source_data)).toBeInTheDocument();
+    // The comps card is computed and shown; only its template drill-down is gone.
+    expect(screen.getByTestId("drilldown-unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Next earnings: 2026-10-29")).toBeInTheDocument();
+  });
+
+  it("META: the agentic memo shows placeholders only for technical and the critic", () => {
+    // Portfolio Fit is the third hidden section, but the card never
+    // renders it.
+    renderCard(presentedMemo("meta_v1"));
+    expect(placeholderSections()).toEqual(["risk_committee_challenge", "technical_agent_view"]);
+    expect(screen.getByText("Synthetic thesis 96 for the meta_v1 fixture.")).toBeInTheDocument();
+    expect(screen.getByText("Synthetic PM view 95 for the meta_v1 fixture.")).toBeInTheDocument();
+    expect(screen.getByText("71")).toBeInTheDocument();
+    expect(screen.queryByText(REASON_TEXT.pm_view_unavailable)).not.toBeInTheDocument();
+    expect(
+      within(placeholder("technical_agent_view")).getByText(/Synthetic intake rationale 64 for the meta_v1 fixture\./),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("unavailable-count")).toHaveTextContent("· 1 section unavailable in this version.");
+  });
+
+  it("renders no placeholder for a memo without a map (pre-W2a body)", () => {
+    renderCard(makeMemo({ section_availability: undefined }));
+    expect(screen.queryAllByTestId("unavailable-section")).toHaveLength(0);
+    expect(screen.getByText("62")).toBeInTheDocument();
   });
 });

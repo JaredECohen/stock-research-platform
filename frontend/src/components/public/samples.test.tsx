@@ -9,7 +9,9 @@ import SampleFundamentalsChart, { metricLabel } from "@/components/public/Sample
 import SampleMemoSummary from "@/components/public/SampleMemoSummary";
 import SamplePriceChart from "@/components/public/SamplePriceChart";
 import SampleScreenerRow from "@/components/public/SampleScreenerRow";
+import { REASON_TEXT, UNAVAILABLE_TEXT } from "@/lib/memoSections";
 import { makeMemo } from "@/test/fixtures/memo";
+import { PM_TEMPLATE_TAIL, presentedMemo } from "@/test/fixtures/memoSections";
 import { makeComps, makeDCF, makeSample } from "@/test/fixtures/sample";
 
 vi.mock("recharts", () => {
@@ -152,6 +154,48 @@ describe("SampleMemoSummary", () => {
   it("prints n/a when the verdict has no DCF upside", () => {
     render(<SampleMemoSummary memo={makeMemo({ valuation_verdict: { verdict: "overvalued", summary: "", dcf_base_upside: null } })} />);
     expect(screen.getByText("DCF base-case upside n/a")).toBeInTheDocument();
+  });
+
+  // W2a — the served sample memo is presented server-side; these bodies are
+  // the presenter's captured output.
+  describe("W2a placeholders (captured presenter output)", () => {
+    function placeholderSections(): string[] {
+      return screen
+        .queryAllByTestId("unavailable-section")
+        .map((el) => el.getAttribute("data-section") ?? "")
+        .sort();
+    }
+
+    it("GOOGL: template thesis, PM view, confidence and case headlines read as unavailable", () => {
+      const { container } = render(<SampleMemoSummary memo={presentedMemo("googl_live_prepflag")} />);
+      expect(placeholderSections()).toEqual(["bear_case", "bull_case", "final_pm_view", "one_sentence_thesis"]);
+      expect(screen.getAllByText(REASON_TEXT.template_fallback)).toHaveLength(2);
+      expect(screen.getByTestId("sample-confidence")).toHaveTextContent("Confidence unavailable in this version");
+      expect(screen.getByTestId("sample-confidence")).not.toHaveTextContent("59");
+      expect(screen.getByText(REASON_TEXT.pm_view_unavailable)).toBeInTheDocument();
+      expect(within(screen.getByTestId("case-bull")).getByText(/1 template item not shown/)).toBeInTheDocument();
+      expect(screen.getByText(/Model output, not a recommendation/)).toHaveTextContent(
+        "8 sections unavailable in this version.",
+      );
+      expect(container.textContent).not.toContain(PM_TEMPLATE_TAIL);
+    });
+
+    it("AAPL: the emptied key-risks list is a placeholder, not a vanished block", () => {
+      render(<SampleMemoSummary memo={presentedMemo("aapl_demo")} />);
+      const risks = document.querySelector('[data-section="key_risks"]') as HTMLElement;
+      expect(within(risks).getByText(UNAVAILABLE_TEXT)).toBeInTheDocument();
+      expect(within(risks).getByText("2 template items not shown")).toBeInTheDocument();
+    });
+
+    it("META: the agentic memo shows no placeholder", () => {
+      render(<SampleMemoSummary memo={presentedMemo("meta_v1")} />);
+      expect(placeholderSections()).toEqual([]);
+      expect(screen.getByText("Synthetic thesis 96 for the meta_v1 fixture.")).toBeInTheDocument();
+      expect(screen.getByTestId("sample-confidence")).toHaveTextContent("Confidence 71/100");
+      expect(screen.getByText(/Model output, not a recommendation/)).toHaveTextContent(
+        "1 section unavailable in this version.",
+      );
+    });
   });
 });
 

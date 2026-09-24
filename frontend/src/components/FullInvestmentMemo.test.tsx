@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import FullInvestmentMemo from "@/components/FullInvestmentMemo";
+import { REASON_TEXT, UNAVAILABLE_TEXT } from "@/lib/memoSections";
+import { PM_TEMPLATE_TAIL, presentedMemo } from "@/test/fixtures/memoSections";
 import {
   BLANK_MISPRICING,
   CLAMPED_DCF_SUMMARY,
@@ -216,5 +218,87 @@ describe("FullInvestmentMemo", () => {
       renderMemo(makeMemo({ scorecard: null }));
       expect(screen.queryByTestId("memo-scorecard")).toBeNull();
     });
+  });
+});
+
+// W2a — placeholders from the captured presenter output. The PDF is the
+// modal's DOM printed from a popup, so the test captures what
+// `downloadPdf` writes into that popup.
+describe("FullInvestmentMemo W2a placeholders (captured presenter output)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function placeholderSections(): string[] {
+    return screen
+      .queryAllByTestId("unavailable-section")
+      .map((el) => el.getAttribute("data-section") ?? "")
+      .sort();
+  }
+
+  function printedHtml(): string {
+    let written = "";
+    const popup = {
+      document: {
+        open: () => {},
+        write: (html: string) => {
+          written += html;
+        },
+        close: () => {},
+      },
+      focus: () => {},
+      print: () => {},
+      onload: null as null | (() => void),
+    };
+    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    fireEvent.click(screen.getByText("Download PDF"));
+    return written;
+  }
+
+  it("GOOGL: the PDF carries placeholders and reasons, never the PM template tail or Portfolio Fit", () => {
+    renderMemo(presentedMemo("googl_live_prepflag"));
+    const html = printedHtml();
+    expect(html).toContain(UNAVAILABLE_TEXT);
+    expect(html).toContain(REASON_TEXT.template_fallback);
+    expect(html).toContain(REASON_TEXT.critic_not_run);
+    expect(html).toContain("Conviction: unavailable in this version");
+    expect(html).not.toContain(PM_TEMPLATE_TAIL);
+    expect(html).not.toContain("Portfolio Fit");
+    expect(html).not.toMatch(/Conviction: \d+\/100/);
+  });
+
+  it("GOOGL: hidden sections render as placeholders in the modal", () => {
+    renderMemo(presentedMemo("googl_live_prepflag"));
+    expect(placeholderSections()).toEqual([
+      "bear_case",
+      "bull_case",
+      "final_pm_view",
+      "final_verdict",
+      "mispricing_thesis",
+      "one_sentence_thesis",
+      "risk_committee_challenge",
+      "sector_agent_view",
+      "technical_agent_view",
+    ]);
+    expect(screen.getByText(REASON_TEXT.pm_view_unavailable)).toBeInTheDocument();
+    expect(screen.getByText(/Synthetic intake rationale 40 for the googl_live_prepflag fixture\./)).toBeInTheDocument();
+    // Banner count excludes Portfolio Fit (template_always) and technical
+    // (intake skip).
+    expect(screen.getByTestId("unavailable-count")).toHaveTextContent("8 sections unavailable in this version.");
+  });
+
+  it("META: only technical and the critic are placeholders; Portfolio Fit is omitted", () => {
+    renderMemo(presentedMemo("meta_v1"));
+    expect(placeholderSections()).toEqual(["risk_committee_challenge", "technical_agent_view"]);
+    expect(screen.queryByText("Portfolio Fit")).not.toBeInTheDocument();
+    expect(screen.getByText("Synthetic thesis 96 for the meta_v1 fixture.")).toBeInTheDocument();
+    expect(screen.getByText("Conviction: 71/100")).toBeInTheDocument();
+  });
+
+  it("still prints Portfolio Fit for a memo without a map (pre-W2a body)", () => {
+    renderMemo(makeMemo({ section_availability: undefined }));
+    expect(screen.getByText("Portfolio Fit")).toBeInTheDocument();
+    expect(screen.getByText("Core defensive holding.")).toBeInTheDocument();
+    expect(screen.queryAllByTestId("unavailable-section")).toHaveLength(0);
   });
 });
