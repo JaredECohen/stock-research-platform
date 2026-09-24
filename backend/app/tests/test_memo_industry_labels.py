@@ -81,9 +81,18 @@ def _leaks(obj: Any, row: dict, analyst: ia.IndustryAnalyst) -> list[str]:
     sub = ik.get_sub_industry(str(row.get("sub_industry_code") or "")) or {}
     # The provider's own industry string is public by design (it stands in
     # for the sub-industry) even where it happens to spell a registry name —
-    # FMP calls NVDA's industry "Semiconductors" and JPM's "Banks".
-    provider = ia._sub_industry_of(row)
+    # FMP calls NVDA's industry "Semiconductors" and JPM's "Banks". The
+    # whitelist is the ROW's column, never `_sub_industry_of` itself: a
+    # function under test cannot be its own oracle.
+    provider = row.get("source_industry")
+    # Where the registry sub-industry name differs from the provider's
+    # string (MSFT "Systems Software" vs "Software", JPM "Diversified Banks"
+    # vs "Banks") it must appear nowhere, in any position.
+    sub_name = sub.get("name") or ""
+    distinct_sub_name = sub_name if sub_name and sub_name not in (provider or "") else ""
     for text in _strings(obj):
+        if distinct_sub_name and distinct_sub_name in text:
+            found.append(f"registry sub-industry name: {text[:80]}")
         if text == provider:
             continue
         low = text.lower()
@@ -146,6 +155,93 @@ def test_summary_finding_evidence_and_company_context_carry_no_code_or_registry_
     # The telemetry key keeps its code; the reader-facing name does not.
     assert analyst.display_name == f"Industry Group Analyst {analyst.code}"
     assert analyst.public_display_name == f"Industry Group Analyst ({analyst.label})"
+
+
+def test_provider_industry_is_the_rows_own_column_in_precedence_order():
+    """Pins `_sub_industry_of` to the row's DATA (review of d623e59: the
+    leak tests used the function as their own oracle, so returning the
+    registry sub-industry name passed everything)."""
+    for ticker in TICKERS:
+        row = _row(ticker)
+        assert row["source_industry"]
+        assert ia._sub_industry_of(row) == row["source_industry"]
+    labels = {"industry": "Labels Industry", "sub_industry": "Labels Sub"}
+    assert ia._sub_industry_of({"source_industry": "Column", "evidence": {"labels": labels}}) == "Column"
+    assert ia._sub_industry_of({"evidence": {"labels": labels}, "source_sub_industry": "Sub Column"}) \
+        == "Labels Industry"
+    assert ia._sub_industry_of({"source_sub_industry": "Sub Column", "evidence": {"labels": {
+        "sub_industry": "Labels Sub"}}}) == "Sub Column"
+    assert ia._sub_industry_of({"evidence": {"labels": {"sub_industry": "Labels Sub"}}}) == "Labels Sub"
+
+
+@pytest.mark.parametrize("row", [
+    None, "not-a-dict", {}, {"evidence": "not-a-dict"}, {"evidence": {"labels": "x"}},
+    {"evidence": {"labels": ["x"]}}, {"evidence": None, "source_industry": "   "},
+])
+def test_sub_industry_of_never_raises(row):
+    assert ia._sub_industry_of(row) is None
+
+
+def test_malformed_evidence_does_not_hide_the_provider_column_or_fail_the_finding():
+    base = _row("MSFT")
+    row = {**base, "evidence": "not-a-dict"}
+    assert ia._sub_industry_of(row) == base["source_industry"]
+    bare = {k: v for k, v in row.items() if k not in ("source_industry", "source_sub_industry")}
+    finding = ia.run_industry_group_agent({"ticker": "MSFT"}, {}, classification=bare)
+    assert finding.data["industry_group"]["provider_industry"] is None
+    assert "no provider industry recorded" in finding.summary
+
+
+def _pg_shaped_row() -> dict:
+    """A provider-alias row whose provider industry string is ALSO a
+    registry group name: FMP files PG and CL under "Household & Personal
+    Products", the registry's name for group 3030."""
+    base = _row("MSFT")
+    return {
+        **base, "ticker": "PG", "source": ic.SOURCE_PROVIDER_ALIAS, "author": "alias map",
+        "sector_code": "30", "industry_group_code": "3030", "industry_code": "303010",
+        "sub_industry_code": "30301010", "sub_industry_codes": ["30301010"],
+        "source_industry": "Household & Personal Products", "source_sub_industry": None,
+        "evidence": {"labels": {"sector": "Consumer Defensive", "industry": "Household & Personal Products"}},
+    }
+
+
+def test_provider_industry_that_spells_a_registry_name_is_shown_as_the_provider_wrote_it(monkeypatch):
+    """REGRESSION (review of d623e59): the finding scrubbed the provider's
+    string into our label, so it reported "Household & Personal Care
+    Brands" as the PROVIDER's industry while the sector card, in the same
+    memo, said "Household & Personal Products"."""
+    row = _pg_shaped_row()
+    provider = row["source_industry"]
+    analyst = ia.analyst_for_classification(row)
+    assert analyst is not None and analyst.code == "3030" and analyst.name == provider
+    profile = {"ticker": "PG", "company_name": "Procter & Gamble"}
+
+    _, sector_summary, _ = ia.sector_prompt_block(profile, row)
+    finding = ia.run_industry_group_agent(profile, {}, classification=row)
+    assert sector_summary is not None
+    assert finding.data["industry_group"]["provider_industry"] == sector_summary["provider_industry"] == provider
+    assert finding.headline == f"{analyst.label}: mandate read for PG — {provider}"
+    assert f"provider industry: {provider}." in finding.summary
+    assert f"provider industry: {provider}." in finding.data["placement"]
+    assert f"Provider industry: {provider}." in analyst.company_context_block(profile, row)
+
+    # The LLM path and the spliced sector output keep it too, while a code
+    # next to it and the brand are still scrubbed.
+    monkeypatch.setattr(type(settings), "has_llm", property(lambda self: True))
+    monkeypatch.setattr(ia.llm, "chat_json", lambda *a, **k: {
+        "headline": f"{provider} (3030) demand holds", "summary": f"The GICS {provider} peers", "confidence": 0.6,
+    })
+    finding = ia.run_industry_group_agent(profile, {}, classification=row)
+    assert finding.headline == f"{provider} demand holds"
+    assert finding.summary == f"The {provider} peers"
+    assert finding.data["industry_group"]["provider_industry"] == provider
+
+    out = sector_agents._scrub_spliced_output(
+        {"headline": f"{provider} (3030) volumes", "summary": "Software & Services lag"},
+        provider_industry=provider,
+    )
+    assert out == {"headline": f"{provider} volumes", "summary": f"{il.label('4510')} lag"}
 
 
 # --- the LLM path ----------------------------------------------------------------------
@@ -269,6 +365,7 @@ def test_label_accessor_failure_does_not_stub_the_sector_card(monkeypatch):
     assert ig["error"] == "industry group block unavailable"
     assert ig["state"] == "mapped" and ig["label"] is None
     assert ig["mapping_caveat"] == il.PUBLIC_MAPPING_CAVEAT
+    _assert_no_code_value(ig, row)
 
     # End to end: the memo keeps a real sector card; only the industry
     # analyst (whose label is genuinely unavailable) degrades.
@@ -278,11 +375,53 @@ def test_label_accessor_failure_does_not_stub_the_sector_card(monkeypatch):
     assert memo.sector_agent_view.data["industry_group"]["error"] == "industry group block unavailable"
 
 
+def _assert_no_code_value(obj: Any, row: dict | None) -> None:
+    """No value (and no key) equals one of the row's 2/4/6/8-digit codes —
+    `_leaks` only catches a sector code in 'sector 45' / '(45)' form."""
+    row = row or {}
+    codes = {str(c) for c in (row.get("sector_code"), row.get("industry_group_code"),
+                              row.get("industry_code"), row.get("sub_industry_code"),
+                              *(row.get("sub_industry_codes") or [])) if c}
+    values = [v for v in _strings(obj)] + [v for v in _values(obj) if not isinstance(v, str)]
+    assert not [v for v in values if str(v) in codes], (obj, codes)
+
+
+def _values(obj: Any) -> list[Any]:
+    if isinstance(obj, dict):
+        return [x for v in obj.values() for x in _values(v)]
+    if isinstance(obj, (list, tuple)):
+        return [x for v in obj for x in _values(v)]
+    return [obj]
+
+
 def test_unavailable_group_summary_cannot_raise():
     for bad in (None, {}, {"state": "mapped", "industry_group_code": "9999"},
-                {"state": "stale", "evidence": "not-a-dict", "industry_group_code": "4530"}):
+                {"state": "stale", "evidence": "not-a-dict", "industry_group_code": "4530"},
+                {**_row("NVDA"), "industry_group_code": "9999"}):
         out = ia.unavailable_group_summary(bad, "x")
         assert out["error"] == "x" and "gics" not in json.dumps(out).lower()
+        _assert_no_code_value(out, bad if isinstance(bad, dict) else None)
+
+
+_PUBLIC_SUMMARY_KEYS = {
+    "slug", "label", "sector_label", "name", "state", "routed_state", "source", "source_label",
+    "author", "source_as_of", "provider_industry", "taxonomy_version", "report_version",
+    "mapping_caveat",
+}
+
+
+@pytest.mark.parametrize("ticker", TICKERS)
+def test_industry_group_summary_emits_public_values_only(ticker):
+    """The summary's exact shape: slug, label, public caveat and key plus
+    classification provenance — no code key, no code value, and already a
+    fixed point of the public projection."""
+    row = _row(ticker)
+    analyst = ia.analyst_for_classification(row)
+    for summary in (ia.industry_group_summary(row, analyst), ia.industry_group_summary(row, None)):
+        assert set(summary) == _PUBLIC_SUMMARY_KEYS
+        _assert_no_code_value(summary, row)
+        assert il.project_public(summary) == summary
+    assert ia.industry_group_summary(row, analyst)["taxonomy_version"] == il.PUBLIC_TAXONOMY_KEY
 
 
 # --- a routed demo memo, end to end ---------------------------------------------------------

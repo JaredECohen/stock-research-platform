@@ -58,6 +58,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -307,16 +308,24 @@ def _sub_industry_of(classification: dict[str, Any] | None) -> str | None:
     Never raises: it feeds the sector card's provenance and the except path
     that must not crash it, and a malformed row means "not reported", not
     a failed memo."""
-    try:
-        cls = classification or {}
-        labels = (cls.get("evidence") or {}).get("labels") or {}
-        for value in (cls.get("source_industry"), labels.get("industry"),
-                      cls.get("source_sub_industry"), labels.get("sub_industry")):
+    # Each candidate is read on its own, in precedence order, so a malformed
+    # `evidence` blob cannot hide a good `source_industry` column.
+    readers: tuple[Callable[[dict[str, Any]], Any], ...] = (
+        lambda c: c.get("source_industry"),
+        lambda c: c["evidence"]["labels"].get("industry"),
+        lambda c: c.get("source_sub_industry"),
+        lambda c: c["evidence"]["labels"].get("sub_industry"),
+    )
+    if not isinstance(classification, dict):
+        return None
+    for read in readers:
+        try:
+            value = read(classification)
             text = " ".join(str(value).split()) if value is not None else ""
-            if text:
-                return _clip(text, _NAME_CHARS)
-    except Exception:  # a provenance string must never fail a memo
-        log.warning("provider industry unreadable on a classification row; shown as not reported")
+        except Exception:  # a provenance string must never fail a memo
+            continue
+        if text:
+            return _clip(text, _NAME_CHARS)
     return None
 
 
@@ -642,12 +651,13 @@ def _deterministic_finding(
         key_points=key_points or ["See the industry group mandate for the KPI list."],
         confidence=0.55,
         data=data,
+        provider_industry=provider_industry,
     )
 
 
 def _public_finding(
     analyst: IndustryAnalyst, *, headline: str, summary: str, key_points: list[str],
-    confidence: float, data: dict[str, Any],
+    confidence: float, data: dict[str, Any], provider_industry: str | None,
 ) -> AgentFinding:
     """The one exit for an analyst finding, so no path can skip the public
     projection: prose through `scrub_text`, `data` through `project_public`
@@ -655,16 +665,22 @@ def _public_finding(
     .industry_code` is dropped, the brief attribution becomes the public
     one), and slug-based machine refs — `industry_knowledge:{slug}`,
     `industry_group:{slug}` — instead of codes. The mandate text is original
-    prose but can name a code; an LLM can echo one from its pretraining."""
+    prose but can name a code; an LLM can echo one from its pretraining.
+
+    `provider_industry` is exempt everywhere: it is public by design, and
+    where it spells a registry name (FMP's "Household & Personal Products"
+    for PG and CL is also a group name) scrubbing it would report OUR label
+    as the provider's industry and contradict the sector card."""
+    keep = (provider_industry,) if provider_industry else ()
     return AgentFinding(
         agent=AGENT_NAME,
-        headline=industry_labels.scrub_text(headline)[:240],
-        summary=industry_labels.scrub_text(summary),
-        key_points=[industry_labels.scrub_text(p) for p in key_points],
+        headline=industry_labels.scrub_text(headline, keep=keep)[:240],
+        summary=industry_labels.scrub_text(summary, keep=keep),
+        key_points=[industry_labels.scrub_text(p, keep=keep) for p in key_points],
         confidence=confidence,
         sources=[f"industry_knowledge:{analyst.slug}"],
         evidence=[Citation(kind="other", ref=f"industry_group:{analyst.slug}", excerpt=analyst.label[:300])],
-        data=industry_labels.project_public(data),
+        data=industry_labels.project_public(data, keep=keep),
     )
 
 
@@ -759,4 +775,5 @@ def run_industry_group_agent(
         key_points=[str(p) for p in (llm_out.get("key_points") or [])][:12],
         confidence=max(0.0, min(1.0, confidence)),
         data=data,
+        provider_industry=_sub_industry_of(classification),
     )

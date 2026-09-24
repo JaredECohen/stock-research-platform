@@ -181,8 +181,9 @@ def test_company_context_block_names_sub_industry_and_source_label():
     # string stands in, and neither the 8-digit code nor its registry name
     # reaches the prompt.
     sub = ik.get_sub_industry(row["sub_industry_code"])
-    provider_industry = ia._sub_industry_of(row)
+    provider_industry = row["source_industry"]      # the row's data, not the function under test
     assert provider_industry and f"Provider industry: {provider_industry}." in block
+    assert f"Provider industry: {sub['name']}." not in block
     assert row["sub_industry_code"] not in block and f"{row['sub_industry_code']} {sub['name']}" not in block
     assert "Classification: research map (Investment_Universe_163_Map.json@" in block
     assert il.PUBLIC_MAPPING_CAVEAT in block and "gics" not in block.lower()
@@ -276,7 +277,7 @@ def test_industry_group_summary_carries_provenance_and_caveat():
     assert summary["sector_label"] == il.label("45")
     assert summary["state"] == "mapped" and summary["source"] == "research_map"
     assert summary["source_label"].startswith("research map (")
-    assert "sub_industry" not in summary and summary["provider_industry"] == ia._sub_industry_of(row)
+    assert "sub_industry" not in summary and summary["provider_industry"] == row["source_industry"]
     assert summary["taxonomy_version"] == il.PUBLIC_TAXONOMY_KEY
     assert summary["report_version"] is None
     assert summary["mapping_caveat"] == il.PUBLIC_MAPPING_CAVEAT
@@ -659,7 +660,7 @@ def test_run_industry_group_agent_deterministic_read_is_mandate_grounded():
     # internal code, shown without it.
     brief = next(s for s in analyst.mandate.sub_industries if s.code == row["sub_industry_code"])
     assert brief.economics in finding.summary and row["sub_industry_code"] not in finding.summary
-    assert finding.data["industry_group"]["provider_industry"] == ia._sub_industry_of(row)
+    assert finding.data["industry_group"]["provider_industry"] == row["source_industry"]
     core = set(analyst.mandate.items("core_kpis"))
     assert finding.data["kpis_to_watch"] and all(k["kpi"] in core and "industry_code" not in k
                                                 for k in finding.data["kpis_to_watch"])
