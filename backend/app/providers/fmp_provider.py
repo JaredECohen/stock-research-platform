@@ -58,21 +58,32 @@ class FMPProvider:
             ],
         )
 
-    def _get(self, path: str, **params: Any) -> Any | None:
+    def _get_status(self, path: str, **params: Any) -> tuple[int | None, Any | None]:
+        """`(HTTP status, body)`; body only on 200, `(None, None)` when not sent or failed.
+
+        The status is what tells an entitlement refusal (401/402/403) from an
+        empty answer. The one log line names the symbol so a plan loss can be
+        told from a spelling refusal (the 2026-09-21 closeout could not); the
+        key is a query parameter and is never logged.
+        """
         if not self.api_key:
-            return None
+            return None, None
+        symbol = params.get("symbol") or params.get("symbols")
         try:
             params["apikey"] = self.api_key
             with httpx.Client(timeout=TIMEOUT) as client:
                 r = client.get(f"{BASE_URL}{path}", params=params)
                 if r.status_code != 200:
-                    log.warning("FMP %s -> %s", path, r.status_code)
-                    return None
-                return r.json()
+                    log.warning("FMP %s -> %s symbol=%s", path, r.status_code, symbol)
+                    return r.status_code, None
+                return 200, r.json()
         except Exception as exc:  # pragma: no cover — network paths
             # httpx errors quote the URL, which carries `?apikey=`.
             log_safely(log, f"FMP request failed for {path}", exc)
-            return None
+            return None, None
+
+    def _get(self, path: str, **params: Any) -> Any | None:
+        return self._get_status(path, **params)[1]
 
     # ------------------------------------------------------------------
     # Profile
@@ -354,7 +365,13 @@ class FMPProvider:
             ("cash", "/cash-flow-statement", self._cash_row),
         ):
             for cadence, api_period, limit in (("annual", "annual", years + 2), ("quarterly", "quarter", years * 4 + 4)):
-                raw = self._get(path, symbol=ticker.upper(), period=api_period, limit=limit)
+                status, raw = self._get_status(path, symbol=ticker.upper(), period=api_period, limit=limit)
+                if status in (401, 402, 403):
+                    # A refusal is not "no data": it is either a plan gap or a
+                    # symbol the plan does not cover (BRK.B; BRK-B answers).
+                    result["_history_issues"].append({"kind": "provider_entitlement_denied", "status": status,
+                                                      "endpoint": path, "statement": statement, "cadence": cadence})
+                    continue
                 if not isinstance(raw, list) or not raw:
                     result["_history_issues"].append({"kind": "provider_no_data", "statement": statement, "cadence": cadence})
                     continue

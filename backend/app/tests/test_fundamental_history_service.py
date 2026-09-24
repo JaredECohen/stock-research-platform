@@ -155,9 +155,10 @@ def test_fmp_history_has_both_cadences_and_preserves_noncalendar_fiscal_year(mon
     calls = []
     def get(path, **params):
         calls.append((path, params))
-        return [{"date": "2025-09-30", "fiscalYear": "2026", "period": "FY" if params.get("period") == "annual" else "Q1",
-                 "reportedCurrency": "EUR", "revenue": 7}]
-    monkeypatch.setattr(provider, "_get", get)
+        return 200, [{"date": "2025-09-30", "fiscalYear": "2026", "period": "FY" if params.get("period") == "annual" else "Q1",
+                      "reportedCurrency": "EUR", "revenue": 7}]
+    # `_get` wraps `_get_status`, so one patch drives both FMP read paths.
+    monkeypatch.setattr(provider, "_get_status", get)
     result = provider.get_financial_history("test", date(2000, 1, 1))
     assert len(calls) == 6
     assert {p["period"] for _, p in calls} == {"annual", "quarter"}
@@ -219,7 +220,7 @@ def test_unsourced_legacy_refresh_does_not_claim_other_provider_values(database)
 
 def test_fmp_unidentified_quarter_is_reported_not_relabeled_as_annual(monkeypatch):
     provider = FMPProvider()
-    monkeypatch.setattr(provider, "_get", lambda *a, **k: [{"date": "2025-09-30", "reportedCurrency": "USD", "revenue": 3}])
+    monkeypatch.setattr(provider, "_get_status", lambda *a, **k: (200, [{"date": "2025-09-30", "reportedCurrency": "USD", "revenue": 3}]))
     result = provider.get_financial_history("TEST", date(2024, 1, 1))
     assert len(result["_history_issues"]) == 3
     assert all(i["kind"] == "invalid_fiscal_quarter" for i in result["_history_issues"])
@@ -312,8 +313,8 @@ def test_alpha_explicit_report_lists_keep_annual_and_noncalendar_quarters_separa
 
 def test_fmp_actual_normalizers_preserve_reported_availability_dates(monkeypatch):
     provider = FMPProvider()
-    monkeypatch.setattr(provider, "_get", lambda *a, **k: [{"date": "2025-12-31", "fiscalYear": "2025", "period": "FY" if k["period"] == "annual" else "Q4",
-        "reportedCurrency": "USD", "filingDate": "2026-01-28", "acceptedDate": "2026-01-28 16:00:00"}])
+    monkeypatch.setattr(provider, "_get_status", lambda *a, **k: (200, [{"date": "2025-12-31", "fiscalYear": "2025", "period": "FY" if k["period"] == "annual" else "Q4",
+        "reportedCurrency": "USD", "filingDate": "2026-01-28", "acceptedDate": "2026-01-28 16:00:00"}]))
     result = provider.get_financial_history("TEST", date(2024, 1, 1))
     assert all(r["filing_date"] == "2026-01-28" and r["accepted_date"] == "2026-01-28 16:00:00" for s in svc.LINES for r in result[s])
 
@@ -454,8 +455,8 @@ def test_quarter_freshness_names_missing_later_quarter():
 def test_boolean_values_are_rejected_before_real_provider_mapping(monkeypatch):
     from app.providers.alpha_vantage_provider import AlphaVantageProvider
     fmp = FMPProvider()
-    monkeypatch.setattr(fmp, "_get", lambda *a, **k: [{"date": "2025-12-31", "fiscalYear": "2025",
-        "period": "FY" if k["period"] == "annual" else "Q4", "reportedCurrency": "USD", "revenue": True}])
+    monkeypatch.setattr(fmp, "_get_status", lambda *a, **k: (200, [{"date": "2025-12-31", "fiscalYear": "2025",
+        "period": "FY" if k["period"] == "annual" else "Q4", "reportedCurrency": "USD", "revenue": True}]))
     raw = fmp.get_financial_history("TEST", date(2024, 1, 1))
     assert all(r["revenue"] is None for r in raw["income"])
     assert any(i["raw_field"] == "revenue" and i["reason"] == "boolean_value" for i in raw["_history_issues"])
