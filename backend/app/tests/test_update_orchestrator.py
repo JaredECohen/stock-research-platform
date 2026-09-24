@@ -321,3 +321,110 @@ def test_queue_depth_reports_in_flight_events():
     out = update_orchestrator.queue_depth("TSTQ")
     assert out == {"TSTQ": 1}
     update_orchestrator._QUEUES.clear()
+
+
+# ---------------------------------------------------------------------------
+# W2b patch guard: a news patch runs neither the PM nor the critic, so it
+# cannot state a valuation reason or earn confidence.
+# ---------------------------------------------------------------------------
+
+def _guarded_memo(ticker: str, *, rating: str = "Neutral", outcome: str = "consistent",
+                  confidence: float = 50.0) -> StockMemoOut:
+    from app.agents import memo_quality
+    from app.schemas import ConfidenceAssessment, ConfidenceCap, MemoQuality, RatingReconciliation
+    vv = memo_quality.valuation_evidence_verdict(
+        family_pct=None, family_coverage=None, comps_premium=0.44,
+        dcf_initial_upside=-0.54, dcf_final_upside=-0.30,
+    )
+    assert vv.verdict == "overvalued"
+    return _stub_memo(ticker).model_copy(update={
+        "rating_label": rating, "confidence_score": confidence, "valuation_verdict": vv,
+        "scores": {"confidence": confidence},
+        "quality": MemoQuality(
+            rating_reconciliation=RatingReconciliation(
+                outcome=outcome, pm_rating=rating, blended_rating=rating, final_rating=rating,
+                valuation_verdict="overvalued", divergence=outcome == "accepted"),
+            confidence=ConfidenceAssessment(
+                raw=72.0, final=confidence, binding="critic_not_live",
+                caps=[ConfidenceCap(code="critic_not_live", cap=60.0)]),
+        ),
+    })
+
+
+def _patch_with(ticker: str, patch_fields: dict) -> dict:
+    assessment = {
+        "material": True, "patch": patch_fields,
+        "rationales": {k: "news" for k in patch_fields}, "delta_summary": "news",
+    }
+    with patch.object(news_impact_agent, "assess", return_value=assessment):
+        return update_orchestrator.on_news_alert(ticker, _stub_alert())
+
+
+def test_patch_cannot_raise_confidence_or_publish_divergence(monkeypatch):
+    """ABBV went 44.6 -> 90 confidence in five patches, and patches set
+    ratings against the stored valuation with no reason. With the guard, a
+    patch may lower confidence but never lift it above the last full run's
+    earned value, and a divergent patched rating is set to Neutral."""
+    monkeypatch.setattr(update_orchestrator, "MAX_PATCHES_PER_DAY", 10)
+    _reset_memos("TSTGUARD")
+    memo_store.save_memo(_guarded_memo("TSTGUARD"), trigger="full_reanalysis")
+
+    out = _patch_with("TSTGUARD", {"rating_label": "Bullish", "confidence_score": 65.0})
+    assert out["patched"] is True
+    snap = memo_store.latest_memo("TSTGUARD")
+    m = memo_store.memo_to_pydantic(snap)
+    assert m.rating_label == "Neutral"
+    assert m.confidence_score == 50.0 == m.scores["confidence"] == m.quality.confidence.final
+    rec = m.quality.rating_reconciliation
+    assert rec.outcome == "downgraded" and rec.pm_rating == "Bullish" and rec.final_rating == "Neutral"
+    assert "without a valuation reason" in rec.note
+    assert snap.revision_log[0]["quality_guard"] == {"rating_downgraded": True, "confidence_clamped": True}
+
+    # Lowering is allowed ...
+    _patch_with("TSTGUARD", {"confidence_score": 40.0})
+    m = memo_store.memo_to_pydantic(memo_store.latest_memo("TSTGUARD"))
+    assert m.confidence_score == 40.0 == m.quality.confidence.final
+    # ... and a later rise is held at the LAST FULL RUN's value (50), not
+    # at the lowered patch value, and never above it.
+    _patch_with("TSTGUARD", {"confidence_score": 55.0})
+    m = memo_store.memo_to_pydantic(memo_store.latest_memo("TSTGUARD"))
+    assert m.confidence_score == 50.0 == m.scores["confidence"]
+    assert [c.code for c in m.quality.confidence.caps].count("last_full_run") == 1
+    # A non-divergent rating patch goes through untouched.
+    _patch_with("TSTGUARD", {"rating_label": "Bearish"})
+    assert memo_store.latest_memo("TSTGUARD").memo_json["rating_label"] == "Bearish"
+
+
+def test_patch_keeps_an_accepted_divergence_in_the_same_direction(monkeypatch):
+    monkeypatch.setattr(update_orchestrator, "MAX_PATCHES_PER_DAY", 10)
+    _reset_memos("TSTACC")
+    memo_store.save_memo(_guarded_memo("TSTACC", rating="Bullish", outcome="accepted"),
+                         trigger="full_reanalysis")
+    _patch_with("TSTACC", {"rating_label": "Very Bullish"})
+    m = memo_store.memo_to_pydantic(memo_store.latest_memo("TSTACC"))
+    assert m.rating_label == "Very Bullish"
+    assert m.quality.rating_reconciliation.outcome == "accepted"
+
+
+def test_patch_guard_record_mode_does_not_enforce(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "rating_reconciliation_mode", "record")
+    _reset_memos("TSTREC")
+    memo_store.save_memo(_guarded_memo("TSTREC"), trigger="full_reanalysis")
+    _patch_with("TSTREC", {"rating_label": "Bullish"})
+    m = memo_store.memo_to_pydantic(memo_store.latest_memo("TSTREC"))
+    assert m.rating_label == "Bullish"
+    assert m.quality.rating_reconciliation.note.startswith("Recorded only")
+
+
+def test_patch_guard_leaves_legacy_memos_alone():
+    """A memo written before the guards (no `quality`) behaves exactly as
+    before: the patch's rating and confidence ship as proposed."""
+    _reset_memos("TSTLEG")
+    legacy = _stub_memo("TSTLEG").model_copy(update={"rating_label": "Neutral", "confidence_score": 50.0})
+    memo_store.save_memo(legacy, trigger="first_run")
+    _patch_with("TSTLEG", {"rating_label": "Very Bullish", "confidence_score": 65.0})
+    snap = memo_store.latest_memo("TSTLEG")
+    m = memo_store.memo_to_pydantic(snap)
+    assert (m.rating_label, m.confidence_score, m.quality) == ("Very Bullish", 65.0, None)
+    assert snap.revision_log[0]["quality_guard"] == {"rating_downgraded": False, "confidence_clamped": False}
