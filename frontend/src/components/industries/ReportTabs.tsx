@@ -56,16 +56,31 @@ function anchorsOf(facts: Record<string, unknown> | undefined): IndustryAnchor[]
     : [];
 }
 
+/** A forecast assumption the contract registered: it carries the id,
+ *  value, horizon and anchor the table prints. Stored editions are never
+ *  rewritten, so a pre-contract edition (served as the fallback when a
+ *  week fails) still has `forecast_assumption` claims with none of these;
+ *  they keep their badge in the claims list but get no table row of
+ *  blank cells. */
+function isRegistered(c: IndustryClaim): boolean {
+  return (
+    c.type === "forecast_assumption" &&
+    [c.id, c.value, c.horizon, c.anchor].every((f) => typeof f === "string" && f.trim() !== "")
+  );
+}
+
 function claimBadge(type: string): string {
   return type === "forecast_assumption" ? ASSUMPTION_BADGE : humanize(type);
 }
 
-/** An anchor's observed value in its family's unit. A multiple prints as
- *  "26.5x"; a rate takes the unit its path claims, and a rate path the
- *  formatter does not recognise is still a rate, never a bare decimal. */
+/** An anchor's observed value in its family's unit. A multiple prints at
+ *  the same two decimals as a rate ("26.54x") — the facts store medians to
+ *  six digits, and "26.543218x" is precision nobody observed; a rate takes
+ *  the unit its path claims, and a rate path the formatter does not
+ *  recognise is still a rate, never a bare decimal. */
 function fmtAnchor(anchor: IndustryAnchor): string {
   if (!isNum(anchor.value)) return na("not on file");
-  if (anchor.family === "multiple") return `${anchor.value}x`;
+  if (anchor.family === "multiple") return `${anchor.value.toFixed(2)}x`;
   return unitFor(anchor.path) === "plain" ? fmtPctSigned(anchor.value) : fmtByPath(anchor.path, anchor.value);
 }
 
@@ -147,7 +162,7 @@ function Interpretation({
   mode: string;
   anchors?: IndustryAnchor[];
 }) {
-  const assumptions = (interp.claims ?? []).filter((c) => c.type === "forecast_assumption");
+  const assumptions = (interp.claims ?? []).filter(isRegistered);
   return (
     <div className="text-sm space-y-3" data-testid="interpretation-view">
       <p className="text-slate-200 whitespace-pre-line">{interp.text}</p>

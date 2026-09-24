@@ -157,6 +157,43 @@ describe("ReportTabs", () => {
     expect(screen.queryByTestId("assumptions-table")).not.toBeInTheDocument();
   });
 
+  it("gives an unregistered (pre-contract) forecast_assumption no table row, only its badge", () => {
+    // Stored editions are never rewritten, and a failed week falls back to
+    // the last agentic one — so an outlook whose forecast_assumption claim
+    // has no id/value/horizon/anchor reaches this page. It must not become
+    // a row of blank cells under "Analyst assumptions".
+    const r = fx.clone(fx.report);
+    const interp = r.payload.sections.outlook.interpretation!;
+    interp.claims = [
+      {
+        type: "forecast_assumption",
+        text: "Scenarios are mandate templates, not forecasts.",
+        basis: ["mandate:capital_cycle"],
+        falsifier: "n/a: template scenario carries no dated forecast",
+      },
+    ];
+    for (const s of Object.values(interp.scenarios ?? {})) delete s.assumption_ids;
+    render(<ReportTabs report={r} section="outlook" onSelect={() => {}} />);
+    expect(screen.queryByTestId("assumptions-table")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("interpretation-claims")).getByText(ASSUMPTION_BADGE)).toBeInTheDocument();
+  });
+
+  it("prints a multiple anchor at the table's fixed precision, with its unit", () => {
+    const r = fx.clone(fx.report);
+    const outlook = r.payload.sections.outlook;
+    const path = "statistics.valuation.ev_ebitda.median";
+    outlook.facts = {
+      ...outlook.facts,
+      anchors: [...(outlook.facts.anchors as unknown[]), { path, value: 26.543218, family: "multiple" }],
+    };
+    const fa = outlook.interpretation!.claims!.find((c) => c.id === "FA1")!;
+    Object.assign(fa, { value: "22x", anchor: path });
+    render(<ReportTabs report={r} section="outlook" onSelect={() => {}} />);
+    const row = screen.getByTestId("assumption-FA1");
+    expect(row).toHaveTextContent("26.54x");
+    expect(row).not.toHaveTextContent("26.543218");
+  });
+
   it("says so when an assumption's anchor is not in the edition's catalogue", () => {
     const r = fx.clone(fx.report);
     const outlook = r.payload.sections.outlook;
