@@ -98,6 +98,61 @@ def test_worker_repairs_schema_before_still_running_async_seed_and_queue(old_sch
             assert not thread.is_alive()
 
 
+def test_worker_boot_sweep_failure_does_not_stop_the_seed_thread(old_schema, monkeypatch):
+    """W6: the boot sweep fails closed (ExclusionSetMismatch when production
+    differs from the evidence). The seed thread must log it and carry on to
+    the provider seed, the pgvector backfill and scorecard registration, and
+    the queue must still start. Without the handler, the exception ended the
+    daemon thread before any of them ran."""
+    from app import worker
+    from app.config import settings
+    from app.services import memory_probe, outcome_eligibility, regen_worker, scorecard_service, vector_store
+
+    events: list[str] = []
+    done = threading.Event()
+    seed_threads = []
+
+    def classify(*, db):
+        events.append("eligibility_failed")
+        raise outcome_eligibility.ExclusionSetMismatch("x")
+
+    def seed():
+        seed_threads.append(threading.current_thread())
+        events.append("seed")
+        return {}
+
+    def register():
+        events.append("scorecard")
+        done.set()
+        return {}
+
+    def start_queue():
+        events.append("queue")
+        worker._shutdown.set()
+        return True
+
+    monkeypatch.setattr(worker, "_shutdown", threading.Event())
+    monkeypatch.setattr(worker.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(settings, "enable_monitoring", False)
+    monkeypatch.setattr(settings, "enable_industry_reports", False)
+    monkeypatch.setattr("app.seed_universe.run_full_seed", seed)
+    monkeypatch.setattr(outcome_eligibility, "classify_pending", classify)
+    monkeypatch.setattr(vector_store, "backfill_and_index", lambda: events.append("pgvector") or {"skipped": True})
+    monkeypatch.setattr(scorecard_service, "ensure_version_registered", register)
+    monkeypatch.setattr(regen_worker, "start_worker", start_queue)
+    monkeypatch.setattr(regen_worker, "stop_worker", lambda: None)
+    monkeypatch.setattr("app.services.industry_report_worker.stop_worker", lambda: None)
+    monkeypatch.setattr(memory_probe, "log_rss", lambda *a: None)
+    monkeypatch.setattr(worker, "_heartbeat", lambda: None)
+    assert worker.main() == 0
+    assert done.wait(5), f"seed thread stopped early: {events}"
+    for thread in seed_threads:
+        thread.join(timeout=2)
+    assert "queue" in events
+    seed_steps = [e for e in events if e != "queue"]
+    assert seed_steps == ["eligibility_failed", "seed", "pgvector", "scorecard"]
+
+
 @pytest.mark.parametrize("entrypoint", ["worker", "web"])
 @pytest.mark.parametrize("failure", ["init", "missing_columns"])
 def test_failed_schema_stops_every_startup_consumer(old_schema, monkeypatch, entrypoint, failure):
