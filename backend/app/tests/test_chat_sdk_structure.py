@@ -218,7 +218,7 @@ def test_get_company_lite(tools):
     out = tools["get_company_lite"](DEMO.lower())
     assert set(out) == {
         "ticker", "name", "sector", "industry", "market_cap", "business",
-        "last_price", "metrics", "screener_scores",
+        "last_price", "last_price_as_of", "last_price_source", "metrics", "screener_scores",
     }
     assert out["ticker"] == DEMO and out["market_cap"] > 0
     assert out["screener_scores"] is not None       # seeded by run_full_seed
