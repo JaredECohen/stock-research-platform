@@ -32,6 +32,7 @@ from app.services import gics_registry as reg
 from app.services import industry_classification as ic
 from app.services import industry_group_knowledge as igk
 from app.services import industry_knowledge as ik
+from app.services import industry_labels as il
 from app.services.industry_group_knowledge import thesis_stages, universal_research_rules
 from app.tests.gating_helpers import seed_demo_universe
 
@@ -68,7 +69,10 @@ def test_factory_caches_per_code_and_version(_universe):
     assert a.code == "4530" and a.taxonomy_version_id == _universe.id
     assert a.taxonomy_version_key == _universe.version_key
     assert a.mandate.code == "4530" and a.mandate.version_key == _universe.version_key
+    # `display_name` is the LLMCallLog telemetry key and keeps its code so
+    # cost-by-agent continuity survives; readers get `public_display_name`.
     assert a.display_name == "Industry Group Analyst 4530"
+    assert a.public_display_name == f"Industry Group Analyst ({il.label('4530')})"
 
 
 def test_factory_reads_the_active_version_from_the_database_on_every_call(monkeypatch):
@@ -102,8 +106,10 @@ def test_system_prompt_loads_methodology_rules_and_mandate_from_the_knowledge_ba
         assert rule in prompt
     for key in ik.governing_methodology()["operating_rules"]:
         assert f"- {key}:" in prompt
-    assert "## Industry Group mandate — 4530" in prompt
-    assert ik.BRIEF_ATTRIBUTION in prompt
+    # The PUBLIC mandate (owner decision 2026-09-24): our label, no code.
+    assert f"## Industry Group mandate — {il.label('4530')} ({il.label('45')})" in prompt
+    assert il.PUBLIC_BRIEF_ATTRIBUTION in prompt
+    assert "4530" not in prompt and "gics" not in prompt.lower()
 
 
 def test_every_group_system_prompt_keeps_the_attribution_and_the_sub_industry_layer():
@@ -113,14 +119,16 @@ def test_every_group_system_prompt_keeps_the_attribution_and_the_sub_industry_la
     profile = {"ticker": "NVDA", "company_name": "NVIDIA"}
     for g in ik.list_industry_groups():
         prompt = ia.get_industry_analyst(g["code"]).system_prompt()
-        assert prompt.rstrip().endswith(ik.BRIEF_ATTRIBUTION), g["code"]
-        assert igk.SUB_INDUSTRY_HEADER in prompt, g["code"]
-        shown = re.findall(r"^- \d{8} .*$", prompt, re.M)
+        assert prompt.rstrip().endswith(il.PUBLIC_BRIEF_ATTRIBUTION), g["code"]
+        assert igk.PUBLIC_SUB_INDUSTRY_HEADER in prompt, g["code"]
+        # Public briefs are unnamed lines after the header; count them there.
+        briefs = prompt.split(igk.PUBLIC_SUB_INDUSTRY_HEADER, 1)[1].split("\nAttribution:", 1)[0]
+        shown = [ln for ln in briefs.strip("\n").split("\n") if ln.startswith("- ") and "| Advantage test:" in ln]
         omitted = re.search(r"… (\d+) more sub-industr", prompt)
         assert not any(line.endswith("…") for line in shown), g["code"]
         assert len(shown) + (int(omitted.group(1)) if omitted else 0) == len(ik.list_sub_industries(g["code"]))
         block = ia.get_industry_analyst(g["code"]).company_context_block(profile, None)
-        assert len(block) <= 4000 and ik.BRIEF_ATTRIBUTION in block, g["code"]
+        assert len(block) <= 4000 and il.PUBLIC_BRIEF_ATTRIBUTION in block, g["code"]
 
 
 def test_a_long_header_shortens_the_mandate_instead_of_cutting_its_attribution():
@@ -143,7 +151,7 @@ def test_a_long_header_shortens_the_mandate_instead_of_cutting_its_attribution()
                     {"ticker": "NVDA", "company_name": "N" * name_len}, cls,
                 )
                 assert len(block) <= 4000, (g["code"], name_len)
-                assert ik.BRIEF_ATTRIBUTION in block, (g["code"], name_len, cls and cls["state"])
+                assert il.PUBLIC_BRIEF_ATTRIBUTION in block, (g["code"], name_len, cls and cls["state"])
                 assert not block.endswith("…"), (g["code"], name_len)
 
 
@@ -153,10 +161,12 @@ def test_a_header_that_leaves_no_budget_says_the_mandate_was_omitted():
     provenance has been sliced off."""
     analyst = ia.get_industry_analyst("4530")
     profile = {"ticker": "NVDA", "company_name": "NVIDIA"}
-    block = analyst.company_context_block(profile, None, max_chars=700)
+    # The labels-only header is shorter than the old code-and-version one,
+    # so the floor is probed with a tighter ceiling.
+    block = analyst.company_context_block(profile, None, max_chars=500)
     assert "mandate omitted: no prompt budget left" in block
     assert "## Industry Group mandate" not in block
-    assert len(block) <= 700
+    assert len(block) <= 500
     # A ceiling too small for a mandate is the same story, not a silent cut.
     block = analyst.company_context_block(profile, None, mandate_chars=50)
     assert "mandate omitted: no prompt budget left" in block
@@ -167,17 +177,24 @@ def test_company_context_block_names_sub_industry_and_source_label():
     row = ic.current_for(["MSFT"])["MSFT"]
     assert row["source"] == "research_map"
     block = analyst.company_context_block({"ticker": "MSFT", "company_name": "Microsoft"}, row)
+    # Sub-industries are never named publicly: the provider's own industry
+    # string stands in, and neither the 8-digit code nor its registry name
+    # reaches the prompt.
     sub = ik.get_sub_industry(row["sub_industry_code"])
-    assert f"Sub-industry: {row['sub_industry_code']} {sub['name']}" in block
+    provider_industry = ia._sub_industry_of(row)
+    assert provider_industry and f"Provider industry: {provider_industry}." in block
+    assert row["sub_industry_code"] not in block and f"{row['sub_industry_code']} {sub['name']}" not in block
     assert "Classification: research map (Investment_Universe_163_Map.json@" in block
-    assert "derived from provider classification, not licensed GICS security assignments" in block
-    assert "## Industry Group mandate — 4510" in block
+    assert il.PUBLIC_MAPPING_CAVEAT in block and "gics" not in block.lower()
+    assert f"sits in our {il.label('4510')} industry group ({il.label('45')} sector)" in block
+    assert f"## Industry Group mandate — {il.label('4510')}" in block
 
     alias_row = {**row, "source": "provider_alias", "author": "fmp-aliases-2026-09",
-                 "sub_industry_code": None, "state": "mapped"}
+                 "sub_industry_code": None, "state": "mapped", "source_industry": None,
+                 "source_sub_industry": None, "evidence": {}}
     block = analyst.company_context_block({"ticker": "MSFT", "company_name": "Microsoft"}, alias_row)
     assert "Classification: derived from provider classification (fmp-aliases-2026-09)" in block
-    assert "Sub-industry: n/a (classified at group level only)" in block
+    assert "Provider industry: n/a (not reported by the provider)" in block
     assert ia.classification_source_label(None) == "unclassified"
     assert ia.classification_source_label({"state": "missing", "source": "none"}) == "unmapped (missing)"
 
@@ -224,21 +241,24 @@ def test_a_stale_row_still_routes_and_the_provenance_says_it_is_stale():
     assert ia._no_mapping_reason(None) == "no mapping: no classification row"
 
 
-def test_prompt_header_names_the_bundled_knowledge_edition_not_a_versioned_mandate():
-    """The mandate prose is the single bundled knowledge base for every
-    taxonomy version; only the codes and names follow the row's registry
-    version. The header must not imply otherwise."""
+def test_prompt_header_carries_no_version_key_but_the_summary_keeps_the_public_one():
+    """The header used to name both editions (registry taxonomy key and
+    bundled knowledge edition). Both are internal keys ("gics-2026-04"), so
+    the labels-only header names neither; provenance keeps the PUBLIC key
+    on `industry_group_summary`. The mandate prose is still the single
+    bundled knowledge base for every taxonomy version."""
     analyst = ia.get_industry_analyst("4530")
     row = ic.current_for(["NVDA"])["NVDA"]
     block = analyst.company_context_block({"ticker": "NVDA", "company_name": "NVIDIA"}, row)
     knowledge = analyst.mandate.knowledge_version
     assert knowledge == ik.load_industry_knowledge()["taxonomy_version"]
-    assert f"taxonomy {analyst.taxonomy_version_key}" in block
-    assert f"The mandate below is the bundled knowledge edition {knowledge}" in block
-    assert "it does not vary by taxonomy version" in " ".join(block.split())
-    # The claim is checkable: a mandate built under any other taxonomy
-    # version still carries the bundled edition, because there is only one
-    # knowledge document. `version_key` is a cache key, not a mandate.
+    assert analyst.taxonomy_version_key not in block and knowledge not in block
+    summary = ia.industry_group_summary(row, analyst)
+    assert summary["taxonomy_version"] == il.public_version_key(analyst.taxonomy_version_key)
+    assert summary["taxonomy_version"] == il.PUBLIC_TAXONOMY_KEY
+    # A mandate built under any other taxonomy version still carries the
+    # bundled edition, because there is only one knowledge document.
+    # `version_key` is a cache key, not a mandate.
     other = igk.group_mandate("4530", version_key="gics-2099-99")
     assert other.version_key == "gics-2099-99"
     assert other.knowledge_version == knowledge
@@ -250,13 +270,16 @@ def test_industry_group_summary_carries_provenance_and_caveat():
     analyst = ia.get_industry_analyst("4530")
     row = ic.current_for(["NVDA"])["NVDA"]
     summary = ia.industry_group_summary(row, analyst)
-    assert summary["code"] == "4530" and summary["name"] == analyst.name
+    # Public values only: slug + label, never the code or registry name.
+    assert "code" not in summary and summary["slug"] == il.slug("4530") == analyst.slug
+    assert summary["label"] == summary["name"] == analyst.label != analyst.name
+    assert summary["sector_label"] == il.label("45")
     assert summary["state"] == "mapped" and summary["source"] == "research_map"
     assert summary["source_label"].startswith("research map (")
-    assert summary["sub_industry"]["code"] == row["sub_industry_code"]
-    assert summary["taxonomy_version"] == analyst.taxonomy_version_key
+    assert "sub_industry" not in summary and summary["provider_industry"] == ia._sub_industry_of(row)
+    assert summary["taxonomy_version"] == il.PUBLIC_TAXONOMY_KEY
     assert summary["report_version"] is None
-    assert summary["mapping_caveat"] == reg.MAPPING_CAVEAT
+    assert summary["mapping_caveat"] == il.PUBLIC_MAPPING_CAVEAT
 
 
 # --- the prompt placeholder ------------------------------------------------------
@@ -281,7 +304,7 @@ def test_sector_prompt_block_is_empty_for_a_non_routable_row():
     block, summary, analyst = ia.sector_prompt_block({"ticker": "X"}, {"state": "fallback", "source": "provider_alias",
                                                                         "industry_group_code": None})
     assert block == "" and analyst is None
-    assert summary["state"] == "fallback" and summary["code"] is None
+    assert summary["state"] == "fallback" and summary["slug"] is None and summary["label"] is None
     block, summary, analyst = ia.sector_prompt_block({"ticker": "X"}, None)
     assert block == "" and summary is None and analyst is None
 
@@ -431,14 +454,15 @@ def test_routing_on_constructs_at_most_one_analyst_and_lands_in_extra_views(monk
     assert finding.agent == "Industry Group Analyst"
     assert finding.confidence > 0.0
     ig = finding.data["industry_group"]
-    assert ig["code"] == "4510" and ig["state"] == "mapped"
+    assert ig["slug"] == il.slug("4510") and ig["state"] == "mapped"
+    assert ig["name"] == ia.get_industry_analyst("4510").label
     assert ig["source_label"].startswith("research map (")
-    assert ig["sub_industry"]["code"] == "45103020"
-    assert ig["mapping_caveat"] == reg.MAPPING_CAVEAT
+    assert ig["provider_industry"] and "sub_industry" not in ig
+    assert ig["mapping_caveat"] == il.PUBLIC_MAPPING_CAVEAT
     assert [c["stage"] for c in finding.data["causal_chain"]] == [s["id"] for s in thesis_stages()]
-    assert "industry_knowledge:4510" in finding.sources
+    assert f"industry_knowledge:{il.slug('4510')}" in finding.sources
     # The sector analyst saw the same mapping and says so on its finding.
-    assert memo.sector_agent_view.data["industry_group"]["code"] == "4510"
+    assert memo.sector_agent_view.data["industry_group"]["slug"] == il.slug("4510")
     assert "Industry Group Analyst" not in memo.degraded_agents
     assert finding.long_form_report  # the long-form pass covered the new spec too
 
@@ -492,7 +516,7 @@ def test_a_malformed_llm_response_degrades_instead_of_raising(monkeypatch, malfo
 
     assert finding.agent == "Industry Group Analyst"
     assert finding.confidence == 0.55                      # the deterministic read
-    assert finding.data["industry_group"]["code"] == "4510"
+    assert finding.data["industry_group"]["slug"] == il.slug("4510")
     shape = type(malformed).__name__
     assert finding.data["deterministic_fallback"] == (
         f"Industry Group LLM returned a JSON {shape}, not an object; "
@@ -629,19 +653,26 @@ def test_run_industry_group_agent_deterministic_read_is_mandate_grounded():
     profile = {"ticker": "NVDA", "company_name": "NVIDIA", "sector": "Technology"}
     finding = ia.run_industry_group_agent(profile, {"roic": 0.51, "ev_ebitda": 30.8}, classification=row)
     analyst = ia.get_industry_analyst("4530")
-    assert finding.headline.startswith(f"{analyst.name} (4530): mandate read for NVDA")
+    assert finding.headline.startswith(f"{analyst.label}: mandate read for NVDA")
     assert "Deterministic edition" in finding.summary
-    assert finding.data["industry_group"]["sub_industry"]["code"] == "45301020"
-    assert finding.data["kpis_to_watch"] and all(k["industry_code"] in analyst.mandate.industry_codes
+    # Still grounded in the row's own sub-industry brief — matched on the
+    # internal code, shown without it.
+    brief = next(s for s in analyst.mandate.sub_industries if s.code == row["sub_industry_code"])
+    assert brief.economics in finding.summary and row["sub_industry_code"] not in finding.summary
+    assert finding.data["industry_group"]["provider_industry"] == ia._sub_industry_of(row)
+    core = set(analyst.mandate.items("core_kpis"))
+    assert finding.data["kpis_to_watch"] and all(k["kpi"] in core and "industry_code" not in k
                                                 for k in finding.data["kpis_to_watch"])
     assert finding.data["causal_chain"][0]["text"].startswith("n/a:")
     assert "deterministic_fallback" not in finding.data  # no LLM configured: the design, not a degradation
-    assert finding.evidence[0].ref == "gics:4530"
+    assert finding.evidence[0].ref == f"industry_group:{analyst.slug}"
+    assert finding.evidence[0].excerpt == analyst.label
+    assert finding.sources == [f"industry_knowledge:{analyst.slug}"]
 
 
 def test_run_industry_group_agent_looks_the_row_up_when_not_given():
     finding = ia.run_industry_group_agent({"ticker": "NVDA"}, {})
-    assert finding.data["industry_group"]["code"] == "4530"
+    assert finding.data["industry_group"]["slug"] == il.slug("4530")
 
 
 def test_run_industry_group_agent_on_an_unknown_symbol_says_no_mapping():

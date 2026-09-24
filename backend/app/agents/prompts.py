@@ -128,18 +128,19 @@ Return strict JSON with keys:
 # the industry analyst's own user prompt. `classification_label` is the
 # provenance sentence ("research map" vs "derived from provider
 # classification"); it travels with every display of a mapping.
-# The two editions are named separately on purpose: the registry version
-# governs the codes and names (it follows the classification row), while the
-# mandate prose below always comes from the single bundled knowledge base.
-# Claiming one version for both would be a lie the reader cannot check.
+# Labels only (owner decision 2026-09-24): whatever this block names, the
+# sector and industry models can repeat to a reader, so it carries our own
+# group/sector labels (`industry_labels`), the data provider's industry
+# string and `industry_labels.PUBLIC_MAPPING_CAVEAT` (`{mapping_caveat}`) —
+# never a taxonomy code, a registry name, "GICS" or an internal version key.
+# The codes and version keys stay on the classification row and the mandate
+# record, where the audit reads them.
 INDUSTRY_GROUP_COMPANY_CONTEXT = """## Industry group context for {ticker}
-{ticker} ({company_name}) sits in GICS industry group {group_code} {group_name} \
-(sector {sector_code} {sector_name}; taxonomy {taxonomy_version}).
-Sub-industry: {sub_industry}.
-Classification: {classification_label} (state: {state}; as of {source_as_of}). \
-Mappings are derived from provider classification, not licensed GICS security assignments.
-The mandate below is the bundled knowledge edition {knowledge_version}; it does not vary \
-by taxonomy version.
+{ticker} ({company_name}) sits in our {group_label} industry group ({sector_label} sector).
+Provider industry: {provider_industry}.
+Classification: {classification_label} (state: {state}; as of {source_as_of}); \
+{mapping_caveat}.
+Name the group and sector only by the labels above; never write numeric classification codes.
 {mandate_block}"""
 
 INDUSTRY_GROUP_ANALYST_PROMPT = """{company_context}
@@ -153,8 +154,8 @@ Using ONLY the mandate above and the observed snapshot, write the industry group
    (say "n/a: <reason>" when a stage cannot be supported by the evidence on hand).
 2) placement — where this company sits in the group's economics (which sub-industry brief applies,
    which mandate it resembles: compounder or inflection, and why).
-3) kpis_to_watch — the 3-5 mandate KPIs that would test the thesis for THIS name, each with the
-   industry code that supplied it.
+3) kpis_to_watch — the 3-5 mandate KPIs that would test the thesis for THIS name, each quoted
+   from the mandate.
 4) falsifiers — 2-3 dated, observable statements that would break the read.
 5) traps — the accounting/data traps from the mandate that apply here.
 
@@ -164,7 +165,7 @@ Research and education only — no recommendations.
 Return strict JSON with keys: headline (string), summary (string, 4-7 sentences),
 key_points (list of strings), confidence (0-1), causal_chain (list of {{"stage": id, "text": ...}}),
 placement (string), mandate_type ("compounder" | "inflection" | "unclear"),
-kpis_to_watch (list of {{"kpi": ..., "industry_code": ..., "why": ...}}),
+kpis_to_watch (list of {{"kpi": ..., "why": ...}}),
 falsifiers (list of strings), traps (list of strings)."""
 
 EARNINGS_ANALYST_PROMPT = """You are an institutional earnings call analyst

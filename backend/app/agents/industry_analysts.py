@@ -37,8 +37,21 @@ shown nothing.
 
 Provenance travels with every display: the classification source label
 ("research map" vs "derived from provider classification", plus the
-staleness when there is any), the sub-industry name, the taxonomy version
-and the mapping caveat all ride on ``finding.data["industry_group"]``.
+staleness when there is any), the provider's industry string, the public
+taxonomy key and the mapping caveat all ride on
+``finding.data["industry_group"]``.
+
+Public labels, internal codes
+-----------------------------
+Owner decision 2026-09-24: MarketMosaic's own labels publicly, no GICS
+branding or codes on anything a reader can see (licensing). Everything this
+module puts on a finding — headline, summary, key points, evidence refs,
+sources, ``data`` — and every prompt whose output becomes one is built from
+``industry_labels``: our group/sector label and slug, never a code or a
+registry name. Sub-industries are never named; the provider's own industry
+string stands in. The codes stay internal: the cache key, the classification
+row, the mandate record and ``display_name`` (the LLMCallLog telemetry key,
+kept code-based so cost-by-agent continuity survives).
 """
 from __future__ import annotations
 
@@ -52,7 +65,7 @@ from ..config import settings
 from ..memory import SectorMemory
 from ..prompts import load_prompt
 from ..schemas import AgentFinding, Citation
-from ..services import gics_registry, industry_classification, industry_knowledge
+from ..services import gics_registry, industry_classification, industry_labels
 from ..services.industry_group_knowledge import (
     GroupMandate,
     group_mandate,
@@ -114,14 +127,41 @@ class IndustryAnalyst:
 
     @property
     def display_name(self) -> str:
+        """The LLMCallLog `agent_name` telemetry key. Code-based on purpose
+        and never shown to a reader — `public_display_name` is."""
         return f"{AGENT_NAME} {self.code}"
+
+    # Public identity. Properties rather than fields so a label-file change
+    # needs no cache flush, and a group the label file does not carry raises
+    # `UnknownLabel` where it is USED (a sector card must not fail because
+    # an unrelated analyst was built).
+    @property
+    def label(self) -> str:
+        return industry_labels.label(self.code)
+
+    @property
+    def slug(self) -> str:
+        return industry_labels.slug(self.code)
+
+    @property
+    def sector_label(self) -> str:
+        return industry_labels.label(self.sector_code)
+
+    @property
+    def public_display_name(self) -> str:
+        return industry_labels.public_display_name(self.code)
 
     def system_prompt(self) -> str:
         """Identity prose + the loaded methodology + the ten universal rules
-        + this group's mandate. Nothing about the framework is retyped."""
+        + this group's mandate. Nothing about the framework is retyped.
+
+        The mandate is the PUBLIC edition (label header, no codes, unnamed
+        sub-industry briefs): this prompt drives the memo analyst and — via
+        `industry_report_writer` — every weekly report, and a model that
+        never sees a code or a registry name cannot echo one to a reader."""
         identity = load_prompt("industry_analyst") or _SYSTEM_FALLBACK
         parts = [identity, methodology_prompt_block(), universal_rules_prompt_block(),
-                 self.mandate.as_prompt_block()]
+                 self.mandate.as_prompt_block(provenance="public")]
         return "\n\n".join(p for p in parts if p)
 
     def memory(self) -> SectorMemory:
@@ -146,21 +186,24 @@ class IndustryAnalyst:
         `mandate_chars`, when given, is a CEILING on that budget, never a
         licence to overrun `max_chars`.
         """
-        sub = _sub_industry_of(classification)
+        provider_industry = _sub_industry_of(classification)
         cls = classification or {}
+        # Labels only: this block reaches the sector and industry models, and
+        # whatever it names they can repeat to a reader. Codes and taxonomy
+        # version keys stay on the classification row and the mandate record.
         fields = {
             "ticker": _clip(str(profile.get("ticker") or "").upper(), _TICKER_CHARS) or "n/a",
-            # The only two free-text fields in the header; bounded so a
-            # pathological company name cannot crowd out the mandate.
+            # The free-text fields in the header; bounded so a pathological
+            # company name cannot crowd out the mandate.
             "company_name": _clip(profile.get("company_name") or "n/a", _NAME_CHARS),
-            "group_code": self.code, "group_name": self.name,
-            "sector_code": self.sector_code, "sector_name": self.sector_name,
-            "taxonomy_version": self.taxonomy_version_key,
-            "knowledge_version": self.mandate.knowledge_version or "n/a",
-            "sub_industry": (f"{sub['code']} {sub['name']}" if sub else "n/a (classified at group level only)"),
-            "classification_label": _clip(classification_source_label(classification), _LABEL_CHARS),
+            "group_label": self.label, "sector_label": self.sector_label,
+            "provider_industry": _clip(provider_industry or "n/a (not reported by the provider)", _NAME_CHARS),
+            "classification_label": _clip(
+                industry_labels.scrub_text(classification_source_label(classification)), _LABEL_CHARS,
+            ),
             "state": cls.get("state") or "n/a",
             "source_as_of": cls.get("source_as_of") or "n/a",
+            "mapping_caveat": industry_labels.PUBLIC_MAPPING_CAVEAT,
         }
         header = prompts.INDUSTRY_GROUP_COMPANY_CONTEXT.format(mandate_block="", **fields)
         budget = max_chars - len(header)
@@ -177,7 +220,7 @@ class IndustryAnalyst:
             )
             return block if len(block) <= max_chars else block[: max(0, max_chars - 1)].rstrip() + "…"
         return prompts.INDUSTRY_GROUP_COMPANY_CONTEXT.format(
-            mandate_block=self.mandate.as_prompt_block(max_chars=budget), **fields,
+            mandate_block=self.mandate.as_prompt_block(max_chars=budget, provenance="public"), **fields,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -255,38 +298,89 @@ def classification_source_label(classification: dict[str, Any] | None) -> str:
     return f"unmapped ({classification.get('state') or 'unknown'})"
 
 
-def _sub_industry_of(classification: dict[str, Any] | None) -> dict[str, str] | None:
-    code8 = (classification or {}).get("sub_industry_code")
-    if not code8:
-        return None
-    entry = industry_knowledge.get_sub_industry(code8)
-    return {"code": str(code8), "name": entry["name"] if entry else "unknown"}
+def _sub_industry_of(classification: dict[str, Any] | None) -> str | None:
+    """The data provider's own industry string for this company — what a
+    reader is shown where a sub-industry would go. Sub-industries (and
+    industries) are never named publicly (licensing), and the provider's
+    label is already public on the Research page.
+
+    Never raises: it feeds the sector card's provenance and the except path
+    that must not crash it, and a malformed row means "not reported", not
+    a failed memo."""
+    try:
+        cls = classification or {}
+        labels = (cls.get("evidence") or {}).get("labels") or {}
+        for value in (cls.get("source_industry"), labels.get("industry"),
+                      cls.get("source_sub_industry"), labels.get("sub_industry")):
+            text = " ".join(str(value).split()) if value is not None else ""
+            if text:
+                return _clip(text, _NAME_CHARS)
+    except Exception:  # a provenance string must never fail a memo
+        log.warning("provider industry unreadable on a classification row; shown as not reported")
+    return None
+
+
+def _public_group_identity(code: Any) -> dict[str, Any]:
+    """`slug`/`label`/`sector_label` for a group code, or Nones when the row
+    names no group. Raises `UnknownLabel` for a code the label file lacks —
+    callers that must not fail use `unavailable_group_summary`."""
+    key = str(code or "").strip()
+    if not key:
+        return {"slug": None, "label": None, "sector_label": None}
+    return {"slug": industry_labels.slug(key), "label": industry_labels.label(key),
+            "sector_label": industry_labels.label(key[:2])}
 
 
 def industry_group_summary(
     classification: dict[str, Any] | None, analyst: IndustryAnalyst | None,
 ) -> dict[str, Any]:
     """The compact provenance block that rides on `finding.data["industry_group"]`
-    (and, when routing is on, on the sector finding)."""
+    (and, when routing is on, on the sector finding).
+
+    Public values only: our slug and label, never the internal code or the
+    registry name; the provider's industry string instead of a sub-industry;
+    the public taxonomy key and mapping caveat. `name` repeats the label for
+    readers written against the pre-label shape."""
     cls = classification or {}
+    identity = _public_group_identity(analyst.code if analyst else cls.get("industry_group_code"))
     return {
-        "code": cls.get("industry_group_code"),
-        "name": analyst.name if analyst else None,
+        **identity,
+        "name": identity["label"],
         "state": cls.get("state") or "missing",
         # What routing actually decided on: differs from `state` only for a
         # stale row, which routes on the state it held before the drift.
         "routed_state": routed_state(classification) or "missing",
         "source": cls.get("source") or industry_classification.SOURCE_NONE,
-        "source_label": classification_source_label(classification),
+        "source_label": industry_labels.scrub_text(classification_source_label(classification)),
         "author": cls.get("author") or "",
         "source_as_of": cls.get("source_as_of") or "",
-        "sub_industry": _sub_industry_of(classification),
-        "taxonomy_version": analyst.taxonomy_version_key if analyst else None,
+        "provider_industry": _sub_industry_of(classification),
+        "taxonomy_version": (industry_labels.public_version_key(analyst.taxonomy_version_key)
+                             if analyst else None),
         # Filled by the report store once slice 3/4 publish reports; None
         # says "no edition on file" rather than pretending one exists.
         "report_version": None,
-        "mapping_caveat": gics_registry.MAPPING_CAVEAT,
+        "mapping_caveat": industry_labels.PUBLIC_MAPPING_CAVEAT,
     }
+
+
+def unavailable_group_summary(classification: dict[str, Any] | None, error: str) -> dict[str, Any]:
+    """The summary for a failed industry-group block, built so it CANNOT
+    raise: it runs inside the sector analyst's except path, where a second
+    exception (a label the file lacks, a malformed row) would turn a
+    degraded sector card into a crash stub."""
+    try:
+        summary = industry_group_summary(classification, None)
+    except Exception as exc:
+        log_safely(log, "industry group summary unavailable; minimal provenance shipped", exc)
+        cls = classification if isinstance(classification, dict) else {}
+        summary = {
+            "slug": None, "label": None, "sector_label": None, "name": None,
+            "state": str(cls.get("state") or "missing"),
+            "mapping_caveat": industry_labels.PUBLIC_MAPPING_CAVEAT,
+        }
+    summary["error"] = error
+    return summary
 
 
 # --- the factory ---------------------------------------------------------------
@@ -469,37 +563,43 @@ def _deterministic_finding(
     with the wrong shape. It is only read when an LLM was configured."""
     m = analyst.mandate
     ticker = str(profile.get("ticker") or "").upper()
-    sub = _sub_industry_of(classification)
-    brief = next((s for s in m.sub_industries if sub and s.code == sub["code"]), None)
-    label = classification_source_label(classification)
+    provider_industry = _sub_industry_of(classification)
+    # The brief is matched on the row's internal sub-industry code; only its
+    # prose is shown — never the code or the registry name it belongs to.
+    code8 = str((classification or {}).get("sub_industry_code") or "")
+    brief = next((s for s in m.sub_industries if code8 and s.code == code8), None)
+    source_label = classification_source_label(classification)
 
     lines = [
-        f"{ticker} is classified in {m.code} {m.name} ({label}); "
-        + (f"sub-industry {sub['code']} {sub['name']}." if sub else "no sub-industry recorded."),
+        f"{ticker} is placed in the {analyst.label} industry group ({analyst.sector_label}; {source_label}); "
+        + (f"provider industry: {provider_industry}." if provider_industry
+           else "no provider industry recorded."),
     ]
     if brief and brief.economics:
-        lines.append(f"Sub-industry economics (original analyst brief, {brief.industry_code}): {brief.economics}")
+        lines.append(f"Sub-industry economics (original analyst brief): {brief.economics}")
     engines = m.items("economic_engine", 2)
     if engines:
         lines.append("Group economic engine: " + "; ".join(engines) + ".")
     if m.research_priority is not None:
-        lines.append(f"Research priority {m.research_priority}/5 (set by {m.research_priority_source}).")
+        lines.append(f"Research priority {m.research_priority}/5.")
     lines.append(
         "Deterministic edition: no analyst narrative; the causal chain below is the mandate's "
         "test list, not an asserted thesis (stage 1 world change: n/a — no dated external change on file)."
     )
 
+    # Mandate items WITHOUT their `[industry codes]` provenance brackets:
+    # the codes stay on the mandate record, the reader gets the text.
     key_points: list[str] = []
     for r in m.lists.get("core_kpis", ())[:5]:
-        key_points.append(f"KPI to test: {r.text} [{','.join(r.industry_codes)}]")
+        key_points.append(f"KPI to test: {r.text}")
     for r in m.lists.get("leading_indicators", ())[:3]:
-        key_points.append(f"Leading indicator: {r.text} [{','.join(r.industry_codes)}]")
+        key_points.append(f"Leading indicator: {r.text}")
     for r in m.lists.get("accounting_data_traps", ())[:2]:
-        key_points.append(f"Trap: {r.text} [{','.join(r.industry_codes)}]")
+        key_points.append(f"Trap: {r.text}")
     if brief and brief.advantage_test:
-        key_points.append(f"Advantage test ({brief.code}): {brief.advantage_test}")
-    for code, q in m.highest_evi_questions[:2]:
-        key_points.append(f"Highest-EVI question [{code}]: {q}")
+        key_points.append(f"Advantage test: {brief.advantage_test}")
+    for _code, q in m.highest_evi_questions[:2]:
+        key_points.append(f"Highest-EVI question: {q}")
 
     stages = thesis_stages()
     chain = []
@@ -511,7 +611,7 @@ def _deterministic_finding(
         else:
             chain.append({"stage": s["id"], "text": "n/a: deterministic edition — not asserted"})
 
-    falsifiers = [f"Failure mode observed: {r.text} [{','.join(r.industry_codes)}]"
+    falsifiers = [f"Failure mode observed: {r.text}"
                   for r in m.lists.get("common_failure_modes", ())[:3]]
     data: dict[str, Any] = {
         "industry_group": industry_group_summary(classification, analyst),
@@ -519,7 +619,7 @@ def _deterministic_finding(
         "placement": lines[0],
         "causal_chain": chain,
         "kpis_to_watch": [
-            {"kpi": r.text, "industry_code": r.industry_codes[0], "why": "mandate core KPI"}
+            {"kpi": r.text, "why": "mandate core KPI"}
             for r in m.lists.get("core_kpis", ())[:5]
         ],
         "falsifiers": falsifiers,
@@ -534,15 +634,37 @@ def _deterministic_finding(
             f"Industry Group LLM {llm_outcome}; mandate-grounded "
             "deterministic read shipped instead."
         )
-    return AgentFinding(
-        agent=AGENT_NAME,
-        headline=f"{m.name} ({m.code}): mandate read for {ticker}" + (f" — {sub['name']}" if sub else ""),
+    return _public_finding(
+        analyst,
+        headline=f"{analyst.label}: mandate read for {ticker}"
+        + (f" — {provider_industry}" if provider_industry else ""),
         summary=" ".join(lines),
         key_points=key_points or ["See the industry group mandate for the KPI list."],
         confidence=0.55,
-        sources=[f"industry_knowledge:{m.code}", *[f"industry:{c}" for c in m.industry_codes]],
-        evidence=[Citation(kind="other", ref=f"gics:{m.code}", excerpt=m.name[:300])],
         data=data,
+    )
+
+
+def _public_finding(
+    analyst: IndustryAnalyst, *, headline: str, summary: str, key_points: list[str],
+    confidence: float, data: dict[str, Any],
+) -> AgentFinding:
+    """The one exit for an analyst finding, so no path can skip the public
+    projection: prose through `scrub_text`, `data` through `project_public`
+    (checklist `industry_codes` become group slugs, `kpis_to_watch[]
+    .industry_code` is dropped, the brief attribution becomes the public
+    one), and slug-based machine refs — `industry_knowledge:{slug}`,
+    `industry_group:{slug}` — instead of codes. The mandate text is original
+    prose but can name a code; an LLM can echo one from its pretraining."""
+    return AgentFinding(
+        agent=AGENT_NAME,
+        headline=industry_labels.scrub_text(headline)[:240],
+        summary=industry_labels.scrub_text(summary),
+        key_points=[industry_labels.scrub_text(p) for p in key_points],
+        confidence=confidence,
+        sources=[f"industry_knowledge:{analyst.slug}"],
+        evidence=[Citation(kind="other", ref=f"industry_group:{analyst.slug}", excerpt=analyst.label[:300])],
+        data=industry_labels.project_public(data),
     )
 
 
@@ -627,14 +749,14 @@ def run_industry_group_agent(
         confidence = float(llm_out.get("confidence", 0.7))
     except (TypeError, ValueError):
         confidence = 0.7
-    return AgentFinding(
-        agent=AGENT_NAME,
-        headline=str(llm_out.get("headline") or f"{analyst.name} read for {ticker}")[:240],
+    # The model sees only labels, but it knows the taxonomy from pretraining
+    # and can still write "GICS" or a code; `_public_finding` scrubs every
+    # prose field and drops `kpis_to_watch[].industry_code` from `data`.
+    return _public_finding(
+        analyst,
+        headline=str(llm_out.get("headline") or f"{analyst.label} read for {ticker}"),
         summary=str(llm_out.get("summary") or ""),
         key_points=[str(p) for p in (llm_out.get("key_points") or [])][:12],
         confidence=max(0.0, min(1.0, confidence)),
-        sources=[f"industry_knowledge:{analyst.code}",
-                 *[f"industry:{c}" for c in analyst.mandate.industry_codes]],
-        evidence=[Citation(kind="other", ref=f"gics:{analyst.code}", excerpt=analyst.name[:300])],
         data=data,
     )
