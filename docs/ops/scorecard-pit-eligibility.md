@@ -13,6 +13,16 @@ stored fields remain untouched. The reader excludes them as
 `period_end_after_as_of` and `available_after_as_of` identify ordinary future
 observations separately; one row can have multiple reasons.
 
+The FMP-primary re-pull (FIX-006, 2026-09-24) preserves this exclusion: FMP's
+own rows whose availability precedes their period end are flagged
+(`primary_availability_precedes_period_end`), never moved, re-dated or
+re-inserted under a new availability, so 35607/35609 stay excluded. The
+upsert that let an INSERT-only availability fall before a moved period end now
+refuses any `period_end` change on a row that already has `available_at`.
+When FMP and another provider both hold a fiscal year's line, the FMP row wins
+the duplicate before the latest-availability rule; that changed `inputs_hash`
+once for tickers where a secondary row used to win.
+
 The public snapshot returns counts and uncapped `excluded_rows`, retaining
 row ID, ticker, fiscal label, statement, line, value, currency, source and
 date provenance. The execution stream appends optional row metadata to the
