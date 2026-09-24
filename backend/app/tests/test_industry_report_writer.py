@@ -412,3 +412,187 @@ def test_a_budget_of_one_call_reports_the_sections_it_never_reached(analyst, mon
     assert res.payload["narrative_by_section"]["overview"] == "llm"
     assert "outlook" not in (res.generation["llm_planned_sections"] or [])
     assert v.validate(res.payload, _facts_of(res.payload)) == []
+
+
+# --- registered forecast assumptions (owner decision 1) -----------------------
+
+
+def _llm_on(monkeypatch, fake_chat_json) -> None:
+    monkeypatch.setattr(w.settings.__class__, "has_llm", property(lambda self: True))
+    monkeypatch.setattr(w.llm, "_demo_only", lambda: False)
+    monkeypatch.setattr(w.llm, "chat_json", fake_chat_json)
+    monkeypatch.setattr(w.llm, "last_usage", lambda: {})
+
+
+def _sections_of(prompt: str) -> tuple[str, ...]:
+    return tuple(prompt.split("\n", 1)[0].removeprefix("Sections to interpret now: ").rstrip(".").split(", "))
+
+
+def _rich_stats() -> dict:
+    """A statistics row with every anchor family populated — more numeric
+    leaves than the catalogue's cap."""
+    stats = _stats()
+    horizons = ("1W", "1M", "QTD", "YTD", "1Y")
+    p = stats["payload"]
+    p["returns"] = {h: {"equal_weight": 0.01 * (i + 1), "median": 0.011 * (i + 1),
+                        "market_cap_weight": 0.012 * (i + 1), "n": 3, "n_mcw": 3}
+                    for i, h in enumerate(horizons)}
+    p["benchmark_relative"] = {b: {h: {"value": 0.002 * (i + 1), "n": 3, "benchmark_n": 30}
+                                   for i, h in enumerate(horizons)}
+                               for b in ("universe_ew", "sector_ew", "KFR.MKT_RF.D")}
+    p["breadth"] = {"1w": {"pct_positive": 0.67, "n": 3},
+                    "above_50d_mean": {"share": 0.33, "n": 3, "window_sessions": 50}}
+    p["dispersion"] = {"horizon": "1m", "stdev": 0.03, "iqr": 0.02, "range": 0.09, "n": 3}
+    p["fundamentals"] = {m: {"median": 0.2, "p25": 0.1, "p75": 0.3, "n": 3}
+                         for m in ("revenue_growth_yoy", "op_margin", "fcf_margin")}
+    p["valuation"] = {m: {"median": 20.5, "p25": 15.5, "p75": 25.5, "n": 3, "n_excluded_nonpositive": 0}
+                      for m in ("ev_ebitda", "pe_ttm", "ev_revenue")}
+    return stats
+
+
+def test_anchor_catalog_is_reproducible_by_server_facts(analyst):
+    """The catalogue the model is shown must be exactly what the worker's
+    independent rebuild produces (`_server_facts`), or every edition would
+    fail the facts-mutation guard. Every entry resolves, at its stated
+    value, in those facts; no entry is a count."""
+    from app.services import industry_report_worker as jobs
+
+    for stats in (_stats(), _rich_stats()):
+        res = w.write_report(analyst, stats, None, None, [], run_id="run-anchor")
+        outlook = res.payload["sections"]["outlook"]["facts"]
+        rebuilt = jobs._server_facts(analyst, stats, None, None, [], job={"run_id": "run-anchor"},
+                                     payload=res.payload)
+        assert rebuilt["outlook"] == outlook
+        assert outlook["forecast_policy"] == v.FORECAST_POLICY
+        anchors = outlook["anchors"]
+        assert anchors and len(anchors) <= v.MAX_ANCHORS
+        for a in anchors:
+            assert v.resolve_fact_path(rebuilt, a["path"]) == a["value"], a
+            assert a["path"].startswith(v.ANCHOR_PREFIXES[a["family"]]), a
+            assert not v._is_count_leaf(a["path"].rsplit(".", 1)[-1]), a
+        assert v.validate(res.payload, rebuilt) == []
+
+    # The small row: its returns and its one valuation multiple, no counts.
+    small = w.write_report(analyst, _stats(), None, None, [], run_id="run-anchor-small")
+    paths = {a["path"]: a for a in small.payload["sections"]["outlook"]["facts"]["anchors"]}
+    assert paths["performance.returns.1M.equal_weight"] == {
+        "path": "performance.returns.1M.equal_weight", "value": -0.031, "family": "rate"}
+    assert paths["statistics.valuation.ev_ebitda.median"]["family"] == "multiple"
+    assert "performance.returns.1M.n" not in paths
+    assert small.payload["sections"]["outlook"]["facts"]["anchors_truncated"] == 0
+
+    # The rich row overflows the cap: the drop is counted, and headline
+    # leaves go first so the multiples (last in prefix order) survive.
+    rich = w.write_report(analyst, _rich_stats(), None, None, [], run_id="run-anchor-rich")
+    facts = rich.payload["sections"]["outlook"]["facts"]
+    assert len(facts["anchors"]) == v.MAX_ANCHORS and facts["anchors_truncated"] > 0
+    assert {a["family"] for a in facts["anchors"]} == {"rate", "multiple"}
+    assert "performance.benchmark_relative.KFR.MKT_RF.D.1W.value" in {a["path"] for a in facts["anchors"]}
+
+
+def test_coerce_keeps_assumption_fields():
+    """The writer used to keep only type/text/basis/falsifier of every
+    claim, so a model's registration (id, value, horizon, anchor, bounds)
+    and a scenario's `assumption_ids` never reached the validator."""
+    section = w._coerce_section({
+        "text": "Outlook.",
+        "claims": [
+            {"type": "forecast_assumption", "id": " FA1 ", "text": "t", "value": "21%", "horizon": "next 4 quarters",
+             "anchor": "statistics.fundamentals.op_margin.median", "bounds": ["18%", "25%"],
+             "basis": ["statistics.fundamentals.op_margin.median"], "falsifier": "f", "extra": "dropped"},
+            {"type": "forecast_assumption", "id": "FA2", "text": "t", "value": "21.123456789012345%"},
+            {"type": "observed_fact", "text": "o", "id": "FA3", "value": "5%"},
+        ],
+        "scenarios": {"base": {"text": "b", "falsifiers": ["x"], "assumption_ids": ["FA1", " FA2"]},
+                      "bull": {"text": "u"}},
+    })
+    fa1, fa2, fact = section["claims"]
+    assert fa1 == {"type": "forecast_assumption", "text": "t", "basis": ["statistics.fundamentals.op_margin.median"],
+                   "falsifier": "f", "id": "FA1", "value": "21%", "horizon": "next 4 quarters",
+                   "anchor": "statistics.fundamentals.op_margin.median", "bounds": ["18%", "25%"]}
+    # Over the cap: dropped (the validator then names it), never truncated
+    # into a different number.
+    assert "value" not in fa2 and fa2["id"] == "FA2"
+    # Only an assumption carries registration fields.
+    assert "id" not in fact and "value" not in fact
+    assert section["scenarios"]["base"]["assumption_ids"] == ["FA1", "FA2"]
+    assert "assumption_ids" not in section["scenarios"]["bull"]
+
+
+def test_outlook_batch_uses_raised_max_tokens(analyst, monkeypatch):
+    """Each registered assumption costs ~120-150 output tokens; the batch
+    that carries the outlook takes its cap from settings, the other keeps
+    3200."""
+    calls: list[tuple[tuple[str, ...], int]] = []
+
+    def fake_chat_json(prompt, **kwargs):
+        calls.append((_sections_of(prompt), kwargs.get("max_tokens")))
+        return {}
+
+    _llm_on(monkeypatch, fake_chat_json)
+    monkeypatch.setattr(w.settings, "industry_report_outlook_max_tokens", 4321)
+    w.write_report(analyst, _stats(), None, None, [], run_id="run-mt")
+    caps = dict(calls)
+    assert caps[("outlook", "what_changed")] == 4321
+    assert [cap for sections, cap in calls if "outlook" not in sections] == [3200]
+
+
+def test_repair_notes_reach_the_prompt(analyst, monkeypatch):
+    prompts: list[str] = []
+
+    def fake_chat_json(prompt, **kwargs):
+        prompts.append(prompt)
+        return {}
+
+    _llm_on(monkeypatch, fake_chat_json)
+    note = "1 validation problem(s): outlook: number '75%' is not in the facts or a registered assumption"
+    w.write_report(analyst, _stats(), None, None, [], run_id="run-rn", repair_notes=note)
+    assert len(prompts) == 2
+    for prompt in prompts:
+        assert f"rejected by the validator for: {note}" in prompt
+        assert "Fix exactly these problems" in prompt
+    prompts.clear()
+    w.write_report(analyst, _stats(), None, None, [], run_id="run-rn2")
+    assert prompts and not any("rejected by the validator" in p for p in prompts)
+
+
+def test_template_edition_still_validates():
+    """The audit-only template must pass the FULL validator to be stored.
+    Its outlook used to register "Scenarios are mandate templates, not
+    forecasts." as a `forecast_assumption` with no value or anchor — which
+    the registered-assumption contract rejects — and its scenarios quoted
+    bracketed industry codes, six-digit numbers the outlook's own facts do
+    not carry."""
+    ia.clear_cache()
+    for code in ("2030", "4510", "4530"):
+        a = ia.get_industry_analyst(code)
+        for deterministic in (False, True):
+            res = w.write_report(a, _stats(), None, None, [], run_id=f"tpl-{code}", deterministic=deterministic)
+            assert v.validate(res.payload, _facts_of(res.payload)) == [], code
+            outlook = res.payload["sections"]["outlook"]
+            assert outlook["facts"]["anchors"], code
+            claims = outlook["interpretation"]["claims"]
+            assert not [c for c in claims if c["type"] == "forecast_assumption"], code
+            assert {"type": "observed_fact", "text": "Scenarios are mandate templates, not forecasts.",
+                    "basis": ["outlook.scenario_policy"], "falsifier": ""} in claims
+            for sc in outlook["interpretation"]["scenarios"].values():
+                for text in [sc["text"], *sc["falsifiers"]]:
+                    assert all(v._is_exempt(raw) for raw, _, _ in v.numeric_tokens(text)), (code, text)
+
+
+def test_stub_analyst_registers_a_valid_assumption(analyst, monkeypatch):
+    """The test/fixture stand-in analyst publishes one registered assumption
+    anchored on its own observation, through the real coerce + validate
+    path, so the published fixture exercises the contract."""
+    from app.tests.fixtures import industry_analyst_stub
+
+    industry_analyst_stub.install(monkeypatch)
+    res = w.write_report(analyst, _stats(), None, None, [], run_id="run-stub")
+    assert res.payload["analyst_narrative"] == "llm"
+    assert v.validate(res.payload, _facts_of(res.payload)) == []
+    outlook = res.payload["sections"]["outlook"]["interpretation"]
+    [fa] = [c for c in outlook["claims"] if c["type"] == "forecast_assumption"]
+    first_rate = next(a for a in res.payload["sections"]["outlook"]["facts"]["anchors"] if a["family"] == "rate")
+    assert fa["id"] == "FA1" and fa["anchor"] == first_rate["path"]
+    assert fa["value"] == f"{first_rate['value'] * 100:.1f}%"
+    assert outlook["scenarios"]["base"]["assumption_ids"] == ["FA1"]

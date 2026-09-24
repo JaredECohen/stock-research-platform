@@ -15,7 +15,17 @@ The validator enforces the research-process contract between them:
 * the drivers section follows the eight-stage causal order loaded from the
   knowledge base and does not open with a KPI forecast (the handbook's
   named anti-pattern);
-* no advice phrasing, and the disclaimer is present.
+* no advice phrasing, and the disclaimer is present;
+* the outlook's forward numbers are REGISTERED forecast assumptions
+  (owner decision 1, 2026-09-24; rules F1-F10 below): each is declared
+  once as a ``forecast_assumption`` claim with an id, a rate or multiple,
+  a horizon, an anchor that resolves to an observed fact of the same unit
+  family, and a falsifier. The outlook is checked against ITS OWN facts
+  (which carry the anchors catalogue) and those declarations — never the
+  whole pack, where a sector code "45" licensed "45x" and a breadth of
+  0.75 licensed a "75%" bull case nobody declared. Grounding is not
+  exempted: a forward number is still traceable, to the observation it
+  departs from.
 
 ``validate`` returns a list of error strings; empty means the payload may
 be published. A rejected payload fails the job, which retries and, on the
@@ -23,7 +33,9 @@ final attempt, runs the deterministic writer so a week is never blank.
 """
 from __future__ import annotations
 
+import math
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from ..services.industry_group_knowledge import thesis_stages
@@ -74,6 +86,45 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 # A ratio of ±1000% is already an extreme; beyond it a fact is a rendered
 # figure (a multiple, a price, a market cap), not something to scale.
 _RATIO_CEILING = 10.0
+
+# --- registered forecast assumptions (owner decision 1, 2026-09-24) -------------
+#
+# A forward number cannot be in a backward-looking facts pack, so the
+# outlook may state one only as a DECLARED assumption: a rate or a multiple,
+# with a horizon, anchored to an observed fact of the same unit family and
+# quoted next to it, so the size of the departure is visible. Exogenous
+# levels (commodity prices, policy rates, currency amounts, counts) have no
+# anchor and are not admissible; they must be stated qualitatively.
+FORWARD_SECTIONS: tuple[str, ...] = ("outlook",)
+MAX_FORECAST_ASSUMPTIONS = 12
+_FA_ID_RE = re.compile(r"^FA(?:[1-9]|1[0-2])$")
+_HORIZON_RE = re.compile(
+    r"\b(?:\d+\s*(?:quarters?|years?|months?|weeks?)|next\s+(?:quarter|year|month|12 months)"
+    r"|FY\s?\d{2,4}|[HQ][1-4]\s?(?:FY)?\d{2,4}|20\d{2})\b", re.I,
+)
+_MAX_HORIZON_CHARS = 60
+RATE_UNITS: tuple[str, ...] = ("%", "bps", "bp", "pp")
+MULTIPLE_UNITS: tuple[str, ...] = ("x",)
+# Where an anchor may live, per unit family. Order matters: it is the
+# catalogue's order, and the catalogue is what the writer shows the model.
+ANCHOR_PREFIXES: dict[str, tuple[str, ...]] = {
+    "rate": ("performance.returns.", "performance.benchmark_relative.", "statistics.breadth.",
+             "statistics.dispersion.", "statistics.fundamentals."),
+    "multiple": ("statistics.valuation.", "outlook.expectations_ledger.price_implied.value."),
+}
+# The catalogue is capped so the outlook call's facts stay small. Headline
+# leaves are listed before the quantiles so a cap never drops a whole family
+# (the valuation multiples come last in prefix order).
+MAX_ANCHORS = 40
+_HEADLINE_LEAVES = frozenset({"median", "equal_weight", "value", "pct_positive", "share", "stdev"})
+# A leaf naming a count is a sample size or a window, never a rate: `n`,
+# `n_mcw`, `benchmark_n`, `window_sessions`, `n_days`. Same token rule as
+# the UI's `unitFor` (frontend/src/components/industries/format.ts).
+_COUNT_LEAF_TOKENS = frozenset({"n", "count", "sessions", "days"})
+FORECAST_POLICY = (
+    "Forward numbers are registered assumptions anchored to an observed fact; they are "
+    "labelled as assumptions, not forecasts of record."
+)
 
 
 # --- helpers -------------------------------------------------------------------
@@ -180,6 +231,13 @@ def _percent_form(a: float) -> float | None:
 def _supported(raw: str, value: float, decimals: int, allowed: set[float]) -> bool:
     if _is_exempt(raw):
         return True
+    return _matches(value, decimals, allowed)
+
+
+def _matches(value: float, decimals: int, allowed: set[float]) -> bool:
+    """`value`, shown at `decimals`, is one of `allowed` (or its percent
+    form). No count/year exemption: used where a token must BE the fact,
+    such as an assumption's anchor value quoted in its own text."""
     tol = 0.5 * (10 ** -decimals) + 1e-9
     for a in allowed:
         if abs(a - value) <= tol:
@@ -293,6 +351,358 @@ def opens_with_kpi_forecast(text: str) -> bool:
     return any(p.search(first[0]) for p in _KPI_FORECAST_OPENERS)
 
 
+# --- forecast assumptions ---------------------------------------------------------
+
+
+class _Missing:
+    """Sentinel for a fact path that names nothing (a fact may be `None`)."""
+
+    def __repr__(self) -> str:  # pragma: no cover — debugging aid
+        return "<missing>"
+
+
+_MISSING: Any = _Missing()
+
+
+def resolve_fact_path(facts: Any, path: Any) -> Any:
+    """The value at dot `path` in the per-section facts, or `_MISSING`.
+
+    Integer segments index lists. A dict key may itself contain dots — the
+    factor benchmark is keyed ``KFR.MKT_RF.D`` — so at each dict the
+    longest run of remaining segments that is a key wins, backtracking if
+    it leads nowhere.
+    """
+    if not isinstance(path, str) or not path.strip():
+        return _MISSING
+    return _resolve(facts, path.strip().split("."))
+
+
+def _resolve(node: Any, segs: list[str]) -> Any:
+    if not segs:
+        return node
+    if isinstance(node, dict):
+        for j in range(len(segs), 0, -1):
+            key = ".".join(segs[:j])
+            if key in node:
+                found = _resolve(node[key], segs[j:])
+                if found is not _MISSING:
+                    return found
+        return _MISSING
+    if isinstance(node, list) and segs[0].isdigit() and int(segs[0]) < len(node):
+        return _resolve(node[int(segs[0])], segs[1:])
+    return _MISSING
+
+
+def _is_number(value: Any) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(float(value)))
+
+
+def _is_count_leaf(key: str) -> bool:
+    return bool(set(str(key).lower().split("_")) & _COUNT_LEAF_TOKENS)
+
+
+def _numeric_leaves(node: Any, path: str) -> list[tuple[str, str, Any]]:
+    """`(path, leaf key, value)` for every finite number under a dict tree."""
+    out: list[tuple[str, str, Any]] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if _is_number(value):
+                out.append((f"{path}.{key}", str(key), value))
+            elif isinstance(value, dict):
+                out.extend(_numeric_leaves(value, f"{path}.{key}"))
+    return out
+
+
+def anchor_catalog(facts: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
+    """The observed facts a forecast assumption may be anchored to, and how
+    many the cap dropped.
+
+    Every finite numeric leaf under ``ANCHOR_PREFIXES`` except counts, as
+    ``{path, value, family}``. The writer stores it in the outlook's facts
+    (so the model sees exactly what it may anchor to) and the validator
+    recomputes it from the server's facts, so the two cannot disagree: the
+    stored copy is covered by the facts-mutation guard like every other
+    fact. A path outside the catalogue is not an anchor, even if it
+    resolves — the model was never shown it, and the page could not print
+    its value without re-resolving paths.
+    """
+    rows: list[tuple[bool, dict[str, Any]]] = []
+    for family, prefixes in ANCHOR_PREFIXES.items():
+        for prefix in prefixes:
+            root = prefix.rstrip(".")
+            node = resolve_fact_path(facts, root)
+            if node is _MISSING:
+                continue
+            for path, leaf, value in _numeric_leaves(node, root):
+                if _is_count_leaf(leaf):
+                    continue
+                rows.append((leaf in _HEADLINE_LEAVES, {"path": path, "value": value, "family": family}))
+    ordered = [r for headline, r in rows if headline] + [r for headline, r in rows if not headline]
+    return ordered[:MAX_ANCHORS], max(0, len(ordered) - MAX_ANCHORS)
+
+
+def _token_family(raw: str) -> str | None:
+    """`rate`, `multiple`, `other` (a currency or a size unit) or `None`
+    for a bare number."""
+    s = raw.strip().lower()
+    if "$" in s:
+        return "other"
+    m = re.search(r"(bps|bp|pp|%|x|pts?|bn|mm|m|k|tn|t|b)$", s)
+    if not m:
+        return None
+    unit = m.group(1)
+    if unit in RATE_UNITS:
+        return "rate"
+    if unit in MULTIPLE_UNITS:
+        return "multiple"
+    return "other"
+
+
+def unit_family(raw: Any) -> str | None:
+    """`rate` or `multiple` for a single unit-suffixed figure, else None."""
+    fam = _token_family(str(raw or ""))
+    return fam if fam in ("rate", "multiple") else None
+
+
+def _canonical(raw: str, value: float, decimals: int) -> tuple[float, float]:
+    """`(value, tolerance)` in the family's common unit: basis points are
+    hundredths of a percentage point, so "150 bps" and "1.5%" compare."""
+    factor = 0.01 if re.search(r"bps?$", raw.strip().lower()) else 1.0
+    return value * factor, (0.5 * (10 ** -decimals)) * factor + 1e-9
+
+
+def _single_measure(raw: Any) -> tuple[str, float, str] | None:
+    """`(raw, canonical value, family)` when `raw` is exactly one rate or
+    multiple (``"21%"``, ``"-150 bps"``, ``"18x"``) and nothing else."""
+    if not isinstance(raw, str):
+        return None
+    toks = numeric_tokens(raw)
+    if len(toks) != 1 or toks[0][0] != raw.strip():
+        return None
+    fam = unit_family(toks[0][0])
+    if fam is None:
+        return None
+    value, _ = _canonical(*toks[0])
+    return toks[0][0], value, fam
+
+
+@dataclass(frozen=True)
+class ForecastAssumption:
+    """One declared, valid forecast assumption (all of F2-F7 passed)."""
+
+    id: str
+    value: float          # canonical: percentage points for a rate, times for a multiple
+    family: str
+    anchor: str
+    anchor_value: float
+    bounds: tuple[float, float] | None = None
+
+    def states_value(self, raw: str, value: float, decimals: int) -> bool:
+        """`raw` is this assumption's value at the precision `raw` shows."""
+        if _token_family(raw) != self.family:
+            return False
+        canon, tol = _canonical(raw, value, decimals)
+        return abs(canon - self.value) <= tol
+
+    def states_anchor(self, raw: str, value: float, decimals: int) -> bool:
+        """`raw` is the anchor's observed value (a bare figure, or one in the
+        assumption's own unit family)."""
+        return _token_family(raw) in (None, self.family) and _matches(value, decimals, {self.anchor_value})
+
+    def states_bound(self, raw: str, value: float, decimals: int) -> bool:
+        if self.bounds is None or _token_family(raw) != self.family:
+            return False
+        canon, tol = _canonical(raw, value, decimals)
+        return any(abs(canon - b) <= tol for b in self.bounds)
+
+
+def _horizon_ok(horizon: Any) -> bool:
+    """An explicit horizon, whose only numbers are bare counts or years:
+    the field is printed beside the assumption, so a "20%" smuggled into it
+    would be a number nothing checked."""
+    if not isinstance(horizon, str) or not horizon.strip() or len(horizon) > _MAX_HORIZON_CHARS:
+        return False
+    if not _HORIZON_RE.search(horizon):
+        return False
+    return all(raw.isdigit() for raw, _, _ in numeric_tokens(horizon))
+
+
+def _bounds_of(raw: Any, measure: tuple[str, float, str] | None) -> tuple[float, float] | None:
+    """`[lo, hi]` in the value's unit family, around the value."""
+    if measure is None or not isinstance(raw, (list, tuple)) or len(raw) != 2:
+        return None
+    parsed = [_single_measure(b) for b in raw]
+    if any(p is None or p[2] != measure[2] for p in parsed):
+        return None
+    lo, hi = parsed[0][1], parsed[1][1]  # type: ignore[index]
+    if not lo < hi or not lo <= measure[1] <= hi:
+        return None
+    return lo, hi
+
+
+def _forecast_assumptions(name: str, interp: dict[str, Any], facts: dict[str, Any],
+                          anchors: list[dict[str, Any]],
+                          errors: list[str]) -> tuple[set[str], dict[str, ForecastAssumption]]:
+    """F2-F7 over the section's `forecast_assumption` claims. Returns the
+    ids declared (for F9/F10) and the assumptions that passed every rule
+    (the only ones that may support a number)."""
+    catalogue = {a["path"]: a for a in anchors}
+    fa_claims = [c for c in _claims_of(interp) if c.get("type") == "forecast_assumption"]
+    if len(fa_claims) > MAX_FORECAST_ASSUMPTIONS:
+        errors.append(f"{name}: {len(fa_claims)} forecast assumptions declared; at most "
+                      f"{MAX_FORECAST_ASSUMPTIONS} are accepted")
+    seen: set[str] = set()
+    declared: set[str] = set()
+    valid: dict[str, ForecastAssumption] = {}
+    for claim in fa_claims:
+        fid = claim.get("id")
+        if not isinstance(fid, str) or not _FA_ID_RE.match(fid) or fid in seen:
+            errors.append(f"{name}: forecast assumption id {fid!r} is missing, malformed or repeated")
+            valid.pop(str(fid), None)
+            continue
+        seen.add(fid)
+        declared.add(fid)
+        ok = True
+        measure = _single_measure(claim.get("value"))  # F3
+        if measure is None:
+            errors.append(f"{name}: {fid} value {claim.get('value')!r} is not a single rate or multiple")
+            ok = False
+        if not _horizon_ok(claim.get("horizon")):  # F4
+            errors.append(f"{name}: {fid} has no explicit horizon")
+            ok = False
+        anchor = claim.get("anchor")  # F5
+        entry = catalogue.get(anchor) if isinstance(anchor, str) else None
+        resolved = resolve_fact_path(facts, anchor)
+        family = measure[2] if measure else None
+        if (entry is None or (family is not None and entry["family"] != family)
+                or not _is_number(resolved) or resolved != entry["value"]):
+            errors.append(f"{name}: {fid} anchor {anchor!r} is not an observed {family or 'rate or multiple'} "
+                          "in this edition's facts")
+            ok = False
+            entry = None
+        bounds = None
+        if claim.get("bounds") is not None:
+            bounds = _bounds_of(claim.get("bounds"), measure)
+            if bounds is None:
+                errors.append(f"{name}: {fid} bounds must be [lo, hi] in its value's unit family, "
+                              "around its value")
+                ok = False
+        fa = (ForecastAssumption(fid, measure[1], measure[2], str(anchor), float(entry["value"]), bounds)
+              if measure is not None and entry is not None else None)
+        if fa is not None:  # F6
+            toks = numeric_tokens(str(claim.get("text") or ""))
+            if not (any(fa.states_value(*t) for t in toks) and any(fa.states_anchor(*t) for t in toks)):
+                errors.append(f"{name}: {fid} text must state its value and its anchor's observed value")
+                ok = False
+        if not is_real_falsifier(claim.get("falsifier")):  # F7
+            errors.append(f"{name}: {fid} has no usable falsifier")
+            ok = False
+        if ok and fa is not None:
+            valid[fid] = fa
+    return declared, valid
+
+
+def _basis_resolves(basis: Any, facts: dict[str, Any], declared: set[str]) -> bool:
+    """F9: a causal basis names something checkable — a fact path below a
+    section, a mandate item, or a declared assumption."""
+    for ref in basis if isinstance(basis, list) else []:
+        r = str(ref).strip()
+        if r.startswith("mandate:") and len(r) > len("mandate:"):
+            return True
+        if r in declared:
+            return True
+        if "." in r and resolve_fact_path(facts, r) is not _MISSING:
+            return True
+    return False
+
+
+def _scenario_ids(sc: dict[str, Any]) -> list[Any]:
+    ids = sc.get("assumption_ids")
+    return list(ids) if isinstance(ids, list) else []
+
+
+def _forward_errors(name: str, interp: dict[str, Any], facts: dict[str, Any],
+                    errors: list[str]) -> None:
+    """F1-F10 for a forward section. Its numbers are checked against the
+    section's OWN facts (the anchors catalogue included) and its valid
+    assumptions — never the whole pack — and a scenario's numbers only
+    against the assumptions that scenario lists."""
+    anchors = anchor_catalog(facts)[0]
+    declared, fas = _forecast_assumptions(name, interp, facts, anchors, errors)
+    claims = _claims_of(interp)
+
+    for claim in claims:  # F9
+        if claim.get("type") == "causal_inference" and not _basis_resolves(claim.get("basis"), facts, declared):
+            errors.append(f"{name}: causal claim basis names nothing in the facts, the mandate or a "
+                          "registered assumption")
+
+    scenarios = interp.get("scenarios")
+    scenarios = scenarios if isinstance(scenarios, dict) else {}
+    for key, sc in scenarios.items():  # F10
+        if not isinstance(sc, dict):
+            continue
+        if sc.get("assumption_ids") is not None and not isinstance(sc.get("assumption_ids"), list):
+            errors.append(f"{name}: scenario {key} assumption_ids is not a list")
+        for fid in _scenario_ids(sc):
+            if not isinstance(fid, str) or fid not in declared:
+                errors.append(f"{name}: scenario {key} references undeclared assumption {fid}")
+
+    section_facts = facts.get(name)
+    own_facts: dict[str, Any] = section_facts if isinstance(section_facts, dict) else {}
+    own = _numbers({k: v for k, v in own_facts.items() if k not in ("anchors", "anchors_truncated")})
+    own |= {float(a["value"]) for a in anchors}
+
+    def general(text: str) -> None:  # F8
+        for raw, value, decimals in numeric_tokens(text):
+            if _supported(raw, value, decimals, own) or any(
+                    fa.states_value(raw, value, decimals) for fa in fas.values()):
+                continue
+            errors.append(f"{name}: number {raw!r} is not in the facts or a registered assumption")
+
+    if isinstance(interp.get("text"), str):
+        general(interp["text"])
+    for stage in interp.get("stages") or []:
+        if isinstance(stage, dict) and isinstance(stage.get("text"), str):
+            general(stage["text"])
+    for claim in claims:
+        if isinstance(claim.get("text"), str):
+            general(claim["text"])
+        falsifier = claim.get("falsifier")
+        if not isinstance(falsifier, str):
+            continue
+        if claim.get("type") != "forecast_assumption":
+            general(falsifier)
+            continue
+        fa = fas.get(str(claim.get("id")))
+        # An assumption's falsifier may name only its own registered
+        # numbers: its bounds, its value, its anchor's observed value.
+        for raw, value, decimals in numeric_tokens(falsifier):
+            if _is_exempt(raw) or (fa is not None and (
+                    fa.states_bound(raw, value, decimals) or fa.states_value(raw, value, decimals)
+                    or fa.states_anchor(raw, value, decimals))):
+                continue
+            errors.append(f"{name}: {claim.get('id')} falsifier number {raw!r} is not its bounds, "
+                          "value or anchor value")
+
+    # A scenario may quote only the assumptions it lists — their values or
+    # their anchors' observed values. Anything else, even a number that
+    # happens to be somewhere in the facts, is an undeclared forecast.
+    for key, sc in scenarios.items():
+        if not isinstance(sc, dict):
+            continue
+        listed = [fas[i] for i in _scenario_ids(sc) if isinstance(i, str) and i in fas]
+        texts = [sc.get("text")] + list(sc.get("falsifiers") or [])
+        for text in texts:
+            for raw, value, decimals in numeric_tokens(str(text or "")):
+                if _is_exempt(raw) or any(
+                        fa.states_value(raw, value, decimals) or fa.states_anchor(raw, value, decimals)
+                        for fa in listed):
+                    continue
+                errors.append(f"{name}: scenario {key} number {raw!r} is not the value or anchor "
+                              "of an assumption it lists")
+
+
 # --- the gate -----------------------------------------------------------------
 
 
@@ -350,14 +760,22 @@ def validate(payload: dict[str, Any], facts: dict[str, Any]) -> list[str]:
                     f"{name}: causal_inference claim has no usable falsifier "
                     f"({str(claim.get('falsifier') or '')[:40]!r})"
                 )
+            # F1: a registered forward number belongs to the outlook. A
+            # backward-looking section quotes observations, full stop.
+            if claim.get("type") == "forecast_assumption" and name not in FORWARD_SECTIONS:
+                errors.append(f"{name}: forecast_assumption claims are accepted only in outlook")
+        forward = name in FORWARD_SECTIONS
+        if forward:
+            _forward_errors(name, interp, facts, errors)
         for text in _interpretation_texts(interp):
             low = text.lower()
             for phrase in FORBIDDEN_PHRASES:
                 if phrase in low:
                     errors.append(f"{name}: advice phrasing {phrase!r}")
-            for raw, value, decimals in numeric_tokens(text):
-                if not _supported(raw, value, decimals, allowed):
-                    errors.append(f"{name}: number {raw!r} is not in the facts")
+            if not forward:  # the forward section's numbers were checked above
+                for raw, value, decimals in numeric_tokens(text):
+                    if not _supported(raw, value, decimals, allowed):
+                        errors.append(f"{name}: number {raw!r} is not in the facts")
             for sentence in _sentences(text):
                 if _has_causal_marker(sentence) and not _claim_supports(sentence, claims):
                     errors.append(f"{name}: unsupported causal claim {sentence[:80]!r}")
