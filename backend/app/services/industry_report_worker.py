@@ -1008,12 +1008,23 @@ def _run_group_report(job: dict[str, Any], info: gics_registry.VersionInfo,
     prior = industry_report_store.latest_good(code, version=info)
     events, events_provenance = _events_for(snapshot, code)
 
+    # A retry after a validator rejection tells the model what was wrong;
+    # otherwise attempt 2 is attempt 1's prompt again and fails the same
+    # way. `_claim` leaves the previous attempt's error on the row, and
+    # `_finish_claim` stored it redacted and capped at _MAX_ERROR_CHARS.
+    # The deterministic final attempt makes no model call, so it gets none.
+    repair_notes = ""
+    if not deterministic and job.get("error_type") == ReportRejected.__name__:
+        repair_notes = str(job.get("error_message") or "")
+
     _append_progress(job_id, "writing_report",
-                     mode="deterministic" if deterministic else "default")
+                     mode="deterministic" if deterministic else "default",
+                     **({"repair_notes": True} if repair_notes else {}))
     with llm_call_context(agent_name=analyst.display_name, run_id=job["run_id"],
                           feature="industry_report", route="cheap"):
         result = writer.write_report(analyst, stats, snapshot, prior, events,
-                                     run_id=job["run_id"], deterministic=deterministic)
+                                     run_id=job["run_id"], deterministic=deterministic,
+                                     repair_notes=repair_notes)
     result.degraded.extend(snapshot_reasons)
     dropped = events_provenance.get("n_dropped_by_snapshot_global_cap") or 0
     if dropped:
