@@ -720,6 +720,11 @@ def test_undeclared_scenario_number_coinciding_with_a_fact_is_rejected():
     registered, and all three used to pass."""
     wire = json.loads((REPO / "frontend/src/test/fixtures/industry.wire.json").read_text())
     payload = wire["report"]["payload"]
+    # The fixture is the PUBLIC projection (owner decision 2026-09-24): the
+    # sector is a slug there. The stored edition the validator reads keeps
+    # the internal sector code, which is what licensed "45x" — put it back.
+    sector = payload["sections"]["overview"]["facts"]["sector"]
+    sector["code"] = "45"
     facts = {name: s["facts"] for name, s in payload["sections"].items()}
     whole_pack = v._numbers(facts)
     for token in ("75%", "90%", "45x"):
