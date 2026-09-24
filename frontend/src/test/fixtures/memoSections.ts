@@ -16,7 +16,8 @@
 // `abbv_v7_patch` the legacy patched shape. The repo is public, so
 // non-template prose in them is synthetic.
 import wire from "./memo-sections.wire.json";
-import type { StockMemoOut } from "@/types";
+import { isCounted } from "@/lib/memoSections";
+import type { AgentFinding, SectionAvailability, StockMemoOut } from "@/types";
 
 export type PresentedMemoName =
   | "aapl_demo"
@@ -34,8 +35,110 @@ export function presentedMemo(name: PresentedMemoName): StockMemoOut {
 
 export const PRESENTED_MEMO_NAMES = Object.keys(MEMOS) as PresentedMemoName[];
 
-// The first sentence of the deterministic PM fallback tail
-// (`memo_sections` signature `pm_view_tail`, `graph.py:1275-1276`). A
-// renderer, the PDF included, must never print it.
+// The deterministic PM fallback tail, verbatim: `memo_sections.SIG["pm_view_tail"].text`
+// (`graph._pm_synthesis`). `test_memo_sections_fixture_contract.py` fails if
+// this copy drifts from the backend signature. A renderer, the PDF
+// included, must never print it.
 export const PM_TEMPLATE_TAIL =
-  "Sector framing supports the cohort thesis; valuation-relative read is the main swing factor.";
+  "Sector framing supports the cohort thesis; valuation-relative read is the main swing factor. The risk committee flagged the dominant downside scenarios; portfolio fit depends on macro view.";
+
+/** The presented memo with its hidden prose fields put back to raw template
+ * text (each carrying `PM_TEMPLATE_TAIL`) and the map left as the presenter
+ * wrote it. The presenter already replaces hidden prose with the
+ * placeholder, so "the PDF never prints the tail" can only fail against a
+ * body like this: it proves a renderer follows the map, not the text. */
+export function withRawTemplateProse(name: PresentedMemoName): StockMemoOut {
+  const memo = presentedMemo(name);
+  memo.final_pm_view = `Research view: Bullish. ${PM_TEMPLATE_TAIL}`;
+  memo.one_sentence_thesis = `${memo.ticker} is undervalued. ${PM_TEMPLATE_TAIL}`;
+  memo.final_verdict = `PM final view: Bullish (confidence 59). ${PM_TEMPLATE_TAIL}`;
+  return memo;
+}
+
+// Presenter outputs the five captured bodies do not reach. Each is `meta_v1`
+// with one change and the map entry `memo_sections.present_memo` returned
+// for exactly that change (run on 2026-09-24 against the S11 presenter):
+//  - scorecard: `scorecard: null` plus the graph's soft event
+//    ("Fundamental Scorecard", "DataUnavailable") (graph.py:1824-1828);
+//  - industry: `extra_agent_views.industry_group` =
+//    `industry_analysts._unmapped_finding` (FEAT-003 routing, owner decision 10);
+//  - valuationVerdict: `ValuationVerdict()` plus a "Valuation Verdict" hard event;
+//  - dcf: `dcf_summary: {}` plus a "DCF Engine" hard event;
+//  - degradedThesis: a builder rewrite (`section_provenance.thesis = "rewrite"`)
+//    of an available analyst's headline plus the builder's lever sentence.
+const unavailable = (
+  reason: NonNullable<SectionAvailability["reason"]>,
+  basis: string[],
+): SectionAvailability => ({ status: "unavailable", reason, hidden_items: 0, headline_hidden: false, basis });
+
+export const THESIS_BUILDER_CLAUSE =
+  "At this price the return comes from steady compounding, not a re-rating — own the floor, not the multiple.";
+
+export const PROBES = {
+  scorecard(): StockMemoOut {
+    const memo = presentedMemo("meta_v1");
+    memo.scorecard = null;
+    memo.section_availability!.scorecard = unavailable("no_source_data", [
+      "event:Fundamental Scorecard/DataUnavailable",
+    ]);
+    return memo;
+  },
+  industry(): StockMemoOut {
+    const memo = presentedMemo("meta_v1");
+    memo.extra_agent_views = {
+      industry_group: {
+        agent: "Industry Group Analyst",
+        headline: "Industry group read unavailable: no mapping.",
+        summary: "",
+        key_points: [],
+        confidence: 0,
+        sources: [],
+        data: { no_mapping: true } as AgentFinding["data"],
+      },
+    };
+    memo.section_availability!["extra_agent_views.industry_group"] = unavailable("no_source_data", [
+      "signature:industry_no_mapping",
+    ]);
+    return memo;
+  },
+  valuationVerdict(): StockMemoOut {
+    const memo = presentedMemo("meta_v1");
+    memo.valuation_verdict = {
+      verdict: "fairly_priced",
+      summary: "",
+      dcf_base_upside: null,
+    } as StockMemoOut["valuation_verdict"];
+    memo.section_availability!.valuation_verdict = unavailable("agent_failed", [
+      "event:Valuation Verdict/RuntimeError",
+    ]);
+    return memo;
+  },
+  dcf(): StockMemoOut {
+    const memo = presentedMemo("meta_v1");
+    memo.dcf_summary = {};
+    memo.section_availability!.dcf_summary = unavailable("agent_failed", ["event:DCF Engine/RuntimeError"]);
+    return memo;
+  },
+  degradedThesis(): StockMemoOut {
+    const memo = presentedMemo("meta_v1");
+    memo.one_sentence_thesis = `META is fairly priced — ${memo.valuation_agent_view.headline} ${THESIS_BUILDER_CLAUSE}`;
+    memo.section_availability!.one_sentence_thesis = {
+      status: "degraded",
+      reason: "partial_template",
+      hidden_items: 0,
+      headline_hidden: false,
+      basis: ["provenance:thesis=rewrite", "claim:llm_headline"],
+    };
+    return memo;
+  },
+} as const;
+
+/** Every counted section a rendered memo shows a placeholder for: the
+ * distinct `data-section` keys in `root` that `isCounted` says the banner
+ * counts. A renderer's banner number must equal this list's length. */
+export function countedPlaceholders(memo: StockMemoOut, root: ParentNode): string[] {
+  const keys = new Set(
+    Array.from(root.querySelectorAll("[data-section]")).map((el) => el.getAttribute("data-section") ?? ""),
+  );
+  return [...keys].filter((k) => isCounted(memo, k)).sort();
+}

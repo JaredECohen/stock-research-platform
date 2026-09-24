@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  FULL_MEMO_SECTIONS,
+  MEMO_CARD_SECTIONS,
   REASON_TEXT,
+  SAMPLE_SUMMARY_SECTIONS,
+  SECTION_REASON_TEXT,
   UNAVAILABLE_TEXT,
+  availability,
   bannerCount,
+  isCounted,
+  reasonText,
   hiddenKeys,
   intakeRationale,
   isBlankedFinding,
@@ -10,7 +17,7 @@ import {
   sectionStatus,
 } from "@/lib/memoSections";
 import { makeMemo } from "@/test/fixtures/memo";
-import { PRESENTED_MEMO_NAMES, presentedMemo } from "@/test/fixtures/memoSections";
+import { PRESENTED_MEMO_NAMES, PROBES, presentedMemo } from "@/test/fixtures/memoSections";
 import type { SectionAvailability } from "@/types";
 
 function av(status: SectionAvailability["status"], reason: SectionAvailability["reason"]): SectionAvailability {
@@ -51,7 +58,7 @@ describe("memoSections", () => {
   it("counts neither template_always, intake skips, nor not-produced sections in the banner", () => {
     // META: portfolio fit (template_always), technical (intake skip) and two
     // not-produced optional sections are all unavailable; only the critic counts.
-    expect(bannerCount(presentedMemo("meta_v1"))).toBe(1);
+    expect(bannerCount(presentedMemo("meta_v1"), MEMO_CARD_SECTIONS)).toBe(1);
     const onlyExcluded = makeMemo({
       section_availability: {
         portfolio_fit: av("unavailable", "template_always"),
@@ -61,10 +68,39 @@ describe("memoSections", () => {
         rating_label: av("degraded", "pm_view_unavailable"),
       },
     });
-    expect(bannerCount(onlyExcluded)).toBe(0);
+    for (const shown of [MEMO_CARD_SECTIONS, FULL_MEMO_SECTIONS, SAMPLE_SUMMARY_SECTIONS]) {
+      expect(bannerCount(onlyExcluded, shown)).toBe(0);
+    }
     // GOOGL (template PM view, no flag): thesis, PM view, confidence,
     // mispricing, sector view, sector synthesis, critic and final verdict.
-    expect(bannerCount(presentedMemo("googl_live_prepflag"))).toBe(8);
+    expect(bannerCount(presentedMemo("googl_live_prepflag"), MEMO_CARD_SECTIONS)).toBe(8);
+  });
+
+  it("counts only the sections the calling renderer can show", () => {
+    // FEAT-003 routing gives every unmapped ticker a hidden industry finding
+    // that no memo renderer displays; counting it named a section the reader
+    // could not find.
+    const industry = PROBES.industry();
+    expect(isCounted(industry, "extra_agent_views.industry_group")).toBe(true);
+    expect(bannerCount(industry, MEMO_CARD_SECTIONS)).toBe(1); // the critic alone
+    expect(bannerCount(industry, FULL_MEMO_SECTIONS)).toBe(1);
+    // The public summary shows no critic, so nothing it shows is missing.
+    expect(bannerCount(industry, SAMPLE_SUMMARY_SECTIONS)).toBe(0);
+    // A missing scorecard row is shown (and counted) by the full memo only.
+    const scorecard = PROBES.scorecard();
+    expect(bannerCount(scorecard, FULL_MEMO_SECTIONS)).toBe(2);
+    expect(bannerCount(scorecard, MEMO_CARD_SECTIONS)).toBe(1);
+    // The full memo has no sector-synthesis block, so GOOGL counts 7 there.
+    expect(bannerCount(presentedMemo("googl_live_prepflag"), FULL_MEMO_SECTIONS)).toBe(7);
+  });
+
+  it("words a degraded thesis as a kept claim beside builder wording, not as removed text", () => {
+    const thesis = availability(PROBES.degradedThesis(), "one_sentence_thesis");
+    expect(reasonText(thesis, "one_sentence_thesis")).toBe(SECTION_REASON_TEXT.one_sentence_thesis.partial_template);
+    expect(reasonText(thesis, "one_sentence_thesis")).not.toBe(REASON_TEXT.partial_template);
+    // Other sections keep the generic sentence (the presenter does remove
+    // items from a partially templated list).
+    expect(reasonText(thesis, "key_risks")).toBe(REASON_TEXT.partial_template);
   });
 
   it("reads the intake rationale from the finding, then from the intake decision", () => {

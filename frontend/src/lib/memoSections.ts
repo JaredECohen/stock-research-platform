@@ -106,9 +106,25 @@ export function isDegraded(
   return sectionStatus(memo, key) === "degraded";
 }
 
-/** The reason sentence for a verdict, or "" when it carries none. */
-export function reasonText(av: SectionAvailability | undefined): string {
-  return av?.reason ? REASON_TEXT[av.reason] ?? "" : "";
+// Reason sentences that depend on the section as well as the reason. A
+// degraded thesis (`partial_template`, basis `claim:llm_headline`) is a
+// builder rewrite that kept the analyst's claim and appended the builder's
+// canned lever sentence: the presenter removes nothing from it, so the
+// generic "Template text was removed" would be false. The integration plan
+// kept that thesis visible only because it is "shown with a note"
+// (critique delta 11).
+export const SECTION_REASON_TEXT: Readonly<Record<string, Partial<Record<SectionReason, string>>>> = {
+  one_sentence_thesis: {
+    partial_template: "The claim is the analyst's; the sentence after it is standard builder wording, not analysis.",
+  },
+};
+
+/** The reason sentence for a verdict, or "" when it carries none. With
+ * `section`, a section-specific wording wins over the generic one. */
+export function reasonText(av: SectionAvailability | undefined, section?: string): string {
+  if (!av?.reason) return "";
+  const specific = section ? SECTION_REASON_TEXT[section]?.[av.reason] : undefined;
+  return specific ?? REASON_TEXT[av.reason] ?? "";
 }
 
 /** "2 template items not shown" for a list section the presenter filtered,
@@ -124,17 +140,95 @@ export function hiddenKeys(memo: Pick<StockMemoOut, "section_availability">): st
   return Object.keys(memo.section_availability ?? {}).filter((k) => isHidden(memo, k));
 }
 
+/** True when an unavailable section counts toward the banner: withheld for
+ * a reason in neither `NOT_COUNTED` nor a drill-down (`<finding>.long_form_report`
+ * belongs to its card, which carries its own note). */
+export function isCounted(
+  memo: Pick<StockMemoOut, "section_availability"> | null | undefined,
+  key: string,
+): boolean {
+  const av = availability(memo, key);
+  return (
+    av?.status === "unavailable" &&
+    !(av.reason && NOT_COUNTED.has(av.reason)) &&
+    !key.endsWith(".long_form_report")
+  );
+}
+
+// The sections each renderer can show a placeholder for. The banner counts
+// only these, so "N sections unavailable" never names a section the reader
+// cannot find on the page in front of them: no memo renderer shows
+// `extra_agent_views.*` (FEAT-003 routing adds one per unmapped ticker),
+// `earnings_qoq_delta` or `forward_catalysts`; the card has no scorecard or
+// thesis breakers; the full memo has no sector synthesis. A renderer that
+// starts showing a section adds its key here with the placeholder, and each
+// renderer's test asserts that the count equals the placeholders it shows.
+const FINDING_SECTIONS = [
+  "sector_agent_view",
+  "earnings_agent_view",
+  "filing_agent_view",
+  "valuation_agent_view",
+  "comps_agent_view",
+  "macro_sensitivity",
+  "technical_agent_view",
+] as const;
+
+export const MEMO_CARD_SECTIONS: ReadonlySet<string> = new Set([
+  "one_sentence_thesis",
+  "valuation_verdict",
+  "confidence_score",
+  "final_pm_view",
+  "mispricing_thesis",
+  ...FINDING_SECTIONS,
+  "bull_case",
+  "bear_case",
+  "sector_synthesis",
+  "catalysts",
+  "key_risks",
+  "dcf_summary",
+  "risk_committee_challenge",
+  "final_verdict",
+]);
+
+export const FULL_MEMO_SECTIONS: ReadonlySet<string> = new Set([
+  "confidence_score",
+  "one_sentence_thesis",
+  "final_pm_view",
+  "mispricing_thesis",
+  "bull_case",
+  "bear_case",
+  ...FINDING_SECTIONS,
+  "valuation_verdict",
+  "dcf_summary",
+  "scorecard",
+  "catalysts",
+  "key_risks",
+  "thesis_breakers",
+  "risk_committee_challenge",
+  "portfolio_fit",
+  "final_verdict",
+]);
+
+export const SAMPLE_SUMMARY_SECTIONS: ReadonlySet<string> = new Set([
+  "confidence_score",
+  "one_sentence_thesis",
+  "final_pm_view",
+  "bull_case",
+  "bear_case",
+  "valuation_verdict",
+  "catalysts",
+  "key_risks",
+]);
+
 /** How many sections the "N sections unavailable in this version" banner
- * reports. Excludes the reasons in `NOT_COUNTED` and the per-analyst
- * drill-down keys (`<finding>.long_form_report`): a drill-down belongs to its
- * card, which carries its own note, and counting it would report a section
- * the reader cannot find. */
-export function bannerCount(memo: Pick<StockMemoOut, "section_availability">): number {
-  return Object.entries(memo.section_availability ?? {}).filter(
-    ([key, av]) =>
-      av.status === "unavailable" &&
-      !(av.reason && NOT_COUNTED.has(av.reason)) &&
-      !key.endsWith(".long_form_report"),
+ * reports: the counted sections (`isCounted`) among those the calling
+ * renderer shows (`shown`, one of the sets above). */
+export function bannerCount(
+  memo: Pick<StockMemoOut, "section_availability">,
+  shown: ReadonlySet<string>,
+): number {
+  return Object.keys(memo.section_availability ?? {}).filter(
+    (key) => shown.has(key) && isCounted(memo, key),
   ).length;
 }
 

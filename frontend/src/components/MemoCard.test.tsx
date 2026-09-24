@@ -2,8 +2,16 @@ import { describe, expect, it } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import MemoCard from "@/components/MemoCard";
-import { REASON_TEXT, UNAVAILABLE_TEXT } from "@/lib/memoSections";
-import { PM_TEMPLATE_TAIL, presentedMemo } from "@/test/fixtures/memoSections";
+import { REASON_TEXT, SECTION_REASON_TEXT, UNAVAILABLE_TEXT } from "@/lib/memoSections";
+import {
+  PM_TEMPLATE_TAIL,
+  PRESENTED_MEMO_NAMES,
+  PROBES,
+  THESIS_BUILDER_CLAUSE,
+  countedPlaceholders,
+  presentedMemo,
+  withRawTemplateProse,
+} from "@/test/fixtures/memoSections";
 import {
   BLANK_MISPRICING,
   CLAMPED_DCF_SUMMARY,
@@ -290,5 +298,65 @@ describe("MemoCard W2a placeholders (captured presenter output)", () => {
     renderCard(makeMemo({ section_availability: undefined }));
     expect(screen.queryAllByTestId("unavailable-section")).toHaveLength(0);
     expect(screen.getByText("62")).toBeInTheDocument();
+  });
+});
+
+describe("MemoCard W2a banner and notes (review fixes)", () => {
+  function bannerNumber(): number {
+    const el = screen.queryByTestId("unavailable-count");
+    if (!el) return 0;
+    const m = /(\d+) sections? unavailable/.exec(el.textContent ?? "");
+    if (!m) throw new Error(`unparseable banner: ${el.textContent}`);
+    return Number(m[1]);
+  }
+
+  const bodies: [string, () => StockMemoOut][] = [
+    ...PRESENTED_MEMO_NAMES.map((n): [string, () => StockMemoOut] => [n, () => presentedMemo(n)]),
+    ...Object.entries(PROBES).map(([n, f]): [string, () => StockMemoOut] => [`probe:${n}`, f]),
+  ];
+
+  it.each(bodies)("%s: the banner counts exactly the placeholders the card shows", (_name, build) => {
+    const memo = build();
+    const { container, unmount } = renderCard(memo);
+    expect(bannerNumber()).toBe(countedPlaceholders(memo, container).length);
+    unmount();
+  });
+
+  it("does not count a hidden industry finding the card never shows", () => {
+    // FEAT-003 routing (owner decision 10) gives every unmapped ticker one.
+    renderCard(PROBES.industry());
+    expect(screen.getByTestId("unavailable-count")).toHaveTextContent("· 1 section unavailable in this version.");
+  });
+
+  it("shows why a failed valuation verdict and DCF are missing", () => {
+    renderCard(PROBES.valuationVerdict());
+    const vv = document.querySelector('[data-section="valuation_verdict"]') as HTMLElement;
+    expect(within(vv).getByText("Valuation verdict")).toBeInTheDocument();
+    expect(within(vv).getByText(REASON_TEXT.agent_failed)).toBeInTheDocument();
+  });
+
+  it("notes a degraded thesis instead of letting the builder sentence read as analysis", () => {
+    renderCard(PROBES.degradedThesis());
+    // The thesis stays visible (critique delta 11) ...
+    expect(screen.getByText(new RegExp(THESIS_BUILDER_CLAUSE))).toBeInTheDocument();
+    // ... with the thesis-specific note under it.
+    const note = document.querySelector('[data-testid="degraded-note"][data-section="one_sentence_thesis"]');
+    expect(note).toHaveTextContent(SECTION_REASON_TEXT.one_sentence_thesis.partial_template!);
+    expect(note).not.toHaveTextContent(REASON_TEXT.partial_template);
+  });
+
+  it("follows the map, not the text: raw template prose under a hidden verdict never prints", () => {
+    const { container } = renderCard(withRawTemplateProse("googl_live_prepflag"));
+    expect(container.textContent).not.toContain(PM_TEMPLATE_TAIL);
+    expect(document.querySelector('[data-section="final_pm_view"]')).toHaveTextContent(UNAVAILABLE_TEXT);
+  });
+
+  it("ABBV: a not-produced mispricing view gets a placeholder instead of vanishing", () => {
+    renderCard(presentedMemo("abbv_v7_patch"));
+    const misp = document.querySelector(
+      '[data-testid="unavailable-section"][data-section="mispricing_thesis"]',
+    ) as HTMLElement;
+    expect(within(misp).getByText("Where We Differ From Consensus")).toBeInTheDocument();
+    expect(within(misp).getByText(REASON_TEXT.not_produced)).toBeInTheDocument();
   });
 });

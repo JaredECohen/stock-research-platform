@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import FullInvestmentMemo from "@/components/FullInvestmentMemo";
-import { REASON_TEXT, UNAVAILABLE_TEXT } from "@/lib/memoSections";
-import { PM_TEMPLATE_TAIL, presentedMemo } from "@/test/fixtures/memoSections";
+import { REASON_TEXT, SECTION_REASON_TEXT, UNAVAILABLE_TEXT } from "@/lib/memoSections";
+import {
+  PM_TEMPLATE_TAIL,
+  PRESENTED_MEMO_NAMES,
+  PROBES,
+  THESIS_BUILDER_CLAUSE,
+  countedPlaceholders,
+  presentedMemo,
+  withRawTemplateProse,
+} from "@/test/fixtures/memoSections";
 import {
   BLANK_MISPRICING,
   CLAMPED_DCF_SUMMARY,
@@ -283,8 +291,10 @@ describe("FullInvestmentMemo W2a placeholders (captured presenter output)", () =
     expect(screen.getByText(REASON_TEXT.pm_view_unavailable)).toBeInTheDocument();
     expect(screen.getByText(/Synthetic intake rationale 40 for the googl_live_prepflag fixture\./)).toBeInTheDocument();
     // Banner count excludes Portfolio Fit (template_always) and technical
-    // (intake skip).
-    expect(screen.getByTestId("unavailable-count")).toHaveTextContent("8 sections unavailable in this version.");
+    // (intake skip), and sector synthesis, which the full memo does not
+    // render: 7 = thesis, PM view, confidence, mispricing, sector view,
+    // critic, final verdict.
+    expect(screen.getByTestId("unavailable-count")).toHaveTextContent("7 sections unavailable in this version.");
   });
 
   it("META: only technical and the critic are placeholders; Portfolio Fit is omitted", () => {
@@ -300,5 +310,92 @@ describe("FullInvestmentMemo W2a placeholders (captured presenter output)", () =
     expect(screen.getByText("Portfolio Fit")).toBeInTheDocument();
     expect(screen.getByText("Core defensive holding.")).toBeInTheDocument();
     expect(screen.queryAllByTestId("unavailable-section")).toHaveLength(0);
+  });
+});
+
+describe("FullInvestmentMemo W2a banner, notes and PDF (review fixes)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function printedHtml(): string {
+    let written = "";
+    const popup = {
+      document: {
+        open: () => {},
+        write: (html: string) => {
+          written += html;
+        },
+        close: () => {},
+      },
+      focus: () => {},
+      print: () => {},
+      onload: null as null | (() => void),
+    };
+    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    fireEvent.click(screen.getByText("Download PDF"));
+    return written;
+  }
+
+  function bannerNumber(root: ParentNode): number {
+    const el = root.querySelector('[data-testid="unavailable-count"]');
+    if (!el) return 0;
+    const m = /(\d+) sections? unavailable/i.exec(el.textContent ?? "");
+    if (!m) throw new Error(`unparseable banner: ${el.textContent}`);
+    return Number(m[1]);
+  }
+
+  const bodies: [string, () => StockMemoOut][] = [
+    ...PRESENTED_MEMO_NAMES.map((n): [string, () => StockMemoOut] => [n, () => presentedMemo(n)]),
+    ...Object.entries(PROBES).map(([n, f]): [string, () => StockMemoOut] => [`probe:${n}`, f]),
+  ];
+
+  it.each(bodies)("%s: the PDF banner counts exactly the placeholders the PDF shows", (_name, build) => {
+    const memo = build();
+    const { unmount } = renderMemo(memo);
+    const doc = new DOMParser().parseFromString(printedHtml(), "text/html");
+    expect(bannerNumber(doc)).toBe(countedPlaceholders(memo, doc).length);
+    unmount();
+  });
+
+  it("the PDF follows the map, not the text: raw template prose under hidden verdicts never prints", () => {
+    renderMemo(withRawTemplateProse("googl_live_prepflag"));
+    const html = printedHtml();
+    expect(html).not.toContain(PM_TEMPLATE_TAIL);
+    expect(html).toContain(UNAVAILABLE_TEXT);
+  });
+
+  it("AAPL: the PDF keeps the Risks section as a placeholder and the computed catalyst", () => {
+    renderMemo(presentedMemo("aapl_demo"));
+    const doc = new DOMParser().parseFromString(printedHtml(), "text/html");
+    const risks = doc.querySelector('[data-section="key_risks"]');
+    expect(risks?.textContent).toContain(UNAVAILABLE_TEXT);
+    expect(risks?.textContent).toContain("2 template items not shown");
+    expect(doc.querySelector('[data-section="earnings_agent_view"]')?.textContent).toContain(REASON_TEXT.no_source_data);
+    expect(doc.body.textContent).toContain("Next earnings: 2026-10-29");
+  });
+
+  it("ABBV: a not-produced mispricing view prints a placeholder instead of vanishing", () => {
+    renderMemo(presentedMemo("abbv_v7_patch"));
+    const doc = new DOMParser().parseFromString(printedHtml(), "text/html");
+    const misp = doc.querySelector('[data-section="mispricing_thesis"]');
+    expect(misp?.textContent).toContain(UNAVAILABLE_TEXT);
+    expect(misp?.textContent).toContain(REASON_TEXT.not_produced);
+    expect(doc.body.textContent).toContain("Where We Differ From Consensus");
+  });
+
+  it("prints the degraded-thesis note under the thesis, in the modal and the PDF", () => {
+    renderMemo(PROBES.degradedThesis());
+    const note = SECTION_REASON_TEXT.one_sentence_thesis.partial_template!;
+    expect(screen.getByText(new RegExp(THESIS_BUILDER_CLAUSE))).toBeInTheDocument();
+    expect(screen.getByText(note)).toBeInTheDocument();
+    expect(printedHtml()).toContain(note);
+  });
+
+  it("a run with no scorecard row prints the scorecard placeholder, not nothing", () => {
+    renderMemo(PROBES.scorecard());
+    const doc = new DOMParser().parseFromString(printedHtml(), "text/html");
+    expect(doc.body.textContent).toContain("Fundamental Factor Scorecard");
+    expect(doc.querySelector('[data-section="scorecard"]')?.textContent).toContain(REASON_TEXT.no_source_data);
   });
 });

@@ -14,6 +14,7 @@ import {
   bannerCount,
   bannerText,
   intakeRationale,
+  FULL_MEMO_SECTIONS,
   isHidden,
   isUnavailable,
 } from "@/lib/memoSections";
@@ -92,7 +93,7 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
   const dcfWacc = pickNumber(dcf, ["wacc", "discount_rate"]);
   const dcfGrowth = pickNumber(dcf, ["terminal_growth", "g_terminal"]);
   const tvClamped = dcf.tv_clamped === true;
-  const hiddenCount = bannerCount(memo);
+  const hiddenCount = bannerCount(memo, FULL_MEMO_SECTIONS);
   const confidenceHidden = isHidden(memo, "confidence_score");
   const pfAv = availability(memo, "portfolio_fit");
   const portfolioFitOmitted = pfAv?.status === "unavailable" && pfAv.reason === "template_always";
@@ -156,7 +157,11 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                   availability={availability(memo, "rating_label")}
                   className="mt-1 max-w-[16rem] ml-auto"
                 />
-                <div className="mt-2 text-xs text-slate-400 print:text-slate-600" data-testid="cover-conviction">
+                <div
+                  className="mt-2 text-xs text-slate-400 print:text-slate-600"
+                  data-testid="cover-conviction"
+                  data-section={confidenceHidden ? "confidence_score" : undefined}
+                >
                   {confidenceHidden
                     ? "Conviction: unavailable in this version"
                     : `Conviction: ${Math.round(memo.confidence_score)}/100`}
@@ -212,10 +217,20 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                 className="mb-3"
               />
             ) : (
-              <p className="text-base leading-relaxed italic text-slate-200 print:text-slate-800 mb-3">
-                {memo.one_sentence_thesis ||
-                  (isHidden(memo, "final_verdict") ? "" : memo.final_verdict)}
-              </p>
+              <>
+                <p className="text-base leading-relaxed italic text-slate-200 print:text-slate-800 mb-3">
+                  {memo.one_sentence_thesis ||
+                    (isHidden(memo, "final_verdict") ? "" : memo.final_verdict)}
+                </p>
+                {/* A degraded thesis keeps the analyst's claim beside the
+                    builder's canned sentence; the note keeps that sentence
+                    from reading as analysis, in the PDF too. */}
+                <DegradedNote
+                  availability={availability(memo, "one_sentence_thesis")}
+                  section="one_sentence_thesis"
+                  className="-mt-2 mb-3"
+                />
+              </>
             )}
             {isHidden(memo, "final_pm_view") ? (
               <UnavailableSection
@@ -310,7 +325,16 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
 
           {/* VALUATION */}
           <Section title="Valuation">
-            {memo.valuation_verdict?.summary && (
+            {isHidden(memo, "valuation_verdict") ? (
+              // The verdict step failed; its default would read "fairly priced".
+              <UnavailableSection
+                variant="paper"
+                title="Valuation verdict"
+                section="valuation_verdict"
+                availability={availability(memo, "valuation_verdict")}
+                className="mb-3"
+              />
+            ) : memo.valuation_verdict?.summary && (
               <p className="text-sm font-semibold text-slate-100 print:text-slate-900 mb-3">
                 {memo.valuation_verdict.summary}
               </p>
@@ -318,15 +342,25 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
             {tvClamped && <TerminalClampBadge className="mb-3" />}
             <DegradedNote availability={availability(memo, "dcf_summary")} className="mb-3" />
             <div className="grid md:grid-cols-2 gap-4 mb-4">
-              <KvTable
-                title="DCF Summary"
-                rows={[
-                  ["Fair value / share", hasDcf ? fmtPrice(dcfFair) : "—"],
-                  ["Implied upside", hasDcf ? fmtUpside(dcfImpliedUpside) : "—"],
-                  ["WACC", dcfWacc !== null ? fmtPctLoose(dcfWacc) : "—"],
-                  ["Terminal growth", dcfGrowth !== null ? fmtPctLoose(dcfGrowth) : "—"],
-                ]}
-              />
+              {isHidden(memo, "dcf_summary") ? (
+                // The DCF engine failed; a table of dashes would not say why.
+                <UnavailableSection
+                  variant="paper"
+                  title="DCF Summary"
+                  section="dcf_summary"
+                  availability={availability(memo, "dcf_summary")}
+                />
+              ) : (
+                <KvTable
+                  title="DCF Summary"
+                  rows={[
+                    ["Fair value / share", hasDcf ? fmtPrice(dcfFair) : "—"],
+                    ["Implied upside", hasDcf ? fmtUpside(dcfImpliedUpside) : "—"],
+                    ["WACC", dcfWacc !== null ? fmtPctLoose(dcfWacc) : "—"],
+                    ["Terminal growth", dcfGrowth !== null ? fmtPctLoose(dcfGrowth) : "—"],
+                  ]}
+                />
+              )}
               {memo.dcf_pm_adjustment_headline && (
                 <div className="border border-slate-700 print:border-slate-300 rounded p-3">
                   <div className="text-xs uppercase tracking-wider text-slate-400 print:text-slate-600">
@@ -347,9 +381,17 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
           </Section>
 
           {/* SCORECARD — hidden on memos that pre-date the field (undefined)
-              and on runs with no row for the ticker (null). Informs the
-              memo; the rating blend does not read it. */}
-          {memo.scorecard && (
+              and on runs with no row for the ticker (null), except that a
+              presented memo shows the placeholder for the no-row case.
+              Informs the memo; the rating blend does not read it. */}
+          {isHidden(memo, "scorecard") ? (
+            // The run had no scorecard row for the ticker (the graph's
+            // DataUnavailable event); the section says so instead of
+            // vanishing, and the banner can count it.
+            <Section title="Fundamental Factor Scorecard">
+              <UnavailableSection variant="paper" section="scorecard" availability={availability(memo, "scorecard")} />
+            </Section>
+          ) : memo.scorecard && (
             <Section title="Fundamental Factor Scorecard">
               <ScorecardMemoSection scorecard={memo.scorecard} />
             </Section>

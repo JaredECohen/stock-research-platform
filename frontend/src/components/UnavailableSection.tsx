@@ -37,7 +37,7 @@ export default function UnavailableSection({
   variant?: "card" | "inline" | "paper";
   className?: string;
 }) {
-  const reason = reasonLine ?? reasonText(availability);
+  const reason = reasonLine ?? reasonText(availability, section);
   const items = hiddenItemsNote(availability);
   const body = (
     <>
@@ -113,18 +113,23 @@ export default function UnavailableSection({
  */
 export function DegradedNote({
   availability,
+  section,
   className = "",
 }: {
   availability?: SectionAvailability;
+  // The map key, for a section-specific reason sentence (the thesis) and
+  // for `data-section`.
+  section?: string;
   className?: string;
 }) {
   if (availability?.status !== "degraded") return null;
-  const parts = [reasonText(availability), hiddenItemsNote(availability)].filter(Boolean);
+  const parts = [reasonText(availability, section), hiddenItemsNote(availability)].filter(Boolean);
   if (parts.length === 0) return null;
   return (
     <div
       className={`text-[11px] text-warn-500 print:text-amber-800 ${className}`}
       data-testid="degraded-note"
+      data-section={section}
     >
       {parts.join(" · ")}
     </div>

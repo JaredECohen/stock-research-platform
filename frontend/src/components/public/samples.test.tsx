@@ -9,9 +9,18 @@ import SampleFundamentalsChart, { metricLabel } from "@/components/public/Sample
 import SampleMemoSummary from "@/components/public/SampleMemoSummary";
 import SamplePriceChart from "@/components/public/SamplePriceChart";
 import SampleScreenerRow from "@/components/public/SampleScreenerRow";
-import { REASON_TEXT, UNAVAILABLE_TEXT } from "@/lib/memoSections";
+import { REASON_TEXT, SECTION_REASON_TEXT, UNAVAILABLE_TEXT } from "@/lib/memoSections";
 import { makeMemo } from "@/test/fixtures/memo";
-import { PM_TEMPLATE_TAIL, presentedMemo } from "@/test/fixtures/memoSections";
+import {
+  PM_TEMPLATE_TAIL,
+  PRESENTED_MEMO_NAMES,
+  PROBES,
+  THESIS_BUILDER_CLAUSE,
+  countedPlaceholders,
+  presentedMemo,
+  withRawTemplateProse,
+} from "@/test/fixtures/memoSections";
+import type { StockMemoOut } from "@/types";
 import { makeComps, makeDCF, makeSample } from "@/test/fixtures/sample";
 
 vi.mock("recharts", () => {
@@ -152,8 +161,21 @@ describe("SampleMemoSummary", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
   it("prints n/a when the verdict has no DCF upside", () => {
-    render(<SampleMemoSummary memo={makeMemo({ valuation_verdict: { verdict: "overvalued", summary: "", dcf_base_upside: null } })} />);
+    render(
+      <SampleMemoSummary
+        memo={makeMemo({
+          valuation_verdict: { verdict: "overvalued", summary: "Net read: overvalued.", dcf_base_upside: null },
+        })}
+      />,
+    );
     expect(screen.getByText("DCF base-case upside n/a")).toBeInTheDocument();
+  });
+  it("prints no verdict label for a verdict that was not produced (empty summary)", () => {
+    // `schemas/memo.py::ValuationVerdict`: an empty summary means "not
+    // produced", whatever the default `verdict` says.
+    render(<SampleMemoSummary memo={makeMemo({ valuation_verdict: { verdict: "fairly_priced", summary: "", dcf_base_upside: null } })} />);
+    expect(screen.queryByText("Valuation verdict")).not.toBeInTheDocument();
+    expect(screen.queryByText("fairly priced")).not.toBeInTheDocument();
   });
 
   // W2a — the served sample memo is presented server-side; these bodies are
@@ -174,8 +196,9 @@ describe("SampleMemoSummary", () => {
       expect(screen.getByTestId("sample-confidence")).not.toHaveTextContent("59");
       expect(screen.getByText(REASON_TEXT.pm_view_unavailable)).toBeInTheDocument();
       expect(within(screen.getByTestId("case-bull")).getByText(/1 template item not shown/)).toBeInTheDocument();
+      // Only what the summary shows is counted: thesis, PM view, confidence.
       expect(screen.getByText(/Model output, not a recommendation/)).toHaveTextContent(
-        "8 sections unavailable in this version.",
+        "3 sections unavailable in this version.",
       );
       expect(container.textContent).not.toContain(PM_TEMPLATE_TAIL);
     });
@@ -192,9 +215,48 @@ describe("SampleMemoSummary", () => {
       expect(placeholderSections()).toEqual([]);
       expect(screen.getByText("Synthetic thesis 96 for the meta_v1 fixture.")).toBeInTheDocument();
       expect(screen.getByTestId("sample-confidence")).toHaveTextContent("Confidence 71/100");
-      expect(screen.getByText(/Model output, not a recommendation/)).toHaveTextContent(
-        "1 section unavailable in this version.",
+      // The critic is hidden, but the summary does not show a critic, so the
+      // footnote names nothing the visitor could not find.
+      expect(screen.getByText(/Model output, not a recommendation/)).not.toHaveTextContent("unavailable in this version");
+    });
+
+    const bodies: [string, () => StockMemoOut][] = [
+      ...PRESENTED_MEMO_NAMES.map((n): [string, () => StockMemoOut] => [n, () => presentedMemo(n)]),
+      ...Object.entries(PROBES).map(([n, f]): [string, () => StockMemoOut] => [`probe:${n}`, f]),
+    ];
+    it.each(bodies)("%s: the footnote counts exactly the placeholders the summary shows", (_name, build) => {
+      const memo = build();
+      const { container, unmount } = render(<SampleMemoSummary memo={memo} />);
+      const m = /(\d+) sections? unavailable/i.exec(
+        screen.getByText(/Model output, not a recommendation/).textContent ?? "",
       );
+      expect(m ? Number(m[1]) : 0).toBe(countedPlaceholders(memo, container).length);
+      unmount();
+    });
+
+    it("ABBV: a not-produced verdict prints no default 'fairly priced' label", () => {
+      render(<SampleMemoSummary memo={presentedMemo("abbv_v7_patch")} />);
+      expect(screen.queryByText("fairly priced")).not.toBeInTheDocument();
+      expect(screen.queryByText("DCF base-case upside n/a")).not.toBeInTheDocument();
+    });
+
+    it("a failed verdict step reads as unavailable with its reason", () => {
+      render(<SampleMemoSummary memo={PROBES.valuationVerdict()} />);
+      expect(screen.queryByText("fairly priced")).not.toBeInTheDocument();
+      const vv = document.querySelector('[data-section="valuation_verdict"]') as HTMLElement;
+      expect(within(vv).getByText(UNAVAILABLE_TEXT)).toBeInTheDocument();
+      expect(within(vv).getByText(REASON_TEXT.agent_failed)).toBeInTheDocument();
+    });
+
+    it("notes a degraded thesis under it", () => {
+      render(<SampleMemoSummary memo={PROBES.degradedThesis()} />);
+      expect(screen.getByText(new RegExp(THESIS_BUILDER_CLAUSE))).toBeInTheDocument();
+      expect(screen.getByText(SECTION_REASON_TEXT.one_sentence_thesis.partial_template!)).toBeInTheDocument();
+    });
+
+    it("follows the map, not the text: raw template prose under hidden verdicts never prints", () => {
+      const { container } = render(<SampleMemoSummary memo={withRawTemplateProse("googl_live_prepflag")} />);
+      expect(container.textContent).not.toContain(PM_TEMPLATE_TAIL);
     });
   });
 });

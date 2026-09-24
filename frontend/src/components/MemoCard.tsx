@@ -14,6 +14,7 @@ import {
   intakeRationale,
   isHidden,
   isUnavailable,
+  MEMO_CARD_SECTIONS,
 } from "@/lib/memoSections";
 import UnavailableSection, { DegradedNote } from "./UnavailableSection";
 import CrossSectorChips from "./CrossSectorChips";
@@ -454,7 +455,7 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
   // W2a: sections the presenter hid. A memo can have hidden sections and no
   // degraded agents (a pre-flag template PM view carries no event), so the
   // banner shows for either.
-  const hiddenCount = bannerCount(memo);
+  const hiddenCount = bannerCount(memo, MEMO_CARD_SECTIONS);
   return (
     <div className="space-y-4">
       {(degraded.length > 0 || hiddenCount > 0) && (
@@ -527,11 +528,31 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
               availability={availability(memo, "one_sentence_thesis")}
             />
           ) : (
-            <div className="text-base md:text-lg text-slate-100 leading-snug">
-              {memo.one_sentence_thesis}
-            </div>
+            <>
+              <div className="text-base md:text-lg text-slate-100 leading-snug">
+                {memo.one_sentence_thesis}
+              </div>
+              {/* A degraded thesis is a builder rewrite around the analyst's
+                  claim; it stays visible only with this note (critique
+                  delta 11), or the canned sentence reads as analysis. */}
+              <DegradedNote
+                availability={availability(memo, "one_sentence_thesis")}
+                section="one_sentence_thesis"
+                className="mt-1"
+              />
+            </>
           )}
-          {memo.valuation_verdict?.summary && (
+          {isHidden(memo, "valuation_verdict") ? (
+            // The verdict step failed: its `ValuationVerdict()` default
+            // would otherwise read as a "fairly priced" call.
+            <UnavailableSection
+              variant="inline"
+              title="Valuation verdict"
+              section="valuation_verdict"
+              availability={availability(memo, "valuation_verdict")}
+              className="mt-2 pt-2 border-t border-ink-700"
+            />
+          ) : memo.valuation_verdict?.summary && (
             <div className="mt-2 pt-2 border-t border-ink-700 text-xs text-slate-300">
               <span className="text-[10px] uppercase tracking-widest text-slate-500 mr-2">
                 Valuation verdict
@@ -746,7 +767,15 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
       <div className="card-tight">
         <div className="section-title mb-1">DCF Snapshot</div>
         <DegradedNote availability={availability(memo, "dcf_summary")} className="mb-2" />
-        {dcf && Object.keys(dcf).length > 0 ? (
+        {isHidden(memo, "dcf_summary") ? (
+          // The DCF engine failed on this run; say why rather than the bare
+          // "DCF unavailable." an empty summary gets.
+          <UnavailableSection
+            variant="inline"
+            section="dcf_summary"
+            availability={availability(memo, "dcf_summary")}
+          />
+        ) : dcf && Object.keys(dcf).length > 0 ? (
           (() => {
             // null = the engine could not compute the number (no share
             // count / no quote) → rendered "n/a". `Number(null)` is 0,
