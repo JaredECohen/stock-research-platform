@@ -200,3 +200,19 @@ def test_force_is_recorded(db):
 def test_bad_mode_or_empty_reason_raises(db, mode, reason):
     with pytest.raises(ValueError):
         control.set_mode(mode, reason=reason, now=NOW)
+
+
+def test_reserved_epoch_reason_is_refused(db):
+    """An emergency demotion filed under the epoch's reserved reason would
+    be accepted and then ignored by `mode_events` (or, before the first
+    nightly, become the backfill epoch). It is refused instead."""
+    sessions, _, _ = db
+    with sessions() as s:
+        control.ensure_epoch(s, now=NOW)
+        s.commit()
+    for reason in ("ledger_epoch", "  ledger_epoch "):
+        with pytest.raises(ValueError, match="reserved"):
+            control.set_mode("off", reason=reason, now=NOW + timedelta(hours=1))
+    with sessions() as s:
+        assert control.db_mode(s) == "shadow"
+        assert [e["reason"] for e in control.recent_events(s)] == ["ledger_epoch"]

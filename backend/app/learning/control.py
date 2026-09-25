@@ -193,6 +193,11 @@ def set_mode(
         raise ValueError(f"unknown learning mode {mode!r}; expected one of {MODES}")
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("a reason is required for every learning mode change")
+    if reason.strip() == EPOCH_REASON:
+        # Reserved: `mode_events` skips epoch rows, so a mode change filed
+        # under this reason would be accepted and then silently ignored —
+        # or, before the first nightly, become the backfill epoch itself.
+        raise ValueError(f"{EPOCH_REASON!r} is a reserved reason; describe the mode change")
     if actor not in ("admin", "auto"):
         raise ValueError(f"unknown learning control actor {actor!r}")
     now = now or datetime.utcnow()
