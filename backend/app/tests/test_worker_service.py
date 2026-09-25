@@ -101,3 +101,22 @@ def test_heartbeat_reports_the_routing_value_this_process_loaded(monkeypatch):
         monkeypatch.setattr(settings, "enable_industry_analyst_routing", value)
         worker._heartbeat()
         assert shown in calls[-1]["note"]
+
+
+def test_worker_heartbeat_reports_gemini_backend(monkeypatch):
+    """The worker is the only process that calls Gemini; its heartbeat is
+    where a post-deploy check sees which backend it loaded. Vertex wins when
+    both are set. The key itself never appears."""
+    from app import monitoring, worker
+    from app.config import settings
+    calls = []
+    secret = "AIza-not-a-real-key-0123456789"
+    monkeypatch.setattr(settings, "enable_industry_reports", False)
+    monkeypatch.setattr(monitoring, "record_run", lambda *a, **kw: calls.append(kw))
+    for key, project, shown in ((secret, "", "gemini=api"), ("", "", "gemini=off"),
+                                (secret, "some-project", "gemini=vertex")):
+        monkeypatch.setattr(settings, "gemini_api_key", key)
+        monkeypatch.setattr(settings, "vertex_project_id", project)
+        worker._heartbeat()
+        assert shown in calls[-1]["note"]
+        assert secret not in calls[-1]["note"]
