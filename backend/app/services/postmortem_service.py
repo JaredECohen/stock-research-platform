@@ -575,7 +575,7 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
                       writes or their persisted completion flag failed.
       `memory_disabled` memory was disabled; no file was touched.
       `classification_error` the eligibility sweep's failure, or None.
-      `learning_*`    W7 ledger writes for 90d+ postmortems: `written`
+      `learning_*`    W7 ledger writes for 90d postmortems: `written`
                       (a lesson was stored), `skipped` with its reasons
                       (deterministic, ineligible, template PM, no
                       hypothesis, ...), `rejected` hypotheses that broke the
@@ -603,7 +603,10 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
     # live postmortem of the ledger era, so the historical backfill
     # (`ledger.sync_from_postmortems`, pre-epoch rows only) can never
     # re-learn a postmortem this path saw and deliberately did not learn.
-    learn = bool(settings.learning_ledger_writes) and horizon_days >= 90
+    # Lessons are stated over, and judged on, 90 days only
+    # (`ledger.LESSON_HORIZON`): an admin 180d run keeps the legacy prompt
+    # rather than paying for a hypothesis the ledger would discard.
+    learn = bool(settings.learning_ledger_writes) and horizon_days == 90
     learning_written = 0
     learning_rejected = 0
     learning_skips: dict[str, int] = {}

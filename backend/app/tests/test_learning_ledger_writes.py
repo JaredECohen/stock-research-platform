@@ -13,7 +13,7 @@ refuses any real call.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -122,6 +122,36 @@ def test_fallback_state_ticker_uses_sector_scope(db, canned):
     assert [(i.scope_type, i.scope_key) for i in peer] == [("sector", "information_technology")]
 
 
+def test_conflict_state_ticker_uses_group_scope(db, canned):
+    """A conflict classification with a code is trusted for the group (the
+    `industry_classification.constituents` rule), unlike a fallback row."""
+    with db() as s:
+        classify(s, "LRNK", state="conflict", group="4510")
+        assert ledger.scopes_for(s, "LRNK").peer() == ("industry_group", "4510")
+    _seed(db, "LRNK")
+    pm.run_postmortems(horizon_days=90, limit=10)
+    peer = [i for i in _items(db) if i.origin_kind == "postmortem_sector"]
+    assert [(i.scope_type, i.scope_key) for i in peer] == [("industry_group", "4510")]
+
+
+def test_lessons_are_written_only_at_the_lesson_horizon(db, canned):
+    """Every lesson reads "... over 90 days" and is judged on 90d alpha, so a
+    180d postmortem (admin run) neither asks for nor stores a hypothesis."""
+    with db() as s:
+        add_company(s, "LRNL")
+        snap = add_snapshot(s, "LRNL", generated_at=GEN - timedelta(days=200))
+        add_outcome(s, snap, horizon=180, alpha=0.08)
+        sid = snap.id
+    report = pm.run_postmortems(horizon_days=180, limit=10)
+    assert report["written"] == 1 and report["learning_written"] == 0
+    assert '"hypothesis"' not in canned.prompts[0]
+    view = ledger.MemoView(True, None, {"sector": "Technology"})
+    res = ledger.record_postmortem(snapshot_id=sid, ticker="LRNL", horizon_days=180,
+                                   evaluated_at=GEN, llm_out={"hypothesis": HYP}, view=view)
+    assert (res["status"], res["reason"]) == ("skipped", "horizon")
+    assert _items(db) == [] and ledger.LESSON_HORIZON == 90
+
+
 def test_ineligible_or_unclassified_snapshot_writes_nothing(db):
     view = ledger.MemoView(True, None, {"sector": "Technology"})
     out = {"hypothesis": HYP}
@@ -151,6 +181,7 @@ def test_deterministic_postmortem_writes_nothing(db, canned):
 @pytest.mark.parametrize("memo, reason", [
     ({"degraded_agents": ["PM Synthesis"]}, "template_pm"),
     ({"thesis": ""}, "unavailable:one_sentence_thesis"),
+    ({"pm_view": ""}, "unavailable:final_pm_view"),
 ])
 def test_template_pm_memo_skipped(db, canned, memo, reason):
     _seed(db, "LRNG", **memo)

@@ -40,26 +40,36 @@ def db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def judge(monkeypatch):
-    """Canned judge: answers `applies` per id from `box.answers` (default
-    "yes"); records every prompt."""
+    """Canned judge: answers `applies` per id from `box.answers`, else per
+    memo ticker from `box.by_ticker` (default "yes"); leaves out the ids in
+    `box.omit`; merges `box.claims` into every row; records every prompt
+    and every `usage` it reports."""
     class Box:
         answers: dict[str, str] = {}
+        by_ticker: dict[str, str] = {}
+        omit: set[str] = set()
+        claims: dict[str, Any] = {}
         extra: list[dict[str, Any]] = []
         prompts: list[str] = []
+        usage: dict[str, Any] | None = None
         reply_none = False
 
     box = Box()
-    box.answers, box.extra, box.prompts = {}, [], []
+    box.answers, box.by_ticker, box.omit, box.claims, box.extra, box.prompts = {}, {}, set(), {}, [], []
 
     def _chat(prompt: str, **kwargs: Any):
         assert kwargs.get("route") == "cheap"
         box.prompts.append(prompt)
+        if box.usage is not None:
+            llm._USAGE_STATE.last = dict(box.usage)   # what a real provider call records
         if box.reply_none:
             return None
         import json
         payload = json.loads(prompt.split("Hypotheses and memo:\n", 1)[1])
-        rows = [{"id": h["id"], "applies": box.answers.get(h["id"], "yes"), "why": "the memo says so"}
-                for h in payload["hypotheses"]]
+        default = box.by_ticker.get(payload["memo"]["ticker"], "yes")
+        rows = [{"id": h["id"], "applies": box.answers.get(h["id"], default), "why": "the memo says so",
+                 **box.claims}
+                for h in payload["hypotheses"] if h["id"] not in box.omit]
         return {"judgments": rows + box.extra}
     monkeypatch.setattr(llm, "chat_json", _chat)
     return box
@@ -157,12 +167,12 @@ def test_deduped_eligible_outcome_still_produces_evidence(db, judge, monkeypatch
 
 
 def test_verdict_follows_alpha_not_model(db, judge):
-    """The judge "says" held; realized alpha of -10% on an outperform
-    hypothesis makes it failed. The model's opinion of the outcome is
-    never read."""
+    """The judge claims held on every row; realized alpha of -10% on an
+    outperform hypothesis makes it failed. Only `applies` is read — the
+    model's opinion of the outcome never is."""
     _memo(db, "JDGA", datetime(2026, 5, 1), alpha=-0.10)
     item = _lesson(db)
-    judge.extra = []
+    judge.claims = {"verdict": "held", "held": True, "outcome": "outperformed"}
     report = _run()
     assert report["evidence"] == 1
     [row] = _evidence(db, item)
@@ -287,3 +297,112 @@ def test_one_bad_memo_does_not_end_the_night(db, judge, monkeypatch):
     report = _run()
     assert report["failed_memos"] == [{"ticker": "JDB1", "memo_snapshot_id": bad, "error_type": "RuntimeError"}]
     assert [(r.item_id, r.memo_snapshot_id) for r in _evidence(db)] == [(item, good)]
+
+
+def test_judge_skips_ineligible_short_horizon_and_null_alpha_outcomes(db, judge):
+    """Only W6-eligible outcomes at the lesson horizon with a realized alpha
+    may feed learning; nothing else is billed or written."""
+    _lesson(db)
+    with db() as s:
+        add_company(s, "JDGA")
+        for version, (eligible, horizon, alpha) in enumerate(
+            ((False, 90, 0.1), (None, 90, 0.1), (True, 30, 0.1), (True, 90, None)), start=1,
+        ):
+            snap = add_snapshot(s, "JDGA", generated_at=datetime(2026, 3 + version, 1), version=version,
+                                eligible=eligible)
+            add_outcome(s, snap, horizon=horizon, alpha=alpha)
+    report = _run()
+    assert report["outcomes"] == 0 and report["calls"] == 0
+    assert judge.prompts == [] and _evidence(db) == []
+
+
+def test_one_memo_is_judged_once_on_the_lesson_horizon(db, judge):
+    """A memo with 90, 180 and 365d outcomes is one call and one row, on the
+    horizon the lesson is stated over — not three correlated rows scored on
+    horizons it never claimed."""
+    item = _lesson(db)
+    with db() as s:
+        add_company(s, "JDGA")
+        snap = add_snapshot(s, "JDGA", generated_at=datetime(2026, 5, 1))
+        add_outcome(s, snap, horizon=90, alpha=-0.2)
+        add_outcome(s, snap, horizon=180, alpha=0.4)
+        add_outcome(s, snap, horizon=365, alpha=0.4)
+    report = _run()
+    assert (report["outcomes"], report["calls"]) == (1, 1)
+    assert [(r.item_id, r.horizon_days, r.verdict) for r in _evidence(db)] == [(item, 90, "failed")]
+
+
+def test_irrelevant_peer_does_not_close_the_window(db, judge):
+    """The first peer judged in a window does not decide it: a condition
+    that did not apply to JWP1 still gets its one held/failed row from JWP2
+    in the same window, and then the window closes (n_eff <= 1)."""
+    item = _lesson(db, scope_type="sector", scope_key="information_technology",
+                   condition="enterprise software budgets are cut mid-year")
+    first = _memo(db, "JWP1", datetime(2026, 5, 1), alpha=0.2)
+    second = _memo(db, "JWP2", datetime(2026, 5, 1), alpha=0.2)
+    _memo(db, "JWP3", datetime(2026, 5, 1), alpha=-0.2)
+    judge.by_ticker = {"JWP1": "no"}
+    report = _run()
+    assert (report["calls"], report["evidence"], report["irrelevant"]) == (2, 1, 1)
+    assert [(r.memo_snapshot_id, r.verdict) for r in _evidence(db, item)] == [
+        (first, "irrelevant"), (second, "held")]
+    # Nothing is re-billed: JWP1 was judged, the window is closed for JWP3.
+    assert _run()["calls"] == 0
+    with db() as s:
+        assert ledger.posteriors(s, [item], now=NOW)[item].n_eff <= 1.0
+
+
+def test_unanswered_hypothesis_is_retried_not_burned(db, judge):
+    """A hypothesis the judge leaves out writes no row, so the window stays
+    open; the next night offers it again."""
+    item = _lesson(db)
+    _memo(db, "JDGA", datetime(2026, 5, 1), alpha=0.2)
+    judge.omit = {f"L-{item}"}
+    report = _run()
+    assert (report["calls"], report["unanswered"], report["evidence"], report["irrelevant"]) == (1, 1, 0, 0)
+    assert _evidence(db) == []
+    judge.omit = set()
+    assert _run()["evidence"] == 1
+    assert [r.verdict for r in _evidence(db, item)] == ["held"]
+
+
+@pytest.mark.parametrize("memo", [
+    {"thesis": ""},
+    {"pm_view": ""},
+    {"degraded_agents": ["PM Synthesis"]},
+])
+def test_judge_skips_memo_whose_thesis_or_pm_view_is_unavailable(db, judge, memo):
+    """Evidence rows are ledger writes: the W2a rule (no writes when the
+    thesis or PM view is unavailable) applies to the judge too."""
+    _lesson(db)
+    _memo(db, "JDGA", datetime(2026, 5, 1), **memo)
+    report = _run()
+    assert (report["unavailable"], report["calls"]) == (1, 0)
+    assert judge.prompts == [] and _evidence(db) == []
+
+
+def test_dollar_cap_is_cumulative_over_the_night(db, judge, monkeypatch):
+    """$0.25 is a NIGHT's budget, not a per-call limit."""
+    monkeypatch.setattr(ledger, "_projected_usd", lambda prompt: 0.10)
+    _lesson(db, scope_type="sector", scope_key="information_technology",
+            condition="enterprise software budgets are cut mid-year")
+    for i, ticker in enumerate(("JDU1", "JDU2", "JDU3")):
+        _memo(db, ticker, datetime(2026, 4 + 3 * i, 1))   # three separate windows
+    report = _run(max_usd=0.25)
+    assert (report["calls"], report["deferred"], report["stopped_reason"]) == (2, 1, "max_usd")
+    assert report["usd"] == pytest.approx(0.20)
+
+
+def test_actual_usage_is_charged_and_stale_usage_is_not(db, judge, monkeypatch):
+    """The night is billed from the call's own usage; usage left over from
+    an earlier call (the strong postmortem) is consumed first, never
+    charged to the judge."""
+    from app.services import llm_metrics
+    monkeypatch.setattr(ledger, "_projected_usd", lambda prompt: 0.10)
+    monkeypatch.setattr(llm_metrics, "estimate_cost_usd", lambda p, m, i, o, **k: i / 1000)
+    _lesson(db)
+    _memo(db, "JDGA", datetime(2026, 5, 1))
+    llm._USAGE_STATE.last = {"provider": "openai", "model": "strong", "input_tokens": 200, "output_tokens": 0}
+    judge.usage = {"provider": "openai", "model": "cheap", "input_tokens": 30, "output_tokens": 0}
+    report = _run()
+    assert report["calls"] == 1 and report["usd"] == pytest.approx(0.03)

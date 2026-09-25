@@ -116,7 +116,8 @@ def _learning_pass() -> tuple[str, bool]:
         )
         parts.append(
             f"judge status={j['status']} due={j['due']} calls={j['calls']} usd={j['usd']:.4f} "
-            f"evidence={j['evidence']} irrelevant={j['irrelevant']} deferred={j['deferred']} "
+            f"evidence={j['evidence']} irrelevant={j['irrelevant']} unanswered={j['unanswered']} "
+            f"deferred={j['deferred']} "
             f"failed={j['failed']} retired={j['retired']} unavailable={j['unavailable']}"
             + (f" stopped={j['stopped_reason']}" if j["stopped_reason"] else "")
         )

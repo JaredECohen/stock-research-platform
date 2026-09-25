@@ -11,12 +11,15 @@ comes in and learn dynamically". Design: `design-w7-learning-final.md`
   The judge (cheap route) answers only whether the condition APPLIED to a
   later memo; held / failed is computed here from realized alpha with the
   postmortem verdict thresholds. A model never decides a verdict.
-* **Decoupled judging.** ``judge_due`` walks every W6-eligible 90d+ outcome,
-  regardless of postmortem dedupe, so evidence is not starved by the
-  "rating unchanged" skip. Capped per night in calls and dollars.
+* **Decoupled judging.** ``judge_due`` walks every W6-eligible memo with a
+  90d outcome (the horizon every lesson is stated over), regardless of
+  postmortem dedupe, so evidence is not starved by the "rating unchanged"
+  skip. One call per memo, capped per night in calls and dollars.
 * **One row per window.** Evidence is keyed ``(item, scope_key, horizon,
   bucket)``: re-issues of one company, or three peers of one group, inside
-  one window count once.
+  one window count once. Only a held / failed / mixed row closes the
+  window; ``irrelevant`` is recorded per memo, so a peer the condition did
+  not fit never blocks a later peer it did.
 * **Nothing from templates, nothing ineligible.** Only W6-eligible outcomes
   feed learning (``outcome_eligibility.eligible_only``, fail closed); the
   learning payload goes through the W2a presenter, and writes are skipped
@@ -71,6 +74,12 @@ OBS_TTL_DAYS = 400
 MAX_ACTIVE_LESSONS_PER_SCOPE = 30
 MAX_OBS_PER_SCOPE = 10
 LESSON_MIN_HORIZON = 90
+# The one horizon a live hypothesis is stated over ("... over 90 days") and
+# judged on. Judging 180d and 365d outcomes too would pay the same
+# horizon-independent "did the condition apply?" question up to three times
+# per memo and turn one memo into three correlated evidence rows, scored on
+# horizons the lesson never claimed.
+LESSON_HORIZON = 90
 SYNC_LIMIT = 200
 DETAIL_MAX = 4000
 RATIONALE_MAX = 500
@@ -187,6 +196,14 @@ def independence_key(scope_key: str, horizon_days: int, generated_at: datetime) 
     return f"{scope_key}:{horizon_days}:{window_bucket(generated_at, horizon_days)}"
 
 
+def irrelevant_key(window_key: str, snapshot_id: int) -> str:
+    """Where an `irrelevant` row lives: per memo, NOT per window. A condition
+    that did not apply to one peer (or one re-issue) says nothing about the
+    next memo in the same window, so it must not take the window's single
+    held / failed / mixed slot — that would starve the ledger of evidence."""
+    return f"{window_key}:s{snapshot_id}"
+
+
 def verdict_from_alpha(observable: str, alpha: float | None) -> str | None:
     """held / failed / mixed from realized alpha, with the postmortem's own
     thresholds (`_classify_verdict`): an outperform hypothesis is judged like
@@ -233,7 +250,7 @@ def parse_hypothesis(raw: Any) -> tuple[Hypothesis | None, str | None]:
     return Hypothesis(cond, obs.strip().lower()), None
 
 
-def lesson_text(h: Hypothesis, scope_type: str, horizon_days: int = LESSON_MIN_HORIZON) -> str:
+def lesson_text(h: Hypothesis, scope_type: str, horizon_days: int = LESSON_HORIZON) -> str:
     if scope_type not in SCOPE_TYPES:
         raise ValueError(f"unknown learning scope_type {scope_type!r}")
     text = f"When {h.condition}, expect {_SUBJECT[scope_type]} to {h.observable} the benchmark over {horizon_days} days."
@@ -527,7 +544,8 @@ def record_postmortem(
     if not _writes_on():
         result.update(status="disabled", reason="learning_ledger_writes=false")
         return result
-    if horizon_days < LESSON_MIN_HORIZON:
+    if horizon_days != LESSON_HORIZON:
+        # Lessons are stated over, and judged on, LESSON_HORIZON only.
         result["reason"] = "horizon"
         return result
     if not isinstance(llm_out, dict):
@@ -774,7 +792,9 @@ def hypotheses_to_judge(
 ) -> list[_Candidate]:
     """Active, testable lessons in this memo's scopes that were knowable when
     it was written (no look-ahead), were not learned from it (no in-sample),
-    and have no evidence for this window yet."""
+    were not already judged against THIS memo, and whose window has no
+    held / failed / mixed row yet. An `irrelevant` row never closes the
+    window (see `irrelevant_key`)."""
     pairs = scopes.read()
     stmt = select(LearningItem).where(
         LearningItem.kind == "lesson", LearningItem.status == "active",
@@ -787,14 +807,20 @@ def hypotheses_to_judge(
     if not items:
         return []
     keys = {i.id: independence_key(i.scope_key, horizon_days, generated_at) for i in items}
-    judged = {
-        (item_id, key) for item_id, key in db.execute(
-            select(LearningEvidence.item_id, LearningEvidence.independence_key)
-            .where(LearningEvidence.item_id.in_(keys))
-        ).all()
-    }
-    counts: Counter[int] = Counter(item_id for item_id, _ in judged)
-    open_items = [i for i in items if (i.id, keys[i.id]) not in judged]
+    closed: set[tuple[int, str]] = set()
+    seen_here: set[int] = set()
+    counts: Counter[int] = Counter()
+    for item_id, key, verdict, memo_id in db.execute(
+        select(LearningEvidence.item_id, LearningEvidence.independence_key,
+               LearningEvidence.verdict, LearningEvidence.memo_snapshot_id)
+        .where(LearningEvidence.item_id.in_(keys))
+    ).all():
+        if memo_id == snapshot_id:
+            seen_here.add(item_id)
+        if verdict != "irrelevant":
+            closed.add((item_id, key))
+            counts[item_id] += 1
+    open_items = [i for i in items if (i.id, keys[i.id]) not in closed and i.id not in seen_here]
     open_items.sort(key=lambda i: (counts[i.id], i.created_at, i.id))
     return [
         _Candidate(i.id, i.scope_key, str(i.condition), str(i.observable), keys[i.id])
@@ -872,14 +898,18 @@ def judge_due(
     *, max_calls: int, max_usd: float, now: datetime | None = None,
     chat: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
-    """Judge every eligible 90d+ outcome that has in-scope, knowable,
-    out-of-sample hypotheses without evidence — whether or not the
-    postmortem deduped it. One cheap-route call per memo, stopping BEFORE a
-    call would exceed `max_calls` or `max_usd`. Never raises per item: a
-    failed call is counted and retried on a later night."""
+    """Judge every eligible memo old enough to have its LESSON_HORIZON
+    outcome, when it has in-scope, knowable, out-of-sample hypotheses
+    without evidence — whether or not the postmortem deduped it. Only the
+    LESSON_HORIZON outcome is used (every memo with a 180d or 365d outcome
+    has one), so it is one cheap-route call per memo, stopping BEFORE a call
+    would exceed `max_calls` or `max_usd`. Memos whose thesis or PM view the
+    W2a presenter hides write nothing (counted `unavailable`). Never raises
+    per item: a failed call, or a hypothesis the judge did not answer, is
+    retried on a later night."""
     report: dict[str, Any] = {
         "status": "ok", "outcomes": 0, "due": 0, "calls": 0, "usd": 0.0, "evidence": 0,
-        "irrelevant": 0, "duplicates": 0, "failed": 0, "failed_memos": [], "unavailable": 0,
+        "irrelevant": 0, "unanswered": 0, "duplicates": 0, "failed": 0, "failed_memos": [], "unavailable": 0,
         "deferred": 0, "retired": 0, "stopped_reason": None,
     }
     if not _writes_on():
@@ -907,7 +937,7 @@ def judge_due(
                 )
                 .join(MemoSnapshot, MemoSnapshot.id == MemoOutcome.memo_snapshot_id)
                 .join(MemoOutcomeEligibility, MemoOutcomeEligibility.memo_snapshot_id == MemoOutcome.memo_snapshot_id)
-                .where(MemoOutcome.horizon_days >= LESSON_MIN_HORIZON, MemoOutcome.alpha.is_not(None),
+                .where(MemoOutcome.horizon_days == LESSON_HORIZON, MemoOutcome.alpha.is_not(None),
                        MemoSnapshot.generated_at.is_not(None)),
                 MemoOutcome.memo_snapshot_id,
             ).order_by(MemoOutcome.evaluated_at, MemoOutcome.id)
@@ -931,11 +961,10 @@ def judge_due(
                     report["stopped_reason"] = report["stopped_reason"] or "max_calls"
                     continue
                 snap = db.get(MemoSnapshot, snapshot_id)
-                # Judging tests a claim about the WORLD against realized
-                # alpha, not the memo's call, so a template PM view does not
-                # disqualify the memo: the presenter hides template sections
-                # and the judge reads what is left. Only an unreadable memo
-                # is skipped.
+                # Evidence rows are ledger writes, and the accepted W2a rule
+                # is that ledger writes are skipped when the thesis or PM
+                # view is unavailable (template-filled or missing): the same
+                # gate as `record_postmortem` and the sync.
                 view = present_for_learning(snap, db) if snap is not None else MemoView(False, "missing", None)
                 snap = None
         except Exception as exc:
@@ -943,7 +972,7 @@ def judge_due(
             report["failed_memos"].append({"ticker": ticker, "memo_snapshot_id": snapshot_id,
                                            "error_type": type(exc).__name__})
             continue
-        if view.memo is None:
+        if view.memo is None or not view.available:
             report["unavailable"] += 1
             continue
         prompt = judge_prompt(cands, view.memo)
@@ -974,15 +1003,22 @@ def judge_due(
             with SessionLocal() as db:
                 touched: list[int] = []
                 for c in cands:
-                    applies, why = judged.get(ref(c.item_id), ("unclear", "not answered by the judge"))
+                    answer = judged.get(ref(c.item_id))
+                    if answer is None:
+                        # Not answered: no row, so neither this memo nor the
+                        # window is burned. The next night offers only the
+                        # still-open hypotheses, so the retry converges.
+                        report["unanswered"] += 1
+                        continue
+                    applies, why = answer
                     verdict = verdict_from_alpha(c.observable, alpha) if applies == "yes" else "irrelevant"
                     if verdict is None:
                         continue
                     db.add(LearningEvidence(
                         item_id=c.item_id, verdict=verdict, applies=applies, postmortem_id=None,
                         memo_snapshot_id=snapshot_id, ticker=ticker, horizon_days=horizon,
-                        independence_key=c.key, alpha=alpha, rationale=why, observed_at=evaluated_at,
-                        created_at=now,
+                        independence_key=c.key if verdict != "irrelevant" else irrelevant_key(c.key, snapshot_id),
+                        alpha=alpha, rationale=why, observed_at=evaluated_at, created_at=now,
                     ))
                     touched.append(c.item_id)
                     report["evidence" if verdict != "irrelevant" else "irrelevant"] += 1

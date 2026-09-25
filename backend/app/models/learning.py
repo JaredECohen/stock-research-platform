@@ -87,7 +87,9 @@ class LearningEvidence(Base):
     `independence_key` is `"{scope_key}:{horizon}:{bucket}"`: one row per
     lesson per scope window, so re-issues of one company inside a window
     (MSFT is at v108) and three peers of one group in the same window each
-    count once (n_eff <= 1 per window).
+    count once (n_eff <= 1 per window). An `irrelevant` row (the condition
+    did not apply to that memo; n_eff 0) is keyed per memo instead
+    (`"...:s{memo_snapshot_id}"`), so it never takes the window's slot.
     """
     __tablename__ = "learning_evidence"
 
