@@ -288,11 +288,23 @@ def _classify_verdict(rating: str, alpha: float | None) -> str:
 
 def _llm_postmortem(
     memo: dict[str, Any], outcome: MemoOutcome, horizon_days: int,
+    learning: Any = None,
 ) -> dict[str, Any] | None:
     """Ask the LLM for a structured retrospective.
 
     Returns dict with: `lesson` (markdown body), `agent_attribution`
     (per-specialist credit/blame dict), and `regime_at_memo`.
+
+    `learning` (W7) is a `ledger.MemoView`, passed POSITIONALLY and only
+    when the learning ledger writes: every existing stub takes three
+    arguments, and with writes off the prompt stays byte-identical. When
+    given, the memo comes from the W2a presenter (template sections read
+    "Unavailable in this version."), each memo field is clipped on its own
+    instead of cutting the serialized JSON mid-structure, and — only when
+    the thesis and PM view are available — the contract asks for one
+    grounded hypothesis. It is the same strong-route call: no new spend.
+    Judging existing hypotheses is NOT done here; the nightly cheap-route
+    judge does it for every eligible outcome, deduped or not.
     """
     # Gate on any configured LLM, not OpenAI specifically: `llm.chat_json`
     # picks the active provider itself, and the old OpenAI-only check made
@@ -300,6 +312,8 @@ def _llm_postmortem(
     # deterministic lesson without ever trying.
     if not settings.has_llm:
         return None
+    if learning is not None:
+        return _llm_postmortem_learning(memo, outcome, horizon_days, learning)
     payload = {
         "memo": {
             "ticker": memo.get("ticker"),
@@ -340,6 +354,68 @@ def _llm_postmortem(
         "  \"sector_lesson\": \"<one sentence the sector analyst should "
         "internalize, or empty if not generalizable>\" }\n\n"
         "Memo + outcome:\n" + json.dumps(payload, default=str)[:24000],
+        system=(
+            "You are a senior PM running a postmortem. Be specific, "
+            "honest, and concise. No hedging."
+        ),
+        route="strong",
+    )
+    if not isinstance(out, dict):
+        return None
+    return out
+
+
+_LEARNING_CONTRACT = (
+    '{ "lesson": "<3-6 sentence markdown — what we said, what happened, why, what to '
+    'remember next time>",\n'
+    '  "agent_attribution": { "sector": -1..1, "earnings": -1..1, "filing": -1..1, '
+    '"valuation": -1..1, "comps": -1..1, "macro": -1..1, "risk": -1..1 },\n'
+    '  "regime_at_memo": "<short tag if knowable, else empty>",\n'
+    '  "sector_lesson": "<one sentence the sector analyst should internalize, or empty if '
+    'not generalizable>"'
+)
+_HYPOTHESIS_CONTRACT = (
+    ',\n  "hypothesis": { "condition": "<at most 160 characters: a situation a future memo on '
+    "this company would already show when it is written - a fact about the business, filings, "
+    'guidance, balance sheet or valuation; never a price move or an outcome>", '
+    '"observable": "outperform|underperform" } or null,\n'
+    '  "peer_hypothesis": { the same shape, about other companies in this company\'s industry '
+    "group or sector } or null"
+)
+_HYPOTHESIS_GUIDANCE = (
+    "\n\nA hypothesis is tested later ONLY by whether its condition applied to a future memo "
+    "and by that stock's realized return against the benchmark over the same horizon. Propose "
+    "one only if this outcome suggests it; otherwise use null. Never name an index-provider "
+    "taxonomy, brand or numeric classification code."
+)
+
+
+def _llm_postmortem_learning(
+    memo: dict[str, Any], outcome: MemoOutcome, horizon_days: int, learning: Any,
+) -> dict[str, Any] | None:
+    """The W7 variant of the strong postmortem call (see `_llm_postmortem`)."""
+    from ..agents import llm
+    from ..learning import ledger
+
+    source = getattr(learning, "memo", None) or memo
+    propose = bool(getattr(learning, "available", False))
+    payload = {
+        "memo": ledger.memo_block(source, include_rating=True),
+        "outcome": {
+            "horizon_days": horizon_days,
+            "realized_return": outcome.forward_return,
+            "benchmark_return": outcome.benchmark_return,
+            "alpha": outcome.alpha,
+            "thesis_held": outcome.thesis_held,
+        },
+    }
+    contract = _LEARNING_CONTRACT + (_HYPOTHESIS_CONTRACT if propose else "") + " }"
+    out = llm.chat_json(
+        f"Write a {horizon_days}-day postmortem for this memo. The "
+        "user is the PM. Be candid — credit specialists who got it "
+        "right, blame specialists who got it wrong. Output JSON:\n\n"
+        + contract + (_HYPOTHESIS_GUIDANCE if propose else "")
+        + "\n\nMemo + outcome:\n" + json.dumps(payload, default=str),
         system=(
             "You are a senior PM running a postmortem. Be specific, "
             "honest, and concise. No hedging."
@@ -499,6 +575,13 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
                       writes or their persisted completion flag failed.
       `memory_disabled` memory was disabled; no file was touched.
       `classification_error` the eligibility sweep's failure, or None.
+      `learning_*`    W7 ledger writes for 90d+ postmortems: `written`
+                      (a lesson was stored), `skipped` with its reasons
+                      (deterministic, ineligible, template PM, no
+                      hypothesis, ...), `rejected` hypotheses that broke the
+                      grammar or named a code, and `failed` with identities.
+                      A failure turns the loop red; the postmortem itself
+                      is already written either way.
     """
     # W6: make sure every snapshot has an eligibility row before selecting
     # work. A no-op after the 02:30 outcome loop; it protects the admin
@@ -516,6 +599,23 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
         classification_error = f"{type(exc).__name__}: {exc}"[:500]
         log.error("postmortem %sd: eligibility sweep failed, selecting from the existing ledger: %s",
                   horizon_days, classification_error)
+    # W7: the learning ledger. The epoch marker goes down BEFORE the first
+    # live postmortem of the ledger era, so the historical backfill
+    # (`ledger.sync_from_postmortems`, pre-epoch rows only) can never
+    # re-learn a postmortem this path saw and deliberately did not learn.
+    learn = bool(settings.learning_ledger_writes) and horizon_days >= 90
+    learning_written = 0
+    learning_rejected = 0
+    learning_skips: dict[str, int] = {}
+    learning_failed_memos: list[dict[str, Any]] = []
+    learning_ledger: Any = None
+    if learn:
+        from ..learning import ledger as learning_ledger
+        try:
+            learning_ledger.ensure_epoch()
+        except Exception as exc:
+            learning_failed_memos.append({"ticker": "*", "memo_snapshot_id": None,
+                                          "reason": f"ledger_epoch:{type(exc).__name__}"})
     scan = _scan_due(horizon_days, limit=limit)
     due = scan.items
     written = 0
@@ -566,7 +666,12 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
             skipped_memos.append(_memo_identity(snap, f"memo_parse_error:{type(exc).__name__}"))
             continue
         verdict = _classify_verdict(memo.get("rating_label", ""), outcome.alpha)
-        llm_out = _llm_postmortem(memo, outcome, horizon_days)
+        learning_view = None
+        if learn:
+            learning_view = learning_ledger.postmortem_context(snap)
+            llm_out = _llm_postmortem(memo, outcome, horizon_days, learning_view)
+        else:
+            llm_out = _llm_postmortem(memo, outcome, horizon_days)
         lesson = (llm_out or {}).get("lesson") or _deterministic_lesson(
             memo, outcome, verdict, horizon_days,
         )
@@ -631,6 +736,22 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
                 "written_targets": memory_result.written_targets,
                 "errors": memory_result.errors,
             })
+        if learn:
+            result = learning_ledger.record_postmortem(
+                snapshot_id=outcome.memo_snapshot_id, ticker=outcome.ticker,
+                horizon_days=horizon_days, evaluated_at=outcome.evaluated_at,
+                llm_out=llm_out, view=learning_view,
+            )
+            learning_rejected += len(result["rejected"])
+            if result["status"] == "written":
+                learning_written += 1
+            elif result["status"] == "failed":
+                learning_failed_memos.append(_memo_identity(
+                    snap, f"{result['reason']}:{result['error_type']}",
+                ))
+            else:
+                key = str(result["reason"] or result["status"])
+                learning_skips[key] = learning_skips.get(key, 0) + 1
         written += 1
     report = {
         "horizon_days": horizon_days,
@@ -649,6 +770,14 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
     for status, identities in memory_memos.items():
         report[f"memory_{status}"] = len(identities)
         report[f"memory_{status}_memos"] = identities
+    # W7 learning ledger: always present (zeros when writes are off), so a
+    # night that learned nothing reads as an answer, not as a missing key.
+    report["learning_written"] = learning_written
+    report["learning_skipped"] = sum(learning_skips.values())
+    report["learning_skip_reasons"] = learning_skips
+    report["learning_rejected"] = learning_rejected
+    report["learning_failed"] = len(learning_failed_memos)
+    report["learning_failed_memos"] = learning_failed_memos
     # Admin runs do not go through the scheduled loop, so keep their
     # complete omission details in the log as well as the returned report.
     log.info("postmortem %sd report: %s", horizon_days, report)

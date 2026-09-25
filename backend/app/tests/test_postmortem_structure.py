@@ -242,7 +242,11 @@ def test_run_postmortems_writes_row_and_memory_on_90d(memory_dir, no_llm):
         "skipped_memos", "memory_written", "memory_written_memos",
         "memory_failed", "memory_failed_memos", "memory_disabled", "memory_disabled_memos",
         "memory_not_requested", "memory_not_requested_memos", "classification_error",
+        # W7: always present, zero while the learning ledger is off.
+        "learning_written", "learning_skipped", "learning_skip_reasons", "learning_rejected",
+        "learning_failed", "learning_failed_memos",
     }
+    assert (report["learning_written"], report["learning_skipped"], report["learning_failed"]) == (0, 0, 0)
     assert report["horizon_days"] == 90 and report["written"] >= 1
     assert report["classification_error"] is None
     assert {"ticker": t, "horizon": 90} in no_llm       # the LLM was asked, and declined
@@ -423,3 +427,40 @@ def test_failed_sweep_still_postmortems_classified_memos(w6_pm, monkeypatch):
     with sessions() as db:
         assert [r.memo_snapshot_id for r in db.query(MemoPostmortem).all()] == [live.id]
         assert oe.lookup(db, stray.id) is None
+
+
+# ---------------------------------------------------------------------------
+# W7 — the loop note carries the learning counts, and a failed learning
+# write turns the loop red (the postmortem itself was still written)
+# ---------------------------------------------------------------------------
+
+def _loop_report(horizon_days: int, *, learning_failed: int = 0) -> dict[str, Any]:
+    return {
+        "horizon_days": horizon_days, "due": 1, "written": 1, "already_done": 0, "deduped": 0,
+        "skipped": 0, "deferred": 0, "ineligible": 0, "classification_error": None,
+        "learning_written": 1 - learning_failed, "learning_skipped": 0, "learning_rejected": 0,
+        "learning_failed": learning_failed,
+        "learning_failed_memos": [{"ticker": "TSTPMLRN", "memo_snapshot_id": 1, "reason": "exception:X"}]
+        if learning_failed else [],
+    }
+
+
+@pytest.mark.parametrize("learning_failed, success", [(0, True), (1, False)])
+def test_loop_success_requires_no_learning_failures(monkeypatch, learning_failed, success):
+    from app.monitoring import postmortem_loop
+
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(postmortem_loop, "record_run", lambda name, **k: recorded.append(k))
+    monkeypatch.setattr(postmortem_loop, "run_postmortems", lambda horizon_days, limit: _loop_report(
+        horizon_days, learning_failed=learning_failed if horizon_days == 90 else 0))
+    monkeypatch.setattr(settings, "learning_ledger_writes", False)
+    postmortem_loop.run_once()
+    [row] = recorded
+    assert row["success"] is success
+    assert (f"90d due=1 written=1 already_done=0 deduped=0 skipped=0 deferred=0 ineligible=0 "
+            f"memory_written=0 memory_disabled=0 memory_failed=0 memory_not_requested=0 "
+            f"learning_written={1 - learning_failed} learning_skipped=0 learning_rejected=0 "
+            f"learning_failed={learning_failed}") in row["note"]
+    if learning_failed:
+        assert "learning_failed memos: TSTPMLRN#1 (exception:X)" in row["note"]
+    assert row["note"].endswith("; learning off")
