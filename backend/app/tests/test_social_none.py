@@ -80,18 +80,45 @@ def test_social_live_mode_no_llm_no_numbers(live_mode, no_llm):
     assert no_llm == []
 
 
-def test_stub_only_in_demo(monkeypatch, live_mode):
+def test_stub_only_in_demo(monkeypatch, live_mode, no_llm):
     # Live: the hash stub is unreachable, whether through the agent or the
     # tool the news/risk scopes name.
     _assert_unavailable(tools.get_social_sentiment("AAPL"), "AAPL")
 
     # Demo: the stub still gives the offline demo and the suite a stable shape.
+    # The Gemini key from `live_mode` is still set, which is exactly when the
+    # pre-fix demo path made its ungrounded call; L7 allows social numbers only
+    # from real fetched data, so demo must not call a model either (a dev .env
+    # with a real key would otherwise pay for an invented reading).
     monkeypatch.setattr(settings, "use_demo_data", True)
     monkeypatch.setattr(settings, "enable_live_data", False)
+    assert settings.use_demo_data_only and settings.has_gemini
     demo = tools.get_social_sentiment("AAPL")
     assert isinstance(demo["sentiment_extremity"], float)
     assert demo["contrarian_flag"] in ("bullish_setup", "bearish_setup", "neutral")
     assert social_agent.run("AAPL", force_refresh=True)["source"] == "stub"
+    assert no_llm == []
+
+
+def test_live_mode_is_not_use_demo_data_alone(monkeypatch, live_mode, no_llm):
+    """USE_DEMO_DATA=true with ENABLE_LIVE_DATA=true is live: graph.py labels
+    those memos live (`not use_demo_data_only`), so social must say "none"
+    there too rather than serve the hash stub under a live label."""
+    monkeypatch.setattr(settings, "use_demo_data", True)
+    monkeypatch.setattr(settings, "enable_live_data", True)
+    assert settings.use_demo_data and not settings.use_demo_data_only
+
+    _assert_unavailable(social_agent.run("AMD", force_refresh=True), "AMD")
+    _assert_unavailable(tools.get_social_sentiment("AMD"), "AMD")
+
+    recorded: list[dict] = []
+    monkeypatch.setattr(social_loop, "record_run",
+                        lambda name, **kw: recorded.append(kw))
+    monkeypatch.setattr(social_loop, "select_focus",
+                        lambda *a, **k: pytest.fail("select_focus ran live"))
+    assert social_loop.run_once() == []
+    assert recorded and "no social data source" in recorded[0]["note"]
+    assert no_llm == []
 
 
 def test_social_loop_note_no_source(monkeypatch, live_mode, no_llm):
@@ -101,14 +128,22 @@ def test_social_loop_note_no_source(monkeypatch, live_mode, no_llm):
         lambda name, **kw: recorded.append((name, kw)),
     )
 
-    def _must_not_run(*a, **k):
-        raise AssertionError("live social_loop did work despite having no source")
+    # Record rather than raise: run_once swallows per-ticker exceptions, so a
+    # raising sentinel on social_agent.run would only log and never fail.
+    work: list[str] = []
 
-    monkeypatch.setattr(social_loop, "select_focus", _must_not_run)
-    monkeypatch.setattr(social_loop.social_agent, "run", _must_not_run)
+    def _record(name):
+        def _f(*a, **k):
+            work.append(name)
+            return {}
+        return _f
+
+    monkeypatch.setattr(social_loop, "select_focus", _record("select_focus"))
+    monkeypatch.setattr(social_loop.social_agent, "run", _record("social_agent.run"))
 
     assert social_loop.run_once() == []
     assert social_loop.run_once(["NVDA"]) == []
+    assert work == [], f"live social_loop did work despite having no source: {work}"
 
     assert [name for name, _ in recorded] == ["social_loop", "social_loop"]
     for _, kw in recorded:
