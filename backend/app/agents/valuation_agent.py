@@ -50,8 +50,11 @@ def run_valuation_agent(
         # tells the analyst to reconcile, not defer, to it.
         payload["fundamental_scorecard"] = scorecard_block
     # W2b 7(a): the live quote is fetched here; the scorecard block is the
-    # rendered rank the prompt shows. The rest duplicates registered DCF
-    # and ratio facts, which dedupe by value.
+    # rendered rank the prompt shows. The rest of the payload restates the
+    # DCF and ratios `_gather_inputs` already registered under their own
+    # refs, so it is not registered a second time here (the ledger dedupes
+    # only a repeated (kind, ref, extracted facts) registration, not equal
+    # values under different refs).
     register_source("price", f"price:{ticker}", {"current_price": payload["current_price"]})
     if scorecard_block:
         register_source("scorecard", f"scorecard_block:{ticker}", scorecard_block)

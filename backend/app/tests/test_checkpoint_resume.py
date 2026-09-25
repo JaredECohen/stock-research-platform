@@ -277,10 +277,35 @@ def test_capture_is_opt_in():
 
 
 def test_roster_steps_capture_sources():
+    """Every roster step is built by `_build_checkpointed`, and a step it
+    builds persists the facts its analyst registered (behaviour, not the
+    source text: a roster spec with a fake runner, run under a ledger and a
+    run_id)."""
+    import dataclasses
+
     from app.agents import roster
-    for spec in roster.AGENTS:
-        runner = roster.checkpointed_runner(spec)
-        assert runner.__closure__ is not None
-    # The decorator's flag is what the roster passes; pinned by source.
-    import inspect
-    assert "capture_sources=True" in inspect.getsource(roster._build_checkpointed)
+    from app.agents.source_ledger import SourceLedger, register_source
+    _reset_table()
+    assert all(roster.checkpointed_runner(spec) is roster._CHECKPOINTED[spec] for spec in roster.AGENTS)
+
+    calls: list[int] = []
+
+    def run(inputs, critique):
+        calls.append(1)
+        register_source("technical", "technical:T", {"rsi_14": 61.7})
+        return AgentFinding(agent="Technical Analyst", headline="h", summary="s", confidence=0.6)
+
+    spec = dataclasses.replace(roster.AGENTS[0], run=run)
+    runner = roster._build_checkpointed(spec)
+    ledger = SourceLedger()
+    with ledger.activate(), llm_call_context(run_id="run-roster"):
+        runner(None)  # type: ignore[arg-type]
+    stored = checkpoint_store.load_step_sources("run-roster", spec.checkpoint)
+    assert stored is not None and len(stored["facts"]) == 1
+
+    # ... and replays them on resume without re-running the analyst.
+    resumed = SourceLedger()
+    with resumed.activate(), llm_call_context(run_id="run-roster"):
+        runner(None)  # type: ignore[arg-type]
+    assert calls == [1]
+    assert {round(f.value, 2) for f in resumed.snapshot().facts} == {61.7}

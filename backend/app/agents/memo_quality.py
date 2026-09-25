@@ -591,12 +591,6 @@ class PatchGuard:
     unchecked_fields: list[str] = field(default_factory=list)
 
 
-# Fields a news patch can rewrite wholesale; their stored claims described
-# the text the patch replaced.
-_PATCH_TEXT_FIELDS = ("one_sentence_thesis", "final_pm_view", "mispricing_thesis",
-                      "catalysts", "thesis_breakers", "final_verdict")
-
-
 def _patched_paths(prior: StockMemoOut, patched: StockMemoOut, fields: set[str]) -> list[str]:
     """The number-check paths a patch changed. Appended case points and
     risks are named item by item (the stored items keep their check);

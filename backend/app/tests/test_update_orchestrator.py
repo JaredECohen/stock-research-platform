@@ -450,18 +450,23 @@ def test_patched_fields_marked_unchecked(monkeypatch):
             checked=True, claims=[thesis_claim, view_claim])}),
     })
     n_bull = len(base.bull_case.key_points)
+    n_risks = len(base.key_risks)
     memo_store.save_memo(base, trigger="full_reanalysis")
 
     _patch_with("TSTNUM", {"one_sentence_thesis": "News moved the thesis: 45% growth.",
-                           "bull_case": {"key_points": ["New order worth $9.9B."]}})
+                           "bull_case": {"key_points": ["New order worth $9.9B."]},
+                           "key_risks": [{"title": "Probe", "detail": "A 25% tariff on imports.",
+                                          "severity": "medium"}]})
     snap = memo_store.latest_memo("TSTNUM")
     m = memo_store.memo_to_pydantic(snap)
     nc = m.quality.number_check
     added = f"bull_case.key_points[{n_bull}]"
-    assert nc.unchecked_fields == [added, "one_sentence_thesis"]
+    risk = f"key_risks[{n_risks}]"
+    assert m.key_risks[n_risks].detail == "A 25% tariff on imports."
+    assert nc.unchecked_fields == [added, risk, "one_sentence_thesis"]
     assert [c.field for c in nc.claims] == ["final_pm_view"]   # the thesis claim went with its text
     assert m.final_pm_view[0:3] == "$5B"
-    assert snap.revision_log[0]["quality_guard"]["fields_unchecked"] == [added, "one_sentence_thesis"]
+    assert snap.revision_log[0]["quality_guard"]["fields_unchecked"] == [added, risk, "one_sentence_thesis"]
 
     # A memo whose check never ran carries no number_check to label.
     _reset_memos("TSTNUM2")
