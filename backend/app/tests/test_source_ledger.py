@@ -116,10 +116,24 @@ def test_llm_outputs_are_not_sources(monkeypatch):
             "base": {"implied_share_price": 57.58,
                      "drivers": [{"name": "AI ramps", "rationale": "growth +777bp on a 66.6% share",
                                   "assumption_changes": ["revenue_growth"]}]},
+            # A live driver NAME is LLM output too (scenario_assumptions
+            # copies it from the model's JSON; the memo prints it as "DCF
+            # driver — {name}: ..."), so its figure must not trace to itself.
+            "bull": {"implied_share_price": 81.0,
+                     "drivers": [{"name": "Data-center revenue reaches $412B", "rationale": "",
+                                  "assumption_changes": []}]},
+            # The engine's own sensitivity-grid name is still read.
+            "sensitivities": [{"name": "WACC vs terminal growth at 9.25%", "row_axis": "wacc",
+                               "col_axis": "terminal_growth", "rows": [], "cols": [], "cells": []}],
         }, text_keys=DCF_TEXT_KEYS, exclude_keys=DCF_LLM_KEYS)
     got = values(ledger)
-    assert 12.5 in got and 57.58 in got
+    assert 12.5 in got and 57.58 in got and 81.0 in got and 9.25 in got
     assert 87.65 not in got and 66.6 not in got and 7.77 not in got
+    assert 412e9 not in got
+    reg = ledger.snapshot()
+    from app.agents import number_check
+    (c,) = number_check.check_text("DCF driver — Data-center revenue reaches $412B.", reg)
+    assert c.status == "untraceable"
 
 
 def test_long_term_memory_is_not_a_source(monkeypatch):

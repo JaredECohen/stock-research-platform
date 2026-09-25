@@ -95,11 +95,16 @@ log = logging.getLogger(__name__)
 T = TypeVar("T")
 
 # W2b 7(a) source registration for DCF results: prose is read only under
-# these keys (the engine's own labels, summary and guardrail messages).
-# Scenario drivers' `rationale` / `assumption_changes` are written by an LLM
-# in live runs, so they are never a source for the figures they quote.
+# these keys (the engine's own labels, summary and guardrail messages;
+# `name` is for DCFSensitivity.name). Scenario drivers are written by an
+# LLM in live runs (`scenario_assumptions._parse_side` copies each driver's
+# name, rationale and assumption_changes from its JSON), so the whole
+# `drivers` subtree is never a source for the figures it quotes — a figure
+# in a driver name would otherwise trace to "dcf:initial" (the memo prints
+# it as "DCF driver — {name}: ..."). The other keys stay excluded wherever
+# they appear.
 DCF_TEXT_KEYS = ("summary", "message", "label", "name", "row_axis", "col_axis", "metric")
-DCF_LLM_KEYS = ("rationale", "assumption_changes")
+DCF_LLM_KEYS = ("drivers", "rationale", "assumption_changes")
 
 
 # ---------------------------------------------------------------------------
