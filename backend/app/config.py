@@ -151,12 +151,40 @@ class Settings(BaseSettings):
     enable_regen_worker: bool = True
     regen_worker_poll_seconds: float = 2.0
     regen_queue_max_age_minutes: int = 30
-    # Long-term agent memory (filesystem markdown, delta-triggered).
-    # `memory_dir` is the root; companies live at <root>/companies/<TICKER>.md
-    # and sectors at <root>/sectors/<sector_slug>.md. Set absolute or
-    # relative-to-CWD; default keeps state inside the backend dir for dev.
+    # Long-term agent memory: the LEGACY file backend (filesystem markdown,
+    # delta-triggered). `memory_dir` is the root; companies live at
+    # <root>/companies/<TICKER>.md and sectors at <root>/sectors/<sector_slug>.md.
+    # Render's container disk is ephemeral, so production keeps this false
+    # (render.yaml); the Postgres learning ledger (W7, `learning_*` below)
+    # replaces it there rather than reusing this flag with a new meaning —
+    # ten call sites read it as "touch the markdown files".
     enable_long_term_memory: bool = True
     memory_dir: str = "./memory"
+    # W7 learning ledger (owner decision 9, 2026-09-24): lessons are testable
+    # hypotheses whose credibility is a Beta posterior over later, eligible
+    # outcomes, so memory updates priors as evidence arrives instead of
+    # being a fixed instruction. Off by default (CI, dev laptops): writes
+    # happen only where render.yaml turns them on.
+    learning_ledger_writes: bool = False
+    # A CEILING on how far learned priors may reach prompts: off | shadow |
+    # inject. The effective mode is min(this, the DB-held mode), and the DB
+    # mode defaults to shadow (computed and audited, never injected), so
+    # "inject" here only permits a later, gated admin promotion. "off" is
+    # the emergency stop: no DB read, prompts byte-identical to today. A str
+    # with a validator for the same reason as `rating_reconciliation_mode`.
+    learning_mode_max: str = "off"
+    # The nightly applicability judge (cheap route) spends at most this much
+    # per night. Owner default adopted 2026-09-24: <= 20 calls, <= $0.25.
+    learning_judge_max_calls_per_night: int = 20
+    learning_judge_max_usd_per_night: float = 0.25
+
+    @field_validator("learning_mode_max")
+    @classmethod
+    def _learning_mode_max_known(cls, v: str) -> str:
+        mode = str(v).strip().lower()
+        if mode not in ("off", "shadow", "inject"):
+            raise ValueError("learning_mode_max must be 'off', 'shadow' or 'inject'")
+        return mode
     # Wave 3C / 8A: drill-down "long-form" agent reports. The deterministic
     # markdown is always populated (cheap, no LLM); when this flag is on,
     # the deterministic body is enriched via a 1-2 paragraph LLM expansion
