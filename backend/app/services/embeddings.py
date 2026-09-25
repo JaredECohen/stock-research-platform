@@ -1,15 +1,26 @@
 """Wave 10 — embedding service for vector retrieval over the corpus.
 
 Single entry point: `embed(texts) -> list[list[float]]`. Uses OpenAI's
-`text-embedding-3-large` (3072 dims) when `OPENAI_API_KEY` is set; falls
-back to deterministic-hash embeddings when it isn't (so unit tests can
-exercise the indexer / retriever without network access).
+`text-embedding-3-small` (1536 dims) when `OPENAI_API_KEY` is set and the
+process is live. Deterministic-hash embeddings (256 dims) are produced only
+outside production, and only when there is no key or the process is in
+demo-only mode — so unit tests and the demo loop can exercise the indexer
+and retriever without network access or spend.
 
-Embeddings live in `doc_chunks.embedding` as JSON-serialized lists.
-When pgvector is enabled in production, an out-of-band migration
-converts the column to `vector(N)` and adds an HNSW index — neither is
-required for retrieval to work; the JSON path falls back to numpy
-cosine similarity.
+Strict by design (W7 §8.1). Any other state — a configured key whose
+request fails, a response of the wrong shape, or production with no key —
+raises `EmbeddingUnavailable` instead of quietly substituting a hash
+vector. A 256-dim hash row can never sync into the `vector(1536)` column
+and is skipped by every 1536-dim query, so the old silent fallback turned
+an OpenAI blip into a permanently unreachable chunk. Raising lets
+`upsert_source` roll its delete back (the source keeps its good chunks),
+the post-pass report name the failure, and `vector_store.search` return []
+so the analysts fall back to BM25.
+
+Embeddings live in `doc_chunks.embedding` as JSON-serialized lists (the
+source of truth). On Postgres with pgvector, `embedding_vec vector(1536)`
+is a derived index column; the JSON path falls back to numpy cosine
+similarity.
 """
 from __future__ import annotations
 
@@ -19,6 +30,9 @@ import math
 import os
 import re
 from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -34,9 +48,92 @@ EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536  # text-embedding-3-small dimensionality
 FALLBACK_DIM = 256  # deterministic-hash mode
 
+# OpenAI list price for `EMBEDDING_MODEL`, USD per million input tokens.
+# The corpus repair's caps and receipts are denominated in it.
+EMBEDDING_USD_PER_MTOK = 0.02
+
+
+class EmbeddingUnavailable(RuntimeError):
+    """No usable semantic embedding.
+
+    Callers fall back (search → [] → BM25) or record a failure; never a hash
+    vector in production, and never when a live key is configured. The
+    message carries the exception *type* only: provider exceptions can echo
+    request text or credentials, and this message reaches loop notes.
+    """
+
 
 def _is_openai_available() -> bool:
     return bool(getattr(settings, "openai_api_key", None))
+
+
+def _hash_allowed() -> bool:
+    """True when deterministic hash vectors are an acceptable answer.
+
+    Never in production, whatever else is configured. Elsewhere, when there
+    is no key (CI, a fresh checkout) or the process is demo-only: a
+    developer `.env` carries a live key, and demo-mode indexing of demo
+    filings would otherwise spend real money embedding fixtures.
+    """
+    if (getattr(settings, "app_env", "") or "").lower() == "production":
+        return False
+    return not _is_openai_available() or bool(settings.use_demo_data_only)
+
+
+def semantic_available() -> bool:
+    """True when `embed` returns real `EMBEDDING_DIM` vectors (or raises).
+
+    The gate for anything that *writes repairs*: a repair run in a process
+    where hash vectors are allowed would replace unusable rows with more
+    unusable rows.
+    """
+    return _is_openai_available() and not _hash_allowed()
+
+
+def tokens_to_usd(tokens: int) -> float:
+    return tokens / 1_000_000 * EMBEDDING_USD_PER_MTOK
+
+
+@dataclass
+class UsageMeter:
+    """Embedding tokens billed inside one `usage_meter()` block.
+
+    `tokens` sums the provider's `usage.total_tokens` per request — the
+    number OpenAI invoices. `estimated_tokens` covers a response that omits
+    usage, counted with our tokenizer, so a spend cap can never be bypassed
+    by a missing field. Hash vectors cost nothing and add nothing.
+    """
+    tokens: int = 0
+    estimated_tokens: int = 0
+    calls: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.tokens + self.estimated_tokens
+
+    @property
+    def usd(self) -> float:
+        return tokens_to_usd(self.total_tokens)
+
+
+_usage_meter: ContextVar[UsageMeter | None] = ContextVar("embedding_usage_meter", default=None)
+
+
+@contextmanager
+def usage_meter() -> Iterator[UsageMeter]:
+    """Meter every OpenAI embedding request made inside the block.
+
+    A context variable rather than a return value because the spend happens
+    several calls down (`index_filing` → `upsert_source` → `embed`) behind
+    interfaces that return chunk counts, and the repair caps must see what
+    was billed, not what was estimated beforehand.
+    """
+    meter = UsageMeter()
+    token = _usage_meter.set(meter)
+    try:
+        yield meter
+    finally:
+        _usage_meter.reset(token)
 
 
 def _hash_embed(text: str, dim: int = FALLBACK_DIM) -> list[float]:
@@ -60,27 +157,51 @@ def _hash_embed(text: str, dim: int = FALLBACK_DIM) -> list[float]:
 
 
 def embed(texts: Sequence[str]) -> list[list[float]]:
-    """Return one embedding per input text.
+    """Return one embedding per input text, or raise `EmbeddingUnavailable`.
 
-    OpenAI when configured; deterministic hash fallback otherwise. The
-    fallback is real-vector-shaped so the same retrieval code path works
-    in dev without network access.
+    OpenAI when configured and live; deterministic hash vectors only where
+    `_hash_allowed()`. See the module docstring for why there is no silent
+    fallback.
     """
     if not texts:
         return []
-    if _is_openai_available():
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=settings.openai_api_key)
-            from .regen_lease import assert_current
-            assert_current()
-            from .industry_lease import assert_current as assert_industry_current
-            assert_industry_current()
-            resp = client.embeddings.create(model=EMBEDDING_MODEL, input=list(texts))
-            return [d.embedding for d in resp.data]
-        except Exception as exc:  # pragma: no cover — fall back rather than fail
-            log.warning("OpenAI embeddings failed (%s); using hash fallback", exc)
-    return [_hash_embed(t) for t in texts]
+    if _hash_allowed():
+        return [_hash_embed(t) for t in texts]
+    if not _is_openai_available():
+        raise EmbeddingUnavailable("no embedding provider configured in production")
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=settings.openai_api_key)
+    except Exception as exc:
+        raise EmbeddingUnavailable(f"openai client unavailable: {type(exc).__name__}") from None
+    # Unchanged in position, and outside every `try`: a stale memo or
+    # industry lease must cancel the dispatch. `LeaseLost` subclasses
+    # BaseException, so no `except Exception` could swallow it anyway.
+    from .regen_lease import assert_current
+    assert_current()
+    from .industry_lease import assert_current as assert_industry_current
+    assert_industry_current()
+    try:
+        resp = client.embeddings.create(model=EMBEDDING_MODEL, input=list(texts))
+    except Exception as exc:
+        # Type only, and `from None`: a provider exception can carry the
+        # request body or a key, and a chained cause would be logged too.
+        raise EmbeddingUnavailable(f"openai embeddings failed: {type(exc).__name__}") from None
+    try:
+        vecs = [list(d.embedding) for d in resp.data]
+    except Exception:
+        raise EmbeddingUnavailable("openai embeddings returned an unexpected shape") from None
+    if len(vecs) != len(texts) or any(len(v) != EMBEDDING_DIM for v in vecs):
+        raise EmbeddingUnavailable("openai embeddings returned an unexpected shape")
+    meter = _usage_meter.get()
+    if meter is not None:
+        meter.calls += 1
+        used = getattr(getattr(resp, "usage", None), "total_tokens", None)
+        if isinstance(used, int) and not isinstance(used, bool) and used >= 0:
+            meter.tokens += used
+        else:
+            meter.estimated_tokens += sum(count_tokens(t) for t in texts)
+    return vecs
 
 
 def embed_one(text: str) -> list[float]:

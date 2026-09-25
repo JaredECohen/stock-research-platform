@@ -264,6 +264,15 @@ def _filing_word_count(sections: dict[str, Any], raw: str) -> int:
     return total
 
 
+# The only text-bearing keys a stored filing's `sections` can hold; the rest
+# of the body lives in `raw_text`, which `filing_memory.index_filing` does not
+# chunk. `corpus_inventory` reads this to tell an indexable filing from one
+# (typically an 8-K) whose sections are empty and will always index to zero.
+FILING_SECTION_KEYS: tuple[str, ...] = (
+    "business_description", "risk_factors", "mda",
+    "segments", "legal_or_regulatory", "financial_highlights",
+)
+
 _FILING_SOURCE_METADATA_FIELDS = (
     "text_fetch_error", "text_truncated", "text_observed_chars", "text_retained_chars",
     "text_bytes_read", "html_oversized_tokens",
@@ -334,12 +343,7 @@ def _ingest_filings(
         filing_date = _coerce_date(f.get("filing_date"))
         period_end = _coerce_date(f.get("period_end"))
         url = f.get("url") or ""
-        sections = {
-            k: f.get(k) for k in (
-                "business_description", "risk_factors", "mda",
-                "segments", "legal_or_regulatory", "financial_highlights",
-            ) if k in f
-        }
+        sections = {k: f.get(k) for k in FILING_SECTION_KEYS if k in f}
         source_metadata = {k: f[k] for k in _FILING_SOURCE_METADATA_FIELDS if k in f}
         if source_metadata:
             # Preserve source completeness without a production schema migration.

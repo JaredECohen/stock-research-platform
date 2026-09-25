@@ -465,7 +465,10 @@ def search(
         return []
     try:
         q_vec = emb_svc.embed_one(query)
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
+        # `EmbeddingUnavailable` (W7 §8.1) lands here. [] puts the filing and
+        # earnings analysts on BM25; the old hash query vector instead
+        # "matched" hash rows by byte pattern, which means nothing.
         log.warning("embed query failed: %s", exc)
         return []
 
