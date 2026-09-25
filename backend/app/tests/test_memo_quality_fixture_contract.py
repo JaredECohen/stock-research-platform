@@ -87,7 +87,10 @@ def test_fixture_revalidates_and_round_trips(wire):
 
 
 def test_quality_key_sets_match_the_models(wire):
-    q = wire["memo"]["quality"]
+    _assert_quality_shape(wire["memo"]["quality"])
+
+
+def _assert_quality_shape(q: dict[str, Any] | None) -> None:
     assert q is not None, RECAPTURE
     _same_keys(q, MemoQuality, "quality")
     nc = q["number_check"]
@@ -149,34 +152,40 @@ def test_fixture_meta_matches_the_script(wire):
     assert wire["meta"]["ticker"] == capture.TICKER
 
 
-def _essentials(memo: dict[str, Any]) -> dict[str, Any]:
-    """What the UI tests rely on, minus incidental run-to-run values."""
+def _scenario(memo: dict[str, Any]) -> dict[str, Any]:
+    """The scripted scenario the UI tests read: the stored (flagged,
+    assumption) claims with their offsets, the withheld point, the rating
+    check's outcome and the caps.
+
+    Deliberately NOT compared: tallies, cited sources, the section map and
+    the reconciliation note's numbers. Those depend on what else the
+    database holds (a DCF, scorecard or macro snapshot another test wrote
+    moves the traced count, the cited refs and the DCF figure in the note),
+    so in a full-suite run they differ from a fresh-database capture for
+    reasons that have nothing to do with the contract."""
     q = memo["quality"]
     nc = q["number_check"]
-    counts = {k: v for k, v in nc["counts"].items() if k not in ("registry_facts", "registry_sources")}
     return {
         "rating_label": memo["rating_label"],
         "confidence_score": memo["confidence_score"],
-        "counts": counts,
         "claims": [(c["field"], c["start"], c["end"], c["raw"], c["status"]) for c in nc["claims"]],
         "withheld": [(w["field"], w["index"], w["text"]) for w in nc["withheld"]],
         "assumptions": nc["assumptions"],
-        "sources_cited": nc["sources_cited"],
-        "primary_kinds_cited": nc["primary_kinds_cited"],
         "reconciliation": {k: q["rating_reconciliation"][k] for k in (
-            "outcome", "pm_rating", "blended_rating", "final_rating", "valuation_verdict", "note")},
+            "outcome", "pm_rating", "blended_rating", "final_rating", "valuation_verdict")},
         "caps": [(c["code"], c["cap"]) for c in q["confidence"]["caps"]],
         "binding": q["confidence"]["binding"],
-        "availability": {k: (v["status"], v["reason"]) for k, v in memo["section_availability"].items()},
-        "final_pm_view": memo["final_pm_view"],
     }
 
 
 def test_fixture_is_what_the_pipeline_produces(wire):
-    """Re-run the capture (demo data, scripted answers, no keys) and compare
-    what the UI relies on. A change to the number check, the reconciliation,
-    the caps or the presenter that alters the served record fails here with
-    the instruction to re-capture, instead of leaving the UI tested against
-    a record the pipeline no longer writes."""
+    """Re-run the capture (demo data, scripted answers, no keys): the
+    pipeline must still write the same `quality` SHAPE, and the scripted
+    scenario must still come out the same. A change to the number check,
+    the reconciliation or the caps that alters what the UI reads fails here
+    with the instruction to re-capture, instead of leaving the UI tested
+    against a record the pipeline no longer writes."""
     fresh = capture.capture()
-    assert _essentials(fresh["memo"]) == _essentials(wire["memo"]), RECAPTURE
+    _assert_quality_shape(fresh["memo"]["quality"])
+    assert set(fresh["memo"]) == set(wire["memo"]), RECAPTURE
+    assert _scenario(fresh["memo"]) == _scenario(wire["memo"]), RECAPTURE
