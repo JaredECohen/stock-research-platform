@@ -17,6 +17,7 @@ from .agents import (
     BullBearCase,
     CatalystItem,
     CriticReview,
+    DebateRecord,
     DivergenceAssessment,
     RiskItem,
     RoundFindings,
@@ -229,6 +230,11 @@ class StockMemoOut(BaseModel):
     technical_agent_view: AgentFinding | None = None
     bull_case: BullBearCase
     bear_case: BullBearCase
+    # D2 (2026-09-25): the bull/bear debate as it ran, behind DEBATE_MODE.
+    # None on every memo written with the mode off and on every memo that
+    # pre-dates the field. `bull_case`/`bear_case` above are unchanged, so
+    # every existing consumer of the cases keeps working either way.
+    debate: DebateRecord | None = None
     catalysts: list[CatalystItem]
     key_risks: list[RiskItem]
     thesis_breakers: list[RiskItem]

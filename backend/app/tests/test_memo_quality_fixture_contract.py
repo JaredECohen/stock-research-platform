@@ -31,6 +31,7 @@ from app.schemas import (
     CatalystItem,
     ConfidenceAssessment,
     ConfidenceCap,
+    CriticReview,
     MemoQuality,
     NumberCheck,
     NumberClaim,
@@ -223,6 +224,29 @@ def test_pm_template_fixture_is_the_template_confidence_state(pm_template_wire):
     assert sa["confidence_score"].status == "available"
 
 
+# The item-8 reviewer fields as a review carries them when nothing wrote
+# them: with DEBATE_MODE and REVIEWER_MODE both off (the capture's state,
+# and production's until waves H and I) the debate is null and every
+# reviewer field holds its "not produced" value.
+ITEM8_UNWRITTEN = {
+    "reviewer_model": "", "verdict": "", "issues": [], "rating_too_high": None,
+    "rating_too_low": None, "review_status": "", "revision": None, "debate_review": None,
+}
+
+
+@pytest.mark.parametrize("which", ["wire", "pm_template_wire"])
+def test_fixtures_carry_the_d2_contract_with_both_modes_off(which, request):
+    """D2: both captures are the pipeline with the debate and the item-8
+    reviewer off. The UI tests read `debate` and the review fields from
+    these bodies, so the keys must be on the wire (as null / empty, not
+    absent), and the review's key set must be the model's both ways."""
+    memo = request.getfixturevalue(which)["memo"]
+    assert "debate" in memo and memo["debate"] is None, RECAPTURE
+    review = memo["risk_committee_challenge"]
+    _same_keys(review, CriticReview, "memo.risk_committee_challenge")
+    assert {k: review[k] for k in ITEM8_UNWRITTEN} == ITEM8_UNWRITTEN, RECAPTURE
+
+
 def test_field_paths_the_renderers_build(wire):
     """The renderers look claims up by path strings they build themselves
     (`claimsFor(memo, "key_risks[0].title")` and so on). Pin the formats
@@ -296,6 +320,9 @@ def test_fixture_is_what_the_pipeline_produces(wire):
     fresh = capture.capture()
     _assert_quality_shape(fresh["memo"]["quality"])
     assert set(fresh["memo"]) == set(wire["memo"]), RECAPTURE
+    assert (set(fresh["memo"]["risk_committee_challenge"])
+            == set(wire["memo"]["risk_committee_challenge"])), RECAPTURE
+    assert fresh["memo"]["debate"] == wire["memo"]["debate"], RECAPTURE
     assert _scenario(fresh["memo"]) == _scenario(wire["memo"]), RECAPTURE
     assert _variant_scenario(fresh["variants"]) == _variant_scenario(wire["variants"]), RECAPTURE
 

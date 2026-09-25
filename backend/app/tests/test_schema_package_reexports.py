@@ -108,6 +108,19 @@ SCHEMA_NAMES = [
     "ConfidenceCap",
     "ConfidenceAssessment",
     "MemoQuality",
+    # D2 (2026-09-25, `schemas/agents.py`): the bull/bear debate record and
+    # the item-8 full-report reviewer fields, expand-only.
+    "DebateEvidence",
+    "DebateClaim",
+    "DebateResponse",
+    "DebateRuling",
+    "DebateResolution",
+    "DebateRecord",
+    "DebateReview",
+    "ReviewIssue",
+    "ReviewRatingCase",
+    "ReviewRecheck",
+    "ReviewRevision",
 ]
 
 # `typing.Literal` aliases are not classes and carry no `__module__`.
@@ -204,11 +217,18 @@ MODEL_SUBMODULES = [
 # `basis`/`signals`, and `CriticReview.valuation_divergence_assessment`, all
 # defaulted so stored snapshots read unchanged. It ships a deploy wave before
 # anything writes the new values, so reverting a writer cannot strand stored
-# memos as unreadable. These intentional changes are pinned here. Update this deliberately, in
+# memos as unreadable. D2 bull/bear debate + reviewer fields (2026-09-25)
+# then added `debate: DebateRecord | None` after `bear_case` and the item-8
+# full-report reviewer fields on `CriticReview` (`reviewer_model`,
+# `verdict`, `issues`, `rating_too_high`/`rating_too_low`, `review_status`,
+# `revision`, `debate_review`), all defaulted and expand-only: nothing
+# writes them until the debate and reviewer slices land behind
+# DEBATE_MODE / REVIEWER_MODE, and stored memos read back with `debate`
+# None. These intentional changes are pinned here. Update this deliberately, in
 # the same commit, whenever `StockMemoOut` itself changes — never to make
 # an accidental drift pass.
 STOCK_MEMO_OUT_SCHEMA_SHA256 = (
-    "f6e38f3e45ce524c4a97788595eacf5a8e694eacc6a1402ca5b77caa6492d62b"
+    "a8059729ecad0be3b2642656f5cf351c53c897fa0eb32fe0921879dfe1cab1dd"
 )
 
 

@@ -52,6 +52,13 @@ from app.tests.test_memo_unreadable import ABBV_BEAR, AMBIGUOUS, LINZESS
 PRE_S2 = Path(__file__).parent / "fixtures" / "memo_contract" / "pre_s2_memo.json"
 
 NEW_TOP_LEVEL = {"section_provenance", "section_availability", "quality"}
+# Added after S2 by D2 (2026-09-25), also expand-only: the debate record and
+# the item-8 reviewer fields on the critic review.
+LATER_TOP_LEVEL = {"debate"}
+LATER_REVIEW_FIELDS = {
+    "reviewer_model", "verdict", "issues", "rating_too_high", "rating_too_low",
+    "review_status", "revision", "debate_review",
+}
 
 TICKERS = ("ZZC1QUAL", "ZZC1PRES", "ZZC1BACK", "ZZC1MIX", "ZZC1OWN", "ZZC1SAMP")
 
@@ -133,10 +140,13 @@ def test_stored_shapes_validate_unchanged():
             assert {k: dumped[key][k] for k in value} == value, key
         else:
             assert dumped[key] == value, key
-    assert set(dumped) - set(original) == NEW_TOP_LEVEL
+    # Later expand-only contracts add their own defaulted keys on top of
+    # S2's; each pins its own defaults (D2: test_debate_schema /
+    # test_review_schema).
+    assert set(dumped) - set(original) == NEW_TOP_LEVEL | LATER_TOP_LEVEL
     assert set(dumped["valuation_verdict"]) - set(original["valuation_verdict"]) == {"basis", "signals"}
     assert (set(dumped["risk_committee_challenge"]) - set(original["risk_committee_challenge"])
-            == {"valuation_divergence_assessment"})
+            == {"valuation_divergence_assessment"} | LATER_REVIEW_FIELDS)
 
     # ABBV v7: the two unambiguous legacy case lists still project as before.
     legacy = deepcopy(original)
