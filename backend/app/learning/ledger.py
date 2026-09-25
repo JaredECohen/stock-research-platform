@@ -1060,7 +1060,7 @@ def ensure_epoch(*, now: datetime | None = None) -> datetime:
     return at
 
 
-def sync_from_postmortems(*, limit: int = SYNC_LIMIT, now: datetime | None = None) -> dict[str, Any]:
+def sync_from_postmortems(*, limit: int | None = None, now: datetime | None = None) -> dict[str, Any]:
     """Backfill company lessons from postmortems written BEFORE the ledger
     epoch (DB-only, no LLM, idempotent).
 
@@ -1071,6 +1071,7 @@ def sync_from_postmortems(*, limit: int = SYNC_LIMIT, now: datetime | None = Non
     lessons are narrative (no observable), so they stay "untested" and are
     never judged; they are capped, suppressible and retire by capacity."""
     report: dict[str, Any] = {"backfilled": 0, "skipped": {}, "failed": 0}
+    limit = SYNC_LIMIT if limit is None else limit   # read at call time, not bound at import
     if not _writes_on():
         report["status"] = "off"
         return report

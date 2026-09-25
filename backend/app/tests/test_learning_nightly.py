@@ -217,6 +217,34 @@ def test_observation_expiry_and_scope_capacity(db, monkeypatch):
     assert [statuses[f"lesson {n}"][0] for n in (1, 2, 3, 4)] == ["retired", "retired", "active", "active"]
 
 
+def test_sync_stops_at_the_pass_limit(db, monkeypatch):
+    monkeypatch.setattr(ledger, "SYNC_LIMIT", 1)
+    _postmortem(db, "NTS")
+    _postmortem(db, "NTT")
+    out = ledger.nightly(now=NOW)
+    assert out["backfilled"] == 1 and out["backfill_skipped"] == {"pass_limit": 1}
+    assert ledger.nightly(now=NOW + timedelta(days=1))["backfilled"] == 1     # the rest, next night
+
+
+@pytest.mark.parametrize("mode, age_days", [("shadow", 2), ("inject", 31)])
+def test_integrity_does_not_demote_for_shadow_or_stale_inject_renders(db, mode, age_days):
+    """Only an INJECT render inside the 30-day lookback is contamination
+    worth demoting for; a shadow render never reached a prompt."""
+    _postmortem(db, "NTU")
+    ledger.nightly(now=NOW)
+    [item] = _items(db)
+    with db() as s:
+        s.add(LearningControlEvent(mode="inject", actor="admin", reason="soaked", gates={}, forced=True,
+                                   created_at=NOW - timedelta(days=40)))
+        s.add(LearningRender(run_id="r1", consumer="pm_memo", ticker="NTU", mode=mode, chars=300,
+                             items=[{"ref": f"L-{item.id}", "item_id": item.id}], dropped=[],
+                             created_at=NOW - timedelta(days=age_days)))
+        mark(s, item.origin_snapshot_id, eligible=False, reason="demo_dev_copy_2026_05_04")
+    assert ledger.integrity_check(now=NOW) == {"retired": [item.id], "demoted": False}
+    with db() as s:
+        assert control.db_mode(s) == "inject"
+
+
 # ---------------------------------------------------------------------------
 # postmortem_loop: the note and the success rule
 # ---------------------------------------------------------------------------
@@ -264,3 +292,57 @@ def test_loop_with_learning_off_says_so(db, recorded, monkeypatch):
     monkeypatch.setattr(settings, "learning_ledger_writes", False)
     postmortem_loop.run_once()
     assert recorded[0]["success"] is True and recorded[0]["note"].endswith("; learning off")
+
+
+_JUDGE_OK = {"status": "ok", "due": 0, "calls": 0, "usd": 0.0, "evidence": 0, "irrelevant": 0, "unanswered": 0,
+             "deferred": 0, "failed": 0, "failed_memos": [], "retired": 0, "unavailable": 0,
+             "stopped_reason": None}
+_NIGHTLY_OK = {"status": "ok", "backfilled": 0, "backfill_skipped": {}, "backfill_failed": 0, "retired": 0,
+               "retired_ids": [], "demoted": False, "expired": 0, "capacity": 0}
+
+
+def _raise(**k):
+    raise RuntimeError("judge down")
+
+
+@pytest.mark.parametrize("nightly, judge, expected", [
+    ({**_NIGHTLY_OK, "backfill_failed": 1}, lambda **k: dict(_JUDGE_OK), "backfill_failed=1"),
+    (_NIGHTLY_OK, lambda **k: {**_JUDGE_OK, "failed": 1, "status": "partial",
+                               "failed_memos": [{"ticker": "NTW", "memo_snapshot_id": 7}]},
+     "judge failed memos: NTW#7"),
+    (_NIGHTLY_OK, _raise, "learning judge failed: RuntimeError: judge down"),
+])
+def test_loop_is_red_when_the_judge_or_backfill_fails(db, recorded, monkeypatch, nightly, judge, expected):
+    monkeypatch.setattr(ledger, "nightly", lambda **k: dict(nightly))
+    monkeypatch.setattr(ledger, "judge_due", judge)
+    postmortem_loop.run_once()
+    assert recorded[0]["success"] is False
+    assert expected in recorded[0]["note"]
+
+
+def test_loop_passes_the_owner_caps_to_the_judge(db, recorded, monkeypatch):
+    """Owner default: at most 20 cheap calls and $0.25 per night. render.yaml
+    does not set them, so production runs on these code defaults."""
+    from app.config import Settings
+    assert Settings.model_fields["learning_judge_max_calls_per_night"].default == 20
+    assert Settings.model_fields["learning_judge_max_usd_per_night"].default == 0.25
+    monkeypatch.setattr(settings, "learning_judge_max_calls_per_night", 20)
+    monkeypatch.setattr(settings, "learning_judge_max_usd_per_night", 0.25)
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(ledger, "nightly", lambda **k: dict(_NIGHTLY_OK))
+    monkeypatch.setattr(ledger, "judge_due", lambda **k: seen.append(k) or dict(_JUDGE_OK))
+    note, ok = postmortem_loop._learning_pass()
+    assert ok is True and seen == [{"max_calls": 20, "max_usd": 0.25}]
+
+
+def test_epoch_write_failure_is_reported_and_turns_the_loop_red(db, recorded, monkeypatch):
+    def boom(**k):
+        raise RuntimeError("epoch down")
+    monkeypatch.setattr(ledger, "ensure_epoch", boom)
+    report = pm.run_postmortems(horizon_days=90, limit=10)
+    assert report["learning_failed"] == 1
+    assert report["learning_failed_memos"][0]["reason"] == "ledger_epoch:RuntimeError"
+    monkeypatch.setattr(ledger, "nightly", lambda **k: dict(_NIGHTLY_OK))
+    monkeypatch.setattr(ledger, "judge_due", lambda **k: dict(_JUDGE_OK))
+    postmortem_loop.run_once()
+    assert recorded[0]["success"] is False
