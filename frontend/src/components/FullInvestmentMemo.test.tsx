@@ -19,7 +19,14 @@ import {
   makeMemo,
 } from "@/test/fixtures/memo";
 import { makeDisagreementSummary, makeInsufficientSummary, makeSummary } from "@/test/fixtures/scorecard";
-import { QUALITY_EXPECT, qualityMemo, qualityMemoConfidenceHidden } from "@/test/fixtures/memoQuality";
+import {
+  QUALITY_EXPECT,
+  qualityMemo,
+  qualityMemoConfidenceHidden,
+  qualityMemoPmTemplate,
+  qualityMemoWithClaimAt,
+  qualityVariant,
+} from "@/test/fixtures/memoQuality";
 import type { StockMemoOut } from "@/types";
 
 function renderMemo(memo: StockMemoOut) {
@@ -447,14 +454,96 @@ describe("FullInvestmentMemo W2b research checks", () => {
     expect(doc.body.textContent).toContain("Research Checks");
     expect(doc.querySelector('[data-testid="research-checks-counts"]')).not.toBeNull();
     const marked = Array.from(doc.querySelectorAll('[data-claim-status="untraceable"]')).map((e) => e.textContent);
-    expect(marked).toEqual([QUALITY_EXPECT.fabricated_pm_figure]);
-    // The withheld point is only behind the panel's disclosure, never printed.
-    expect(doc.body.textContent).not.toContain(QUALITY_EXPECT.withheld_point);
+    expect(marked).toEqual([QUALITY_EXPECT.fabricated_pm_figure, QUALITY_EXPECT.fabricated_view_figure]);
+    // Paper has no toggles: the withheld point is printed as a list inside
+    // Research Checks, and nowhere else in the memo.
+    expect(doc.querySelector("button")).toBeNull();
+    const checks = doc.querySelector('[data-testid="research-checks"]')!;
+    expect(checks.textContent).toContain(`Valuation analyst: ${QUALITY_EXPECT.withheld_point}`);
+    expect(doc.body.textContent!.split(QUALITY_EXPECT.withheld_point)).toHaveLength(2);
     // The section adds no placeholder: the banner still counts exactly the
     // ones the PDF prints on this captured presented memo.
     const el = doc.querySelector('[data-testid="unavailable-count"]');
     const n = Number(/(\d+) sections? unavailable/i.exec(el?.textContent ?? "")?.[1] ?? 0);
     expect(n).toBe(countedPlaceholders(memo, doc).length);
+  });
+
+  it("styles the figure marks in the PDF popup, which loads none of the app's CSS", () => {
+    renderMemo(qualityMemo());
+    const html = printedHtml();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    expect(doc.querySelectorAll('link[rel="stylesheet"]')).toHaveLength(0);
+    const css = Array.from(doc.querySelectorAll("style")).map((e) => e.textContent).join("\n");
+    expect(css).toMatch(/\[data-claim-status="untraceable"\][^{]*\{[^}]*text-decoration:\s*underline dotted/);
+    expect(css).toMatch(/\[data-claim-status="assumption"\]\s*\{[^}]*text-decoration:\s*underline dotted/);
+  });
+
+  it("keeps a legacy memo's PM view in Markdown", () => {
+    // Only a PM view with a figure to mark switches to plain paragraphs;
+    // every memo stored before W2b keeps the Markdown rendering.
+    const md = "First paragraph with **bold** text.\n\nSecond paragraph.";
+    const { container } = renderMemo(makeMemo({ final_pm_view: md }));
+    const strong = Array.from(container.querySelectorAll("strong")).find((e) => e.textContent === "bold");
+    expect(strong).toBeDefined();
+    const section = strong!.closest("section")!;
+    const paras = Array.from(section.querySelectorAll("p")).map((p) => p.textContent);
+    expect(paras).toContain("First paragraph with bold text.");
+    expect(paras).toContain("Second paragraph.");
+    expect(section.textContent).not.toContain("**");
+  });
+
+  it("keeps a checked memo's PM view in Markdown when it has nothing to mark", () => {
+    const memo = qualityMemo();
+    memo.final_pm_view = "First paragraph with **bold** text.\n\nSecond paragraph.";
+    const { container } = renderMemo(memo);
+    expect(Array.from(container.querySelectorAll("strong")).some((e) => e.textContent === "bold")).toBe(true);
+  });
+
+  // Every CheckedText call site in the full memo, each with one real
+  // stored claim re-pointed at it (`qualityMemoWithClaimAt`).
+  const PAPER_SITES = [
+    "one_sentence_thesis",
+    "final_pm_view",
+    "mispricing_thesis.consensus_view",
+    "mispricing_thesis.our_view",
+    "mispricing_thesis.gap",
+    "bull_case.headline",
+    "bull_case.key_points[0]",
+    "bear_case.headline",
+    "bear_case.key_points[0]",
+    "valuation_agent_view.headline",
+    "valuation_agent_view.summary",
+    "valuation_agent_view.key_points[0]",
+    "sector_agent_view.summary",
+    "catalysts[0].title",
+    "catalysts[0].detail",
+    "key_risks[0].title",
+    "key_risks[0].detail",
+    "thesis_breakers[0].title",
+    "thesis_breakers[0].detail",
+  ];
+  it.each(PAPER_SITES)("marks a stored claim at %s", (path) => {
+    const { memo, raw } = qualityMemoWithClaimAt(path);
+    const { container } = renderMemo(memo);
+    const marked = Array.from(container.querySelectorAll('[data-claim-status="untraceable"]'));
+    expect(marked.map((e) => e.textContent)).toEqual([raw]);
+    expect(marked[0].parentElement?.textContent).toContain(`Revenue of ${raw} next year.`);
+  });
+
+  it("captions the cover rating only with a record that is still about it", () => {
+    const stale = renderMemo(qualityVariant("patch_kept_record"));
+    expect(screen.queryByTestId("rating-reconciliation-note")).toBeNull();
+    stale.unmount();
+    renderMemo(qualityVariant("record_mode"));
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(/^Kept at Bullish:/);
+  });
+
+  it("prints the earned confidence, not the template's, when the PM synthesis was template-filled", () => {
+    const memo = qualityMemoPmTemplate();
+    renderMemo(memo);
+    expect(screen.getByTestId("research-checks-confidence-line")).toHaveTextContent(
+      `Confidence ${Math.round(memo.quality!.confidence!.final)} after the research checks.`,
+    );
   });
 
   it("keeps the cover's confidence and the panel's numbers hidden when availability hides confidence", () => {

@@ -1,18 +1,20 @@
 import React from "react";
-import type { NumberCheck, RatingReconciliation, StockMemoOut } from "@/types";
+import type { NumberCheck, StockMemoOut } from "@/types";
 import { isHidden } from "@/lib/memoSections";
 import {
   capText,
+  checksCoverHiddenText,
   CLAIM_TITLE,
   CRITIC_ASSESSMENT_TEXT,
+  declaredAssumptionFor,
   fieldLabel,
   FLAGGED_STATUSES,
   orderedCaps,
-  noteText,
+  pmConfidenceIsTemplate,
   qualityOf,
+  ratingCheckLines,
   sourceLabel,
   sourceLabels,
-  verdictText,
 } from "@/lib/memoQuality";
 
 /**
@@ -24,8 +26,9 @@ import {
  *    where it appears, the PM's declared assumptions (labelled "PM
  *    assumption"), and the supporting points withheld from the memo behind
  *    a disclosure.
- *  - Rating check (7b): the reconciliation note and whether a live critic
- *    reviewed the PM's reason.
+ *  - Rating check (7b): the check in sentences built from the record's
+ *    fields (never the backend's note, which carries check names), the
+ *    PM's reason, and whether a live critic reviewed it.
  *  - Confidence (7c): PM confidence before and after the caps, each cap as
  *    a sentence, the binding one first.
  *  - Sources: what the traced figures trace to, as labels.
@@ -33,8 +36,11 @@ import {
  * It follows the presenter's section map (W2a, owner decision 2): when the
  * memo's confidence is unavailable in this version, the raw -> final
  * numbers and the caps are not printed either — they would put back the
- * number the placeholder withholds. Figures in hidden sections were already
- * dropped from the record by the presenter.
+ * number the placeholder withholds. When the PM synthesis was template-
+ * filled, the PM's "raw" confidence is the template's number, so only the
+ * final (earned) confidence is printed. Flagged figures in hidden sections
+ * were already dropped from the record by the presenter; the tallies and
+ * cited sources are memo-wide, and say so when sections are hidden.
  *
  * Machine vocabulary (cap codes, field paths, source refs, industry
  * codes) never reaches the page: `lib/memoQuality` maps each to a label.
@@ -65,6 +71,8 @@ export default function QualityPanel({
     ? "text-xs uppercase tracking-wider text-slate-400 print:text-slate-600 font-semibold"
     : "text-[10px] uppercase tracking-widest text-slate-500";
   const confidenceHidden = isHidden(memo, "confidence_score");
+  const templateConfidence = pmConfidenceIsTemplate(memo);
+  const wholeRun = checksCoverHiddenText(memo);
 
   return (
     <div
@@ -76,14 +84,14 @@ export default function QualityPanel({
       {nc && (
         <div data-testid="research-checks-figures">
           <div className={head}>Figures</div>
-          <FiguresBlock nc={nc} body={body} muted={muted} />
+          <FiguresBlock nc={nc} body={body} muted={muted} paper={paper} wholeRun={wholeRun} />
         </div>
       )}
 
       {rec && (
         <div data-testid="research-checks-rating">
           <div className={head}>Rating check</div>
-          <RatingBlock rec={rec} body={body} muted={muted} />
+          <RatingBlock memo={memo} body={body} muted={muted} />
         </div>
       )}
 
@@ -95,9 +103,11 @@ export default function QualityPanel({
           ) : (
             <>
               <p className={`mt-1 ${body}`} data-testid="research-checks-confidence-line">
-                {conf.final < conf.raw
-                  ? `PM confidence ${Math.round(conf.raw)} → ${Math.round(conf.final)} after the research checks.`
-                  : `PM confidence ${Math.round(conf.final)}; no research check lowered it.`}
+                {templateConfidence
+                  ? `Confidence ${Math.round(conf.final)} after the research checks. The PM synthesis was template-filled, so it has no confidence of its own to show.`
+                  : conf.final < conf.raw
+                    ? `PM confidence ${Math.round(conf.raw)} → ${Math.round(conf.final)} after the research checks.`
+                    : `PM confidence ${Math.round(conf.final)}; no research check lowered it.`}
               </p>
               {conf.caps.length > 0 && (
                 <ul className={`mt-1 list-disc pl-5 space-y-0.5 text-xs ${body}`}>
@@ -116,14 +126,30 @@ export default function QualityPanel({
 
       {nc && nc.checked && nc.sources_cited.length > 0 && (
         <p className={`text-xs ${muted}`} data-testid="research-checks-sources">
-          Figures trace to: {sourceLabels(nc.sources_cited).join(" · ")}.
+          {wholeRun ? "Figures across the whole memo, including sections not shown, trace to:" : "Figures trace to:"}{" "}
+          {sourceLabels(nc.sources_cited).join(" · ")}.
         </p>
       )}
     </div>
   );
 }
 
-function FiguresBlock({ nc, body, muted }: { nc: NumberCheck; body: string; muted: string }) {
+function FiguresBlock({
+  nc,
+  body,
+  muted,
+  paper,
+  wholeRun,
+}: {
+  nc: NumberCheck;
+  body: string;
+  muted: string;
+  // The PDF prints the withheld points as a list: a toggle means nothing
+  // on paper, and the popup loads none of the app's CSS to hide one.
+  paper: boolean;
+  // The tallies cover sections the presenter hid (see the header).
+  wholeRun: boolean;
+}) {
   const [showWithheld, setShowWithheld] = React.useState(false);
   if (!nc.checked) {
     return (
@@ -150,6 +176,12 @@ function FiguresBlock({ nc, body, muted }: { nc: NumberCheck; body: string; mute
       <p className={body} data-testid="research-checks-counts">
         {parts.join(" · ")}
       </p>
+      {wholeRun && (
+        <p className={`text-xs ${muted}`} data-testid="research-checks-scope">
+          These counts cover the whole memo as generated, including sections not shown in this
+          version and the withheld points.
+        </p>
+      )}
       {n("weak") > 0 && (
         <p className={`text-xs ${muted}`}>
           A value-only match is a round figure found in the data without the metric it names; it
@@ -166,10 +198,13 @@ function FiguresBlock({ nc, body, muted }: { nc: NumberCheck; body: string; mute
           ))}
         </ul>
       )}
+      {paper && (flagged.length > 0 || assumptions.length > 0) && (
+        <p className={`text-xs ${muted}`}>These figures are underlined with dots where they appear in the memo.</p>
+      )}
       {assumptions.length > 0 && (
         <ul className={`list-disc pl-5 space-y-0.5 text-xs ${body}`} data-testid="research-checks-assumptions">
           {assumptions.map((c, i) => {
-            const declared = (nc.assumptions ?? []).find((a) => Number(a.value) === Math.abs(Number(c.value)));
+            const declared = declaredAssumptionFor(nc, c);
             const horizon = typeof declared?.horizon === "string" ? declared.horizon : "";
             const basis = typeof declared?.basis_ref === "string" ? sourceLabel(declared.basis_ref) : "";
             return (
@@ -184,19 +219,25 @@ function FiguresBlock({ nc, body, muted }: { nc: NumberCheck; body: string; mute
       )}
       {withheld.length > 0 && (
         <div data-testid="research-checks-withheld">
-          <button
-            type="button"
-            className="text-xs text-accent-500 hover:text-accent-400 print:hidden"
-            aria-expanded={showWithheld}
-            onClick={() => setShowWithheld((v) => !v)}
-          >
-            {showWithheld ? "Hide" : "Show"} {withheld.length} withheld point{withheld.length === 1 ? "" : "s"}
-          </button>
+          {paper ? (
+            <p className={`text-xs ${body}`}>
+              {withheld.length} withheld point{withheld.length === 1 ? "" : "s"}:
+            </p>
+          ) : (
+            <button
+              type="button"
+              className="text-xs text-accent-500 hover:text-accent-400 print:hidden"
+              aria-expanded={showWithheld}
+              onClick={() => setShowWithheld((v) => !v)}
+            >
+              {showWithheld ? "Hide" : "Show"} {withheld.length} withheld point{withheld.length === 1 ? "" : "s"}
+            </button>
+          )}
           <p className={`text-xs ${muted}`}>
             Supporting points whose figures were not found in the source data are removed from the
             memo and kept here verbatim.
           </p>
-          {showWithheld && (
+          {(paper || showWithheld) && (
             <ul className={`mt-1 list-disc pl-5 space-y-0.5 text-xs ${body}`}>
               {withheld.map((w, i) => (
                 <li key={i}>
@@ -223,20 +264,24 @@ function FiguresBlock({ nc, body, muted }: { nc: NumberCheck; body: string; mute
   );
 }
 
-function RatingBlock({ rec, body, muted }: { rec: RatingReconciliation; body: string; muted: string }) {
-  const line =
-    noteText(rec.note) ||
-    (rec.outcome === "consistent"
-      ? `The rating agrees with the valuation evidence (${verdictText(rec.valuation_verdict)}).`
-      : rec.outcome === "not_applicable"
-        ? "No valuation evidence was available, so the rating was not checked against it."
-        : "");
+function RatingBlock({ memo, body, muted }: { memo: StockMemoOut; body: string; muted: string }) {
+  const rec = qualityOf(memo)?.rating_reconciliation;
+  if (!rec) return null;
+  const [line, ...after] = ratingCheckLines(memo);
   return (
-    <div className="mt-1 space-y-0.5">
+    <div className="mt-1 space-y-0.5" data-testid="research-checks-rating-text">
       {line && <p className={body}>{line}</p>}
-      {rec.divergence && rec.reason && (
+      {rec.divergence && rec.reason.trim() && (
+        <p className={`text-xs ${body}`}>PM&apos;s reason: &ldquo;{rec.reason.trim()}&rdquo;</p>
+      )}
+      {rec.divergence && rec.reason.trim() && (
         <p className={`text-xs ${muted}`}>{CRITIC_ASSESSMENT_TEXT[rec.critic_assessment] ?? ""}</p>
       )}
+      {after.map((l, i) => (
+        <p key={i} className={`text-xs ${muted}`}>
+          {l}
+        </p>
+      ))}
     </div>
   );
 }

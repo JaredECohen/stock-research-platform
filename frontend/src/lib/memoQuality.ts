@@ -9,16 +9,20 @@
 // (`industry_group:<slug>`, `filing:<accession>`) and review modes — and
 // owner decision 8 keeps codes (industry codes above all) off the page. So
 // every one of those goes through a closed map here, and anything the map
-// does not know is shown as a generic phrase, never verbatim.
+// does not know is shown as a generic phrase, never verbatim. The same goes
+// for the backend's free-text notes: the rating check is worded here from
+// the record's fields, and its `note` is never printed.
 import type {
   ConfidenceAssessment,
   ConfidenceCap,
   MemoQuality,
+  NumberCheck,
   NumberClaim,
   NumberClaimStatus,
+  RatingReconciliation,
   StockMemoOut,
 } from "@/types";
-import { isHidden } from "@/lib/memoSections";
+import { hiddenKeys, isHidden } from "@/lib/memoSections";
 
 /** The quality record, or null for a memo that pre-dates it. */
 export function qualityOf(memo: Pick<StockMemoOut, "quality"> | null | undefined): MemoQuality | null {
@@ -59,6 +63,50 @@ export function claimsFor(
 ): NumberClaim[] {
   const claims = qualityOf(memo)?.number_check?.claims ?? [];
   return claims.filter((c) => c.field === field && MARKED_STATUSES.has(c.status));
+}
+
+/** The declared PM assumption a stored `assumption` claim matched, or
+ * null. Mirrors `number_check._is_declared`: the units must agree when the
+ * declaration names one, and the values match within the claim's printed
+ * precision — "18.5%" is 18.45..18.55, so a declared 18.47 is its
+ * assumption. Exact equality would drop the horizon and basis of any
+ * declared value the prose rounds. The closest match wins. */
+export function declaredAssumptionFor(
+  nc: Pick<NumberCheck, "assumptions">,
+  claim: Pick<NumberClaim, "raw" | "value" | "unit">,
+): Record<string, unknown> | null {
+  const value = Math.abs(Number(claim.value));
+  if (!Number.isFinite(value)) return null;
+  const tol = printedTolerance(claim.raw, value);
+  let best: Record<string, unknown> | null = null;
+  let bestDist = Infinity;
+  for (const a of nc.assumptions ?? []) {
+    const v = a?.value;
+    if (typeof v !== "number" || !Number.isFinite(v)) continue;
+    const unit = typeof a.unit === "string" ? a.unit : "";
+    if (unit && unit !== claim.unit) continue;
+    const dist = Math.abs(Math.abs(v) - value);
+    if (dist <= tol && dist < bestDist) {
+      best = a;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+// Half a unit in the last printed place of `raw`, in the claim's (scaled)
+// value units — `number_check.extract_claims`' `tol`, including its
+// loosening for round integers with a scale word ("1,200 million").
+function printedTolerance(raw: string, value: number): number {
+  const m = /(\d[\d,]*)(?:\.(\d+))?/.exec(raw ?? "");
+  if (!m) return 1e-9;
+  const intDigits = m[1].replace(/,/g, "");
+  const decimals = m[2]?.length ?? 0;
+  const printed = Number(`${intDigits}${m[2] ? `.${m[2]}` : ""}`);
+  const scale = printed > 0 ? value / printed : 1;
+  const zeros = intDigits.length - intDigits.replace(/0+$/, "").length;
+  const zEff = decimals === 0 && scale >= 1e3 ? Math.min(zeros, Math.max(0, intDigits.length - 2)) : 0;
+  return 0.5 * 10 ** (zEff - decimals) * scale + 1e-9;
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +299,25 @@ export function cappedConfidenceLine(memo: StockMemoOut): string {
   return `Capped at ${Math.round(conf.final)} — ${capText(cap)}`;
 }
 
+/** True when the PM's own confidence (`quality.confidence.raw`) is a
+ * template's number: the PM synthesis fell back (`pm_template` cap), or the
+ * presenter hid the PM view as template. The quality stage stamps the
+ * FINAL confidence as earned, so `confidence_score` stays available in
+ * that state (`memo_sections._classify`) and only this catches it. */
+export function pmConfidenceIsTemplate(memo: StockMemoOut): boolean {
+  const conf = qualityOf(memo)?.confidence;
+  return Boolean(conf?.caps?.some((c) => c.code === "pm_template")) || isHidden(memo, "final_pm_view");
+}
+
+/** True when the presenter hid any section or item of this memo. The
+ * number check ran over the whole memo before presentation, and its tallies
+ * and cited sources are stored memo-wide (traced figures are not stored
+ * per section), so they then include text the page does not show. */
+export function checksCoverHiddenText(memo: Pick<StockMemoOut, "section_availability">): boolean {
+  if (hiddenKeys(memo).length > 0) return true;
+  return Object.values(memo.section_availability ?? {}).some((av) => (av?.hidden_items ?? 0) > 0);
+}
+
 // The Confidence card's tooltip. The old wording ("dampened by
 // source-evidence quality") still describes every memo stored before the
 // checks existed, so it stays for those; a checked memo gets the wording
@@ -279,28 +346,117 @@ export function verdictText(v: string | null | undefined): string {
   return VERDICT_TEXT[v ?? ""] ?? "unclear";
 }
 
+// A record is about the rating on the page only while its final rating IS
+// that rating. A news patch can move the rating without re-running the
+// full-run check (`memo_quality.enforce_after_patch` re-checks only a move
+// that diverges from the evidence), which leaves the full run's record in
+// place under a different rating.
+function recordIsCurrent(memo: Pick<StockMemoOut, "rating_label">, rec: RatingReconciliation): boolean {
+  return Boolean(rec.final_rating) && rec.final_rating === memo.rating_label;
+}
+
+// `rating_reconciliation_mode=record` (the kill switch) writes `downgraded`
+// but leaves the rating as blended: the check recorded, it did not act.
+function downgradeEnforced(rec: RatingReconciliation): boolean {
+  return rec.final_rating !== rec.blended_rating;
+}
+
+// A patch-guard record (`enforce_after_patch`) states no reason and runs no
+// reason checks: a news patch cannot state one. A full-run record always
+// carries the checks it ran (`reconcile_rating`).
+function isPatchRecord(rec: RatingReconciliation): boolean {
+  return Object.keys(rec.reason_checks ?? {}).length === 0;
+}
+
 /** One line under the rating badge when the check changed or overrode the
- * call; "" when the rating simply agreed with the evidence. */
+ * call; "" when the rating simply agreed with the evidence, and "" when the
+ * record no longer describes the rating shown (a later news patch moved
+ * it) — the badge must never be captioned with another rating's story. */
 export function reconciliationBadgeNote(memo: StockMemoOut): string {
   const rec = qualityOf(memo)?.rating_reconciliation;
-  if (!rec) return "";
+  if (!rec || !recordIsCurrent(memo, rec)) return "";
   const evidence = verdictText(rec.valuation_verdict);
   const from = rec.blended_rating || rec.pm_rating;
+  const call = from ? `a ${from} call` : "the call";
   if (rec.outcome === "downgraded") {
-    return `Set to ${rec.final_rating || memo.rating_label}: ${from ? `a ${from} call` : "the call"} conflicted with the valuation evidence (${evidence}) without a supported reason.`;
+    if (!downgradeEnforced(rec)) {
+      return `Kept at ${rec.final_rating}: the call conflicts with the valuation evidence (${evidence}), but the rating check is recording only, not changing ratings.`;
+    }
+    if (isPatchRecord(rec)) {
+      return `Set to ${rec.final_rating}: a news update moved the call to ${from || "another rating"} against the valuation evidence (${evidence}).`;
+    }
+    return `Set to ${rec.final_rating}: ${call} conflicted with the valuation evidence (${evidence}) without a supported reason.`;
   }
   if (rec.outcome === "accepted") {
     const review =
       rec.critic_assessment === "supported" ? "reviewed and supported" : "not independently reviewed";
-    return `${rec.final_rating || memo.rating_label} despite ${evidence} valuation evidence, on the PM's stated reason (${review}).`;
+    return `${rec.final_rating} despite ${evidence} valuation evidence, on the PM's stated reason (${review}).`;
   }
   return "";
 }
 
-/** The backend's reconciliation note, minus the one piece of config
- * vocabulary it can carry (`memo_quality.reconcile_rating` in record mode). */
-export function noteText(note: string | null | undefined): string {
-  return (note ?? "").replace(/\s*\(rating_reconciliation_mode=record\)/g, "").trim();
+// `memo_quality.REASON_CHECKS` -> what a failed check says about the reason.
+const REASON_CHECK_FAILED: Record<string, string> = {
+  substantive: "was too short or generic to count as a reason",
+  names_signal: "did not name the valuation signal it goes against",
+  quotes_value: "did not quote that signal's value",
+};
+
+function joinClauses(parts: string[]): string {
+  if (parts.length <= 1) return parts.join("");
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+function downgradeWhy(rec: RatingReconciliation): string {
+  const checks = rec.reason_checks ?? {};
+  if (!rec.reason.trim()) return "no reason was given";
+  if (checks.check_failed) return "the stated reason could not be verified";
+  const failed = Object.keys(REASON_CHECK_FAILED).filter((k) => checks[k] === false);
+  if (failed.length === 0) return "the risk committee judged the stated reason unsupported";
+  return `the stated reason ${joinClauses(failed.map((k) => REASON_CHECK_FAILED[k]))}`;
+}
+
+/** The rating check in sentences, composed from the record's structured
+ * fields. The backend's `note` is never printed: it carries the reason
+ * checks' names ("failed: names_signal, quotes_value") and the config
+ * switch's name, and any future wording would reach the page unreviewed. */
+export function ratingCheckLines(memo: StockMemoOut): string[] {
+  const rec = qualityOf(memo)?.rating_reconciliation;
+  if (!rec) return [];
+  const evidence = verdictText(rec.valuation_verdict);
+  const blended = rec.blended_rating || rec.pm_rating || "the blended rating";
+  const lines: string[] = [];
+  switch (rec.outcome) {
+    case "not_applicable":
+      lines.push("No valuation evidence was available, so the rating was not checked against it.");
+      break;
+    case "consistent":
+      lines.push(`The rating agrees with the valuation evidence (${evidence}).`);
+      break;
+    case "accepted":
+      lines.push(`Rated ${blended} although the valuation evidence reads ${evidence}, on the PM's stated reason.`);
+      break;
+    case "downgraded": {
+      const enforced = downgradeEnforced(rec);
+      const what = isPatchRecord(rec)
+        ? `A news update moved the rating to ${blended} against the valuation evidence (${evidence}) with no valuation reason (a news update cannot state one).`
+        : `The blended rating was ${blended}, but the valuation evidence reads ${evidence}, and ${downgradeWhy(rec)}.`;
+      lines.push(
+        enforced
+          ? `${what} The rating was set to ${rec.final_rating}.`
+          : `${what} Recorded only: the rating check is not changing ratings, so it stays ${rec.final_rating || blended}.`,
+      );
+      break;
+    }
+    default:
+      break;
+  }
+  if (rec.final_rating && !recordIsCurrent(memo, rec)) {
+    lines.push(
+      `A news update has since moved the rating to ${memo.rating_label}; this check describes the last full run.`,
+    );
+  }
+  return lines;
 }
 
 export const CRITIC_ASSESSMENT_TEXT: Record<string, string> = {

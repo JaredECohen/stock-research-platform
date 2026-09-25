@@ -1030,6 +1030,13 @@ function downloadPdf(memo: StockMemoOut, container: HTMLDivElement | null) {
     [class*="text-slate-400"], [class*="text-slate-500"], [class*="text-slate-600"] { color: #4b5563 !important; }
     [class*="bg-ink-"], [class*="bg-black"] { background: transparent !important; }
     .border-ink-700, .border-slate-700, .border-ink-800 { border-color: #cbd5e1 !important; }
+    /* W2b: checked figures keep their marks on paper. CheckedText styles
+       them with Tailwind classes this popup does not load, so key on the
+       data attribute instead (the Research Checks section explains them). */
+    [data-claim-status="untraceable"], [data-claim-status="mis_anchored"] {
+      text-decoration: underline dotted #b45309; text-underline-offset: 2px;
+    }
+    [data-claim-status="assumption"] { text-decoration: underline dotted #64748b; text-underline-offset: 2px; }
     /* Bull / bear accents stay visible in print */
     .border-emerald-500\\/40 { border-color: #047857 !important; }
     .border-rose-500\\/40 { border-color: #be123c !important; }

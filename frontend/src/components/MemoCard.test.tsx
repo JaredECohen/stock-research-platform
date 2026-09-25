@@ -23,6 +23,9 @@ import {
   QUALITY_EXPECT,
   qualityMemo,
   qualityMemoConfidenceHidden,
+  qualityMemoPmTemplate,
+  qualityMemoWithClaimAt,
+  qualityVariant,
 } from "@/test/fixtures/memoQuality";
 import { CHECKED_CONFIDENCE_TOOLTIP } from "@/lib/memoQuality";
 import type { StockMemoOut } from "@/types";
@@ -417,7 +420,7 @@ describe("MemoCard W2b research checks", () => {
       countedPlaceholders(memo, container).length,
     );
     const marked = Array.from(document.querySelectorAll('[data-claim-status="untraceable"]')).map((e) => e.textContent);
-    expect(marked).toEqual([QUALITY_EXPECT.fabricated_pm_figure]);
+    expect(marked).toEqual([QUALITY_EXPECT.fabricated_pm_figure, QUALITY_EXPECT.fabricated_view_figure]);
     expect(document.querySelector('[data-claim-status="assumption"]')).toHaveTextContent(
       QUALITY_EXPECT.declared_assumption,
     );
@@ -434,20 +437,97 @@ describe("MemoCard W2b research checks", () => {
   });
 
   it("notes an accepted divergence under the badge, and nothing for a consistent rating", () => {
-    const accepted = qualityMemo();
-    accepted.rating_label = "Bullish";
-    Object.assign(accepted.quality!.rating_reconciliation!, {
-      outcome: "accepted", final_rating: "Bullish", reason: "A reason.", critic_assessment: "not_assessed",
-    });
-    const a = renderCard(accepted);
+    const a = renderCard(qualityVariant("accepted_unreviewed"));
     expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(
       "Bullish despite overvalued valuation evidence, on the PM's stated reason (not independently reviewed).",
     );
     a.unmount();
+    const s = renderCard(qualityVariant("accepted_supported"));
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(
+      "Bullish despite overvalued valuation evidence, on the PM's stated reason (reviewed and supported).",
+    );
+    s.unmount();
     const consistent = qualityMemo();
     consistent.quality!.rating_reconciliation!.outcome = "consistent";
     renderCard(consistent);
     expect(screen.queryByTestId("rating-reconciliation-note")).toBeNull();
+  });
+
+  it("never says the check set a rating it did not set (record mode)", () => {
+    // `reconcile_rating(enforce=False)`: outcome downgraded, rating left Bullish.
+    renderCard(qualityVariant("record_mode"));
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(
+      "Kept at Bullish: the call conflicts with the valuation evidence (overvalued), but the rating check is recording only, not changing ratings.",
+    );
+    expect(screen.getByTestId("rating-reconciliation-note")).not.toHaveTextContent(/Set to/);
+  });
+
+  it("drops the badge note when a news patch moved the rating away from the record", () => {
+    // `enforce_after_patch` re-checks only a move against the evidence, so
+    // these patches leave the full run's record under a different rating.
+    for (const name of ["patch_kept_record", "patch_after_accepted"] as const) {
+      const memo = qualityVariant(name);
+      expect(memo.quality!.rating_reconciliation!.final_rating).not.toBe(memo.rating_label);
+      const r = renderCard(memo);
+      expect(screen.queryByTestId("rating-reconciliation-note")).toBeNull();
+      // The panel says the check is from the last full run instead.
+      expect(screen.getByTestId("research-checks-rating")).toHaveTextContent(
+        `A news update has since moved the rating to ${memo.rating_label}; this check describes the last full run.`,
+      );
+      r.unmount();
+    }
+  });
+
+  it("words the news-patch guard's downgrade, and its record mode", () => {
+    const g = renderCard(qualityVariant("patch_guard"));
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(
+      "Set to Neutral: a news update moved the call to Very Bullish against the valuation evidence (overvalued).",
+    );
+    g.unmount();
+    renderCard(qualityVariant("patch_guard_record_mode"));
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(
+      "Kept at Very Bullish: the call conflicts with the valuation evidence (overvalued), but the rating check is recording only, not changing ratings.",
+    );
+  });
+
+  // Every CheckedText call site on the card, each with one real stored
+  // claim re-pointed at it (`qualityMemoWithClaimAt`).
+  const CARD_SITES = [
+    "one_sentence_thesis",
+    "final_pm_view",
+    "mispricing_thesis.consensus_view",
+    "mispricing_thesis.our_view",
+    "mispricing_thesis.gap",
+    "valuation_agent_view.headline",
+    "valuation_agent_view.summary",
+    "valuation_agent_view.key_points[0]",
+    "earnings_agent_view.summary",
+    "bull_case.headline",
+    "bull_case.key_points[0]",
+    "bear_case.key_points[0]",
+    "catalysts[0].title",
+    "catalysts[0].detail",
+    "key_risks[0].title",
+  ];
+  it.each(CARD_SITES)("marks a stored claim at %s", (path) => {
+    const { memo, raw } = qualityMemoWithClaimAt(path);
+    const { container } = renderCard(memo);
+    const marked = Array.from(container.querySelectorAll('[data-claim-status="untraceable"]'));
+    expect(marked.map((e) => e.textContent)).toEqual([raw]);
+    // Marked in the prose (its sentence), not only listed in the panel.
+    expect(marked[0].parentElement?.textContent).toContain(`Revenue of ${raw} next year.`);
+  });
+
+  it("shows the earned confidence, not the template's, when the PM synthesis was template-filled", () => {
+    const memo = qualityMemoPmTemplate();
+    renderCard(memo);
+    const conf = memo.quality!.confidence!;
+    expect(screen.getByTestId("confidence-capped")).toHaveTextContent(
+      "Capped at 40 — The PM synthesis was template-filled.",
+    );
+    expect(screen.getByTestId("research-checks-confidence").textContent).not.toMatch(
+      new RegExp(`\\b${Math.round(conf.raw)}\\b`),
+    );
   });
 
   it("shows the capped-confidence line and the rewritten tooltip", () => {
