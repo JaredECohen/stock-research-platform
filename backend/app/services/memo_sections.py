@@ -45,6 +45,7 @@ from ..schemas import (
     AgentFinding,
     CriticReview,
     MispricingThesis,
+    NumberClaim,
     SectionAvailability,
     StockMemoOut,
 )
@@ -1296,10 +1297,21 @@ def present_memo(
         for c in nc.claims:
             if _section_of_field(c.field) in hidden:
                 continue
+            if c.field.endswith(".long_form_report"):
+                c = _rebased_long_form_claim(memo, out, c)
+                if c is None:
+                    continue
             moved = _renumbered(c.field, dropped, hidden_heads)
             if moved is not None:
                 claims.append(c if moved == c.field else c.model_copy(update={"field": moved}))
         nc.claims = claims
+        # Fields a patch changed name list items by their STORED index; they
+        # move with the presenter's dropped items exactly as claims do.
+        nc.unchecked_fields = [
+            moved for p in nc.unchecked_fields
+            if _section_of_field(p) not in hidden
+            and (moved := _renumbered(p, dropped, hidden_heads)) is not None
+        ]
         # A withheld item was removed before storage, so its index refers to
         # the pre-check list and is left alone; its TEXT is judged by the
         # same rules as a stored item of that list.
@@ -1320,6 +1332,34 @@ _LIST_ITEM_PATH = re.compile(
     r"^(?P<section>key_risks|thesis_breakers|catalysts|(?:bull|bear)_case)"
     r"(?P<mid>\.key_points)?\[(?P<index>\d+)\](?P<rest>.*)$"
 )
+
+
+def _rebased_long_form_claim(memo: StockMemoOut, out: StockMemoOut, c: NumberClaim) -> NumberClaim | None:
+    """A long-form claim moved from the STORED report to the presented one.
+
+    The number check stores long-form offsets into the full report (the
+    deterministic body, then the marker, then the analyst's expansion); the
+    presenter shows only the stripped expansion (`_long_form_expansion`).
+    The claim moves back by everything the presenter cut in front of it, and
+    is dropped when it no longer indexes the shown text — a renderer relies
+    on `text[start:end] == raw`."""
+    key = c.field[: -len(".long_form_report")]
+    f_stored, f_shown = _finding_at(memo, key), _finding_at(out, key)
+    stored = f_stored.long_form_report if f_stored is not None else None
+    shown = f_shown.long_form_report if f_shown is not None else None
+    if not isinstance(stored, str) or not isinstance(shown, str):
+        return None
+    if stored == shown:
+        return c if shown[c.start:c.end] == c.raw else None
+    at = stored.find(_LONG_FORM_MARKER)
+    if at < 0:
+        return None
+    rest = stored[at + len(_LONG_FORM_MARKER):]
+    cut = at + len(_LONG_FORM_MARKER) + (len(rest) - len(rest.lstrip()))
+    start, end = c.start - cut, c.end - cut
+    if start < 0 or end > len(shown) or shown[start:end] != c.raw:
+        return None
+    return c.model_copy(update={"start": start, "end": end})
 
 
 def _renumbered(path: str, dropped: dict[str, list[int]], head_hidden: set[str]) -> str | None:
