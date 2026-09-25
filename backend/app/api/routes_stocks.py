@@ -468,7 +468,16 @@ def get_stock_memory(
     Returns the most recent `limit` entries from `memory/companies/<T>.md`
     plus any `structured_facts` blobs Wave 3D extracted from filings /
     transcripts. Read-only; the file itself remains the source of truth.
+
+    W7: once learned priors are being injected (effective mode "inject"),
+    the trail is the learning ledger instead — company-scope filing
+    observations and non-suppressed lessons, each lesson labelled a
+    provisional hypothesis, never the audit-only `detail`, in the same
+    response shape. In off and shadow modes this route is unchanged.
     """
+    from ..learning import context as learning_context
+    if learning_context.public_trail_enabled():
+        return learning_context.public_trail(ticker, limit=limit)
     from ..memory import CompanyMemory
     from ..memory.longterm import company_memory_path
     cm = CompanyMemory.for_ticker(ticker.upper())
