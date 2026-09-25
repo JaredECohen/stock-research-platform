@@ -211,3 +211,172 @@ def test_resolve_field_paths(path):
         bull_case=BullBearCase(headline="b", key_points=["first"]),
     )
     assert nc.resolve_field(memo, path) in ("c2", "b", "why", "first")
+
+
+# ---------------------------------------------------------------------------
+# Review round: extraction gaps, anchoring of value-first multiples, credit,
+# assumption scope and withholding consistency
+# ---------------------------------------------------------------------------
+
+def test_ascii_arrow_is_a_change_not_a_threshold():
+    """"12% -> 97%" states two values; only a comparison symbol makes a
+    figure a threshold, so an invented value after an arrow is checked."""
+    got = [(c.raw, c.cls) for c in claims("Revenue growth accelerates 12% -> 97%.")]
+    assert got == [("12%", "fact"), ("97%", "fact")]
+    assert [(c.raw, c.cls) for c in claims("Gross margin 61%->99.9%.")] == [
+        ("61%", "fact"), ("99.9%", "fact")]
+    assert [(c.raw, c.cls) for c in claims("Revenue growth 12% => 97%.")][1] == ("97%", "fact")
+    # Real comparisons stay thresholds.
+    assert [c.cls for c in claims("FCF yield > 4% and leverage >= 2.5x")] == ["threshold", "threshold"]
+
+
+def test_may_the_verb_is_not_a_date():
+    assert [c.raw for c in claims("Revenue may 30% higher next year")] == ["30%"]
+    assert [c.raw for c in claims("Margins may reach 45.5% by then")] == ["45.5%"]
+    # The month still masks a real date.
+    assert claims("Earnings on May 30, 2026 and Mar 12") == []
+
+
+def test_value_first_multiples_anchor_to_the_multiple():
+    """"46.8x earnings" is a P/E, "22.3x sales" a P/S, "34.4x EBITDA" an
+    EV/EBITDA: the noun after the x names the multiple, not revenue or
+    EBITDA. Without the binding every one read mis_anchored."""
+    reg = registry(("financials", "financials:T", {
+        "income": [{"period": "2025", "revenue": 130_500_000_000, "ebitda": 86_000_000_000}],
+        "ratios": {"PE": 46.79, "PS": 22.31, "EV_Revenue": 22.34, "EV_EBITDA": 34.37, "PFCF": 49.57,
+                   "gross_margin": 0.976, "operating_margin": 0.61, "net_debt_to_ebitda": 1.2}}))
+    for text in ("Shares trade at 22.3x sales.", "Shares trade at 22.3x revenue.",
+                 "The stock trades at 34.4x EBITDA.", "Trading at 46.8x earnings, a premium to peers.",
+                 "NVDA trades at 46.8x trailing earnings.",
+                 "At 46.8x earnings and 22.3x sales, NVDA is priced for perfection.",
+                 "Valuation: 46.8x P/E, 34.4x EV/EBITDA, 49.6x P/FCF.",
+                 "P/E 46.8x, EV/EBITDA 34.4x, P/FCF 49.6x.",
+                 "NVDA runs a 61% operating margin and 97.6% gross margins.",
+                 "Net debt sits at 1.2x EBITDA."):
+        assert {s for _, s in statuses(text, reg)} == {"traced"}, (text, statuses(text, reg))
+    # The binding is a reading, not a pass: a wrong multiple is still flagged.
+    assert statuses("Shares trade at 31.2x earnings.", reg) == [("31.2x", "untraceable")]
+    assert statuses("Shares trade at 34.4x earnings.", reg) == [("34.4x", "mis_anchored")]
+
+
+def test_primary_kind_credit_survives_ref_truncation():
+    """The same note block is registered once per agent; a transcript that
+    also carries the figure must still earn its primary-kind credit when
+    more than eight refs support the claim."""
+    ledger = SourceLedger()
+    note = {"note": "Data-center revenue grew 94% year over year."}
+    for agent in ("comps", "earnings", "filing", "macro", "pm", "sector", "technical", "valuation"):
+        ledger.register("research_note", f"notes:{agent}", note)
+    ledger.register("transcript", "transcript:2025Q3", {"remarks": note["note"]})
+    (c,) = nc.check_text("Data-center revenue grew 94% year over year.", ledger.snapshot())
+    assert c.status == "traced"
+    assert "transcript" in c.kinds
+    assert c.sources[0] == "transcript:2025Q3" and len(c.sources) == 8
+
+
+def _memo_with(**kw):
+    from app.tests.factories import make_memo
+    return make_memo(**kw)
+
+
+def test_declared_assumption_covers_only_pm_fields():
+    """A declaration labels the PM's own forward figure; the same value in
+    an analyst key point or a risk stays flagged (and withholdable)."""
+    from app.schemas import BullBearCase, RiskItem
+    reg = registry(("financials", "financials:T", {"ratios": {"revenue_growth": 0.12}}))
+    declared = [{"value": 18.5, "unit": "pct", "basis_ref": "financials:T", "horizon": "FY2027"}]
+    memo = _memo_with(
+        final_pm_view="We assume services growth of 18.5% through FY2027.",
+        bull_case=BullBearCase(headline="Bull", key_points=[
+            "Services attach reached 18.5% last year", "Tailwind: cloud", "Tailwind: AI", "Tailwind: ads"]),
+        key_risks=[RiskItem(title="Mix", detail="Attach fell from 18.5% in a year.", severity="low")],
+    )
+    result = nc.check_memo(memo, reg, withhold=True, assumptions=declared)
+    by_field = {fr.spec.path: [c.status for c in fr.claims] for fr in result.fields if fr.claims}
+    assert by_field["final_pm_view"] == ["assumption"]
+    assert by_field["bull_case.key_points[0]"] == ["untraceable"]
+    assert by_field["key_risks[0].detail"] == ["untraceable"]
+    assert result.plan.items == {"bull_case.key_points": [0]}
+
+
+def _flagged_list_memo(n_bad: int, n: int = 4):
+    from app.schemas import BullBearCase
+    points = [f"Invented figure {i}: backlog reached {91 + i}.7% of sales" for i in range(n_bad)]
+    points += [f"Tailwind: qualitative point {i}" for i in range(n - n_bad)]
+    return _memo_with(bull_case=BullBearCase(headline="Bull", key_points=points))
+
+
+def test_half_list_guard_boundary():
+    """Design §4.4: exactly half of a list may be withheld; more than half
+    is likelier a registry gap, so the list is flagged and kept."""
+    empty = SourceLedger().snapshot()
+    two = nc.check_memo(_flagged_list_memo(2), empty, withhold=True)
+    assert two.plan.items == {"bull_case.key_points": [0, 1]}
+    assert two.plan.lists_not_withheld == []
+    three = nc.check_memo(_flagged_list_memo(3), empty, withhold=True)
+    assert three.plan.items == {}
+    assert three.plan.lists_not_withheld == ["bull_case.key_points"]
+
+
+def test_withheld_text_is_not_left_in_a_guarded_copy():
+    """The memo copies analyst key points into catalysts and bull points.
+    When a copy sits in a list the half-list guard keeps, withholding the
+    original would leave a withheld record contradicting what the reader
+    sees; every copy is kept, flagged, instead."""
+    from app.schemas import CatalystItem
+    bad1 = "Cloud tailwind: backlog growth hit 81.7% as hyperscalers pre-bought capacity"
+    bad2 = "Accelerating demand: pricing power lifted blended ASPs by 64.3% this year"
+    view = _memo_with().sector_agent_view.model_copy(update={"key_points": [
+        bad1, bad2, "Tailwind: sovereign AI", "Tailwind: networking attach", "Moat: CUDA software",
+        "Tailwind: inference demand"]})
+    catalysts = [CatalystItem(title=s[:80], detail=s) for s in (bad1, bad2)]
+    catalysts.append(CatalystItem(title="Next earnings", detail="Report due next month."))
+    memo = _memo_with(sector_agent_view=view, catalysts=catalysts)
+    result = nc.check_memo(memo, SourceLedger().snapshot(), withhold=True)
+    assert result.plan.items == {}
+    assert set(result.plan.lists_not_withheld) == {"catalysts", "sector_agent_view.key_points"}
+    # Without the guarded copy, the analyst's two bad points (2 of 6) go.
+    alone = nc.check_memo(_memo_with(sector_agent_view=view), SourceLedger().snapshot(), withhold=True)
+    assert alone.plan.items == {"sector_agent_view.key_points": [0, 1]}
+
+
+def test_withheld_copies_go_together():
+    """A flagged key point copied into a catalyst list that may withhold it
+    is withheld from both, so it survives nowhere outside quality."""
+    from app.schemas import CatalystItem, NumberCheck
+    bad = "Cloud tailwind: backlog growth hit 81.7% as hyperscalers pre-bought capacity"
+    view = _memo_with().sector_agent_view.model_copy(update={"key_points": [
+        bad, "Tailwind: sovereign AI", "Tailwind: networking attach", "Moat: CUDA software"]})
+    catalysts = [CatalystItem(title=bad[:80], detail=bad),
+                 CatalystItem(title="Next earnings", detail="Report due next month."),
+                 CatalystItem(title="Product launch", detail="New platform ships.")]
+    memo = _memo_with(sector_agent_view=view, catalysts=catalysts)
+    result = nc.check_memo(memo, SourceLedger().snapshot(), withhold=True)
+    assert result.plan.items == {"catalysts": [0], "sector_agent_view.key_points": [0]}
+    check = nc.summarize(result, assumptions=[], notes=[])
+    assert isinstance(check, NumberCheck)
+    nc.apply_withholding(memo, check, result.plan)
+    assert bad not in memo.model_dump_json(exclude={"quality"})
+
+
+def test_catalyst_withholding_keeps_title_and_detail_offsets():
+    """A catalyst withholds as one item: its title and detail are joined
+    with " — " and the detail's claims move by len(title) + 3."""
+    from app.schemas import CatalystItem, NumberCheck, NumberClaim
+    memo = _memo_with(catalysts=[
+        CatalystItem(title="Order worth $4.2B", detail="Backlog up 71.3% after the order."),
+        CatalystItem(title="Next earnings", detail="Report due next month."),
+    ])
+    check = NumberCheck(checked=True, claims=[
+        NumberClaim(field="catalysts[0].title", start=12, end=17, raw="$4.2B", status="untraceable"),
+        NumberClaim(field="catalysts[0].detail", start=11, end=16, raw="71.3%", status="untraceable"),
+        NumberClaim(field="catalysts[1].detail", start=0, end=6, raw="Report", status="weak"),
+    ])
+    assert nc.apply_withholding(memo, check, nc.WithholdPlan(items={"catalysts": [0]})) == [
+        "Order worth $4.2B — Backlog up 71.3% after the order."]
+    (w,) = check.withheld
+    assert (w.field, w.index) == ("catalysts", 0)
+    assert [w.text[c.start:c.end] for c in w.claims] == ["$4.2B", "71.3%"]
+    assert [c.raw for c in w.claims] == ["$4.2B", "71.3%"]
+    assert [(c.field, c.raw) for c in check.claims] == [("catalysts[0].detail", "Report")]
+    assert [c.title for c in memo.catalysts] == ["Next earnings"]

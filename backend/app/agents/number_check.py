@@ -70,9 +70,12 @@ _MASKS: tuple[re.Pattern[str], ...] = tuple(re.compile(p, re.I) for p in (
     r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?\b",                   # ISO date
     r"\b\d{4}-W\d{2}\b",                                                      # ISO week
     r"\b\d+\.\d+\.\d+(?:[-\w.]*)?\b|\bv\d+(?:\.\d+)*\b",                      # versions
-    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
+    # "may" is also the English verb ("revenue may 30% higher"), so only a
+    # capitalised "May" is a month; and a day number is never followed by a
+    # percent sign or a decimal ("Mar 12.5%" is a figure, not a date).
+    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|(?-i:May)|june?|july?|aug(?:ust)?"
     r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?"
-    r"(?:,?\s+\d{4})?\b",                                                     # "Sep 24, 2026"
+    r"(?!\s?%|\.\d)(?:,?\s+\d{4})?\b",                                     # "Sep 24, 2026"
     r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",                                            # 9/24/2026
     # fiscal / calendar periods
     r"\b(?:FY|CY)\s?'?\d{2,4}\b",
@@ -132,7 +135,10 @@ _RANGE_SEP_RE = re.compile(r"^\s?[-–—]\s?[~≈]?$|^\s+to\s+[~≈]?$", re.I)
 _DURATION_RE = re.compile(
     r"^[\s-]?(?:days?|weeks?|months?|quarters?|years?|hours?|minutes?|decades?|sessions?|bars?"
     r"|consecutive|straight|successive)\b", re.I)
-_THRESHOLD_RE = re.compile(r"(?:>=|<=|[<>≥≤])\s?$")
+# A comparison symbol in front of a figure makes it a threshold. An ASCII
+# arrow ("12% -> 97%", "=>") is a change between two stated values, so the
+# value after it is a claim of fact like any other.
+_THRESHOLD_RE = re.compile(r"(?:>=|<=|(?<![-=])>|<|[≥≤])\s?$")
 _COUNT_MAX = 12
 
 
@@ -472,12 +478,66 @@ class ClaimContext:
     wide: frozenset[str]
 
 
+# Multiples are written value-first: "46.8x earnings", "22.3x sales",
+# "34.4x EBITDA", "12x book". The noun after the "x" names the MULTIPLE
+# (P/E, P/S, EV/EBITDA ...), not the underlying metric — "22.3x sales" is
+# not a claim about revenue, so without this binding a correct multiple
+# reads as mis_anchored against the revenue fact.
+MULTIPLE_METRICS = frozenset({"pe", "forward_pe", "ps", "pb", "pfcf", "ev_ebitda", "ev_revenue",
+                              "ev_ebit", "debt_to_ebitda", "exit_multiple", "interest_coverage"})
+_PERIOD_WORD = r"(?:(?:trailing|ttm|ltm|current|forward|fwd|ntm|next[- ]year'?s?|this[- ]year'?s?)\s+)?"
+_MULTIPLE_NOUNS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = tuple(
+    (re.compile(p, re.I), toks) for p, toks in (
+        (r"(?:forward|fwd|ntm|next[- ]year'?s?)\s+(?:earnings|eps)\b", ("forward_pe",)),
+        (_PERIOD_WORD + r"(?:earnings|eps)\b(?!\s+(?:growth|per|yield))", ("pe",)),
+        # "x sales" is written for both P/S and EV/sales.
+        (_PERIOD_WORD + r"(?:sales|revenues?)\b(?!\s+growth)", ("ps", "ev_revenue")),
+        (_PERIOD_WORD + r"ebitda\b(?!\s+(?:margin|growth))", ("ev_ebitda",)),
+        (_PERIOD_WORD + r"ebit\b(?!\s+(?:margin|growth))", ("ev_ebit",)),
+        (r"(?:tangible\s+)?book(?:\s+value)?\b", ("pb",)),
+        (_PERIOD_WORD + r"(?:fcf|free[- ]cash[- ]flows?)\b(?!\s+(?:yield|margin|growth))", ("pfcf",)),
+    ))
+# The words a multiple binds to stop at punctuation: in "P/E 46.8x, EV/EBITDA
+# 34.4x" the EV/EBITDA after the comma belongs to the next value.
+_BIND_CUT_RE = re.compile(r"[,;:()\[\]]|[.!?](?=\s|$)|\s[-–—]\s|—|\n")
+_BIND_LEAD_RE = re.compile(r"^\s*(?:times\s+)?", re.I)
+
+
+def _multiple_binding(after: str, left: frozenset[str]) -> frozenset[str]:
+    """The metric a multiple-unit claim names directly after its "x"
+    ("46.8x earnings" -> pe; "34.4x EV/EBITDA" -> ev_ebitda), or empty."""
+    cut = _BIND_CUT_RE.search(after)
+    seg = after[:cut.start()] if cut else after
+    seg = seg[_BIND_LEAD_RE.match(seg).end():]  # type: ignore[union-attr]
+    if not seg:
+        return frozenset()
+    for rx, toks in _MULTIPLE_NOUNS:
+        if rx.match(seg):
+            if toks == ("ev_ebitda",) and left & {"debt", "debt_to_ebitda"}:
+                return frozenset({"debt_to_ebitda"})   # "net debt at 1.2x EBITDA"
+            return frozenset(toks)
+    # An explicit multiple name right after the value ("46.8x P/E").
+    low = seg.lower()
+    for rx, toks in _SYN_RE:
+        if rx.match(low):
+            return frozenset(toks) & MULTIPLE_METRICS
+    return frozenset()
+
+
+# Separators that end one value's phrase in a list: "46.8x P/E, 34.4x
+# EV/EBITDA", "a 61% operating margin and 97.6% gross margins".
+_LIST_SEP_RE = re.compile(r",|\band\b|\bwith\b|\bwhile\b|\bbut\b|\bversus\b|\bvs\b\.?|\bagainst\b", re.I)
+
+
 def claim_contexts(text: str, claims: list[ParsedClaim]) -> list[ClaimContext]:
     """Anchoring context for each claim, in order: `left` (the words between
     the previous number and this one, within the clause), `right` (up to the
     next number), `wide` (±12 words of the clause)."""
     bounds = [0] + [m.end() for m in _BOUNDARY_RE.finditer(text)] + [len(text) + 1]
     out: list[ClaimContext] = []
+    # Whether each claim took its metric from the words AFTER it
+    # (value-then-metric prose) rather than from the words before it.
+    value_first: list[bool] = []
     for i, c in enumerate(claims):
         k = bisect.bisect_right(bounds, c.start) - 1
         cs, ce = bounds[k], min(len(text), bounds[k + 1] if k + 1 < len(bounds) else len(text))
@@ -488,20 +548,36 @@ def claim_contexts(text: str, claims: list[ParsedClaim]) -> list[ClaimContext]:
         if prev_end > cs and out and _RANGE_SEP_RE.match(between or "x"):
             # The second end of a range reads what the first end reads.
             out.append(out[-1])
+            value_first.append(value_first[-1])
             continue
-        # "16.4x EV/EBITDA with a 2.77% FCF yield": when the previous number
-        # named no metric on its left and the words right after it name one
-        # (while the words right before this number do not), those words are
-        # ITS metric (value-then-metric prose), not this one's.
-        if prev_end > cs and out and not (out[-1].left - QUALIFIERS) and (left - QUALIFIERS):
-            head = context_tokens(_words_head(between, 2)) - QUALIFIERS
-            tail = context_tokens(_words_tail(between, 2)) - QUALIFIERS
-            if head and not tail:
-                left = frozenset()
+        # "16.4x EV/EBITDA with a 2.77% FCF yield", "46.8x P/E, 34.4x
+        # EV/EBITDA": when the previous number took its metric from the
+        # words after it, the words up to the first list separator are ITS
+        # metric, not this one's; this number reads only what follows the
+        # separator.
+        if prev_end > cs and out and value_first[-1] and (left - QUALIFIERS):
+            sep = _LIST_SEP_RE.search(between)
+            if sep is not None:
+                left = context_tokens(_words_tail(between[sep.end():], NEAR_WORDS))
+            else:
+                head = context_tokens(_words_head(between, 2)) - QUALIFIERS
+                tail = context_tokens(_words_tail(between, 2)) - QUALIFIERS
+                if head and not tail:
+                    left = frozenset()
+        first = not (left - QUALIFIERS)
+        if c.unit == "multiple":
+            bound = _multiple_binding(text[c.end:next_start], left)
+            if bound:
+                # The noun after the "x" is what the multiple is OF; it beats
+                # anything named further left ("trades at a premium, 46.8x
+                # earnings"). Qualifiers on the left (peers, bull) still apply.
+                left = bound | (left & QUALIFIERS)
+                first = True
         right = context_tokens(_words_head(text[c.end:next_start], NEAR_WORDS))
         wide = context_tokens(_words_tail(text[cs:c.start], WIDE_WORDS) + " "
                               + _words_head(text[c.end:ce], WIDE_WORDS))
         out.append(ClaimContext(left=left, right=right, wide=wide))
+        value_first.append(first)
     return out
 
 
@@ -617,14 +693,28 @@ def check_text(
         if status in FLAGGED_STATUSES and _is_declared(c, declared):
             out.append(CheckedClaim(c, "assumption"))
             continue
-        sources = _credited(facts) if status == "traced" else ()
-        kinds = tuple(sorted({f.kind for f in facts if f.source in sources})) if sources else ()
+        traced = status == "traced"
+        sources = _credited(facts) if traced else ()
+        # Kinds come from EVERY supporting fact, not only the stored refs:
+        # the same note block is registered once per agent (notes:comps,
+        # notes:earnings ...), and truncating to eight refs must not drop the
+        # transcript that also carries the figure (primary-kind credit feeds
+        # the no_primary_trace / single_primary_kind caps).
+        kinds = tuple(sorted({f.kind for f in facts})) if traced else ()
         out.append(CheckedClaim(c, status, sources, kinds))
     return out
 
 
+MAX_CREDITED_REFS = 8
+
+
 def _credited(facts: list[Fact]) -> tuple[str, ...]:
-    return tuple(sorted({f.source for f in facts}))[:8]
+    """The refs stored for a traced claim: primary sources first, then the
+    rest, alphabetically within each group, at most eight."""
+    from .source_ledger import PRIMARY_KINDS
+    primary = sorted({f.source for f in facts if f.kind in PRIMARY_KINDS})
+    other = sorted({f.source for f in facts} - set(primary))
+    return tuple(primary + other)[:MAX_CREDITED_REFS]
 
 
 def _is_declared(c: ParsedClaim, declared: list[dict[str, Any]]) -> bool:
@@ -763,6 +853,34 @@ class MemoCheck:
     incomplete: tuple[str, ...]
 
 
+# Fields the PM writes. A declared forecast assumption labels matching
+# figures HERE only: it covers the PM's own forward numbers, never an
+# analyst's key point or a risk that happens to print the same value
+# (owner decision 1/9: grounding is not exempted).
+PM_FIELDS = frozenset({
+    "final_pm_view", "one_sentence_thesis", "mispricing_thesis.consensus_view",
+    "mispricing_thesis.our_view", "mispricing_thesis.gap", "dcf_pm_adjustment_headline",
+    "quality.rating_reconciliation.reason",
+})
+_PM_FIELD_PREFIXES = ("dcf_pm_adjustments[",)
+
+
+def is_pm_field(path: str) -> bool:
+    return path in PM_FIELDS or path.startswith(_PM_FIELD_PREFIXES)
+
+
+# Two list items carry the same text when one contains the other: the memo
+# copies analyst key points into bull/bear points and catalysts, truncated
+# (`title=s[:80]`, `text[:240]`) or prefixed.
+_SAME_TEXT_MIN = 30
+
+
+def _same_text(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    return min(len(a), len(b)) >= _SAME_TEXT_MIN and (a in b or b in a)
+
+
 def check_memo(memo: Any, registry: FactRegistry, *, withhold: bool,
                assumptions: Iterable[dict[str, Any]] = ()) -> MemoCheck:
     """Check every field of `memo` and plan the withholding (not applied)."""
@@ -770,30 +888,75 @@ def check_memo(memo: Any, registry: FactRegistry, *, withhold: bool,
     results: list[FieldResult] = []
     for spec in iter_fields(memo):
         claims = check_text(spec.text, registry, threshold=spec.policy == POLICY_THRESHOLD,
-                            assumptions=declared)
+                            assumptions=declared if is_pm_field(spec.path) else ())
         results.append(FieldResult(spec, claims))
     plan = WithholdPlan()
     if withhold:
-        by_list: dict[str, dict[int, bool]] = {}
-        sizes: dict[str, int] = {}
-        for r in results:
-            if r.spec.policy != POLICY_WITHHOLD:
-                continue
-            items = by_list.setdefault(r.spec.list_path, {})
-            items[r.spec.index] = items.get(r.spec.index, False) or r.flagged
-        for lp, items in by_list.items():
-            sizes[lp] = len(items)
-            bad = sorted(i for i, f in items.items() if f)
-            if not bad:
-                continue
-            # Half-list guard: when most of a list fails, the likelier cause
-            # is a registry gap, not a hallucinating agent — flag, keep all.
-            if len(bad) <= sizes[lp] // 2:
-                plan.items[lp] = bad
-            else:
-                plan.lists_not_withheld.append(lp)
+        _plan_withholding(results, plan)
     return MemoCheck(fields=results, plan=plan, registry_facts=len(registry.facts),
                      registry_sources=len(registry.sources), incomplete=registry.incomplete_steps)
+
+
+def _plan_withholding(results: list[FieldResult], plan: WithholdPlan) -> None:
+    """Decide which flagged list items to remove.
+
+    A withheld text must appear nowhere else in the memo, and the memo
+    copies analyst key points into bull/bear points and catalysts. So the
+    decision is taken per TEXT: a flagged item is withheld only when every
+    copy of it sits in a list that may withhold it. A copy in a list the
+    half-list guard keeps, or in a list that is never withheld (risks,
+    thesis breakers), keeps every copy — flagged — rather than leave a
+    withheld record that contradicts what the reader sees."""
+    items: dict[tuple[str, int], list[str]] = {}
+    flagged: dict[tuple[str, int], bool] = {}
+    policy: dict[str, str] = {}
+    for r in results:
+        if r.spec.policy not in (POLICY_WITHHOLD, POLICY_FLAG):
+            continue
+        key = (r.spec.list_path, r.spec.index)
+        policy[r.spec.list_path] = r.spec.policy
+        if r.spec.text.strip():
+            items.setdefault(key, []).append(r.spec.text.strip())
+        else:
+            items.setdefault(key, [])
+        flagged[key] = flagged.get(key, False) or r.flagged
+    bad = {k for k, f in flagged.items() if f}
+    if not bad:
+        return
+
+    def copies(key: tuple[str, int]) -> set[tuple[str, int]]:
+        mine = items[key]
+        return {k for k, texts in items.items()
+                if k == key or any(_same_text(a, b) for a in mine for b in texts)}
+
+    # Every copy of a flagged text is flagged with it (the same words read
+    # the same way; this only matters for truncated copies).
+    closure = set(bad)
+    for k in bad:
+        closure |= copies(k)
+    sizes: dict[str, int] = {}
+    for lp, _ in items:
+        sizes[lp] = sizes.get(lp, 0) + 1
+    by_list: dict[str, list[int]] = {}
+    for lp, i in closure:
+        by_list.setdefault(lp, []).append(i)
+    # Half-list guard: when most of a list fails, the likelier cause is a
+    # registry gap, not a hallucinating agent — flag, keep all. Lists that
+    # never withhold (risks) keep everything by policy.
+    kept_lists = {lp for lp, idx in by_list.items()
+                  if policy[lp] != POLICY_WITHHOLD or len(idx) > sizes[lp] // 2}
+    kept = {k for k in closure if k[0] in kept_lists}
+    blocked = set(kept)
+    for k in kept:
+        blocked |= copies(k)
+    for lp, idx in sorted(by_list.items()):
+        if policy[lp] != POLICY_WITHHOLD:
+            continue
+        gone = sorted(i for i in idx if (lp, i) not in blocked)
+        if gone:
+            plan.items[lp] = gone
+        if len(gone) < len(idx):
+            plan.lists_not_withheld.append(lp)
 
 
 def distinct_flagged(checked: Iterable[CheckedClaim]) -> int:
@@ -801,10 +964,6 @@ def distinct_flagged(checked: Iterable[CheckedClaim]) -> int:
     defect, as the industry validator counts them."""
     return len({(c.claim.unit, round(c.claim.value, 6)) for c in checked
                 if c.status in FLAGGED_STATUSES})
-
-
-def is_finite(v: Any) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
 
 
 # ---------------------------------------------------------------------------

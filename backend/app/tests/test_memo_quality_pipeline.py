@@ -60,7 +60,19 @@ def _assert_offsets(memo) -> None:
 # The CI invariant: code-generated prose has no untraceable figure
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("ticker", ["NVDA", "JPM", "XOM", "AMT", "COST"])
+# The primary kinds each demo memo cites. A registration site that goes
+# missing (the filing analyst's MD&A and chunks are the only source of 10-K
+# figures in live runs) loses its kind here even when no figure goes
+# untraceable, because the financials often carry the same number. XOM's
+# demo run has no transcript or filing text.
+PRIMARY_KINDS_BY_TICKER = {
+    "NVDA": ["filing", "financials", "transcript"], "JPM": ["filing", "financials", "transcript"],
+    "XOM": ["financials"], "AMT": ["filing", "financials", "transcript"],
+    "COST": ["filing", "financials", "transcript"],
+}
+
+
+@pytest.mark.parametrize("ticker", sorted(PRIMARY_KINDS_BY_TICKER))
 def test_deterministic_memo_has_no_untraceable_figures(ticker):
     """Every figure a keyless demo memo prints is written by code from
     registered data. A new deterministic sentence quoting an unregistered
@@ -72,7 +84,7 @@ def test_deterministic_memo_has_no_untraceable_figures(ticker):
     assert c["claims_total"] >= 30
     assert c["untraceable"] == c["mis_anchored"] == c["weak"] == 0, nc.claims
     assert nc.withheld == [] and nc.lists_not_withheld == []
-    assert "financials" in nc.primary_kinds_cited
+    assert nc.primary_kinds_cited == PRIMARY_KINDS_BY_TICKER[ticker]
     assert nc.sources_cited and all(":" in s for s in nc.sources_cited)
     # An untraceable figure is a finding about the memo, not an outage.
     assert "Number Check" not in memo.degraded_agents
@@ -116,6 +128,37 @@ def test_known_bad_figures_flagged_on_real_registry(monkeypatch):
     stale = "The 3.9x bull/bear ratio frames the discount-rate sensitivity."
     assert _status(stale, reg, "3.9x") in FLAGGED
     assert _status(stale.replace("3.9x", f"{ratio:.1f}x"), reg, f"{ratio:.1f}x") == "traced"
+
+
+def test_value_first_multiples_trace_on_real_registry(monkeypatch):
+    """Review regression: the commonest ways of writing multiples and
+    margins read mis_anchored against the real NVDA registry ("x earnings"
+    anchored to nothing, "x sales" to revenue, "46.8x P/E, 34.4x EV/EBITDA"
+    gave each value the PREVIOUS metric), and a correct P/E point was
+    withheld from the bull case."""
+    box = _capture_registry(monkeypatch)
+    graph.run_stock_memo("NVDA")
+    reg = box["registry"]
+    for text in (
+        "Shares trade at 22.3x sales.", "Shares trade at 22.3x revenue.",
+        "The stock trades at 34.4x EBITDA.", "Trading at 46.8x earnings, a premium to peers.",
+        "At 46.8x earnings and 22.3x sales, NVDA is priced for perfection.",
+        "Valuation: 46.8x P/E, 34.4x EV/EBITDA, 49.6x P/FCF.",
+        "NVDA runs a 61% operating margin and 97.6% gross margins.",
+        "NVDA trades at 46.8x earnings.",
+    ):
+        got = [(c.claim.raw, c.status) for c in number_check.check_text(text, reg)]
+        assert got and all(st == "traced" for _, st in got), (text, got)
+
+    from app.tests.factories import make_memo
+    points = ["Trades at 46.8x earnings, a premium to peers, justified by growth.",
+              "Operating margin of 61% underlines pricing power.", "Tailwind: networking attach"]
+    memo = make_memo(bull_case=BullBearCase(headline="Bull", key_points=points))
+    result = number_check.check_memo(memo, reg, withhold=True)
+    assert "bull_case.key_points" not in result.plan.items
+    bull = [c.status for fr in result.fields if fr.spec.path.startswith("bull_case.key_points")
+            for c in fr.claims]
+    assert bull == ["traced", "traced"]
 
 
 def test_false_support_rate_on_real_registry(monkeypatch):
@@ -274,6 +317,70 @@ def test_withheld_text_appears_only_in_quality(monkeypatch):
     assert view.key_points == ["P/E 46.8x", "EV/EBITDA 34.4x", "FCF yield 2.0%"]
     assert "- EV/EBITDA 34.4x" in view.long_form_report and "### Key points" in view.long_form_report
     _assert_offsets(memo)
+
+
+def test_withheld_point_scrubbed_from_a_separate_round_copy(monkeypatch):
+    """Round 0 keeps the analyst's ORIGINAL finding object when a deep-
+    research re-fire replaces the view (deep_research.py), so the audit
+    trail can hold a copy the view-level removal never touches."""
+    _live_looking(monkeypatch, answers=_valuation_answer)
+    real = graph._check_numbers
+    copies = []
+
+    def spy(memo, inputs, notes):
+        r0 = memo.round_findings[0].findings
+        r0["valuation"] = r0["valuation"].model_copy(deep=True)
+        copies.append(r0["valuation"])
+        return real(memo, inputs, notes)
+
+    monkeypatch.setattr(graph, "_check_numbers", spy)
+    memo = graph.run_stock_memo("NVDA")
+    bad = "Hidden optionality worth $987.65B"
+    (copy,) = copies
+    assert copy is not memo.valuation_agent_view
+    assert bad not in copy.key_points
+    assert "987.65" not in (copy.long_form_report or "")
+    dump = memo.model_dump(mode="json")
+    dump.pop("quality")
+    assert "987.65" not in json.dumps(dump)
+
+
+def test_research_notes_are_registered():
+    """The one choke point every note reaches an agent through registers
+    the rendered block as a non-primary `research_note` source."""
+    from app.agents.source_ledger import SourceLedger
+    from app.services import research_notes as rn
+
+    mp = pytest.MonkeyPatch()
+    try:
+        mp.setattr(rn, "select_for", lambda *a, **k: ["n"])
+        mp.setattr(rn, "select_bodies", lambda *a, **k: [])
+        mp.setattr(rn, "render_summary_block", lambda s: "Note: cloud margin reached 43.21% last year.")
+        mp.setattr(rn, "render_body_block", lambda e: "")
+        ledger = SourceLedger()
+        with ledger.activate():
+            block = rn.build_notes_block_for_agent("valuation", {"ticker": "T"})
+    finally:
+        mp.undo()
+    assert "43.21%" in block
+    reg = ledger.snapshot()
+    assert reg.resolves("notes:valuation")
+    (c,) = number_check.check_text("Cloud margin reached 43.21% last year.", reg)
+    assert c.status == "traced" and c.kinds == ("research_note",)
+
+
+def test_forecast_assumptions_capped_at_five():
+    from app.agents import memo_quality
+    good = [{"value": 10 + i, "unit": "pct", "basis_ref": "financials:T", "horizon": "FY2027"}
+            for i in range(7)]
+    raw = [{"value": "x", "unit": "pct", "basis_ref": "r", "horizon": "h"},
+           {"value": 50, "unit": "bps", "basis_ref": "financials:T", "horizon": "FY2027"},
+           {"value": 5, "unit": "furlongs", "basis_ref": "r", "horizon": "h"},
+           {"value": 5, "unit": "pct", "basis_ref": "", "horizon": "h"}, *good]
+    got = memo_quality.parse_forecast_assumptions(raw)
+    assert memo_quality.MAX_FORECAST_ASSUMPTIONS == 5 and len(got) == 5
+    assert got[0] == {"value": 0.5, "unit": "pp", "basis_ref": "financials:T", "horizon": "FY2027"}
+    assert [a["value"] for a in got[1:]] == [10, 11, 12, 13]
 
 
 def test_reflection_sees_the_checked_memo(monkeypatch):
