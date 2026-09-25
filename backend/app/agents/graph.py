@@ -1217,12 +1217,15 @@ def _pm_synthesis(
     # Wave 10 — read PM brain + company / sector memory + research_notes.
     # Phase 6 — plus the scorecard block (<= 600 chars; "" when no row), so
     # the synthesis prompt can ask for `scorecard_reconciliation`.
+    # W7 — `learning_consumer` asks for the learned-priors block. It renders
+    # only in a live memo run; off / shadow leave pm_ctx byte-identical.
     from .pm_context import build_pm_context
     pm_ctx = build_pm_context(
         ticker=profile.get("ticker"),
         sector=profile.get("sector"),
         profile=profile,
         scorecard_block=scorecard_context.prompt_block(scorecard),
+        learning_consumer="pm_memo",
     )
     view = _pm_view(findings)
     # C7 assembly order: static template + pm_ctx, then the routed digests,
@@ -1254,6 +1257,15 @@ def _pm_synthesis(
             + json.dumps({k: v.model_dump() for k, v in view.findings.items()}, default=str)[: settings.max_agent_context_chars],
             system=prompts.PM_SYSTEM, route="strong",
             model=settings.openai_pm_model,
+        )
+    if isinstance(llm_out, dict) and llm_out.get("priors_considered") is not None:
+        # W7: which shown priors the PM applied or contradicted, kept on the
+        # run's inject render row (ids it was not shown are dropped). The
+        # memo picks `synth` fields explicitly, so the key never reaches it.
+        from ..learning import context as learning_context
+        safe_call(
+            learning_context.record_considered, llm.current_call_context().get("run_id"),
+            llm_out.get("priors_considered"), fallback=0, name="Learning considered", log_to=None,
         )
     if llm_out and "rating_label" in llm_out:
         return llm_out
@@ -2817,6 +2829,16 @@ def _persist(memo: StockMemoOut, inputs: MemoInputs) -> StockMemoOut:
         safe_call(
             scorecard_context.mark_reviewed, inputs.ticker, snapshot_id,
             fallback=0, name="Scorecard Review", log_to=None,
+        )
+    # W7 — link this run's learned-priors audit rows to the snapshot, so
+    # "why did the agent see this?" answers per memo (and the promotion
+    # gate counts only linked renders). Live memos only: a backtest renders
+    # nothing, and an audit failure never touches the saved memo.
+    if inputs.as_of_date is None:
+        from ..learning import context as learning_context
+        safe_call(
+            learning_context.link_run, inputs.run_id, snapshot_id,
+            fallback=0, name="Learning link", log_to=None,
         )
     return memo
 

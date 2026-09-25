@@ -395,8 +395,15 @@ def run_sector_agent(
     # Long-term agent memory (gated by ENABLE_LONG_TERM_MEMORY). Read both
     # files: the company-specific notebook and the sector-wide self-reflection
     # journal (with cross-company patterns filtered to this ticker).
+    #
+    # W7: in inject mode the learned-priors block (bounded, audited, framed
+    # as provisional hypotheses) replaces these files. Off and shadow — and
+    # every call outside a live memo run, e.g. chat's `ask_sector` — take the
+    # legacy branch, so those prompts are byte-identical to before.
+    from ..learning import context as learning_context
     memory_context = ""
-    if settings.enable_long_term_memory:
+    learned = learning_context.render_safely("sector", ticker=ticker, sector=profile.get("sector"))
+    if learned.mode != "inject" and settings.enable_long_term_memory:
         try:
             cm = CompanyMemory.for_ticker(ticker)
             sm = SectorMemory.for_sector(profile.get("sector") or "unknown")
@@ -502,6 +509,7 @@ def run_sector_agent(
         + critique_block
         + ("\n\nPrior context from long-term memory (use to inform but do not over-anchor):\n"
            + memory_context if memory_context else "")
+        + (("\n\n" + learned.text) if learned.text else "")
         + (("\n\n" + research_notes_block) if research_notes_block else "")
         + (("\n\n" + sector_context_block
             + "\n\nUse the readings above as concrete evidence in the summary and "

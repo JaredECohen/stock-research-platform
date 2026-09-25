@@ -728,8 +728,13 @@ def run_industry_group_agent(
             "Address this question directly with mandate KPIs and observed figures:\n"
             f"{prior_round_critique}\n"
         )
+    # W7: in inject mode the learned-priors block replaces the group's
+    # legacy memory file; off, shadow and any call outside a live memo run
+    # keep the legacy branch, so those prompts are byte-identical.
+    from ..learning import context as learning_context
+    learned = learning_context.render_safely("industry_group", ticker=ticker, sector=profile.get("sector"))
     memory_block = ""
-    if settings.enable_long_term_memory:
+    if learned.mode != "inject" and settings.enable_long_term_memory:
         try:
             memory_block = analyst.memory().as_prompt_context_for(ticker, max_chars=1500)
         except Exception:  # pragma: no cover — memory must never block a memo
@@ -751,6 +756,8 @@ def run_industry_group_agent(
     )
     if memory_block:
         user_prompt += "\n\nPrior context from the group's long-term memory:\n" + memory_block
+    if learned.text:
+        user_prompt += "\n\n" + learned.text
 
     # Output headroom: this schema (4-7 sentence summary, key points, one
     # causal-chain entry per methodology stage, placement, 3-5 KPIs with

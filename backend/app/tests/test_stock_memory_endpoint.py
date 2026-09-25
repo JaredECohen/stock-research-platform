@@ -151,3 +151,92 @@ def test_stock_memory_endpoint_empty_for_unknown_ticker(tmp_path, monkeypatch):
     body = r.json()
     assert body["entries"] == []
     assert body["entry_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# W7 (S19): the ledger branch is public only once priors are injected
+# ---------------------------------------------------------------------------
+
+def test_public_memory_in_shadow_returns_legacy_shape_and_never_detail(tmp_path, monkeypatch):
+    """Until the owner promotes learning to inject, the page shows the legacy
+    trail exactly as before, whatever the ledger holds. In inject it shows
+    company-scope observations and non-suppressed lessons, every lesson
+    labelled a provisional hypothesis — never the audit-only `detail`, never
+    a peer scope, never a suppressed item — in the same response shape."""
+    from datetime import date, datetime
+
+    from app.config import settings
+    from app.learning import context, control, ledger
+    from app.models import LearningControlEvent, LearningEvidence
+    from app.tests.learning_helpers import learning_db
+
+    sessions, engine = learning_db(tmp_path, monkeypatch, context)
+    monkeypatch.setattr(settings, "memory_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "learning_mode_max", "inject")
+    now = datetime.utcnow()
+    cm = CompanyMemory.for_ticker("ZZLRN")
+    cm.append_entry(MemoryEntry(date="2026-05-01", trigger="earnings", body="Legacy file entry."))
+    cm.save()
+    with sessions() as s:
+        def item(kind: str, text: str, ref: str, *, scope_type: str = "company", scope_key: str = "ZZLRN",
+                 status: str = "active", filed: date = date(2026, 8, 1)) -> int:
+            row = ledger._new_item(
+                s, kind=kind, scope_type=scope_type, scope_key=scope_key, text=text,
+                detail="SECRET-DETAIL full postmortem narrative",
+                origin_kind="postmortem" if kind == "lesson" else "filing_delta",
+                origin_ref=ref, origin_ticker="ZZLRN", source_date=filed, now=now,
+            )
+            row.status = status
+            s.flush()
+            return int(row.id)
+
+        tested = item("lesson", "When bookings accelerate, expect the stock to outperform the benchmark over 90 days.",
+                      "pm-1", filed=date(2026, 6, 1))
+        for n, verdict in enumerate(("held", "held", "held", "held")):
+            s.add(LearningEvidence(item_id=tested, verdict=verdict, ticker="ZZLRN", horizon_days=90,
+                                   independence_key=f"ZZLRN:90:{n}", observed_at=now))
+        item("lesson", "SUPPRESSED-TEXT should never be public.", "pm-2", status="suppressed")
+        item("lesson", "When churn rises, expect the stock to underperform the benchmark over 90 days.", "pm-3",
+             status="retired", filed=date(2026, 5, 1))
+        item("observation", "What's new in 10-Q filed 2026-08-01: bookings up.", "acc-1")
+        item("lesson", "PEER-SCOPE lesson stays off the company trail.", "pm-4",
+             scope_type="industry_group", scope_key="4510")
+        s.commit()
+
+    try:
+        client = TestClient(app)
+        # Shadow (the DB default after deploy): the legacy trail, unchanged.
+        control._cache_clear()
+        assert control.effective_mode() == "shadow"
+        legacy = client.get("/api/stocks/ZZLRN/memory").json()
+        assert legacy["path"].endswith("ZZLRN.md")
+        assert [e["body"] for e in legacy["entries"]] == ["Legacy file entry."]
+        assert "SECRET-DETAIL" not in str(legacy)
+
+        # Inject: the ledger, in the same shape.
+        with sessions() as s:
+            s.add(LearningControlEvent(mode="inject", actor="admin", reason="test", gates={}, created_at=now))
+            s.commit()
+        control._cache_clear()
+        body = client.get("/api/stocks/ZZLRN/memory").json()
+        assert set(body) == set(legacy)
+        assert body["path"] == "database: learning ledger"
+        text = str(body)
+        assert "SECRET-DETAIL" not in text and "SUPPRESSED-TEXT" not in text and "PEER-SCOPE" not in text
+        assert "4510" not in text
+        assert body["entry_count"] == 3 and body["suppressed_count"] == 1
+        triggers = [e["trigger"] for e in body["entries"]]
+        assert triggers == ["filing observation", "provisional hypothesis · supported 4 of 4 later outcomes",
+                            "provisional hypothesis · untested hypothesis · retired"]
+        lessons = [e for e in body["entries"] if e["trigger"].startswith("provisional hypothesis")]
+        assert all(e["body"].endswith("Provisional hypothesis — not investment advice.") for e in lessons)
+        assert all(e["structured_facts"] is None for e in body["entries"])
+        assert "not investment advice" in body["historical_context"]
+        assert body["entries"][0]["date"] == "2026-08-01"
+
+        # The env ceiling is the emergency stop: off serves the legacy trail.
+        monkeypatch.setattr(settings, "learning_mode_max", "off")
+        assert client.get("/api/stocks/ZZLRN/memory").json()["path"].endswith("ZZLRN.md")
+    finally:
+        control._cache_clear()
+        engine.dispose()
