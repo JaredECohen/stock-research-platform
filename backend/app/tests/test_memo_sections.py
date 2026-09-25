@@ -251,8 +251,11 @@ def _producer_texts() -> dict[str, Any]:
         return sector_agents._deterministic_bull_bear_analysis(profile, {})
 
     def thesis(rating: str, findings: dict[str, AgentFinding] | None = None) -> str:
+        # W2b: the builder takes the verdict word; a rating-derived word is
+        # what every legacy (signature-bearing) thesis was built with.
+        from app.agents.memo_quality import rating_word
         return graph._build_thesis_from_findings(dict(profile), findings or {}, None, "PINT",
-                                                  rating=rating)
+                                                  verdict_word=rating_word(rating))
 
     def mispricing(verdict: str, upside: float | None) -> MispricingThesis:
         memo = make_memo(ticker="PINT", one_sentence_thesis="",
@@ -675,11 +678,17 @@ def test_new_memo_llm_off_hides_llm_sections():
     assert prov["v"] == 1 and prov["llm_configured"] is False
     assert prov["thesis"] in ("pm", "rewrite") and prov["mispricing"] == "fallback"
     av = compute_availability(memo)
-    for key in ("final_pm_view", "one_sentence_thesis", "confidence_score", "mispricing_thesis",
+    for key in ("final_pm_view", "one_sentence_thesis", "mispricing_thesis",
                 "sector_agent_view", "valuation_agent_view", "macro_sensitivity"):
         assert av[key].status == "unavailable", key
     for key in ("comps_agent_view", "dcf_summary", "valuation_verdict"):
         assert av[key].status in ("available", "degraded"), key
+    # W2b 7(c) (contract C2): the confidence is EARNED — capped for the
+    # template PM and sections — so it is shown, not hidden with the PM view.
+    assert prov["confidence"] == "earned"
+    assert av["confidence_score"].status == "available"
+    assert memo.quality is not None and memo.quality.confidence is not None
+    assert memo.confidence_score == memo.quality.confidence.final <= 40.0
     shown = present_memo(memo)
     assert shown.one_sentence_thesis == UNAVAILABLE_TEXT
     assert shown.comps_agent_view.headline == memo.comps_agent_view.headline

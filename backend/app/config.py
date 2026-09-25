@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -237,6 +237,34 @@ class Settings(BaseSettings):
     # behavior (factor score is dispositive); 1.0 gives the LLM full
     # authority. Clamped to [0.0, 1.0] at use site.
     llm_rating_weight: float = 0.4
+
+    # W2b research-quality guards (owner decision 7, 2026-09-24).
+    # `rating_reconciliation_mode` is 7(b)'s kill switch: "enforce" sets a
+    # Bullish rating on overvalued valuation evidence (or the Bearish
+    # mirror) to Neutral unless the PM stated a substantive reason;
+    # "record" computes and stores the same reconciliation but publishes
+    # the blended rating unchanged — an env flip on the worker instead of a
+    # redeploy if the rule misbehaves. Record mode leaves published output
+    # untouched by 7(b): an unenforced ("downgraded" but not applied)
+    # divergence carries no confidence cap either, because the
+    # `divergence_unreviewed` cap is only for a reason 7(b) ACCEPTED without
+    # a live critic's review. Anything else fails validation at
+    # boot rather than silently meaning one of the two. A `str` with a
+    # validator, not a `Literal`: the image-defaults test loads this module
+    # outside `sys.modules`, where a postponed `Literal` annotation cannot
+    # be resolved.
+    rating_reconciliation_mode: str = "enforce"
+    # 7(a) (number-to-source check, a later slice): False means untraceable
+    # figures are flagged only, never withheld from supporting lists.
+    number_check_withhold: bool = True
+
+    @field_validator("rating_reconciliation_mode")
+    @classmethod
+    def _rating_reconciliation_mode_known(cls, v: str) -> str:
+        mode = str(v).strip().lower()
+        if mode not in ("enforce", "record"):
+            raise ValueError("rating_reconciliation_mode must be 'enforce' or 'record'")
+        return mode
 
     # Runtime
     cache_ttl_seconds: int = 3600

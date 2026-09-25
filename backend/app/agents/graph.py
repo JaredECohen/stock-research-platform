@@ -44,10 +44,14 @@ from ..schemas import (
     BullBearCase,
     CatalystItem,
     CompsResult,
+    ConfidenceAssessment,
+    ConfidenceCap,
     CriticReview,
     CritiqueQuestion,
     DCFResult,
+    MemoQuality,
     MispricingThesis,
+    RatingReconciliation,
     RiskItem,
     RoundFindings,
     ScorecardSummary,
@@ -59,10 +63,18 @@ from ..services.filings_service import get_filings
 from ..services.fundamentals_service import get_full_financials
 from ..services.transcripts_service import latest_transcript
 from ..services.valuation_service import build_comps, build_dcf
-from . import llm, prompts, roster, scorecard_context
+from . import llm, memo_quality, prompts, roster, scorecard_context
 from .critic_agent import run_critic
 from .log_safety import redact
-from .memo_context import AnalystRound, DCFStage, DegradationNote, MemoInputs, VerdictOutcome
+from .memo_context import (
+    AnalystRound,
+    DCFStage,
+    DegradationNote,
+    MemoInputs,
+    PMOpinion,
+    QualityOutcome,
+    VerdictOutcome,
+)
 from .risk_agent import derive_risk_items, risk_item_from_text
 from .safe_runner import (
     DegradationLog,
@@ -110,31 +122,6 @@ def _looks_like_anti_pattern_thesis(text: str) -> bool:
     if not text:
         return False
     return bool(_THESIS_ANTI_PATTERN.match(text.strip()))
-
-
-def _verdict_word(rating: str | None, upside: float | None) -> str:
-    """Map the memo's headline rating to the thesis verdict word so the
-    one-liner can never contradict the rating badge the reader sees.
-
-    DCF and the multiples/comps read routinely disagree on premium
-    compounders (COST: DCF cheap, multiple rich). The prior logic took the
-    verdict straight off the DCF base upside in isolation, so the thesis
-    could say "undervalued" while the rating badge and the whole valuation
-    section said overvalued. Anchoring on the rating fixes that.
-
-    Falls back to the DCF upside sign ONLY when no rating is available —
-    the LLM-disabled deterministic path, before the factor blend runs.
-    """
-    label = (rating or "").strip().lower()
-    if "bull" in label:
-        return "undervalued"
-    if "bear" in label:
-        return "overvalued"
-    if label:  # explicit "Neutral" (or any other named rating)
-        return "fairly priced"
-    if upside is None or abs(upside) < 0.10:
-        return "fairly priced"
-    return "undervalued" if upside > 0 else "overvalued"
 
 
 # A bull/bear price ratio the valuation analyst computed itself from the
@@ -393,68 +380,6 @@ def _risk_items_from_bear_case(bear: BullBearCase | None) -> list[RiskItem]:
     return items
 
 
-def _build_valuation_verdict(
-    memo: StockMemoOut, comps: CompsResult | None,
-) -> ValuationVerdict:
-    """Theme 1 — compute the memo's single reconciled valuation call.
-
-    Runs after the PM DCF adjustment and the final rating blend, so it
-    reads the same `dcf_summary` and `rating_label` the reader sees. The
-    verdict word follows the rating (via `_verdict_word`); the summary
-    names each underlying signal and flags when they disagree instead of
-    letting each section assert its own answer.
-    """
-    dcf_up = (memo.dcf_summary or {}).get("base_upside")
-    prem = (comps.premium_discount or {}).get("ev_ebitda") if comps is not None else None
-    factor_val = (memo.scores or {}).get("factor_valuation")
-
-    word = _verdict_word(memo.rating_label, dcf_up)
-    verdict = {"undervalued": "undervalued", "overvalued": "overvalued"}.get(
-        word, "fairly_priced",
-    )
-
-    parts: list[str] = []
-    if dcf_up is not None:
-        parts.append(f"DCF base case {dcf_up:+.0%} to fair value")
-    else:
-        # No DCF upside — either the model never ran or it could not price
-        # the shares (no share count / no quote). Say so explicitly: an
-        # unavailable DCF is NOT a 0% neutral signal, and `_verdict_word`
-        # already falls through to the rating / other signals.
-        parts.append("DCF unavailable")
-    if prem is not None:
-        parts.append(
-            f"EV/EBITDA {abs(prem):.0%} "
-            f"{'premium' if prem > 0 else 'discount'} vs peers"
-        )
-    if factor_val is not None:
-        parts.append(f"quant valuation factor {factor_val:.0f}/100")
-
-    # Name the tension explicitly when DCF and the multiple disagree —
-    # that divergence is why the memo used to contradict itself.
-    tension = ""
-    if dcf_up is not None and prem is not None:
-        if (dcf_up > 0.10 and prem > 0.05) or (dcf_up < -0.10 and prem < -0.05):
-            tension = (
-                " DCF and the peer multiple point in opposite directions; "
-                "the blended rating arbitrates."
-            )
-    summary = f"Net read: {word}"
-    if parts:
-        summary += f" ({'; '.join(parts)})."
-    else:
-        summary += "."
-    summary += tension
-
-    return ValuationVerdict(
-        verdict=verdict,
-        dcf_base_upside=dcf_up,
-        comps_ev_ebitda_premium=prem,
-        factor_valuation=factor_val,
-        summary=summary,
-    )
-
-
 def _build_mispricing_fallback(memo: StockMemoOut) -> MispricingThesis:
     """Deterministic mispricing thesis when the PM left the structure
     blank (B6 — no LLM, LLM failure, or the PM declined).
@@ -482,7 +407,24 @@ def _build_mispricing_fallback(memo: StockMemoOut) -> MispricingThesis:
 
     our_view = memo.one_sentence_thesis or f"See the {ticker} thesis above."
 
-    if vv.verdict == "fairly_priced":
+    if vv.basis == "evidence":
+        # W2b 7(b): the verdict is an evidence read now, not the blended
+        # rating, so the card must not say "the blended read calls" it.
+        if vv.verdict == "mixed":
+            gap = (f"Valuation signals conflict ({vv.summary.removeprefix('Net read: ')}); "
+                   f"no single mispricing call.")
+        elif vv.verdict == "fairly_priced":
+            gap = ("No material mispricing on our work — the valuation evidence does not "
+                   "point either way.")
+        elif vv.dcf_base_upside is not None:
+            gap = (f"Our DCF base case implies {vv.dcf_base_upside:+.0%} to fair value; "
+                   f"the valuation evidence reads {vv.verdict.replace('_', ' ')}.")
+        else:
+            gap = f"The valuation evidence reads {vv.verdict.replace('_', ' ')}."
+    # A rating-derived verdict (every memo stored before W2b, and the
+    # fixtures that pin the presenter's legacy signatures) keeps the
+    # wording that was true of it.
+    elif vv.verdict == "fairly_priced":
         gap = (
             "No material mispricing on our work — the signals offset and "
             "the blended rating lands at fair value."
@@ -562,7 +504,8 @@ def _build_thesis_from_findings(
     findings: dict[str, AgentFinding],
     dcf: DCFResult | None,
     ticker: str,
-    rating: str | None = None,
+    *,
+    verdict_word: str | None,
 ) -> str:
     """Compose a short-form thesis (2-3 sentences) from the specialists'
     findings. Mirrors the structure required by PM_SYNTHESIS_PROMPT so
@@ -633,11 +576,14 @@ def _build_thesis_from_findings(
     upside = dcf.base.upside_pct if dcf and dcf.base else None
 
     # --- Sentence 1: VERDICT ---
-    # Verdict follows the memo's headline rating, not the DCF base upside
-    # in isolation — see `_verdict_word`.
-    verdict_word = _verdict_word(rating, upside)
-
-    if claim:
+    # The caller decides the word (W2b 7(b)): the valuation EVIDENCE word
+    # (`memo_quality.verdict_word`), or the rating's word when there is no
+    # evidence or the PM's divergence was accepted. None is a `mixed`
+    # verdict: the signals conflict, so no single word is stated.
+    if verdict_word is None:
+        lead = f"{ticker_sym}: valuation signals are mixed" if ticker_sym else "Valuation signals are mixed"
+        sentence_1 = f"{lead} — {claim}." if claim else f"{lead}; no single mispricing call."
+    elif claim:
         sentence_1 = f"{ticker_sym} is {verdict_word} — {claim}." if ticker_sym else f"{verdict_word.capitalize()} — {claim}."
     elif verdict_word == "fairly priced":
         sector = (profile.get("sector") or "core").strip().lower()
@@ -647,13 +593,13 @@ def _build_thesis_from_findings(
             else f"Fairly priced on our work — no actionable edge in {sector}."
         )
     else:
-        # Mispriced per the blended read, but no specialist headline
+        # Mispriced on our valuation read, but no specialist headline
         # carries the call — stay consistent with the verdict word.
         sentence_1 = (
-            f"{ticker_sym} screens {verdict_word} on the blended read, "
+            f"{ticker_sym} screens {verdict_word} on our valuation read, "
             f"though no single specialist headline defines the call."
             if ticker_sym
-            else f"Screens {verdict_word} on the blended read, "
+            else f"Screens {verdict_word} on our valuation read, "
             f"though no single specialist headline defines the call."
         )
 
@@ -1246,7 +1192,7 @@ def _pm_view(findings: dict[str, AgentFinding]) -> PMView:
 
 def _pm_synthesis(
     profile: dict, findings: dict[str, AgentFinding], dcf: DCFResult | None,
-    *, scorecard: Any | None = None,
+    *, scorecard: Any | None = None, valuation_evidence: ValuationVerdict | None = None,
 ) -> dict:
     # PM uses its dedicated model (OPENAI_PM_MODEL — gpt-5.5-pro by default).
     # Wave 10 — read PM brain + company / sector memory + research_notes.
@@ -1264,6 +1210,11 @@ def _pm_synthesis(
     # then the capped JSON. The digests sit outside the cut on purpose (see
     # `_pm_view`), and "" when there are none keeps the prompt byte-identical.
     digest_block = ("\n\n" + "\n\n".join(view.digests)) if view.digests else ""
+    # W2b 7(b), C7: the deterministic valuation-evidence read goes after the
+    # digests and before "Findings:" — volatile, outside the cached prefix and
+    # outside the JSON cut. "" without evidence keeps the prompt byte-identical.
+    evidence = memo_quality.valuation_evidence_block(valuation_evidence)
+    evidence_block = ("\n\n" + evidence) if evidence else ""
     # The synthesis template is byte-stable across memos; declare it as the
     # cached prefix so each PM call reads it instead of re-paying for it. The
     # volatile pm_ctx / digests / findings follow the "\n\n" join and stay
@@ -1273,6 +1224,7 @@ def _pm_synthesis(
             prompts.PM_SYNTHESIS_PROMPT
             + (("\n\n" + pm_ctx) if pm_ctx else "")
             + digest_block
+            + evidence_block
             + "\n\nFindings:\n"
             + json.dumps({k: v.model_dump() for k, v in view.findings.items()}, default=str)[: settings.max_agent_context_chars],
             system=prompts.PM_SYSTEM, route="strong",
@@ -1327,8 +1279,17 @@ def _pm_synthesis(
     # recap. Centralized in `_build_thesis_from_findings` so the
     # deterministic fallback and the post-LLM anti-pattern rewrite share
     # one source of truth.
+    # The thesis states the valuation EVIDENCE word when there is evidence
+    # (W2b 7(b)): the keyword rating is a separate call about return, and the
+    # reconciliation stage squares the two. With no evidence, the rating's
+    # word (the pre-W2b behaviour).
+    word = (
+        memo_quality.verdict_word(valuation_evidence.verdict)
+        if valuation_evidence is not None and memo_quality.evidence_available(valuation_evidence)
+        else memo_quality.rating_word(rating)
+    )
     thesis = _build_thesis_from_findings(
-        profile, findings, dcf, profile.get("ticker") or "", rating=rating,
+        profile, findings, dcf, profile.get("ticker") or "", verdict_word=word,
     )
     pm_view = (
         f"Research view: {rating}. {thesis} "
@@ -1478,9 +1439,12 @@ def _run_stock_memo_inner(
     Stage boundaries and the objects that cross them are the dataclasses
     in `memo_context` — read its mutation contract: `inputs.profile` and
     `analysts.findings` are shared and edited in place by stages 2-5, and
-    the memo holds the same finding objects. The verdict stage is the one
-    pure step: it returns a `VerdictOutcome` that is applied here, after
-    review, because it reads the post-blend rating.
+    the memo holds the same finding objects. The verdict and quality stages
+    are pure: each returns an outcome (`VerdictOutcome`, `QualityOutcome`)
+    applied here, after review, because both read the post-blend,
+    post-reconciliation rating. The confidence-bearing texts are rendered
+    once, after both (`_render_final_texts`), and memory reflection runs on
+    that final memo (W2b §6.1).
 
     Wave 8A: each resumable step (fundamentals, dcf, comps, every
     specialist, critic) runs through a `@checkpointed` wrapper. When
@@ -1502,13 +1466,29 @@ def _run_stock_memo_inner(
     )
     analysts = _run_analyst_round(inputs)
     dcf_stage = _adjust_dcf(inputs, analysts)
+    # The evidence verdict is computed here, BEFORE the PM, and the PM's
+    # divergence reason is captured on `memo.quality` (W2b 7(b)).
     memo = _compose_memo(inputs, analysts, dcf_stage)
+    initial = PMOpinion(memo.rating_label, float(memo.confidence_score), memo.final_pm_view)
+    # Critic, risk recommendations, blend, then the rating reconciliation.
     memo = _review_memo(memo, inputs, analysts)
     verdict = _build_verdict(
         memo, comps=inputs.comps, dcf=dcf_stage.dcf, profile=inputs.profile,
         findings=analysts.findings, ticker=ticker,
     )
     verdict.apply(memo, degradation)
+    # 7(c): the earned-confidence caps. A checker bug must neither kill the
+    # memo nor ship it uncapped, so the fallback still caps (`_quality_fallback`).
+    quality = safe_call(
+        _assess_quality, memo, inputs, analysts,
+        fallback=_quality_fallback(memo), name="Memo Quality", log_to=degradation,
+    )
+    quality.apply(memo, degradation)
+    # The two confidence-bearing strings are rendered once, from final values.
+    _render_final_texts(memo, verdict, initial)
+    # Memory learns from the final, checked memo (it used to write the
+    # pre-blend rating and confidence).
+    _run_reflection(memo, inputs)
     _attach_scorecard_disagreement(memo)
     return _persist(memo, inputs)
 
@@ -1813,6 +1793,49 @@ def _summarize_dcf(d: DCFResult | None) -> dict[str, Any]:
     )
 
 
+def _evidence_verdict(inputs: MemoInputs, dcf_stage: DCFStage) -> ValuationVerdict:
+    """Collect the valuation evidence and call `memo_quality`'s rule on it.
+
+    * valuation family: the fs-v1 scorecard row's valuation category
+      (universe percentile; its own coverage, else the row's);
+    * comps: the EV/EBITDA premium to the peer median, with both
+      multiples and the sector so a negative multiple or a bank/REIT
+      (where EV is not meaningful) records the premium without a vote;
+    * DCF: the INITIAL (consensus-anchored) model votes, the PM-adjusted
+      one is recorded — the PM who rates the name also moved that model;
+    * `factor_valuation`: the identical call `_build_scores_dict` makes, so
+      `valuation_verdict.factor_valuation == scores["factor_valuation"]`
+      (display only; the absolute factor never votes).
+    """
+    from ..finance import factor_scores as fs
+    fam_pct: float | None = None
+    fam_cov: float | None = None
+    summary = inputs.scorecard
+    if summary is not None:
+        cat = (summary.categories or {}).get("valuation")
+        if cat is not None and cat.percentile is not None:
+            fam_pct = float(cat.percentile)
+            cov = cat.coverage if cat.coverage is not None else summary.coverage
+            fam_cov = float(cov) if cov is not None else None
+    comps = inputs.comps
+    prem = (comps.premium_discount or {}).get("ev_ebitda") if comps is not None else None
+    target_multiple = comps.target.ev_ebitda if comps is not None else None
+    median_multiple = comps.median.ev_ebitda if comps is not None else None
+    initial = dcf_stage.initial_dcf
+    init_summary = _summarize_dcf(initial)
+    ratios = inputs.ratios or {}
+    return memo_quality.valuation_evidence_verdict(
+        family_pct=fam_pct, family_coverage=fam_cov, comps_premium=prem,
+        dcf_initial_upside=init_summary.get("base_upside"),
+        dcf_initial_tv_clamped=bool(init_summary.get("tv_clamped")),
+        dcf_final_upside=_summarize_dcf(dcf_stage.dcf).get("base_upside"),
+        factor_valuation=fs.valuation_score(
+            ratios.get("EV_EBITDA"), ratios.get("PFCF"), ratios.get("FCF_yield")),
+        comps_target_multiple=target_multiple, comps_peer_median_multiple=median_multiple,
+        sector=(inputs.profile or {}).get("sector"),
+    )
+
+
 def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStage) -> StockMemoOut:
     """Bull/bear/catalysts/risks, PM synthesis, enrichments, then the memo.
 
@@ -1856,6 +1879,17 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
             profile["risks"] = [r.detail for r in risks]
     thesis_breakers = [r for r in risks if r.severity == "high"][:3]
 
+    # W2b 7(b): the valuation verdict from evidence alone, BEFORE the PM
+    # writes — so the PM reads it (and must argue any divergence) and so the
+    # verdict can never be derived from the rating it is meant to check. A
+    # crash is a hard "Valuation Verdict" entry (the same banner name the
+    # verdict stage used), with a placeholder card rather than a silent one.
+    valuation_verdict: ValuationVerdict = safe_call(
+        _evidence_verdict, inputs, dcf_stage,
+        fallback=ValuationVerdict(basis="evidence", summary=memo_quality.VERDICT_UNAVAILABLE_SUMMARY),
+        name="Valuation Verdict", log_to=degradation,
+    )
+
     from .llm import llm_call_context
     synth_fallback: dict[str, Any] = {
         "final_pm_view": "PM synthesis unavailable; relying on specialist findings only.",
@@ -1866,10 +1900,15 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     with llm_call_context(agent_name="PM Synthesis", run_id=inputs.run_id, route="strong"):
         synth: dict[str, Any] = safe_call(
             _pm_synthesis, profile, findings, dcf, scorecard=inputs.scorecard,
+            valuation_evidence=valuation_verdict,
             fallback=synth_fallback, name="PM Synthesis", log_to=degradation,
         )
     rating = synth.get("rating_label", "Neutral")
     raw_confidence = float(synth.get("confidence_score", 60))
+    # The PM's stated reason for rating against the evidence. Memo content
+    # (the reader sees it with the reconciliation note), capped like the
+    # other PM strings.
+    divergence_reason = str(synth.get("valuation_divergence_reason") or "").strip()[:1200]
 
     # Phase 6 — the scorecard summary the memo carries. No row on file is a
     # SOFT degradation the reader must see (the section says n/a and why),
@@ -2074,6 +2113,14 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
         macro_snapshot_at_memo=macro_snapshot_at_memo,
         macro_regime_at_memo=macro_regime_at_memo,
         scorecard=memo_scorecard,
+        valuation_verdict=valuation_verdict,
+        # W2b: the PM's side of the 7(b) reconciliation, recorded now; the
+        # review stage completes it against the post-blend rating, and the
+        # critic reads it from the draft.
+        quality=MemoQuality(rating_reconciliation=RatingReconciliation(
+            pm_rating=str(rating), pm_confidence=raw_confidence,
+            valuation_verdict=valuation_verdict.verdict, reason=divergence_reason,
+        )),
         # W2a write-time provenance: facts the payload cannot recover later.
         # Without keys every LLM-intended section is the deterministic
         # stand-in by design, and the presenter hides it from readers; the
@@ -2104,18 +2151,20 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
 # ---------------------------------------------------------------------------
 
 def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound) -> StockMemoOut:
-    """Critic, long-term-memory reflection, risk recommendations, rating blend.
+    """Critic, risk recommendations, rating blend, rating reconciliation.
 
     Owns the `graph.critic` checkpoint. Mutates `memo` in place (and
     `findings["risk"].data["applied_recommendations"]`) and refreshes the
-    memo's degradation fields after the critic and after reflection —
-    both make LLM calls that can record failures.
+    memo's degradation fields after the critic, which makes an LLM call
+    that can record failures.
+
+    Two things moved out (W2b §6.1): long-term-memory reflection now runs
+    after the quality stage (`_run_reflection`), so memory records the final
+    rating and confidence; and the "Final rating after ..." preface on the
+    PM view is rendered once from final values (`_render_final_texts`).
     """
     degradation = inputs.degradation
     risk_finding = analysts.findings["risk"]
-    initial_rating = memo.rating_label
-    initial_confidence = memo.confidence_score
-    initial_pm_view = memo.final_pm_view
 
     # Run critic on a draft of the memo (pass dict to avoid recursion).
     # safe_critic upgrades exceptions into a typed "critic unavailable" review
@@ -2128,22 +2177,6 @@ def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound)
         memo.risk_committee_challenge = critic
     # Refresh degraded_agents in case the critic recorded a failure.
     _sync_degradation(memo, degradation)
-
-    # Long-term memory: appends a structured entry to the company + sector
-    # memory files iff a delta event fired this run (new earnings / new
-    # filing / material news). safe_call wraps it so a memory write never
-    # blocks the memo from being returned.
-    #
-    # Wave 1C: skip memory writes when running as a backtest (`as_of_date`
-    # set). Backtests are diagnostic — we don't want the agent's notebook
-    # polluted with retroactive entries.
-    if inputs.as_of_date is None:
-        safe_call(
-            _run_reflection_step, memo,
-            fallback=([], []),
-            name="Reflection (long-term memory)", log_to=degradation,
-        )
-        _sync_degradation(memo, degradation)
 
     # Wave 8H — apply the risk analyst's structured recommendations.
     # Runs AFTER the memo body is assembled but BEFORE final_verdict +
@@ -2164,20 +2197,59 @@ def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound)
         risk_finding.data["applied_recommendations"] = applied_risk_recs
 
     _blend_rating(memo)
-    # The PM wrote this rationale before risk recommendations and the
-    # existing factor blend. Preserve it as that stage's opinion instead
-    # of presenting an obsolete call as the final decision. This changes
-    # presentation only; no weights, thresholds, or recommendations move.
-    if memo.rating_label != initial_rating or memo.confidence_score != initial_confidence:
-        memo.final_pm_view = (
-            f"Final rating after risk review and factor blend: {memo.rating_label} "
-            f"(confidence {memo.confidence_score:g}/100).\n\n"
-            f"PM rationale before those adjustments (rating {initial_rating}; "
-            f"confidence {initial_confidence:g}/100):\n{initial_pm_view}"
-        )
+    # W2b 7(b) binds the PUBLISHED rating, so it runs on the post-blend one.
+    _reconcile_rating(memo, degradation)
     if isinstance(memo.scores, dict):
         memo.scores = {**memo.scores, "confidence": float(memo.confidence_score)}
     return memo
+
+
+def _reconcile_rating(memo: StockMemoOut, degradation: DegradationLog) -> None:
+    """Rule 7(b) on the post-blend rating (`memo_quality.reconcile_rating`).
+
+    Writes `memo.rating_label` (enforce mode only) and
+    `memo.quality.rating_reconciliation`. A reason check that crashed
+    fails closed (the rating moves to Neutral) and is a soft "Rating Check"
+    degradation, so the reader sees why. A memo without `quality` (a
+    fixture) gets a reconciliation with an empty reason.
+    """
+    quality = memo.quality or MemoQuality()
+    critic = memo.risk_committee_challenge
+    enforce = settings.rating_reconciliation_mode != "record"
+    try:
+        rec = memo_quality.reconcile_rating(
+            blended_rating=str(memo.rating_label), verdict=memo.valuation_verdict,
+            pm=quality.rating_reconciliation, critic=critic, enforce=enforce,
+        )
+    except Exception as exc:
+        # Fail closed here too: a divergent rating nobody could check does
+        # not ship as if it had passed.
+        log.warning("rating check failed for %s: %s", memo.ticker, type(exc).__name__)
+        blended = str(memo.rating_label)
+        divergent = memo_quality.diverges(blended, memo.valuation_verdict.verdict)
+        rec = RatingReconciliation(
+            outcome="downgraded" if divergent else "not_applicable",
+            pm_rating=(quality.rating_reconciliation.pm_rating
+                       if quality.rating_reconciliation else ""),
+            blended_rating=blended,
+            final_rating="Neutral" if (divergent and enforce) else blended,
+            valuation_verdict=memo.valuation_verdict.verdict, divergence=divergent,
+            reason_checks={"check_failed": True},
+            note="The rating check could not run; a divergent rating was set to Neutral.",
+        )
+    if rec.reason_checks.get("check_failed"):
+        degradation.record_soft(
+            "Rating Check", "divergence reason could not be verified; the check failed closed",
+            kind="RatingCheckFailed",
+        )
+        _sync_degradation(memo, degradation)
+    memo.rating_label = rec.final_rating  # type: ignore[assignment]
+    memo.quality = quality.model_copy(update={"rating_reconciliation": rec})
+    log.info(
+        "rating check %s: pm=%s blended=%s verdict=%s outcome=%s final=%s mode=%s",
+        memo.ticker, rec.pm_rating, rec.blended_rating, rec.valuation_verdict,
+        rec.outcome, rec.final_rating, settings.rating_reconciliation_mode,
+    )
 
 
 def _blend_rating(memo: StockMemoOut) -> None:
@@ -2248,33 +2320,33 @@ def _build_verdict(
     def _note_soft(agent: str, reason: str, exc: BaseException) -> None:
         notes.append(DegradationNote(agent, type(exc).__name__, reason[:300], soft=True))
 
-    # Theme 1 — compute the memo's single reconciled valuation call now
-    # that the rating blend is final. Everything downstream (thesis
-    # consistency guard, mispricing fallback, UI valuation card) reads it.
-    # An exception here used to ship an empty valuation card with no banner
-    # entry — a memo-visible silent failure (RP-001).
-    valuation_verdict = _guarded(
-        "Valuation Verdict", _build_valuation_verdict, memo, comps, fallback=ValuationVerdict(),
-    )
+    # W2b 7(b): the valuation verdict is the evidence read the compose stage
+    # stored (before the PM wrote); it is passed through, never recomputed
+    # here — recomputing it from the post-blend memo is how it used to follow
+    # the rating badge. Everything downstream (thesis guard, mispricing
+    # fallback, UI valuation card) reads it.
+    valuation_verdict = memo.valuation_verdict
+    rec = memo.quality.rating_reconciliation if memo.quality is not None else None
+    accepted = rec is not None and rec.outcome == "accepted"
 
     # Anti-pattern guard + verdict-consistency guard. The PM prompt forbids
     # the "{Company} — {Sector} / {industry}, {hook}; DCF base case +X%"
     # templated form, but in practice the LLM sometimes ignores it (or the
-    # deterministic fallback historically emitted it). Additionally, the
-    # thesis was written against the PRE-blend rating — the factor blend or
-    # a risk-rec downgrade may have moved the rating since, leaving the
-    # verdict word contradicting the badge. Both cases trigger a rewrite
-    # from the specialist findings using the final rating.
+    # deterministic fallback historically emitted it). The stated verdict
+    # word is rewritten only when it contradicts BOTH the final rating's
+    # direction and the evidence verdict (either is a defensible reading),
+    # and never for an accepted divergence — the PM argued that one.
     thesis = memo.one_sentence_thesis
-    dcf_upside = dcf.base.upside_pct if dcf and dcf.base else None
     is_anti_pattern = _looks_like_anti_pattern_thesis(thesis)
-    expected_word = _verdict_word(memo.rating_label, dcf_upside)
     stated_word = next(
         (w for w in ("undervalued", "overvalued", "fairly priced")
          if w in (thesis or "").lower()),
         None,
     )
-    rewrite_fired = is_anti_pattern or (stated_word is not None and stated_word != expected_word)
+    rewrite_fired, expected_word = memo_quality.thesis_rewrite_word(
+        stated=stated_word, rating=memo.rating_label, verdict=valuation_verdict,
+        accepted=accepted, anti_pattern=is_anti_pattern,
+    )
     # W2a: whether the builder's text actually replaced the PM's thesis.
     # `rewrite_fired` alone is not enough — the rewrite is rejected when it
     # would itself be the anti-pattern, and the PM's words then stand.
@@ -2289,7 +2361,7 @@ def _build_verdict(
         )
         try:
             rewritten = _build_thesis_from_findings(
-                profile, findings, dcf, ticker, rating=memo.rating_label,
+                profile, findings, dcf, ticker, verdict_word=expected_word,
             )
             if rewritten and not _looks_like_anti_pattern_thesis(rewritten):
                 thesis_rewritten = rewritten != thesis
@@ -2300,6 +2372,9 @@ def _build_verdict(
             # prevent. Surface it instead of swallowing it.
             log.warning("thesis rewrite failed for %s: %s", ticker, type(exc).__name__)
             _note_soft("Thesis Builder", f"thesis rewrite failed: {redact(exc)}", exc)
+    # The word the final thesis stands on: the rewrite's, else what the
+    # thesis states, else the expected one. The gap clause must agree with it.
+    thesis_word = (expected_word if thesis_rewritten else stated_word) or expected_word or "fairly priced"
 
     # Wave 8R — thesis augmentation. Surface where the model diverges
     # from analyst consensus (the actual *what is the market missing*
@@ -2316,7 +2391,7 @@ def _build_verdict(
         if (
             delta_clause
             and delta_clause not in thesis
-            and _gap_clause_agrees(delta_clause, expected_word)
+            and _gap_clause_agrees(delta_clause, thesis_word)
         ):
             thesis = thesis.rstrip(".") + ". " + delta_clause
     except Exception as exc:  # pragma: no cover — never break a memo on thesis polish
@@ -2379,10 +2454,11 @@ def _build_verdict(
             sector_lean_blurb += f" Key disagreement: {disagreement}"
 
     # Final verdict ties together rating, confidence, and PM view succinctly.
-    # Rating and thesis_breakers are read post-review (risk recs may have
-    # moved the rating and grown the breaker list).
-    final_verdict = (
-        f"PM final view: {memo.rating_label} (confidence {int(memo.confidence_score)}). "
+    # Only the BODY is built here: its "PM final view: <rating> (confidence
+    # N)." lead is rendered once, after the quality stage has set the final
+    # confidence (`VerdictOutcome.render`, `_render_final_texts`).
+    # thesis_breakers are read post-review (risk recs may have grown them).
+    final_verdict_body = (
         f"{thesis}"
         f"{cohort_blurb}{cross_relevance_blurb}{sector_lean_blurb} "
         f"Watch items: {', '.join(r.title for r in memo.thesis_breakers) or 'none flagged.'}"
@@ -2394,13 +2470,134 @@ def _build_verdict(
         valuation_verdict=valuation_verdict,
         one_sentence_thesis=thesis,
         mispricing_thesis=mispricing,
-        final_verdict=final_verdict,
+        final_verdict_body=final_verdict_body,
         extra_scores=extra_scores,
         thesis_rewrite_fired=rewrite_fired,
         thesis_rewritten=thesis_rewritten,
         mispricing_fallback=mispricing_fallback,
         degradations=notes,
     )
+
+
+# ---------------------------------------------------------------------------
+# Stage 6b — quality (pure): 7(c) earned confidence
+# ---------------------------------------------------------------------------
+
+def _assess_quality(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound) -> QualityOutcome:
+    """The 7(c) caps on the PM's confidence, from the post-verdict memo.
+
+    Pure: reads the memo and the inputs; the orchestrator applies the
+    returned `QualityOutcome`. Template-filled sections come from the W2a
+    presenter's `compute_availability` (contract C2) so the caps and the
+    "unavailable in this version" placeholders can never disagree about
+    which section was a template. A section that map could not classify
+    raises (`memo_quality.template_filled`), so `_quality_fallback` caps
+    the memo instead of the template caps silently dropping out. The
+    number-to-source caps arrive with that check (S15) and are skipped
+    while it has not run.
+    """
+    from ..services.memo_sections import compute_availability
+
+    pm_template, template_sections = memo_quality.template_filled(compute_availability(memo))
+    filing = analysts.findings.get("filing")
+    filing_skipped = bool(
+        filing is not None and isinstance(filing.data, dict) and filing.data.get("intake_skipped")
+    )
+    rec = memo.quality.rating_reconciliation if memo.quality is not None else None
+    # Only a divergence 7(b) ACCEPTED on a reason no live critic supported.
+    # A downgraded one no longer diverges in enforce mode; in record mode it
+    # still does, but the kill switch must leave published output (rating
+    # AND confidence) as if 7(b) were off, and "a reason no live critic
+    # reviewed" would misdescribe a missing or critic-rejected reason.
+    divergence_unreviewed = (
+        rec is not None and rec.divergence and rec.outcome == "accepted"
+        and memo_quality.diverges(memo.rating_label, memo.valuation_verdict.verdict)
+        and rec.critic_assessment != "supported"
+    )
+    confidence = memo_quality.earned_confidence(
+        raw=float(memo.confidence_score),
+        pm_template=pm_template,
+        template_sections=template_sections,
+        critic_mode=memo.risk_committee_challenge.review_mode,
+        transcript_given=inputs.transcript is not None,
+        filing_reviewed=bool(inputs.filings) and not filing_skipped,
+        divergence_unreviewed=divergence_unreviewed,
+        number_check=memo.quality.number_check if memo.quality is not None else None,
+    )
+    log.info(
+        "confidence check %s: raw=%.1f final=%.1f binding=%s caps=%s",
+        memo.ticker, confidence.raw, confidence.final, confidence.binding,
+        ",".join(f"{c.code}:{c.cap:g}" for c in confidence.caps) or "none",
+    )
+    return QualityOutcome(confidence=confidence)
+
+
+def _quality_fallback(memo: StockMemoOut) -> QualityOutcome:
+    """What ships when `_assess_quality` crashes: never an uncapped memo.
+
+    Nothing is known about which caps apply, so the most conservative
+    section cap stands in (the "Memo Quality" banner entry says why)."""
+    raw = float(memo.confidence_score)
+    cap = ConfidenceCap(
+        code="quality_check_failed", cap=memo_quality.CAP_TEMPLATE_SECTIONS[3],
+        detail="The confidence checks could not run for this memo.",
+    )
+    final = min(raw, cap.cap)
+    return QualityOutcome(confidence=ConfidenceAssessment(
+        raw=raw, final=final, caps=[cap], binding=cap.code if final < raw else None,
+    ))
+
+
+def _render_final_texts(memo: StockMemoOut, verdict: VerdictOutcome, initial: PMOpinion) -> None:
+    """Render the two strings that embed rating and confidence, once.
+
+    Runs after the quality stage, so both read the FINAL rating and the
+    earned confidence (rendering them earlier and patching later is the
+    5aa1b74 stale-string class):
+      * `final_verdict` = lead + the verdict stage's body;
+      * the PM-view preface, written when the rating or confidence moved
+        since the PM wrote. It names each step that moved something; with
+        only the risk review and blend involved the wording is unchanged.
+    """
+    memo.final_verdict = verdict.render(memo)
+    if memo.rating_label == initial.rating and float(memo.confidence_score) == initial.confidence:
+        memo.final_pm_view = initial.text
+        return
+    q = memo.quality
+    rec = q.rating_reconciliation if q is not None else None
+    steps = ["risk review", "factor blend"]
+    if rec is not None and rec.outcome == "downgraded" and rec.final_rating != rec.blended_rating:
+        steps.append("valuation check")
+    conf = q.confidence if q is not None else None
+    if conf is not None and conf.final < conf.raw:
+        steps.append("evidence cap on confidence")
+    after = " and ".join(steps) if len(steps) == 2 else ", ".join(steps[:-1]) + " and " + steps[-1]
+    memo.final_pm_view = (
+        f"Final rating after {after}: {memo.rating_label} "
+        f"(confidence {memo.confidence_score:g}/100).\n\n"
+        f"PM rationale before those adjustments (rating {initial.rating}; "
+        f"confidence {initial.confidence:g}/100):\n{initial.text}"
+    )
+
+
+def _run_reflection(memo: StockMemoOut, inputs: MemoInputs) -> None:
+    """Long-term memory reflection on the FINAL memo (W2b §6.4).
+
+    Appends a structured entry to the company + sector memory files iff a
+    delta event fired this run (new earnings / new filing / material news).
+    It runs after the quality stage so memory records the published rating
+    and earned confidence, not the pre-blend draft. safe_call wraps it so a
+    memory write never blocks the memo. Skipped on backtests (`as_of_date`
+    set): the agent's notebook must not collect retroactive entries.
+    """
+    if inputs.as_of_date is not None:
+        return
+    safe_call(
+        _run_reflection_step, memo,
+        fallback=([], []),
+        name="Reflection (long-term memory)", log_to=inputs.degradation,
+    )
+    _sync_degradation(memo, inputs.degradation)
 
 
 # ---------------------------------------------------------------------------

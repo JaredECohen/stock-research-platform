@@ -334,7 +334,11 @@ def test_sector_prompt_block_is_empty_for_a_non_routable_row():
 #     sector_agent_view.key_points, minus the macro tail (see below).
 #     extra_agent_views — a new roster entry lands here or nowhere.
 #     degraded_agents / degradation_events, restricted to _BLAST_RADIUS.
-#     rating_label — the memo's own verdict, the end of the pipeline.
+#     rating_label — the memo's own verdict as the factor blend left it.
+#       Since W2b 7(b) (S14) the PUBLISHED label also passes a valuation
+#       check whose DCF vote reads the persistent DCF store, i.e. what the
+#       shared database holds; the blend's label is the routing-sensitive
+#       part, so that is what is compared (`blended_rating`).
 #
 #   EXCLUDED, by name, with the reason:
 #     the macro-overlay tail of key_points. The sector agent appends up to
@@ -393,7 +397,9 @@ def _invariant_projection(memo) -> dict:
         "extra_agent_views": sorted(memo.extra_agent_views.keys()),
         "degraded_agents": [a for a in memo.degraded_agents if a in _BLAST_RADIUS],
         "degradation_events": [e for e in memo.degradation_events if e["agent"] in _BLAST_RADIUS],
-        "rating_label": memo.rating_label,
+        "rating_label": (memo.quality.rating_reconciliation.blended_rating
+                         if memo.quality and memo.quality.rating_reconciliation
+                         else memo.rating_label),
     }
 
 

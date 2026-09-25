@@ -51,6 +51,7 @@ from ..schemas import (
     score_from_rating_label,
 )
 from .log_safety import safe_exc
+from .memo_quality import rating_direction
 
 log = logging.getLogger(__name__)
 
@@ -250,15 +251,28 @@ def detect_disagreement(summary: ScorecardSummary, memo: StockMemoOut) -> Scorec
     material_at = float(settings.scorecard_disagreement_material)
     watch_at = float(settings.scorecard_disagreement_watch)
 
-    # Valuation contradiction: the verdict word against the family rank.
+    # Valuation contradiction: the NARRATIVE's valuation stance against the
+    # family rank. Before W2b the verdict word was derived from the rating,
+    # so it was the narrative's stance. A W2b verdict (`basis="evidence"`) is
+    # a deterministic read that itself counts this family rank, so comparing
+    # it with the rank would pit evidence against evidence and the
+    # `narrative_*_quant` labels would lie. For those memos the rating's
+    # direction is the narrative stance (Bullish reads cheap, Bearish rich).
     val = _valuation_category(summary)
     val_pct = val.percentile if val is not None else None
-    verdict = memo.valuation_verdict.verdict if memo.valuation_verdict is not None else "fairly_priced"
+    vv = memo.valuation_verdict
+    verdict = vv.verdict if vv is not None else "fairly_priced"
+    if vv is not None and vv.basis == "evidence":
+        stance = {1: "undervalued", -1: "overvalued"}.get(rating_direction(rating), "fairly_priced")
+        stance_label = f"Rating {rating} (reads {stance.replace('_', ' ')})"
+    else:
+        stance = verdict
+        stance_label = f"Valuation verdict '{verdict}'"
     val_direction: str | None = None
     if val_pct is not None:
-        if verdict == "undervalued" and float(val_pct) < VALUATION_LOW_PCT:
+        if stance == "undervalued" and float(val_pct) < VALUATION_LOW_PCT:
             val_direction = "narrative_above_quant"
-        elif verdict == "overvalued" and float(val_pct) > VALUATION_HIGH_PCT:
+        elif stance == "overvalued" and float(val_pct) > VALUATION_HIGH_PCT:
             val_direction = "narrative_below_quant"
 
     overall_material = abs(gap) >= material_at
@@ -284,7 +298,7 @@ def detect_disagreement(summary: ScorecardSummary, memo: StockMemoOut) -> Scorec
         f"; overall gap {gap:+.1f} vs universe percentile {float(pct):.1f} also in the watch band" if overall_watch else ""
     )
     note = (
-        f"Valuation verdict '{verdict}' vs valuation-family universe percentile {float(val_pct):.1f} "
+        f"{stance_label} vs valuation-family universe percentile {float(val_pct):.1f} "
         f"(rating {rating}; {coverage_note}{overall_note}){held}."
     )
     return ScorecardDisagreementFlag(

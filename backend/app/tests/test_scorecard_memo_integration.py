@@ -326,6 +326,40 @@ def test_valuation_contradiction_is_material_even_when_the_overall_gap_only_reac
     assert (mirror.severity, mirror.dimension, mirror.direction) == ("material", "valuation", "narrative_below_quant")
 
 
+def _evidence_stub(rating: str, verdict: str) -> Any:
+    """A W2b memo: its verdict is an evidence read (`basis="evidence"`)."""
+    from types import SimpleNamespace
+
+    from app.schemas import ValuationVerdict
+    return SimpleNamespace(
+        ticker="NVDA", rating_label=rating,
+        valuation_verdict=ValuationVerdict(verdict=verdict, basis="evidence", summary="evidence"),
+    )
+
+
+def test_valuation_labels_read_the_rating_direction_on_evidence_verdicts():
+    """W2b: an evidence verdict already counts the valuation-family rank, so
+    comparing it with that rank would pit evidence against evidence and the
+    `narrative_*_quant` label would describe no narrative. On those memos
+    the narrative's valuation stance is the RATING's direction."""
+    above = scorecard_context.detect_disagreement(
+        _summary(pct=50.0, val_pct=12.0), _evidence_stub("Bullish", "fairly_priced"))
+    assert above is not None
+    assert (above.severity, above.dimension, above.direction) == ("material", "valuation", "narrative_above_quant")
+    assert above.note.startswith("Rating Bullish (reads undervalued) vs valuation-family universe percentile 12.0")
+    below = scorecard_context.detect_disagreement(
+        _summary(pct=50.0, val_pct=88.0), _evidence_stub("Bearish", "fairly_priced"))
+    assert below is not None and below.direction == "narrative_below_quant"
+    # A Neutral memo takes no valuation stance, whatever the evidence reads
+    # (the rating-derived rule would have flagged "undervalued" here).
+    assert scorecard_context.detect_disagreement(
+        _summary(pct=50.0, val_pct=12.0), _evidence_stub("Neutral", "undervalued")) is None
+    # Legacy memos (verdict derived from the rating) keep the verdict rule.
+    legacy = scorecard_context.detect_disagreement(
+        _summary(pct=50.0, val_pct=12.0), _memo_stub("Neutral", verdict="undervalued"))
+    assert legacy is not None and legacy.note.startswith("Valuation verdict 'undervalued'")
+
+
 def test_missing_percentile_is_na_not_a_flag():
     assert scorecard_context.detect_disagreement(_summary(pct=None), _memo_stub("Very Bullish")) is None
     assert scorecard_context.summarize(None, _memo_stub("Bullish")) is None
