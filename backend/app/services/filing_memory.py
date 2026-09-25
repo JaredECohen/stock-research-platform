@@ -449,6 +449,10 @@ def post_pass(filing: FilingDoc, profile: dict[str, Any] | None = None) -> dict[
         bullets.extend(f"➖ Risk removed: {r}" for r in risk_removals)
     if risk_expanded:
         bullets.extend(f"↗ Risk expanded: {r}" for r in risk_expanded)
+    # W7: only what the model's diff said may become a ledger observation.
+    # The deterministic fallback below restates section lengths — memory
+    # files keep it, the ledger never learns from it.
+    llm_bullets = list(bullets) if llm_out else []
 
     if not bullets:
         bullets = _deterministic_diff(prior, filing)
@@ -465,7 +469,33 @@ def post_pass(filing: FilingDoc, profile: dict[str, Any] | None = None) -> dict[
         result = _write_to_sector_memory(sector, filing, sector_pattern)
         _record_memory_result(report, "sector", result)
         report["sector_pattern_written"] = result.status == "written"
+    if settings.learning_ledger_writes:
+        _record_memory_result(report, "ledger", _write_to_ledger(
+            filing, llm_bullets, sector_pattern, (profile or {}).get("sector"),
+        ))
     return report
+
+
+def _write_to_ledger(
+    filing: FilingDoc, llm_bullets: list[str], sector_pattern: str, sector: str | None,
+) -> MemoryWriteResult:
+    """W7: persist this filing's LLM diff as ledger observations.
+
+    No new LLM call — `_llm_diff` output is paid for today and, with the
+    file backend off in production, was dropped. `record_filing` resolves the
+    sector from `companies` when no profile is passed (the ingest post-pass
+    passes none), refuses demo accessions, and never raises; a failure lands
+    in `report["errors"]` as stage `ledger_memory`, like the file writers.
+    """
+    if not llm_bullets and not (isinstance(sector_pattern, str) and sector_pattern.strip()):
+        return MemoryWriteResult("not_requested")
+    try:
+        from ..learning import ledger
+        out = ledger.record_filing(filing=filing, bullets=llm_bullets, sector_pattern=sector_pattern,
+                                   sector=sector)
+    except Exception as exc:  # record_filing contains its own errors; belt and braces
+        return MemoryWriteResult("failed", type(exc).__name__)
+    return MemoryWriteResult(str(out["status"]), out.get("error_type"))
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,7 @@ from .industry import (
     TaxonomyVersion,
 )
 from .jobs import CatalystEvent, CronLoopRun, RegenJob, ThemeExposure
+from .learning import LearningControlEvent, LearningEvidence, LearningItem, LearningRender
 from .market_data import DailyPrice, FinancialDataRepair, FundamentalRefreshState, MarketDataSync
 from .memo import (
     MemoOutcome,
@@ -139,4 +140,9 @@ __all__ = [
     "CrossIndustrySnapshot",
     "IndustryReport",
     "IndustryReportJob",
+    # learning ledger (W7)
+    "LearningItem",
+    "LearningEvidence",
+    "LearningRender",
+    "LearningControlEvent",
 ]

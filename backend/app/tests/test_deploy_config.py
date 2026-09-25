@@ -145,6 +145,43 @@ def test_industry_analyst_routing_is_explicit_and_on_for_both_services():
     assert values == {web["name"]: "true", worker["name"]: "true"}, values
 
 
+def _explicit_env(svc: dict) -> dict:
+    return {e["key"]: e.get("value") for e in svc.get("envVars", []) if "value" in e}
+
+
+def test_learning_flags_agree_across_services():
+    """W7: both services carry the learning keys, with the same values.
+
+    Web and worker both write ledger rows (filing post-passes run on web at
+    symbol introduction) and both will render priors into memos, so a
+    per-process value would make what a memo learned from, and what it was
+    shown, depend on which process wrote it. Explicit, because the code
+    defaults are off (CI, dev laptops) and a missing key silently turns the
+    ledger off in production. The ceiling ships at "inject" so a later gated
+    promotion needs no deploy; the DB mode still starts at shadow.
+    """
+    web, worker = _web_and_worker()
+    for key, expected in (("LEARNING_LEDGER_WRITES", "true"), ("LEARNING_MODE_MAX", "inject")):
+        values = {}
+        for svc in (web, worker):
+            env = _explicit_env(svc)
+            assert key in env, f"{svc['name']} does not define {key}; it must be explicit on both services"
+            values[svc["name"]] = env[key]
+        assert set(values.values()) == {expected}, values
+
+
+def test_legacy_file_memory_stays_off():
+    """The markdown memory backend writes to the container's ephemeral disk,
+    which web and worker do not share. The ledger replaces it; turning this
+    back on would silently lose every entry at the next deploy and split
+    memory between the processes."""
+    for svc in _services():
+        env = _explicit_env(svc)
+        assert env.get("ENABLE_LONG_TERM_MEMORY") == "false", (
+            f"{svc['name']}: ENABLE_LONG_TERM_MEMORY must stay explicitly \"false\""
+        )
+
+
 def test_nightly_live_suite_routes_like_production():
     """The nightly live suite mirrors the production memo path, so its memos
     route too; `test_regen_smoke` checks the routed read is an analyst's."""
