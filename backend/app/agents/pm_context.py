@@ -42,6 +42,16 @@ log = logging.getLogger(__name__)
 INDUSTRY_EXCERPT_MAX_CHARS = 600
 INDUSTRY_BLOCK_MAX_CHARS = 2000
 
+# W7 inject mode only: learned priors are hypotheses the run's evidence
+# overrides, so the header must not tell the PM to let memory shape the
+# synthesis (owner decision 9: never over-index on memory).
+PM_CONTEXT_HEADER_INJECT = (
+    "# PM context\n\n"
+    "_Read these before synthesizing. The learned priors are provisional "
+    "hypotheses; current findings take precedence. Use the rest as context; "
+    "do not quote verbatim._"
+)
+
 
 def _clip(text: Any, limit: int) -> str:
     s = str(text or "").strip()
@@ -300,6 +310,7 @@ def build_pm_context(
     max_chars_each: int = 3000,
     scorecard_block: str | None = None,
     tickers: list[str] | None = None,
+    learning_consumer: str | None = None,
 ) -> str:
     """Render the markdown context the PM should read.
 
@@ -310,6 +321,15 @@ def build_pm_context(
     `scorecard_context.PROMPT_BLOCK_MAX_CHARS` (600), well inside
     `max_chars_each`; it is clipped here again so a caller cannot widen
     the budget by handing in a longer string.
+
+    `learning_consumer` (W7): only the memo run passes it ("pm_memo"). In
+    off and shadow modes the context is byte-identical to the legacy one;
+    in inject mode the learned-priors block (bounded, audited, framed as
+    provisional hypotheses) takes the place of the legacy company and
+    sector memory files, and the header stops calling memory something to
+    "let shape the synthesis". The regime and specialist-reliability blocks
+    are untouched in every mode (decision 7(d): calibration is frozen).
+    Chat and the orchestrator never pass it, so they never see priors.
     """
     blocks: list[str] = []
 
@@ -323,8 +343,20 @@ def build_pm_context(
     except Exception as exc:  # pragma: no cover — never block on memory
         log.debug("PM memory read failed: %s", exc)
 
-    # 2) Company memory for the ticker in scope.
-    if ticker:
+    # W7 — one render per PM synthesis, before the memory blocks it
+    # replaces. `render_for` reports "off" outside a live memo run, so a
+    # failure here (or any mode but inject) leaves the legacy path intact.
+    inject = False
+    if learning_consumer and ticker:
+        from ..learning import context as learning_context
+        learned = learning_context.render_safely(learning_consumer, ticker=ticker, sector=sector)
+        inject = learned.mode == "inject"
+        if inject and learned.text:
+            blocks.append(learned.text)
+
+    # 2) Company memory for the ticker in scope (legacy file backend; the
+    # learning ledger replaces it in inject mode).
+    if ticker and not inject:
         try:
             from ..memory import CompanyMemory
             cm = CompanyMemory.for_ticker(ticker)
@@ -337,8 +369,8 @@ def build_pm_context(
         except Exception as exc:  # pragma: no cover
             log.debug("company memory read failed for %s: %s", ticker, exc)
 
-    # 3) Sector memory.
-    if sector:
+    # 3) Sector memory (legacy; replaced in inject mode, as above).
+    if sector and not inject:
         try:
             from ..memory import SectorMemory
             sm = SectorMemory.for_sector(sector)
@@ -464,11 +496,14 @@ def build_pm_context(
 
     if not blocks:
         return ""
-    header = (
-        "# PM context\n\n"
-        "_Read these before synthesizing. They are your second brain — "
-        "your prior views, the company's history with you, sector lessons, "
-        "and curated notes. Let them shape the synthesis; do not quote "
-        "verbatim._"
-    )
+    if inject:
+        header = PM_CONTEXT_HEADER_INJECT
+    else:
+        header = (
+            "# PM context\n\n"
+            "_Read these before synthesizing. They are your second brain — "
+            "your prior views, the company's history with you, sector lessons, "
+            "and curated notes. Let them shape the synthesis; do not quote "
+            "verbatim._"
+        )
     return "\n\n---\n\n".join([header, *blocks])

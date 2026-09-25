@@ -53,12 +53,33 @@ def _prior_memo_context(ticker: str) -> str:
         return ""
 
 
-def _company_memory_context(ticker: str) -> str:
+# W7 inject mode: the critic reads lessons as hypotheses, not a record the
+# memo must obey. The legacy wording ("if the memo CONTRADICTS prior recorded
+# lessons ... raise it as a challenge") over-indexes on memory, which owner
+# decision 9 rules out; a filing observation is a fact, so a silent reversal
+# of one is still worth flagging.
+CRITIC_PRIORS_INSTRUCTION = (
+    "Cross-check: flag a silent reversal of a recorded filing observation. "
+    "Lessons are hypotheses: do not challenge a departure from an untested or "
+    "contested lesson; challenge a departure from a supported lesson only when "
+    "the memo gives no current evidence."
+)
+
+
+def _company_memory_context(ticker: str, sector: str | None = None) -> str:
     """Wave 10 — pull the company memory file as additional critic
     grounding. Lets the critic say 'you said the opposite three months
-    ago — what changed?' instead of judging the memo in isolation."""
+    ago — what changed?' instead of judging the memo in isolation.
+
+    W7: in inject mode the learned-priors block replaces the file, with the
+    reframed instruction above; off, shadow and any call outside a live memo
+    run keep the legacy block byte for byte."""
     if not ticker:
         return ""
+    from ..learning import context as learning_context
+    learned = learning_context.render_safely("critic", ticker=ticker, sector=sector)
+    if learned.mode == "inject":
+        return f"\n\n{learned.text}\n\n{CRITIC_PRIORS_INSTRUCTION}" if learned.text else ""
     try:
         from ..memory import CompanyMemory
         cm = CompanyMemory.for_ticker(ticker)
@@ -119,7 +140,7 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
     # spot silent reversals and cross-version inconsistencies.
     ticker = memo_dict.get("ticker") or ""
     prior_block = _prior_memo_context(ticker)
-    memory_block = _company_memory_context(ticker)
+    memory_block = _company_memory_context(ticker, memo_dict.get("sector"))
 
     divergence_block = _divergence_block(memo_dict)
     payload = json.dumps(memo_dict, default=str)[: settings.max_agent_context_chars]
