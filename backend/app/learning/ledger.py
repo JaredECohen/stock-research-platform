@@ -679,19 +679,34 @@ def record_filing(
                     continue
                 if _item_exists(db, origin_kind, str(filing.accession_number), scope_type, scope_key):
                     continue
+                # Supersede by FILING date, not by processing order. EDGAR's
+                # `filings.recent` is newest-first and a batch is post-passed
+                # in that order, so the newest 10-Q routinely arrives before
+                # the older ones in the same batch. Only priors filed on or
+                # before this filing yield to it; if a newer one is already
+                # active, this older observation is born superseded (with
+                # its history), so the newest fact stays the live one.
+                newer: LearningItem | None = None
                 if supersede_key:
-                    for prior in db.execute(
+                    priors = db.execute(
                         select(LearningItem).where(LearningItem.supersede_key == supersede_key,
                                                    LearningItem.status == "active")
-                    ).scalars().all():
-                        transition(prior, "superseded", reason=f"superseded_by:{filing.accession_number}",
-                                   actor="system", now=now)
-                        result["superseded"] += 1
-                _new_item(
+                    ).scalars().all()
+                    newer = next((p for p in priors if _filed_key(p.source_date) > _filed_key(filed)), None)
+                    if newer is None:
+                        for prior in priors:
+                            transition(prior, "superseded", reason=f"superseded_by:{filing.accession_number}",
+                                       actor="system", now=now)
+                            result["superseded"] += 1
+                item = _new_item(
                     db, kind="observation", scope_type=scope_type, scope_key=scope_key, text=text,
                     origin_kind=origin_kind, origin_ref=str(filing.accession_number), origin_ticker=ticker,
                     source_date=filed, supersede_key=supersede_key, expires_at=expires, now=now,
                 )
+                if newer is not None:
+                    transition(item, "superseded", reason=f"superseded_by:{newer.origin_ref}",
+                               actor="system", now=now)
+                    result["superseded"] += 1
                 db.flush()
                 result["items"] += 1
                 if origin_kind == "filing_pattern":
@@ -710,13 +725,21 @@ def record_filing(
     return result
 
 
+def _filed_key(filed: date | None) -> date:
+    """Sort key for an observation's information date; undated is oldest."""
+    return filed or date.min
+
+
 def _cap_observations(db: Session, scope_type: str, scope_key: str, *, now: datetime) -> int:
+    """Keep the newest MAX_OBS_PER_SCOPE by filing date, not by when they
+    were processed (a newest-first batch would otherwise keep the oldest)."""
     rows = db.execute(
         select(LearningItem).where(
             LearningItem.kind == "observation", LearningItem.scope_type == scope_type,
             LearningItem.scope_key == scope_key, LearningItem.status == "active",
-        ).order_by(LearningItem.created_at.desc(), LearningItem.id.desc())
+        )
     ).scalars().all()
+    rows = sorted(rows, key=lambda i: (_filed_key(i.source_date), i.id), reverse=True)
     n = 0
     for old in rows[MAX_OBS_PER_SCOPE:]:
         n += transition(old, "superseded", reason="scope_cap", actor="system", now=now)

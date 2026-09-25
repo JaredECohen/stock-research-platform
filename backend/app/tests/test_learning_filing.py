@@ -99,6 +99,42 @@ def test_llm_delta_supersedes_prior_same_type(db, diff):
     assert diff.calls == 3                          # one existing diff call per filing, no new call
 
 
+def test_newest_first_batch_keeps_the_newest_observation_active(db, diff):
+    """EDGAR's `filings.recent` is newest-first and a batch is post-passed in
+    that order. Supersession follows the FILING date: the Aug 10-Q stays
+    live, the May one is stored already superseded (with its history)."""
+    with db() as s:
+        add_company(s, "FLGN")
+    aug = _filing(db, "FLGN", date(2026, 8, 1))
+    may = _filing(db, "FLGN", date(2026, 5, 1))
+    _filing(db, "FLGN", date(2026, 2, 1))
+    filing_memory.post_pass(aug, {"sector": "Technology"})
+    report = filing_memory.post_pass(may, {"sector": "Technology"})
+    assert report["memory_writes"]["ledger"] == {"status": "written", "error_type": None}
+    rows = {i.source_date: i for i in _items(db, origin_kind="filing_delta")}
+    assert [d for d, i in rows.items() if i.status == "active"] == [date(2026, 8, 1)]
+    older = rows[date(2026, 5, 1)]
+    assert older.status == "superseded"
+    assert [h["to"] for h in older.status_history] == ["active", "superseded"]
+    assert older.status_history[-1]["reason"] == f"superseded_by:{aug.accession_number}"
+    assert rows[date(2026, 8, 1)].status_history[-1]["to"] == "active"
+
+
+def test_scope_cap_keeps_the_newest_filings_not_the_last_processed(db, diff):
+    diff.reply = {"bullets": ["Backlog grew"], "sector_relevant": True,
+                  "sector_pattern": "Cloud buyers are pushing renewals into the next fiscal year."}
+    for n in reversed(range(12)):          # newest filing processed first
+        ticker = f"FR{n:02d}"
+        with db() as s:
+            add_company(s, ticker)
+            classify(s, ticker, state="mapped", group="4510")
+        _filing(db, ticker, date(2026, 1, 1))
+        filing_memory.post_pass(_filing(db, ticker, date(2026, 2, 1 + n)))
+    patterns = _items(db, origin_kind="filing_pattern")
+    active = sorted(i.source_date.day for i in patterns if i.status == "active")
+    assert active == list(range(3, 13))    # Feb 3..12 kept; Feb 1 and 2 capped
+
+
 def test_first_of_type_and_deterministic_diff_write_nothing(db, diff):
     first = _filing(db, "FLGB", date(2026, 2, 1))
     report = filing_memory.post_pass(first)
