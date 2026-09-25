@@ -351,3 +351,87 @@ def test_record_considered_keeps_only_shown_ids_on_the_inject_row(env):
     # No inject row for the run (off / shadow): nothing is written.
     assert context.record_considered("run-unknown", raw) == 0
     assert context.record_considered("run-considered", None) == 0
+
+
+def _shown(block: dict[str, Any]) -> list[str]:
+    return [i["ref"] for i in block["items"]]
+
+
+def _dropped(block: dict[str, Any], reason: str) -> list[str]:
+    return [d["ref"] for d in block["dropped"] if d["reason"] == reason]
+
+
+def test_count_caps_bind_before_the_character_budget(env):
+    """Owner decision 9's over-indexing guard is the per-kind caps, not only
+    the character budget. Short lines here, so every cap binds while the
+    budget never does: at most `max_untested` unproven hypotheses, at most
+    one weakened lesson, at most `max_observations` observations (newest
+    first), and at most `max_lessons` lessons in all."""
+    sessions, _ = env
+    untested = [_lesson(sessions, f"When u{i} rises, expect outperformance.", source_date=date(2026, 7, i + 1))
+                for i in range(5)]
+    weakened = [_lesson(sessions, f"When w{i} rises, expect underperformance.", verdicts=("failed", "failed"))
+                for i in range(3)]
+    obs = [_observation(sessions, f"10-Q filed 2026-10-{i + 1:02d}: item {i}.", filed=date(2026, 10, i + 1))
+           for i in range(4)]
+    u = [f"L-{i}" for i in reversed(untested)]      # newest information first
+    w = [f"L-{i}" for i in reversed(weakened)]      # same date: newest id first
+    o = [f"O-{i}" for i in reversed(obs)]
+
+    for consumer, budget in context.BUDGETS.items():
+        block = context.build_block(consumer, ticker=TICKER, sector="Technology", now=NOW)
+        n_u, n_o = budget.max_untested, budget.max_observations
+        assert _shown(block) == u[:n_u] + w[:1] + o[:n_o], consumer
+        assert _dropped(block, "cap_untested") == u[n_u:], consumer
+        assert _dropped(block, "cap_weakened") == w[1:], consumer
+        assert _dropped(block, "cap_kind") == o[n_o:], consumer
+        assert _dropped(block, "budget") == [], consumer   # the caps did the work
+    assert [b.max_untested for b in context.BUDGETS.values()] == [2, 2, 1, 1]
+    assert [b.max_observations for b in context.BUDGETS.values()] == [2, 1, 1, 2]
+
+    # Enough supported lessons to fill every consumer: exactly max_lessons
+    # are shown, and nothing weaker gets in behind them.
+    supported = [_lesson(sessions, f"When s{i} rises, expect outperformance.", verdicts=("held",) * 5)
+                 for i in range(5)]
+    s = [f"L-{i}" for i in reversed(supported)]
+    for consumer, budget in context.BUDGETS.items():
+        block = context.build_block(consumer, ticker=TICKER, sector="Technology", now=NOW)
+        lessons = [r for r in _shown(block) if r.startswith("L-")]
+        assert lessons == s[: budget.max_lessons], consumer
+        assert set(_dropped(block, "cap_kind")) >= set(s[budget.max_lessons:] + u + w[:1]), consumer
+        assert _dropped(block, "budget") == [], consumer
+    assert [b.max_lessons for b in context.BUDGETS.values()] == [4, 3, 2, 2]
+
+
+def test_consumer_scopes_decide_which_peers_a_prompt_sees(env):
+    """The critic reviews this company only; the industry-group analyst sees
+    its group and the company, never sector peers. Here scope is the only
+    thing that can exclude a line: every lesson is supported and all of
+    them fit every cap and budget."""
+    sessions, _ = env
+    sector = ledger.sector_key("Technology")
+    assert sector
+    group = _lesson(sessions, "When group backlog grows, expect peers to outperform.",
+                    scope_type="industry_group", scope_key=GROUP, verdicts=("held",) * 5)
+    sect = _lesson(sessions, "When rates fall, expect sector peers to outperform.",
+                   scope_type="sector", scope_key=sector, verdicts=("held",) * 5)
+    own = _observation(sessions, "10-Q filed 2026-10-30: bundles lifted retention.")
+    peer = _observation(sessions, "Sector filing 2026-10-01: pricing firmed.", filed=date(2026, 10, 1),
+                        scope_type="sector", scope_key=sector)
+    expected = {
+        "pm_memo": [f"L-{group}", f"L-{sect}", f"O-{own}", f"O-{peer}"],
+        "sector": [f"L-{group}", f"L-{sect}", f"O-{own}"],
+        "industry_group": [f"L-{group}", f"O-{own}"],
+        "critic": [f"O-{own}"],
+    }
+    for consumer, refs in expected.items():
+        block = context.build_block(consumer, ticker=TICKER, sector="Technology", now=NOW)
+        assert _shown(block) == refs, consumer
+        assert _dropped(block, "budget") == [], consumer
+        if consumer in ("industry_group", "critic"):
+            assert "sector peers" not in block["text"], consumer
+        if consumer == "critic":
+            assert "peers" not in block["text"]
+            assert block["dropped"] == []      # never selected at all, not capped out
+    assert "(sector peers; supported 5 of 5 later outcomes)" in context.build_block(
+        "sector", ticker=TICKER, sector="Technology", now=NOW)["text"]
