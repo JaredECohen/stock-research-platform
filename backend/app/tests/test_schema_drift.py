@@ -177,6 +177,54 @@ def test_feat_002_added_columns_are_repaired_on_a_live_table(table, column, inde
         assert column in indexed
 
 
+# LLM attribution (slice B7-M1): the per-attempt columns added to the live
+# `llm_call_logs` table on every deployment. (table, column, index or None).
+LLM_ATTRIBUTION_ADDED_COLUMNS = (
+    ("llm_call_logs", "call_id", "ix_llm_call_logs_call_id"),
+    ("llm_call_logs", "attempt", None),
+    ("llm_call_logs", "action", "ix_llm_call_logs_action"),
+    ("llm_call_logs", "role", None),
+    ("llm_call_logs", "origin", None),
+    ("llm_call_logs", "job_id", None),
+    ("llm_call_logs", "process_role", None),
+    ("llm_call_logs", "requested_provider", None),
+    ("llm_call_logs", "requested_model", None),
+    ("llm_call_logs", "served_model", None),
+    ("llm_call_logs", "model_resolution", None),
+    ("llm_call_logs", "failover_reason", None),
+    ("llm_call_logs", "effort", None),
+    ("llm_call_logs", "max_tokens", None),
+    ("llm_call_logs", "reasoning_tokens", None),
+    ("llm_call_logs", "finish_reason", None),
+    ("llm_call_logs", "error_type", None),
+    ("llm_call_logs", "cost_usd", None),
+    ("llm_call_logs", "grounded", None),
+)
+
+
+@pytest.mark.parametrize("table,column,index", LLM_ATTRIBUTION_ADDED_COLUMNS)
+def test_llm_attribution_columns_are_repaired_on_a_live_table(table, column, index):
+    """Production's `llm_call_logs` predates these columns; the first boot
+    of each service must add them (and the two indexes), nullable, via
+    `reconcile_missing_columns`, not a migration nobody runs."""
+    from app.models import LLMCallLog
+    col = LLMCallLog.__table__.columns[column]
+    assert col.nullable and col.server_default is None, column
+    init_db()
+    _drop_column(table, column, index)
+    assert column not in _columns(table), "setup failed"
+
+    added = reconcile_missing_columns()
+    assert f"{table}.{column}" in added
+    assert column in _columns(table)
+    if index:
+        indexed = {
+            col for idx in sa_inspect(engine).get_indexes(table)
+            for col in (idx.get("column_names") or [])
+        }
+        assert column in indexed
+
+
 def test_feat_002_columns_are_all_nullable_or_defaulted():
     """Nothing added to an existing table may be NOT NULL without a
     default — that is the one shape `reconcile_missing_columns` refuses."""

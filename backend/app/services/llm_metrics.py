@@ -148,23 +148,52 @@ def estimate_cost_usd(provider: str, model: str,
     return round(cost_in + cost_out, 6)
 
 
+def not_skipped_filter():
+    """SQL predicate for rows that are NOT skip rows.
+
+    A skipped attempt (open breaker, no client, grounding cap) made no
+    provider request: it has zero tokens and costs nothing, but counting it
+    as a call or a failure would inflate every existing aggregate
+    (attribution critique #14). Legacy rows have NULL error_type.
+    """
+    from sqlalchemy import or_
+    return or_(LLMCallLog.error_type.is_(None), ~LLMCallLog.error_type.like("skipped:%"))
+
+
+def _row_cost(r: Any) -> float:
+    return estimate_cost_usd(
+        r.provider, r.model, r.tokens_in, r.tokens_out,
+        cache_read_tokens=r.cache_read_tokens,
+        cache_write_tokens=r.cache_write_tokens,
+    )
+
+
 def _ensure_table(db: Session) -> None:
     """Mirror the cache.snapshots pattern — direct callers don't need init_db()."""
     LLMCallLog.__table__.create(bind=db.get_bind(), checkfirst=True)
 
 
-def cost_per_run(run_id: str, *, db: Session | None = None) -> dict[str, Any]:
-    """Per-call detail + totals for one memo run."""
+def cost_per_run(run_id: str, *, agents: Any = None,
+                 db: Session | None = None) -> dict[str, Any]:
+    """Per-call detail + totals for one memo run.
+
+    `agents` (an iterable of agent names) restricts the rows, e.g. the
+    debate budget reads only the Bull/Bear Advocate spend of the run.
+    Skip rows (no provider request) are excluded; see `not_skipped_filter`.
+    """
     own = db is None
     if own:
         db = SessionLocal()
     try:
         _ensure_table(db)
-        rows = list(db.execute(
+        stmt = (
             select(LLMCallLog)
-            .where(LLMCallLog.run_id == run_id)
+            .where(LLMCallLog.run_id == run_id, not_skipped_filter())
             .order_by(LLMCallLog.generated_at.asc())
-        ).scalars().all())
+        )
+        if agents is not None:
+            stmt = stmt.where(LLMCallLog.agent_name.in_(sorted(set(agents))))
+        rows = list(db.execute(stmt).scalars().all())
         calls = [{
             "agent_name": r.agent_name,
             "provider": r.provider,
@@ -173,11 +202,7 @@ def cost_per_run(run_id: str, *, db: Session | None = None) -> dict[str, Any]:
             "tokens_out": r.tokens_out,
             "cache_read_tokens": int(r.cache_read_tokens or 0),
             "cache_write_tokens": int(r.cache_write_tokens or 0),
-            "cost_usd": estimate_cost_usd(
-                r.provider, r.model, r.tokens_in, r.tokens_out,
-                cache_read_tokens=r.cache_read_tokens,
-                cache_write_tokens=r.cache_write_tokens,
-            ),
+            "cost_usd": _row_cost(r),
             "duration_ms": r.duration_ms,
             "success": r.success,
             "generated_at": r.generated_at.isoformat() if r.generated_at else None,
@@ -208,7 +233,7 @@ def cost_per_agent(*, since: datetime | None = None,
         db = SessionLocal()
     try:
         _ensure_table(db)
-        stmt = select(LLMCallLog)
+        stmt = select(LLMCallLog).where(not_skipped_filter())
         if since:
             stmt = stmt.where(LLMCallLog.generated_at >= since)
         rows = list(db.execute(stmt).scalars().all())
@@ -225,11 +250,7 @@ def cost_per_agent(*, since: datetime | None = None,
             a["cache_read_tokens"] += int(r.cache_read_tokens or 0)
             a["cache_write_tokens"] += int(r.cache_write_tokens or 0)
             a["duration_ms_total"] += r.duration_ms
-            a["cost_usd"] += estimate_cost_usd(
-                r.provider, r.model, r.tokens_in, r.tokens_out,
-                cache_read_tokens=r.cache_read_tokens,
-                cache_write_tokens=r.cache_write_tokens,
-            )
+            a["cost_usd"] += _row_cost(r)
             if not r.success:
                 a["n_failures"] += 1
         for v in agg.values():
@@ -248,7 +269,7 @@ def cost_per_provider(*, since: datetime | None = None,
         db = SessionLocal()
     try:
         _ensure_table(db)
-        stmt = select(LLMCallLog)
+        stmt = select(LLMCallLog).where(not_skipped_filter())
         if since:
             stmt = stmt.where(LLMCallLog.generated_at >= since)
         rows = list(db.execute(stmt).scalars().all())
@@ -264,11 +285,7 @@ def cost_per_provider(*, since: datetime | None = None,
             a["tokens_out"] += r.tokens_out
             a["cache_read_tokens"] += int(r.cache_read_tokens or 0)
             a["cache_write_tokens"] += int(r.cache_write_tokens or 0)
-            a["cost_usd"] += estimate_cost_usd(
-                r.provider, r.model, r.tokens_in, r.tokens_out,
-                cache_read_tokens=r.cache_read_tokens,
-                cache_write_tokens=r.cache_write_tokens,
-            )
+            a["cost_usd"] += _row_cost(r)
             if not r.success:
                 a["n_failures"] += 1
         for v in agg.values():
@@ -287,7 +304,8 @@ def slowest_calls(*, since: datetime | None = None, n: int = 20,
         db = SessionLocal()
     try:
         _ensure_table(db)
-        stmt = select(LLMCallLog).order_by(LLMCallLog.duration_ms.desc()).limit(n)
+        stmt = (select(LLMCallLog).where(not_skipped_filter())
+                .order_by(LLMCallLog.duration_ms.desc()).limit(n))
         if since:
             stmt = stmt.where(LLMCallLog.generated_at >= since)
         rows = list(db.execute(stmt).scalars().all())
@@ -301,6 +319,29 @@ def slowest_calls(*, since: datetime | None = None, n: int = 20,
             "run_id": r.run_id,
             "generated_at": r.generated_at.isoformat() if r.generated_at else None,
         } for r in rows]
+    finally:
+        if own:
+            db.close()
+
+
+def skipped_attempts(*, since: datetime | None = None,
+                     db: Session | None = None) -> dict[str, int]:
+    """Skip rows by reason (`skipped:breaker_open` -> n), which every other
+    aggregate here excludes. A skip made no provider request, so it has no
+    cost, but a breaker that keeps skipping is exactly what a reader of the
+    cost report needs to see."""
+    from sqlalchemy import func
+    own = db is None
+    if own:
+        db = SessionLocal()
+    try:
+        _ensure_table(db)
+        stmt = (select(LLMCallLog.error_type, func.count())
+                .where(LLMCallLog.error_type.like("skipped:%"))
+                .group_by(LLMCallLog.error_type))
+        if since:
+            stmt = stmt.where(LLMCallLog.generated_at >= since)
+        return {str(k): int(n) for k, n in db.execute(stmt).all()}
     finally:
         if own:
             db.close()

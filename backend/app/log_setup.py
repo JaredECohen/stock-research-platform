@@ -32,7 +32,14 @@ DEFAULT_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 # Third-party loggers that emit one INFO line per network call. Their
 # volume is noise; their content is a credential leak.
-NOISY_LOGGERS: tuple[str, ...] = ("httpx", "httpcore")
+#
+# `httpx2` / `httpcore2` are the transport the pinned openai SDK (3.8.0)
+# uses; the names are the ones `httpx2/_client.py` and `httpcore2/*` pass to
+# `logging.getLogger` in the pinned 2.12.0 source. Unsilenced, they logged
+# one `POST https://api.openai.com/...` line per call — the only per-call
+# trace production had before the `app.llm.calls` line replaced it
+# (attribution design gap G17, critique #20).
+NOISY_LOGGERS: tuple[str, ...] = ("httpx", "httpcore", "httpx2", "httpcore2")
 
 # Matches a secret carried in a URL query string. The leading `?` or `&` is
 # required on purpose: without it, `key=` would also rewrite ordinary prose

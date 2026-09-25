@@ -58,6 +58,7 @@ from ..database import SessionLocal
 from ..models import LLMCallLog
 from .llm_metrics import (
     estimate_cost_usd,
+    not_skipped_filter,
     price_source,
 )
 
@@ -132,7 +133,9 @@ OPERATIONS: tuple[Operation, ...] = (
             "user_id and feature, and a turn issues classify_intent plus at least one "
             "answer call. The figure below is therefore PER CALL, and a turn costs at "
             "least that much — it is a floor, not the per-turn cost. Logging a turn id "
-            "in llm_call_context is what would close the gap"
+            "in llm_call_context is what would close the gap: rows that carry one (a "
+            "run_id) are already grouped into one unit per turn, and the attempts of one "
+            "failed-over call (a shared call_id) into one unit per call"
         ),
         plan_feature="pm_chat",
         understates_unit=True,
@@ -193,6 +196,8 @@ class _Unit:
     cost_usd: float = 0.0
     n_calls: int = 0
     problems: set[str] = field(default_factory=set)
+    # Call-grouped units only: did any attempt deliver?
+    succeeded: bool = False
 
 
 # Why a unit is unusable. Keys are stable (they appear in the output), values
@@ -247,6 +252,10 @@ def _scan(db: Session, *, since: datetime, until: datetime, max_rows: int,
         LLMCallLog.feature.in_(wanted),
         LLMCallLog.generated_at >= since,
         LLMCallLog.generated_at < until,
+        # A skip row (open breaker, no client) made no provider request;
+        # counted as a call it would inflate `failed_calls` and split units
+        # (attribution critique #14).
+        not_skipped_filter(),
     )
     total = int(db.execute(
         select(func.count()).select_from(LLMCallLog).where(*where)
@@ -257,6 +266,7 @@ def _scan(db: Session, *, since: datetime, until: datetime, max_rows: int,
             LLMCallLog.tokens_in, LLMCallLog.tokens_out, LLMCallLog.success,
             LLMCallLog.generated_at,
             LLMCallLog.cache_read_tokens, LLMCallLog.cache_write_tokens,
+            LLMCallLog.call_id,
         )
         .where(*where)
         .order_by(LLMCallLog.generated_at.desc())
@@ -379,16 +389,23 @@ def _units_for(op: Operation, rows: Sequence[Any],
                 continue
             key = r.run_id
         else:
-            if not r.success:
-                # One call is one delivered unit here, and a failed call
-                # delivered nothing. Counted separately so the failure rate
-                # stays visible.
-                failed_calls += 1
-                continue
-            key = f"{op.key}:{i}"
+            # One unit per logical CALL, not per row: a failover writes two
+            # rows (attempts) sharing a call_id, and a PM chat turn tagged
+            # with a `chat:<hex>` run_id is one turn of several calls
+            # (attribution critique #14). Legacy rows carry neither and stay
+            # one unit each, exactly as before.
+            call_id = getattr(r, "call_id", None)
+            if op.key == "pm_chat" and r.run_id:
+                key = f"run:{r.run_id}"
+            elif call_id:
+                key = f"call:{call_id}"
+            else:
+                key = f"{op.key}:{i}"
         n_calls += 1
         unit = units.setdefault(key, _Unit())
         unit.n_calls += 1
+        if r.success:
+            unit.succeeded = True
         if op.basis == BASIS_RUN_ID and key in partial_runs:
             unit.problems.add("partial_unit")
         unit.cost_usd += estimate_cost_usd(
@@ -401,6 +418,14 @@ def _units_for(op: Operation, rows: Sequence[Any],
             unit.problems.add("missing_token_counts")
         if op.basis == BASIS_RUN_ID and not r.success:
             failed_calls += 1
+
+    if op.basis != BASIS_RUN_ID:
+        # One call is one delivered unit here, and a call none of whose
+        # attempts succeeded delivered nothing. Counted separately so the
+        # failure rate stays visible.
+        for key in [k for k, u in units.items() if not u.succeeded]:
+            failed_calls += 1
+            n_calls -= units.pop(key).n_calls
 
     excluded: dict[str, int] = {}
     n_excluded = 0

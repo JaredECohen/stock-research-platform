@@ -116,6 +116,24 @@ class Settings(BaseSettings):
     # bytes the model sees are identical either way; the flag exists so a
     # bad cache interaction can be switched off on Render without a deploy.
     llm_prompt_caching_enabled: bool = True
+    # LLM attribution (owner, 2026-09-25). The guard on every LLM entry
+    # point: strict raises on a call that names no registered action, warn
+    # logs one WARNING per call site, off records nothing. APP_ENV=production
+    # always runs warn (a strict raise inside the memo pipeline is swallowed
+    # by safe_call and would silently turn every memo into stub findings;
+    # attribution critique #10).
+    llm_attribution_mode: str = "warn"
+    # Kill switch for the per-call `app.llm.calls` INFO lines on success
+    # only. Error/skip/failover/breaker WARNINGs and the DB rows stay.
+    llm_call_log_enabled: bool = True
+
+    @field_validator("llm_attribution_mode")
+    @classmethod
+    def _attribution_mode_known(cls, v: str) -> str:
+        mode = str(v).strip().lower()
+        if mode not in ("strict", "warn", "off"):
+            raise ValueError("llm_attribution_mode must be 'strict', 'warn' or 'off'")
+        return mode
 
     # Database
     database_url: str = Field(default="sqlite:///./marketmosaic.db", repr=False)
