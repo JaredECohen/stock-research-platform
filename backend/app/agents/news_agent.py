@@ -1,17 +1,27 @@
-"""News agent backed by Gemini 2.5 Flash + Google Search grounding.
+"""News agent backed by a Search-grounded Gemini model (`GEMINI_NEWS_MODEL`).
 
 The news agent produces `NewsAlert` records from open-web sources, classifies
 severity (advisory/material/breaking), and drops them into the hot cache so
 sector + PM agents can react. With no Gemini API key, the agent falls back
 to whatever the existing `news_service` returns and labels everything
 `advisory` so the rest of the pipeline still has signal.
+
+Gemini items are model-written JSON, not publisher text: the title, url and
+date are whatever the model typed after reading its search results. So the
+Gemini branch is governed more strictly than the provider feed (N34, news
+trace 2026-09-25): an item with no URL is dropped because the domain
+allow-list cannot judge it, the allow-list runs BEFORE the provider-fallback
+decision so a relevant-but-blocked answer falls back instead of producing
+zero alerts, and a date the parser cannot read is kept for display but
+flagged `date_unknown` so the patch path never treats it as fresh.
 """
 from __future__ import annotations
 
 import json
 import logging
 import re
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, time, timedelta
+from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -165,20 +175,217 @@ def _filter_grounded_sources(items: list[dict[str, Any]]) -> list[dict[str, Any]
     return out
 
 
+# How far back the grounded Gemini prompt asks for news (assumption A10 of
+# the 2026-09-25 plan). It was 60 days: with "the 5 most material items" that
+# turned news_hot into a rolling greatest-hits list, and every 2-hourly pass
+# re-surfaced weeks-old "material" stories into the patch path.
+GEMINI_WINDOW_DAYS = 7
+
+# A published date further in the future than this is not a date anyone
+# published; it is a model typo or a timezone-free guess. One day of slack
+# covers provider timestamps written in a zone ahead of UTC.
+_FUTURE_SLACK = timedelta(days=1)
+
+# Provider formats seen in the feeds, plus what a model plausibly types.
+# Alpha Vantage's `time_published` is the compact `20260921T214039`.
+_DATETIME_FORMATS = ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M")
+_DATE_FORMATS = ("%Y%m%d", "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y")
+
+
+def _parse_published(value: Any, now: datetime | None = None) -> tuple[datetime, bool] | None:
+    """(naive-UTC instant, has_time) for a published-date value, or None.
+
+    Aware values are converted to UTC; naive ones are taken as UTC (the
+    persisted convention). A date with no time keeps `has_time=False` so
+    callers can tell "that day" from "midnight that day". `now` (default:
+    the wall clock) is what "in the future" is measured against.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        dt, has_time = value, True
+    elif isinstance(value, date):
+        dt, has_time = datetime.combine(value, time.min), False
+    else:
+        s = str(value).strip()
+        if not s:
+            return None
+        parsed: datetime | None = None
+        has_time = True
+        try:
+            parsed = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            has_time = len(s) > 10
+        except ValueError:
+            parsed = None
+        if parsed is None:
+            for fmt in _DATETIME_FORMATS:
+                try:
+                    parsed = datetime.strptime(s, fmt).replace(tzinfo=UTC)
+                    break
+                except ValueError:
+                    continue
+        if parsed is None:
+            for fmt in _DATE_FORMATS:
+                try:
+                    parsed = datetime.strptime(s, fmt).replace(tzinfo=UTC)
+                    has_time = False
+                    break
+                except ValueError:
+                    continue
+        if parsed is None:
+            try:
+                parsed = parsedate_to_datetime(s)  # RFC 2822, as RSS feeds write it
+            except (TypeError, ValueError, IndexError):
+                parsed = None
+        if parsed is None:
+            return None
+        dt = parsed
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
+    if dt - (now or datetime.utcnow()) > _FUTURE_SLACK:
+        return None
+    return dt, has_time
+
+
+def parse_published_at(value: Any, *, now: datetime | None = None) -> datetime | None:
+    """The LATEST naive-UTC instant a published-date value can mean, or None.
+
+    A date-only value maps to the end of that day, so an age gate never
+    rejects a same-day story because its time was not given. None means the
+    value cannot be read as a date (or lies in the future): callers decide
+    what an undated item is worth, and for model-written items the answer
+    is "not fresh".
+    """
+    parsed = _parse_published(value, now)
+    if parsed is None:
+        return None
+    dt, has_time = parsed
+    return dt if has_time else datetime.combine(dt.date(), time.max)
+
+
+def _normalized_published_at(value: Any) -> str | None:
+    """ISO form of a parseable published date (`...Z` with a time, a bare
+    date without), else the original text, else None. Normalising lets every
+    reader (`industry_snapshot`, the NewsAlert panel) parse what the feeds
+    wrote in their own formats; an unreadable value is kept verbatim so the
+    user still sees what the source said."""
+    parsed = _parse_published(value)
+    if parsed is None:
+        return str(value) if value not in (None, "") else None
+    dt, has_time = parsed
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ") if has_time else dt.date().isoformat()
+
+
 def _since_window(ticker: str) -> date:
-    """Time-window selection: prefer 'since last filing'; else last 60 days."""
-    cold = cache_get(ticker, "company_cold")
-    if cold and isinstance(cold.payload, dict):
-        # Try to read the last filing date from the cold payload's filings list.
-        # The cold payload doesn't include filings directly; the filings_service
-        # holds them, so we only need the date the cold snapshot itself was
-        # generated as a worst-case lower bound.
+    """Start of the window the Gemini prompt asks about (`GEMINI_WINDOW_DAYS`)."""
+    return date.today() - timedelta(days=GEMINI_WINDOW_DAYS)
+
+
+def _gemini_skip_reason() -> str | None:
+    """Why a grounded Gemini call made now would be skipped without a
+    response, or None. Read BEFORE the call, so a failure the call itself
+    causes (the third one trips the breaker) is not counted as a skip.
+
+    Both short-circuits return None exactly like an empty answer, so
+    without this the news_loop note cannot tell "Gemini was never asked"
+    from "Gemini had nothing" (news critique: the shared breaker silently
+    turns Gemini news off for 120 s). `grounding_cap_reached` is the llm
+    core's grounded-call daily cap; until it exists the cap is not counted.
+    """
+    try:
+        breaker = getattr(llm, "breaker_open", None) or llm._breaker_open
+        if breaker("gemini"):
+            return "breaker_open"
+    except Exception:  # pragma: no cover — diagnostics must not break news
         pass
-    return date.today() - timedelta(days=60)
+    cap = getattr(llm, "grounding_cap_reached", None)
+    if callable(cap):
+        try:
+            if cap():
+                return "grounding_cap"
+        except Exception:  # pragma: no cover
+            pass
+    return None
 
 
-def run(ticker: str, *, force_refresh: bool = False) -> list[NewsAlert]:
-    """Fetch + classify news, cache as `news_hot`. Returns NewsAlert list."""
+def _gemini_items(
+    ticker: str, name: str, name_tokens: list[str], report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Ask the grounded Gemini model for news; return only the items that
+    pass relevance, carry a URL and pass the domain allow-list.
+
+    An empty return means "use the provider feed". `report` records a
+    short-circuited call for the news_loop note.
+    """
+    company_clause = f"{name} ({ticker})" if name else ticker
+    prompt = (
+        f"Find the 5 most material news items PRIMARILY about {company_clause} "
+        f"since {_since_window(ticker).isoformat()}. Each item must be a story "
+        f"whose main subject is {company_clause} — exclude sector roundups, "
+        f"peer-comparison articles, dividend lists, or pieces where {ticker} "
+        f"is only mentioned in passing. Keep each summary under 200 characters. "
+        f"Give published_at as an ISO 8601 date. "
+        f"Return a JSON object "
+        f'{{"items": [{{title, summary, url, published_at}}, ...]}}.'
+    )
+    skip = _gemini_skip_reason()
+    # Grounded responses include citations + thinking-token overhead, so
+    # the budget needs to comfortably fit 5 items + grounding metadata.
+    # 900 tokens truncates mid-JSON on 2.5-flash with `google_search`.
+    out = llm.gemini_chat_json(
+        prompt,
+        model=settings.gemini_news_model,
+        enable_search_grounding=True,
+        max_tokens=2500,
+    )
+    if out is None and skip:
+        report["gemini_skipped"] = skip
+    items: list[Any] = []
+    if isinstance(out, dict) and isinstance(out.get("items"), list):
+        items = list(out["items"])
+    elif isinstance(out, list):
+        items = list(out)
+    items = [it for it in items if isinstance(it, dict)]
+    if not items:
+        return []
+    relevant = [it for it in items if _is_about_company(it, ticker, name_tokens)]
+    if not relevant:
+        log.info(
+            "news_agent: all %d Gemini items for %s failed relevance filter; "
+            "falling back to news_service", len(items), ticker,
+        )
+        return []
+    # `_filter_grounded_sources` passes URL-less items through (a provider
+    # row without a link is still publisher text). A model-written item
+    # without a URL has no source anyone can check and would bypass the
+    # allow-list entirely, so the Gemini branch drops it first.
+    with_url = [
+        it for it in relevant if _domain_of(str(it.get("url") or it.get("source_url") or ""))
+    ]
+    # The allow-list runs BEFORE the fallback decision: relevant items that
+    # are all unsourced or off-list fall back to the provider feed instead
+    # of leaving the ticker with zero alerts.
+    governed = _filter_grounded_sources(with_url)
+    if not governed:
+        log.info(
+            "news_agent: %d relevant Gemini items for %s had no URL or a disallowed "
+            "domain; falling back to news_service", len(relevant), ticker,
+        )
+    return governed
+
+
+def run(
+    ticker: str, *, force_refresh: bool = False, report: dict[str, Any] | None = None,
+) -> list[NewsAlert]:
+    """Fetch + classify news, cache as `news_hot`. Returns NewsAlert list.
+
+    `report`, when given, is filled with where the alerts came from
+    (`origin`: gemini / provider / empty / cache) and, when the Gemini call
+    was short-circuited, why (`gemini_skipped`: breaker_open /
+    grounding_cap). The news_loop note counts these; the return value is
+    unchanged, so every other caller is unaffected.
+    """
+    report = report if report is not None else {}
     cache_subject = f"news_hot:{ticker}"
     today_key = f"news_hot:{ticker}:{date.today().isoformat()}"
 
@@ -187,9 +394,12 @@ def run(ticker: str, *, force_refresh: bool = False) -> list[NewsAlert]:
         if cached and isinstance(cached.payload, dict):
             payload = cached.payload.get("alerts") or []
             try:
-                return [NewsAlert.model_validate(a) for a in payload]
+                cached_alerts = [NewsAlert.model_validate(a) for a in payload]
             except Exception:
-                pass
+                cached_alerts = None
+            if cached_alerts is not None:
+                report["origin"] = "cache"
+                return cached_alerts
 
     # Try Gemini-grounded path first; fall back to deterministic news_service.
     items: list[dict[str, Any]] = []
@@ -197,41 +407,8 @@ def run(ticker: str, *, force_refresh: bool = False) -> list[NewsAlert]:
     name_tokens = _name_tokens(name)
     used_gemini = False
     if settings.has_gemini:
-        company_clause = f"{name} ({ticker})" if name else ticker
-        prompt = (
-            f"Find the 5 most material news items PRIMARILY about {company_clause} "
-            f"since {_since_window(ticker).isoformat()}. Each item must be a story "
-            f"whose main subject is {company_clause} — exclude sector roundups, "
-            f"peer-comparison articles, dividend lists, or pieces where {ticker} "
-            f"is only mentioned in passing. Keep each summary under 200 characters. "
-            f"Return a JSON object "
-            f'{{"items": [{{title, summary, url, published_at}}, ...]}}.'
-        )
-        # Grounded responses include citations + thinking-token overhead, so
-        # the budget needs to comfortably fit 5 items + grounding metadata.
-        # 900 tokens truncates mid-JSON on 2.5-flash with `google_search`.
-        out = llm.gemini_chat_json(
-            prompt,
-            model=settings.gemini_news_model,
-            enable_search_grounding=True,
-            max_tokens=2500,
-        )
-        if isinstance(out, dict) and isinstance(out.get("items"), list):
-            items = list(out["items"])
-        elif isinstance(out, list):
-            items = list(out)
-        if items:
-            used_gemini = True
-            relevant = [it for it in items if _is_about_company(it, ticker, name_tokens)]
-            if not relevant:
-                log.info(
-                    "news_agent: all %d Gemini items for %s failed relevance filter; "
-                    "falling back to news_service", len(items), ticker,
-                )
-                items = []
-                used_gemini = False
-            else:
-                items = relevant
+        items = _gemini_items(ticker, name, name_tokens, report)
+        used_gemini = bool(items)
 
     if not items:
         # Fallback: existing news_service. Re-apply the relevance filter — the
@@ -239,15 +416,15 @@ def run(ticker: str, *, force_refresh: bool = False) -> list[NewsAlert]:
         # return sector or peer items keyed off the requested ticker.
         raw = list(news_service.get_news(ticker) or [])
         items = [it for it in raw if _is_about_company(it, ticker, name_tokens)] if name_tokens else raw
-
-    items = _filter_grounded_sources(items)
+        items = _filter_grounded_sources(items)
 
     alerts: list[NewsAlert] = []
+    undated: list[bool] = []
     for n in items[:10]:
         title = n.get("title") or n.get("headline") or ""
         summary = n.get("summary") or n.get("description") or ""
         url = n.get("url") or n.get("source_url") or ""
-        published_at = n.get("published_at") or n.get("date")
+        raw_published = n.get("published_at") or n.get("date")
         sev = _classify_severity(title, summary)
         alerts.append(NewsAlert(
             ticker=ticker,
@@ -255,12 +432,23 @@ def run(ticker: str, *, force_refresh: bool = False) -> list[NewsAlert]:
             summary=summary[:600],
             url=url,
             severity=sev,
-            published_at=str(published_at) if published_at else None,
+            published_at=_normalized_published_at(raw_published),
             source="gemini" if used_gemini else "news_service",
         ))
+        # L8: a model-written date the parser cannot read stays visible (it
+        # is what the model claimed) but is flagged, so no reader takes it
+        # for a fresh story. Provider rows keep their existing leniency.
+        undated.append(used_gemini and parse_published_at(raw_published) is None)
 
-    # Persist to hot cache (today's bucket + canonical bucket)
-    payload = {"alerts": [a.model_dump() for a in alerts], "ticker": ticker}
+    report["origin"] = ("gemini" if used_gemini else "provider") if alerts else "empty"
+
+    # Persist to hot cache (today's bucket + canonical bucket). `date_unknown`
+    # is written only where true, so dated payloads keep their exact shape.
+    alert_dicts = [
+        {**a.model_dump(), "date_unknown": True} if flag else a.model_dump()
+        for a, flag in zip(alerts, undated)
+    ]
+    payload = {"alerts": alert_dicts, "ticker": ticker}
     cache_put(today_key, "news_hot", payload=payload,
               sources_used=[f"news:{a.url or a.title}" for a in alerts],
               generated_by="news_agent",
