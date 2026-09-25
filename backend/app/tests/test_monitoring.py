@@ -77,3 +77,80 @@ def test_edgar_poller_invalidates_company_cold_on_new_accession():
         assert cache_get("NVDA", "company_cold") is None  # invalidated
         # Wave 5B: orchestrator's filing handler was called for the new accession.
         fe.assert_called_once_with("NVDA")
+
+
+# ---------------------------------------------------------------------------
+# N34 — per-alert isolation and a note that says where news came from
+# ---------------------------------------------------------------------------
+
+def _quiet_loop(monkeypatch, *, throttled=()):
+    from datetime import datetime
+    notes: list[dict] = []
+    monkeypatch.setattr(news_loop, "record_run", lambda *a, **k: notes.append(k))
+    monkeypatch.setattr(
+        news_loop, "_last_run_for", lambda t: datetime.utcnow() if t in throttled else None)
+    monkeypatch.setattr(news_loop, "_record_run_for", lambda t: None)
+    monkeypatch.setattr(news_loop, "invalidate", lambda *a, **k: None)
+    return notes
+
+
+def test_first_alert_raises_second_still_assessed(monkeypatch):
+    from types import SimpleNamespace
+
+    import app.services.update_orchestrator as uo
+    notes = _quiet_loop(monkeypatch)
+    alerts = [SimpleNamespace(severity="material", title="first", source="news_service"),
+              SimpleNamespace(severity="breaking", title="second", source="news_service")]
+    monkeypatch.setattr(news_loop.news_agent, "run", lambda t, **k: alerts)
+    seen: list[str] = []
+
+    def on_news_alert(ticker, alert):
+        seen.append(alert.title)
+        if alert.title == "first":
+            raise ValueError("unreadable prior memo")
+        return {"patched": False, "reason": "not_material"}
+    monkeypatch.setattr(uo, "on_news_alert", on_news_alert)
+
+    news_loop.run_once(["NVDA"])
+
+    assert seen == ["first", "second"]
+    (rec,) = notes
+    assert rec["success"] is False
+    assert "1 updates failed: NVDA" in rec["note"]
+
+
+def test_news_loop_note_counts_sources(monkeypatch):
+    from types import SimpleNamespace
+    notes = _quiet_loop(monkeypatch, throttled=("THR",))
+
+    def run(ticker, *, force_refresh=False, report=None):
+        report = report if report is not None else {}
+        if ticker == "GEM":
+            report["origin"] = "gemini"
+            return [SimpleNamespace(severity="advisory", source="gemini")]
+        if ticker == "PROV":
+            report["origin"] = "provider"
+            return [SimpleNamespace(severity="advisory", source="news_service")]
+        if ticker == "BRK":  # breaker open: Gemini never asked, feed empty too
+            report.update(origin="empty", gemini_skipped="breaker_open")
+            return []
+        report.update(origin="provider", gemini_skipped="grounding_cap")
+        return [SimpleNamespace(severity="advisory", source="news_service")]
+    monkeypatch.setattr(news_loop.news_agent, "run", run)
+
+    news_loop.run_once(["GEM", "PROV", "THR", "BRK", "CAP"])
+
+    (rec,) = notes
+    assert rec["note"].endswith(
+        "sources gemini=1 provider=2 empty=1 throttled=1 gemini_breaker=1 grounding_cap=1")
+
+
+def test_news_loop_note_counts_sources_without_a_report(monkeypatch):
+    # A news_agent.run that fills no report (a stand-in) is classified from
+    # the alerts it returned.
+    from types import SimpleNamespace
+    notes = _quiet_loop(monkeypatch)
+    by_ticker = {"A": [SimpleNamespace(severity="advisory", source="gemini")], "B": []}
+    monkeypatch.setattr(news_loop.news_agent, "run", lambda t, **k: by_ticker[t])
+    news_loop.run_once(["A", "B"])
+    assert "sources gemini=1 provider=0 empty=1 throttled=0" in notes[0]["note"]

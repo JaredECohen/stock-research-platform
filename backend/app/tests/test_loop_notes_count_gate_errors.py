@@ -44,7 +44,10 @@ def test_news_loop_counts_failed_assessments(monkeypatch, caplog):
     (args, kwargs), = calls
     assert args == ("news_loop",)
     assert kwargs["success"] is False
-    assert "1 material events; 1 assessments failed: NVDA" == kwargs["note"]
+    assert kwargs["note"] == (
+        "1 material events; 1 assessments failed: NVDA; "
+        "sources gemini=0 provider=1 empty=0 throttled=0 gemini_breaker=0 grounding_cap=0"
+    )
     assert kwargs["note"] in caplog.text
 
 
@@ -64,7 +67,10 @@ def test_news_loop_is_healthy_when_assessments_succeed(monkeypatch):
 
     (_, kwargs), = calls
     assert kwargs["success"] is True
-    assert kwargs["note"] == "1 material events"
+    assert kwargs["note"] == (
+        "1 material events; "
+        "sources gemini=0 provider=1 empty=0 throttled=0 gemini_breaker=0 grounding_cap=0"
+    )
 
 
 def test_edgar_poller_counts_gate_errors(monkeypatch):
