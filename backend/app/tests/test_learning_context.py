@@ -435,3 +435,37 @@ def test_consumer_scopes_decide_which_peers_a_prompt_sees(env):
             assert block["dropped"] == []      # never selected at all, not capped out
     assert "(sector peers; supported 5 of 5 later outcomes)" in context.build_block(
         "sector", ticker=TICKER, sector="Technology", now=NOW)["text"]
+
+
+def test_admin_preview_shows_what_the_renderer_would_inject(env, monkeypatch):
+    """The owner's pre-promotion review reads `/api/admin/learning/preview`.
+    Its ranked list is everything in the ticker's scopes; `block` must be
+    what a prompt would actually get: the consumer's scopes, expiry and caps
+    applied, the same text `build_block` produces, and nothing written."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    sessions, engine = env
+    token = "test-admin-token-s19-preview"
+    monkeypatch.setattr(settings, "admin_api_token", token)
+    sector = ledger.sector_key("Technology")
+    assert sector
+    own = _lesson(sessions, "When churn falls, expect the stock to outperform the benchmark over 90 days.")
+    peer = _lesson(sessions, "When rates fall, expect sector peers to outperform the benchmark over 90 days.",
+                   scope_type="sector", scope_key=sector)
+    stale = _observation(sessions, "10-K filed 2025-01-01: stale.", expires_at=datetime.utcnow() - timedelta(days=1))
+    with _count_statements(engine) as seen:
+        body = TestClient(app).get(f"/api/admin/learning/preview?ticker={TICKER.lower()}&consumer=critic",
+                                   headers={"Authorization": f"Bearer {token}"}).json()
+    assert not [s for s in seen if s.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
+    # The ranked list still shows the whole ledger for the ticker...
+    assert {x["id"] for x in body["lessons"]} >= {own, peer}
+    # ...and the block shows only what the critic would see.
+    block = body["block"]
+    assert [i["ref"] for i in block["items"]] == [f"L-{own}"]
+    assert f"L-{peer}" not in block["text"] and f"O-{stale}" not in block["text"]
+    assert block["text"].startswith(context.HEADER)
+    assert block["text"] == context.build_block("critic", ticker=TICKER)["text"]
+    assert block["chars"] == len(block["text"]) <= context.BUDGETS["critic"].max_chars
+    assert _renders(sessions) == []

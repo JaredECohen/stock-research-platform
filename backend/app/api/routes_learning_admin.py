@@ -13,7 +13,9 @@ browser-called, so none is in `admin_auth.EXEMPT_PREFIXES`.
   per-lesson kill switch (suppress / retire / reactivate); history is
   appended, never overwritten.
 * **renders** — the audit trail: "why did the agent see this?".
-* **preview** — what the ledger holds for a ticker, ranked, with posteriors.
+* **preview** — what the ledger holds for a ticker, ranked, with posteriors,
+  and under `block` the exact bounded text the S19 renderer would inject for
+  that consumer (its scopes, expiry, label filter, caps and budget applied).
   Writes nothing, so priors can be evaluated without generating a memo.
 * **corpus-inventory** — the S17 census (aggregate SQL; never selects
   embedding values).
@@ -33,7 +35,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from ..database import SessionLocal
-from ..learning import control, ledger
+from ..learning import context, control, ledger
 from ..models import LearningEvidence, LearningItem, LearningRender
 
 router = APIRouter()
@@ -213,8 +215,14 @@ def learning_preview(
 ) -> dict[str, Any]:
     try:
         out = ledger.preview(ticker, consumer=consumer)
+        # The ranked list above is everything in the ticker's scopes; the
+        # pre-promotion review needs what a prompt would actually get, so the
+        # renderer's own read-only selection rides along (design §7.1).
+        with SessionLocal() as db:
+            block = context.build_block(consumer, ticker=ticker, db=db)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    out["block"] = {k: block[k] for k in ("text", "chars", "items", "dropped")}
     out["effective_mode"] = control.effective_mode()
     return out
 
