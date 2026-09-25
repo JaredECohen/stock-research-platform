@@ -87,9 +87,12 @@ class Settings(BaseSettings):
     # When both are configured, Vertex wins so production deployments
     # don't accidentally fall back to API-key auth.
     gemini_api_key: str = Field(default="", repr=False)
-    gemini_news_model: str = "gemini-2.5-flash"
-    gemini_social_model: str = "gemini-2.5-flash"
-    gemini_longdoc_model: str = "gemini-3.1-pro"
+    # gemini-2.5-flash returns 404 "no longer available to new users" for a
+    # key created after its retirement (production's key, 2026-09-25), and
+    # "gemini-3.1-pro" was never a valid ID: only the -preview one exists.
+    gemini_news_model: str = "gemini-3.5-flash-lite"
+    gemini_social_model: str = "gemini-3.5-flash-lite"
+    gemini_longdoc_model: str = "gemini-3.1-pro-preview"
     vertex_project_id: str = ""
     vertex_location: str = "us-central1"
     # When set, overrides the per-agent Gemini model envs across all Gemini
