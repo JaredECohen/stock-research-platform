@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from ..config import settings
 from ..services import (
     fundamentals_service,
     macro_service,
@@ -211,14 +212,39 @@ def get_search_trend(ticker: str) -> dict[str, Any] | None:
     )
 
 
+SOCIAL_UNAVAILABLE_REASON = (
+    "No social data source is connected, so social sentiment is not available."
+)
+
+
+def social_unavailable(ticker: str) -> dict[str, Any]:
+    """The live-mode social result: an explicit absence, never a number.
+
+    Deliberately carries no `sentiment_extremity` / `contrarian_flag` keys, so a
+    consumer that reads them gets nothing rather than a neutral-looking 50.
+    """
+    return dict(
+        ticker=ticker,
+        source="none",
+        status="unavailable",
+        reason=SOCIAL_UNAVAILABLE_REASON,
+    )
+
+
 def get_social_sentiment(ticker: str) -> dict[str, Any]:
-    """Aggregate social into a single contrarian-flag scalar.
+    """Aggregate social into a single contrarian-flag scalar — DEMO ONLY.
 
     Per the discipline rule, we never quote individual tweets/posts. We return
     a sentiment-extremity score (0..100) plus a contrarian flag. Consumers
     should treat extremes as a *contrarian* signal, not a momentum signal.
+
+    The scalar below is a hash of the ticker's characters, not sentiment
+    (FIX-016). It exists so the offline demo and the tests have a stable
+    shape to render; outside demo mode it must never be reached, so live
+    mode gets `social_unavailable` instead.
     """
-    # Demo mode: deterministic stub derived from ticker hash so it's stable.
+    if not settings.use_demo_data_only:
+        return social_unavailable(ticker)
     h = sum(ord(c) for c in ticker) % 100
     extremity = 50 + ((h - 50) * 0.6)  # range ~20..80
     extremity = max(0.0, min(100.0, extremity))

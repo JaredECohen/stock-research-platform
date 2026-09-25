@@ -1,10 +1,20 @@
-"""Social monitoring loop — daily per-ticker sentiment scalar."""
+"""Social monitoring loop — daily per-ticker sentiment scalar (demo only).
+
+Outside demo mode there is no social data source (FIX-016 / L7), so a run
+records "no social data source" on cron-health and does nothing else: no
+focus query, no agent call, no LLM spend. The loop stays registered so
+`KNOWN_LOOPS` and cron-health keep reporting it, and so a real source can
+be wired into `social_agent` later without re-plumbing the scheduler.
+Dropping the old daily Gemini call also stops it co-firing with the news
+loop's Gemini traffic against the shared circuit breaker.
+"""
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
 
 from ..agents import social_agent
+from ..config import settings
 from . import record_run
 from .research_focus import select_focus
 
@@ -22,20 +32,25 @@ _RUN_INTERVAL_HOURS = 24
 
 # How many tickers one run may cover.
 #
-# Cost math: this loop runs daily, and `social_agent.run(force_refresh=True)`
-# makes one Gemini call per ticker (`settings.gemini_social_model`). So the
-# steady-state spend is budget x 1 call/day — at 10, that is 10 Gemini calls
-# a day. Raising it to ~25 (25/day) would cover every ticker that carries
-# any research signal at all today: the 10 pins plus the 17 that have ever
-# had a memo generated, minus the overlap.
-#
-# Deliberately left at 10, which is exactly what the old arbitrary
-# `list_tickers()[:10]` slice spent. This change is about WHICH ten, not how
-# many; raising it is a spend decision for the owner.
+# Cost math: zero LLM calls a day. Live runs skip selection entirely (see
+# `run_once`); demo runs cover this many tickers with the free
+# deterministic stub. It used to bound one Gemini call per ticker per day
+# (10 a day at 10); if a real, paid source is wired in later, calls/day =
+# this budget again, and raising it is a spend decision for the owner.
 SOCIAL_FOCUS_BUDGET = 10
+
+# The cron-health note for a live run. Worded for a reader of
+# `/api/admin/cron-health`, who otherwise sees a green loop and assumes it
+# produced sentiment.
+NO_SOURCE_NOTE = "no social data source; social sentiment unavailable"
 
 
 def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
+    if not settings.use_demo_data_only:
+        # success=True: the loop did what it can do. A failure flag would page
+        # on every run for a known, owner-decided absence.
+        record_run("social_loop", note=NO_SOURCE_NOTE)
+        return []
     selection = None
     if tickers is None:
         # Relevance-ranked rather than an arbitrary universe slice — see
@@ -48,9 +63,9 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         # standalone per-ticker scalar, and `sdk_runtime.run_social_agent`
         # calls that same function during memo generation against a 24h
         # cache — so this daily pass is a pre-warm for a pin's FIRST memo.
-        # Withholding it from the five pins that have no memo yet would
-        # remove exactly the warm-up those first memos benefit from, to
-        # save five Gemini calls a day.
+        # Withholding it from the pins that have no memo yet would remove
+        # exactly the warm-up those first memos benefit from. (Demo-only
+        # today; the reasoning holds for any real source wired in later.)
         selection = select_focus(
             budget=SOCIAL_FOCUS_BUDGET,
             rotation_period_hours=_RUN_INTERVAL_HOURS,
