@@ -190,8 +190,68 @@ def test_loop_reports_failure_without_raising(monkeypatch):
     )
     def boom(**kw): raise RuntimeError("db gone")
     monkeypatch.setattr(snapshot_gc, "gc_snapshots", boom)
-    assert snapshot_gc.run_once() == {"scanned": 0, "deleted": 0, "capped": 0, "ledger_deleted": 0}
+    monkeypatch.setattr(snapshot_gc, "_prune_learning_renders", lambda: {"deleted": 0, "capped": 0})
+    assert snapshot_gc.run_once() == {"scanned": 0, "deleted": 0, "capped": 0, "ledger_deleted": 0,
+                                      "renders_deleted": 0}
     assert recorded["success"] is False and "RuntimeError" in recorded["note"]
+
+
+# ---------------------------------------------------------------------------
+# W7 (S19): shadow learning_renders retention
+# ---------------------------------------------------------------------------
+
+def test_shadow_render_retention(tmp_path, monkeypatch):
+    """One audit row per consumer per memo run adds up. Shadow rows past 180
+    days are reaped in bounded batches; inject rows (what a memo was actually
+    shown) and recent shadow rows are kept. A prune failure is reported, not
+    raised, and never stops the snapshot GC."""
+    from app.learning import context
+    from app.models import LearningRender
+    from app.monitoring import snapshot_gc
+    from app.tests.learning_helpers import learning_db
+
+    sessions, engine = learning_db(tmp_path, monkeypatch, context)
+    now = datetime.utcnow()
+    old = now - timedelta(days=context.SHADOW_RENDER_RETENTION_DAYS + 5)
+    recent = now - timedelta(days=context.SHADOW_RENDER_RETENTION_DAYS - 5)
+
+    def add(mode: str, at: datetime) -> int:
+        with sessions() as s:
+            row = LearningRender(run_id="r", consumer="pm_memo", ticker="GCR", mode=mode, chars=10,
+                                 items=[], dropped=[], created_at=at)
+            s.add(row)
+            s.commit()
+            return int(row.id)
+
+    def alive() -> set[int]:
+        with sessions() as s:
+            return {r.id for r in s.query(LearningRender).all()}
+
+    try:
+        old_shadow = [add("shadow", old) for _ in range(5)]
+        kept = {add("shadow", recent), add("inject", old), add("inject", recent)}
+
+        # Bounded: two batches of two stop with one left, and say so.
+        assert context.prune_shadow_renders(batch_size=2, max_batches=2) == {"deleted": 4, "capped": 1}
+        assert alive() == kept | {old_shadow[-1]}
+
+        recorded: dict = {}
+        monkeypatch.setattr(snapshot_gc, "record_run", lambda name, **kw: recorded.update({"name": name, **kw}))
+        monkeypatch.setattr(snapshot_gc, "gc_snapshots",
+                            lambda **kw: {"scanned": 0, "deleted": 0, "capped": 0, "ledger_deleted": 0})
+        stats = snapshot_gc.run_once()
+        assert stats["renders_deleted"] == 1 and alive() == kept
+        assert recorded["success"] is True and "renders_deleted=1" in recorded["note"]
+        assert snapshot_gc.run_once()["renders_deleted"] == 0          # idempotent
+
+        def broken():
+            raise RuntimeError("renders table gone")
+
+        monkeypatch.setattr(snapshot_gc, "_prune_learning_renders", broken)
+        assert snapshot_gc.run_once()["renders_deleted"] == 0
+        assert recorded["success"] is False and "renders_error=RuntimeError" in recorded["note"]
+    finally:
+        engine.dispose()
 
 
 # ---------------------------------------------------------------------------
