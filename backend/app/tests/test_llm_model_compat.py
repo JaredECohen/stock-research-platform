@@ -269,6 +269,18 @@ def test_refusal_fails_over_when_allowed(monkeypatch):
     assert llm._FAILURE_COUNTERS["anthropic"] == 0
 
 
+def test_gpt6_long_context_request_warns(monkeypatch, caplog):
+    """GPT-6 bills a request over 272K input at 2x/1.5x, which the estimate
+    does not price: never silent."""
+    import logging
+    _openai(monkeypatch, openai_response(prompt_tokens=300_000))
+    with caplog.at_level(logging.WARNING, logger="app.agents.llm"):
+        llm.chat_json("p", model="gpt-6-sol", action="pm.synthesis")
+        llm.chat_json("p", model="gpt-5.5", action="pm.synthesis")
+    hits = [r.getMessage() for r in caplog.records if "long-context" in r.getMessage()]
+    assert len(hits) == 1 and "300000" in hits[0] and "gpt-6-sol" in hits[0]
+
+
 def test_public_failover_partner_and_breaker_open(monkeypatch):
     llm_fakes.live(monkeypatch, openai=FakeClient(openai_response()),
                    anthropic=FakeClient(anthropic_response()))
