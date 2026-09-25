@@ -9,6 +9,7 @@ import {
   isUnavailable,
   SAMPLE_SUMMARY_SECTIONS,
 } from "@/lib/memoSections";
+import { bannerDegradedAgents } from "@/lib/memoQuality";
 import type { BullBearCase, StockMemoOut } from "@/types";
 import UnavailableSection, { DegradedNote } from "@/components/UnavailableSection";
 
@@ -27,7 +28,9 @@ export default function SampleMemoSummary({ memo, headingLevel = 2 }: { memo: St
   const H = `h${headingLevel}` as "h2" | "h3";
   const generated = formatShortUtc(memo.generated_at || null);
   const verdict = memo.valuation_verdict;
-  const degraded = memo.degraded_agents || [];
+  // W2b: quality events (untraceable figures) are not unavailable
+  // specialists; nothing else about the research checks shows here.
+  const degraded = bannerDegradedAgents(memo);
   const hiddenCount = bannerCount(memo, SAMPLE_SUMMARY_SECTIONS);
   return (
     <section aria-labelledby="sample-memo-heading" className="card">

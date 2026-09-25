@@ -19,6 +19,7 @@ import {
   makeMemo,
 } from "@/test/fixtures/memo";
 import { makeDisagreementSummary, makeInsufficientSummary, makeSummary } from "@/test/fixtures/scorecard";
+import { QUALITY_EXPECT, qualityMemo, qualityMemoConfidenceHidden } from "@/test/fixtures/memoQuality";
 import type { StockMemoOut } from "@/types";
 
 function renderMemo(memo: StockMemoOut) {
@@ -397,5 +398,86 @@ describe("FullInvestmentMemo W2a banner, notes and PDF (review fixes)", () => {
     const doc = new DOMParser().parseFromString(printedHtml(), "text/html");
     expect(doc.body.textContent).toContain("Fundamental Factor Scorecard");
     expect(doc.querySelector('[data-section="scorecard"]')?.textContent).toContain(REASON_TEXT.no_source_data);
+  });
+});
+
+describe("FullInvestmentMemo W2b research checks", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function printedHtml(): string {
+    let written = "";
+    const popup = {
+      document: { open: () => {}, write: (html: string) => { written += html; }, close: () => {} },
+      focus: () => {},
+      print: () => {},
+      onload: null as null | (() => void),
+    };
+    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    fireEvent.click(screen.getByText("Download PDF"));
+    return written;
+  }
+
+  it("renders a legacy memo (no quality) exactly as one whose quality is null, with nothing new", () => {
+    const legacy = renderMemo(makeMemo());
+    const html = legacy.container.innerHTML;
+    legacy.unmount();
+    const nulled = renderMemo(makeMemo({ quality: null }));
+    expect(nulled.container.innerHTML).toBe(html);
+    expect(screen.queryByText("Research Checks")).toBeNull();
+    expect(screen.queryByTestId("cover-conviction-cap")).toBeNull();
+    expect(screen.queryByTestId("rating-reconciliation-note")).toBeNull();
+    expect(nulled.container.querySelector("[data-claim-status]")).toBeNull();
+    nulled.unmount();
+    // The contrast: the captured W2b memo carries the section.
+    renderMemo(qualityMemo());
+    expect(screen.getByText("Research Checks")).toBeInTheDocument();
+  });
+
+  it("prints the Research Checks section, the marked PM figure and the cover cap line in the PDF", () => {
+    const memo = qualityMemo();
+    renderMemo(memo);
+    expect(screen.getByTestId("cover-conviction")).toHaveTextContent("Conviction: 45/100");
+    expect(screen.getByTestId("cover-conviction-cap")).toHaveTextContent(
+      "Capped at 45 — 3 core analyst sections were template-filled (sector, earnings, filing).",
+    );
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent("Set to Neutral:");
+    const doc = new DOMParser().parseFromString(printedHtml(), "text/html");
+    expect(doc.body.textContent).toContain("Research Checks");
+    expect(doc.querySelector('[data-testid="research-checks-counts"]')).not.toBeNull();
+    const marked = Array.from(doc.querySelectorAll('[data-claim-status="untraceable"]')).map((e) => e.textContent);
+    expect(marked).toEqual([QUALITY_EXPECT.fabricated_pm_figure]);
+    // The withheld point is only behind the panel's disclosure, never printed.
+    expect(doc.body.textContent).not.toContain(QUALITY_EXPECT.withheld_point);
+    // The section adds no placeholder: the banner still counts exactly the
+    // ones the PDF prints on this captured presented memo.
+    const el = doc.querySelector('[data-testid="unavailable-count"]');
+    const n = Number(/(\d+) sections? unavailable/i.exec(el?.textContent ?? "")?.[1] ?? 0);
+    expect(n).toBe(countedPlaceholders(memo, doc).length);
+  });
+
+  it("keeps the cover's confidence and the panel's numbers hidden when availability hides confidence", () => {
+    const memo = qualityMemoConfidenceHidden();
+    renderMemo(memo);
+    expect(screen.getByTestId("cover-conviction")).toHaveTextContent("Conviction: unavailable in this version");
+    expect(screen.queryByTestId("cover-conviction-cap")).toBeNull();
+    expect(screen.queryByTestId("research-checks-confidence-line")).toBeNull();
+    expect(screen.getByTestId("research-checks-confidence")).toHaveTextContent(
+      "Confidence is unavailable in this version.",
+    );
+  });
+
+  it("keeps quality events off the partial-coverage banner", () => {
+    const memo = qualityMemo();
+    memo.degraded_agents = ["Number Check", "Filing Analyst"];
+    memo.degradation_events = [
+      { agent: "Number Check", error_type: "UntraceableNumbers", message: "" },
+      { agent: "Filing Analyst", error_type: "DeterministicFallback", message: "" },
+    ];
+    renderMemo(memo);
+    const banner = screen.getByText("Partial coverage:").parentElement as HTMLElement;
+    expect(banner).toHaveTextContent("Filing Analyst was unavailable");
+    expect(banner).not.toHaveTextContent("Number Check");
   });
 });
