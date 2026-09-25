@@ -8,14 +8,18 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from app.agents import news_impact_agent
+from app.agents import llm, news_impact_agent
+from app.config import settings
 from app.models import MemoSnapshot
 from app.services import memo_store, update_orchestrator
-from app.tests.test_update_orchestrator import _stub_alert, _stub_memo
+from app.tests.test_update_orchestrator import _stub_alert, _stub_memo, forget_news_assessments
 
 
 @pytest.fixture
 def memo_db(tmp_path, monkeypatch):
+    # The news-patch dedup row lives in the shared cache table, not in this
+    # fixture's memo DB: forget ABBV's so each test's stub alert is new news.
+    forget_news_assessments("ABBV")
     engine = create_engine(f"sqlite:///{tmp_path / 'legacy-memos.db'}")
     MemoSnapshot.__table__.create(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -163,3 +167,66 @@ def test_publication_revalidates_assignment_before_opening_database(monkeypatch,
     with pytest.raises(ValidationError):
         memo_store.save_memo(memo)
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# N34 / FIX-017: the LLM's patch shape is normalised in `assess`, before
+# `apply_patch` (which stays strict for programmer misuse, above).
+# ---------------------------------------------------------------------------
+
+def _llm_returns(monkeypatch, out):
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-key-not-real")
+    monkeypatch.setattr(llm, "chat_json", lambda *a, **k: out)
+
+
+def test_string_case_patch_is_normalized_not_raised(memo_db, monkeypatch):
+    # The prompt never stated the case shape; the model wrote a string and
+    # apply_patch raised ValueError — 36 crashed patches in one week.
+    memo_store.save_memo(_stub_memo("ABBV"))
+    _llm_returns(monkeypatch, {
+        "material": True,
+        "patch": {"bull_case": "New data-center demand", "bear_case": ["Capex overrun risk"],
+                  "key_risks": {"title": "Grid delay", "detail": "Interconnect slips.", "severity": "high"}},
+        "rationales": {"bull_case": "new demand", "bear_case": "cost", "key_risks": "delay"},
+        "delta_summary": "news",
+    })
+    result = update_orchestrator.on_news_alert("ABBV", _stub_alert())
+    assert result["patched"] is True
+    new = memo_store.memo_to_pydantic(memo_store.latest_memo("ABBV"))
+    assert new.bull_case.key_points == ["bp1", "New data-center demand"]
+    assert new.bull_case.headline == "bull"
+    assert new.bear_case.key_points == ["bp2", "Capex overrun risk"]
+    assert [(r.title, r.severity) for r in new.key_risks] == [("Grid delay", "high")]
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("One point.", {"key_points": ["One point."]}),
+    (["a", "b"], {"key_points": ["a", "b"]}),
+    ({"key_points": "Not split into letters."}, {"key_points": ["Not split into letters."]}),
+    ({"headline": "New head", "key_points": ["p"], "junk": 1}, {"headline": "New head", "key_points": ["p"]}),
+    ([{"key_point": "Legacy point object."}], {"key_points": ["Legacy point object."]}),
+])
+def test_case_patch_shapes_normalize(value, expected):
+    assert news_impact_agent._clamp_patch(_stub_memo(), {"bull_case": value}) == {"bull_case": expected}
+
+
+def test_invalid_case_shape_is_dropped_with_its_rationale(monkeypatch):
+    _llm_returns(monkeypatch, {
+        "material": True,
+        "patch": {"bull_case": 42, "bear_case": {"key_points": [None, 7]},
+                  "final_pm_view": ["Not a string"], "rating_label": "Neutral"},
+        "rationales": {"bull_case": "a", "bear_case": "b", "final_pm_view": "c", "rating_label": "d"},
+        "delta_summary": "news",
+    })
+    out = news_impact_agent.assess(_stub_memo("ABBV"), _stub_alert())
+    assert out["patch"] == {"rating_label": "Neutral"}
+    assert out["rationales"] == {"rating_label": "d"}
+    assert out["material"] is True
+
+
+def test_only_invalid_shapes_is_not_material(monkeypatch):
+    _llm_returns(monkeypatch, {
+        "material": True, "patch": {"bull_case": 42}, "rationales": {"bull_case": "a"},
+    })
+    out = news_impact_agent.assess(_stub_memo("ABBV"), _stub_alert())
+    assert out["material"] is False and out["patch"] == {} and out["rationales"] == {}
