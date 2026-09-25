@@ -21,6 +21,7 @@ Idempotent, and safe to run repeatedly.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from ..cache.snapshots import gc_snapshots
 from . import record_run
@@ -28,20 +29,27 @@ from . import record_run
 log = logging.getLogger(__name__)
 
 
-def _prune_learning_renders() -> dict[str, int]:
+def _prune_learning_renders() -> dict[str, Any]:
     from ..learning.context import prune_shadow_renders
     return prune_shadow_renders()
 
 
 def run_once() -> dict[str, int]:
     # The two reapers are independent: one failing never stops the other.
-    renders_error: str | None = None
+    # The render prune reports its own partial failure (its batches commit
+    # one by one, so rows may already be gone); the except here is only for
+    # a failure before it could count anything.
     try:
         renders = _prune_learning_renders()
     except Exception as exc:
-        renders_error = type(exc).__name__
+        renders = {"deleted": 0, "capped": 0, "error": type(exc).__name__}
+    renders_error = renders.get("error")
+    if renders_error:
         log.warning("snapshot_gc: learning_renders prune failed: %s", renders_error)
-        renders = {"deleted": 0, "capped": 0}
+    renders_note = (
+        f"renders_deleted={renders['deleted']} renders_capped={renders['capped']}"
+        + (f" renders_error={renders_error}" if renders_error else "")
+    )
     try:
         stats = gc_snapshots()
     except Exception as exc:
@@ -49,21 +57,20 @@ def run_once() -> dict[str, int]:
         # a GC that silently stops working is how the table grew unnoticed
         # the first time.
         log.warning("snapshot_gc failed: %s", type(exc).__name__)
-        record_run("snapshot_gc", success=False, note=f"error={type(exc).__name__}")
+        record_run("snapshot_gc", success=False, note=f"error={type(exc).__name__} {renders_note}")
         return {"scanned": 0, "deleted": 0, "capped": 0, "ledger_deleted": 0,
                 "renders_deleted": renders["deleted"]}
     stats = {**stats, "renders_deleted": renders["deleted"]}
     note = (
         f"scanned={stats['scanned']} deleted={stats['deleted']} "
         f"capped={stats['capped']} ledger_deleted={stats.get('ledger_deleted', 0)} "
-        f"renders_deleted={renders['deleted']} renders_capped={renders['capped']}"
-        + (f" renders_error={renders_error}" if renders_error else "")
+        + renders_note
     )
     # `capped` means the table still has more to reap than one pass removes;
     # the next run continues, but a run that stays capped for days means
     # retention is not keeping up with write volume. A failed render prune
     # is not success either, for the same reason.
-    record_run("snapshot_gc", success=renders_error is None, note=note)
+    record_run("snapshot_gc", success=not renders_error, note=note)
     return stats
 
 

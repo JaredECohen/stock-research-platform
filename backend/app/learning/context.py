@@ -381,31 +381,48 @@ def link_run(run_id: str | None, snapshot_id: int | None) -> int:
 
 def prune_shadow_renders(*, now: datetime | None = None, retention_days: int = SHADOW_RENDER_RETENTION_DAYS,
                          batch_size: int = RENDER_GC_BATCH,
-                         max_batches: int = RENDER_GC_MAX_BATCHES) -> dict[str, int]:
+                         max_batches: int = RENDER_GC_MAX_BATCHES) -> dict[str, Any]:
     """Delete SHADOW render rows older than `retention_days`, in bounded
     batches (ids first, then a delete per batch, committed each time).
-    Inject rows are never touched. `capped` = 1 when the pass stopped with
-    more left, and the next day's run continues."""
+    Inject rows are never touched. `capped` = 1 only when the pass stopped
+    at `max_batches` with eligible rows still left; the next day's run
+    continues.
+
+    Never raises: each batch commits on its own, so a failure partway has
+    already deleted rows, and the count must survive it or the cron note
+    under-reports. `error` is the exception type name, or None."""
     cutoff = (now or datetime.utcnow()) - timedelta(days=retention_days)
+    eligible = and_(LearningRender.mode == "shadow", LearningRender.created_at < cutoff)
     deleted = 0
     capped = 0
+    error: str | None = None
     with SessionLocal() as db:
-        for n in range(max_batches):
-            ids = [row_id for (row_id,) in db.execute(
-                select(LearningRender.id)
-                .where(LearningRender.mode == "shadow", LearningRender.created_at < cutoff)
-                .order_by(LearningRender.id).limit(batch_size)
-            ).all()]
-            if not ids:
-                break
-            result = db.execute(delete(LearningRender).where(LearningRender.id.in_(ids)))
-            db.commit()
-            deleted += int(result.rowcount if result.rowcount is not None else len(ids))
-            if len(ids) < batch_size:
-                break
-            if n == max_batches - 1:
-                capped = 1
-    return {"deleted": deleted, "capped": capped}
+        try:
+            for _ in range(max_batches):
+                ids = [row_id for (row_id,) in db.execute(
+                    select(LearningRender.id).where(eligible).order_by(LearningRender.id).limit(batch_size)
+                ).all()]
+                if not ids:
+                    break
+                result = db.execute(delete(LearningRender).where(LearningRender.id.in_(ids)))
+                db.commit()
+                deleted += int(result.rowcount if result.rowcount is not None else len(ids))
+                if len(ids) < batch_size:
+                    break
+            else:
+                # Every batch came back full. Whether rows remain is a fact to
+                # read, not infer: an eligible set that is an exact multiple
+                # of the batch size is fully reaped, and a false "capped"
+                # reads as retention falling behind.
+                capped = int(db.execute(select(LearningRender.id).where(eligible).limit(1)).first() is not None)
+        except Exception as exc:
+            error = type(exc).__name__
+            log.warning("learning_renders prune stopped after %d deleted (%s)", deleted, error)
+            try:
+                db.rollback()
+            except Exception as rb_exc:   # a dead connection; the count above still stands
+                log.warning("learning_renders prune rollback failed (%s)", type(rb_exc).__name__)
+    return {"deleted": deleted, "capped": capped, "error": error}
 
 
 # ---------------------------------------------------------------------------
