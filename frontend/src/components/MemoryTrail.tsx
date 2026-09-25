@@ -22,6 +22,14 @@ type Memory = {
   entries: Entry[];
 };
 
+// W7: once learned priors are injected, `GET /api/stocks/{t}/memory` serves
+// the learning ledger under this path (`learning/context.PUBLIC_PATH`), and
+// its `historical_context` is the coverage note the public trail must show
+// (how many lessons, how many tested, that they are provisional hypotheses).
+// The legacy file trail's `historical_context` is condensed takeaways the
+// page has never shown, so it stays hidden.
+const LEDGER_PATH = "database: learning ledger";
+
 const FACT_LABEL: Record<string, string> = {
   guidance_changes: "Guidance",
   capex_commentary: "Capex",
@@ -61,12 +69,24 @@ export default function MemoryTrail({ ticker }: { ticker: string }) {
   if (data === null) {
     return <div className="text-xs text-slate-500">Loading memory…</div>;
   }
+  const coverage =
+    data.path === LEDGER_PATH && data.historical_context ? (
+      <p className="text-xs text-slate-400">{data.historical_context}</p>
+    ) : null;
   if (data.entries.length === 0) {
-    return (
+    const empty = (
       <div className="text-xs text-slate-500">
         No memory entries for {ticker} yet — earnings + filing deltas
         accumulate here over time.
       </div>
+    );
+    return coverage ? (
+      <div className="space-y-2">
+        {empty}
+        {coverage}
+      </div>
+    ) : (
+      empty
     );
   }
   return (
@@ -77,6 +97,7 @@ export default function MemoryTrail({ ticker }: { ticker: string }) {
       <div className="text-[10px] uppercase tracking-widest text-slate-600">
         {data.path}
       </div>
+      {coverage}
       <ol className="space-y-2">
         {data.entries.map((e, i) => (
           <li key={i} className="border-t border-ink-700 pt-2">
