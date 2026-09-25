@@ -16,6 +16,7 @@ def database(tmp_path, monkeypatch):
     factory = sessionmaker(bind=create_engine(f"sqlite:///{tmp_path / 'fundamentals.db'}"), autoflush=False)
     monkeypatch.setattr(svc, "SessionLocal", factory)
     monkeypatch.setattr(svc, "_today", lambda: date(2026, 9, 13))
+    monkeypatch.setattr(svc, "_now", lambda: datetime(2026, 9, 13, 12, 0))
     return factory
 
 
@@ -516,37 +517,86 @@ def test_boolean_values_are_rejected_before_real_provider_mapping(monkeypatch):
     assert any(i.get("raw_field") == "totalRevenue" and i["reason"] == "boolean_value" for i in raw["_history_issues"])
 
 
-def test_complete_but_week_old_primary_values_trigger_provider_refresh(database, monkeypatch):
+def test_week_old_fetch_is_not_stale_without_newer_filed_period(database, monkeypatch):
+    """FIX-005: fetch age alone never makes stored fundamentals stale. The
+    old contract re-verified every statement weekly (`stored_fetch_stale`);
+    the owner's cadence is "load as often as it changes"."""
     calls = providers(monkeypatch, ("fmp", payload()))
     svc.backfill_fundamentals("TEST", date(2024, 9, 13))
-    old = datetime.utcnow() - timedelta(days=8)
+    old = svc._now() - timedelta(days=30)
     with database() as db:
         for row in db.execute(select(FinancialPeriod)).scalars():
             row.fetched_at = old
         db.commit()
     coverage = svc.fundamental_coverage("TEST", date(2024, 9, 13))
-    assert svc._complete(coverage["coverage"]) and not coverage["success"]
-    assert len([i for i in coverage["issues"] if i["kind"] == "stored_fetch_stale"]) == 6
-    assert coverage["coverage"]["income"]["annual"]["refresh_ttl_days"] == 7
+    assert coverage["success"], coverage["issues"]
+    assert not any(i["kind"] in {"stored_fetch_stale", "expected_period_missing"} for i in coverage["issues"])
+    bucket = coverage["coverage"]["income"]["annual"]
+    assert bucket["fresh"] and bucket["period_current"] and "refresh_ttl_days" not in bucket
+    assert bucket["latest_primary_fetched_at"] == old.isoformat()
     report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
-    assert report["success"] and len(calls) == 2
-    assert report["rows_written"] == report["rows_refreshed"] == 36
-    assert all(b["fresh"] for s in report["coverage"].values() for b in s.values())
-    again = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
-    assert again["rows_written"] == 0 and len(calls) == 2
+    assert report["success"] and report["source"] == "database" and len(calls) == 1
+
+
+def _file_state(database, **fields):
+    from app.models import FundamentalRefreshState
+    FundamentalRefreshState.__table__.create(database.kw["bind"], checkfirst=True)
+    with database() as db:
+        db.merge(FundamentalRefreshState(ticker="TEST", **fields))
+        db.commit()
+
+
+def test_filed_period_missing_after_grace_blocks_and_forces_refresh(database, monkeypatch):
+    """A period EDGAR shows as filed is awaited through its publication
+    grace, then blocks as `expected_period_missing` and makes a database-only
+    call go to the provider; storing it clears the block."""
+    calls = providers(monkeypatch, ("fmp", payload()))
+    svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    observed = datetime(2026, 9, 5, 12)
+    _file_state(database, filed_quarter_end=date(2026, 8, 31), filed_quarter_form="10-Q",
+                filed_quarter_accession="0000000001-26-000123", filed_quarter_on=date(2026, 9, 4),
+                quarter_observed_at=observed)
+    monkeypatch.setattr(svc, "_now", lambda: observed + timedelta(hours=24))
+    waiting = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    bucket = waiting["coverage"]["income"]["quarterly"]
+    assert waiting["success"] and bucket["awaiting_provider"] and not bucket["period_current"] and bucket["fresh"]
+    assert bucket["expected_latest_period_end"] == "2026-08-31" and bucket["expected_basis"] == "edgar_filing"
+    assert svc.backfill_fundamentals("TEST", date(2024, 9, 13))["source"] == "database" and len(calls) == 1
+
+    monkeypatch.setattr(svc, "_now", lambda: observed + timedelta(hours=73))
+    late = svc.fundamental_coverage("TEST", date(2024, 9, 13))
+    missing = [i for i in late["issues"] if i["kind"] == "expected_period_missing"]
+    assert not late["success"] and {i["statement"] for i in missing} == {"income", "balance", "cash"}
+    assert {(i["cadence"], i["expected_period_end"], i["form"], i["filed_on"]) for i in missing} == {
+        ("quarterly", "2026-08-31", "10-Q", "2026-09-04")}
+    assert late["coverage"]["income"]["annual"]["fresh"]  # the annual cadence is not affected
+
+    filed = payload()
+    for statement, primary in svc.PRIMARY.items():
+        filed[statement].append({"period": "2026Q3", "period_end": "2026-08-31", "filing_date": "2026-09-04",
+                                 "currency": "EUR", primary: 100})
+    calls = providers(monkeypatch, ("fmp", filed))
+    report = svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    assert len(calls) == 1 and report["success"], report["issues"]
+    assert report["coverage"]["income"]["quarterly"]["period_current"]
+    assert report["new_period_ends"]["income"]["quarterly"] == ["2026-08-31"]
 
 
 def test_primary_fetch_freshness_is_not_hidden_by_a_fresh_optional_line(database, monkeypatch):
+    """`latest_primary_fetched_at` is the primary line's last provider
+    confirmation, not a fresher optional line's; it is informational only."""
     providers(monkeypatch, ("fmp", payload()))
     svc.backfill_fundamentals("TEST", date(2024, 9, 13))
+    old = svc._now() - timedelta(days=8)
     with database() as db:
         row = db.execute(select(FinancialPeriod).where(FinancialPeriod.statement == "income", FinancialPeriod.period == "FY2025")).scalar_one()
-        row.fetched_at = datetime.utcnow() - timedelta(days=8)
+        row.fetched_at = old
         db.add(FinancialPeriod(ticker="TEST", statement="income", period="FY2025", period_end=date(2025, 12, 31), fiscal_year=2025,
-                               line_item="net_income", value=3, currency="EUR", source="fmp", fetched_at=datetime.utcnow()))
+                               line_item="net_income", value=3, currency="EUR", source="fmp", fetched_at=svc._now()))
         db.commit()
     report = svc.fundamental_coverage("TEST", date(2024, 9, 13))
-    assert not report["coverage"]["income"]["annual"]["fresh"] and not report["success"]
+    assert report["coverage"]["income"]["annual"]["latest_primary_fetched_at"] == old.isoformat()
+    assert report["coverage"]["income"]["annual"]["fresh"] and report["success"]
 
 
 @pytest.mark.parametrize("raw,expected", [

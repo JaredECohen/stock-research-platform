@@ -243,6 +243,13 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
     truncated_filings: list[dict] = []
     deferred: list[str] = []
     unvisited: list[str] = []
+    # FIX-005: every successfully read index, handed to
+    # `fundamental_refresh.observe_many` once per pass. Includes first-run,
+    # deferred and bookkeeping-error tickers: what an issuer has reported is
+    # true whatever this pass did with its events. Unvisited tickers are
+    # simply not observed this pass.
+    observations: list[tuple[str, list[dict]]] = []
+    refresh_state_errors: list[str] = []
     polled = 0
 
     def failure_note() -> str:
@@ -250,7 +257,7 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
         for label, names in (
             ("index errors", index_errors), ("handler errors", handler_errors),
             ("gate errors", gate_errors), ("bookkeeping errors", bookkeeping_errors),
-            ("persist errors", persist_errors),
+            ("persist errors", persist_errors), ("refresh-state errors", refresh_state_errors),
         ):
             if names:
                 parts.append(f"{label} on {len(names)}: {', '.join(names)}")
@@ -319,6 +326,7 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
             index_errors.append(t)
             log.warning("EDGAR index failed for %s: %s", t, type(exc).__name__)
             continue
+        observations.append((t, filings))
 
         try:
             seen = _seen_accessions(t)
@@ -383,6 +391,18 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
             except Exception as exc:
                 bookkeeping_errors.append(t)
                 log.warning("EDGAR seen write failed for %s: %s", t, type(exc).__name__)
+
+    # FIX-005: record what issuers have reported so fundamentals are fetched
+    # when they change, not on a timer. DB-only; one session for the pass.
+    # Event semantics above are untouched: extras in the index (amendments,
+    # 20-F/40-F, deregistration notices) never reach `_FILING_TYPES`.
+    if observations:
+        try:
+            from ..services import fundamental_refresh
+            refresh_state_errors.extend(fundamental_refresh.observe_many(observations))
+        except Exception as exc:
+            refresh_state_errors.append("pass")
+            log.warning("fundamentals refresh-state update failed: %s", type(exc).__name__)
 
     # Where the next scheduled pass starts. The first unvisited ticker when
     # the budget bit, otherwise back to the head of the universe. Written

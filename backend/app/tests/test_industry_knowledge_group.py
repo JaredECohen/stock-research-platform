@@ -319,7 +319,10 @@ def test_public_prompt_block_has_no_code_or_registry_name():
     for g in ik.list_industry_groups():
         m = igk.group_mandate(g["code"])
         nodes = _registry_nodes_of(g["code"])
-        public_lines = {"- " + il.scrub_text(f"{b.economics} | Advantage test: {b.advantage_test}")
+        # A brief's own prose may name a sub-industry ("Office REITs lease
+        # ..."); the public block writes it as a plain description.
+        public_lines = {il.plain_registry_phrases("- " + il.scrub_text(f"{b.economics} | Advantage test: "
+                                                                        f"{b.advantage_test}"))
                         for b in m.sub_industries}
         for budget in (400, 1200, 2600, igk.PROMPT_BLOCK_MAX_CHARS):
             block = m.as_prompt_block(max_chars=budget, provenance="public")
@@ -328,6 +331,7 @@ def test_public_prompt_block_has_no_code_or_registry_name():
             assert block.startswith(f"## Industry Group mandate — {il.label(g['code'])} "
                                     f"({il.label(g['code'][:2])})"), where
             assert "Industries:" not in block and "gics" not in block.lower(), where
+            assert il.registry_phrase_hits(block) == [], where
             assert m.version_key not in block and "(set by" not in block, where
             assert not re.search(r"\[\s*\d[\d,\s]*\]", block), where        # no provenance brackets
             for code, name in nodes.items():

@@ -16,10 +16,15 @@ import { fmtCap, fmtDate, fmtPct, fmtPctSigned, fmtPrice, isNum, na } from "./fo
  * research map and a row derived from the data provider's own industry
  * label are different kinds of evidence, and the badge's title is the
  * API's `source_label` verbatim — including the map author's caveat that
- * it is research, not a licensed issuer mapping.
+ * it is research, not an issuer classification.
+ *
+ * A company's industry is the DATA PROVIDER's own label ("Provider
+ * industry"): the taxonomy's industry and sub-industry levels are never
+ * named or coded publicly (owner decision 2026-09-24), and the caption
+ * names the group by its label alone.
  */
 
-type SortKey = "ticker" | "company_name" | "sub_industry_name" | "source" | "market_cap" | "weight_mcw" | "last_close" | "ret_1m";
+type SortKey = "ticker" | "company_name" | "provider_industry" | "source" | "market_cap" | "weight_mcw" | "last_close" | "ret_1m";
 type SortDir = "ascending" | "descending";
 
 const NUMERIC: readonly SortKey[] = ["market_cap", "weight_mcw", "last_close", "ret_1m"];
@@ -35,8 +40,8 @@ function cell(row: IndustryCompanyRow, key: SortKey): string | number | null {
       return row.ticker;
     case "company_name":
       return row.company_name ?? "";
-    case "sub_industry_name":
-      return row.sub_industry_name ?? "";
+    case "provider_industry":
+      return row.provider_industry ?? "";
     case "source":
       return row.classification.source ?? "";
     case "market_cap":
@@ -138,7 +143,7 @@ export default function CompaniesTable({ companies, editionNPriced = null, class
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm" data-testid="companies-table">
           <caption className="text-left text-xs text-slate-400 mb-2" data-testid="companies-caption">
-            {companies.name} ({companies.code}) membership as of{" "}
+            {companies.name} membership as of{" "}
             {companies.as_of ? fmtDate(companies.as_of) : na("no statistics as-of")}: {companies.count} classified
             constituents,{" "}
             {/* With no statistics row there is nothing that priced
@@ -157,7 +162,7 @@ export default function CompaniesTable({ companies, editionNPriced = null, class
             <tr>
               {header("ticker", "Ticker", "left")}
               {header("company_name", "Company", "left")}
-              {header("sub_industry_name", "Sub-industry", "left", "8-digit GICS sub-industry from the classification row")}
+              {header("provider_industry", "Provider industry", "left", "The data provider's own industry label")}
               {header("source", "Source", "left", "Where the group assignment came from")}
               {header("market_cap", "Market cap")}
               {header("weight_mcw", "Weight (mcw)", "right", "Market-cap weight inside the group")}
@@ -175,14 +180,11 @@ export default function CompaniesTable({ companies, editionNPriced = null, class
                     <span className="font-mono">{row.ticker}</span>
                   </th>
                   <td className="px-2 py-1 text-slate-300">{row.company_name || na("name not on file")}</td>
-                  <td className="px-2 py-1 text-slate-300" data-testid={`sub-industry-${row.ticker}`}>
-                    {row.sub_industry_name ? (
-                      <>
-                        {row.sub_industry_name}{" "}
-                        <span className="font-mono text-[10px] text-slate-500">{row.sub_industry_code}</span>
-                      </>
+                  <td className="px-2 py-1 text-slate-300" data-testid={`provider-industry-${row.ticker}`}>
+                    {row.provider_industry ? (
+                      row.provider_industry
                     ) : (
-                      <span className="text-slate-500">{na("no sub-industry on this row")}</span>
+                      <span className="text-slate-500">{na("the provider reports no industry for this company")}</span>
                     )}
                   </td>
                   <td className="px-2 py-1">

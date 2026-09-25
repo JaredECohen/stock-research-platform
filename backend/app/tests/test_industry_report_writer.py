@@ -563,6 +563,45 @@ def test_repair_notes_reach_the_prompt(analyst, monkeypatch):
     assert prompts and not any("rejected by the validator" in p for p in prompts)
 
 
+def test_prompt_facts_are_label_projected(analyst, monkeypatch):
+    """The model is sent the label projection of the facts (owner decision
+    2026-09-24): no taxonomy code, registry name or brand to echo into the
+    prose L1 rejects. The STORED facts keep the codes — provenance — and
+    the validator checks against those."""
+    from app.services import industry_labels as il
+
+    prompts: list[str] = []
+
+    def fake_chat_json(prompt, **kwargs):
+        prompts.append(prompt)
+        return {}
+
+    _llm_on(monkeypatch, fake_chat_json)
+    res = w.write_report(analyst, _stats(), None, None, [], run_id="run-pp")
+    sent = "\n".join(prompts)
+    names = il.registry_names()
+    assert "gics" not in sent.lower()
+    assert not [c for c in names if len(c) in (6, 8) and c in sent]
+    assert f'"code": "{il.slug("4510")}"' in sent and f'"group_label": "{il.label("4510")}"' in sent
+    assert '"code": "4510"' not in sent
+    assert names["4510"] not in sent          # "Software & Services"
+    # ...while what is stored and validated is untouched.
+    overview = res.payload["sections"]["overview"]["facts"]
+    assert overview["code"] == "4510" and overview["name"] == names["4510"]
+    assert overview["group_label"] == il.label("4510") and overview["sector_label"] == il.label("45")
+
+
+def test_template_prose_names_the_group_by_its_label(analyst):
+    from app.services import industry_labels as il
+
+    res = w.write_report(analyst, _stats(), None, None, [], run_id="run-lbl")
+    text = res.payload["sections"]["overview"]["interpretation"]["text"]
+    assert il.label("4510") in text and il.label("45") in text
+    assert "4510" not in text and "Software & Services" not in text and "Information Technology" not in text
+    companies = res.payload["sections"]["companies"]["interpretation"]["text"]
+    assert "GICS" not in companies and il.PUBLIC_MAPPING_CAVEAT in companies
+
+
 def test_template_edition_still_validates():
     """The audit-only template must pass the FULL validator to be stored.
     Its outlook used to register "Scenarios are mandate templates, not
@@ -573,9 +612,18 @@ def test_template_edition_still_validates():
     ia.clear_cache()
     for code in ("2030", "4510", "4530"):
         a = ia.get_industry_analyst(code)
+        # L1 (owner decision 2026-09-24) must hold on the path that printed
+        # "[453010] <question>" before: every group here has highest-EVI
+        # questions, and the template quotes them.
+        assert a.mandate.highest_evi_questions, code
         for deterministic in (False, True):
             res = w.write_report(a, _stats(), None, None, [], run_id=f"tpl-{code}", deterministic=deterministic)
             assert v.validate(res.payload, _facts_of(res.payload)) == [], code
+            for name in v.INTERPRETED_SECTIONS:
+                interp = res.payload["sections"][name]["interpretation"]
+                for text in v._interpretation_texts(interp):
+                    assert v.taxonomy_leaks(text, group_code=code) == [], (code, name, text)
+            assert "Highest-EVI questions:" in res.payload["sections"]["kpis"]["interpretation"]["text"]
             outlook = res.payload["sections"]["outlook"]
             assert outlook["facts"]["anchors"], code
             claims = outlook["interpretation"]["claims"]

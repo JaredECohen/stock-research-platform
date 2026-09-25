@@ -34,7 +34,7 @@ import logging
 import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
 
 from ..config import settings
 from ..finance.dcf import fmt_price, fmt_upside
@@ -1194,6 +1194,56 @@ def _catalysts(
     return items[:6]
 
 
+class PMView(NamedTuple):
+    """How the PM synthesis sees this run's findings (contract C7).
+
+    `digests` — text placed after `pm_ctx` and before "Findings:", outside
+    the `max_agent_context_chars` cut; `findings` — what the capped JSON
+    carries, and what the no-LLM keyword heuristic counts; `visible` —
+    everything the PM reads either way, which is what `agent_influence`
+    scores (a withheld read has no stored pull on a rating it never saw)."""
+
+    digests: list[str]
+    findings: dict[str, AgentFinding]
+    visible: dict[str, AgentFinding]
+
+
+def _pm_view(findings: dict[str, AgentFinding]) -> PMView:
+    """Split `findings` by the roster's `pm_digest` declarations.
+
+    A spec with a digest is NEVER put in the JSON: on a live memo its entry
+    sits past the 60k cut (it is the roster tail), and on a small memo it
+    would be read twice. Its non-empty digest is read instead; an empty one
+    withholds the finding from the PM entirely. Without such a spec in
+    `findings` the JSON set is `findings` itself, same keys in the same
+    order, so the PM prompt is byte-identical to what it was before."""
+    # Read off `roster.AGENTS` per call rather than `AGENTS_BY_KEY`, so a
+    # spec a test appends to the roster is honoured here too.
+    specs = {spec.key: spec for spec in roster.AGENTS}
+    digests: list[str] = []
+    rest: dict[str, AgentFinding] = {}
+    visible: dict[str, AgentFinding] = {}
+    for key, finding in findings.items():
+        spec = specs.get(key)
+        if spec is None or spec.pm_digest is None:
+            rest[key] = finding
+            visible[key] = finding
+            continue
+        try:
+            text = spec.pm_digest(finding)
+        except Exception as exc:
+            # A digest that cannot be built withholds that one read; it must
+            # not cost the memo its PM synthesis (`safe_call` would ship the
+            # "synthesis unavailable" fallback for the whole memo).
+            log.warning("PM digest for %s failed; read withheld from the PM: %s",
+                        key, type(exc).__name__)
+            text = ""
+        if text:
+            digests.append(text)
+            visible[key] = finding
+    return PMView(digests, rest, visible)
+
+
 def _pm_synthesis(
     profile: dict, findings: dict[str, AgentFinding], dcf: DCFResult | None,
     *, scorecard: Any | None = None,
@@ -1209,15 +1259,22 @@ def _pm_synthesis(
         profile=profile,
         scorecard_block=scorecard_context.prompt_block(scorecard),
     )
+    view = _pm_view(findings)
+    # C7 assembly order: static template + pm_ctx, then the routed digests,
+    # then the capped JSON. The digests sit outside the cut on purpose (see
+    # `_pm_view`), and "" when there are none keeps the prompt byte-identical.
+    digest_block = ("\n\n" + "\n\n".join(view.digests)) if view.digests else ""
     # The synthesis template is byte-stable across memos; declare it as the
     # cached prefix so each PM call reads it instead of re-paying for it. The
-    # volatile pm_ctx / findings follow the "\n\n" join and stay uncached.
+    # volatile pm_ctx / digests / findings follow the "\n\n" join and stay
+    # uncached.
     with llm.llm_call_context(static_prefix_chars=len(prompts.PM_SYNTHESIS_PROMPT) + 2):
         llm_out = llm.chat_json(
             prompts.PM_SYNTHESIS_PROMPT
             + (("\n\n" + pm_ctx) if pm_ctx else "")
+            + digest_block
             + "\n\nFindings:\n"
-            + json.dumps({k: v.model_dump() for k, v in findings.items()}, default=str)[: settings.max_agent_context_chars],
+            + json.dumps({k: v.model_dump() for k, v in view.findings.items()}, default=str)[: settings.max_agent_context_chars],
             system=prompts.PM_SYSTEM, route="strong",
             model=settings.openai_pm_model,
         )
@@ -1239,10 +1296,13 @@ def _pm_synthesis(
     # None (no DCF, or a DCF that could not price the shares) contributes
     # nothing to the score — it is an absent signal, not a neutral one.
     upside = dcf.base.upside_pct if dcf else None
-    pos_signals = sum(1 for f in findings.values() if any(k in (f.headline + f.summary).lower()
-                                                          for k in ("constructive", "premium", "outperform", "tailwind")))
-    neg_signals = sum(1 for f in findings.values() if any(k in (f.headline + f.summary).lower()
-                                                          for k in ("pressured", "underperform", "elevated", "compress")))
+    # The keyword heuristic counts the JSON set only. A digested read is
+    # the PM model's input, not a vote here: the mandate text of some groups
+    # says "premium", and routing must not move the no-LLM fallback rating.
+    pos_signals = sum(1 for f in view.findings.values() if any(k in (f.headline + f.summary).lower()
+                                                               for k in ("constructive", "premium", "outperform", "tailwind")))
+    neg_signals = sum(1 for f in view.findings.values() if any(k in (f.headline + f.summary).lower()
+                                                               for k in ("pressured", "underperform", "elevated", "compress")))
     dcf_signal = 0
     if upside is not None:
         dcf_signal = 1 if upside > 0.10 else (-1 if upside < -0.10 else 0)
@@ -1920,7 +1980,10 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     agent_influence: dict[str, float] = {}
     try:
         from .influence import compute_influence
-        agent_influence = compute_influence(findings)
+        # Scored over what the PM read: a withheld read (a template stand-in
+        # `_pm_view` kept out of the synthesis) must not be stored as a pull
+        # on a rating it never reached.
+        agent_influence = compute_influence(_pm_view(findings).visible)
     except Exception as exc:  # pragma: no cover
         log.debug("agent influence computation failed: %s", exc)
 

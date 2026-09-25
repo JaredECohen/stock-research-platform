@@ -16,6 +16,8 @@ The validator enforces the research-process contract between them:
   knowledge base and does not open with a KPI forecast (the handbook's
   named anti-pattern);
 * no advice phrasing, and the disclaimer is present;
+* no licensed-taxonomy brand, code or industry/sub-industry registry name
+  in anything the page prints (rule L1, owner decision 2026-09-24);
 * the outlook's forward numbers are REGISTERED forecast assumptions
   (owner decision 1, 2026-09-24; rules F1-F10 below): each is declared
   once as a ``forecast_assumption`` claim with an id, a rate or multiple,
@@ -36,6 +38,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from ..services.industry_group_knowledge import thesis_stages
@@ -763,9 +766,10 @@ def _pack_numbers(facts: dict[str, Any]) -> set[float]:
 
 def _claim_field_texts(interp: dict[str, Any]) -> list[str]:
     """The structured claim fields the page prints beside the prose — an
-    assumption's value, horizon, anchor and bounds. They are not prose,
-    so their numbers are checked by F3-F5; the advice-phrase scan still
-    has to see them."""
+    assumption's value, horizon, anchor and bounds, and every claim's
+    basis. They are not prose, so their numbers are checked by F3-F5 (and
+    a basis is a reference, not a quotation); the advice-phrase scan and
+    L1 still have to see them, because the page prints them."""
     out: list[str] = []
     for claim in _claims_of(interp):
         for key in ("value", "horizon", "anchor"):
@@ -774,7 +778,87 @@ def _claim_field_texts(interp: dict[str, Any]) -> list[str]:
         bounds = claim.get("bounds")
         if isinstance(bounds, list):
             out.extend(str(b) for b in bounds)
+        basis = claim.get("basis")
+        if isinstance(basis, list):
+            out.extend(str(b) for b in basis)
     return out
+
+
+# --- L1: no licensed taxonomy in new prose (owner decision 2026-09-24) ----------
+#
+# Public surfaces never show the licensed taxonomy's brand, codes or names.
+# The read API projects every body through `industry_labels`, which is the
+# net for legacy editions; this rule is the gate for NEW ones, so a
+# validated edition is clean as written and the projection has nothing to
+# rescue. Deliberately narrow, because a false positive costs a retry:
+#
+# * the brand, anywhere (letters on neither side — "gics_x" counts);
+# * a bracketed list of 6/8-digit numbers (the old template's provenance);
+# * a standalone 6/8-digit number that IS a known industry/sub-industry
+#   code (not the tail of a decimal or a thousands group);
+# * the group's own 4-digit code as "(dddd)", "group dddd" or "Industry
+#   Group Analyst dddd". A code that is also a year (2010/2020/2030) is
+#   never flagged: "(2030)" in a Transportation report is far more often
+#   the year, and the projection still rewrites the unambiguous
+#   name-plus-code form;
+# * a multi-word registry name of an industry or sub-industry that is not
+#   also a sector or group name, matched case-sensitively as a phrase on
+#   the raw text (`industry_labels.registry_phrase_hits`; a hit wholly
+#   inside one of OUR labels is exempt) and quoted in the reason so a
+#   retry knows what to change. Single words ("Software", "Restaurants",
+#   "Semiconductors") are ordinary English — the mandate's own prose uses
+#   them — and a sector/group name is the projection's to relabel, not a
+#   rejection. The mandate prompt writes these phrases in lower case
+#   (`plain_registry_phrases`), so a model is never shown one to repeat.
+L1_MESSAGE = "prints an internal taxonomy code or third-party classification mark"
+_L1_BRAND_RE = re.compile(r"(?<![A-Za-z])GICS(?![A-Za-z])", re.I)
+_L1_BRACKET_RE = re.compile(r"[\[(]\s*\d{6,8}(?:\s*[,;/]\s*\d{6,8})*\s*[\])]")
+_L1_LONG_CODE_RE = re.compile(r"(?<![\w$.,])(\d{8}|\d{6})(?![\w%]|[.,]\d)")
+_L1_YEAR_RE = re.compile(r"^(?:19|20)\d\d$")
+
+
+@lru_cache(maxsize=1)
+def _l1_long_codes() -> frozenset[str]:
+    """The known 6/8-digit codes, from the same bundled index the public
+    scrubber uses — one taxonomy source."""
+    from ..services import industry_labels
+
+    return frozenset(c for c in industry_labels.registry_names() if len(c) in (6, 8))
+
+
+def taxonomy_leaks(text: str, *, group_code: str | None = None) -> list[str]:
+    """What in `text` would put the licensed taxonomy on the page (L1), as
+    short reasons; empty when clean.
+
+    A registry-name reason QUOTES the phrase. The reason is all a repair
+    retry is told, and "registry name" alone does not say which words to
+    change — a model re-reading its own paragraph cannot guess that
+    "Office REITs" is the taxonomy's name and "office landlords" is not."""
+    from ..services import industry_labels
+
+    if not isinstance(text, str) or not text:
+        return []
+    found: list[str] = []
+    if _L1_BRAND_RE.search(text):
+        found.append("classification brand")
+    if _L1_BRACKET_RE.search(text):
+        found.append("bracketed code list")
+    if any(m.group(1) in _l1_long_codes() for m in _L1_LONG_CODE_RE.finditer(text)):
+        found.append("industry or sub-industry code")
+    code = str(group_code or "")
+    if len(code) == 4 and code.isdigit() and not _L1_YEAR_RE.match(code):
+        own = re.compile(
+            rf"\(\s*{code}\s*\)|\bgroup\s+{code}(?!\d)|\bIndustry Group Analyst\s+{code}(?!\d)", re.I,
+        )
+        if own.search(text):
+            found.append("the group's own code")
+    # Our own labels are exempt ("Software & IT Services" contains the
+    # industry name "IT Services"); `registry_phrase_hits` discards only a
+    # hit that lies wholly inside a label, so a registry name that merely
+    # CONTAINS a label word ("Health Care Technology") is still caught.
+    for phrase in dict.fromkeys(m.group(0) for m in industry_labels.registry_phrase_hits(text)):
+        found.append(f"industry or sub-industry registry name {phrase!r}")
+    return found
 
 
 # --- the gate -----------------------------------------------------------------
@@ -812,6 +896,8 @@ def validate(payload: dict[str, Any], facts: dict[str, Any]) -> list[str]:
 
     allowed = _pack_numbers(facts)
     stage_ids = [s["id"] for s in thesis_stages()]
+    overview_facts = facts.get("overview")
+    group_code = overview_facts.get("code") if isinstance(overview_facts, dict) else None
 
     for name in INTERPRETED_SECTIONS:
         section = sections.get(name)
@@ -846,6 +932,14 @@ def validate(payload: dict[str, Any], facts: dict[str, Any]) -> list[str]:
             for phrase in FORBIDDEN_PHRASES:
                 if phrase in low:
                     errors.append(f"{name}: advice phrasing {phrase!r}")
+        # L1 — over everything the page prints for this section: the prose
+        # and the structured claim fields (an assumption's value, horizon,
+        # anchor, bounds; every basis).
+        leaks: set[str] = set()
+        for text in _interpretation_texts(interp) + _claim_field_texts(interp):
+            leaks.update(taxonomy_leaks(text, group_code=group_code))
+        if leaks:
+            errors.append(f"{name}: {L1_MESSAGE} ({', '.join(sorted(leaks))})")
         for text in _interpretation_texts(interp):
             low = text.lower()
             for phrase in FORBIDDEN_PHRASES:

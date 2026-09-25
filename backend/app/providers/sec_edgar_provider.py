@@ -35,6 +35,21 @@ DOC_TIMEOUT = 60.0
 RATE_LIMIT_SLEEP = 0.12  # ~8 req/sec — under SEC's 10/sec ceiling
 MAX_TEXT_BYTES = 250_000  # ~50k tokens; trim huge filings so we don't blow the DB
 
+# Forms whose bodies are fetched and which drive filing events (unchanged).
+BODY_FORMS = frozenset({"10-K", "10-Q", "8-K"})
+MAX_BODY_FORMS = 10
+# FIX-005: the metadata-only index also carries what an issuer has reported
+# that the body set cannot show — amendments and foreign annual reports — so
+# `fundamental_refresh` knows a period exists before FMP publishes it. `6-K`
+# is deliberately absent: TSM files monthly revenue 6-Ks, and foreign
+# quarters use the calendar fallback instead.
+INDEX_ONLY_FORMS = frozenset({"10-K/A", "10-Q/A", "20-F", "20-F/A", "40-F", "40-F/A"})
+MAX_INDEX_ONLY_FORMS = 10
+# Deregistration/delisting notices. Evidence only (a 25-NSE may delist one
+# class of notes of an active filer); they never end reporting expectations.
+DEREGISTRATION_FORMS = frozenset({"15-12B", "15-12G", "15-15D", "15F-12B", "15F-12G", "15F-15D", "25", "25-NSE"})
+MAX_DEREGISTRATION_FORMS = 5
+
 
 @dataclass(frozen=True)
 class FilingTextResult:
@@ -294,7 +309,13 @@ class SECEdgarProvider:
         .get_filings_index` reads this method: change detection needs the
         accession numbers and nothing else, and the 30-minute filing poll
         across the curated universe is only affordable at one
-        submissions.json read per ticker rather than ten document bodies."""
+        submissions.json read per ticker rather than ten document bodies.
+
+        The metadata read also returns up to `MAX_INDEX_ONLY_FORMS`
+        amendments / 20-F / 40-F rows and up to `MAX_DEREGISTRATION_FORMS`
+        deregistration notices beside the unchanged body window, for
+        `fundamental_refresh.observe_many`. Callers that act on events keep
+        filtering to the body types."""
         if not cik:
             cik = self.lookup_cik(ticker)
         if not cik:
@@ -313,8 +334,31 @@ class SECEdgarProvider:
             primary = recent.get("primaryDocument", [])
             period_ends = recent.get("reportDate", []) or recent.get("primaryDocDescription", [])
             results: list[dict[str, Any]] = []
+            n_body = n_extra = n_dereg = 0
             for form, date_, acc, doc, pe in zip(forms, dates, accs, primary, period_ends):
-                if form not in ("10-K", "10-Q", "8-K"):
+                # The body window (first ten 10-K/10-Q/8-K) must stay exactly
+                # what it was: `edgar_poller` diffs its accessions against a
+                # stored seen-set, so any change would re-fire ~170 tickers'
+                # filing events on deploy. Index-only extras are separate
+                # windows the poller ignores for events and that only the
+                # metadata read (`fetch_text=False`) returns.
+                if form in BODY_FORMS:
+                    if n_body >= MAX_BODY_FORMS:
+                        continue
+                    n_body += 1
+                elif fetch_text:
+                    continue
+                elif form in INDEX_ONLY_FORMS:
+                    if n_extra >= MAX_INDEX_ONLY_FORMS:
+                        continue
+                    n_extra += 1
+                elif form in DEREGISTRATION_FORMS:
+                    # Own cap, so a run of 25-NSE note delistings can never
+                    # crowd an amendment or a 20-F out of the index.
+                    if n_dereg >= MAX_DEREGISTRATION_FORMS:
+                        continue
+                    n_dereg += 1
+                else:
                     continue
                 acc_no_hyphen = acc.replace("-", "")
                 url = f"https://www.sec.gov/Archives/edgar/data/{int(cik_padded)}/{acc_no_hyphen}/{doc}"
@@ -327,7 +371,9 @@ class SECEdgarProvider:
                     business_description=None,
                     raw_text="",
                 ))
-                if len(results) >= 10:
+                if n_body >= MAX_BODY_FORMS and (
+                    fetch_text or (n_extra >= MAX_INDEX_ONLY_FORMS and n_dereg >= MAX_DEREGISTRATION_FORMS)
+                ):
                     break
         except Exception as exc:  # pragma: no cover
             log_safely(log, "SEC submissions fetch failed", exc)

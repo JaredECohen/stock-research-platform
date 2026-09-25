@@ -79,6 +79,10 @@ def _heartbeat() -> None:
         note = (
             f"llm={settings.active_llm_provider}; generation_mode={mode}; "
             f"embeddings={'openai' if settings.has_openai else 'hash'}; "
+            # FEAT-003: the routing value this process loaded. The worker has
+            # no HTTP port and a Blueprint sync may not apply a new render.yaml
+            # key, so this is where a post-deploy check can see it.
+            f"industry_routing={'on' if settings.enable_industry_analyst_routing else 'off'}; "
             f"build={os.environ.get('RENDER_GIT_COMMIT', 'unknown')}"
         )
         if rss is not None:

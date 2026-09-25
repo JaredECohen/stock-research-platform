@@ -226,9 +226,10 @@ def public_display_name(code: Any) -> str:
 @dataclass(frozen=True)
 class _Index:
     names: dict[str, str]            # every known code (2/4/6/8, retired too) -> registry name
-    public_names: dict[str, str]     # multi-word sector/group registry names with & or , -> label
+    public_names: dict[str, str]     # multi-word registry names with & or , -> label (see `rollup`)
     public_names_re: re.Pattern[str] | None
     exact: tuple[tuple[str, str], ...]
+    rollup: bool                     # does `public_names` also roll industry names up to groups?
 
 
 def _exact_table(labels: Labels) -> tuple[tuple[str, str], ...]:
@@ -254,8 +255,8 @@ def _exact_table(labels: Labels) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(pairs.items(), key=lambda kv: -len(kv[0])))
 
 
-@lru_cache(maxsize=1)
-def _index() -> _Index:
+@lru_cache(maxsize=2)
+def _index(rollup: bool = False) -> _Index:
     labels = load()
     payload = industry_knowledge.load_industry_knowledge()
     names: dict[str, str] = {}
@@ -280,12 +281,35 @@ def _index() -> _Index:
         # ordinary English and rewriting them would mangle sentences.
         if entry is not None and ("&" in name or "," in name):
             public_names[name] = entry[0]
+    # The ROLLUP (`rollup=True` only): a distinctive industry / sub-industry
+    # name ("Semiconductor Materials & Equipment") reads as the label of the
+    # group it rolls up to — what `gics_registry.display()` shows for those
+    # levels. It is the net for LEGACY industry-report prose (new editions
+    # are rejected by the validator's L1 rule instead), so only the industry
+    # surfaces ask for it: the read routes, the PM's report excerpts and the
+    # report writer's facts. It is NOT the default, because in company-memo
+    # prose the same strings are ordinary industry words — and often a
+    # provider's industry string ("Aerospace & Defense") — and rewriting
+    # them into a broader group label changes what a sentence says ("Unlike
+    # Oil & Gas Exploration & Production peers, XOM refines" would name
+    # XOM's own group as the contrast). A name two groups share is ambiguous
+    # and left for L1; a sector/group name keeps its own mapping above.
+    if rollup:
+        targets_of: dict[str, set[str]] = {}
+        for code, name in names.items():
+            if len(code) in (6, 8) and ("&" in name or "," in name) and name not in public_names:
+                group = labels.entry(code[:4])
+                if group is not None:
+                    targets_of.setdefault(name, set()).add(group[0])
+        for name, targets in targets_of.items():
+            if len(targets) == 1:
+                public_names[name] = next(iter(targets))
     pattern = None
     if public_names:
         alternation = "|".join(re.escape(n) for n in sorted(public_names, key=len, reverse=True))
         pattern = re.compile(rf"(?<![\w&])(?:{alternation})(?![\w])")
     return _Index(names=names, public_names=public_names, public_names_re=pattern,
-                  exact=_exact_table(labels))
+                  exact=_exact_table(labels), rollup=rollup)
 
 
 def clear_cache() -> None:
@@ -293,6 +317,88 @@ def clear_cache() -> None:
     The module constants keep the values read at import."""
     _default_labels.cache_clear()
     _index.cache_clear()
+    _phrase_index.cache_clear()
+
+
+def registry_names() -> dict[str, str]:
+    """Every known taxonomy code (2/4/6/8-digit, retired included) → its
+    registry name. A copy: the report validator's L1 rule and the
+    public-surface tests read it, and neither may edit the cached index."""
+    return dict(_index().names)
+
+
+@lru_cache(maxsize=1)
+def _phrase_index() -> tuple[re.Pattern[str] | None, re.Pattern[str] | None]:
+    """(the industry/sub-industry registry-phrase pattern, our labels) —
+    the phrase set the report validator's L1 rule rejects in new prose.
+
+    A phrase is the multi-word registry name of a 6/8-digit node that is
+    not also a sector/group name; single words ("Software", "Restaurants")
+    are ordinary English. Case-sensitive: "Office REITs" is the taxonomy's
+    name, "office REITs" is a description."""
+    names = _index().names
+    upper = {n for c, n in names.items() if len(c) in (2, 4)}
+    phrases = sorted({n for c, n in names.items()
+                      if len(c) in (6, 8) and n not in upper and len(n.split()) > 1}, key=len, reverse=True)
+    phrase_re = (re.compile(r"(?<![\w&])(?:" + "|".join(re.escape(p) for p in phrases) + r")(?![\w])")
+                 if phrases else None)
+    labels = load()
+    ours = sorted({lab for lab, _slug in (*labels.sectors.values(), *labels.groups.values())},
+                  key=len, reverse=True)
+    ours_re = (re.compile(r"(?<![\w&])(?:" + "|".join(re.escape(lab) for lab in ours) + r")(?![\w])")
+               if ours else None)
+    return phrase_re, ours_re
+
+
+def registry_phrase_hits(text: Any) -> list[re.Match[str]]:
+    """Every industry/sub-industry registry phrase in `text` that is not
+    part of one of OUR labels ("Software & IT Services" is our label and
+    contains the registry name "IT Services"; a label is what prose is
+    asked to say, so it is never the leak).
+
+    Matched on the raw text, and a hit is discarded only when it lies
+    wholly inside a label occurrence. Blanking the labels out first (the
+    earlier approach) also blanked the label WORDS inside longer registry
+    names — "Health Care Technology" lost "Technology", "Technology
+    Distributors" became "Distributors" — so those names were never seen."""
+    if not isinstance(text, str) or not text:
+        return []
+    phrase_re, ours_re = _phrase_index()
+    if phrase_re is None:
+        return []
+    spans = [m.span() for m in ours_re.finditer(text)] if ours_re is not None else []
+    return [m for m in phrase_re.finditer(text)
+            if not any(a <= m.start() and m.end() <= b for a, b in spans)]
+
+
+def _plain_word(word: str) -> str:
+    """"Office" → "office"; an acronym ("IT", "REITs") keeps its capitals."""
+    return word if sum(ch.isupper() for ch in word) > 1 else word.lower()
+
+
+def plain_registry_phrases(text: str) -> str:
+    """Write every registry phrase `registry_phrase_hits` finds as an
+    ordinary lower-case description ("Office REITs lease space" → "office
+    REITs lease space"), for text a model is PROMPTED with.
+
+    The mandate's own prose names sub-industries ("Office REITs",
+    "Industrial REITs" in the Property REITs mandate); a model that reads
+    the capitalised name repeats it, and L1 then rejects the edition. The
+    description keeps its meaning — unlike rolling it up to the group
+    label, which would turn four different REIT types into one — and is
+    not the taxonomy's name. Length-preserving (ASCII case change only), so
+    a budget measured on the text still holds after it."""
+    hits = registry_phrase_hits(text)
+    if not hits:
+        return text
+    out: list[str] = []
+    last = 0
+    for m in hits:
+        out.append(text[last:m.start()])
+        out.append(re.sub(r"[A-Za-z]+", lambda w: _plain_word(w.group(0)), m.group(0)))
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out)
 
 
 # --- scrub_text ----------------------------------------------------------------
@@ -320,7 +426,39 @@ _PREFIX_RE = re.compile(
 _LONG_CODE_RE = re.compile(r"(\s?)" + _TOKEN_GUARD_BEFORE + r"(\d{6}|\d{8})" + _TOKEN_GUARD_AFTER)
 _INTERNAL_KEY_RE = re.compile(r"\bgics-\d{4}-\d{2}\b", re.IGNORECASE)
 _BRAND_BEFORE_WORD_RE = re.compile(r"\bGICS\b®?\s+(?=[A-Za-z])", re.IGNORECASE)
-_BRAND_RE = re.compile(r"\bGICS\b®?", re.IGNORECASE)
+# Letters only on either side, not `\b`: an underscore or a digit is a word
+# character, so `\bGICS\b` let the brand through inside an identifier
+# ("gics_industries_2026.json", "import_gics_taxonomy") — a string the
+# public surfaces did carry, in the taxonomy source and the 503 remedy.
+_BRAND_RE = re.compile(r"(?<![A-Za-z])GICS(?![A-Za-z])®?", re.IGNORECASE)
+
+
+def has_brand(text: Any) -> bool:
+    """Does `text` name the brand? Letters on neither side, so "Biologics"
+    (and any other word that happens to contain the four letters) is not
+    the brand: a substring test dropped a "biologics" primary source and
+    flagged a "Biologics production" dependency edge."""
+    return isinstance(text, str) and _BRAND_RE.search(text) is not None
+# A code in a basis or source reference: `mandate:4530`, `mapping:4530`,
+# `industry:453010`. The namespace is an allowlist because an arbitrary
+# `word:NN` is as often a count or a ratio as a code ("limit:10", "year:2020");
+# a taxonomy namespace proves the number is a code, including the three
+# year-shaped group codes (2010/2020/2030).
+_REF_NAMESPACES = ("mandate", "mapping", "industry", "industry_group", "group", "industry_knowledge",
+                   "sector", "gics", "taxonomy", "code")
+_REF_CODE_RE = re.compile(
+    r"(?<![\w:])(" + "|".join(_REF_NAMESPACES) + r"):(\d{8}|\d{6}|\d{4}|\d{2})" + _TOKEN_GUARD_AFTER,
+    re.IGNORECASE,
+)
+# The brand followed directly by a code or a list of codes ("GICS 4010",
+# "GICS® 2030", "GICS 4510, 4520", "GICS 4510/451020"). Longest width
+# first, so a 4-digit code is never read as a 2-digit one plus a remainder.
+_CODE_TOKEN = r"(?:\d{8}|\d{6}|\d{4}|\d{2})"
+_BRAND_CODES_RE = re.compile(
+    r"\b(GICS\b®?)(\s+)(" + _CODE_TOKEN + r"(?:\s*[,;/]\s*" + _CODE_TOKEN + r")*)" + _TOKEN_GUARD_AFTER,
+    re.IGNORECASE,
+)
+_CODE_LIST_SPLIT_RE = re.compile(r"(\s*[,;/]\s*)")
 _MULTISPACE_RE = re.compile(r"[ \t]{2,}")
 # The lookbehind pins a match to the START of a space run, so a long run not
 # followed by punctuation is scanned once rather than once per position.
@@ -342,6 +480,19 @@ _SECTOR_CODE_NOUNS = frozenset({
     "constituents", "companies", "stocks", "equities", "peers", "members", "index",
     "indices", "benchmark", "analyst", "analysts", "coverage", "universe", "exposure",
     "weighting", "weight", "cohort", "basket", "classification", "code",
+})
+# After the brand, one number followed by one of these counts taxonomy
+# levels ("the GICS 11 sectors"; "GICS 10 sectors" before 2016) rather than
+# naming one. "sub" is what _NEXT_WORD_RE reads from "sub-industries".
+_TAXONOMY_COUNT_NOUNS = frozenset({
+    "sectors", "groups", "industries", "sub", "subindustries", "levels", "tiers", "codes",
+})
+# A year after the brand that names a revision of the standard ("the GICS
+# 2020 changes") is a year, even where it is also a group code.
+_REVISION_NOUNS = frozenset({
+    "revision", "revisions", "reclassification", "reclassifications", "restructuring",
+    "change", "changes", "update", "updates", "methodology", "structure", "edition",
+    "version", "review", "reshuffle", "overhaul",
 })
 
 
@@ -400,7 +551,7 @@ def _keepable(phrase: Any) -> bool:
     """A phrase a caller may exempt from scrubbing: non-blank text with no
     digit and no brand — a provider industry string, never a code."""
     return (isinstance(phrase, str) and bool(phrase.strip())
-            and not any(ch.isdigit() for ch in phrase) and "gics" not in phrase.lower())
+            and not any(ch.isdigit() for ch in phrase) and not has_brand(phrase))
 
 
 def _keep_set(keep: Any) -> frozenset[str]:
@@ -409,7 +560,7 @@ def _keep_set(keep: Any) -> frozenset[str]:
     return frozenset(p.strip() for p in (keep or ()) if _keepable(p))
 
 
-def scrub_text(text: str, *, keep: Any = ()) -> str:
+def scrub_text(text: str, *, keep: Any = (), rollup: bool = False) -> str:
     """Remove taxonomy codes, the brand and registry group names from
     prose. A registry name EQUAL to a ``keep`` phrase is left as written
     (the caller's already-public provider industry string: "Household &
@@ -427,11 +578,16 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
     c. ``name (code)`` / ``code name`` pairs → our label (sector/group) or
        nothing (industry/sub-industry); ``Industry Group Analyst dddd`` →
        the public display name; ``sector 45`` / ``group 4530`` → ``sector
-       Technology`` / ``group Chips & Chipmaking Equipment``;
+       Technology`` / ``group Chips & Chipmaking Equipment``; the brand
+       as a code's own prefix (``GICS 4010``, ``GICS® 2030``, ``GICS 4510,
+       4520``) → ``industry <label>`` per 2/4-digit code, 6/8-digit codes
+       in the run removed;
     d. standalone known 6/8-digit codes → removed. A bare 4-digit token is
        never touched (2020 and 2030 are years as well as group codes);
     e. multi-word registry sector/group names containing ``&`` or ``,`` →
-       our label (case-sensitive);
+       our label (case-sensitive); with ``rollup=True`` (industry-report
+       surfaces only — see ``_index``) a distinctive industry/sub-industry
+       name → the label of its group as well;
     f. the internal taxonomy key → the public key; any remaining "GICS" is
        dropped before a noun ("the GICS sector" → "the sector") and
        otherwise read as "industry".
@@ -440,25 +596,38 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
     or a hyphenated word are never altered by the contextual rules (b,
     c-prefix, d); a prefixed code followed by a unit word is a quantity,
     and a 2-digit one must be followed by punctuation, the end of the text
-    or a taxonomy noun. The one year-shaped rewrite is rule c's pair form,
-    where the registry name next to the bracketed code proves it is one.
+    or a taxonomy noun. A year-shaped number is rewritten only where
+    something next to it proves it is a code: the registry name (rule c's
+    pair form) or the brand (rule c's brand form, unless a revision noun
+    follows: "the GICS 2020 changes").
     """
     if not isinstance(text, str) or not text:
         return text
     kept = _keep_set(keep)
     labels = load()
-    idx = _index()
+    idx = _index(rollup)
     out = text
     for old, new in idx.exact:
         if old in out:
             out = out.replace(old, new)
     if any(ch.isdigit() for ch in out):
+        # References before everything else: the standalone-code rule would
+        # strip the 6-digit half of "industry:453010" and leave a dangling
+        # "industry:".
+        out = _REF_CODE_RE.sub(lambda m: _ref_sub(m, idx, labels), out)
         # Pairs first: a bracket rule that ran earlier would strip the
         # "(4010)" off "Banks (4010)" and leave the registry name behind.
         out = _pair_subs(out, idx, labels, kept)
         out = _ANALYST_RE.sub(
             lambda m: public_display_name(m.group(1)) if labels.entry(m.group(1)) else m.group(0), out,
         )
+        if "gics" in out.lower():
+            # Before the bracket, prefix and long-code rules and before rule
+            # f: the brand is the one evidence that "2030" in "GICS 2030" is
+            # a code and not a year. Once rule f rewrites it to "industry",
+            # or rule d strips a 6-digit member out of a list, that evidence
+            # is gone and the code stays next to our own noun.
+            out = _BRAND_CODES_RE.sub(lambda m: _brand_codes_sub(m, idx, labels), out)
         out = _BRACKET_RE.sub(lambda m: _bracket_sub(m, idx.names), out)
         out = _PREFIX_RE.sub(lambda m: _prefix_sub(m, labels), out)
         out = _LONG_CODE_RE.sub(lambda m: "" if m.group(2) in idx.names else m.group(0), out)
@@ -475,6 +644,58 @@ def scrub_text(text: str, *, keep: Any = ()) -> str:
         # spacing survives untouched text.
         out = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", _MULTISPACE_RE.sub(" ", out))
     return out
+
+
+def _brand_codes_sub(m: re.Match[str], idx: _Index, labels: Labels) -> str:
+    """``GICS <code>[, <code>...]`` → ``industry <label>[, <label>...]``.
+
+    The brand proves the number is a code, so neither the year guard nor
+    the 2-digit noun guard of the bare prefix form applies ("GICS 2030
+    rerates", "GICS 45 names"). A single number followed by a unit word, a
+    taxonomy count ("GICS 11 sectors") or, when year-shaped, a revision
+    noun ("GICS 2020 changes") is left for rule f. Codes are rewritten left
+    to right; from the first token that is not a known code on, the run
+    stays as written, since a list that stops being codes is not a code
+    list."""
+    brand, gap, run = m.group(1), m.group(2), m.group(3)
+    parts = _CODE_LIST_SPLIT_RE.split(run)
+    tokens, seps = parts[0::2], parts[1::2]
+    if len(tokens) == 1:
+        nxt = _NEXT_WORD_RE.match(m.string, m.end())
+        word = (nxt.group(1) if nxt else "").lower()
+        if word in _UNIT_WORDS or word in _TAXONOMY_COUNT_NOUNS:
+            return m.group(0)
+        if _is_year(run) and word in _REVISION_NOUNS:
+            return m.group(0)
+    rewritten: list[str] = []
+    rest = ""
+    for i, tok in enumerate(tokens):
+        entry = labels.entry(tok)
+        if tok not in idx.names or (len(tok) <= 4 and entry is None):
+            # The unrecognised remainder, with the separator before it.
+            rest = "".join(parts[2 * i - 1:]) if i else run
+            break
+        if entry is not None:
+            rewritten.append(entry[0])
+        # A 6/8-digit code has no entry and is removed outright (rule d).
+    if not rewritten:
+        # Nothing to label: the brand is left for rule f and the remainder
+        # as written ("GICS 45301020 names" → "GICS names" → "names").
+        return f"{brand}{gap}{rest}" if rest else brand
+    # Between the surviving labels, the list's own first separator.
+    joiner = seps[0] if seps else ", "
+    return f"industry{gap}{joiner.join(rewritten)}{rest}"
+
+
+def _ref_sub(m: re.Match[str], idx: _Index, labels: Labels) -> str:
+    """``mandate:4530`` → ``mandate:<group slug>``; a 6/8-digit code rolls
+    up to its group's slug (the only level with a public name). An unknown
+    number is left alone — it is not a code this taxonomy has."""
+    namespace, code = m.group(1), m.group(2)
+    if code not in idx.names:
+        return m.group(0)
+    entry = labels.entry(code if len(code) <= 4 else code[:4])
+    return f"{namespace}:{entry[1]}" if entry is not None else m.group(0)
 
 
 def _prefix_sub(m: re.Match[str], labels: Labels) -> str:
@@ -520,7 +741,7 @@ _DROP_KEYS = frozenset({"industry_code", "sub_industry_code", "industry_name", "
 _CONSTANT_KEYS = ("attribution", "mapping_caveat", "security_reference_caveat")
 _VERSION_KEYS = frozenset({"taxonomy_version", "key", "knowledge_version", "version_key"})
 _SOURCE_LIST_KEYS = frozenset({"primary_sources", "map_sources"})
-_BRANDED_SOURCE_RE = re.compile(r"gics|msci\.com|spglobal\.com", re.IGNORECASE)
+_BRANDED_SOURCE_RE = re.compile(r"(?<![A-Za-z])gics(?![A-Za-z])|msci\.com|spglobal\.com", re.IGNORECASE)
 _PUBLIC_REF = "MarketMosaic industry research knowledge base"
 # Values that are public by design and shown exactly as the source wrote
 # them (W1 §4.5: the provider's industry string stands in for the
@@ -529,9 +750,19 @@ _PUBLIC_REF = "MarketMosaic industry research knowledge base"
 _PASSTHROUGH_KEYS = frozenset({"provider_industry"})
 
 
+# Lists that name groups by bare code under a key that does not end in
+# `_codes`: the cross-industry snapshot's `insufficient_sample_groups` is a
+# list of code strings, and `missing_groups` is one in older snapshots (a
+# list of `{code, name, reason}` in newer ones). A bare "4530" string is
+# never touched by `scrub_text` (four digits can be a year), so these keys
+# have to be named.
+_GROUP_LIST_KEYS = frozenset({"insufficient_sample_groups", "missing_groups"})
+
+
 def _code_list_slugs(values: list[Any], idx: _Index, labels: Labels, keep: Any) -> list[Any]:
     """Each known code → the slug of its group (6/8-digit codes roll up to
-    their 4-digit prefix); unknown values are kept; duplicates collapse."""
+    their 4-digit prefix); unknown values are kept (strings scrubbed, other
+    values projected); duplicates collapse."""
     out: list[Any] = []
     for v in values:
         key = _norm(v)
@@ -540,14 +771,14 @@ def _code_list_slugs(values: list[Any], idx: _Index, labels: Labels, keep: Any) 
             if entry is None:
                 continue
             v = entry[1]
-        elif isinstance(v, str):
-            v = scrub_text(v, keep=keep)
+        else:
+            v = _project(v, idx, labels, keep)
         if v not in out:
             out.append(v)
     return out
 
 
-def _constant_for(key: str, value: Any, labels: Labels, keep: Any) -> Any:
+def _constant_for(key: str, value: Any, idx: _Index, labels: Labels, keep: Any) -> Any:
     default = {"attribution": labels.attribution, "mapping_caveat": labels.mapping_caveat,
                "security_reference_caveat": labels.security_reference_caveat}[key]
     if not isinstance(value, str):
@@ -555,10 +786,10 @@ def _constant_for(key: str, value: Any, labels: Labels, keep: Any) -> Any:
     # A known branded sentence maps to its own public twin (the brief
     # attribution is not the taxonomy attribution); any other text that
     # names the brand gets the key's public constant, not a half-scrub.
-    exact = dict(_index().exact)
+    exact = dict(idx.exact)
     if value in exact:
         return exact[value]
-    return default if "gics" in value.lower() else scrub_text(value, keep=keep)
+    return default if has_brand(value) else scrub_text(value, keep=keep, rollup=idx.rollup)
 
 
 def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels, keep: Any) -> dict[Any, Any]:
@@ -590,20 +821,32 @@ def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels, keep: Any) -
         elif k in _PASSTHROUGH_KEYS and (v is None or _keepable(v)):
             out[k] = v
         elif k in _CONSTANT_KEYS:
-            out[k] = _constant_for(k, v, labels, keep)
+            out[k] = _constant_for(k, v, idx, labels, keep)
         elif k == "provenance" and isinstance(v, dict):
             out[k] = {}
         elif k in _VERSION_KEYS and isinstance(v, str) and v.lower().startswith("gics-"):
             out[k] = public_version_key(v.lower())
-        elif isinstance(k, str) and (k == "codes" or k.endswith("_codes")) and isinstance(v, list):
+        elif isinstance(k, str) and (k == "codes" or k.endswith("_codes") or k in _GROUP_LIST_KEYS) \
+                and isinstance(v, list):
             out[k] = _code_list_slugs(v, idx, labels, keep)
         elif k in _SOURCE_LIST_KEYS and isinstance(v, list):
             kept = [s for s in v if not _BRANDED_SOURCE_RE.search(json.dumps(s, default=str))]
             out[k] = [_project(s, idx, labels, keep) for s in kept]
             if len(kept) != len(v):
                 out[f"{k}_withheld"] = len(v) - len(kept)
-        elif k == "ref" and isinstance(v, str) and "gics" in v.lower():
+        elif k == "ref" and isinstance(v, str) and has_brand(v):
             out[k] = _PUBLIC_REF
+        elif isinstance(v, list):
+            # A list entry that was nothing BUT a non-public identity (an
+            # overview `boundaries` row is `{code, name}` of an industry)
+            # projects to `{}`; a page would render a row of nothing. It is
+            # dropped and counted, the same way a withheld source is.
+            projected = [_project(item, idx, labels, keep) for item in v]
+            emptied = {i for i, (a, b) in enumerate(zip(v, projected))
+                       if isinstance(a, dict) and a and b == {}}
+            out[k] = [p for i, p in enumerate(projected) if i not in emptied]
+            if emptied:
+                out[f"{k}_withheld"] = len(emptied)
         else:
             out[k] = _project(v, idx, labels, keep)
     return out
@@ -611,7 +854,7 @@ def _project_dict(obj: dict[Any, Any], idx: _Index, labels: Labels, keep: Any) -
 
 def _project(obj: Any, idx: _Index, labels: Labels, keep: Any = ()) -> Any:
     if isinstance(obj, str):
-        return scrub_text(obj, keep=keep)
+        return scrub_text(obj, keep=keep, rollup=idx.rollup)
     if isinstance(obj, dict):
         return _project_dict(obj, idx, labels, keep)
     if isinstance(obj, (list, tuple)):
@@ -619,7 +862,7 @@ def _project(obj: Any, idx: _Index, labels: Labels, keep: Any = ()) -> Any:
     return copy.deepcopy(obj)
 
 
-def project_public(obj: Any, *, keep: Any = ()) -> Any:
+def project_public(obj: Any, *, keep: Any = (), rollup: bool = False) -> Any:
     """A public copy of a JSON-shaped payload (the input is never mutated):
 
     1. ``code`` / ``sector_code`` / ``industry_group_code`` / ``group_code``
@@ -627,7 +870,9 @@ def project_public(obj: Any, *, keep: Any = ()) -> Any:
        sibling ``*name`` → our label; holding a 6/8-digit code → both keys
        removed.
     2. ``industry_code`` / ``sub_industry_code`` (and their names) → removed;
-       ``codes`` / ``*_codes`` lists → group slugs, de-duplicated.
+       ``codes`` / ``*_codes`` lists, and the snapshot's
+       ``insufficient_sample_groups`` / ``missing_groups`` → group slugs for
+       their bare-code entries, de-duplicated.
     3. dict keys equal to a known 2/4-digit code → slug; 6/8-digit keys →
        entry dropped.
     4. ``attribution`` / ``mapping_caveat`` / ``security_reference_caveat``
@@ -637,14 +882,17 @@ def project_public(obj: Any, *, keep: Any = ()) -> Any:
        publishers → removed, counted in ``<key>_withheld``; a branded
        ``ref`` → the knowledge-base reference.
     6. ``provider_industry`` → kept verbatim (public by design).
-    7. every remaining string → ``scrub_text`` (with ``keep``).
+    7. every remaining string → ``scrub_text`` (with ``keep`` and
+       ``rollup``). ``rollup=True`` is for industry-report surfaces only
+       (the read routes, the PM's report excerpts): see ``_index``.
     """
-    return _project(obj, _index(), load(), keep)
+    return _project(obj, _index(rollup), load(), keep)
 
 
 def project_for_prompt(obj: Any, *, keep: Any = ()) -> Any:
     """The same projection, applied to facts sent to a model: a prompt that
     never contains a code or registry name cannot be echoed into prose.
     A separate name so a prompt-only rule can diverge without moving what
-    API responses carry."""
-    return _project(obj, _index(), load(), keep)
+    API responses carry. Its only caller is the industry report writer,
+    whose prose L1 gates, so the industry rollup applies."""
+    return _project(obj, _index(rollup=True), load(), keep)

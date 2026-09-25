@@ -689,3 +689,370 @@ def test_applies_to_is_false_with_routing_off_and_records_nothing():
     inputs = make_inputs("MSFT", industry_group={"state": "mapped", "industry_group_code": "4510"})
     assert ia.applies_to(inputs) is False
     assert inputs.degradation.failures == []
+
+
+# --- routing ON: the PM reads the routed read (S13, owner decision 2026-09-24) ------
+#
+# The PM synthesis reads findings as ONE JSON blob cut at
+# `max_agent_context_chars`, built in roster order, and the Industry Group
+# Analyst is the roster's tail: on JPM's demo memo its entry started at offset
+# 62,791 against the 60,000 cap, and on every stored live memo (META v1's
+# views alone are 86,518 chars) it is never read. The PM now reads a bounded
+# digest ahead of the JSON instead (C7), and a stand-in read not at all.
+
+# An LLM-shaped read: what the analyst returns when its model answers. The
+# summary says "premium" on purpose — the deterministic PM heuristic counts
+# that word as a bullish vote, so a leak into the heuristic shows up.
+_ROUTED_READ: dict = {
+    "headline": "Deposit franchise sets this bank's rate leverage",
+    "summary": "Net interest margin follows deposit beta more than loan growth; "
+               "the funding franchise earns a premium on cost of deposits.",
+    "key_points": [f"Routed point {n}" for n in range(1, 8)],
+    "confidence": 0.7,
+    "mandate_type": "compounder",
+    "placement": "Money-centre franchise with a low-beta deposit base.",
+    "causal_chain": [{"stage": s["id"], "text": f"Routed stage {s['id']}"} for s in thesis_stages()],
+    "kpis_to_watch": [{"kpi": "Deposit beta", "why": "drives net interest margin"}],
+    "falsifiers": ["Deposit beta above peers", "Loan losses outrun reserves",
+                   "Fee income stalls", "A fourth falsifier the digest leaves out"],
+    "traps": ["Reserve releases flatter EPS"],
+}
+_DIGEST_HEAD = "## Industry group read"
+_JSON_ENTRY = '"industry_group": {"agent"'  # the finding as a JSON entry, not the bare key
+_FINDINGS = "\n\nFindings:\n"
+
+
+def _routed_finding(monkeypatch, ticker: str = "JPM", **overrides) -> AgentFinding:
+    """The analyst's real LLM path, with its model stubbed to `_ROUTED_READ`."""
+    read = {**_ROUTED_READ, **overrides}
+    with monkeypatch.context() as m:
+        m.setattr(ia.llm, "chat_json", lambda *a, **k: dict(read))
+        return ia.run_industry_group_agent({"ticker": ticker, "company_name": ticker}, {},
+                                           classification=ic.current_for([ticker])[ticker])
+
+
+def _spy_llm(monkeypatch, *, industry_read: dict | None = None, pm_reply: dict | None = None) -> dict:
+    """Capture the PM Synthesis and Risk Committee prompts, and answer the
+    Industry Group Analyst's call with `industry_read` when given. Anything
+    else goes to the real (keyless, demo) client."""
+    from app.agents import llm as llm_mod
+    seen: dict[str, list] = {"pm": [], "critic": [], "industry": []}
+    # A second spy in the same test must wrap the client, not the first spy.
+    real = getattr(llm_mod.chat_json, "_unspied", llm_mod.chat_json)
+
+    def spy(prompt, **kwargs):
+        if prompt.startswith(prompts.PM_SYNTHESIS_PROMPT):
+            seen["pm"].append(prompt)
+            return dict(pm_reply) if pm_reply else None
+        if prompt.startswith(prompts.CRITIC_PROMPT):
+            seen["critic"].append(prompt)
+            return None
+        if llm_mod.current_call_context().get("agent_name") == ia.AGENT_NAME:
+            seen["industry"].append(kwargs)
+            if industry_read is not None:
+                return dict(industry_read)
+        return real(prompt, **kwargs)
+
+    spy._unspied = real  # type: ignore[attr-defined]
+    monkeypatch.setattr(llm_mod, "chat_json", spy)
+    return seen
+
+
+_PROFILE = {"ticker": "JPM", "sector": "Financials"}
+_PM_REPLY = {"rating_label": "Neutral", "confidence_score": 50, "final_pm_view": "v",
+             "one_sentence_thesis": "t"}
+
+
+def test_pm_synthesis_reads_the_routed_read_ahead_of_the_capped_json(monkeypatch):
+    cap = settings.max_agent_context_chars
+    routed = _routed_finding(monkeypatch)
+    findings = {
+        # A sector finding alone overflows the cap, as on every live memo.
+        "sector": AgentFinding(agent="Sector Analyst", headline="Sector read", summary="s",
+                               data={"research": "x" * (cap + 5_000)}),
+        "industry_group": routed,
+    }
+    seen = _spy_llm(monkeypatch, pm_reply=_PM_REPLY)
+    graph._pm_synthesis(_PROFILE, findings, None)
+    (prompt,) = seen["pm"]
+
+    assert prompt.index(_DIGEST_HEAD) < prompt.index(_FINDINGS)
+    assert prompt.index(routed.headline) < prompt.index(_FINDINGS)
+    label = routed.data["industry_group"]["label"]
+    assert f"{_DIGEST_HEAD} — {label} (Industry Group Analyst)" in prompt
+    # The capped JSON is still the cap. (Its content cannot show whether the
+    # read was left out: the padded sector entry fills it before any entry
+    # after it. The unpadded case below does.)
+    assert len(prompt.split(_FINDINGS, 1)[1]) == cap
+
+    # On a small memo, where the whole JSON fits, the read is still never a
+    # JSON entry: it would be read twice, once as the digest and once raw.
+    small = {"sector": AgentFinding(agent="Sector Analyst", headline="Sector read", summary="s"),
+             "industry_group": routed}
+    graph._pm_synthesis(_PROFILE, small, None)
+    prompt = seen["pm"][-1]
+    assert prompt.index(_DIGEST_HEAD) < prompt.index(_FINDINGS)
+    assert _JSON_ENTRY not in prompt
+    assert prompt.count(routed.headline) == 1
+
+
+def test_a_digested_read_casts_no_keyword_vote_in_the_no_llm_rating(monkeypatch):
+    """Design §3.2: the no-LLM keyword heuristic counts only the JSON set.
+    A routed read reaches the PM model as its digest, but it must not move
+    the deterministic rating: `_ROUTED_READ.summary` says "premium", a
+    bullish keyword, so a digested read that voted would lift a Neutral
+    fallback (it did on the base commit: Neutral 55 → Bullish 60)."""
+    routed = _routed_finding(monkeypatch)
+    assert ia.pm_digest(routed)                     # digested, not withheld
+    sector = AgentFinding(agent="Sector Analyst", headline="Sector read", summary="Neutral.")
+    _spy_llm(monkeypatch)                           # the PM model answers nothing
+    alone = graph._pm_synthesis(_PROFILE, {"sector": sector}, None)
+    with_read = graph._pm_synthesis(_PROFILE, {"sector": sector, "industry_group": routed}, None)
+    assert (with_read["rating_label"], with_read["confidence_score"]) == (
+        alone["rating_label"], alone["confidence_score"])
+
+
+def test_pm_digest_is_bounded_and_shaped(monkeypatch):
+    # Per-field bounds, checked against literal fixture content rather than
+    # against pm_digest's own output: at most 5 key points, at most 3
+    # falsifiers, the summary clipped to 600 characters.
+    digest = ia.pm_digest(_routed_finding(monkeypatch))
+    assert "Routed point 5" in digest and "Routed point 6" not in digest
+    assert "Fee income stalls" in digest and "A fourth falsifier" not in digest
+    clipped = ia.pm_digest(_routed_finding(monkeypatch, summary="w" * 1_000, key_points=["a"]))
+    (summary_line,) = [ln for ln in clipped.splitlines() if ln.startswith("Summary: ")]
+    assert len(summary_line) == len("Summary: ") + 600 and summary_line.endswith("…")
+    assert len(clipped) < ia.PM_DIGEST_MAX_CHARS
+
+    long = AgentFinding(
+        agent=ia.AGENT_NAME, headline="H" * 300, summary="S" * 5_000,
+        key_points=["k" * 400] * 8, confidence=0.7,
+        data={"industry_group": {"label": "Lbl"}, "mandate_type": "inflection",
+              "falsifiers": ["f" * 300] * 5},
+    )
+    digest = ia.pm_digest(long)
+    assert len(digest) == ia.PM_DIGEST_MAX_CHARS and digest.endswith("…")
+    assert digest.startswith(f"{_DIGEST_HEAD} — Lbl (Industry Group Analyst)\nHeadline: ")
+    short = ia.pm_digest(long.model_copy(update={
+        "headline": "Head", "summary": "Short.", "key_points": ["a", "b"],
+        "data": {**long.data, "falsifiers": ["x", "y"]},
+    }))
+    assert short == ("## Industry group read — Lbl (Industry Group Analyst)\nHeadline: Head\n"
+                     "Summary: Short.\n- a\n- b\nMandate type: inflection\nFalsifiers: x; y")
+    # A read that says nothing is withheld rather than sent as an empty header.
+    assert ia.pm_digest(long.model_copy(update={"headline": " ", "summary": ""})) == ""
+
+
+def test_pm_prompt_is_byte_identical_without_a_digest_spec(monkeypatch):
+    """With no digest spec in the findings (routing off, or an unmapped
+    company) the PM's input is exactly the pre-change expression."""
+    findings = {
+        "sector": AgentFinding(agent="Sector Analyst", headline="Sector read", summary="Neutral."),
+        "earnings": AgentFinding(agent="Earnings Analyst", headline="Beat", summary="Guidance held."),
+    }
+    view = graph._pm_view(findings)
+    assert view.digests == [] and view.findings == findings and view.visible == findings
+    assert list(view.findings) == ["sector", "earnings"]
+
+    from app.agents import pm_context
+    monkeypatch.setattr(pm_context, "build_pm_context", lambda **kw: "PM-CONTEXT")
+    seen = _spy_llm(monkeypatch, pm_reply=_PM_REPLY)
+    graph._pm_synthesis(_PROFILE, findings, None)
+    expected = (
+        prompts.PM_SYNTHESIS_PROMPT
+        + "\n\nPM-CONTEXT"
+        + "\n\nFindings:\n"
+        + json.dumps({k: v.model_dump() for k, v in findings.items()}, default=str)[
+            : settings.max_agent_context_chars]
+    )
+    assert seen["pm"] == [expected]
+
+
+@pytest.mark.parametrize("pm_ctx", ["PM-CONTEXT", ""])
+def test_pm_prompt_assembly_order(monkeypatch, pm_ctx):
+    """Contract C7: template + pm_ctx, then the industry digest, then the
+    capped JSON. Later slices insert their blocks between the digest and
+    "Findings:"; this pins the order they extend."""
+    routed = _routed_finding(monkeypatch)
+    sector = AgentFinding(agent="Sector Analyst", headline="Sector read", summary="Neutral.")
+    from app.agents import pm_context
+    monkeypatch.setattr(pm_context, "build_pm_context", lambda **kw: pm_ctx)
+    seen = _spy_llm(monkeypatch, pm_reply=_PM_REPLY)
+    graph._pm_synthesis(_PROFILE, {"sector": sector, "industry_group": routed}, None)
+    digest = ia.pm_digest(routed)
+    assert digest
+    assert seen["pm"] == [
+        prompts.PM_SYNTHESIS_PROMPT
+        + (f"\n\n{pm_ctx}" if pm_ctx else "")
+        + "\n\n" + digest
+        + "\n\nFindings:\n"
+        + json.dumps({"sector": sector.model_dump()}, default=str)[: settings.max_agent_context_chars]
+    ]
+
+
+_WITHHELD = {
+    "no_mapping": True,
+    "deterministic_fallback": "Industry Group LLM returned no usable output; mandate-grounded "
+                              "deterministic read shipped instead.",
+    "degraded": True,
+    "intake_skipped": True,
+}
+
+
+@pytest.mark.parametrize("flag", sorted(_WITHHELD))
+def test_withheld_industry_reads_never_reach_the_pm_or_influence(monkeypatch, flag):
+    """A stand-in read (the flags `memo_sections.finding_is_template` reads)
+    must not reach the rating dressed as an analyst view: no digest, no JSON
+    entry, no keyword vote in the no-LLM fallback, and no stored pull in
+    `agent_influence`."""
+    routed = _routed_finding(monkeypatch)
+    withheld = routed.model_copy(update={
+        "summary": routed.summary + " Constructive tailwind, premium outperform.",
+        "data": {**routed.data, flag: _WITHHELD[flag]},
+    })
+    assert ia.pm_digest(withheld) == ""
+
+    # The deterministic PM path: the rating is what it is without the read.
+    base = {"sector": AgentFinding(agent="Sector Analyst", headline="Sector read", summary="Neutral.")}
+    seen = _spy_llm(monkeypatch)
+    alone = graph._pm_synthesis(_PROFILE, dict(base), None)
+    with_it = graph._pm_synthesis(_PROFILE, {**base, "industry_group": withheld}, None)
+    assert (with_it["rating_label"], with_it["confidence_score"]) == (
+        alone["rating_label"], alone["confidence_score"])
+    assert len(seen["pm"]) == 2
+    assert all(_DIGEST_HEAD not in p and _JSON_ENTRY not in p for p in seen["pm"])
+
+    # End to end: stored on the memo as history, absent from its influence.
+    monkeypatch.setattr(settings, "enable_industry_analyst_routing", True)
+    monkeypatch.setattr(roster, "run_industry_group_agent", lambda *a, **k: withheld)
+    memo = graph.run_stock_memo("JPM")
+    assert "industry_group" in memo.extra_agent_views
+    assert "industry_group" not in memo.agent_influence
+    assert len(seen["pm"]) == 3 and _JSON_ENTRY not in seen["pm"][-1]
+    assert _DIGEST_HEAD not in seen["pm"][-1]
+
+
+def test_routed_demo_memo_reaches_the_pm_and_degrades_nothing(monkeypatch):
+    """Routing happens in demo mode too, and no keys is the design there,
+    not a degradation. With the analyst's model answering, its read reaches
+    the PM as the digest and is scored for influence; the keyless
+    deterministic mandate read (a template) is stored but withheld."""
+    monkeypatch.setattr(settings, "enable_industry_analyst_routing", True)
+    seen = _spy_llm(monkeypatch, industry_read=_ROUTED_READ)
+    memo = graph.run_stock_memo("JPM")
+
+    assert seen["industry"], "the Industry Group Analyst's model was never asked"
+    (prompt,) = seen["pm"]
+    label = ia.analyst_for_classification(ic.current_for(["JPM"])["JPM"]).label
+    assert prompt.index(f"{_DIGEST_HEAD} — {label}") < prompt.index(_FINDINGS)
+    assert _ROUTED_READ["headline"] in prompt and _JSON_ENTRY not in prompt
+    assert ia.construction_count() == 1
+    assert memo.extra_agent_views["industry_group"].headline == _ROUTED_READ["headline"]
+    assert memo.sector_agent_view.data["industry_group"]["label"] == label
+    assert "industry_group" in memo.agent_influence
+    assert not [a for a in memo.degraded_agents if "Industry Group" in a]
+
+    seen = _spy_llm(monkeypatch)                  # keyless: the deterministic mandate read
+    memo = graph.run_stock_memo("JPM")
+    (prompt,) = seen["pm"]
+    assert _DIGEST_HEAD not in prompt and _JSON_ENTRY not in prompt
+    assert "industry_group" in memo.extra_agent_views
+    assert "industry_group" not in memo.agent_influence
+    assert not [a for a in memo.degraded_agents if "Industry Group" in a]
+
+
+def _lookup_raises(monkeypatch):
+    def boom(ticker):
+        raise RuntimeError("classification read failed")
+    monkeypatch.setattr(ia, "lookup_classification", boom)
+
+
+def _factory_raises(monkeypatch):
+    def boom(code, **kwargs):
+        raise reg.UnknownNode(f"no node {code}")
+    monkeypatch.setattr(ia, "get_industry_analyst", boom)
+
+
+@pytest.mark.parametrize("break_it", [_lookup_raises, _factory_raises], ids=["lookup-coverage", "factory"])
+def test_routing_failures_degrade_the_memo_instead_of_failing_it(monkeypatch, break_it):
+    """The two failure paths no test covered: the gather-stage read raises,
+    or the factory cannot build the analyst (a code the registry or the
+    knowledge base does not carry). The memo completes, the banner names the
+    analyst, and nothing of it reaches the PM or the influence map.
+
+    `factory` is the regression case and fails on the base commit.
+    `lookup-coverage` is a
+    characterization of behaviour S13 does not change (a raising lookup
+    never produced an industry finding, so it passes on the base commit
+    too); it pins that path now that routing is on in production."""
+    monkeypatch.setattr(settings, "enable_industry_analyst_routing", True)
+    break_it(monkeypatch)
+    seen = _spy_llm(monkeypatch)
+    memo = graph.run_stock_memo("JPM")
+
+    assert memo.sector_agent_view.confidence > 0.0
+    assert "Industry Group Analyst" in memo.degraded_agents
+    (prompt,) = seen["pm"]
+    assert _DIGEST_HEAD not in prompt and _JSON_ENTRY not in prompt
+    assert "industry_group" not in memo.agent_influence
+    if break_it is _factory_raises:
+        assert memo.sector_agent_view.data["industry_group"]["error"] == "industry group block unavailable"
+        assert memo.extra_agent_views["industry_group"].data.get("degraded") is True
+
+
+def test_a_digest_that_raises_withholds_the_read_not_the_synthesis(monkeypatch):
+    """`_pm_synthesis` runs under `safe_call`; a digest bug must cost the PM
+    one read, not ship the "synthesis unavailable" fallback for the memo."""
+    import dataclasses
+
+    def boom(finding):
+        raise ValueError("digest bug")
+
+    tail = dataclasses.replace(roster.AGENTS[-1], pm_digest=boom)
+    monkeypatch.setattr(roster, "AGENTS", (*roster.AGENTS[:-1], tail))
+    routed = _routed_finding(monkeypatch)
+    sector = AgentFinding(agent="Sector Analyst", headline="Sector read", summary="Neutral.")
+    view = graph._pm_view({"sector": sector, "industry_group": routed})
+    assert view.digests == [] and list(view.findings) == ["sector"] and list(view.visible) == ["sector"]
+    seen = _spy_llm(monkeypatch, pm_reply=_PM_REPLY)
+    assert graph._pm_synthesis(_PROFILE, {"sector": sector, "industry_group": routed}, None) == _PM_REPLY
+    assert len(seen["pm"]) == 1 and _DIGEST_HEAD not in seen["pm"][0]
+
+
+def test_industry_analyst_call_has_output_headroom(monkeypatch):
+    """The analyst's schema is the largest any specialist is asked for; at
+    `chat_json`'s 1,600 default it truncates into a deterministic fallback."""
+    kwargs_seen: list[dict] = []
+
+    def spy(prompt, **kwargs):
+        kwargs_seen.append(kwargs)
+        return dict(_ROUTED_READ)
+
+    monkeypatch.setattr(ia.llm, "chat_json", spy)
+    ia.run_industry_group_agent({"ticker": "JPM"}, {}, classification=ic.current_for(["JPM"])["JPM"])
+    assert [k.get("max_tokens") for k in kwargs_seen] == [2400]
+
+
+def test_no_report_prompt_line_trips_the_validator_l1_rule():
+    """The weekly report writer sends each group analyst's system prompt
+    (and the report rules) to the model, and the validator's L1 rule
+    rejects any registry name the model echoes into new prose. The
+    Property REITs mandate named its sub-industries ("Office REITs lease
+    space ...") in the taxonomy's own capitalisation, so every edition that
+    repeated its own mandate was rejected. Every line, every group."""
+    from app.agents import industry_report_validator as v
+    from app.prompts import load_prompt
+
+    offending: list[tuple[str, list[str], str]] = []
+    for group in reg.industry_groups():
+        for line in ia.get_industry_analyst(group.code).system_prompt().splitlines():
+            if leaks := v.taxonomy_leaks(line, group_code=group.code):
+                offending.append((group.code, leaks, line[:120]))
+    for line in (load_prompt("industry_report") or "").splitlines():
+        if leaks := v.taxonomy_leaks(line):
+            offending.append(("rules", leaks, line[:120]))
+    assert offending == []
+    # The description survives: the Property REITs mandate still says what
+    # an office REIT does, in plain words.
+    reits = ia.get_industry_analyst("6010").system_prompt()
+    assert "office REITs lease space" in reits and "Office REITs" not in reits

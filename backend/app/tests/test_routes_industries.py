@@ -36,6 +36,7 @@ from app.models import (
 )
 from app.services import gics_registry as reg
 from app.services import industry_analytics as ia
+from app.services import industry_labels as il
 from app.services import industry_report_store as store
 
 AS_OF = datetime(2026, 9, 4, 21, 0)
@@ -187,7 +188,8 @@ def test_taxonomy_answers_from_the_registry_not_a_literal(client, taxonomy):
     assert sum(g["industry_count"] for g in groups) == counts["industry"]
     assert sum(g["sub_industry_count"] for g in groups) == counts["sub_industry"]
     assert body["node_counts"] == counts
-    assert body["taxonomy_version"]["key"] == taxonomy.version_key
+    # Public: our key, never the internal (branded) one.
+    assert body["taxonomy_version"]["key"] == il.public_version_key(taxonomy.version_key)
     assert body["attribution"] and body["mapping_caveat"]
 
 
@@ -195,7 +197,7 @@ def test_taxonomy_sub_industry_counts_match_the_registry_per_group(client, taxon
     body = client.get("/api/industries/taxonomy").json()
     groups = {g["code"]: g for s in body["sectors"] for g in s["industry_groups"]}
     for code, entry in list(groups.items())[:6]:
-        assert entry["sub_industry_count"] == len(reg.sub_industries_of(code, version=taxonomy)), code
+        assert entry["sub_industry_count"] == len(reg.sub_industries_of(il.code_for(code), version=taxonomy)), code
 
 
 def test_taxonomy_names_the_groups_this_universe_can_never_cover(client, taxonomy, group):
@@ -236,8 +238,8 @@ def test_taxonomy_names_the_groups_this_universe_can_never_cover(client, taxonom
 
     # The seeded group sits exactly at the floor: coverable, and nothing
     # about it says "short".
-    assert groups[group.code]["universe_coverage"]["coverable"] is True
-    assert groups[group.code]["universe_coverage"]["constituents_short_by"] == 0
+    assert groups[il.slug(group.code)]["universe_coverage"]["coverable"] is True
+    assert groups[il.slug(group.code)]["universe_coverage"]["constituents_short_by"] == 0
 
     # And the point of the whole field: this universe leaves groups the
     # weekly warm-up can never rescue, and they are named rather than
@@ -257,7 +259,8 @@ def _a_group_with_no_constituents(client) -> str:
     body = client.get("/api/industries/taxonomy").json()
     empty = [g["code"] for s in body["sectors"] for g in s["industry_groups"] if g["constituent_count"] == 0]
     assert empty, "no empty group to seed into; this test needs one and the taxonomy is fully populated"
-    return sorted(empty)[0]
+    # The response names groups by slug; the seeders write internal codes.
+    return sorted(il.code_for(slug) for slug in empty)[0]
 
 
 def _seed_two_members(code: str, taxonomy) -> None:
@@ -336,10 +339,10 @@ def test_a_group_short_of_constituents_is_not_reported_as_a_universe_short_of_co
 
     body = client.get("/api/industries/taxonomy").json()
     groups = {g["code"]: g for s in body["sectors"] for g in s["industry_groups"]}
-    cov = groups[code]["universe_coverage"]
+    cov = groups[il.slug(code)]["universe_coverage"]
     floor = ia.sample_floor()
 
-    assert groups[code]["constituent_count"] == 2
+    assert groups[il.slug(code)]["constituent_count"] == 2
     assert cov["coverable"] is False and cov["constituents_short_by"] == floor - 2
     # The four rows this universe holds and no group counts, two of which
     # already name this very group.
@@ -358,7 +361,7 @@ def test_a_group_short_of_constituents_is_not_reported_as_a_universe_short_of_co
     summary = body["universe_coverage"]
     assert summary["uncounted"]["by_state"]["fallback"] >= 2
     assert summary["uncounted"]["by_state"]["stale"] >= 2
-    assert summary["uncounted"]["by_group_code"][code] >= 2
+    assert summary["uncounted"]["by_group_code"][il.slug(code)] >= 2
     assert summary["uncounted"]["total"] == sum(summary["uncounted"]["by_state"].values())
     assert summary["uncounted"]["note"]
     # The one-place sentence an operator reads before deciding to widen
@@ -447,6 +450,36 @@ def test_unknown_group_code_is_404(client, code, suffix):
     assert resp.json()["detail"]["code"] == "unknown_industry_group"
 
 
+@pytest.mark.parametrize("suffix", ["report", "companies", "history"])
+def test_slug_and_internal_code_resolve_to_the_same_group(client, group, taxonomy, suffix):
+    """`{code}` is the public slug; an old link's internal code still
+    resolves (the legacy `/industries/4530` redirect lands on one). Either
+    way the body answers with the slug and our label — never the code or
+    the registry name."""
+    _seed_report(group, taxonomy, period_key="2026-W36", stats_id=None)
+    by_slug = client.get(f"/api/industries/{il.slug(group.code)}/{suffix}")
+    by_code = client.get(f"/api/industries/{group.code}/{suffix}")
+    assert by_slug.status_code == by_code.status_code == 200, (by_slug.text, by_code.text)
+    assert by_slug.json()["code"] == by_code.json()["code"] == il.slug(group.code)
+    assert by_slug.json()["name"] == il.label(group.code) != group.name
+    # A slug is case-insensitive the way an address bar is typed.
+    assert client.get(f"/api/industries/{il.slug(group.code).upper()}/{suffix}").status_code == 200
+
+
+def test_a_sector_slug_or_an_industry_code_is_not_a_group(client, group, taxonomy):
+    industry = reg.industries_of_group(group.code, version=taxonomy)[0]
+    for param in (il.slug(group.code[:2]), industry.code):
+        resp = client.get(f"/api/industries/{param}/report")
+        assert resp.status_code == 404, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "unknown_industry_group"
+        # The refusal is a public body: an industry code the caller typed is
+        # not echoed back, in the extras or the message.
+        assert industry.code not in resp.text and "gics" not in resp.text.lower()
+        # ...nor the internal code a sector slug resolves to.
+        assert f"'{group.code[:2]}'" not in detail["message"]
+
+
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
@@ -459,7 +492,8 @@ def test_report_404_names_the_group_and_the_last_attempt(client, group, taxonomy
     detail = resp.json()["detail"]
     assert detail["code"] == "no_report"
     assert detail["reason"] == "no_validated_analyst_edition" and detail["withheld_editions"] == 0
-    assert group.name in detail["message"]
+    assert il.label(group.code) in detail["message"] and detail["name"] == il.label(group.code)
+    assert detail["industry_group_code"] == il.slug(group.code)
     assert detail["last_attempt"]["status"] == "failed"
     assert detail["last_attempt"]["error_type"] == "ValidatorRejected"
 
@@ -470,7 +504,9 @@ def test_report_serves_the_edition_with_its_statistics_and_method(client, group,
     _seed_report(group, taxonomy, period_key="2026-W36", stats_id=stats_id)
 
     body = client.get(f"/api/industries/{group.code}/report").json()
-    assert body["code"] == group.code and body["name"] == group.name
+    # The public slug and our label, whichever form the URL used.
+    assert body["code"] == il.slug(group.code) and body["name"] == il.label(group.code)
+    assert body["sector_code"] == il.slug(group.code[:2])
     assert body["version"] == 1 and body["is_latest_good"] is True
     assert body["stale"] is False and body["stale_reason"] is None
     assert body["llm_cost_usd"] == 0.12
@@ -619,7 +655,7 @@ def _pointer(client, group) -> dict:
     """This group's `latest_report` pointer out of the taxonomy tree."""
     body = client.get("/api/industries/taxonomy").json()
     entry = next(
-        g for s in body["sectors"] for g in s["industry_groups"] if g["code"] == group.code)
+        g for s in body["sectors"] for g in s["industry_groups"] if g["code"] == il.slug(group.code))
     assert entry["latest_report"] is not None
     return entry["latest_report"]
 
@@ -815,18 +851,25 @@ def test_companies_counters_describe_the_membership_not_the_page(client, group, 
     assert capped["counts_basis"]
 
 
-def test_companies_carries_the_sub_industry_layer_and_its_provenance(client, group, taxonomy):
+def test_companies_names_the_provider_industry_and_its_provenance(client, group, taxonomy):
+    """A row's industry is the DATA PROVIDER's own label; the taxonomy's
+    industry and sub-industry levels are never named or coded publicly
+    (owner decision 2026-09-24), so the row carries none of their fields."""
     seeded = _seed_members(group, taxonomy)
+    assert seeded["sub"] is not None, "the fixture group must carry a sub-industry layer"
     body = client.get(f"/api/industries/{group.code}/companies").json()
     row = next(r for r in body["items"] if r["ticker"] == TICKERS[0])
-    if seeded["sub"] is not None:
-        assert row["sub_industry_code"] == seeded["sub"].code
-        assert row["sub_industry_name"] == seeded["sub"].name
+    assert row["provider_industry"] == "Semiconductors"
+    for gone in ("industry_code", "industry_name", "sub_industry_code", "sub_industry_name", "sub_industry_codes"):
+        assert gone not in row, gone
+    assert seeded["sub"].code not in str(body) and seeded["industry_code"] not in str(body)
     assert row["classification"]["source"] == "research_map"
     assert "research map" in row["classification"]["source_label"]
+    assert "gics" not in row["classification"]["source_label"].lower()
     assert row["classification"]["as_of"] == "2026-09-08"
-    assert row["classification"]["mapping_caveat"]
-    assert "not official licensed issuer GICS mapping" in body["security_reference_caveat"]
+    assert row["classification"]["mapping_caveat"] == il.PUBLIC_MAPPING_CAVEAT
+    assert body["security_reference_caveat"] == il.PUBLIC_SECURITY_REFERENCE_CAVEAT
+    assert body["code"] == il.slug(group.code) and body["name"] == il.label(group.code)
 
 
 def test_companies_without_a_statistics_row_says_why(client, group, taxonomy):
@@ -890,8 +933,9 @@ def test_snapshot_serves_the_stored_row(client, taxonomy):
     try:
         body = client.get("/api/industries/snapshot").json()
         assert body["period_key"] == "2026-W36"
-        assert body["payload"]["missing_groups"] == ["4530"]
-        assert body["report_versions"] == {"4530": 2}
+        # Stored with internal codes, served by slug.
+        assert body["payload"]["missing_groups"] == [il.slug("4530")]
+        assert body["report_versions"] == {il.slug("4530"): 2}
         assert body["access"]["surface"] == "pm_chat"
     finally:
         with SessionLocal() as db:

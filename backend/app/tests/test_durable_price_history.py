@@ -19,6 +19,10 @@ def database(monkeypatch):
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setattr(prices, "SessionLocal", factory)
     monkeypatch.setattr(backfill, "SessionLocal", factory)
+    # The admin fundamentals stage takes the refresh lease and records its
+    # outcome (FIX-005); keep that state in this test's database.
+    from app.services import fundamental_refresh
+    monkeypatch.setattr(fundamental_refresh, "SessionLocal", factory)
     yield factory, engine
     engine.dispose()
 
@@ -376,3 +380,48 @@ def test_committed_fundamentals_invalidate_the_company_cold_snapshot(database, m
     assert calls == [("ABC", "company_cold")]
     assert result["company_cold_invalidation"] == {"success": True, "status": "invalidated", "kind": "company_cold",
                                                    "rows_invalidated": 2}
+
+
+def test_admin_fundamentals_stage_takes_the_refresh_lease_and_records_its_outcome(database, monkeypatch):
+    """FIX-005: the web admin sync and the worker's drain/pull-through share
+    one per-ticker lease, and the admin run's outcome lands in the refresh
+    state (trigger `admin`) without clearing a pending filing retry."""
+    from app.services import fundamental_history_service as fundamentals
+    from app.services import fundamental_refresh
+    with database[0]() as db:
+        db.add(Company(ticker="ABC", company_name="ABC", sector="Unknown", industry="Unknown"))
+        db.commit()
+    monkeypatch.setattr(fundamentals, "backfill_fundamentals",
+                        lambda *a, **k: pytest.fail("ran while the refresh lease was held"))
+    assert fundamental_refresh.claim("ABC")
+    held = backfill.sync_ticker("ABC", scope="fundamentals")
+    # The same answer as a held sync claim: the re-pull client retries it
+    # rather than recording the ticker as done, and nothing is written.
+    assert held == {"ticker": "ABC", "status": "running", "success": False,
+                    "note": "A scheduled fundamentals refresh holds this ticker's lease."}
+    with database[0]() as db:
+        assert db.get(MarketDataSync, "ABC") is None
+    fundamental_refresh.release("ABC")
+    monkeypatch.setattr(fundamentals, "backfill_fundamentals",
+                        lambda *a, **k: {"success": True, "committed": True, "rows_written": 0, "attempts": []})
+    done = backfill.sync_ticker("ABC", scope="fundamentals")
+    assert done["success"] and done["refresh_state"]["success"]
+    summary = fundamental_refresh.state_summary(["ABC"])["ABC"]
+    assert summary["last_result"]["trigger"] == "admin"
+    # Nothing named is stored for ABC, so the durable import is still owed.
+    assert (summary["status"], summary["trigger"]) == ("pending", "first_import")
+
+
+def test_coverage_report_attaches_the_refresh_state(database, monkeypatch):
+    from app.services import fundamental_history_service as fundamentals
+    from app.services import fundamental_refresh
+    monkeypatch.setattr(fundamentals, "SessionLocal", database[0])
+    with database[0]() as db:
+        db.add(Company(ticker="ABC", company_name="ABC", sector="Unknown", industry="Unknown"))
+        db.commit()
+    fundamental_refresh.observe_many([("ABC", [{"type": "10-Q", "period_end": "2026-06-30",
+                                                "filing_date": "2026-07-30", "accession_number": "0000000001-26-1"}])])
+    report = backfill.coverage_report("ABC")
+    (row,) = report["targets"]
+    assert row["fundamentals_refresh"]["filed_quarter_end"] == "2026-06-30"
+    assert row["fundamentals_refresh"]["status"] == "pending"

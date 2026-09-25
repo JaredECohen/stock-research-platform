@@ -82,15 +82,20 @@ def coverage_report(ticker: str | None = None) -> dict:
     targets = plan["targets"]
     if ticker:
         targets = [target for target in targets if target["ticker"] == ticker.upper()]
+    from .fundamental_refresh import state_summary
     with SessionLocal() as db:
         price_counts = dict(db.execute(select(DailyPrice.ticker, func.count(DailyPrice.id)).group_by(DailyPrice.ticker)).all())
         fundamental_counts = dict(db.execute(select(FinancialPeriod.ticker, func.count(FinancialPeriod.id)).group_by(FinancialPeriod.ticker)).all())
+        # FIX-005: what EDGAR says each issuer filed and when its next
+        # fundamentals check is due, beside the coverage it explains.
+        refresh = state_summary([t["ticker"] for t in targets if t["fundamentals_required"]], db=db)
     rows = []
     for target in targets:
         start = date.fromisoformat(target["requested_start"])
         prices = price_coverage(target["ticker"], start)
         fundamentals = fundamental_coverage(target["ticker"], start) if target["fundamentals_required"] else None
         rows.append({**target, "prices": prices, "fundamentals": fundamentals,
+                     "fundamentals_refresh": refresh.get(target["ticker"]) if target["fundamentals_required"] else None,
                      "stored_price_row_count": price_counts.get(target["ticker"], 0),
                      "stored_fundamental_row_count": fundamental_counts.get(target["ticker"], 0)})
     return {**{key: value for key, value in plan.items() if key != "targets"}, "targets": rows,
@@ -118,6 +123,29 @@ def requested_start(ticker: str, *, today: date | None = None) -> date:
 
 
 SYNC_SCOPES = ("all", "fundamentals")
+
+
+def _fundamentals_stage(ticker: str, start: date, *, force_refresh: bool, expected_plan: dict[str, Any] | None,
+                        audit_key: str | None, report: dict[str, Any]) -> dict[str, Any]:
+    """The admin fundamentals stage, run under the refresh lease `sync_ticker` holds.
+
+    Afterwards the outcome is recorded in the refresh state (trigger
+    `admin`), which keeps a ticker whose filed period is still missing
+    pending as a filing retry rather than letting an admin run clear it.
+    Caches are invalidated by `sync_ticker` itself.
+    """
+    from . import fundamental_refresh
+    from .fundamental_history_service import backfill_fundamentals
+    fundamentals = backfill_fundamentals(ticker, start, force_refresh=force_refresh,
+                                         expected_plan=expected_plan, audit_key=audit_key)
+    try:
+        outcome = fundamental_refresh.record_result(ticker, fundamentals, trigger="admin", invalidate_caches=False)
+        report["refresh_state"] = {"success": True, "status": outcome.get("status"),
+                                   "satisfied": outcome.get("satisfied")}
+    except Exception as exc:
+        report["refresh_state"] = {"success": False, "error_type": type(exc).__name__}
+        log.warning("fundamentals refresh-state record failed ticker=%s error_type=%s", ticker, type(exc).__name__)
+    return fundamentals
 
 
 def sync_ticker(ticker: str, *, force_refresh: bool = False, scope: str = "all", dry_run: bool = False,
@@ -148,6 +176,30 @@ def sync_ticker(ticker: str, *, force_refresh: bool = False, scope: str = "all",
                 "dry_run": True, "scope": scope, "status": "dry_run", "success": bool(fundamentals.get("success")),
                 "prices": {"status": "not_requested", "success": True}, "fundamentals": fundamentals,
                 "memo_generation_requests": 0, "outcome_rows_modified": 0}
+    if not target["fundamentals_required"]:
+        return _sync(ticker, target, start, force_refresh=force_refresh, scope=scope,
+                     expected_plan=expected_plan, audit_key=audit_key)
+    # FIX-005: the worker's nightly drain and memo pull-through refresh a
+    # ticker under one per-ticker lease, so the web admin sync takes it
+    # first. Held elsewhere -> the same "running" answer as a held sync
+    # claim (the re-pull client retries it instead of recording it done),
+    # and no `market_data_syncs` row is written.
+    from . import fundamental_refresh
+    if not fundamental_refresh.claim(ticker):
+        return {"ticker": ticker, "status": "running", "success": False,
+                "note": "A scheduled fundamentals refresh holds this ticker's lease."}
+    try:
+        return _sync(ticker, target, start, force_refresh=force_refresh, scope=scope,
+                     expected_plan=expected_plan, audit_key=audit_key)
+    finally:
+        try:
+            fundamental_refresh.release(ticker)
+        except Exception as exc:  # the lease expires on its own
+            log.warning("fundamentals refresh lease release failed ticker=%s error_type=%s", ticker, type(exc).__name__)
+
+
+def _sync(ticker: str, target: dict[str, Any], start: date, *, force_refresh: bool, scope: str,
+          expected_plan: dict[str, Any] | None, audit_key: str | None) -> dict:
     started = datetime.utcnow()
     # A durable running record makes interrupted imports visible. Each price
     # and financial write is independently idempotent on its natural key.
@@ -174,8 +226,9 @@ def sync_ticker(ticker: str, *, force_refresh: bool = False, scope: str = "all",
               "scope": scope}
     for kind, action in (
         ("prices", lambda: backfill_prices(ticker, start, force_refresh=force_refresh)),
-        ("fundamentals", lambda: backfill_fundamentals(ticker, start, force_refresh=force_refresh,
-                                                       expected_plan=expected_plan, audit_key=audit_key)),
+        ("fundamentals", lambda: _fundamentals_stage(ticker, start, force_refresh=force_refresh,
+                                                      expected_plan=expected_plan, audit_key=audit_key,
+                                                      report=report)),
     ):
         if kind == "prices" and scope == "fundamentals":
             report[kind] = {"status": "not_requested", "success": True}

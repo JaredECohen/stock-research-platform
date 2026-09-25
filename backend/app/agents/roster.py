@@ -30,6 +30,14 @@ Contract notes
   no long-form pass. The default predicate is always-true; the Industry
   Group Analyst is its first real use (routing flag on AND the company has
   a routable classification).
+* `pm_digest` (FEAT-003 routing, owner decision 2026-09-24) takes a spec's
+  finding OUT of the PM synthesis's findings JSON and puts a compact read
+  AHEAD of it instead. The JSON is cut at `max_agent_context_chars` in
+  roster order, and the appended tail lands past the cut on every live memo
+  on file (META v1's seven views alone total 86,518 chars against 60,000),
+  so a spec added at the end would cost money on every memo and reach the
+  rating on none. Only the tail — the Industry Group Analyst — carries one;
+  moving the other eight would change every memo's PM input.
 """
 from __future__ import annotations
 
@@ -44,6 +52,7 @@ from .comps_agent import run_comps_agent
 from .earnings_agent import run_earnings_agent
 from .filing_agent import run_filing_agent
 from .industry_analysts import applies_to as industry_analyst_applies
+from .industry_analysts import pm_digest as industry_pm_digest
 from .industry_analysts import run_industry_group_agent
 from .macro_agent import run_macro_agent
 from .risk_agent import run_risk_agent
@@ -60,6 +69,10 @@ if TYPE_CHECKING:
 AgentRunner = Callable[["MemoInputs", str | None], AgentFinding]
 # (inputs) -> whether the spec runs for this memo. Evaluated once per run.
 AppliesTo = Callable[["MemoInputs"], bool]
+# (finding) -> the text the PM reads for it ahead of the capped findings
+# JSON, or "" to keep the finding away from the PM entirely (a template or
+# absent read must not reach the rating as an analyst view).
+PMDigest = Callable[[AgentFinding], str]
 
 
 def always_applies(inputs: MemoInputs) -> bool:
@@ -76,6 +89,7 @@ class AgentSpec:
     memo_field: str | None = None  # StockMemoOut attribute, or None -> extra_agent_views[key]
     uses_llm_round0: bool = True      # False when round 0 is deterministic by design
     applies_to: AppliesTo = always_applies  # per-run gate; see the contract note
+    pm_digest: PMDigest | None = None  # PM reads this instead of the JSON entry; see the note
 
     @property
     def long_form_name(self) -> str:
@@ -181,6 +195,9 @@ AGENTS: tuple[AgentSpec, ...] = (
         ),
         needs=("profile", "ratios", "industry_group"), memo_field=None,
         applies_to=industry_analyst_applies,
+        # Last in the roster, so the first entry the PM's 60k cut removes:
+        # the PM reads a bounded digest ahead of the JSON instead.
+        pm_digest=industry_pm_digest,
     ),
 )
 

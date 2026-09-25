@@ -44,7 +44,37 @@ describe("SectorGroupPicker — wide", () => {
     expect(within(listbox).getAllByRole("option")).toHaveLength(fx.allGroups.length);
     expect(within(listbox).getAllByRole("group")).toHaveLength(fx.taxonomy.sectors.length);
     const sector = fx.taxonomy.sectors[0];
-    expect(within(listbox).getByRole("group", { name: `${sector.code} ${sector.name}` })).toBeInTheDocument();
+    expect(within(listbox).getByRole("group", { name: sector.name })).toBeInTheDocument();
+  });
+
+  // Owner decision 2026-09-24: groups and sectors are shown by our own
+  // label only. A code is the URL's slug and an option's value, never
+  // printed — in either rendering.
+  it("prints no taxonomy code and no slug, only the labels", () => {
+    const { listbox } = mountWide();
+    const text = listbox.textContent ?? "";
+    expect(text).not.toMatch(/\(\d{2,8}\)|\b\d{6,8}\b/);
+    expect(text).not.toMatch(/gics/i);
+    for (const s of fx.taxonomy.sectors) expect(text).not.toContain(s.code);
+    for (const g of fx.allGroups) {
+      const option = document.getElementById(optionId(g.code))!;
+      expect(option.textContent?.startsWith(g.name)).toBe(true);
+      expect(option.textContent).not.toContain(g.code);
+    }
+  });
+
+  it("renders no code in the phone rendering either — option values stay the slug", () => {
+    stubMatchMedia(true);
+    const onSelect = vi.fn();
+    render(<SectorGroupPicker taxonomy={fx.taxonomy} value={null} onSelect={onSelect} />);
+    const select = screen.getByTestId("industry-picker-select");
+    const labels = Array.from(select.querySelectorAll("optgroup")).map((o) => o.getAttribute("label"));
+    expect(labels).toEqual(fx.taxonomy.sectors.map((s) => s.name));
+    for (const g of fx.allGroups) {
+      const option = select.querySelector<HTMLOptionElement>(`option[value="${g.code}"]`)!;
+      expect(option.textContent?.startsWith(g.name)).toBe(true);
+      expect(option.textContent).not.toContain(g.code);
+    }
   });
 
   it("moves aria-activedescendant with the arrow keys and Home/End", () => {

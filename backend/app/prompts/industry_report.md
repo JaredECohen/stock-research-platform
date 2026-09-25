@@ -8,6 +8,7 @@ Rules that are enforced mechanically:
 - Separate observed fact, causal inference and forecast assumption; label scenarios as scenarios.
 - Missing evidence is `n/a` plus a reason, never zero or "neutral".
 - No advice phrasing: no "we recommend", "you should buy/sell", "strong buy", "price target".
+- Refer to the group only by its label (`group_label` in the overview facts; the mandate header uses the same label) and to its sector only by `sector_label`. Never write a numeric taxonomy code (no "(4530)", no "group 4530", no bracketed code list), never name an industry or sub-industry by a taxonomy name, and never name a third-party classification standard. This applies to every field the page prints, including claim bases, values and horizons.
 - Research and education only; the disclaimer is added by the server.
 
 Forward-looking numbers (outlook only) — registered forecast assumptions:

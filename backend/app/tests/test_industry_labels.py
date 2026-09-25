@@ -192,6 +192,31 @@ SCRUB_TABLE = [
     # the brand and the internal key
     ("the GICS® sector", "the sector"),
     ("GICS industry group 4530", f"industry group {_C}"),
+    # REGRESSION (S13 whole-memo walk): the brand as the code's own prefix
+    # was rewritten to "industry" AFTER the prefix rule ran, so the code
+    # stayed on the page next to our noun ("industry 4010 rerates").
+    ("GICS 4010 rerates", f"industry {_B} rerates"),
+    ("the GICS® 4530 group", f"the industry {_C} group"),
+    # REGRESSION (review of fb2d135): the brand is the evidence the number
+    # is a code, so the year guard and the 2-digit noun guard of the bare
+    # prefix form do not apply after it; and every code in a branded list
+    # goes, not just the first. Each of these kept a code before.
+    ("GICS 2030 targets", f"industry {il.label('2030')} targets"),
+    ("GICS 2010 multiples", f"industry {il.label('2010')} multiples"),
+    ("GICS® 2020 peers", f"industry {il.label('2020')} peers"),
+    ("GICS 45 names", f"industry {_T} names"),
+    ("the GICS 4510, 4530 groups", f"the industry {il.label('4510')}, {_C} groups"),
+    ("GICS 4510/4530", f"industry {il.label('4510')}/{_C}"),
+    ("GICS 4530, 453010 leads", f"industry {_C} leads"),
+    ("GICS 45301020 names", "names"),
+    # ...while after the brand a quantity, a count of levels and a named
+    # revision of the standard stay numbers
+    ("the GICS 11 sectors", "the industry 11 sectors"),
+    ("GICS 10 sectors", "industry 10 sectors"),
+    ("GICS 20 years", "industry 20 years"),
+    ("GICS 2020 changes", "industry 2020 changes"),
+    ("GICS 45% weight", "industry 45% weight"),
+    ("GICS 4530, 2026 outlook", f"industry {_C}, 2026 outlook"),
     ("taxonomy gics-2026-04", "taxonomy mm-2026-04"),
     # ordinary English is left alone — a count or a year before a name is
     # not a code
@@ -218,7 +243,29 @@ SCRUB_TABLE = [
     ("sector 45.", f"sector {_T}."),
     ("sector 45", f"sector {_T}"),
     ("Information Technology [45] leads", f"{_T} leads"),
+    # S10: a code in a taxonomy-namespaced reference (a claim basis, an
+    # evidence ref) → the group slug; a year-shaped group code too, because
+    # the namespace proves it is a code. Other `word:NN` forms are counts.
+    ("mandate:4530", f"mandate:{il.slug('4530')}"),
+    ("mapping:4530", f"mapping:{il.slug('4530')}"),
+    ("industry:453010", f"industry:{il.slug('4530')}"),
+    ("mandate:2030", f"mandate:{il.slug('2030')}"),
+    ("gics:4530", f"industry:{il.slug('4530')}"),
+    ("limit:10 and year:2020", "limit:10 and year:2020"),
+    ("mandate:capital_cycle", "mandate:capital_cycle"),
+    # S10: the brand glued into an identifier is still the brand, and a
+    # word that merely contains the four letters is not it
+    ("see gics_industries_2026.json", "see industry_industries_2026.json"),
+    ("Biologics production → Bioprocess consumables", "Biologics production → Bioprocess consumables"),
     ("", ""),
+]
+
+# S10: on the INDUSTRY surfaces (`rollup=True`), a distinctive industry /
+# sub-industry name in legacy report prose reads as the label of the group
+# it rolls up to — never named publicly itself.
+ROLLUP_TABLE = [
+    ("Semiconductor Materials & Equipment names", f"{_C} names"),
+    ("Oil & Gas Drilling rigs", f"{il.label('1010')} rigs"),
 ]
 
 
@@ -226,6 +273,52 @@ SCRUB_TABLE = [
 def test_scrub_text_table(text, expected):
     assert il.scrub_text(text) == expected
     assert il.scrub_text(expected) == expected   # idempotent
+
+
+@pytest.mark.parametrize("text,expected", ROLLUP_TABLE)
+def test_the_industry_rollup_relabels_distinctive_industry_names(text, expected):
+    assert il.scrub_text(text, rollup=True) == expected
+    assert il.scrub_text(expected, rollup=True) == expected   # idempotent
+    assert il.project_public({"t": text}, rollup=True) == {"t": expected}
+    assert il.project_for_prompt({"t": text}) == {"t": expected}   # the report writer's facts
+
+
+def test_memo_prose_keeps_ordinary_industry_names():
+    """REGRESSION (S10 review): the rollup was global, so every memo sector
+    card and industry finding had its industry words rewritten into a
+    broader group label — "Unlike Oil & Gas Exploration & Production peers,
+    XOM refines" named XOM's own group as the contrast, and "HON: Aerospace
+    & Defense backlog grew" became a machinery sentence. Outside the
+    industry-report surfaces an industry name is ordinary prose (often a
+    provider's own industry string), and only sector/group names and codes
+    are rewritten."""
+    from app.agents import sector_agents
+
+    for text in ("Unlike Oil & Gas Exploration & Production peers, XOM refines.",
+                 "HON: Aerospace & Defense backlog grew.",
+                 "Semiconductor Materials & Equipment names"):
+        assert il.scrub_text(text) == text
+        assert il.project_public({"summary": text}) == {"summary": text}
+    out = sector_agents._scrub_spliced_output({"summary": "HON: Aerospace & Defense backlog grew."},
+                                              provider_industry="Conglomerates")
+    assert out["summary"] == "HON: Aerospace & Defense backlog grew."
+    # ...while a group's registry name and codes still go on every surface.
+    assert il.scrub_text("Semiconductors & Semiconductor Equipment (4530) names") == f"{_C} names"
+
+
+def test_plain_registry_phrases_describes_without_naming():
+    """The prompt-side counterpart of the L1 rule: registry phrases become
+    lower-case descriptions (acronyms kept), our labels are untouched even
+    where they contain a registry name, and the length never changes."""
+    for text, expected in (
+        ("Office REITs lease space.", "office REITs lease space."),
+        ("Health Care Technology and Technology Distributors", "health care technology and technology distributors"),
+        ("Software & IT Services leads; IT Services lag.", "Software & IT Services leads; IT services lag."),
+        ("Property REITs own buildings.", "Property REITs own buildings."),
+    ):
+        assert il.plain_registry_phrases(text) == expected
+        assert len(il.plain_registry_phrases(text)) == len(text)
+        assert il.registry_phrase_hits(il.plain_registry_phrases(text)) == []
 
 
 def test_scrub_text_maps_the_fixed_branded_sentences_to_their_public_twins():
@@ -289,6 +382,41 @@ def test_scrub_strings_keeps_the_shape():
 
 
 # --- project_public ------------------------------------------------------------------
+
+
+def test_project_public_withholds_branded_sources_but_not_a_word_containing_the_letters():
+    """A primary source that names the brand or its publishers is withheld
+    and counted; one about biologics is not (the old substring test dropped
+    it). Bare-code group lists under the snapshot's keys become slugs."""
+    out = il.project_public({
+        "primary_sources": [{"name": "Biologics manufacturing reference"},
+                            {"name": "MSCI GICS workbook", "url": "https://www.msci.com/x"}],
+        "insufficient_sample_groups": ["4530", "4510"],
+        "missing_groups": ["4530", {"code": "4510", "name": "Software & Services", "reason": "no_stats"}],
+    })
+    assert out["primary_sources"] == [{"name": "Biologics manufacturing reference"}]
+    assert out["primary_sources_withheld"] == 1
+    assert out["insufficient_sample_groups"] == [il.slug("4530"), il.slug("4510")]
+    assert out["missing_groups"] == [il.slug("4530"),
+                                     {"code": il.slug("4510"), "name": il.label("4510"), "reason": "no_stats"}]
+    assert il.has_brand("GICS") and il.has_brand("gics_x") and not il.has_brand("Biologics")
+
+
+def test_a_row_that_was_only_a_non_public_identity_is_dropped_and_counted():
+    """The report's overview lists its industries as `{code, name}` rows.
+    Both keys are withheld for a 6-digit code, and an empty `{}` row would
+    render as a row of nothing — so the row goes and the count stays."""
+    out = il.project_public({
+        "boundaries": [{"code": "453010", "name": "Semiconductors & Semiconductor Equipment"}],
+        "sub_industries": [{"code": "45301010", "name": "Semiconductor Materials & Equipment",
+                            "industry_code": "453010"}, {"code": "45301020", "name": "Semiconductors",
+                                                         "industry_code": "453010", "note": "kept"}],
+        "empty": [{}], "numbers": [1, 2],
+    })
+    assert out["boundaries"] == [] and out["boundaries_withheld"] == 1
+    assert out["sub_industries"] == [{"note": "kept"}] and out["sub_industries_withheld"] == 1
+    assert out["empty"] == [{}] and "empty_withheld" not in out       # nothing was withheld from it
+    assert out["numbers"] == [1, 2] and "numbers_withheld" not in out
 
 
 def test_project_public_rewrites_keys_and_strings_and_never_mutates_its_input():

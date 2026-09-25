@@ -86,3 +86,18 @@ def test_production_heartbeat_exposes_missing_llm_configuration(monkeypatch):
     assert "generation_mode=demo" in calls[0]["note"]
     assert "llm=none" in calls[0]["note"]
     assert "embeddings=hash" in calls[0]["note"]
+
+
+def test_heartbeat_reports_the_routing_value_this_process_loaded(monkeypatch):
+    """The worker has no HTTP port; its cron-health note is where a
+    post-deploy check sees whether ENABLE_INDUSTRY_ANALYST_ROUTING reached
+    this process (a Blueprint sync may not apply a new render.yaml key)."""
+    from app import monitoring, worker
+    from app.config import settings
+    calls = []
+    monkeypatch.setattr(settings, "enable_industry_reports", False)
+    monkeypatch.setattr(monitoring, "record_run", lambda *a, **kw: calls.append(kw))
+    for value, shown in ((True, "industry_routing=on"), (False, "industry_routing=off")):
+        monkeypatch.setattr(settings, "enable_industry_analyst_routing", value)
+        worker._heartbeat()
+        assert shown in calls[-1]["note"]

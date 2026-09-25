@@ -76,6 +76,7 @@ def test_build_response_carries_an_industry_exposure_block():
     from app.main import app
     from app.services import gics_registry as reg
     from app.services import industry_classification as ic
+    from app.services import industry_labels as il
     from app.tests.fixtures.demo_dataset import COMPANY_PROFILES
 
     info = reg.ensure_taxonomy(activate=True)
@@ -86,14 +87,21 @@ def test_build_response_carries_an_industry_exposure_block():
     body = resp.json()
     assert body["holdings"] and body["sector_allocation"] and body["disclaimer"]
     block = body["industry_exposure"]
-    assert block["status"] == "ok" and block["taxonomy_version"] == info.version_key
-    assert block["mapping_caveat"] and "not advice" in block["note"]
+    # Public: our labels and slugs, the public taxonomy key and caveat
+    # (owner decision 2026-09-24), never a code or a registry name.
+    assert block["status"] == "ok" and block["taxonomy_version"] == il.public_version_key(info.version_key)
+    assert block["mapping_caveat"] == il.PUBLIC_MAPPING_CAVEAT and "not advice" in block["note"]
     total = block["mapped_weight"] + block["unmapped_weight"]
     assert total == pytest.approx(sum(h["weight"] for h in body["holdings"]), abs=1e-3)
     held = {h["ticker"] for h in body["holdings"]}
     assert {t for g in block["by_group"] for t in g["tickers"]} | {u["ticker"] for u in block["unmapped"]} == held
+    assert block["by_group"], "the demo portfolio should hold at least one classified name"
     for g in block["by_group"]:
-        assert reg.group(g["code"], version=info).name == g["name"]
+        internal = il.code_for(g["code"])
+        assert g["code"] == il.slug(internal) and g["name"] == il.label(internal)
+        assert g["sector_code"] == il.slug(internal[:2])
+        assert reg.group(internal, version=info).name != g["name"]
+    assert "gics" not in resp.text.lower()
     assert block["snapshot"]["status"] in ("ok", "no_snapshot")
     if block["snapshot"]["status"] == "ok":
         assert [r["code"] for r in block["snapshot"]["groups"]] == [g["code"] for g in block["by_group"]]

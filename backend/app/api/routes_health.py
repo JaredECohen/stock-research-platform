@@ -115,6 +115,12 @@ def health() -> dict:
         "llm_provider": settings.active_llm_provider,
         # The deploy-visible canary: Render's RENDER_GIT_COMMIT, null outside Render.
         "build": {"git_commit": settings.render_git_commit or None},
+        # FEAT-003: the routing value THIS process loaded, not what
+        # render.yaml says — a Blueprint sync may not apply a newly added key,
+        # and routing would then stay off silently. A boolean only. The worker
+        # (no HTTP port) reports its own in the `worker_heartbeat` cron-health
+        # note as `industry_routing=on|off`.
+        "industry_analyst_routing": bool(settings.enable_industry_analyst_routing),
     }
 
 

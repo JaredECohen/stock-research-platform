@@ -18,6 +18,11 @@
 //     the group; `n_priced` is how many of them the statistics row could
 //     price. They are different numbers and are rendered as such.
 //
+// Every `code` / `sector_code` here is a public SLUG and every `name` is
+// MarketMosaic's own label (owner decision 2026-09-24): the API projects
+// out taxonomy codes, registry names and third-party branding before a
+// body leaves the server, and the UI never prints a code.
+//
 // Forward-looking lines in a report are scenarios, not recommendations.
 
 /** Surfaces the API tiers separately (`entitlements_industry.SURFACES`). */
@@ -504,11 +509,10 @@ export interface IndustryCompanyRow {
   ticker: string;
   company_name: string | null;
   is_active: boolean;
-  industry_code: string | null;
-  industry_name: string | null;
-  sub_industry_code: string | null;
-  sub_industry_name: string | null;
-  sub_industry_codes: string[];
+  /** The data provider's own industry label for the company. The
+   *  taxonomy's industry and sub-industry levels are never named or coded
+   *  publicly (owner decision 2026-09-24). */
+  provider_industry: string | null;
   classification: IndustryClassificationOut;
   market_cap: number | null;
   weight_mcw: number | null;

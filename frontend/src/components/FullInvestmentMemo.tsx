@@ -1,7 +1,24 @@
 import React, { useEffect, useRef } from "react";
-import type { AgentFinding, RiskItem, ScorecardContribution, ScorecardSummary, StockMemoOut } from "@/types";
+import type {
+  AgentFinding,
+  RiskItem,
+  ScorecardContribution,
+  ScorecardSummary,
+  SectionAvailability,
+  StockMemoOut,
+} from "@/types";
 import { SCORECARD_FAMILIES } from "@/types/scorecard";
 import { fmtPct, fmtPrice, fmtUpside, ratingBadgeClass } from "@/lib/format";
+import {
+  availability,
+  bannerCount,
+  bannerText,
+  intakeRationale,
+  FULL_MEMO_SECTIONS,
+  isHidden,
+  isUnavailable,
+} from "@/lib/memoSections";
+import UnavailableSection, { DegradedNote } from "./UnavailableSection";
 import { profileText } from "./scorecard/ScorecardPanel";
 import { familyLabel, fmtCoverage, fmtPercentile, fmtScore, fmtZ, humanize, isNum, na } from "./scorecard/format";
 import { Markdown } from "./Markdown";
@@ -26,6 +43,12 @@ import TerminalClampBadge from "./TerminalClampBadge";
  * the memo in an isolated window and triggers the system print dialog
  * with the print stylesheet active; the user picks "Save as PDF" for a
  * proper text PDF. Zero dependencies.
+ *
+ * W2a: sections the presenter hid (a template filled them) render as
+ * "Unavailable in this version." with a reason line. The PDF prints this
+ * DOM, so it inherits the placeholders and never carries template prose.
+ * Portfolio Fit is omitted outright when it is `template_always`: no
+ * analyst writes it, and a placeholder on every memo would be noise.
  */
 
 interface Props {
@@ -70,6 +93,10 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
   const dcfWacc = pickNumber(dcf, ["wacc", "discount_rate"]);
   const dcfGrowth = pickNumber(dcf, ["terminal_growth", "g_terminal"]);
   const tvClamped = dcf.tv_clamped === true;
+  const hiddenCount = bannerCount(memo, FULL_MEMO_SECTIONS);
+  const confidenceHidden = isHidden(memo, "confidence_score");
+  const pfAv = availability(memo, "portfolio_fit");
+  const portfolioFitOmitted = pfAv?.status === "unavailable" && pfAv.reason === "template_always";
 
   return (
     <div
@@ -126,8 +153,18 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                 <div className={`inline-block px-3 py-1 rounded ${ratingBadgeClass(memo.rating_label)}`}>
                   {memo.rating_label}
                 </div>
-                <div className="mt-2 text-xs text-slate-400 print:text-slate-600">
-                  Conviction: {Math.round(memo.confidence_score)}/100
+                <DegradedNote
+                  availability={availability(memo, "rating_label")}
+                  className="mt-1 max-w-[16rem] ml-auto"
+                />
+                <div
+                  className="mt-2 text-xs text-slate-400 print:text-slate-600"
+                  data-testid="cover-conviction"
+                  data-section={confidenceHidden ? "confidence_score" : undefined}
+                >
+                  {confidenceHidden
+                    ? "Conviction: unavailable in this version"
+                    : `Conviction: ${Math.round(memo.confidence_score)}/100`}
                 </div>
                 {hasDcf && (
                   <div className="mt-1 text-xs text-slate-400 print:text-slate-600">
@@ -149,28 +186,74 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
 
           {/* DEGRADED AGENTS — must survive into the PDF so a partial memo
               never presents as complete. */}
-          {degraded.length > 0 && (
+          {(degraded.length > 0 || hiddenCount > 0) && (
             <div className="mt-5 border border-amber-500/50 print:border-amber-700 rounded p-3 text-sm text-amber-400 print:text-amber-800">
               <span className="font-semibold">Partial coverage:</span>{" "}
-              {degraded.join(", ")}{" "}
-              {degraded.length === 1 ? "was" : "were"} unavailable or fell back
-              to deterministic output during this run. Treat the affected
-              section{degraded.length === 1 ? "" : "s"} as thinner evidence.
+              {degraded.length > 0 && (
+                <>
+                  {degraded.join(", ")}{" "}
+                  {degraded.length === 1 ? "was" : "were"} unavailable or fell back
+                  to deterministic output during this run. Treat the affected
+                  section{degraded.length === 1 ? "" : "s"} as thinner evidence.
+                </>
+              )}
+              {hiddenCount > 0 && (
+                <span data-testid="unavailable-count">
+                  {degraded.length > 0 ? " " : ""}
+                  {bannerText(hiddenCount).replace(/^./, (c) => c.toUpperCase())}.
+                </span>
+              )}
             </div>
           )}
 
           {/* EXECUTIVE SUMMARY */}
           <Section title="Executive Summary">
-            <p className="text-base leading-relaxed italic text-slate-200 print:text-slate-800 mb-3">
-              {memo.one_sentence_thesis || memo.final_verdict}
-            </p>
-            {memo.final_pm_view && (
-              <Markdown text={memo.final_pm_view} />
+            {isHidden(memo, "one_sentence_thesis") ? (
+              <UnavailableSection
+                variant="paper"
+                title="Thesis"
+                section="one_sentence_thesis"
+                availability={availability(memo, "one_sentence_thesis")}
+                className="mb-3"
+              />
+            ) : (
+              <>
+                <p className="text-base leading-relaxed italic text-slate-200 print:text-slate-800 mb-3">
+                  {memo.one_sentence_thesis ||
+                    (isHidden(memo, "final_verdict") ? "" : memo.final_verdict)}
+                </p>
+                {/* A degraded thesis keeps the analyst's claim beside the
+                    builder's canned sentence; the note keeps that sentence
+                    from reading as analysis, in the PDF too. */}
+                <DegradedNote
+                  availability={availability(memo, "one_sentence_thesis")}
+                  section="one_sentence_thesis"
+                  className="-mt-2 mb-3"
+                />
+              </>
+            )}
+            {isHidden(memo, "final_pm_view") ? (
+              <UnavailableSection
+                variant="paper"
+                title="PM view"
+                section="final_pm_view"
+                availability={availability(memo, "final_pm_view")}
+              />
+            ) : (
+              memo.final_pm_view && <Markdown text={memo.final_pm_view} />
             )}
           </Section>
 
           {/* MISPRICING — consensus vs our view, and what would prove us wrong */}
-          {hasMispricing && misp && (
+          {isUnavailable(memo, "mispricing_thesis") ? (
+            <Section title="Where We Differ From Consensus">
+              <UnavailableSection
+                variant="paper"
+                section="mispricing_thesis"
+                availability={availability(memo, "mispricing_thesis")}
+              />
+            </Section>
+          ) : hasMispricing && misp && (
             <Section title="Where We Differ From Consensus">
               <div className="space-y-2 text-sm text-slate-200 print:text-slate-800">
                 {misp.consensus_view && (
@@ -214,50 +297,70 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
           {/* BULL / BEAR */}
           <Section title="Investment Thesis — Bull vs Bear">
             <div className="grid md:grid-cols-2 gap-6 print:grid-cols-2">
-              <CaseBlock label="Bull case" tone="bull" headline={memo.bull_case?.headline} points={memo.bull_case?.key_points} />
-              <CaseBlock label="Bear case" tone="bear" headline={memo.bear_case?.headline} points={memo.bear_case?.key_points} />
+              <CaseBlock label="Bull case" tone="bull" headline={memo.bull_case?.headline} points={memo.bull_case?.key_points} availability={availability(memo, "bull_case")} />
+              <CaseBlock label="Bear case" tone="bear" headline={memo.bear_case?.headline} points={memo.bear_case?.key_points} availability={availability(memo, "bear_case")} />
             </div>
           </Section>
 
           {/* SECTOR */}
           {memo.sector_agent_view && (
             <Section title="Sector & Industry Context">
-              <AgentBlock finding={memo.sector_agent_view} />
+              <AgentBlock finding={memo.sector_agent_view} memo={memo} section="sector_agent_view" />
             </Section>
           )}
 
           {/* EARNINGS */}
           {memo.earnings_agent_view && (
             <Section title="Recent Earnings & Guidance">
-              <AgentBlock finding={memo.earnings_agent_view} />
+              <AgentBlock finding={memo.earnings_agent_view} memo={memo} section="earnings_agent_view" />
             </Section>
           )}
 
           {/* FILINGS */}
           {memo.filing_agent_view && (
             <Section title="Filings — Risk Factors & MD&A">
-              <AgentBlock finding={memo.filing_agent_view} />
+              <AgentBlock finding={memo.filing_agent_view} memo={memo} section="filing_agent_view" />
             </Section>
           )}
 
           {/* VALUATION */}
           <Section title="Valuation">
-            {memo.valuation_verdict?.summary && (
+            {isHidden(memo, "valuation_verdict") ? (
+              // The verdict step failed; its default would read "fairly priced".
+              <UnavailableSection
+                variant="paper"
+                title="Valuation verdict"
+                section="valuation_verdict"
+                availability={availability(memo, "valuation_verdict")}
+                className="mb-3"
+              />
+            ) : memo.valuation_verdict?.summary && (
               <p className="text-sm font-semibold text-slate-100 print:text-slate-900 mb-3">
                 {memo.valuation_verdict.summary}
               </p>
             )}
             {tvClamped && <TerminalClampBadge className="mb-3" />}
+            <DegradedNote availability={availability(memo, "dcf_summary")} className="mb-3" />
             <div className="grid md:grid-cols-2 gap-4 mb-4">
-              <KvTable
-                title="DCF Summary"
-                rows={[
-                  ["Fair value / share", hasDcf ? fmtPrice(dcfFair) : "—"],
-                  ["Implied upside", hasDcf ? fmtUpside(dcfImpliedUpside) : "—"],
-                  ["WACC", dcfWacc !== null ? fmtPctLoose(dcfWacc) : "—"],
-                  ["Terminal growth", dcfGrowth !== null ? fmtPctLoose(dcfGrowth) : "—"],
-                ]}
-              />
+              {isHidden(memo, "dcf_summary") ? (
+                // The DCF engine failed; a table of dashes would not say why.
+                <UnavailableSection
+                  variant="paper"
+                  title="DCF Summary"
+                  section="dcf_summary"
+                  availability={availability(memo, "dcf_summary")}
+                />
+              ) : (
+                <KvTable
+                  title="DCF Summary"
+                  rows={[
+                    ["Fair value / share", hasDcf ? fmtPrice(dcfFair) : "—"],
+                    ["Implied upside", hasDcf ? fmtUpside(dcfImpliedUpside) : "—"],
+                    ["WACC", dcfWacc !== null ? fmtPctLoose(dcfWacc) : "—"],
+                    ["Terminal growth", dcfGrowth !== null ? fmtPctLoose(dcfGrowth) : "—"],
+                  ]}
+                />
+              )}
               {memo.dcf_pm_adjustment_headline && (
                 <div className="border border-slate-700 print:border-slate-300 rounded p-3">
                   <div className="text-xs uppercase tracking-wider text-slate-400 print:text-slate-600">
@@ -267,18 +370,28 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                 </div>
               )}
             </div>
-            {memo.valuation_agent_view && <AgentBlock finding={memo.valuation_agent_view} />}
+            {memo.valuation_agent_view && (
+              <AgentBlock finding={memo.valuation_agent_view} memo={memo} section="valuation_agent_view" />
+            )}
             {memo.comps_agent_view && (
               <div className="mt-4">
-                <AgentBlock finding={memo.comps_agent_view} subhead="Comparable companies" />
+                <AgentBlock finding={memo.comps_agent_view} subhead="Comparable companies" memo={memo} section="comps_agent_view" />
               </div>
             )}
           </Section>
 
           {/* SCORECARD — hidden on memos that pre-date the field (undefined)
-              and on runs with no row for the ticker (null). Informs the
-              memo; the rating blend does not read it. */}
-          {memo.scorecard && (
+              and on runs with no row for the ticker (null), except that a
+              presented memo shows the placeholder for the no-row case.
+              Informs the memo; the rating blend does not read it. */}
+          {isHidden(memo, "scorecard") ? (
+            // The run had no scorecard row for the ticker (the graph's
+            // DataUnavailable event); the section says so instead of
+            // vanishing, and the banner can count it.
+            <Section title="Fundamental Factor Scorecard">
+              <UnavailableSection variant="paper" section="scorecard" availability={availability(memo, "scorecard")} />
+            </Section>
+          ) : memo.scorecard && (
             <Section title="Fundamental Factor Scorecard">
               <ScorecardMemoSection scorecard={memo.scorecard} />
             </Section>
@@ -287,18 +400,25 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
           {/* MACRO + RISK */}
           {(memo.macro_sensitivity || memo.technical_agent_view) && (
             <Section title="Macro & Positioning">
-              {memo.macro_sensitivity && <AgentBlock finding={memo.macro_sensitivity} subhead="Macro sensitivity" />}
+              {memo.macro_sensitivity && (
+                <AgentBlock finding={memo.macro_sensitivity} subhead="Macro sensitivity" memo={memo} section="macro_sensitivity" />
+              )}
               {memo.technical_agent_view && (
                 <div className="mt-3">
-                  <AgentBlock finding={memo.technical_agent_view} subhead="Technical positioning" />
+                  <AgentBlock finding={memo.technical_agent_view} subhead="Technical positioning" memo={memo} section="technical_agent_view" />
                 </div>
               )}
             </Section>
           )}
 
           {/* CATALYSTS */}
-          {memo.catalysts && memo.catalysts.length > 0 && (
+          {isHidden(memo, "catalysts") ? (
             <Section title="Catalysts">
+              <UnavailableSection variant="paper" section="catalysts" availability={availability(memo, "catalysts")} />
+            </Section>
+          ) : memo.catalysts && memo.catalysts.length > 0 && (
+            <Section title="Catalysts">
+              <DegradedNote availability={availability(memo, "catalysts")} className="mb-2" />
               <ul className="space-y-2">
                 {memo.catalysts.map((cat, i) => (
                   <li key={i} className="text-sm">
@@ -316,21 +436,41 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
           )}
 
           {/* RISKS */}
-          {(memo.key_risks?.length || memo.thesis_breakers?.length) ? (
+          {(memo.key_risks?.length ||
+            memo.thesis_breakers?.length ||
+            isHidden(memo, "key_risks") ||
+            isHidden(memo, "thesis_breakers")) ? (
             <Section title="Risks & Thesis Breakers">
-              {memo.key_risks && memo.key_risks.length > 0 && (
+              {isHidden(memo, "key_risks") ? (
+                <UnavailableSection
+                  variant="paper"
+                  title="Key risks"
+                  section="key_risks"
+                  availability={availability(memo, "key_risks")}
+                />
+              ) : memo.key_risks && memo.key_risks.length > 0 && (
                 <>
                   <h4 className="text-sm font-semibold mt-1 mb-2 text-slate-300 print:text-slate-700">
                     Key risks
                   </h4>
+                  <DegradedNote availability={availability(memo, "key_risks")} className="mb-2" />
                   <RiskList items={memo.key_risks} />
                 </>
               )}
-              {memo.thesis_breakers && memo.thesis_breakers.length > 0 && (
+              {isHidden(memo, "thesis_breakers") ? (
+                <UnavailableSection
+                  variant="paper"
+                  title="Thesis breakers"
+                  section="thesis_breakers"
+                  availability={availability(memo, "thesis_breakers")}
+                  className="mt-4"
+                />
+              ) : memo.thesis_breakers && memo.thesis_breakers.length > 0 && (
                 <>
                   <h4 className="text-sm font-semibold mt-4 mb-2 text-slate-300 print:text-slate-700">
                     Thesis breakers
                   </h4>
+                  <DegradedNote availability={availability(memo, "thesis_breakers")} className="mb-2" />
                   <RiskList items={memo.thesis_breakers} />
                 </>
               )}
@@ -338,7 +478,15 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
           ) : null}
 
           {/* CRITIC */}
-          {memo.risk_committee_challenge && (
+          {isHidden(memo, "risk_committee_challenge") ? (
+            <Section title="Risk Committee Challenge">
+              <UnavailableSection
+                variant="paper"
+                section="risk_committee_challenge"
+                availability={availability(memo, "risk_committee_challenge")}
+              />
+            </Section>
+          ) : memo.risk_committee_challenge && (
             <Section title="Risk Committee Challenge">
               <div className="text-sm text-slate-300 print:text-slate-700">
                 <p className="italic mb-2">{memo.risk_committee_challenge.overall_assessment}</p>
@@ -366,16 +514,32 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
             </Section>
           )}
 
-          {/* PORTFOLIO FIT */}
-          {memo.portfolio_fit && (
-            <Section title="Portfolio Fit">
-              <p className="text-sm text-slate-200 print:text-slate-800">{memo.portfolio_fit}</p>
-            </Section>
-          )}
+          {/* PORTFOLIO FIT — omitted when `template_always` (see the header). */}
+          {!portfolioFitOmitted &&
+            (isHidden(memo, "portfolio_fit") ? (
+              <Section title="Portfolio Fit">
+                <UnavailableSection variant="paper" section="portfolio_fit" availability={pfAv} />
+              </Section>
+            ) : (
+              memo.portfolio_fit && (
+                <Section title="Portfolio Fit">
+                  <p className="text-sm text-slate-200 print:text-slate-800">{memo.portfolio_fit}</p>
+                </Section>
+              )
+            ))}
 
           {/* FINAL VERDICT */}
-          {memo.final_verdict && (
+          {isHidden(memo, "final_verdict") ? (
             <Section title="Final Verdict">
+              <UnavailableSection
+                variant="paper"
+                section="final_verdict"
+                availability={availability(memo, "final_verdict")}
+              />
+            </Section>
+          ) : memo.final_verdict && (
+            <Section title="Final Verdict">
+              <DegradedNote availability={availability(memo, "final_verdict")} className="mb-1" />
               <p className="text-base font-semibold text-slate-100 print:text-slate-900">
                 {memo.final_verdict}
               </p>
@@ -419,22 +583,35 @@ function CaseBlock({
   tone,
   headline,
   points,
+  availability: av,
 }: {
   label: string;
   tone: "bull" | "bear";
   headline?: string;
   points?: string[];
+  // W2a: an unavailable case shows the placeholder and reason (plus any
+  // computed item the presenter kept); a partial one shows a headline
+  // placeholder and the "N template items not shown" note.
+  availability?: SectionAvailability;
 }) {
   const accent =
     tone === "bull"
       ? "border-emerald-500/40 print:border-emerald-700"
       : "border-rose-500/40 print:border-rose-700";
+  const hidden = av?.status === "unavailable" && av.reason !== "not_produced";
   return (
-    <div className={`border-l-2 ${accent} pl-3`}>
+    <div className={`border-l-2 ${accent} pl-3`} data-testid={`case-${tone}`}>
       <div className="text-xs uppercase tracking-widest text-slate-400 print:text-slate-600 font-semibold">
         {label}
       </div>
-      {headline && (
+      {hidden || av?.headline_hidden ? (
+        <UnavailableSection
+          variant="paper"
+          section={tone === "bull" ? "bull_case" : "bear_case"}
+          availability={hidden ? av : undefined}
+          className="mt-1"
+        />
+      ) : headline && (
         <div className="mt-1 text-sm font-semibold">{headline}</div>
       )}
       {points && points.length > 0 && (
@@ -444,12 +621,40 @@ function CaseBlock({
           ))}
         </ul>
       )}
+      {/* An unavailable case's placeholder already carries its item count. */}
+      {!hidden && <DegradedNote availability={av} className="mt-1" />}
     </div>
   );
 }
 
-function AgentBlock({ finding, subhead }: { finding: AgentFinding; subhead?: string }) {
+function AgentBlock({
+  finding,
+  subhead,
+  memo,
+  section,
+}: {
+  finding: AgentFinding;
+  subhead?: string;
+  // W2a: with both set, a hidden finding renders as the placeholder (and a
+  // PM intake skip carries the PM's rationale).
+  memo?: StockMemoOut;
+  section?: string;
+}) {
   if (!finding) return null;
+  const av = memo && section ? availability(memo, section) : undefined;
+  if (memo && section && isHidden(memo, section)) {
+    return (
+      <UnavailableSection
+        variant="paper"
+        title={subhead}
+        section={section}
+        availability={av}
+        detail={
+          av?.reason === "skipped_by_intake" ? intakeRationale(memo, finding) || undefined : undefined
+        }
+      />
+    );
+  }
   return (
     <div>
       {subhead && (
@@ -457,6 +662,7 @@ function AgentBlock({ finding, subhead }: { finding: AgentFinding; subhead?: str
           {subhead}
         </div>
       )}
+      <DegradedNote availability={av} className="mb-1" />
       {finding.headline && (
         <div className="text-sm font-semibold mb-1">{finding.headline}</div>
       )}

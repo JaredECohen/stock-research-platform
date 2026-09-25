@@ -34,6 +34,13 @@ The residue — a ticker genuinely cold, on a fresh deployment or newly
 promoted into the tier — is bounded by `MAX_COLD_TICKERS_PER_PASS` and
 named in the run note.
 
+Fundamentals are the exception (FIX-005): after the reconciliation pass
+this loop drains the filing-driven refreshes `fundamental_refresh`
+scheduled (a period EDGAR shows as filed that FMP-primary storage lacks,
+plus calendar and sweep checks), under their own cap of 30 per night and a
+15-minute budget. Filings and transcripts stay reconciliation-only, and a
+provider-owned ticker's statements are never read here any more.
+
 Wired in only when `ENABLE_MONITORING=true`; rolling history into local
 SQLite is overkill for the demo loop but essential when the curated
 universe is being driven against live providers.
@@ -150,6 +157,7 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
     deferred: list[str] = []
     post_pass_failures: list[dict] = []
     truncated_filings: list[dict] = []
+    fund = None
     for t in tickers:
         try:
             # Ask before spending. A warm ticker reconciles cached rows
@@ -176,6 +184,15 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
                 auth_errors += 1
             error_names.append(f"{t}:{type(exc).__name__}")
             log.warning("history_backfill failed ticker=%s error_type=%s", t, type(exc).__name__)
+    if not single:
+        # FIX-005: drain the filing-driven fundamentals refreshes under their
+        # own cap (30/night, 15 min). A single-ticker admin run skips it; the
+        # fundamentals admin sync exists for one name.
+        from ..services import fundamental_refresh
+        try:
+            fund = fundamental_refresh.nightly()
+        except Exception as exc:  # nightly() never raises; this keeps record_run below
+            fund = {**fundamental_refresh._empty_result(), "errors": [f"nightly:{type(exc).__name__}"]}
     note_parts = [
         f"tickers={len(tickers) - len(deferred)}",
         f"fp={totals['financial_periods']}",
@@ -185,6 +202,8 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
     ]
     if not single:
         note_parts.append(f"cold={cold}")
+    if fund is not None:
+        note_parts.append(f"fund_refreshed={fund['refreshed']} fund_pending={fund['pending']}")
     if rate_limited:
         note_parts.append(f"rate_limited={rate_limited}")
     if auth_errors:
@@ -209,8 +228,16 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
     if truncated_filings:
         from ..services.history_service import truncated_filing_note
         note += f"; bounded filing sources={len(truncated_filings)}: " + truncated_filing_note(truncated_filings)
+    if fund is not None:
+        note += _fundamentals_note(fund)
     log.info("history_backfill: %s", note)
-    record_run("history_backfill", success=errors == 0 and not post_pass_failures and not fetch_failures, note=note)
+    # A filed period still missing after its secondary attempt (≈ night 9)
+    # is the FIX-005 regression signal: it fails the loop on the night the
+    # ticker becomes stuck, and is named without failing afterwards. A
+    # period merely lagging inside its retry window is named, not a failure.
+    fund_failed = fund is not None and bool(fund["errors"] or fund["stuck"])
+    record_run("history_backfill",
+               success=errors == 0 and not post_pass_failures and not fetch_failures and not fund_failed, note=note)
     totals["errors"] = errors
     totals["rate_limited"] = rate_limited
     totals["auth_errors"] = auth_errors
@@ -220,7 +247,48 @@ def run_once(ticker: str | None = None, *, day: int | None = None) -> dict[str, 
     totals["filing_fetch_errors"] = len(fetch_failures)
     totals["post_pass_errors"] = len(post_pass_failures)
     totals["truncated_filings"] = len(truncated_filings)
+    if fund is not None:
+        totals["fund_refreshed"] = fund["refreshed"]
+        totals["fund_pending"] = fund["pending"]
+        totals["fund_over_cap"] = len(fund["over_cap"])
+        totals["fund_errors"] = len(fund["errors"])
+        totals["fund_stuck"] = len(fund["stuck"])
+        totals["fund_held"] = len(fund.get("held") or [])
     return totals
+
+
+def _fundamentals_note(fund: dict) -> str:
+    """Every name the fundamentals drain skipped, deferred or failed on.
+
+    None of these segments contains the word "deferred": the cold-read cap
+    owns that word in this note.
+    """
+    from ..services.fundamental_refresh import MAX_DRAIN_SECONDS, MAX_FUNDAMENTAL_REFRESHES_PER_PASS
+    note = ""
+    if fund.get("skipped_reason"):
+        note += f"; fundamentals refresh skipped: {fund['skipped_reason']}"
+    if fund["over_cap"]:
+        note += (f"; fundamentals over the {MAX_FUNDAMENTAL_REFRESHES_PER_PASS}-refresh cap: "
+                 f"{note_names(fund['over_cap'])}")
+    if fund["over_budget"]:
+        note += f"; fundamentals over the {MAX_DRAIN_SECONDS}s drain budget: {note_names(fund['over_budget'])}"
+    if fund["leased"]:
+        note += f"; fundamentals leased elsewhere: {note_names(fund['leased'])}"
+    if fund.get("held"):
+        note += f"; fundamentals held for the FMP re-pull execution: {note_names(fund['held'])}"
+    if fund["missing"]:
+        note += f"; fundamentals missing filed periods: {note_names(fund['missing'])}"
+    if fund["stuck"]:
+        note += f"; fundamentals stuck (filed period not published after retries): {note_names(fund['stuck'])}"
+    if fund["still_missing"]:
+        note += f"; fundamentals still missing: {note_names(fund['still_missing'])}"
+    if fund["rows_quarantined"] or fund["repair_ids"]:
+        note += f"; fundamentals quarantined={fund['rows_quarantined']}: {note_names(fund['repair_ids'])}"
+    if fund["entitlement_denied"]:
+        note += f"; fmp entitlement denied: {note_names(fund['entitlement_denied'])}"
+    if fund["errors"]:
+        note += f"; fundamentals failed: {note_names(fund['errors'])}"
+    return note
 
 
 def register(scheduler) -> None:

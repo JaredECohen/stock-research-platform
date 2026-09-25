@@ -21,6 +21,77 @@ import * as fx from "@/test/fixtures/industry";
 // "missing, and here is why" and a page that shows a blank. Every test
 // here is a way that could go wrong.
 
+// Owner decision 2026-09-24: nothing public shows the licensed taxonomy —
+// no third-party brand, no taxonomy code. The page is built on the
+// captured wire fixture, so the fixture is walked here (the mirror of the
+// backend's `test_industry_public_surface`), and the facts renderer — the
+// one component that prints whatever keys a section carries — is checked
+// on every section of the captured edition.
+const BRAND = /(?<![A-Za-z])gics(?![A-Za-z])/i;
+const LONG_CODE = /(?<![\w$.,])\d{6}(?:\d{2})?(?![\w%]|[.,]\d)/;
+const BARE_SHORT_CODE = /^\d{2}$|^\d{4}$/;
+const YEAR = /^(?:19|20)\d\d$/;
+const PAREN_CODE = /\(\d{4}\)|\bgroup \d{4}\b|Industry Group Analyst \d{4}/;
+
+function wireLeaks(node: unknown, path = "$", out: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    node.forEach((v, i) => wireLeaks(v, `${path}[${i}]`, out));
+  } else if (node && typeof node === "object") {
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (BRAND.test(k)) out.push(`${path}: key ${k}`);
+      if (BARE_SHORT_CODE.test(k) && !YEAR.test(k)) out.push(`${path}: code key ${k}`);
+      if (k === "provider_industry") continue;
+      wireLeaks(v, `${path}.${k}`, out);
+    }
+  } else if (typeof node === "string") {
+    if (BRAND.test(node)) out.push(`${path}: brand in ${node.slice(0, 80)}`);
+    if (LONG_CODE.test(node)) out.push(`${path}: 6/8-digit code in ${node.slice(0, 80)}`);
+    if (PAREN_CODE.test(node)) out.push(`${path}: group code form in ${node.slice(0, 80)}`);
+    if (BARE_SHORT_CODE.test(node.trim()) && !YEAR.test(node.trim())) out.push(`${path}: bare code ${node}`);
+  }
+  return out;
+}
+
+describe("the captured wire fixture is public data", () => {
+  it("carries no third-party brand and no taxonomy code anywhere, meta included", () => {
+    expect(wireLeaks(fx.WIRE_META)).toEqual([]);
+    for (const [name, body] of Object.entries({
+      taxonomy: fx.taxonomy,
+      report: fx.report,
+      warmingUpReport: fx.warmingUpReport,
+      universeShortReport: fx.universeShortReport,
+      notUpdatedReport: fx.notUpdatedReport,
+      noAgenticDetail: fx.noAgenticDetail,
+      companies: fx.companies,
+      history: fx.history,
+      changes: fx.changes,
+    })) {
+      expect([name, wireLeaks(body)]).toEqual([name, []]);
+    }
+  });
+
+  it("addresses every group by slug and names it by label", () => {
+    for (const s of fx.taxonomy.sectors) {
+      expect(s.code).toMatch(/^[a-z][a-z0-9-]+$/);
+      for (const g of s.industry_groups) {
+        expect(g.code).toMatch(/^[a-z][a-z0-9-]+$/);
+        expect(g.sector_code).toBe(s.code);
+      }
+    }
+    expect(fx.report.code).toBe(fx.CODE);
+    expect(fx.CODE).toMatch(/^[a-z][a-z0-9-]+$/);
+  });
+
+  it("renders every section's facts without printing a code or the brand", () => {
+    for (const [name, section] of Object.entries(fx.report.payload.sections)) {
+      const { unmount } = render(<FactsView facts={(section as { facts: Record<string, unknown> }).facts} />);
+      const text = document.body.textContent ?? "";
+      expect([name, BRAND.test(text), LONG_CODE.test(text), PAREN_CODE.test(text)]).toEqual([name, false, false, false]);
+      unmount();
+    }
+  });
+});
+
 describe("FactsView", () => {
   it("renders a {value: null, reason} cell as n/a with the server's reason", () => {
     render(<FactsView facts={{ our_forecast: { value: null, reason: "no licensed consensus tape" } }} />);
