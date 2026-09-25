@@ -617,11 +617,13 @@ class Orchestrator:
                         "could not be hydrated for chat context",
                         exc,
                     )
-            lite = _company_lite_snapshot(t)
+            lite = _company_lite_snapshot(t, with_price=False)
             if lite is not None:
                 company_lites.append(lite)
                 if len(company_lites) >= 8:
                     break
+        # One quote read for every lite (at most 8), not one per ticker.
+        _overlay_lite_prices(company_lites)
 
         if not memos and not company_lites:
             # Nothing to ground in — let the help text fire.
@@ -698,12 +700,63 @@ class Orchestrator:
         return body
 
 
-def _company_lite_snapshot(ticker: str) -> dict[str, Any] | None:
+def _lite_quotes(tickers: list[str]) -> dict[str, Any]:
+    """Quotes for chat company-lites in ONE `get_quotes` call.
+
+    The stored-close fallback is DB-only and labelled, so the chat model can
+    say "as of 4:00 PM ET, last close" rather than present an old number as
+    current. A quote is an overlay: any failure leaves the lites unpriced
+    here and the per-ticker fallback below takes over.
+    """
+    if not tickers:
+        return {}
+    try:
+        from ..services import quote_service
+        return dict(quote_service.get_quotes(tickers))
+    except Exception as exc:  # best-effort overlay, like the old per-ticker one
+        log_safely(log, "live quote overlay failed for company lites", exc, level=logging.DEBUG)
+        return {}
+
+
+def _overlay_lite_prices(lites: list[dict[str, Any]]) -> None:
+    """Set `last_price`, `last_price_as_of` and `last_price_source` on each lite.
+
+    Order: the live/stale quote or stored close from `quote_service`; else
+    the recent price series (the old `get_current_price` fallback); else
+    the seed-time `companies.last_price`, labelled as such.
+    """
+    quotes = _lite_quotes([lite["ticker"] for lite in lites])
+    for lite in lites:
+        quote = quotes.get(lite["ticker"])
+        if quote and quote.get("price") is not None:
+            lite.update(last_price=quote["price"], last_price_as_of=quote.get("as_of"),
+                        last_price_source=quote.get("source"))
+            continue
+        try:
+            from ..services.market_data_service import get_price_series
+            rows = [r for r in get_price_series(lite["ticker"], days=5) if r.get("close") is not None]
+        except Exception as exc:  # pragma: no cover — best-effort overlay
+            log_safely(log, f"price series fallback failed for {lite['ticker']}", exc, level=logging.DEBUG)
+            rows = []
+        if rows:
+            lite.update(last_price=rows[-1]["close"], last_price_as_of=rows[-1].get("date"),
+                        last_price_source="eod_close")
+        else:
+            lite.update(last_price_as_of=None,
+                        last_price_source="profile_seed" if lite.get("last_price") is not None else None)
+
+
+def _company_lite_snapshot(ticker: str, *, with_price: bool = True) -> dict[str, Any] | None:
     """Compact dossier when no memo exists — sector / industry / market
     cap from the `companies` table, plus screener-tier metrics (P/E,
     margins, ROIC, growth) so the chat LLM can answer comparative
     follow-ups (moat, valuation, growth) without us pre-running a memo
-    for every screener row."""
+    for every screener row.
+
+    `last_price` is the live quote when there is one, labelled with
+    `last_price_as_of` / `last_price_source` so the model can say how old
+    it is. `with_price=False` skips the quote read for a caller that prices
+    a batch of lites in one call (`_overlay_lite_prices`)."""
     from ..database import SessionLocal
     from ..models import Company, ScreenerMetric, ScreenerScore
     with SessionLocal() as db:
@@ -717,45 +770,44 @@ def _company_lite_snapshot(ticker: str) -> dict[str, Any] | None:
                 ScreenerScore.theme.is_(None),
             )
         ).scalar_one_or_none()
-        # Wave 10 — overlay the live intraday quote so the chat
-        # agent's company-lite carries an honest current price, not
-        # the 7-day-cached `companies.last_price`.
-        live_price: float | None = c.last_price
-        try:
-            from ..services.market_data_service import get_current_price
-            live = get_current_price(c.ticker)
-            if live is not None:
-                live_price = live
-        except Exception as exc:  # pragma: no cover — best-effort overlay
-            log_safely(log, f"live price overlay failed for {c.ticker}", exc,
-                       level=logging.DEBUG)
-        return {
-            "ticker": c.ticker,
-            "name": c.company_name,
-            "sector": c.sector,
-            "industry": c.industry,
-            "market_cap": c.market_cap,
-            "business": (c.business_description or "")[:600],
-            "last_price": live_price,
-            "metrics": {
-                "pe_ttm": getattr(m, "pe_ttm", None),
-                "ev_ebitda": getattr(m, "ev_ebitda", None),
-                "gross_margin": getattr(m, "gross_margin", None),
-                "op_margin": getattr(m, "op_margin", None),
-                "fcf_margin": getattr(m, "fcf_margin", None),
-                "roic": getattr(m, "roic", None),
-                "roe": getattr(m, "roe", None),
-                "debt_to_ebitda": getattr(m, "debt_to_ebitda", None),
-                "revenue_growth_yoy": getattr(m, "revenue_growth_yoy", None),
-                "beta": getattr(m, "beta", None),
-            } if m is not None else None,
-            "screener_scores": {
-                "pm_conviction": s.pm_conviction,
-                "quality": s.quality, "growth": s.growth,
-                "valuation": s.valuation, "earnings_momentum": s.earnings_momentum,
-                "risk": s.risk, "macro_fit": s.macro_fit,
-            } if s is not None else None,
-        }
+        lite = _lite_row(c, m, s)
+    if with_price:
+        _overlay_lite_prices([lite])
+    return lite
+
+
+def _lite_row(c: Any, m: Any, s: Any) -> dict[str, Any]:
+    """The DB-only part of a company-lite (Company, ScreenerMetric, ScreenerScore)."""
+    return {
+        "ticker": c.ticker,
+        "name": c.company_name,
+        "sector": c.sector,
+        "industry": c.industry,
+        "market_cap": c.market_cap,
+        "business": (c.business_description or "")[:600],
+        # Seed-time value until `_overlay_lite_prices` replaces it.
+        "last_price": c.last_price,
+        "last_price_as_of": None,
+        "last_price_source": None,
+        "metrics": {
+            "pe_ttm": getattr(m, "pe_ttm", None),
+            "ev_ebitda": getattr(m, "ev_ebitda", None),
+            "gross_margin": getattr(m, "gross_margin", None),
+            "op_margin": getattr(m, "op_margin", None),
+            "fcf_margin": getattr(m, "fcf_margin", None),
+            "roic": getattr(m, "roic", None),
+            "roe": getattr(m, "roe", None),
+            "debt_to_ebitda": getattr(m, "debt_to_ebitda", None),
+            "revenue_growth_yoy": getattr(m, "revenue_growth_yoy", None),
+            "beta": getattr(m, "beta", None),
+        } if m is not None else None,
+        "screener_scores": {
+            "pm_conviction": s.pm_conviction,
+            "quality": s.quality, "growth": s.growth,
+            "valuation": s.valuation, "earnings_momentum": s.earnings_momentum,
+            "risk": s.risk, "macro_fit": s.macro_fit,
+        } if s is not None else None,
+    }
 
 
 def _memo_for_chat_context(m: StockMemoOut) -> dict[str, Any]:

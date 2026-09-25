@@ -101,7 +101,8 @@ def test_fresh_hit_skips_fetcher(clock):
 
 def test_expired_row_is_refetched_and_rewritten(clock):
     key = _key("expired")
-    _seed(clock, "quote", key, {"price": 1.0}, age_seconds=600)  # quote TTL is 60s
+    # The quote backstop TTL is 900 s (quote_service owns the calendar policy).
+    _seed(clock, "quote", key, {"price": 1.0}, age_seconds=1000)
     calls = []
 
     def fetcher():
@@ -115,6 +116,87 @@ def test_expired_row_is_refetched_and_rewritten(clock):
         assert row.payload_json == {"price": 2.0}
         assert row.fetched_at == clock.base
     assert _row_count("quote", key) == 1
+
+
+def test_quote_backstop_ttl_and_entitlement_entries():
+    """W5b: the fixed quote TTL is the 15-minute backstop, the stale cap
+    stays an hour, and the entitlement memo lives a day in both tables."""
+    assert pc.TTL_BY_CAPABILITY["quote"] == 900
+    assert pc.MAX_STALE_BY_CAPABILITY["quote"] == 3600
+    assert pc.TTL_BY_CAPABILITY["entitlement"] == 86400
+    assert pc.MAX_STALE_BY_CAPABILITY["entitlement"] == 86400
+
+
+def test_read_rows_is_one_query_and_skips_absent_keys(clock):
+    from sqlalchemy import event
+
+    from app.database import engine
+
+    keys = [_key(f"rows{i}") for i in range(5)]
+    for i, key in enumerate(keys[:3]):
+        _seed(clock, "quote", key, {"price": float(i)}, age_seconds=10 * i)
+    statements: list[str] = []
+
+    def count(_conn, _cursor, statement, *_a):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        rows = pc.read_rows("quote", keys)
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert len([s for s in statements if s.lstrip().upper().startswith("SELECT")]) == 1
+    assert set(rows) == set(keys[:3])
+    assert rows[keys[2]] == ({"price": 2.0}, clock.base - timedelta(seconds=20))
+    assert pc.read_rows("quote", []) == {}
+
+
+def test_put_many_inserts_and_updates_in_one_commit(clock):
+    old, new = _key("many-old"), _key("many-new")
+    _seed(clock, "quote", old, {"price": 1.0}, age_seconds=500)
+    pc.put_many("quote", {old: {"price": 2.0}, new: {"price": 3.0}, _key("empty"): {}})
+    rows = pc.read_rows("quote", [old, new])
+    assert rows[old] == ({"price": 2.0}, clock.base)
+    assert rows[new] == ({"price": 3.0}, clock.base)
+    assert _row_count("quote", old) == 1
+
+
+def test_put_many_falls_back_to_put_on_a_lost_insert_race(clock, monkeypatch):
+    key = _key("many-race")
+    real_session = pc.SessionLocal
+    calls = {"n": 0}
+
+    class RacingSession:
+        """First session raises on commit as if another process inserted first."""
+
+        def __init__(self):
+            self._inner = real_session()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._inner.close()
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def commit(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                self._inner.rollback()
+                raise IntegrityError("insert", {}, Exception("unique"))
+            self._inner.commit()
+
+    monkeypatch.setattr(pc, "SessionLocal", RacingSession)
+    pc.put_many("quote", {key: {"price": 7.0}})
+    monkeypatch.setattr(pc, "SessionLocal", real_session)
+    assert pc.read_rows("quote", [key])[key][0] == {"price": 7.0}
+    assert calls["n"] == 2
+
+
+def test_record_stale_is_public_and_aliased():
+    assert pc._record_stale is pc.record_stale
 
 
 def test_provider_miss_serves_stale_within_cap_and_logs_age(clock, caplog):

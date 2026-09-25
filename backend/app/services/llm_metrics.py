@@ -57,8 +57,9 @@ MODEL_PRICES_PER_MTOK: dict[str, tuple[float, float]] = {
     # Google / Vertex
     "gemini-2.5-flash":       (0.30, 2.50),
     "gemini-2.5-pro":         (1.25, 10.00),
-    "gemini-3.1-pro":         (2.00, 12.00),
     "gemini-3.1-pro-preview": (2.00, 12.00),
+    "gemini-3.5-flash-lite":  (0.30, 2.50),
+    "gemini-3.8-flash":       (0.75, 3.75),
 }
 
 # Provider-level fallback (when the specific model isn't tabulated). It keeps

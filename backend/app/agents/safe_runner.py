@@ -124,6 +124,22 @@ def active_log() -> DegradationLog | None:
     return _ACTIVE_LOG.get()
 
 
+def in_memo_run() -> bool:
+    """True exactly while a memo run is executing in this context (contract C6).
+
+    The invariant this rests on: the ONLY production activation of a
+    `DegradationLog` is `graph.run_stock_memo`, which activates one around
+    the whole run and resets it in `finally`. So "a log is active" means
+    "we are inside a memo run", and code that behaves differently there can
+    ask without `graph.py` threading a flag through every stage. Consumers:
+    `quote_service` (a quote read inside a memo is never older than 60 s,
+    so `price_at_memo` keeps its meaning) and, later, the learned-priors
+    renderer. A new `DegradationLog().activate()` call site outside a memo
+    run would break this; `test_memo_quote_floor` pins it end to end.
+    """
+    return _ACTIVE_LOG.get() is not None
+
+
 def note_soft(agent: str, reason: str, kind: str = "DeterministicFallback") -> bool:
     """Record a soft degradation on the active memo run's log.
 

@@ -12,7 +12,10 @@ on:
 jobs:
   backend-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # pytest alone took 5.1 min at wave C (2026-09-25 00:05) and ~10.5 min
+    # after batches 4-6; setup adds ~2. 20 leaves headroom while the slow
+    # tests named by --durations below are investigated (FIX-022).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -72,7 +75,7 @@ jobs:
           USE_DEMO_DATA: "true"
         run: |
           rm -f marketmosaic.db
-          python -m pytest -q
+          python -m pytest -q --durations=25
       - name: Run smoke test
         working-directory: backend
         env:

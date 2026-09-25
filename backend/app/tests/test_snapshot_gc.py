@@ -190,8 +190,156 @@ def test_loop_reports_failure_without_raising(monkeypatch):
     )
     def boom(**kw): raise RuntimeError("db gone")
     monkeypatch.setattr(snapshot_gc, "gc_snapshots", boom)
-    assert snapshot_gc.run_once() == {"scanned": 0, "deleted": 0, "capped": 0, "ledger_deleted": 0}
+    monkeypatch.setattr(snapshot_gc, "_prune_learning_renders", lambda: {"deleted": 0, "capped": 0})
+    assert snapshot_gc.run_once() == {"scanned": 0, "deleted": 0, "capped": 0, "ledger_deleted": 0,
+                                      "renders_deleted": 0}
     assert recorded["success"] is False and "RuntimeError" in recorded["note"]
+
+
+# ---------------------------------------------------------------------------
+# W7 (S19): shadow learning_renders retention
+# ---------------------------------------------------------------------------
+
+def test_shadow_render_retention(tmp_path, monkeypatch):
+    """One audit row per consumer per memo run adds up. Shadow rows past 180
+    days are reaped in bounded batches; inject rows (what a memo was actually
+    shown) and recent shadow rows are kept. A prune failure is reported, not
+    raised, and never stops the snapshot GC."""
+    from app.learning import context
+    from app.models import LearningRender
+    from app.monitoring import snapshot_gc
+    from app.tests.learning_helpers import learning_db
+
+    sessions, engine = learning_db(tmp_path, monkeypatch, context)
+    # Literal ages, not the constant: 180 days is the decision, and a shorter
+    # retention would reap shadow rows the G2 promotion gate still reads.
+    assert context.SHADOW_RENDER_RETENTION_DAYS == 180
+    now = datetime.utcnow()
+    old = now - timedelta(days=181)
+    recent = now - timedelta(days=179)
+
+    def add(mode: str, at: datetime) -> int:
+        with sessions() as s:
+            row = LearningRender(run_id="r", consumer="pm_memo", ticker="GCR", mode=mode, chars=10,
+                                 items=[], dropped=[], created_at=at)
+            s.add(row)
+            s.commit()
+            return int(row.id)
+
+    def alive() -> set[int]:
+        with sessions() as s:
+            return {r.id for r in s.query(LearningRender).all()}
+
+    try:
+        old_shadow = [add("shadow", old) for _ in range(5)]
+        kept = {add("shadow", recent), add("inject", old), add("inject", recent)}
+
+        # Bounded: two batches of two stop with one left, and say so.
+        assert context.prune_shadow_renders(batch_size=2, max_batches=2) == {"deleted": 4, "capped": 1,
+                                                                             "error": None}
+        assert alive() == kept | {old_shadow[-1]}
+
+        recorded: dict = {}
+        monkeypatch.setattr(snapshot_gc, "record_run", lambda name, **kw: recorded.update({"name": name, **kw}))
+        monkeypatch.setattr(snapshot_gc, "gc_snapshots",
+                            lambda **kw: {"scanned": 0, "deleted": 0, "capped": 0, "ledger_deleted": 0})
+        stats = snapshot_gc.run_once()
+        assert stats["renders_deleted"] == 1 and alive() == kept
+        assert recorded["success"] is True and "renders_deleted=1" in recorded["note"]
+        assert snapshot_gc.run_once()["renders_deleted"] == 0          # idempotent
+
+        def broken():
+            raise RuntimeError("renders table gone")
+
+        monkeypatch.setattr(snapshot_gc, "_prune_learning_renders", broken)
+        assert snapshot_gc.run_once()["renders_deleted"] == 0
+        assert recorded["success"] is False and "renders_error=RuntimeError" in recorded["note"]
+    finally:
+        engine.dispose()
+
+
+def _old_shadow_renders(sessions, n: int) -> None:
+    from app.models import LearningRender
+
+    at = datetime.utcnow() - timedelta(days=400)
+    with sessions() as s:
+        for _ in range(n):
+            s.add(LearningRender(run_id="r", consumer="pm_memo", ticker="GCR", mode="shadow", chars=10,
+                                 items=[], dropped=[], created_at=at))
+        s.commit()
+
+
+def _render_count(sessions) -> int:
+    from app.models import LearningRender
+
+    with sessions() as s:
+        return s.query(LearningRender).count()
+
+
+def test_render_prune_not_capped_when_exact_multiple_is_fully_reaped(tmp_path, monkeypatch):
+    """`capped` claims retention is falling behind. Four eligible rows reaped
+    by exactly two full batches of two leave nothing, so it must say 0."""
+    from app.learning import context
+    from app.tests.learning_helpers import learning_db
+
+    sessions, engine = learning_db(tmp_path, monkeypatch, context)
+    try:
+        _old_shadow_renders(sessions, 4)
+        assert context.prune_shadow_renders(batch_size=2, max_batches=2) == {"deleted": 4, "capped": 0,
+                                                                             "error": None}
+        assert _render_count(sessions) == 0
+    finally:
+        engine.dispose()
+
+
+def test_render_prune_partial_failure_reports_what_was_deleted(tmp_path, monkeypatch):
+    """Batches commit one at a time, so a failure on the second has already
+    deleted the first. The cron note must say so (renders_deleted=2), keep
+    the error, and not report success; the gc_snapshots-failure note keeps
+    the render fields too."""
+    from app.learning import context
+    from app.monitoring import snapshot_gc
+    from app.tests.learning_helpers import learning_db
+
+    sessions, engine = learning_db(tmp_path, monkeypatch, context)
+    deletes: list[str] = []
+
+    def second_delete_fails(conn, cursor, statement, *a):
+        if statement.lstrip().upper().startswith("DELETE FROM LEARNING_RENDERS"):
+            deletes.append(statement)
+            if len(deletes) == 2:
+                raise RuntimeError("connection dropped")
+
+    recorded: dict = {}
+    monkeypatch.setattr(snapshot_gc, "record_run", lambda name, **kw: recorded.update({"name": name, **kw}))
+    monkeypatch.setattr(snapshot_gc, "_prune_learning_renders",
+                        lambda: context.prune_shadow_renders(batch_size=2))
+    try:
+        _old_shadow_renders(sessions, 5)
+        monkeypatch.setattr(snapshot_gc, "gc_snapshots",
+                            lambda **kw: {"scanned": 0, "deleted": 0, "capped": 0, "ledger_deleted": 0})
+        event.listen(engine, "before_cursor_execute", second_delete_fails)
+        try:
+            stats = snapshot_gc.run_once()
+        finally:
+            event.remove(engine, "before_cursor_execute", second_delete_fails)
+        assert _render_count(sessions) == 3
+        assert stats["renders_deleted"] == 2
+        assert recorded["success"] is False
+        assert "renders_deleted=2" in recorded["note"] and "renders_error=" in recorded["note"]
+
+        # Snapshot GC failing as well: the render counts still reach the note.
+        def boom(**kw):
+            raise RuntimeError("db gone")
+
+        monkeypatch.setattr(snapshot_gc, "gc_snapshots", boom)
+        deletes.clear()
+        stats = snapshot_gc.run_once()
+        assert stats["renders_deleted"] == 3 and _render_count(sessions) == 0
+        assert recorded["success"] is False
+        assert "error=RuntimeError" in recorded["note"] and "renders_deleted=3" in recorded["note"]
+    finally:
+        engine.dispose()
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/api/client";
+import LiveQuote, { fmtEtDate, parseUtc } from "@/components/LiveQuote";
 import TerminalClampBadge from "@/components/TerminalClampBadge";
 import TickerPicker from "@/components/TickerPicker";
 import type { CompanyOut, DCFAssumptions, DCFResult, DCFSensitivity } from "@/types";
+import type { QuoteOut } from "@/types/quotes";
 import { fmtPrice, fmtUpside } from "@/lib/format";
 
 function NumInput(props: { label: string; value: number; onChange: (v: number) => void; step?: number; pct?: boolean; suffix?: string }) {
@@ -326,6 +328,12 @@ export default function DCFLab() {
   const [savedAvailable, setSavedAvailable] = useState<boolean>(false);
   const [result, setResult] = useState<DCFResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // W5b: the live quote, for a DISPLAY-ONLY upside. The assumptions POSTed
+  // to runDCF stay exactly as loaded: re-pricing saved assumptions to the
+  // live quote could make them equal the engine defaults (which read the
+  // same quote), and build_dcf persists a default-equal run as a new
+  // DCFModel version, so a page view would silently write a model version.
+  const [liveQuote, setLiveQuote] = useState<QuoteOut | null>(null);
   const [consensus, setConsensus] = useState<{
     consensus_revenue_growth: number[] | null;
     trailing_op_margin: number | null;
@@ -335,6 +343,10 @@ export default function DCFLab() {
   useEffect(() => {
     api.listStocks().then(setUniverse);
   }, []);
+
+  useEffect(() => {
+    setLiveQuote(null);
+  }, [ticker]);
 
   // Wave 8R — pull the analyst-consensus baseline so the lab can show
   // where current assumptions diverge.
@@ -435,9 +447,25 @@ export default function DCFLab() {
         { name: "Bear", price: result.bear.implied_share_price },
         { name: "Base", price: result.base.implied_share_price },
         { name: "Bull", price: result.bull.implied_share_price },
-        { name: "Current", price: result.current_price },
+        { name: "Model price", price: result.current_price },
       ]
     : [];
+  const livePrice = liveQuote?.price != null && liveQuote.price > 0 ? liveQuote.price : null;
+  const vsLive = (implied: number | null): number | null =>
+    implied != null && livePrice != null ? (implied - livePrice) / livePrice : null;
+  // The chip hands over stale rows and stored closes too (each labelled
+  // there); the upside beside the cards must say which price it is against,
+  // never "live" for a last close.
+  const vsLabel =
+    liveQuote?.source === "live" ? "vs live price"
+      : liveQuote?.source === "stale" ? "vs last quote"
+        : "vs last close";
+  const marketHeader = liveQuote == null || liveQuote.source === "live" ? "Live price" : "Latest price";
+  // `dcf.py` phrases the summary "... vs current $X ...", and $X here is the
+  // model's price (for a saved run, the save-date price), which the cards
+  // below already call "model price". Relabel that one backend phrase for
+  // display; the stored/POSTed result is untouched.
+  const summary = result?.summary.replace(/\bvs current\b/, "vs model price") ?? "";
   const tvClamped = Boolean(
     result && [result.base, result.bull, result.bear].some((s) => s.tv_clamped),
   );
@@ -501,7 +529,7 @@ export default function DCFLab() {
             Loaded saved <strong className="text-slate-100">v{savedMeta.version}</strong>{" "}
             ({savedMeta.trigger.replace("_", " ")})
             {savedMeta.generated_at
-              ? ` · ${new Date(savedMeta.generated_at).toLocaleString()}`
+              ? ` · ${parseUtc(savedMeta.generated_at).toLocaleString()}`
               : ""}
           </span>
           {savedMeta.assumption_changes && savedMeta.assumption_changes.length > 0 && (
@@ -627,7 +655,22 @@ export default function DCFLab() {
                     <div className="section-title">Scenario summary</div>
                     {tvClamped && <TerminalClampBadge />}
                   </div>
-                  <p className="text-sm text-slate-300">{result.summary}</p>
+                  <div className="flex flex-wrap items-start justify-between gap-3 mb-2 text-xs">
+                    <div className="text-slate-400">
+                      Price used in model{" "}
+                      <span className="font-mono text-slate-100">{fmtPrice(result.current_price)}</span>
+                      <span className="text-slate-500">
+                        {source === "saved" && savedMeta
+                          ? ` · saved v${savedMeta.version}${savedMeta.generated_at ? `, ${fmtEtDate(savedMeta.generated_at)}` : ""}`
+                          : " · engine default"}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[10px] uppercase tracking-widest text-slate-500">{marketHeader}</div>
+                      <LiveQuote ticker={ticker} onQuote={setLiveQuote} />
+                    </div>
+                  </div>
+                  <p className="text-sm text-slate-300">{summary}</p>
                   <div className="grid grid-cols-3 gap-3 mt-3">
                     {(["bear", "base", "bull"] as const).map((k) => {
                       const s = result[k];
@@ -640,8 +683,13 @@ export default function DCFLab() {
                           <div className="text-xs uppercase tracking-widest text-slate-500">{s.label}</div>
                           <div className="text-xl font-mono mt-1">{fmtPrice(s.implied_share_price)}</div>
                           <div className={`text-xs ${tone}`}>
-                            {fmtUpside(up)} vs current
+                            {fmtUpside(up)} vs model price
                           </div>
+                          {livePrice != null && (
+                            <div className="text-[11px] text-slate-500" data-testid={`vs-live-${k}`}>
+                              {fmtUpside(vsLive(s.implied_share_price))} {vsLabel}
+                            </div>
+                          )}
                         </div>
                       );
                     })}

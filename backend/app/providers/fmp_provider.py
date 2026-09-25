@@ -81,8 +81,8 @@ class FMPProvider:
             healthy=bool(self.api_key),
             notes="" if self.api_key else "Set FMP_API_KEY to enable.",
             capabilities=[
-                "profile", "prices", "quote", "financials", "ratios",
-                "key_metrics", "earnings", "estimates", "news",
+                "profile", "prices", "quote", "batch_quote", "financials",
+                "ratios", "key_metrics", "earnings", "estimates", "news",
             ],
         )
 
@@ -179,6 +179,31 @@ class FMPProvider:
     # Prices
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _quote_from_item(item: dict[str, Any]) -> dict[str, Any]:
+        """One `/quote` or `/batch-quote` item in the normalised quote shape.
+
+        `/stable/` spells the percent change `changePercentage`; the retired
+        `/api/v3/` spelled it `changesPercentage`, which is what this read
+        for a year after the migration, so `change_pct` was None on every
+        stable response that carried only the new field. The new spelling
+        wins; the old one is kept as a fallback for any body still using it.
+        """
+        change_pct = _to_float(item.get("changePercentage"))
+        if change_pct is None:
+            change_pct = _to_float(item.get("changesPercentage"))
+        return dict(
+            ticker=item.get("symbol"),
+            price=_to_float(item.get("price")),
+            previous_close=_to_float(item.get("previousClose")),
+            change=_to_float(item.get("change")),
+            change_pct=change_pct,
+            day_low=_to_float(item.get("dayLow")),
+            day_high=_to_float(item.get("dayHigh")),
+            volume=_to_float(item.get("volume")),
+            timestamp=item.get("timestamp"),
+        )
+
     def get_quote(self, ticker: str) -> dict[str, Any] | None:
         """`/stable/quote?symbol=…` — near-real-time intraday price.
 
@@ -190,18 +215,32 @@ class FMPProvider:
         data = self._get("/quote", symbol=ticker.upper())
         if not isinstance(data, list) or not data:
             return None
-        item = data[0]
-        return dict(
-            ticker=item.get("symbol"),
-            price=_to_float(item.get("price")),
-            previous_close=_to_float(item.get("previousClose")),
-            change=_to_float(item.get("change")),
-            change_pct=_to_float(item.get("changesPercentage")),
-            day_low=_to_float(item.get("dayLow")),
-            day_high=_to_float(item.get("dayHigh")),
-            volume=_to_float(item.get("volume")),
-            timestamp=item.get("timestamp"),
-        )
+        return self._quote_from_item(data[0])
+
+    def get_quotes(self, symbols: list[str]) -> tuple[int | None, dict[str, dict[str, Any]]]:
+        """`/stable/batch-quote?symbols=A,B,C` — many quotes in ONE call.
+
+        Returns `(HTTP status, {SYMBOL: quote})`. The status is the point:
+        a 402/403 means this plan does not include the batch endpoint, which
+        `quote_service` remembers in the database for a day and then asks
+        symbol by symbol instead. `(None, {})` when unconfigured or the
+        request failed. Items map back by the symbol FMP returns, so a
+        symbol missing from the answer is simply absent.
+        """
+        wanted = [s.strip().upper() for s in symbols if s and s.strip()]
+        if not wanted:
+            return None, {}
+        status, data = self._get_status("/batch-quote", symbols=",".join(wanted))
+        if status != 200 or not isinstance(data, list):
+            return status, {}
+        out: dict[str, dict[str, Any]] = {}
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "").strip().upper()
+            if symbol:
+                out[symbol] = self._quote_from_item(item)
+        return status, out
 
     def get_price_history(self, ticker: str, days: int = 252) -> list[dict[str, Any]] | None:
         """Explicit inclusive dates; retain all returned daily bars.

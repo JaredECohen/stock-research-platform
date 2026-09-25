@@ -73,6 +73,15 @@ class MemoRunCheckpoint(Base):
         DateTime, default=datetime.utcnow, index=True,
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # W2b 7(a): the facts the step registered on the run's source ledger
+    # (`SourceLedger.export`), so a resumed run that loads this step instead
+    # of re-running it still has them. Written only for roster analyst steps
+    # (opt-in, `checkpointed(capture_sources=True)`). Nullable: rows written
+    # before the column existed, and every other step, carry None — a resume
+    # over such a roster row reports the figures as not checked instead of
+    # flagging them against a registry missing that analyst's inputs. Added
+    # to live databases by `reconcile_missing_columns()` at boot.
+    sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("run_id", "step_name", name="uq_run_step"),

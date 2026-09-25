@@ -11,6 +11,7 @@ from ..services import retrieval_service
 from . import llm, prompts
 from .log_safety import log_safely, redact, safe_exc
 from .safe_runner import note_soft
+from .source_ledger import register_source
 
 log = logging.getLogger(__name__)
 
@@ -247,6 +248,14 @@ def run_filing_agent(
         "segments": primary.get("segments", []),
         "retrieved_chunks": [str(r.get("text") or "")[:1500] for r in retrieved][:3],
     }
+    # W2b 7(a): the filing text the analyst is given is a primary source.
+    # Each retrieved passage is registered under its own ref, in full (the
+    # deterministic path below can quote any of the four).
+    filing_ref = f"filing:{primary.get('accession_number') or primary.get('type') or ticker}"
+    register_source("filing", filing_ref, payload, exclude_keys=("retrieved_chunks",))
+    for chunk, source in zip(retrieved, retrieved_sources):
+        register_source("filing", f"chunk:{source.get('chunk_id') or source['ref']}",
+                        {"text": str(chunk.get("text") or "")})
     from ..services.research_notes import build_notes_block_for_agent
     notes_block = build_notes_block_for_agent(
         "filing", profile, extra_query="risk factors disclosure litigation regulation",
@@ -325,6 +334,8 @@ def run_filing_agent(
 
     mda_snippet = _substantive_filing_snippet(primary.get("mda", ""), retrieved)
     risks = _substantive_risk_factors(primary.get("risk_factors") or [], top_n=3)
+    # The snippet can come from past the prompt's 12,000-character cut.
+    register_source("filing", filing_ref, {"mda_snippet": mda_snippet, "risk_factors": risks})
 
     summary_parts = [
         f"{primary.get('type', '10-K')} dated {primary.get('filing_date', '—')}.",

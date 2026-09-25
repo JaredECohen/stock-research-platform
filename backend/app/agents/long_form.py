@@ -43,6 +43,31 @@ def _bulleted(points: list | None) -> str:
     return "\n".join(f"- {p}" for p in points)
 
 
+_KEY_POINTS_HEADING = "### Key points\n"
+
+
+def replace_key_points_block(report: str, key_points: list | None) -> str:
+    """`report` with its deterministic "### Key points" block rebuilt from
+    `key_points` (or removed when there are none).
+
+    W2b 7(a): when the number check withholds a key point, the drill-down
+    body — which repeats the key points verbatim — must not keep printing
+    it. Only the block written by `deterministic_long_form` is touched: it
+    runs from its heading to the next blank-line-separated part; an
+    "### Analyst expansion" after it is left byte-identical."""
+    at = report.find(_KEY_POINTS_HEADING)
+    if at < 0:
+        return report
+    end = report.find("\n\n", at + len(_KEY_POINTS_HEADING))
+    end = len(report) if end < 0 else end
+    bullets = _bulleted(key_points)
+    if bullets:
+        return report[:at] + _KEY_POINTS_HEADING + bullets + report[end:]
+    # No points left: drop the heading and the separator before the next part.
+    tail = report[end:]
+    return report[:at] + (tail[2:] if tail.startswith("\n\n") else tail)
+
+
 def _format_data_evidence(data: dict[str, Any]) -> str:
     """Pull a few of the most useful structured fields out of `finding.data`.
 

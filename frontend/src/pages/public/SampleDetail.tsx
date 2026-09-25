@@ -135,7 +135,11 @@ export default function SampleDetail() {
             <section aria-labelledby="full-memo-heading">
               <h2 id="full-memo-heading" className="text-lg font-semibold mb-3">The full committee memo</h2>
               <SafeSection label="The committee memo">
-                <MemoCard memo={detail.sample.memo} />
+                {/* W2b design §9: public pages do not show the research
+                    checks (panel, figure marks, rating/confidence notes), so
+                    the card gets the memo without its quality record and
+                    renders as it did before W2b. */}
+                <MemoCard memo={{ ...detail.sample.memo, quality: null }} />
               </SafeSection>
             </section>
           ) : null}

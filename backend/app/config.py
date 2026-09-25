@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -87,9 +87,12 @@ class Settings(BaseSettings):
     # When both are configured, Vertex wins so production deployments
     # don't accidentally fall back to API-key auth.
     gemini_api_key: str = Field(default="", repr=False)
-    gemini_news_model: str = "gemini-2.5-flash"
-    gemini_social_model: str = "gemini-2.5-flash"
-    gemini_longdoc_model: str = "gemini-3.1-pro"
+    # gemini-2.5-flash returns 404 "no longer available to new users" for a
+    # key created after its retirement (production's key, 2026-09-25), and
+    # "gemini-3.1-pro" was never a valid ID: only the -preview one exists.
+    gemini_news_model: str = "gemini-3.5-flash-lite"
+    gemini_social_model: str = "gemini-3.5-flash-lite"
+    gemini_longdoc_model: str = "gemini-3.1-pro-preview"
     vertex_project_id: str = ""
     vertex_location: str = "us-central1"
     # When set, overrides the per-agent Gemini model envs across all Gemini
@@ -151,12 +154,40 @@ class Settings(BaseSettings):
     enable_regen_worker: bool = True
     regen_worker_poll_seconds: float = 2.0
     regen_queue_max_age_minutes: int = 30
-    # Long-term agent memory (filesystem markdown, delta-triggered).
-    # `memory_dir` is the root; companies live at <root>/companies/<TICKER>.md
-    # and sectors at <root>/sectors/<sector_slug>.md. Set absolute or
-    # relative-to-CWD; default keeps state inside the backend dir for dev.
+    # Long-term agent memory: the LEGACY file backend (filesystem markdown,
+    # delta-triggered). `memory_dir` is the root; companies live at
+    # <root>/companies/<TICKER>.md and sectors at <root>/sectors/<sector_slug>.md.
+    # Render's container disk is ephemeral, so production keeps this false
+    # (render.yaml); the Postgres learning ledger (W7, `learning_*` below)
+    # replaces it there rather than reusing this flag with a new meaning —
+    # ten call sites read it as "touch the markdown files".
     enable_long_term_memory: bool = True
     memory_dir: str = "./memory"
+    # W7 learning ledger (owner decision 9, 2026-09-24): lessons are testable
+    # hypotheses whose credibility is a Beta posterior over later, eligible
+    # outcomes, so memory updates priors as evidence arrives instead of
+    # being a fixed instruction. Off by default (CI, dev laptops): writes
+    # happen only where render.yaml turns them on.
+    learning_ledger_writes: bool = False
+    # A CEILING on how far learned priors may reach prompts: off | shadow |
+    # inject. The effective mode is min(this, the DB-held mode), and the DB
+    # mode defaults to shadow (computed and audited, never injected), so
+    # "inject" here only permits a later, gated admin promotion. "off" is
+    # the emergency stop: no DB read, prompts byte-identical to today. A str
+    # with a validator for the same reason as `rating_reconciliation_mode`.
+    learning_mode_max: str = "off"
+    # The nightly applicability judge (cheap route) spends at most this much
+    # per night. Owner default adopted 2026-09-24: <= 20 calls, <= $0.25.
+    learning_judge_max_calls_per_night: int = 20
+    learning_judge_max_usd_per_night: float = 0.25
+
+    @field_validator("learning_mode_max")
+    @classmethod
+    def _learning_mode_max_known(cls, v: str) -> str:
+        mode = str(v).strip().lower()
+        if mode not in ("off", "shadow", "inject"):
+            raise ValueError("learning_mode_max must be 'off', 'shadow' or 'inject'")
+        return mode
     # Wave 3C / 8A: drill-down "long-form" agent reports. The deterministic
     # markdown is always populated (cheap, no LLM); when this flag is on,
     # the deterministic body is enriched via a 1-2 paragraph LLM expansion
@@ -237,6 +268,34 @@ class Settings(BaseSettings):
     # behavior (factor score is dispositive); 1.0 gives the LLM full
     # authority. Clamped to [0.0, 1.0] at use site.
     llm_rating_weight: float = 0.4
+
+    # W2b research-quality guards (owner decision 7, 2026-09-24).
+    # `rating_reconciliation_mode` is 7(b)'s kill switch: "enforce" sets a
+    # Bullish rating on overvalued valuation evidence (or the Bearish
+    # mirror) to Neutral unless the PM stated a substantive reason;
+    # "record" computes and stores the same reconciliation but publishes
+    # the blended rating unchanged — an env flip on the worker instead of a
+    # redeploy if the rule misbehaves. Record mode leaves published output
+    # untouched by 7(b): an unenforced ("downgraded" but not applied)
+    # divergence carries no confidence cap either, because the
+    # `divergence_unreviewed` cap is only for a reason 7(b) ACCEPTED without
+    # a live critic's review. Anything else fails validation at
+    # boot rather than silently meaning one of the two. A `str` with a
+    # validator, not a `Literal`: the image-defaults test loads this module
+    # outside `sys.modules`, where a postponed `Literal` annotation cannot
+    # be resolved.
+    rating_reconciliation_mode: str = "enforce"
+    # 7(a) (number-to-source check, a later slice): False means untraceable
+    # figures are flagged only, never withheld from supporting lists.
+    number_check_withhold: bool = True
+
+    @field_validator("rating_reconciliation_mode")
+    @classmethod
+    def _rating_reconciliation_mode_known(cls, v: str) -> str:
+        mode = str(v).strip().lower()
+        if mode not in ("enforce", "record"):
+            raise ValueError("rating_reconciliation_mode must be 'enforce' or 'record'")
+        return mode
 
     # Runtime
     cache_ttl_seconds: int = 3600

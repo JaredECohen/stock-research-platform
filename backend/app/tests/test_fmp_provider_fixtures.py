@@ -589,3 +589,42 @@ def test_every_endpoint_classifies_entitlement_refusals(router, provider, monkey
     assert denied["/analyst-estimates"]["status"] == 403 and denied["/earnings"]["last_symbol"] == "ZZZ"
     assert all(d["kind"] == "provider_entitlement_denied" and d["provider"] == "fmp" for d in denied.values())
     assert FAKE_KEY not in repr(denied)
+
+
+# ---------------------------------------------------------------------------
+# W5b: /batch-quote and the stable percent-change field
+# ---------------------------------------------------------------------------
+
+def test_stable_change_percentage_field(router, provider):
+    """`/stable/` spells it `changePercentage`; reading only the retired
+    `changesPercentage` left `change_pct` None on every stable body."""
+    item = _rows("quote.json")[0]
+    item.pop("changesPercentage")
+    router.add("/quote", json.dumps([item]))
+    assert provider.get_quote("ACME")["change_pct"] == 1.367
+    legacy = {k: v for k, v in _rows("quote.json")[0].items() if k != "changePercentage"}
+    router.add("/quote", json.dumps([legacy]))
+    assert provider.get_quote("ACME")["change_pct"] == 1.367
+
+
+def test_batch_quote_parses_items(router, provider):
+    router.add_fixture("/batch-quote", "batch_quote.json")
+    status, quotes = provider.get_quotes(["acme", "bolt", "gone"])
+    assert status == 200
+    assert set(quotes) == {"ACME", "BOLT"}              # an absent symbol is simply absent
+    assert all(set(q) == QUOTE_KEYS for q in quotes.values())
+    assert quotes["ACME"]["change_pct"] == 1.367 and quotes["BOLT"]["change_pct"] == -0.824
+    assert quotes["BOLT"]["price"] == 12.05 and quotes["BOLT"]["timestamp"] == 1757000030
+    assert router.calls == [("/batch-quote", {"symbols": "ACME,BOLT,GONE", "apikey": FAKE_KEY})]
+    assert "batch_quote" in provider.status().capabilities
+
+
+def test_batch_quote_returns_status_on_402(router, provider, monkeypatch, caplog):
+    monkeypatch.setattr(fmp, "_ENTITLEMENT_DENIALS", {})
+    router.add("/batch-quote", '{"Error Message": "Special Endpoint"}', status=402)
+    with caplog.at_level("WARNING", logger="app.providers.fmp_provider"):
+        assert provider.get_quotes(["ACME", "BOLT"]) == (402, {})
+    assert "FMP /batch-quote -> 402 symbol=ACME,BOLT" in caplog.text and FAKE_KEY not in caplog.text
+    assert [d["endpoint"] for d in fmp.entitlement_denials()] == ["/batch-quote"]
+    assert provider.get_quotes([]) == (None, {})
+    assert [c[0] for c in router.calls] == ["/batch-quote"]

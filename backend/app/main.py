@@ -26,6 +26,7 @@ from .api import (
     routes_health,
     routes_industries,
     routes_industries_admin,
+    routes_learning_admin,
     routes_macro,
     routes_portfolio,
     routes_public,
@@ -200,6 +201,11 @@ def create_app() -> FastAPI:
     # worker owns report generation.
     app.include_router(routes_industries.router, tags=["industries"])
     app.include_router(routes_industries_admin.router, tags=["industries", "admin"])
+    # W7 learning ledger ops (status, mode, items, renders, preview, and the
+    # S17 corpus census). Under `/api/admin`, so the token middleware guards
+    # every one of them; none is browser-called. DB-only — nothing here calls
+    # a provider or a model, so it is safe on the web process.
+    app.include_router(routes_learning_admin.router, tags=["admin"])
 
     @app.on_event("startup")
     def _startup() -> None:

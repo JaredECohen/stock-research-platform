@@ -76,3 +76,32 @@ def test_provider_default_is_logged_once_per_model(caplog):
 def test_verified_on_is_a_date():
     from datetime import date
     date.fromisoformat(llm_metrics.PRICES_VERIFIED_ON)
+
+
+# Models Google has withdrawn from new API keys, or that never existed. A key
+# created after the withdrawal gets 404 on every call, so a default naming one
+# silently drops news to the provider-headline fallback in production.
+_UNAVAILABLE_GEMINI_MODELS = {"gemini-2.5-flash", "gemini-3.1-pro"}
+
+
+def test_gemini_defaults_name_models_a_new_key_can_call():
+    configured = {
+        name: model for name, model in _configured_models().items()
+        if name.startswith("gemini_")
+    }
+    assert set(configured) >= {"gemini_news_model", "gemini_social_model", "gemini_longdoc_model"}
+    stale = {n: m for n, m in configured.items() if m in _UNAVAILABLE_GEMINI_MODELS}
+    assert not stale, f"Gemini defaults name unavailable models: {stale}"
+
+
+def test_committed_config_env_matches_the_gemini_defaults():
+    from pathlib import Path
+
+    env = Path(__file__).resolve().parents[3] / "config.env"
+    values = dict(
+        line.split("=", 1) for line in env.read_text().splitlines()
+        if line.startswith("GEMINI_") and "=" in line
+    )
+    for key in ("GEMINI_NEWS_MODEL", "GEMINI_SOCIAL_MODEL", "GEMINI_LONGDOC_MODEL"):
+        field = Settings.model_fields[key.lower()].default
+        assert values.get(key) == field, f"config.env {key}={values.get(key)!r} but Settings default is {field!r}"

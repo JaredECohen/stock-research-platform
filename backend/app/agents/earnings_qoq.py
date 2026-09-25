@@ -157,6 +157,13 @@ def run_earnings_qoq_delta(
     prior = _prior_structured_extraction(ticker, period)
     if prior is None:
         return None
+    # W2b 7(a): this tile compares two structured extractions, so they are
+    # its inputs — registered under the labelled, non-primary kind
+    # `prior_extraction`: a figure traced here traces to an earlier model
+    # reading of a call, never to the call itself.
+    from .source_ledger import register_source
+    register_source("prior_extraction", f"prior_extraction:{period or 'current'}", current_structured)
+    register_source("prior_extraction", f"prior_extraction:{prior.get('period') or 'prior'}", prior)
     deterministic = _deterministic_delta(current_structured, prior)
     llm_out = _llm_delta(current_structured, prior, ticker) or {}
     reversals = [str(r) for r in (llm_out.get("reversals") or []) if str(r).strip()]

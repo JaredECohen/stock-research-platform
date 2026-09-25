@@ -53,12 +53,33 @@ def _prior_memo_context(ticker: str) -> str:
         return ""
 
 
-def _company_memory_context(ticker: str) -> str:
+# W7 inject mode: the critic reads lessons as hypotheses, not a record the
+# memo must obey. The legacy wording ("if the memo CONTRADICTS prior recorded
+# lessons ... raise it as a challenge") over-indexes on memory, which owner
+# decision 9 rules out; a filing observation is a fact, so a silent reversal
+# of one is still worth flagging.
+CRITIC_PRIORS_INSTRUCTION = (
+    "Cross-check: flag a silent reversal of a recorded filing observation. "
+    "Lessons are hypotheses: do not challenge a departure from an untested or "
+    "contested lesson; challenge a departure from a supported lesson only when "
+    "the memo gives no current evidence."
+)
+
+
+def _company_memory_context(ticker: str, sector: str | None = None) -> str:
     """Wave 10 — pull the company memory file as additional critic
     grounding. Lets the critic say 'you said the opposite three months
-    ago — what changed?' instead of judging the memo in isolation."""
+    ago — what changed?' instead of judging the memo in isolation.
+
+    W7: in inject mode the learned-priors block replaces the file, with the
+    reframed instruction above; off, shadow and any call outside a live memo
+    run keep the legacy block byte for byte."""
     if not ticker:
         return ""
+    from ..learning import context as learning_context
+    learned = learning_context.render_safely("critic", ticker=ticker, sector=sector)
+    if learned.mode == "inject":
+        return f"\n\n{learned.text}\n\n{CRITIC_PRIORS_INSTRUCTION}" if learned.text else ""
     try:
         from ..memory import CompanyMemory
         cm = CompanyMemory.for_ticker(ticker)
@@ -75,6 +96,39 @@ def _company_memory_context(ticker: str) -> str:
         return ""
 
 
+_ASSESSMENTS = frozenset({"supported", "unsupported"})
+
+
+def _divergence_block(memo_dict: dict) -> str:
+    """The W2b 7(b) block the critic must see, or "".
+
+    Built from `quality.rating_reconciliation` (the PM's rating, the
+    evidence verdict and the PM's stated reason). It is PREPENDED before the
+    memo dump rather than left inside it: the dump is cut at
+    `max_agent_context_chars` (60k) while a live memo's dump runs to ~270k,
+    and `quality` is the last field, so inside the dump the critic would
+    never read it."""
+    from .memo_quality import diverges
+
+    quality = memo_dict.get("quality")
+    rec = quality.get("rating_reconciliation") if isinstance(quality, dict) else None
+    if not isinstance(rec, dict):
+        return ""
+    pm_rating = str(rec.get("pm_rating") or memo_dict.get("rating_label") or "")
+    verdict = str(rec.get("valuation_verdict") or "")
+    if not diverges(pm_rating, verdict):
+        return ""
+    vv = memo_dict.get("valuation_verdict")
+    summary = str(vv.get("summary") or "") if isinstance(vv, dict) else ""
+    reason = str(rec.get("reason") or "").strip()
+    return (
+        f"\n\n## RATING DIVERGENCE (PM rated {pm_rating}; valuation evidence reads "
+        f"{verdict.replace('_', ' ')})\n"
+        f"Valuation evidence: {summary or 'n/a'}\n"
+        f"PM's stated reason: {reason or 'none given'}"
+    )
+
+
 def run_critic(memo_dict: dict) -> CriticReview | None:
     if not settings.enable_agent_critic:
         return None
@@ -86,8 +140,9 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
     # spot silent reversals and cross-version inconsistencies.
     ticker = memo_dict.get("ticker") or ""
     prior_block = _prior_memo_context(ticker)
-    memory_block = _company_memory_context(ticker)
+    memory_block = _company_memory_context(ticker, memo_dict.get("sector"))
 
+    divergence_block = _divergence_block(memo_dict)
     payload = json.dumps(memo_dict, default=str)[: settings.max_agent_context_chars]
     # Critic intentionally crosses provider families (Phase 4): if Anthropic is
     # configured, force-route through ANTHROPIC_CRITIC_MODEL regardless of
@@ -103,6 +158,7 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
         prompts.CRITIC_PROMPT
         + prior_block
         + memory_block
+        + divergence_block
         + "\n\nDraft memo:\n" + payload,
         system=prompts.PM_SYSTEM, route="strong",
         provider_override=provider_override,
@@ -120,6 +176,13 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
                 "advice_compliance_check", "Output framed as research/education, not personalized advice."
             ),
         )
+        # Read only when the critic was actually asked (the block was sent);
+        # any other value, or an unasked one, stays "not_assessed".
+        raw_assessment = (llm_out.get("valuation_divergence_assessment")
+                          if isinstance(llm_out, dict) else None)
+        if (divergence_block and isinstance(raw_assessment, str)
+                and raw_assessment.strip().lower() in _ASSESSMENTS):
+            review.valuation_divergence_assessment = raw_assessment.strip().lower()  # type: ignore[assignment]
     else:
         # This checks a few fields, not factual accuracy or research quality.
         # A missing live result must not read as an independent endorsement.

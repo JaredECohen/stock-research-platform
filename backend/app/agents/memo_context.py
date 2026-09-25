@@ -6,8 +6,11 @@
     _run_analyst_round(inputs) -> AnalystRound
     _adjust_dcf(inputs, round) -> DCFStage
     _compose_memo(inputs, round, dcf_stage) -> StockMemoOut
-    _review_memo(memo, inputs, round) -> StockMemoOut
+    _review_memo(memo, inputs, round) -> StockMemoOut   (critic, blend, 7(b))
     _build_verdict(memo, ...) -> VerdictOutcome   (pure; orchestrator applies)
+    _assess_quality(memo, inputs, round) -> QualityOutcome   (pure; 7(c))
+    _render_final_texts(memo, verdict, initial)   (the confidence-bearing text)
+    _run_reflection(memo, inputs)
     _persist(memo, inputs) -> StockMemoOut
 
 The dataclasses here are the contracts between those stages. This module
@@ -37,7 +40,8 @@ the same objects through. The verdict stage is the exception in the
 other direction: it reads the memo and returns a ``VerdictOutcome`` and
 the orchestrator applies it — nothing inside ``_build_verdict`` writes
 to the memo, which is what lets `test_memo_consistency` exercise it on a
-fixture memo without running the pipeline.
+fixture memo without running the pipeline. The quality stage is pure the
+same way (``QualityOutcome``).
 """
 from __future__ import annotations
 
@@ -48,9 +52,12 @@ from typing import TYPE_CHECKING, Any
 from ..schemas import (
     AgentFinding,
     CompsResult,
+    ConfidenceAssessment,
     CritiqueQuestion,
     DCFResult,
+    MemoQuality,
     MispricingThesis,
+    NumberCheck,
     RoundFindings,
     ScorecardSummary,
     StockMemoOut,
@@ -60,6 +67,8 @@ from .safe_runner import DegradationLog
 
 if TYPE_CHECKING:  # intake -> roster -> memo_context; keep the runtime edge one-way
     from .intake import IntakeDecision
+    from .number_check import WithholdPlan
+    from .source_ledger import SourceLedger
 
 
 @dataclass
@@ -112,6 +121,16 @@ class MemoInputs:
     # `{industry_group_block}` both read it here, so a memo never looks the
     # mapping up twice. With routing off it stays None and nothing reads it.
     industry_group: dict[str, Any] | None = None
+    # W2b 7(a) — the run's source ledger (activated by `run_stock_memo`;
+    # None for a direct stage call, in which case the number check does not
+    # run). Analysts register their payloads through the context var, not
+    # this handle; the quality stage reads the snapshot from here.
+    ledger: SourceLedger | None = None
+    # W2b 7(a) — forward figures the PM declared (`forecast_assumptions`),
+    # shape-checked. Written by the compose stage (the PM speaks there), read
+    # by the quality stage; like `scorecard_seeds_consumed`, a stage output
+    # carried on the inputs because no memo field holds it before the check.
+    forecast_assumptions: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -153,13 +172,37 @@ class DegradationNote:
     soft: bool
 
 
+@dataclass(frozen=True)
+class PMOpinion:
+    """The PM synthesis's own call, captured before review moves anything.
+
+    `_render_final_texts` compares the published rating and confidence
+    with it and, when either moved, keeps this text as the PM's pre-review
+    rationale instead of presenting an obsolete call as the final one."""
+    rating: str
+    confidence: float
+    text: str
+
+
+def final_verdict_lead(memo: StockMemoOut) -> str:
+    """The rating/confidence lead of `final_verdict`, from the memo's
+    CURRENT values. One formatter so no stage can print a stale number."""
+    return f"PM final view: {memo.rating_label} (confidence {int(memo.confidence_score)}). "
+
+
 @dataclass
 class VerdictOutcome:
-    """What `_build_verdict` decided; the orchestrator writes it onto the memo."""
+    """What `_build_verdict` decided; the orchestrator writes it onto the memo.
+
+    `final_verdict_body` is the verdict WITHOUT its rating/confidence lead:
+    the confidence is not final until the quality stage has capped it, so
+    the lead is rendered once, afterwards (`render`, called from
+    `graph._render_final_texts`). Rendering it here and patching it later is
+    how the 5aa1b74 stale-string class happens."""
     valuation_verdict: ValuationVerdict
     one_sentence_thesis: str
     mispricing_thesis: MispricingThesis
-    final_verdict: str
+    final_verdict_body: str
     extra_scores: dict[str, float] = field(default_factory=dict)  # cross_sector_relevance_count
     thesis_rewrite_fired: bool = False
     # W2a write-time provenance. `thesis_rewritten`: the thesis builder's text
@@ -173,16 +216,20 @@ class VerdictOutcome:
     # them to the run's DegradationLog in this order.
     degradations: list[DegradationNote] = field(default_factory=list)
 
+    def render(self, memo: StockMemoOut) -> str:
+        """The full `final_verdict` against `memo`'s current rating/confidence."""
+        return final_verdict_lead(memo) + self.final_verdict_body
+
     def apply(self, memo: StockMemoOut, degradation: DegradationLog) -> None:
         """Write the outcome onto `memo` and replay the degradations.
 
         Lives here rather than in graph.py so the one place that knows the
         outcome's field-to-memo mapping is next to the fields themselves.
+        `final_verdict` is NOT written here (see the class docstring).
         """
         memo.valuation_verdict = self.valuation_verdict
         memo.one_sentence_thesis = self.one_sentence_thesis
         memo.mispricing_thesis = self.mispricing_thesis
-        memo.final_verdict = self.final_verdict
         memo.section_provenance = {
             **(memo.section_provenance or {}),
             "thesis": "rewrite" if self.thesis_rewritten else "pm",
@@ -200,4 +247,46 @@ class VerdictOutcome:
                     "agent": note.agent,
                     "error_type": note.error_type,
                     "message": note.message,
+                })
+
+
+@dataclass
+class QualityOutcome:
+    """What `_assess_quality` decided: 7(a) number check, 7(c) confidence.
+
+    Pure stage output, applied by the orchestrator. `apply` is the one
+    place that writes confidence after the quality stage, and it writes it
+    everywhere at once: `confidence_score == scores["confidence"] ==
+    quality.confidence.final`. It also carries out the number check's
+    withholding plan (`number_check.apply_withholding`), which is the only
+    edit the quality stage makes to memo prose."""
+    confidence: ConfidenceAssessment
+    degradations: list[DegradationNote] = field(default_factory=list)
+    # None when the check did not run (no ledger) — the memo then carries no
+    # `number_check` and no number-based cap.
+    number_check: NumberCheck | None = None
+    withhold: WithholdPlan | None = None
+
+    def apply(self, memo: StockMemoOut, degradation: DegradationLog) -> None:
+        final = float(self.confidence.final)
+        quality = memo.quality or MemoQuality()
+        nc = self.number_check.model_copy(deep=True) if self.number_check is not None else None
+        if nc is not None:
+            from . import number_check as _nc
+            _nc.apply_withholding(memo, nc, self.withhold)
+            nc.counts = {**nc.counts, "withheld": len(nc.withheld)}
+            _nc.drop_stale_claims(memo, nc)
+        memo.quality = quality.model_copy(update={"confidence": self.confidence, "number_check": nc})
+        memo.confidence_score = final
+        if isinstance(memo.scores, dict):
+            memo.scores = {**memo.scores, "confidence": final}
+        # W2a contract C2: an earned confidence is shown even when the PM view
+        # was a template (the caps already say how little it is worth).
+        memo.section_provenance = {**(memo.section_provenance or {}), "confidence": "earned"}
+        for note in self.degradations:
+            if note.soft:
+                degradation.record_soft(note.agent, note.message, kind=note.error_type)
+            else:
+                degradation.failures.append({
+                    "agent": note.agent, "error_type": note.error_type, "message": note.message,
                 })

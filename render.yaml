@@ -133,12 +133,27 @@ services:
       # always-trust mode takes the FIRST entry, which the client controls.
       - key: TRUSTED_PROXY_HOPS
         value: "1"
-      # Long-term agent memory writes to memory/companies/<TICKER>.md.
-      # Render's container disk is ephemeral — disable by default to
-      # avoid silently losing entries on every redeploy. Set "true"
-      # only after mounting a persistent disk for memory/.
+      # The LEGACY file backend of long-term agent memory (markdown under
+      # memory/companies/<TICKER>.md). Render's container disk is ephemeral
+      # and web and worker do not share one, so it stays "false"; the
+      # Postgres learning ledger below replaces it (test_deploy_config.py).
       - key: ENABLE_LONG_TERM_MEMORY
         value: "false"
+      # W7 learning ledger (owner decision 9, 2026-09-24): lessons are
+      # hypotheses whose credibility updates as eligible outcomes arrive.
+      # BOTH services, same values: the worker writes (postmortems, filing
+      # post-passes, the nightly judge) and web can write too (filing
+      # post-passes on symbol introduction), and a memo's priors must not
+      # depend on which process wrote it.
+      # LEARNING_MODE_MAX is a CEILING, not the mode: the effective mode is
+      # min(ceiling, DB mode), and the DB mode defaults to "shadow"
+      # (computed and audited, never injected). Promotion is a gated
+      # POST /api/admin/learning/mode; the emergency stop is setting this
+      # to "off" (no DB read; prompts byte-identical to pre-ledger).
+      - key: LEARNING_LEDGER_WRITES
+        value: "true"
+      - key: LEARNING_MODE_MAX
+        value: "inject"
 
       # Bearer token for the /api/admin/* ops surface (and
       # /api/seed-universe, which sits outside that prefix). MUST be set
@@ -314,9 +329,17 @@ services:
       # No HTTP surface here, so per-IP rate limiting is meaningless.
       - key: RATE_LIMIT_ENABLED
         value: "false"
-      # Same ephemeral-disk caveat as the web service.
+      # Same ephemeral-disk caveat as the web service: legacy file backend,
+      # replaced by the learning ledger below.
       - key: ENABLE_LONG_TERM_MEMORY
         value: "false"
+      # W7 learning ledger: the same values as the web service (see the
+      # comment there). The nightly judge runs here, capped at 20 cheap
+      # calls / $0.25 per night by the code defaults.
+      - key: LEARNING_LEDGER_WRITES
+        value: "true"
+      - key: LEARNING_MODE_MAX
+        value: "inject"
 
       # Secrets — set values in the Render dashboard, not in this file.
       # The worker needs the full set: the monitoring loops hit every

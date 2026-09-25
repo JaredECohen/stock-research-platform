@@ -90,6 +90,9 @@ ROUTES: tuple[tuple[str, str, Policy], ...] = (
     ("GET", "/api/stocks/{ticker}/memos", _pro("memo_history")),
     ("POST", "/api/stocks/{ticker}/analyze", _metered("research_run", "charged only when a job is created")),
     ("GET", "/api/stocks/{ticker}/analyze/status", _FREE),
+    # W5b live-quote chip (Research, DCF Lab). Signed-in only under the
+    # wall, so anonymous traffic cannot draw on the FMP quota.
+    ("GET", "/api/quotes", _FREE),
     # --- screener ------------------------------------------------------------
     ("GET", "/api/screener", _FREE),
     ("POST", "/api/screener/run", _FREE),

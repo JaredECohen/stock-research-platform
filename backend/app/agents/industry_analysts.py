@@ -79,6 +79,7 @@ from ..services.industry_group_knowledge import (
 from . import llm, prompts
 from .log_safety import log_safely
 from .safe_runner import note_soft
+from .source_ledger import register_source
 
 if TYPE_CHECKING:
     from .memo_context import MemoInputs
@@ -727,20 +728,36 @@ def run_industry_group_agent(
             "Address this question directly with mandate KPIs and observed figures:\n"
             f"{prior_round_critique}\n"
         )
+    # W7: in inject mode the learned-priors block replaces the group's
+    # legacy memory file; off, shadow and any call outside a live memo run
+    # keep the legacy branch, so those prompts are byte-identical.
+    from ..learning import context as learning_context
+    learned = learning_context.render_safely("industry_group", ticker=ticker, sector=profile.get("sector"))
     memory_block = ""
-    if settings.enable_long_term_memory:
+    if learned.mode != "inject" and settings.enable_long_term_memory:
         try:
             memory_block = analyst.memory().as_prompt_context_for(ticker, max_chars=1500)
         except Exception:  # pragma: no cover — memory must never block a memo
             memory_block = ""
+    company_context = analyst.company_context_block(profile, classification, max_chars=5000)
+    profile_snapshot = _profile_snapshot(profile)
+    ratios_snapshot = _ratios_snapshot(ratios)
+    # W2b 7(a): the group analyst's inputs, under a code-free ref (owner
+    # decision 10: no industry codes on public surfaces). Group memory is a
+    # prior, not a source.
+    register_source("industry", f"industry_group:{analyst.slug}", {
+        "company_context": company_context, "profile": profile_snapshot, "ratios": ratios_snapshot,
+    })
     user_prompt = prompts.INDUSTRY_GROUP_ANALYST_PROMPT.format(
-        company_context=analyst.company_context_block(profile, classification, max_chars=5000),
-        profile_snapshot=json.dumps(_profile_snapshot(profile), default=str)[:2500],
-        ratios_snapshot=json.dumps(_ratios_snapshot(ratios), default=str)[:1500],
+        company_context=company_context,
+        profile_snapshot=json.dumps(profile_snapshot, default=str)[:2500],
+        ratios_snapshot=json.dumps(ratios_snapshot, default=str)[:1500],
         critique_block=critique_block,
     )
     if memory_block:
         user_prompt += "\n\nPrior context from the group's long-term memory:\n" + memory_block
+    if learned.text:
+        user_prompt += "\n\n" + learned.text
 
     # Output headroom: this schema (4-7 sentence summary, key points, one
     # causal-chain entry per methodology stage, placement, 3-5 KPIs with

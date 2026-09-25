@@ -241,7 +241,9 @@ def _build_checkpointed(spec: AgentSpec) -> Callable[[MemoInputs], AgentFinding]
         return spec.run(inputs, None)
 
     _round0.__name__ = f"checkpointed_{spec.key}"
-    return checkpointed(spec.checkpoint, return_type=AgentFinding)(_round0)
+    # W2b 7(a): analysts register their payloads inside the step, so the
+    # roster steps (and only they) persist and replay those facts.
+    return checkpointed(spec.checkpoint, return_type=AgentFinding, capture_sources=True)(_round0)
 
 
 # Built once at import for the roster; a spec that is not on `AGENTS`

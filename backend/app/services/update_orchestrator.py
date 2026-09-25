@@ -321,6 +321,24 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
         return {"patched": False, "ticker": ticker, "reason": "not_material"}
 
     patched_memo: StockMemoOut = apply_patch(prior_memo, assessment["patch"])
+    # W2b: a patch runs neither the PM nor the critic, so it can neither
+    # state a valuation-divergence reason nor earn confidence. Re-apply 7(b)
+    # against the STORED evidence verdict and hold confidence at or below
+    # the last full run's earned value. A patch runs no number check
+    # either (7(a)): every field it rewrote or appended is labelled
+    # "figures not source-checked". A no-op on memos written before these
+    # guards (no `quality`): they behave exactly as before.
+    from ..agents.memo_quality import enforce_after_patch
+    from ..config import settings
+    patched_memo, guard = enforce_after_patch(
+        prior_memo, patched_memo, assessment["patch"].keys(),
+        enforce=settings.rating_reconciliation_mode != "record",
+    )
+    if guard.rating_downgraded or guard.confidence_clamped:
+        log.info(
+            "patch guard %s: rating_downgraded=%s confidence_clamped=%s",
+            ticker, guard.rating_downgraded, guard.confidence_clamped,
+        )
     revision_log = [
         {
             "version": (snap.version or 0) + 1,
@@ -332,6 +350,11 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
             "delta_summary": assessment.get("delta_summary", ""),
             # Locked decision in MASTER_PLAN: critic doesn't run on patches.
             "critic_skipped": True,
+            "quality_guard": {
+                "rating_downgraded": guard.rating_downgraded,
+                "confidence_clamped": guard.confidence_clamped,
+                "fields_unchecked": guard.unchecked_fields,
+            },
             "alert": {
                 "title": alert.title, "severity": alert.severity,
                 "source": alert.source, "published_at": alert.published_at,

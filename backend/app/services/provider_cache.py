@@ -16,9 +16,13 @@ actually changes:
                              market cap drifts but doesn't justify daily
                              refetch on every research call)
     prices         1 day    (full daily history; refresh after each close)
-    quote          60 s     (intraday last-trade price for valuation
-                             comparison; profile's last_price is stale
-                             for fast movers like NVDA)
+    quote          15 min   fixed backstop only. `quote_service` owns the
+                             real policy: 15 min while the NYSE session is
+                             open, until the next open once it has closed
+                             (calendar-aware; `finance/market_calendar`)
+    entitlement    1 day    (a provider endpoint the plan refuses, e.g. FMP
+                             /batch-quote answering 402: remembered in the
+                             DB so both processes skip it for a day)
     ratios         1 day    (price-dependent metrics)
     key_metrics    1 day    (same derivation as ratios)
     estimates      1 day    (sell-side updates frequently but not
@@ -54,7 +58,7 @@ import json
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any
@@ -91,7 +95,11 @@ DEFAULT_TTL_SECONDS = 3600
 TTL_BY_CAPABILITY: dict[str, int] = {
     "profile":       7 * 86400,
     "prices":             86400,
-    "quote":                 60,
+    # The backstop for a direct `cached_call("quote", ...)`. Quote reads go
+    # through `quote_service`, which applies the calendar-aware policy on
+    # top of this row (15 min in session, until the next open after the
+    # close) and a 60 s floor inside a memo run.
+    "quote":                900,
     "ratios":             86400,
     "key_metrics":        86400,
     "estimates":          86400,
@@ -113,6 +121,10 @@ TTL_BY_CAPABILITY: dict[str, int] = {
     "transcripts":       43200,
     "news":                3600,
     "macro":              86400,
+    # "This plan refuses that endpoint" (e.g. FMP /batch-quote -> 402).
+    # A day, so a plan upgrade is noticed by the next day without paying a
+    # refused call on every request in between.
+    "entitlement":        86400,
 }
 
 # Oldest row `cached_call` will still serve when the provider misses.
@@ -137,6 +149,8 @@ MAX_STALE_BY_CAPABILITY: dict[str, int] = {
     "transcripts":   30 * 86400,
     "news":               86400,
     "macro":         14 * 86400,
+    # An expired entitlement memo is not evidence of anything: retry.
+    "entitlement":        86400,
 }
 DEFAULT_MAX_STALE_SECONDS = 7 * 86400
 
@@ -231,6 +245,26 @@ def _read_row(capability: str, key: str) -> tuple[Any, datetime] | None:
         if row is None:
             return None
         return row.payload_json, row.fetched_at
+
+
+def read_rows(capability: str, keys: Sequence[str]) -> dict[str, tuple[Any, datetime]]:
+    """`{key: (payload, fetched_at)}` for every row that exists, in ONE query.
+
+    The batch read behind a list of quotes: a per-key `_read_row` would be
+    one SELECT per ticker on every page render. Absent keys are simply
+    missing from the result. No TTL is applied; the caller owns freshness.
+    """
+    wanted = list(dict.fromkeys(keys))
+    if not wanted:
+        return {}
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(ProviderCache.key, ProviderCache.payload_json, ProviderCache.fetched_at).where(
+                ProviderCache.capability == capability,
+                ProviderCache.key.in_(wanted),
+            )
+        ).all()
+    return {key: (payload, fetched_at) for key, payload, fetched_at in rows}
 
 
 def _lookup(
@@ -343,6 +377,47 @@ def put(capability: str, key: str, payload: Any) -> None:
             _backoff(attempt)
 
 
+def put_many(capability: str, payloads: Mapping[str, Any]) -> None:
+    """Upsert several rows in one session and one commit.
+
+    Empty payloads are skipped, as in `put`. The batch write behind a list
+    of quotes; on `IntegrityError` (another process inserted one of these
+    keys between our read and our insert) the batch is rolled back and each
+    key goes through `put`, which already retries that race as an UPDATE.
+    """
+    items = {k: v for k, v in payloads.items() if v not in (None, [], {})}
+    if not items:
+        return
+    try:
+        with SessionLocal() as db:
+            existing = {
+                row.key: row for row in db.execute(
+                    select(ProviderCache).where(
+                        ProviderCache.capability == capability,
+                        ProviderCache.key.in_(list(items)),
+                    )
+                ).scalars()
+            }
+            now = _now()
+            for key, payload in items.items():
+                row = existing.get(key)
+                if row is None:
+                    db.add(ProviderCache(
+                        capability=capability, key=key, payload_json=payload, fetched_at=now,
+                    ))
+                else:
+                    row.payload_json = payload
+                    row.fetched_at = now
+            db.commit()
+    except IntegrityError:
+        log.info(
+            "provider_cache.put_many lost an insert race capability=%s keys=%d; "
+            "falling back to per-key put", capability, len(items),
+        )
+        for key, payload in items.items():
+            put(capability, key, payload)
+
+
 def invalidate(capability: str, key: str | None = None) -> int:
     """Drop rows. Pass `key=None` to clear every row for `capability`.
 
@@ -360,9 +435,12 @@ def invalidate(capability: str, key: str | None = None) -> int:
         return n
 
 
-def _record_stale(kind: str, capability: str, key: str, age_seconds: int) -> None:
+def record_stale(kind: str, capability: str, key: str, age_seconds: int) -> None:
     """Write the monitoring row. A ledger hiccup must not take the data
-    path down with it, so failures are logged rather than raised."""
+    path down with it, so failures are logged rather than raised.
+
+    Public because `quote_service` makes its own stale decision (calendar-
+    aware) and must still show up in `stale_stats` for both processes."""
     note = json.dumps(
         {"capability": capability, "key": key, "age_seconds": age_seconds},
         separators=(",", ":"),
@@ -374,6 +452,10 @@ def _record_stale(kind: str, capability: str, key: str, age_seconds: int) -> Non
             "provider_cache: could not record %s for capability=%s key=%s",
             kind, capability, key, exc_info=True,
         )
+
+
+# Internal call sites and tests predate the public name.
+_record_stale = record_stale
 
 
 def cached_call(

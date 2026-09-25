@@ -1,4 +1,5 @@
 """A single prior memo matters; a missing critic is not a passed review."""
+import json
 from datetime import datetime
 from uuid import uuid4
 
@@ -115,3 +116,66 @@ def test_malformed_critic_payload_never_claims_a_live_review(monkeypatch, payloa
     assert review.overall_assessment != "Reviewed."
     assert log.degraded_agents() == ["Risk Committee"]
     assert log.events()[0]["error_type"] == "CriticUnavailable"
+
+
+# ---------------------------------------------------------------------------
+# W2b 7(b): the critic judges a rating that diverges from the evidence
+# ---------------------------------------------------------------------------
+
+def _divergent_draft(pm_rating: str = "Bullish", verdict: str = "overvalued", reason: str = "Because.") -> dict:
+    # `quality` is the LAST field of a memo dump, and the padding puts the
+    # dump well past the 60k cut, as every live memo's is (~270k).
+    return {
+        "ticker": "TEST", "rating_label": pm_rating, "sources_used": ["filing:1"],
+        "padding": "x" * (settings.max_agent_context_chars + 10_000),
+        "valuation_verdict": {"verdict": verdict, "summary": "Net read: overvalued (EV/EBITDA 44% premium)."},
+        "quality": {"rating_reconciliation": {"pm_rating": pm_rating, "valuation_verdict": verdict,
+                                              "reason": reason}},
+    }
+
+
+@pytest.mark.parametrize("answer, expected", [
+    ("unsupported", "unsupported"), ("Supported", "supported"),
+    ("maybe", "not_assessed"), (None, "not_assessed"),
+])
+def test_critic_gets_divergence_block_despite_truncation(monkeypatch, answer, expected):
+    prompts_seen: list[str] = []
+
+    def chat(prompt, **kw):
+        prompts_seen.append(prompt)
+        out = {"overall_assessment": "Reviewed."}
+        if answer is not None:
+            out["valuation_divergence_assessment"] = answer
+        return out
+    monkeypatch.setattr(critic_agent.llm, "chat_json", chat)
+    draft = _divergent_draft(reason="The 44% premium is justified by 32% cloud growth.")
+    assert len(json.dumps(draft)) > settings.max_agent_context_chars
+    review = critic_agent.run_critic(draft)
+    (prompt,) = prompts_seen
+    head, _, dump = prompt.partition("\n\nDraft memo:\n")
+    assert "## RATING DIVERGENCE (PM rated Bullish; valuation evidence reads overvalued)" in head
+    assert "PM's stated reason: The 44% premium is justified by 32% cloud growth." in head
+    assert "Net read: overvalued" in head
+    assert '"quality"' not in dump  # truncated away: only the prepended block carries it
+    assert review.review_mode == "live"
+    assert review.valuation_divergence_assessment == expected
+
+
+def test_no_block_and_no_assessment_without_divergence(monkeypatch):
+    prompts_seen: list[str] = []
+    monkeypatch.setattr(critic_agent.llm, "chat_json", lambda p, **kw: prompts_seen.append(p) or {
+        "overall_assessment": "Reviewed.", "valuation_divergence_assessment": "supported"})
+    for draft in (_divergent_draft("Neutral"), _divergent_draft("Bullish", "fairly_priced"),
+                  _divergent_draft("Bearish", "overvalued"), {"ticker": "TEST"}):
+        review = critic_agent.run_critic(draft)
+        assert "## RATING DIVERGENCE" not in prompts_seen[-1]
+        # An unasked assessment is never recorded.
+        assert review.valuation_divergence_assessment == "not_assessed"
+    review = critic_agent.run_critic(_divergent_draft("Very Bearish", "undervalued", reason=""))
+    assert "PM's stated reason: none given" in prompts_seen[-1]
+    assert review.valuation_divergence_assessment == "supported"
+    # A rule-based review (no live answer) never assesses a divergence.
+    monkeypatch.setattr(critic_agent.llm, "chat_json", lambda *a, **kw: None)
+    review = critic_agent.run_critic(_divergent_draft())
+    assert review.review_mode == "rule_based"
+    assert review.valuation_divergence_assessment == "not_assessed"

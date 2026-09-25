@@ -1,0 +1,186 @@
+"""W7 critique (accepted): a bounded automatic re-index retry inside the
+existing nightly `history_backfill` loop.
+
+With strict embeddings an OpenAI outage during a post-pass raises instead of
+writing hash vectors, which leaves the new filing with zero chunks — and
+`run_ingest_post_passes` never retries. So each night, after the ingest and
+fundamentals passes, the loop re-indexes the newest zero-chunk in-scope
+sources from the last 14 days: at most 10 sources, $0.10 and 20 MB, never a
+post-pass. The note gains `reindexed=` / `reindex_deferred=` and names every
+source; an outage is named without failing the loop; no new loop exists.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+import pytest
+
+from app.models import DocChunk
+from app.monitoring import KNOWN_LOOPS, history_backfill
+from app.services import corpus_repair, filing_memory
+from app.services import fundamental_refresh as fr
+from app.tests.corpus_fixtures import EIGHT_K, corpus_db, ingest_sec_filings, live_openai  # noqa: F401
+
+
+@pytest.fixture
+def loop(monkeypatch):
+    runs: list[dict] = []
+    monkeypatch.setattr(history_backfill, "_tier1_tickers", lambda: [])
+    monkeypatch.setattr(fr, "nightly", lambda: fr._empty_result())
+    monkeypatch.setattr(history_backfill, "record_run",
+                        lambda *a, **k: runs.append({"success": k.get("success"), "note": k.get("note", "")}))
+    monkeypatch.setattr(filing_memory, "post_pass", lambda *a, **k: pytest.fail("the retry ran a post-pass"))
+    return runs
+
+
+def _seed_recent(db):  # noqa: F811
+    """12 recent zero-chunk filings, one older than the window, one indexed."""
+    # The window is relative to the loop's clock, so the fixture is too.
+    today = datetime.utcnow().date()
+    db.company("AAA")
+    recent = [db.filing(ticker="AAA", accession=f"AAA-R{n}", filed=today - timedelta(days=n), words=50)
+              for n in range(1, 13)]
+    old = db.filing(ticker="AAA", accession="AAA-OLD", filed=today - timedelta(days=30), words=50)
+    indexed = db.filing(ticker="AAA", accession="AAA-IDX", filed=today - timedelta(days=1), words=50)
+    db.chunk(source_id=indexed)
+    return recent, old
+
+
+def test_history_backfill_retries_recent_zero_chunk_sources_bounded(corpus_db, live_openai, loop):  # noqa: F811
+    recent, old = _seed_recent(corpus_db)
+    totals = history_backfill.run_once(day=0, reindex=True)
+    run = loop[-1]
+    assert run["success"] is True
+    assert "reindexed=10 reindex_deferred=2" in run["note"]
+    # Newest first; the two oldest in the window are deferred, by identity.
+    assert "reindexed sources: " + ", ".join(f"AAA:filing:{i}" for i in recent[:10]) in run["note"]
+    assert f"reindex deferred: AAA:filing:{recent[10]}, AAA:filing:{recent[11]}" in run["note"]
+    assert (totals["reindexed"], totals["reindex_deferred"]) == (10, 2)
+    with corpus_db.Session() as db:
+        indexed = {r.source_id for r in db.query(DocChunk).filter_by(source_type="filing")}
+    assert set(recent[:10]) <= indexed and old not in indexed and not set(recent[10:]) & indexed
+    assert f"AAA:filing:{old}" not in run["note"]  # outside the 14-day window: not a candidate
+    # The next night drains the remainder.
+    history_backfill.run_once(day=1, reindex=True)
+    assert "reindexed=2 reindex_deferred=0" in loop[-1]["note"]
+
+
+def test_retry_runs_with_the_nightly_caps(corpus_db, live_openai, loop, monkeypatch):  # noqa: F811
+    seen = []
+    monkeypatch.setattr(corpus_repair, "index_missing", lambda **kw: seen.append(kw) or {
+        "sources_indexed": 0, "deferred": [], "indexed": []})
+    history_backfill.run_once(day=0, reindex=True)
+    assert len(seen) == 1
+    caps = {k: seen[0][k] for k in ("recent_days", "max_sources", "max_usd", "max_added_mb")}
+    assert caps == {"recent_days": 14, "max_sources": 10, "max_usd": 0.10, "max_added_mb": 20}
+
+
+def test_openai_outage_is_named_and_does_not_fail_the_loop(corpus_db, live_openai, loop):  # noqa: F811
+    recent, _ = _seed_recent(corpus_db)
+    live_openai.fail = TimeoutError("sk-live-SECRET timed out")
+    history_backfill.run_once(day=0, reindex=True)
+    run = loop[-1]
+    assert run["success"] is True
+    assert "reindexed=0 reindex_deferred=12" in run["note"]
+    assert "reindex stopped: embedding_unavailable" in run["note"]
+    assert "SECRET" not in run["note"]
+
+
+def test_crashed_retry_fails_the_loop(corpus_db, live_openai, loop, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(corpus_repair, "index_missing",
+                        lambda **kw: (_ for _ in ()).throw(ValueError("bug")))
+    history_backfill.run_once(day=0, reindex=True)
+    assert loop[-1]["success"] is False and "reindex crashed: ValueError" in loop[-1]["note"]
+
+
+def test_demo_or_keyless_process_does_not_retry(corpus_db, loop, monkeypatch):  # noqa: F811
+    # CI's own configuration: no key, demo data. Its vectors would be hash.
+    monkeypatch.setattr(corpus_repair, "index_missing", lambda **kw: pytest.fail("retried without OpenAI"))
+    history_backfill.run_once(day=0, reindex=True)
+    assert "reindex" not in loop[-1]["note"] and loop[-1]["success"] is True
+
+
+def test_single_ticker_admin_run_does_not_retry(corpus_db, live_openai, loop, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(corpus_repair, "index_missing", lambda **kw: pytest.fail("single-ticker run retried"))
+    monkeypatch.setattr(history_backfill, "backfill_ticker",
+                        lambda t, **k: {"financial_periods": 0, "filings": 0, "transcripts": 0})
+    totals = history_backfill.run_once("AAA", reindex=True)
+    assert "reindexed" not in totals and "reindex" not in loop[-1]["note"]
+
+
+def test_fetched_8ks_cannot_starve_an_outage_victim(corpus_db, live_openai, loop):  # noqa: F811
+    """Several 8-Ks land a day across the universe, and each is newer than
+    a 10-Q whose post-pass failed last week. They index to zero chunks, so
+    while they counted as candidates they took all ten slots every night
+    and the 10-Q — the one source this retry exists for — was never reached."""
+    today = datetime.utcnow().date()
+    corpus_db.company("AAA")
+    victim = corpus_db.filing(ticker="AAA", accession="AAA-10Q", filed=today - timedelta(days=5), words=400)
+    eight_ks = ingest_sec_filings(corpus_db, "AAA", [
+        (f"AAA-8K-{n}", today - timedelta(days=n % 4), "8-K", EIGHT_K) for n in range(12)
+    ])
+    history_backfill.run_once(day=0, reindex=True)
+    run = loop[-1]
+    assert run["success"] is True
+    assert "reindexed=1 reindex_deferred=0" in run["note"]
+    assert f"reindexed sources: AAA:filing:{victim}" in run["note"]
+    assert not [i for i in eight_ks if f"AAA:filing:{i}" in run["note"]]
+    with corpus_db.Session() as db:
+        assert db.query(DocChunk).filter_by(source_type="filing", source_id=victim).count() > 0
+
+
+def test_a_source_that_writes_nothing_costs_no_slot(corpus_db, live_openai, loop):  # noqa: F811
+    """Belt and braces for the classification: a source that turns out to
+    have nothing to embed is named, and does not use one of the ten slots."""
+    today = datetime.utcnow().date()
+    corpus_db.company("AAA")
+    victim = corpus_db.filing(ticker="AAA", accession="AAA-10Q", filed=today - timedelta(days=5), words=400)
+    hollow = [corpus_db.filing(ticker="AAA", accession=f"AAA-H{n}", filed=today - timedelta(days=1),
+                               words=100, sections={"risk_factors": [""]}) for n in range(12)]
+    history_backfill.run_once(day=0, reindex=True)
+    note = loop[-1]["note"]
+    assert "reindexed=1 reindex_deferred=0" in note and f"reindexed sources: AAA:filing:{victim}" in note
+    assert f"AAA:filing:{hollow[0]}" in note.split("reindex wrote no chunks: ")[1]
+
+
+def test_a_source_written_moments_ago_is_left_to_its_own_post_pass(corpus_db, live_openai, loop):  # noqa: F811
+    """`_ingest_filings` commits a new filing and only then indexes it. The
+    retry must not index that source concurrently: `doc_chunks` has no
+    unique key and `upsert_source` takes no lock, so on Postgres both chunk
+    sets would survive. A post-pass that failed is not in flight, so a
+    freshly written source waits one night."""
+    today = datetime.utcnow().date()
+    corpus_db.company("AAA")
+    fresh = corpus_db.filing(ticker="AAA", accession="AAA-FRESH", filed=today, words=50,
+                             fetched_at=datetime.utcnow())
+    older = corpus_db.filing(ticker="AAA", accession="AAA-OLDER", filed=today - timedelta(days=2), words=50)
+    totals = history_backfill.run_once(day=0, reindex=True)
+    note = loop[-1]["note"]
+    assert totals["reindexed"] == 1 and f"reindexed sources: AAA:filing:{older}" in note
+    assert f"reindex waiting on a fresh post-pass: AAA:filing:{fresh}" in note
+    with corpus_db.Session() as db:
+        assert db.query(DocChunk).filter_by(source_type="filing", source_id=fresh).count() == 0
+
+
+def test_admin_triggered_run_does_not_retry(corpus_db, live_openai, loop, monkeypatch):  # noqa: F811
+    """`POST /api/admin/run-backfill` calls `run_once(ticker=None)` on the web
+    process. The retry's spend and writes belong to the worker's schedule."""
+    monkeypatch.setattr(corpus_repair, "index_missing", lambda **kw: pytest.fail("admin run retried"))
+    totals = history_backfill.run_once(ticker=None)
+    assert "reindexed" not in totals and "reindex" not in loop[-1]["note"]
+
+
+def test_only_the_scheduled_job_asks_for_the_retry():
+    jobs = []
+
+    class Scheduler:
+        def add_job(self, fn, trigger, **kw):
+            jobs.append((fn, kw))
+
+    history_backfill.register(Scheduler())
+    assert [(fn, kw.get("kwargs")) for fn, kw in jobs] == [(history_backfill.run_once, {"reindex": True})]
+
+
+def test_no_new_loop():
+    assert "history_backfill" in KNOWN_LOOPS
+    assert not [name for name in KNOWN_LOOPS if "reindex" in name or "corpus" in name]

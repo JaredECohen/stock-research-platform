@@ -11,13 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.agents import graph
+from app.agents import graph, memo_quality
 from app.agents.comps_agent import run_comps_agent
 from app.agents.graph import (
-    _build_valuation_verdict,
     _refresh_dcf_references,
     _risk_items_from_bear_case,
-    _verdict_word,
 )
 from app.agents.safe_runner import DegradationLog
 from app.agents.valuation_agent import run_valuation_agent
@@ -341,7 +339,25 @@ def nvda_memo():
 def test_valuation_verdict_populated(nvda_memo):
     vv = nvda_memo.valuation_verdict
     assert vv.summary, "valuation_verdict.summary must never ship empty"
-    assert vv.verdict in ("undervalued", "fairly_priced", "overvalued")
+    assert vv.verdict in ("undervalued", "fairly_priced", "overvalued", "mixed")
+
+
+def _thesis_word_is_defensible(memo) -> None:
+    """W2b 7(b): the thesis may state the rating's word or the evidence
+    verdict's word (the guard rewrites only a word that contradicts both),
+    and an accepted divergence keeps the PM's own word."""
+    thesis = memo.one_sentence_thesis.lower()
+    stated = [w for w in ("undervalued", "overvalued", "fairly priced") if w in thesis]
+    if not stated:
+        return
+    allowed = {memo_quality.rating_word(memo.rating_label)}
+    evidence = memo_quality.verdict_word(memo.valuation_verdict.verdict)
+    if evidence is not None:
+        allowed.add(evidence)
+    assert stated[0] in allowed, (
+        f"thesis says {stated[0]!r}; rating {memo.rating_label!r} and evidence "
+        f"{memo.valuation_verdict.verdict!r} allow {sorted(allowed)}"
+    )
 
 
 def test_valuation_verdict_matches_dcf_summary(nvda_memo):
@@ -351,28 +367,28 @@ def test_valuation_verdict_matches_dcf_summary(nvda_memo):
     assert nvda_memo.valuation_verdict.dcf_base_upside == base
 
 
-def test_valuation_verdict_word_follows_rating(nvda_memo):
-    expected = _verdict_word(
-        nvda_memo.rating_label, nvda_memo.dcf_summary.get("base_upside"),
-    ).replace(" ", "_")
-    assert nvda_memo.valuation_verdict.verdict == expected
+def test_valuation_verdict_is_evidence_not_the_rating(nvda_memo):
+    """W2b 7(b): the verdict is the evidence read computed before the PM
+    wrote (`basis="evidence"`), and its display factor is the same number
+    the scores carry — one computation, not two that can drift."""
+    vv = nvda_memo.valuation_verdict
+    assert vv.basis == "evidence"
+    assert vv.signals.get("method") == memo_quality.METHOD
+    assert vv.factor_valuation == nvda_memo.scores["factor_valuation"]
+    # The rule applied to the stored votes reproduces the stored verdict.
+    votes = vv.signals["votes"]
+    rich = sum(1 for v in votes.values() if v < 0)
+    cheap = sum(1 for v in votes.values() if v > 0)
+    if vv.verdict == "overvalued":
+        assert rich >= 2 and cheap == 0
+    elif vv.verdict == "undervalued":
+        assert cheap >= 2 and rich == 0
 
 
-def test_thesis_verdict_word_agrees_with_rating(nvda_memo):
-    """B1 regression guard: if the thesis states a verdict word, it must be
-    the one implied by the FINAL (post-blend) rating badge."""
-    expected = _verdict_word(
-        nvda_memo.rating_label, nvda_memo.dcf_summary.get("base_upside"),
-    )
-    thesis = nvda_memo.one_sentence_thesis.lower()
-    stated = [
-        w for w in ("undervalued", "overvalued", "fairly priced") if w in thesis
-    ]
-    if stated:
-        assert stated[0] == expected, (
-            f"thesis says {stated[0]!r} but rating "
-            f"{nvda_memo.rating_label!r} implies {expected!r}"
-        )
+def test_thesis_verdict_word_agrees_with_rating_or_evidence(nvda_memo):
+    """B1 regression guard, W2b form: a stated verdict word must agree with
+    the FINAL rating or with the evidence verdict."""
+    _thesis_word_is_defensible(nvda_memo)
 
 
 def test_thesis_carries_no_template_filler(nvda_memo):
@@ -545,23 +561,28 @@ def test_refresh_dcf_references_tolerates_none_numbers():
     assert not any(z in p for p in finding2.key_points for z in _ZERO_LIES)
 
 
-def test_valuation_verdict_treats_none_dcf_as_unavailable(nvda_memo):
-    memo = nvda_memo.model_copy(
-        update={"dcf_summary": {**nvda_memo.dcf_summary, "base_upside": None}},
+def test_valuation_verdict_treats_none_dcf_as_unavailable():
+    comps = build_comps("NVDA")
+    prem = (comps.premium_discount or {}).get("ev_ebitda") if comps is not None else None
+    vv = memo_quality.valuation_evidence_verdict(
+        family_pct=None, family_coverage=None, comps_premium=prem,
+        dcf_initial_upside=None, dcf_final_upside=None,
     )
-    vv = _build_valuation_verdict(memo, build_comps("NVDA"))
     assert vv.dcf_base_upside is None
     assert "DCF unavailable" in vv.summary
     assert not any(z in vv.summary for z in _ZERO_LIES)
-    # The word still follows the rating badge — None is not a 0% neutral.
-    assert vv.verdict == _verdict_word(memo.rating_label, None).replace(" ", "_")
+    # None is an absent signal, not a 0% neutral vote.
+    assert "dcf_initial" not in vv.signals["votes"]
 
 
-def test_verdict_word_accepts_none_upside():
-    assert _verdict_word(None, None) == "fairly priced"
-    assert _verdict_word("Bullish", None) == "undervalued"
-    assert _verdict_word("Bearish", None) == "overvalued"
-    assert _verdict_word("Neutral", None) == "fairly priced"
+def test_rating_and_verdict_words():
+    assert memo_quality.rating_word(None) == "fairly priced"
+    assert memo_quality.rating_word("Bullish") == "undervalued"
+    assert memo_quality.rating_word("Very Bearish") == "overvalued"
+    assert memo_quality.rating_word("Neutral") == "fairly priced"
+    assert memo_quality.verdict_word("fairly_priced") == "fairly priced"
+    assert memo_quality.verdict_word("overvalued") == "overvalued"
+    assert memo_quality.verdict_word("mixed") is None
 
 
 def test_valuation_agent_fallback_renders_na_for_unpriced_dcf(monkeypatch):
@@ -601,20 +622,16 @@ def test_unpriced_memo_verdict_names_dcf_unavailable(nvda_memo_unpriced):
     vv = nvda_memo_unpriced.valuation_verdict
     assert vv.dcf_base_upside is None
     assert "DCF unavailable" in vv.summary
-    assert vv.verdict == _verdict_word(nvda_memo_unpriced.rating_label, None).replace(" ", "_")
+    # An unpriced DCF casts no vote; it is not a 0% neutral signal.
+    assert "dcf_initial" not in vv.signals["votes"]
 
 
 def test_unpriced_memo_keeps_consistency_invariants(nvda_memo_unpriced):
     """The B1/B6 invariants must survive a None DCF: the thesis verdict
-    word agrees with the rating, and the mispricing card still ships."""
+    word agrees with the rating or the evidence, and the mispricing card
+    still ships."""
     m = nvda_memo_unpriced
-    expected = _verdict_word(m.rating_label, None)
-    stated = [
-        w for w in ("undervalued", "overvalued", "fairly priced")
-        if w in m.one_sentence_thesis.lower()
-    ]
-    if stated:
-        assert stated[0] == expected
+    _thesis_word_is_defensible(m)
     assert m.mispricing_thesis.consensus_view or m.mispricing_thesis.our_view or m.mispricing_thesis.gap
     assert m.key_risks or not m.bear_case.key_points
 
@@ -660,35 +677,41 @@ def _verdict_for(memo, *, dcf=None, comps=None, findings=None, profile=None) -> 
     )
 
 
-@pytest.mark.parametrize("rating, word", [
-    ("Very Bullish", "undervalued"), ("Bullish", "undervalued"),
-    ("Neutral", "fairly_priced"),
-    ("Bearish", "overvalued"), ("Very Bearish", "overvalued"),
-])
-def test_build_verdict_word_follows_rating(rating, word):
-    """The verdict word anchors on the rating badge even when the DCF
-    disagrees — the COST failure mode (DCF cheap, multiple rich)."""
-    memo = make_memo(rating_label=rating, dcf_summary={"base_upside": -0.25})
+def _evidence(**kw):
+    base = dict(family_pct=None, family_coverage=None, comps_premium=None,
+                dcf_initial_upside=None, dcf_final_upside=None)
+    base.update(kw)
+    return memo_quality.valuation_evidence_verdict(**base)
+
+
+@pytest.mark.parametrize("rating", ["Very Bullish", "Bullish", "Neutral", "Bearish", "Very Bearish"])
+def test_build_verdict_word_follows_evidence(rating):
+    """W2b 7(b): the verdict stage passes the compose-stage evidence verdict
+    through; the rating never rewrites it (it used to derive it)."""
+    vv = _evidence(comps_premium=0.44, dcf_initial_upside=-0.54, dcf_final_upside=-0.30)
+    memo = make_memo(rating_label=rating, dcf_summary={"base_upside": -0.30}, valuation_verdict=vv)
     out = _verdict_for(memo)
-    assert out.valuation_verdict.verdict == word
-    assert out.final_verdict.startswith(f"PM final view: {rating} (confidence 60)")
+    assert out.valuation_verdict is vv
+    assert out.valuation_verdict.verdict == "overvalued"
+    assert out.render(memo).startswith(f"PM final view: {rating} (confidence 60)")
 
 
-def test_build_verdict_dcf_number_is_the_dcf_summary_number():
-    memo = make_memo(rating_label="Bullish", dcf_summary={"base_upside": 0.173})
-    out = _verdict_for(memo, dcf=build_dcf("NVDA"))
-    assert out.valuation_verdict.dcf_base_upside == memo.dcf_summary["base_upside"]
-    assert "+17%" in out.valuation_verdict.summary
+def test_evidence_dcf_number_is_the_dcf_summary_number():
+    """The verdict's printed DCF is the final (dcf_summary) number; the
+    initial one is what votes."""
+    vv = _evidence(dcf_initial_upside=0.05, dcf_final_upside=0.173)
+    assert vv.dcf_base_upside == 0.173
+    assert "+17%" in vv.summary and "+5%" in vv.summary
 
 
-def test_build_verdict_none_dcf_upside_says_unavailable():
+def test_evidence_none_dcf_upside_says_unavailable():
     """Phase 2: an unpriced DCF is "n/a", never a 0% neutral signal."""
-    memo = make_memo(rating_label="Bullish", dcf_summary={"base_upside": None})
-    out = _verdict_for(memo)
-    assert out.valuation_verdict.dcf_base_upside is None
-    assert "DCF unavailable" in out.valuation_verdict.summary
-    assert not any(z in out.valuation_verdict.summary for z in _ZERO_LIES)
-    assert out.valuation_verdict.verdict == "undervalued"
+    vv = _evidence(comps_premium=-0.30)
+    assert vv.dcf_base_upside is None
+    assert "DCF unavailable" in vv.summary
+    assert not any(z in vv.summary for z in _ZERO_LIES)
+    # One cheap vote is not a verdict.
+    assert vv.verdict == "fairly_priced"
 
 
 def test_build_verdict_mispricing_fallback_is_nonempty_and_quotes_final_thesis():
@@ -719,7 +742,7 @@ def test_build_verdict_rewrites_the_anti_pattern_thesis():
     assert out.one_sentence_thesis != anti
     assert not graph._looks_like_anti_pattern_thesis(out.one_sentence_thesis)
     assert "undervalued" in out.one_sentence_thesis
-    assert out.one_sentence_thesis in out.final_verdict
+    assert out.one_sentence_thesis in out.final_verdict_body
 
 
 def test_build_verdict_rewrites_a_thesis_whose_verdict_word_contradicts_the_rating():
@@ -756,7 +779,10 @@ def test_build_verdict_is_pure():
     assert memo.valuation_verdict is out.valuation_verdict
     assert memo.one_sentence_thesis == out.one_sentence_thesis
     assert memo.mispricing_thesis is out.mispricing_thesis
-    assert memo.final_verdict == out.final_verdict
+    # The confidence-bearing verdict is rendered once, after the quality
+    # stage (`graph._render_final_texts`), never by `apply`.
+    assert memo.final_verdict == ""
+    assert out.render(memo) == f"PM final view: Bullish (confidence 60). {out.final_verdict_body}"
 
 
 def test_build_verdict_cross_sector_relevance_rides_on_scores():
@@ -765,28 +791,36 @@ def test_build_verdict_cross_sector_relevance_rides_on_scores():
     memo = make_memo(rating_label="Neutral")
     out = _verdict_for(memo, findings=findings)
     assert out.extra_scores == {"cross_sector_relevance_count": 2.0}
-    assert "Cross-sector pull-through: AMD, AVGO." in out.final_verdict
-    assert "Cohort placement" in out.final_verdict
+    assert "Cross-sector pull-through: AMD, AVGO." in out.final_verdict_body
+    assert "Cohort placement" in out.final_verdict_body
     out.apply(memo, DegradationLog())
     assert memo.scores["cross_sector_relevance_count"] == 2.0
     assert memo.scores["factor_pm_score"] == 55.0  # existing scores kept
 
 
-def test_build_verdict_reports_a_valuation_verdict_crash_instead_of_hiding_it(monkeypatch):
+def test_compose_reports_a_valuation_verdict_crash_instead_of_hiding_it(monkeypatch):
+    """W2b: the verdict is computed in the compose stage now (before the
+    PM), so its crash guard lives there. A crash is a hard banner entry and
+    a placeholder card that says so — never a silent empty card, and never
+    a card that reads as a rating-derived verdict."""
+    from app.agents.intake import IntakeDecision
+    from app.agents.memo_context import AnalystRound, DCFStage
+    from app.tests.factories import make_inputs
+
     def boom(*a, **k):
         raise RuntimeError("verdict exploded")
 
-    monkeypatch.setattr(graph, "_build_valuation_verdict", boom)
-    memo = make_memo(rating_label="Neutral")
-    out = _verdict_for(memo)
-    assert out.valuation_verdict == ValuationVerdict()
-    assert [(n.agent, n.error_type, n.soft) for n in out.degradations] == [
-        ("Valuation Verdict", "RuntimeError", False),
-    ]
-    log = DegradationLog()
-    out.apply(memo, log)
-    assert log.degraded_agents() == ["Valuation Verdict"]
-    assert "verdict exploded" in log.failures[0]["message"]
+    monkeypatch.setattr(memo_quality, "valuation_evidence_verdict", boom)
+    inputs = make_inputs()
+    memo = graph._compose_memo(
+        inputs, AnalystRound(findings=make_findings(), intake=IntakeDecision()),
+        DCFStage(dcf=None, initial_dcf=None),
+    )
+    assert memo.valuation_verdict.basis == "evidence"
+    assert memo.valuation_verdict.summary == memo_quality.VERDICT_UNAVAILABLE_SUMMARY
+    assert "Valuation Verdict" in inputs.degradation.degraded_agents()
+    event = next(e for e in inputs.degradation.events() if e["agent"] == "Valuation Verdict")
+    assert event["error_type"] == "RuntimeError" and "verdict exploded" in event["message"]
 
 
 def test_build_verdict_soft_notes_dedupe_on_apply(monkeypatch):

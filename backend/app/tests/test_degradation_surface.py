@@ -337,11 +337,20 @@ def _minimal_dcf():
 # ---------------------------------------------------------------------------
 
 def test_valuation_verdict_crash_is_on_the_banner(monkeypatch):
-    monkeypatch.setattr(graph, "_build_valuation_verdict", _boom)
+    """W2b: the verdict is computed in the compose stage (before the PM),
+    from evidence, so that is where its guard sits now. The fallback card
+    says it is unavailable instead of shipping blank or reading as a
+    rating-derived verdict."""
+    from app.agents import memo_quality
+    monkeypatch.setattr(memo_quality, "valuation_evidence_verdict", _boom)
     memo = graph.run_stock_memo("NVDA")
     assert "Valuation Verdict" in memo.degraded_agents
-    # The fallback is the empty card the reader would otherwise get silently.
-    assert memo.valuation_verdict == ValuationVerdict()
+    assert memo.valuation_verdict == ValuationVerdict(
+        basis="evidence", summary=memo_quality.VERDICT_UNAVAILABLE_SUMMARY,
+    )
+    # No evidence, so nothing to reconcile the rating against.
+    assert memo.quality is not None and memo.quality.rating_reconciliation is not None
+    assert memo.quality.rating_reconciliation.outcome == "not_applicable"
 
 
 def test_mispricing_fallback_crash_is_on_the_banner(monkeypatch):

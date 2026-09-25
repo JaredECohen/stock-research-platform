@@ -30,6 +30,7 @@ from ..services.data_service import get_data_service
 from ..services.sector_research_service import run_sector_research
 from . import industry_analysts, llm, prompts, sector_tools
 from .log_safety import log_safely
+from .source_ledger import register_source
 
 log = logging.getLogger(__name__)
 
@@ -394,8 +395,15 @@ def run_sector_agent(
     # Long-term agent memory (gated by ENABLE_LONG_TERM_MEMORY). Read both
     # files: the company-specific notebook and the sector-wide self-reflection
     # journal (with cross-company patterns filtered to this ticker).
+    #
+    # W7: in inject mode the learned-priors block (bounded, audited, framed
+    # as provisional hypotheses) replaces these files. Off and shadow — and
+    # every call outside a live memo run, e.g. chat's `ask_sector` — take the
+    # legacy branch, so those prompts are byte-identical to before.
+    from ..learning import context as learning_context
     memory_context = ""
-    if settings.enable_long_term_memory:
+    learned = learning_context.render_safely("sector", ticker=ticker, sector=profile.get("sector"))
+    if learned.mode != "inject" and settings.enable_long_term_memory:
         try:
             cm = CompanyMemory.for_ticker(ticker)
             sm = SectorMemory.for_sector(profile.get("sector") or "unknown")
@@ -410,6 +418,16 @@ def run_sector_agent(
                 memory_context = "\n\n".join(chunks)
         except Exception:  # pragma: no cover — memory should never block a memo
             memory_context = ""
+    # W2b 7(a): the computed cohort research, the macro broadcast, the
+    # sector data overlays, pending news and the industry-group block are
+    # what this analyst reads. Long-term memory is a prior, not a source.
+    register_source("sector_research", f"sector:{ticker}", research)
+    register_source("macro", "macro:broadcast", macro_broadcast)
+    register_source("macro", f"sector_context:{ticker}", {"context": sector_context,
+                                                         "block": sector_context_block})
+    register_source("news", f"news_alerts:{ticker}", news_alerts)
+    if industry_group_block and industry_analyst is not None:
+        register_source("industry", f"industry_group:{industry_analyst.slug}", industry_group_block)
     sector = research["sector"]
     sub_industry = research["sub_industry"]
     cohort = research["cohort"]
@@ -491,6 +509,7 @@ def run_sector_agent(
         + critique_block
         + ("\n\nPrior context from long-term memory (use to inform but do not over-anchor):\n"
            + memory_context if memory_context else "")
+        + (("\n\n" + learned.text) if learned.text else "")
         + (("\n\n" + research_notes_block) if research_notes_block else "")
         + (("\n\n" + sector_context_block
             + "\n\nUse the readings above as concrete evidence in the summary and "

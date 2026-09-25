@@ -177,6 +177,24 @@ describe("SampleMemoSummary", () => {
     expect(screen.queryByText("Valuation verdict")).not.toBeInTheDocument();
     expect(screen.queryByText("fairly priced")).not.toBeInTheDocument();
   });
+  it("W2b: a quality event is not an unavailable specialist", () => {
+    // Untraceable figures are recorded in `memo.quality`, never as an
+    // outage; the footnote lists real failures only.
+    render(
+      <SampleMemoSummary
+        memo={makeMemo({
+          degraded_agents: ["Number Check", "Macro Analyst"],
+          degradation_events: [
+            { agent: "Number Check", error_type: "UntraceableNumbers", message: "" },
+            { agent: "Macro Analyst", error_type: "DeterministicFallback", message: "" },
+          ],
+        })}
+      />,
+    );
+    const footnote = screen.getByText(/Model output, not a recommendation/);
+    expect(footnote).toHaveTextContent("Specialists unavailable during this run: Macro Analyst.");
+    expect(footnote).not.toHaveTextContent("Number Check");
+  });
 
   // W2a — the served sample memo is presented server-side; these bodies are
   // the presenter's captured output.

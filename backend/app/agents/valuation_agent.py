@@ -8,6 +8,7 @@ from ..finance.dcf import fmt_price, fmt_upside
 from ..schemas import AgentFinding, DCFResult
 from ..services.market_data_service import get_current_price
 from . import llm, prompts
+from .source_ledger import register_source
 
 
 def run_valuation_agent(
@@ -48,6 +49,15 @@ def run_valuation_agent(
         # Observed rank + model read under a named version; the prompt
         # tells the analyst to reconcile, not defer, to it.
         payload["fundamental_scorecard"] = scorecard_block
+    # W2b 7(a): the live quote is fetched here; the scorecard block is the
+    # rendered rank the prompt shows. The rest of the payload restates the
+    # DCF and ratios `_gather_inputs` already registered under their own
+    # refs, so it is not registered a second time here (the ledger dedupes
+    # only a repeated (kind, ref, extracted facts) registration, not equal
+    # values under different refs).
+    register_source("price", f"price:{ticker}", {"current_price": payload["current_price"]})
+    if scorecard_block:
+        register_source("scorecard", f"scorecard_block:{ticker}", scorecard_block)
     # Wave 7C: discretionary notes tagged for the valuation agent.
     from ..services.research_notes import build_notes_block_for_agent
     notes_block = build_notes_block_for_agent(
