@@ -25,6 +25,10 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install -r /app/backend/requirements.txt
+# The live-quote policy (backend/app/finance/market_calendar.py) needs the
+# America/New_York zone. Fail the build, not the first quote request, if a
+# base-image or dependency change ever drops the zone data.
+RUN python -c "import zoneinfo; zoneinfo.ZoneInfo('America/New_York')"
 
 COPY backend /app/backend
 COPY example.env /app/example.env

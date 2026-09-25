@@ -24,6 +24,7 @@ import EarningsBreakdown from "./EarningsBreakdown";
 import MacroRegimeBanner from "./MacroRegimeBanner";
 import { Markdown } from "./Markdown";
 import PMDCFAdjustments from "./PMDCFAdjustments";
+import { fmtEtDate } from "./LiveQuote";
 import type { EarningsStructured } from "@/types";
 
 /**
@@ -803,13 +804,20 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
             return (
               <div className="space-y-3 text-sm">
                 <div className="flex items-baseline gap-2 flex-wrap">
-                  <span className="text-xs text-slate-500">Current</span>
+                  {/* W5b: this is the quote the memo's DCF ran on, frozen
+                      in the stored memo; it was labelled "Current" and could
+                      be months old. Today's price is the live chip above. */}
+                  <span className="text-xs text-slate-500">Price used in DCF</span>
                   <span className="font-mono text-base text-slate-100">
                     {fmtPrice(current)}
                   </span>
-                  <span className="text-[10px] text-slate-500">
-                    Δ vs DCF below
-                  </span>
+                  {memo.generated_at && (
+                    <span className="text-[10px] text-slate-500">
+                      {/* ET, like the chip's "memo price …" date: the UTC
+                          slice put evening-ET memos on the next day. */}
+                      as of memo, {fmtEtDate(memo.generated_at)}
+                    </span>
+                  )}
                   {dcf.tv_clamped === true && <TerminalClampBadge className="ml-auto" />}
                 </div>
                 <div className="grid grid-cols-3 gap-3">

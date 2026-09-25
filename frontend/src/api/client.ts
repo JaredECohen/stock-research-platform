@@ -49,6 +49,7 @@ import type {
 } from "@/types";
 import { SCORECARD_EXPORT_CONTRACT, SCORECARD_FAMILIES } from "@/types/scorecard";
 import type { TrackRecordOut } from "@/types/trackRecord";
+import type { QuotesOut } from "@/types/quotes";
 import { getSessionId, logEvent } from "@/lib/logger";
 import { getAnonId } from "@/lib/analytics";
 
@@ -550,6 +551,10 @@ export const api = {
   evaluateOutcomes: () => request<unknown>("/api/admin/evaluate-outcomes", { method: "POST", body: "{}" }),
 
   listStocks: () => request<CompanyOut[]>("/api/stocks"),
+  /** W5b live-quote chip: labelled quotes (live / stale / last close /
+   *  unavailable) plus the NYSE session state. At most 50 tickers. */
+  getQuotes: (tickers: string[]) =>
+    request<QuotesOut>(`/api/quotes?tickers=${encodeURIComponent(tickers.join(","))}`),
   getStock: (ticker: string) =>
     request<{
       profile: CompanyOut & {

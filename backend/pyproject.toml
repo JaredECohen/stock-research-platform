@@ -91,6 +91,14 @@ dependencies = [
     # embed calls stay within OpenAI's 8K-token input limit per chunk.
     "tiktoken>=0.7.0",
 
+    # --- Market calendar (W5b) -----------------------------------------------
+    # `finance/market_calendar.py` reads America/New_York through zoneinfo.
+    # The slim image happens to ship zone files and the lock carried tzdata
+    # only on win32, so nothing guaranteed the zone was loadable; declared
+    # unconditionally so the wheel's zone data is always installed, and the
+    # Dockerfile checks it at build.
+    "tzdata>=2024.1",
+
     # --- Customer auth (FEAT-002) --------------------------------------------
     # Verifies Clerk session JWTs (RS256) against the tenant's JWKS in
     # `app/auth/jwks.py`. The `crypto` extra is `cryptography`, which the

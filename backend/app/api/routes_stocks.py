@@ -17,6 +17,7 @@ from ..database import SessionLocal, get_db
 from ..models import Company
 from ..rate_limit import LIMITS, limiter
 from ..schemas import CompanyOut, StockMemoOut
+from ..schemas.quotes import QuotesOut
 from ..seed_universe import ensure_company_in_universe
 from ..services import memo_sections, memo_store, regen_worker
 from ..services.data_service import get_data_service
@@ -156,6 +157,45 @@ def get_stock(ticker: str, _rate: None = Depends(rate_scope("data"))) -> dict[st
         cash=fin["cash"],
         earnings=fin["earnings"],
         market_stats=stats,
+    )
+
+
+@router.get("/api/quotes", response_model=QuotesOut)
+def get_quotes(
+    response: Response,
+    tickers: str = Query(..., max_length=1000, description="Comma-separated, at most 50"),
+    _rate: None = Depends(rate_scope("data")),
+) -> QuotesOut:
+    """Live quotes for the Research and DCF Lab chips (W5b).
+
+    `quote_service` owns the policy (15 minutes in session, until the next
+    open after the close; labelled stale, then the stored close, then
+    unavailable). An unknown symbol is never a 404 and never reaches a
+    provider: it comes back `unavailable/unknown_ticker`, so the list keeps
+    its shape. The browser may reuse an answer for a minute; the shared
+    provider cache does the rest.
+    """
+    from ..finance.market_calendar import CalendarUnavailable
+    from ..schemas.quotes import QuoteOut
+    from ..services import quote_service
+
+    try:
+        keys = quote_service.normalize_tickers(tickers.split(","))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        quotes = quote_service.get_quotes(keys)
+        market = quote_service.market_state_out()
+    except CalendarUnavailable as exc:
+        # tzdata missing from the image: the chip renders nothing on an
+        # error, and the Dockerfile build check should have caught it.
+        log.error("quotes unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="market calendar unavailable") from exc
+    response.headers["Cache-Control"] = "private, max-age=60"
+    return QuotesOut(
+        quotes=[QuoteOut.model_validate(quotes[k]) for k in keys],
+        market=market,  # type: ignore[arg-type]
+        ttl_seconds_in_session=quote_service.QUOTE_TTL_SECONDS,
     )
 
 

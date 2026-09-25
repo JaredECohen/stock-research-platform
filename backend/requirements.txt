@@ -240,8 +240,10 @@ typing-inspection==0.4.4
     #   mcp
     #   pydantic
     #   pydantic-settings
-tzdata==2026.3 ; sys_platform == 'win32'
-    # via tzlocal
+tzdata==2026.3
+    # via
+    #   alphacouncil-backend (pyproject.toml)
+    #   tzlocal
 tzlocal==5.4.4
     # via apscheduler
 urllib3==2.7.0

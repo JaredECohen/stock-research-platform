@@ -200,7 +200,10 @@ def _build_chat_agent() -> Any | None:
             Use this when the user asks about a name we DON'T have a
             full memo for yet, or when answering comparative questions
             ('which has the best margins?', 'what's the moat?'). This
-            doesn't trigger an analysis run — purely a database read."""
+            doesn't trigger an analysis run. `last_price` comes with
+            `last_price_as_of` (UTC) and `last_price_source` (live, stale,
+            eod_close or profile_seed): when citing it, say how old it is
+            and that live quotes may be delayed up to 15 min."""
             from .orchestrator import _company_lite_snapshot
             snap = _company_lite_snapshot((ticker or "").upper())
             if snap is None:
