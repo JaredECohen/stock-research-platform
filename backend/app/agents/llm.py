@@ -400,11 +400,56 @@ def attribution_mode() -> str:
     return mode
 
 
+def provider_of_model(model: str | None) -> str | None:
+    """Which provider a model name belongs to, from its family prefix."""
+    m = (model or "").lower().strip()
+    if m.startswith(("claude-", "anthropic/")):
+        return "anthropic"
+    if m.startswith(("gpt-", "openai/", "text-embedding-")) or re.match(r"^o\d", m):
+        return "openai"
+    if m.startswith(("gemini-", "models/gemini", "publishers/google")):
+        return "gemini"
+    return None
+
+
+_UNPRICED_WARNED: set[str] = set()
+
+
+def unpriced_configured_models() -> list[str]:
+    """Every model the LIVE settings name (defaults, config.env, Render env)
+    that has no exact price row, each logged once at WARNING. The test on
+    the price table covers code defaults only; a model set by environment
+    at wave H would otherwise price at a provider-default guess silently."""
+    from ..services import llm_metrics
+    missing: list[str] = []
+    for name in type(settings).model_fields:
+        if not name.endswith("_model"):
+            continue
+        value = str(getattr(settings, name, "") or "").strip()
+        if not value:
+            continue
+        provider = provider_of_model(value) or ""
+        if llm_metrics.price_source(provider, value) == "model":
+            continue
+        missing.append(value)
+        if value not in _UNPRICED_WARNED:
+            _UNPRICED_WARNED.add(value)
+            log.warning(
+                "configured model %s (%s) has no price row in llm_metrics; its calls "
+                "cost at a provider-default guess", attribution.sanitize(value), name.upper(),
+            )
+    return sorted(set(missing))
+
+
 def model_summary() -> dict[str, Any]:
     """Routing snapshot for the startup log and the status endpoint.
 
     Contains model names and booleans only — never key material.
     """
+    try:
+        unpriced_configured_models()
+    except Exception as exc:  # pragma: no cover - a summary must not fail on it
+        log_safely(log, "price-row check failed", exc)
     return {
         "active_provider": settings.active_llm_provider,
         "provider_choice": settings.llm_provider,
@@ -644,6 +689,16 @@ def _record_usage(
         ))
     except Exception:  # pragma: no cover - pricing must never break a call
         cost = None
+    if provider == "openai" and (model or "").lower().startswith("gpt-6"):
+        from ..services.llm_metrics import GPT6_LONG_CONTEXT_TOKENS
+        if n_in > GPT6_LONG_CONTEXT_TOKENS:
+            # GPT-6 bills the WHOLE request at 2x input / 1.5x output above
+            # 272K input tokens; the estimate above does not, so say so.
+            log.warning(
+                "GPT-6 long-context request: %d input tokens > %d on %s (billed at the "
+                "long-context rate; cost_usd understates it)",
+                n_in, GPT6_LONG_CONTEXT_TOKENS, attribution.sanitize(model),
+            )
     att["error_type"] = error_type
     att["refused"] = bool(refused)
     att["call_cost_usd"] = float(att.get("call_cost_usd") or 0.0) + float(cost or 0.0)
@@ -831,14 +886,37 @@ def _user_content(user: str) -> str | list[dict[str, Any]]:
 
 
 def _usage_from_gemini(resp: Any) -> tuple[int, int]:
-    # google-genai exposes `usage_metadata.{prompt_token_count, candidates_token_count}`.
+    """(billed input, billed output) for a Gemini response.
+
+    google-genai 2.22 `usage_metadata`: `prompt_token_count` +
+    `tool_use_prompt_token_count` (the grounding tool's own prompt) is
+    input; `candidates_token_count` + `thoughts_token_count` is output,
+    because thoughts bill as output and candidates leave them out (design
+    gap G13; news trace N3(c)). Without this, every Gemini row understated
+    its cost once thinking was on.
+    """
     meta = getattr(resp, "usage_metadata", None)
     if meta is None:
         return 0, 0
     return (
-        int(getattr(meta, "prompt_token_count", 0) or 0),
-        int(getattr(meta, "candidates_token_count", 0) or 0),
+        int(getattr(meta, "prompt_token_count", 0) or 0)
+        + int(getattr(meta, "tool_use_prompt_token_count", 0) or 0),
+        int(getattr(meta, "candidates_token_count", 0) or 0)
+        + int(getattr(meta, "thoughts_token_count", 0) or 0),
     )
+
+
+def _gemini_extra_usage(resp: Any) -> tuple[int | None, int]:
+    """(thoughts, cached prompt tokens): thoughts for the row's
+    `reasoning_tokens` (already inside billed output), cached tokens priced
+    at the model's cache rate (they are inside `prompt_token_count`)."""
+    meta = getattr(resp, "usage_metadata", None)
+    if meta is None:
+        return None, 0
+    thoughts = getattr(meta, "thoughts_token_count", None)
+    cached = getattr(meta, "cached_content_token_count", None)
+    return (int(thoughts) if isinstance(thoughts, int) else None,
+            int(cached) if isinstance(cached, int) else 0)
 
 
 def _safe_finish_diagnostic(provider: str, response: Any) -> str:
@@ -935,11 +1013,85 @@ def _gemini_client() -> Any | None:
                 location=settings.vertex_location or "us-central1",
             )
         if settings.gemini_api_key:
-            return _genai.Client(api_key=settings.gemini_api_key)
+            return _genai.Client(api_key=settings.gemini_api_key,
+                                 http_options=_gemini_http_options())
         return None
     except Exception as exc:  # pragma: no cover
         log_safely(log, "Gemini client init failed", exc)
         return None
+
+
+# google-genai 2.22's `HttpOptions.timeout` is in MILLISECONDS (the news
+# trace critique caught a spec that said 30 = seconds). Unbounded, one hung
+# grounded call held a monitoring thread indefinitely.
+GEMINI_TIMEOUT_MS = 30_000
+
+
+def _gemini_http_options() -> Any:
+    try:
+        from google.genai import types  # type: ignore
+        return types.HttpOptions(timeout=GEMINI_TIMEOUT_MS)
+    except Exception:  # pragma: no cover - older SDKs accept the dict form
+        return {"timeout": GEMINI_TIMEOUT_MS}
+
+
+_GEMINI_3_FLASH_RE = re.compile(r"^gemini-3\.[7-9]-flash(?!-lite)")
+
+
+def _gemini_thinking(model: str) -> tuple[str | None, dict[str, Any] | None]:
+    """(effort label for the row, `thinking_config`) per Gemini model.
+
+    Explicit per model (model research 2026-09-25; owner item 7):
+      - 3.5-flash-lite: thinkingLevel "minimal" (the news model);
+      - 3.7/3.8-flash: "low" — never "minimal", which they reject;
+      - 3.1-pro-preview: "low";
+      - 2.5-flash: thinking_budget=0, kept only for an explicit override
+        (new keys cannot call it any more);
+      - anything else (2.5-pro via VERTEX_MODEL): nothing sent — Pro cannot
+        disable thinking.
+    """
+    m = (model or "").lower().strip()
+    if m.startswith("gemini-3.5-flash-lite"):
+        return "minimal", {"thinking_level": "MINIMAL"}
+    if _GEMINI_3_FLASH_RE.match(m):
+        return "low", {"thinking_level": "LOW"}
+    if m.startswith("gemini-3.1-pro"):
+        return "low", {"thinking_level": "LOW"}
+    if m.startswith("gemini-2.5-flash"):
+        return "budget0", {"thinking_budget": 0}
+    return None, None
+
+
+def _grounding_cap_reached() -> bool:
+    """True when today's (UTC) successful grounded Gemini calls reached
+    GEMINI_GROUNDED_MAX_PER_DAY. Counted from llm_call_logs, not a
+    module-level counter, so the web and worker processes share one cap.
+    A DB error fails OPEN (logged): losing news is worse than a few
+    over-cap grounded calls, which cost cents."""
+    cap = int(settings.gemini_grounded_max_per_day)
+    if cap <= 0:
+        return True
+    try:
+        from datetime import datetime
+
+        from sqlalchemy import func, select
+
+        from ..database import SessionLocal
+        from ..models import LLMCallLog
+        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        with SessionLocal() as db:
+            LLMCallLog.__table__.create(bind=db.get_bind(), checkfirst=True)
+            used = db.execute(
+                select(func.count()).select_from(LLMCallLog).where(
+                    LLMCallLog.grounded.is_(True),
+                    LLMCallLog.success.is_(True),
+                    LLMCallLog.generated_at >= today,
+                )
+            ).scalar() or 0
+        return int(used) >= cap
+    except Exception as exc:  # pragma: no cover - defense in depth
+        log_safely(log, "Gemini grounding-cap count failed; allowing the call", exc)
+        return False
 
 
 def _resolve_gemini_model(caller_model: str | None, default: str) -> str:
@@ -997,12 +1149,18 @@ def gemini_chat_text(
                 model_resolution=_gemini_resolution(model),
             )
         att["max_tokens"] = max_tokens
+        att["effort"] = _gemini_thinking(chosen_model)[0]
         grounded = bool(enable_search_grounding) or None
         if _breaker_open("gemini"):
             _record_skip("gemini", chosen_model, "skipped:breaker_open", grounded=grounded)
             return None
         client = _gemini_client()
         if client is None:
+            return None
+        if enable_search_grounding and _grounding_cap_reached():
+            # Over the daily grounded budget: a skip row the news loop can
+            # count, and the caller falls back to the provider feed.
+            _record_skip("gemini", chosen_model, "skipped:grounding_cap", grounded=True)
             return None
         return _gemini_generate(client, chosen_model, prompt, system=system,
                                 enable_search_grounding=enable_search_grounding,
@@ -1020,10 +1178,15 @@ def _gemini_generate(client: Any, chosen_model: str, prompt: str, *, system: str
     error = ""
     finish_diagnostic = ""
     served = None
+    thoughts = None
+    cached = 0
     try:
         # Build config dynamically — different google-genai versions accept
         # slightly different shapes. We err on the side of being permissive.
         config: dict[str, Any] = {"temperature": 0.3, "max_output_tokens": max_tokens}
+        thinking = _gemini_thinking(chosen_model)[1]
+        if thinking is not None:
+            config["thinking_config"] = thinking
         if enable_search_grounding:
             try:
                 from google.genai import types  # type: ignore
@@ -1039,6 +1202,7 @@ def _gemini_generate(client: Any, chosen_model: str, prompt: str, *, system: str
         )
         received_response = True
         in_tok, out_tok = _usage_from_gemini(resp)
+        thoughts, cached = _gemini_extra_usage(resp)
         served = _served(getattr(resp, "model_version", None))
         finish_diagnostic = _safe_finish_diagnostic("gemini", resp)
         text = getattr(resp, "text", None)
@@ -1056,6 +1220,7 @@ def _gemini_generate(client: Any, chosen_model: str, prompt: str, *, system: str
         success=out is not None, error=error + finish_diagnostic if error else "",
         served_model=served, finish_reason=_finish_from_diagnostic(finish_diagnostic),
         grounded=bool(enable_search_grounding) or None,
+        reasoning_tokens=thoughts, cache_read_tokens=cached,
     )
     if out is None:
         _record_failure("gemini")
@@ -1200,26 +1365,81 @@ def _walk_array_objects(text: str, start_idx: int) -> list[str]:
 
 
 def _anthropic_supports_custom_temp(model: str) -> bool:
-    """Newer Anthropic models (Opus 4.7+, Sonnet 4.6+, Haiku 4.5+) reject
-    `temperature` other than the default and return HTTP 400 with
-    `temperature is deprecated for this model`. Empirically observed
-    2026-05-30 against claude-opus-4-7 and claude-haiku-4-5. Older
-    Claude 3.x models accept it. We gate the parameter rather than
-    pinning a fixed default so the call works across the supported
-    model fleet."""
+    """Only the legacy Claude families still take `temperature`.
+
+    Newer Anthropic models reject sampling parameters with HTTP 400
+    (observed 2026-05-30 on claude-opus-4-7 and claude-haiku-4-5; the
+    claude-api reference lists them as removed on Opus 4.7+, Sonnet 5,
+    Fable and Opus 5/5.5). The old check was a DENYlist on "-4-", so every
+    newer family (`claude-opus-5-5`, `claude-sonnet-5`, `claude-fable-5-1`)
+    was sent `temperature=0.3` and 400'd. An allowlist fails safe for the
+    next family instead. Non-Claude names are not this function's business.
+    """
     m = (model or "").lower().strip()
     if not m.startswith("claude-"):
         return True
-    # The "4-x" generation deprecates the parameter. Pattern: "claude-
-    # {opus,sonnet,haiku}-4-N" or "claude-{family}-4-N-YYYYMMDD".
-    if "-4-" in m or m.endswith("-4"):
-        return False
-    return True
+    return m.startswith(("claude-3", "claude-2", "claude-instant"))
+
+
+# Anthropic models that accept `output_config.effort` (the claude-api
+# reference: Opus 4.5+, Sonnet 4.6+, Fable/Mythos; NOT Haiku 4.5 or Sonnet
+# 4.5, where it is an error).
+_ANTHROPIC_EFFORT_RE = re.compile(
+    r"^claude-(opus-4-[5-9]|opus-[5-9]|sonnet-4-6|sonnet-[5-9]|fable-|mythos-)"
+)
+_ANTHROPIC_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+# Always-thinking Anthropic families: thinking cannot be disabled (or is on
+# by default) and counts against max_tokens, so they get the thinking floor
+# (bull/bear critique #12 added sonnet-5).
+_ALWAYS_THINKING = ("claude-opus-5", "claude-fable-", "claude-sonnet-5", "claude-mythos-")
+# Opus 5.5's API default effort is "medium" (one below Opus 5's "high");
+# sent explicitly so the row says what ran rather than relying on a default.
+_EXPLICIT_DEFAULT_EFFORT = {"claude-opus-5-5": "medium"}
+
+
+def _anthropic_effort(model: str, effort: str | None) -> str | None:
+    """The effort to send in `output_config`, or None to send nothing."""
+    m = (model or "").lower().strip()
+    if not _ANTHROPIC_EFFORT_RE.match(m):
+        if effort:
+            log.debug("effort %s not sent: %s does not accept it", effort, m)
+        return None
+    if not effort:
+        for prefix, default in _EXPLICIT_DEFAULT_EFFORT.items():
+            if m.startswith(prefix):
+                return default
+        return None
+    e = effort.strip().lower()
+    if e not in _ANTHROPIC_EFFORTS:
+        # none/minimal are OpenAI levels; Anthropic's lowest is "low".
+        log.debug("effort %s not sent: not an Anthropic effort level", e)
+        return None
+    return e
+
+
+# Refusal categories Opus 5.5's safety classifiers report in
+# `stop_details.category` (anthropic 0.125 `RefusalStopDetails`); anything
+# else is recorded as "other" so no free text reaches a row.
+_REFUSAL_CATEGORIES = frozenset({"cyber", "bio", "frontier_llm", "reasoning_extraction", "general_harms"})
+
+
+def _refusal_category(msg: Any) -> str | None:
+    """`refusal:<category>` when the response is a refusal, else None.
+
+    A refusal is HTTP 200 with `stop_reason == "refusal"`: not an outage,
+    and retrying the same route refuses again (bull/bear critique #11).
+    """
+    if getattr(msg, "stop_reason", None) != "refusal":
+        return None
+    category = getattr(getattr(msg, "stop_details", None), "category", None)
+    if not isinstance(category, str) or not category:
+        return "refusal:unspecified"
+    return f"refusal:{category if category in _REFUSAL_CATEGORIES else 'other'}"
 
 
 def _anthropic_chat(
     client: Any, *, model: str, system: str, user: str, max_tokens: int,
-    json_mode: bool = False,
+    json_mode: bool = False, effort: str | None = None,
 ) -> Any:
     import time as _time
     t0 = _time.perf_counter()
@@ -1229,6 +1449,7 @@ def _anthropic_chat(
     error = ""
     finish_diagnostic = ""
     served = None
+    refused = False
     try:
         kwargs: dict[str, Any] = {
             "model": model,
@@ -1238,6 +1459,11 @@ def _anthropic_chat(
         }
         if _anthropic_supports_custom_temp(model):
             kwargs["temperature"] = 0.3
+        # No `thinking` param is ever sent: Opus 5.5 cannot disable thinking
+        # (a 400 at every effort level) and runs adaptive when it is omitted.
+        # Effort is the only depth control, and only where accepted.
+        if effort:
+            kwargs["output_config"] = {"effort": effort}
         msg = client.messages.create(**kwargs)
         received_response = True
         # Capture real token usage for cost accounting (Phase C) + log row (Wave 1A).
@@ -1245,18 +1471,23 @@ def _anthropic_chat(
         cache_w, cache_r = _cache_usage_from_anthropic(msg)
         served = _served(getattr(msg, "model", None))
         finish_diagnostic = _safe_finish_diagnostic("anthropic", msg)
-        # Concatenate text blocks
-        parts = []
-        for block in getattr(msg, "content", []) or []:
-            text = getattr(block, "text", None)
-            if text:
-                parts.append(text)
-            elif isinstance(block, dict):
-                parts.append(block.get("text", ""))
-        text = "".join(parts).strip() or None
-        out = _extract_json(text) if json_mode and text is not None else text
-        if out is None:
-            error = "invalid_json_response" if text else "empty_response"
+        refusal = _refusal_category(msg)
+        if refusal is not None:
+            refused = True
+            error = refusal
+        else:
+            # Concatenate text blocks
+            parts = []
+            for block in getattr(msg, "content", []) or []:
+                text = getattr(block, "text", None)
+                if text:
+                    parts.append(text)
+                elif isinstance(block, dict):
+                    parts.append(block.get("text", ""))
+            text = "".join(parts).strip() or None
+            out = _extract_json(text) if json_mode and text is not None else text
+            if out is None:
+                error = "invalid_json_response" if text else "empty_response"
     except Exception as exc:  # pragma: no cover
         error = f"{'response_error' if received_response else 'provider_error'}:{type(exc).__name__}"
         out = None
@@ -1268,6 +1499,7 @@ def _anthropic_chat(
         success=out is not None, error=error + finish_diagnostic if error else "",
         cache_read_tokens=cache_r, cache_write_tokens=cache_w,
         served_model=served, finish_reason=_finish_from_diagnostic(finish_diagnostic),
+        refused=refused,
     )
     return out
 
@@ -1276,33 +1508,82 @@ def _anthropic_chat(
 # OpenAI helpers
 # ---------------------------------------------------------------------------
 
+_OPENAI_GPT_RE = re.compile(r"^gpt-(\d+)")
+_OPENAI_O_SERIES_RE = re.compile(r"^o\d")
+
+
+def _openai_is_reasoning(model: str) -> bool:
+    """gpt-N with N >= 5 and the o-series are reasoning models.
+
+    The old checks were a prefix list (`gpt-5`, `o1`, `o3`, `o4`), so
+    `gpt-6-sol` / `gpt-6-astra` got `max_tokens` and `temperature=0.3`,
+    both of which GPT-6 rejects (model research 2026-09-25; DEVPLAN item 7).
+    """
+    m = (model or "").lower().strip()
+    g = _OPENAI_GPT_RE.match(m)
+    if g:
+        return int(g.group(1)) >= 5
+    return bool(_OPENAI_O_SERIES_RE.match(m))
+
+
 def _openai_token_kwarg(model: str, n: int) -> dict[str, int]:
     """Return the correct max-output-tokens kwarg for the OpenAI model family.
 
-    GPT-5.x and the o-series reasoning models (o1, o3, o4, …) reject
-    `max_tokens` and require `max_completion_tokens`. Older / non-reasoning
-    chat models (gpt-4.1, gpt-4o, gpt-3.5, …) still take `max_tokens`.
-    Verified empirically against gpt-5.4, gpt-5.5, and gpt-4.1-mini on
-    2026-05-02; the new-name convention also covers o1 / o3 reasoning
-    models which use the same API contract.
+    GPT-5+ (GPT-6 included) and the o-series reasoning models (o1, o3, o4, …)
+    reject `max_tokens` and require `max_completion_tokens`. Older /
+    non-reasoning chat models (gpt-4.1, gpt-4o, gpt-3.5, …) still take
+    `max_tokens`. Verified empirically against gpt-5.4, gpt-5.5, and
+    gpt-4.1-mini on 2026-05-02; the new-name convention also covers o1 / o3
+    reasoning models which use the same API contract.
     """
-    m = (model or "").lower().strip()
-    if m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+    if _openai_is_reasoning(model):
         return {"max_completion_tokens": int(n)}
     return {"max_tokens": int(n)}
 
 
 def _openai_supports_custom_temp(model: str) -> bool:
-    """GPT-5.x and o-series reasoning models reject `temperature` other
+    """GPT-5+ and o-series reasoning models reject `temperature` other
     than the default (1). Older chat models accept it. Verified
     empirically 2026-05-03 — gpt-5.5 returns 400 on temperature=0.3."""
+    return not _openai_is_reasoning(model)
+
+
+def _openai_effort(model: str, effort: str | None) -> str | None:
+    """`reasoning_effort` to send, or None. Reasoning models only (gpt-4.1
+    would 400). gpt-6-astra rejects "none" — an unresolvable request, so it
+    raises rather than silently sending something else."""
+    if not effort:
+        return None
     m = (model or "").lower().strip()
-    if m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
-        return False
-    return True
+    if not _openai_is_reasoning(m):
+        log.debug("effort %s not sent: %s is not a reasoning model", effort, m)
+        return None
+    e = effort.strip().lower()
+    if m.startswith("gpt-6-astra") and e == "none":
+        raise ValueError("gpt-6-astra rejects reasoning_effort='none'")
+    return e
 
 
-def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> dict[str, Any] | None:
+def _openai_response_format(schema: dict[str, Any] | None) -> dict[str, Any]:
+    """`json_object` by default; strict `json_schema` when the caller
+    passes a schema (the research run recommended strict json_schema over
+    json_object for GPT-6, and the reviewer relies on it). `schema` is a
+    JSON Schema, optionally wrapped as {"name": ..., "schema": {...}}."""
+    if not schema:
+        return {"type": "json_object"}
+    if "schema" in schema and isinstance(schema.get("schema"), dict):
+        name = str(schema.get("name") or "response")
+        body = schema["schema"]
+    else:
+        name = str(schema.get("title") or "response")
+        body = schema
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:64] or "response"
+    return {"type": "json_schema", "json_schema": {"name": name, "schema": body, "strict": True}}
+
+
+def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_tokens: int,
+                      effort: str | None = None, schema: dict[str, Any] | None = None,
+                      ) -> dict[str, Any] | None:
     import time as _time
     messages = []
     if system:
@@ -1317,14 +1598,16 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
     served = None
     reasoning = None
     try:
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
+            "response_format": _openai_response_format(schema),
             **_openai_token_kwarg(model, max_tokens),
         }
         if _openai_supports_custom_temp(model):
             kwargs["temperature"] = 0.3
+        if effort:
+            kwargs["reasoning_effort"] = effort
         resp = client.chat.completions.create(**kwargs)
         received_response = True
         in_tok, out_tok = _usage_from_openai(resp)
@@ -1352,7 +1635,8 @@ def _openai_chat_json(client: Any, *, model: str, system: str, user: str, max_to
     return out
 
 
-def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_tokens: int) -> str | None:
+def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_tokens: int,
+                      effort: str | None = None) -> str | None:
     import time as _time
     messages = []
     if system:
@@ -1367,13 +1651,15 @@ def _openai_chat_text(client: Any, *, model: str, system: str, user: str, max_to
     served = None
     reasoning = None
     try:
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
             **_openai_token_kwarg(model, max_tokens),
         }
         if _openai_supports_custom_temp(model):
             kwargs["temperature"] = 0.3
+        if effort:
+            kwargs["reasoning_effort"] = effort
         resp = client.chat.completions.create(**kwargs)
         received_response = True
         in_tok, out_tok = _usage_from_openai(resp)
@@ -1445,18 +1731,89 @@ def _has_key(provider: str) -> bool:
         provider == "anthropic" and settings.has_anthropic)
 
 
-def _begin_request(att: dict[str, Any] | None, *, max_tokens: int) -> None:
+def _begin_request(att: dict[str, Any] | None, *, max_tokens: int,
+                   effort: str | None = None) -> None:
     """Per-attempt facts `_record_usage` reads, reset before each request."""
     if att is None:
         return
     att["max_tokens"] = int(max_tokens)
+    att["effort"] = effort
     att["error_type"] = None
     att["refused"] = False
+
+
+def _is_failover_hop() -> bool:
+    att = _ATTEMPT.get()
+    return bool(att and int(att.get("attempt") or 1) > 1)
+
+
+# GPT-6 needs room for reasoning before any visible output ("reserve >=25k
+# tokens", model research 2026-09-25). The same floor covers gpt-5.x on a
+# failover hop: that is where the critic's 1,600-token default ran out
+# inside reasoning and returned nothing (bullish-skew F5; the bull/bear
+# critique's missing item).
+_OPENAI_REASONING_FLOOR = 25_000
+
+
+def _effective_max_tokens(provider: str, model: str, requested: int, *, hop: bool) -> int:
+    """The max_tokens actually sent for (provider, model).
+
+    - Always-thinking Anthropic models: at least LLM_THINKING_MAX_TOKENS_FLOOR,
+      because thinking counts against max_tokens.
+    - Every Anthropic request, failover hops included: at most
+      LLM_ANTHROPIC_NONSTREAM_MAX_TOKENS. The SDK raises before sending a
+      non-streaming request whose max_tokens implies >10 minutes (~21.3k),
+      and `_with_failover` used to forward a 25k reviewer budget verbatim
+      (bull/bear critique #5).
+    - GPT-6 always, gpt-5.x on a failover hop: at least 25,000.
+
+    Today's models on their primary route (claude-opus-4-8, Haiku 4.5,
+    gpt-5.5, gpt-4.1-mini) are unchanged.
+    """
+    n = int(requested)
+    m = (model or "").lower().strip()
+    if provider == "anthropic":
+        if m.startswith(_ALWAYS_THINKING):
+            n = max(n, int(settings.llm_thinking_max_tokens_floor))
+        return min(n, int(settings.llm_anthropic_nonstream_max_tokens))
+    if provider == "openai":
+        if m.startswith("gpt-6") or (hop and m.startswith("gpt-5")):
+            return max(n, _OPENAI_REASONING_FLOOR)
+    return n
+
+
+# Content outcomes: the provider answered, the answer was unusable. Not a
+# health signal when the caller owns its retry policy (failover=False).
+_CONTENT_FAILURES = frozenset({"invalid_json_response", "empty_response"})
+
+
+def _breaker_after(provider: str, out: Any, *, failover: bool = True) -> None:
+    """Feed the process-wide breaker from one attempt's outcome.
+
+    Breaker isolation (bull/bear critique #4): a `failover=False` caller
+    (the debate harness) retries and fails over on its own, and a debate
+    advocate's truncated or unparseable output must not open the breaker
+    the PM relies on moments later. Those calls count transport errors
+    only. A refusal is a content decision, never provider health, so it
+    counts for nobody.
+    """
+    if out is not None:
+        _record_success(provider)
+        return
+    att = _ATTEMPT.get() or {}
+    error_type = att.get("error_type") or ""
+    if error_type.startswith("refusal"):
+        return
+    if not failover and error_type in _CONTENT_FAILURES:
+        return
+    _record_failure(provider)
 
 
 def _call_json(
     provider: str, *, prompt: str, system: str, route: str,
     max_tokens: int, model: str | None,
+    effort: str | None = None, schema: dict[str, Any] | None = None,
+    failover: bool = True,
 ) -> Any:
     """One JSON-mode call against `provider`, feeding its breaker counters.
 
@@ -1464,74 +1821,92 @@ def _call_json(
     change), None when the call failed (failure recorded). `model` must
     already be vetted by `_model_matches_provider` for this provider — the
     failover hop passes None so it lands on the partner's own route default.
+    `effort` is re-resolved for the model actually sent (dropped where the
+    model does not accept it); `effort`/`schema` reach the wrappers only
+    when set, so today's requests are byte-identical.
     """
     from ..services.regen_lease import assert_current
     assert_current()
     from ..services.industry_lease import assert_current as assert_industry_current
     assert_industry_current()
     att = _ATTEMPT.get()
+    hop = _is_failover_hop()
     if provider == "anthropic":
         client = _anthropic_client()
         if client is None:
             return _NO_CLIENT
         chosen = (model or "").strip() or _model_for("anthropic", route)
         sys_with_json = (system + "\n\nReturn ONLY valid JSON, no prose.").strip()
-        _begin_request(att, max_tokens=max_tokens)
+        sent_effort = _anthropic_effort(chosen, effort)
+        n = _effective_max_tokens("anthropic", chosen, max_tokens, hop=hop)
+        _begin_request(att, max_tokens=n, effort=sent_effort)
+        extra: dict[str, Any] = {"effort": sent_effort} if sent_effort else {}
         out = _anthropic_chat(
             client, model=chosen, system=sys_with_json, user=prompt,
-            max_tokens=max_tokens, json_mode=True,
+            max_tokens=n, json_mode=True, **extra,
         )
-        _breaker_after("anthropic", out)
+        _breaker_after("anthropic", out, failover=failover)
         return out
 
     client = _openai_client()
     if client is None:
         return _NO_CLIENT
     chosen = (model or "").strip() or _model_for("openai", route)
-    _begin_request(att, max_tokens=max_tokens)
-    out = _openai_chat_json(client, model=chosen, system=system, user=prompt, max_tokens=max_tokens)
-    _breaker_after("openai", out)
+    sent_effort = _openai_effort(chosen, effort)
+    n = _effective_max_tokens("openai", chosen, max_tokens, hop=hop)
+    _begin_request(att, max_tokens=n, effort=sent_effort)
+    extra = {}
+    if sent_effort:
+        extra["effort"] = sent_effort
+    if schema:
+        extra["schema"] = schema
+    out = _openai_chat_json(client, model=chosen, system=system, user=prompt, max_tokens=n, **extra)
+    _breaker_after("openai", out, failover=failover)
     return out
 
 
 def _call_text(
     provider: str, *, prompt: str, system: str, route: str,
     max_tokens: int, model: str | None,
+    effort: str | None = None, schema: dict[str, Any] | None = None,
+    failover: bool = True,
 ) -> Any:
-    """Text twin of `_call_json`; same contract."""
+    """Text twin of `_call_json`; same contract (`schema` is ignored)."""
     from ..services.regen_lease import assert_current
     assert_current()
     from ..services.industry_lease import assert_current as assert_industry_current
     assert_industry_current()
     att = _ATTEMPT.get()
+    hop = _is_failover_hop()
     if provider == "anthropic":
         client = _anthropic_client()
         if client is None:
             return _NO_CLIENT
         chosen = (model or "").strip() or _model_for("anthropic", route)
-        _begin_request(att, max_tokens=max_tokens)
-        text = _anthropic_chat(client, model=chosen, system=system, user=prompt, max_tokens=max_tokens)
-        _breaker_after("anthropic", text)
+        sent_effort = _anthropic_effort(chosen, effort)
+        n = _effective_max_tokens("anthropic", chosen, max_tokens, hop=hop)
+        _begin_request(att, max_tokens=n, effort=sent_effort)
+        extra: dict[str, Any] = {"effort": sent_effort} if sent_effort else {}
+        text = _anthropic_chat(client, model=chosen, system=system, user=prompt,
+                               max_tokens=n, **extra)
+        _breaker_after("anthropic", text, failover=failover)
         return text
 
     client = _openai_client()
     if client is None:
         return _NO_CLIENT
     chosen = (model or "").strip() or _model_for("openai", route)
-    _begin_request(att, max_tokens=max_tokens)
-    text = _openai_chat_text(client, model=chosen, system=system, user=prompt, max_tokens=max_tokens)
-    _breaker_after("openai", text)
+    sent_effort = _openai_effort(chosen, effort)
+    n = _effective_max_tokens("openai", chosen, max_tokens, hop=hop)
+    _begin_request(att, max_tokens=n, effort=sent_effort)
+    extra = {"effort": sent_effort} if sent_effort else {}
+    text = _openai_chat_text(client, model=chosen, system=system, user=prompt,
+                             max_tokens=n, **extra)
+    _breaker_after("openai", text, failover=failover)
     return text
 
 
-def _breaker_after(provider: str, out: Any) -> None:
-    if out is None:
-        _record_failure(provider)
-    else:
-        _record_success(provider)
-
-
-def _with_failover(provider: str, call: Any, **kwargs: Any) -> Any:
+def _with_failover(provider: str, call: Any, *, failover: bool = True, **kwargs: Any) -> Any:
     """Run `call(provider, **kwargs)`, hopping to the partner provider once.
 
     The hop happens when `provider`'s breaker is already open, its client
@@ -1541,6 +1916,10 @@ def _with_failover(provider: str, call: Any, **kwargs: Any) -> Any:
     configured, or the partner's breaker is open too. The partner runs on
     its *own* route default (`model=None`) because the caller's model name
     belongs to the failed provider.
+
+    `failover=False` (the debate pair, which fails over as a PAIR on its
+    own) returns None after the primary attempt: no hop, and content
+    failures do not feed the shared breaker (`_breaker_after`).
 
     Every attempt leaves a row: a skipped primary (open breaker, client
     unavailable) and a skipped partner (open breaker) are written as
@@ -1553,7 +1932,7 @@ def _with_failover(provider: str, call: Any, **kwargs: Any) -> Any:
         reason = "breaker_open"
         _record_skip(provider, sent, "skipped:breaker_open")
     else:
-        out = call(provider, **kwargs)
+        out = call(provider, failover=failover, **kwargs)
         if out is _NO_CLIENT:
             if _demo_only():
                 # Configuration, not an outage (and every CI run): no row,
@@ -1568,8 +1947,10 @@ def _with_failover(provider: str, call: Any, **kwargs: Any) -> Any:
         elif out is not None:
             return out
         else:
-            reason = "call_failed"
+            reason = "refused" if (att or {}).get("refused") else "call_failed"
 
+    if not failover:
+        return None
     partner = _failover_partner(provider)
     if partner is None:
         return None
@@ -1582,7 +1963,7 @@ def _with_failover(provider: str, call: Any, **kwargs: Any) -> Any:
         _record_skip(partner, partner_model, "skipped:partner_breaker_open")
         return None
     _record_failover(provider, partner, reason, from_model=sent, to_model=partner_model)
-    return call(partner, **{**kwargs, "model": None})
+    return call(partner, failover=failover, **{**kwargs, "model": None})
 
 
 def _prepare(provider: str, model: str | None, route: str) -> str | None:
@@ -1617,6 +1998,9 @@ def chat_json(
     max_tokens: int = 1600,
     provider_override: str | None = None,
     model: str | None = None,
+    failover: bool = True,
+    effort: str | None = None,
+    schema: dict[str, Any] | None = None,
     action: str | None = None,
     ticker: str | None = None,
 ) -> dict[str, Any] | None:
@@ -1634,8 +2018,14 @@ def chat_json(
     reroutes that one agent without code changes. Empty string is treated
     as "use the route default" for ergonomic env handling.
 
-    `action` names what the call does (a key of
-    `llm_attribution.ACTIONS`); `ticker` the company it is about.
+    Keyword-only, each defaulting to today's behaviour:
+      - `failover`: False = no provider hop, and content failures do not
+        feed the shared breaker (the debate pair fails over on its own).
+      - `effort`: sent as `output_config.effort` / `reasoning_effort` only
+        to models that accept it (never Haiku 4.5 or gpt-4.1).
+      - `schema`: strict `json_schema` on OpenAI; ignored elsewhere in v1.
+      - `action`: what the call does (a key of `llm_attribution.ACTIONS`);
+        `ticker`: the company it is about.
 
     OpenAI and Anthropic fail over to each other once per call when the
     other is configured — see `_with_failover`. Gemini does not.
@@ -1650,8 +2040,9 @@ def chat_json(
                                     action=action, ticker=ticker)
         model = _prepare(provider, model, route)
         out = _with_failover(
-            provider, _call_json,
+            provider, _call_json, failover=failover,
             prompt=prompt, system=system, route=route, max_tokens=max_tokens, model=model,
+            effort=effort, schema=schema,
         )
         return None if out is _NO_CLIENT else out
 
@@ -1664,10 +2055,14 @@ def chat_text(
     max_tokens: int = 600,
     provider_override: str | None = None,
     model: str | None = None,
+    failover: bool = True,
+    effort: str | None = None,
+    schema: dict[str, Any] | None = None,
     action: str | None = None,
     ticker: str | None = None,
 ) -> str | None:
-    """Same `model`, `action` and failover semantics as `chat_json`. Returns plain text or None."""
+    """Same `model`, `failover`, `effort`, `action` semantics as `chat_json`
+    (`schema` is accepted and ignored). Returns plain text or None."""
     with _call_scope("chat_text", action=action, ticker=ticker, route=route,
                      max_tokens=max_tokens):
         provider = (provider_override or settings.active_llm_provider).lower()
@@ -1678,7 +2073,8 @@ def chat_text(
                                     action=action, ticker=ticker)
         model = _prepare(provider, model, route)
         out = _with_failover(
-            provider, _call_text,
+            provider, _call_text, failover=failover,
             prompt=prompt, system=system, route=route, max_tokens=max_tokens, model=model,
+            effort=effort, schema=schema,
         )
         return None if out is _NO_CLIENT else out

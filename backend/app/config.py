@@ -126,6 +126,20 @@ class Settings(BaseSettings):
     # Kill switch for the per-call `app.llm.calls` INFO lines on success
     # only. Error/skip/failover/breaker WARNINGs and the DB rows stay.
     llm_call_log_enabled: bool = True
+    # Always-thinking Anthropic models (claude-opus-5*, claude-fable-*,
+    # claude-sonnet-5*) get at least this many max_tokens, because their
+    # thinking counts against it and the 1,600 default would truncate. The
+    # non-streaming clamp keeps every Anthropic request (failover hops
+    # included) under the SDK's ~21.3k non-streaming ceiling, above which it
+    # raises before sending (bull/bear critique #5).
+    llm_thinking_max_tokens_floor: int = 16000
+    llm_anthropic_nonstream_max_tokens: int = 16000
+    # Search-grounded Gemini calls per UTC day, counted from llm_call_logs
+    # so web and worker share one budget (5,000 grounded prompts/month are
+    # free on the paid tier, then $14/1,000). An over-cap call writes a
+    # `skipped:grounding_cap` row and returns None; news then falls back to
+    # the provider feed. 0 disables grounding.
+    gemini_grounded_max_per_day: int = 250
 
     @field_validator("llm_attribution_mode")
     @classmethod
