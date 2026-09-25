@@ -26,20 +26,23 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from app.agents import number_check
+from app.agents import memo_quality, number_check
 from app.schemas import (
+    CatalystItem,
     ConfidenceAssessment,
     ConfidenceCap,
     MemoQuality,
     NumberCheck,
     NumberClaim,
     RatingReconciliation,
+    RiskItem,
     StockMemoOut,
     WithheldItem,
 )
 from app.scripts import capture_memo_quality_fixture as capture
 
 FIXTURE = capture.DEFAULT_OUT
+PM_TEMPLATE_FIXTURE = capture.PM_TEMPLATE_OUT
 RECAPTURE = (
     "Re-capture it, from `backend/` and against a throwaway database:\n"
     '  ENABLE_LIVE_DATA=false USE_DEMO_DATA=true OPENAI_API_KEY="" ANTHROPIC_API_KEY="" '
@@ -63,6 +66,12 @@ ASSUMPTION_KEYS = {"value", "unit", "basis_ref", "horizon", "status"}
 def wire() -> dict[str, Any]:
     assert FIXTURE.exists(), f"{FIXTURE} is missing. {RECAPTURE}"
     return json.loads(FIXTURE.read_text())
+
+
+@pytest.fixture(scope="module")
+def pm_template_wire() -> dict[str, Any]:
+    assert PM_TEMPLATE_FIXTURE.exists(), f"{PM_TEMPLATE_FIXTURE} is missing. {RECAPTURE}"
+    return json.loads(PM_TEMPLATE_FIXTURE.read_text())
 
 
 def _keys(model: type[BaseModel]) -> set[str]:
@@ -90,13 +99,14 @@ def test_quality_key_sets_match_the_models(wire):
     _assert_quality_shape(wire["memo"]["quality"])
 
 
-def _assert_quality_shape(q: dict[str, Any] | None) -> None:
+def _assert_quality_shape(q: dict[str, Any] | None, *, require_claims: bool = True) -> None:
     assert q is not None, RECAPTURE
     _same_keys(q, MemoQuality, "quality")
     nc = q["number_check"]
     _same_keys(nc, NumberCheck, "quality.number_check")
     assert set(nc["counts"]) == COUNT_KEYS, (sorted(set(nc["counts"]) ^ COUNT_KEYS), RECAPTURE)
-    assert nc["claims"], "the fixture must carry stored claims for the UI to mark"
+    if require_claims:
+        assert nc["claims"], "the fixture must carry stored claims for the UI to mark"
     for c in nc["claims"]:
         _same_keys(c, NumberClaim, "quality.number_check.claims[]")
     assert nc["withheld"], "the fixture must carry a withheld item for the disclosure"
@@ -120,6 +130,7 @@ def test_fixture_carries_every_state_the_ui_tests_read(wire):
     nc = q.number_check
     by_raw = {(c.field, c.raw): c.status for c in nc.claims}
     assert by_raw[("final_pm_view", expect["fabricated_pm_figure"])] == "untraceable"
+    assert by_raw[("mispricing_thesis.our_view", expect["fabricated_view_figure"])] == "untraceable"
     assert by_raw[("final_pm_view", expect["declared_assumption"])] == "assumption"
     assert [w.text for w in nc.withheld] == [expect["withheld_point"]]
     # The presented body keeps the renderer's contract: every stored claim
@@ -152,6 +163,92 @@ def test_fixture_meta_matches_the_script(wire):
     assert wire["meta"]["ticker"] == capture.TICKER
 
 
+# The variant name -> (rating shown, outcome, final_rating) each rating-check
+# variant must reproduce. The UI tests read these states; if the producer
+# stops writing one, the fixture no longer shows what the tests claim.
+VARIANT_STATES = {
+    "record_mode": ("Bullish", "downgraded", "Bullish"),
+    "failed_reason": ("Neutral", "downgraded", "Neutral"),
+    "accepted_unreviewed": ("Bullish", "accepted", "Bullish"),
+    "accepted_supported": ("Bullish", "accepted", "Bullish"),
+    "critic_unsupported": ("Neutral", "downgraded", "Neutral"),
+    "patch_kept_record": ("Bearish", "downgraded", "Neutral"),
+    "patch_guard": ("Neutral", "downgraded", "Neutral"),
+    "patch_guard_record_mode": ("Very Bullish", "downgraded", "Very Bullish"),
+    "patch_after_accepted": ("Very Bullish", "accepted", "Bullish"),
+}
+
+
+def test_rating_check_variants_are_real_records(wire):
+    """`variants` holds the rating-check states one scripted run cannot
+    reach, each written by `reconcile_rating` / `enforce_after_patch` on the
+    captured memo's verdict. They overlay the captured body in the frontend
+    loader, so each must be a full record with the models' key sets."""
+    variants = wire["variants"]
+    assert set(variants) == set(VARIANT_STATES), RECAPTURE
+    for name, v in variants.items():
+        assert set(v) == {"rating_label", "confidence_score", "rating_reconciliation", "confidence"}
+        _same_keys(v["rating_reconciliation"], RatingReconciliation, f"variants.{name}.rating_reconciliation")
+        RatingReconciliation.model_validate(v["rating_reconciliation"])
+        _same_keys(v["confidence"], ConfidenceAssessment, f"variants.{name}.confidence")
+        ConfidenceAssessment.model_validate(v["confidence"])
+        rec = v["rating_reconciliation"]
+        assert (v["rating_label"], rec["outcome"], rec["final_rating"]) == VARIANT_STATES[name], name
+    # The note shapes the panel must word without printing machine terms.
+    assert "failed:" in variants["failed_reason"]["rating_reconciliation"]["note"]
+    assert "rating_reconciliation_mode=record" in variants["record_mode"]["rating_reconciliation"]["note"]
+    assert variants["failed_reason"]["rating_reconciliation"]["reason_checks"] == {
+        k: False for k in memo_quality.REASON_CHECKS}
+    # A patch-guard record carries no reason checks (a patch states no
+    # reason); the frontend tells it from a full-run record that way.
+    assert variants["patch_guard"]["rating_reconciliation"]["reason_checks"] == {}
+    assert variants["failed_reason"]["rating_reconciliation"]["reason_checks"]
+
+
+def test_pm_template_fixture_is_the_template_confidence_state(pm_template_wire):
+    """With the PM unscripted the template PM ships. The presenter hides its
+    view but shows the confidence (the quality stage stamps it `earned`),
+    so the PM's raw confidence in `quality.confidence` is a template's
+    number that no guard on `confidence_score` availability catches. The
+    panel keys on the `pm_template` cap instead; this pins that the
+    producer still writes exactly this state."""
+    memo = StockMemoOut.model_validate(pm_template_wire["memo"])
+    assert json.loads(memo.model_dump_json()) == pm_template_wire["memo"], RECAPTURE
+    _assert_quality_shape(pm_template_wire["memo"]["quality"], require_claims=False)
+    q = memo.quality
+    assert q is not None and q.confidence is not None
+    assert q.confidence.binding == "pm_template" and q.confidence.final < q.confidence.raw
+    sa = memo.section_availability or {}
+    assert sa["final_pm_view"].status == "unavailable"
+    assert sa["confidence_score"].status == "available"
+
+
+def test_field_paths_the_renderers_build(wire):
+    """The renderers look claims up by path strings they build themselves
+    (`claimsFor(memo, "key_risks[0].title")` and so on). Pin the formats
+    the frontend tests use against `number_check.iter_fields`, so a change
+    of path format fails here instead of silently dropping every mark."""
+    memo = StockMemoOut.model_validate(wire["memo"]).model_copy(deep=True)
+    memo.bull_case.key_points = ["a"]
+    memo.bear_case.key_points = ["a"]
+    memo.catalysts = [CatalystItem(title="a", detail="b")]
+    memo.key_risks = [RiskItem(title="a", detail="b")]
+    memo.thesis_breakers = [RiskItem(title="a", detail="b")]
+    memo.valuation_agent_view.key_points = ["a"]
+    paths = {spec.path for spec in number_check.iter_fields(memo)}
+    want = {
+        "final_pm_view", "one_sentence_thesis",
+        "mispricing_thesis.consensus_view", "mispricing_thesis.our_view", "mispricing_thesis.gap",
+        "bull_case.headline", "bull_case.key_points[0]", "bear_case.headline", "bear_case.key_points[0]",
+        "valuation_agent_view.headline", "valuation_agent_view.summary",
+        "valuation_agent_view.key_points[0]",
+        "catalysts[0].title", "catalysts[0].detail",
+        "key_risks[0].title", "key_risks[0].detail",
+        "thesis_breakers[0].title", "thesis_breakers[0].detail",
+    }
+    assert want <= paths, sorted(want - paths)
+
+
 def _scenario(memo: dict[str, Any]) -> dict[str, Any]:
     """The scripted scenario the UI tests read: the stored (flagged,
     assumption) claims with their offsets, the withheld point, the rating
@@ -178,6 +275,17 @@ def _scenario(memo: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _variant_scenario(variants: dict[str, Any]) -> dict[str, Any]:
+    """Each variant's outcome fields (the notes' numbers are DB-dependent)."""
+    keys = ("outcome", "pm_rating", "blended_rating", "final_rating", "valuation_verdict",
+            "divergence", "reason", "reason_checks", "critic_assessment")
+    return {
+        name: (v["rating_label"], {k: v["rating_reconciliation"][k] for k in keys},
+               [c["code"] for c in v["confidence"]["caps"]])
+        for name, v in variants.items()
+    }
+
+
 def test_fixture_is_what_the_pipeline_produces(wire):
     """Re-run the capture (demo data, scripted answers, no keys): the
     pipeline must still write the same `quality` SHAPE, and the scripted
@@ -189,3 +297,16 @@ def test_fixture_is_what_the_pipeline_produces(wire):
     _assert_quality_shape(fresh["memo"]["quality"])
     assert set(fresh["memo"]) == set(wire["memo"]), RECAPTURE
     assert _scenario(fresh["memo"]) == _scenario(wire["memo"]), RECAPTURE
+    assert _variant_scenario(fresh["variants"]) == _variant_scenario(wire["variants"]), RECAPTURE
+
+
+def test_pm_template_fixture_is_what_the_pipeline_produces(pm_template_wire):
+    fresh = capture.capture_pm_template()
+    _assert_quality_shape(fresh["memo"]["quality"], require_claims=False)
+    assert set(fresh["memo"]) == set(pm_template_wire["memo"]), RECAPTURE
+    got, want = fresh["memo"]["quality"]["confidence"], pm_template_wire["memo"]["quality"]["confidence"]
+    assert (got["binding"], [c["code"] for c in got["caps"]]) == (
+        want["binding"], [c["code"] for c in want["caps"]]), RECAPTURE
+    for key in ("final_pm_view", "confidence_score"):
+        assert (fresh["memo"]["section_availability"][key]["status"]
+                == pm_template_wire["memo"]["section_availability"][key]["status"]), (key, RECAPTURE)

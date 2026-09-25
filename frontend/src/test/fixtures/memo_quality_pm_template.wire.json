@@ -13,7 +13,7 @@
   "bear_case": {
    "headline": "Unavailable in this version.",
    "key_points": [
-    "DCF bear case implies $43.86 (-63%).",
+    "DCF bear case implies $22.54 (-81%).",
     "Risk lens: Multiple compression risk: EV/EBITDA 34.4x",
     "Risk lens: DCF bear scenario maps explicit downside"
    ]
@@ -21,7 +21,7 @@
   "bull_case": {
    "headline": "Unavailable in this version.",
    "key_points": [
-    "DCF bull case implies $73.90 (-37%)."
+    "DCF bull case implies $38.21 (-68%)."
    ]
   },
   "business_summary": "Designs GPUs and accelerated computing platforms for AI training and inference, gaming, professional visualization, and data center workloads.",
@@ -75,19 +75,19 @@
    ],
    "summary": "Peer set: AMD, AVGO, INTC, QCOM. Trades at a +24.9% premium to peers on EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median."
   },
-  "confidence_score": 45.0,
+  "confidence_score": 40.0,
   "dcf_initial_summary": {},
   "dcf_pm_adjustment_headline": "",
   "dcf_pm_adjustments": [],
   "dcf_summary": {
-   "base_implied_price": 57.58452502903146,
-   "base_upside": -0.5119955506014283,
-   "bear_implied_price": 43.862010429313834,
-   "bear_upside": -0.6282880472092047,
-   "bull_implied_price": 73.90063209210219,
-   "bull_upside": -0.37372345684659164,
+   "base_implied_price": 29.728008925248943,
+   "base_upside": -0.7480677209724665,
+   "bear_implied_price": 22.541425312779406,
+   "bear_upside": -0.8089709719255982,
+   "bull_implied_price": 38.21417633855288,
+   "bull_upside": -0.6761510479783654,
    "current_price": 118.0,
-   "summary": "Base case implied price $57.58 vs current $118.00 (-51.2%). Bull $73.90 (-37.4%) | Bear $43.86 (-62.8%). ⚠ Model warnings: 0 errors, 1 warns",
+   "summary": "Base case implied price $29.73 vs current $118.00 (-74.8%). Bull $38.21 (-67.6%) | Bear $22.54 (-80.9%). ⚠ Model warnings: 0 errors, 1 warns",
    "terminal_growth": 0.025,
    "tv_clamped": false,
    "wacc": 0.1123
@@ -129,6 +129,11 @@
     "message": "LLM returned no usable proposal; DCF kept consensus assumptions"
    },
    {
+    "agent": "PM Synthesis",
+    "error_type": "DeterministicFallback",
+    "message": "LLM returned no usable synthesis; deterministic PM view shipped"
+   },
+   {
     "agent": "Fundamental Scorecard",
     "error_type": "DataUnavailable",
     "message": "no scorecard row on file for NVDA; section renders n/a"
@@ -147,6 +152,7 @@
    "Macro Analyst",
    "Technical Analyst",
    "PM DCF Adjuster",
+   "PM Synthesis",
    "Fundamental Scorecard",
    "Risk Committee"
   ],
@@ -183,10 +189,10 @@
    ],
    "summary": "Unavailable in this version."
   },
-  "final_pm_view": "Final rating after risk review, factor blend, valuation check and evidence cap on confidence: Neutral (confidence 45/100).\n\nPM rationale before those adjustments (rating Bullish; confidence 79.4655/100):\nData-center revenue of $123.45B anchors the call. We assume revenue growth of 18.5% through FY2027 as hyperscaler capex stays elevated.",
-  "final_verdict": "PM final view: Neutral (confidence 45). NVDA compounds data-center share faster than the market prices, but the multiple already assumes much of it. Watch items: Custom-silicon competition",
+  "final_pm_view": "Unavailable in this version.",
+  "final_verdict": "Unavailable in this version.",
   "forward_catalysts": [],
-  "generated_at": "2026-09-25T04:33:57.219540",
+  "generated_at": "2026-09-25T04:33:58.216846",
   "generation_mode": "demo",
   "intake_decision": {},
   "key_risks": [
@@ -227,21 +233,24 @@
   },
   "macro_snapshot_at_memo": {},
   "mispricing_thesis": {
-   "consensus_view": "The market treats the AI build-out as a one-cycle spike.",
-   "falsifiers": [
-    "Two consecutive quarters of data-center revenue decline"
-   ],
-   "gap": "Duration of data-center demand.",
-   "our_view": "Share gains in networking and software extend the cycle to $456.78B."
+   "consensus_view": "Unavailable in this version.",
+   "falsifiers": [],
+   "gap": "Unavailable in this version.",
+   "our_view": "Unavailable in this version."
   },
-  "one_sentence_thesis": "NVDA compounds data-center share faster than the market prices, but the multiple already assumes much of it.",
+  "one_sentence_thesis": "Unavailable in this version.",
   "portfolio_fit": "Unavailable in this version.",
   "price_at_memo": 118.0,
-  "price_at_memo_at": "2026-09-25T04:33:57.219280",
+  "price_at_memo_at": "2026-09-25T04:33:58.216643",
   "quality": {
    "confidence": {
-    "binding": "template_sections",
+    "binding": "pm_template",
     "caps": [
+     {
+      "cap": 40.0,
+      "code": "pm_template",
+      "detail": "The PM synthesis was template-filled."
+     },
      {
       "cap": 45.0,
       "code": "template_sections",
@@ -251,70 +260,26 @@
       "cap": 60.0,
       "code": "critic_not_live",
       "detail": "No live critic review (review mode: rule_based)."
-     },
-     {
-      "cap": 70.0,
-      "code": "untraceable_figures",
-      "detail": "3 distinct figure(s) not found in the data the analysts were given (3 of 50 checked)."
      }
     ],
-    "final": 45.0,
-    "raw": 74.46545454545455
+    "final": 40.0,
+    "raw": 48.300000000000004
    },
    "number_check": {
-    "assumptions": [
-     {
-      "basis_ref": "financials:NVDA",
-      "horizon": "FY2027",
-      "status": "assumption",
-      "unit": "pct",
-      "value": 18.5
-     }
-    ],
+    "assumptions": [],
     "checked": true,
-    "claims": [
-     {
-      "end": 235,
-      "field": "final_pm_view",
-      "raw": "$123.45B",
-      "source_refs": [],
-      "start": 227,
-      "status": "untraceable",
-      "unit": "usd",
-      "value": 123450000000.0
-     },
-     {
-      "end": 67,
-      "field": "mispricing_thesis.our_view",
-      "raw": "$456.78B",
-      "source_refs": [],
-      "start": 59,
-      "status": "untraceable",
-      "unit": "usd",
-      "value": 456780000000.0
-     },
-     {
-      "end": 287,
-      "field": "final_pm_view",
-      "raw": "18.5%",
-      "source_refs": [],
-      "start": 282,
-      "status": "assumption",
-      "unit": "pct",
-      "value": 18.5
-     }
-    ],
+    "claims": [],
     "counts": {
-     "assumption": 1,
-     "claims_total": 50,
+     "assumption": 0,
+     "claims_total": 53,
      "fields_checked": 70,
-     "flagged_distinct": 3,
+     "flagged_distinct": 1,
      "mis_anchored": 0,
      "registry_facts": 1392,
      "registry_sources": 26,
      "threshold": 0,
-     "traced": 47,
-     "untraceable": 3,
+     "traced": 52,
+     "untraceable": 1,
      "weak": 0,
      "withheld": 1
     },
@@ -329,9 +294,9 @@
     "sources_cited": [
      "dcf:initial",
      "dcf_summary:NVDA",
+     "comps:NVDA",
      "financials:NVDA",
      "risk_inputs:NVDA",
-     "comps:NVDA",
      "sector:NVDA",
      "sector_context:NVDA",
      "macro:snapshot",
@@ -367,10 +332,10 @@
     "critic_assessment": "not_assessed",
     "divergence": true,
     "final_rating": "Neutral",
-    "note": "Rating set to Neutral: the blended rating was Bullish but the valuation evidence reads overvalued, and no reason was given. Net read: overvalued (EV/EBITDA 25% premium vs peers, rich; consensus DCF base case -51% to fair value, rich).",
+    "note": "Rating set to Neutral: the blended rating was Bullish but the valuation evidence reads overvalued, and no reason was given. Net read: overvalued (EV/EBITDA 25% premium vs peers, rich; consensus DCF base case -75% to fair value, rich).",
     "outcome": "downgraded",
-    "pm_confidence": 82.0,
-    "pm_rating": "Bullish",
+    "pm_confidence": 55.0,
+    "pm_rating": "Neutral",
     "reason": "",
     "reason_checks": {
      "names_signal": false,
@@ -496,8 +461,8 @@
         {
          "applied_change": {
           "field": "confidence_score",
-          "from": 79.46545454545455,
-          "to": 74.46545454545455
+          "from": 53.300000000000004,
+          "to": 48.300000000000004
          },
          "detail": "EV/EBITDA 34.4x is rich",
          "direction": "lower",
@@ -598,7 +563,7 @@
         "section": null
        },
        {
-        "excerpt": "Base case implied price $57.58 vs current $118.00 (-51.2%). Bull $73.90 (-37.4%) | Bear $43.86 (-62.8%). ⚠ Model warnings: 0 errors, 1 warns",
+        "excerpt": "Base case implied price $29.73 vs current $118.00 (-74.8%). Bull $38.21 (-67.6%) | Bear $22.54 (-80.9%). ⚠ Model warnings: 0 errors, 1 warns",
         "kind": "dcf",
         "ref": "NVDA",
         "section": null
@@ -1927,7 +1892,7 @@
       "data": {},
       "evidence": [
        {
-        "excerpt": "Base case implied price $57.58 vs current $118.00 (-51.2%). Bull $73.90 (-37.4%) | Bear $43.86 (-62.8%). ⚠ Model warnings: 0 errors, 1 warns",
+        "excerpt": "Base case implied price $29.73 vs current $118.00 (-74.8%). Bull $38.21 (-67.6%) | Bear $22.54 (-80.9%). ⚠ Model warnings: 0 errors, 1 warns",
         "kind": "dcf",
         "ref": "NVDA",
         "section": null
@@ -1986,8 +1951,8 @@
   "scorecard": null,
   "scores": {
    "beat_streak": 0.0,
-   "blended_pm_score": 70.2,
-   "confidence": 45.0,
+   "blended_pm_score": 62.2,
+   "confidence": 40.0,
    "deep_research_questions": 0.0,
    "deep_research_rounds": 1.0,
    "evidence_quality": 92.3,
@@ -2000,9 +1965,9 @@
    "factor_risk": 72.0,
    "factor_valuation": 11.1,
    "guidance_net_direction": 0.0,
-   "llm_rating_score": 70.0,
+   "llm_rating_score": 50.0,
    "llm_rating_weight": 0.4,
-   "raw_confidence": 82.0,
+   "raw_confidence": 55.0,
    "risk_confidence": 70.0,
    "risk_recs_applied": 3.0,
    "sector_confidence": 78.0,
@@ -2103,20 +2068,22 @@
     "status": "unavailable"
    },
    "final_pm_view": {
-    "basis": [],
-    "headline_hidden": false,
-    "hidden_items": 0,
-    "reason": null,
-    "status": "available"
-   },
-   "final_verdict": {
     "basis": [
-     "stripped:key_disagreement"
+     "signature:pm_view_tail"
     ],
     "headline_hidden": false,
     "hidden_items": 0,
-    "reason": "partial_template",
-    "status": "degraded"
+    "reason": "template_fallback",
+    "status": "unavailable"
+   },
+   "final_verdict": {
+    "basis": [
+     "derived:thesis_or_confidence"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "derived_from_hidden",
+    "status": "unavailable"
    },
    "forward_catalysts": {
     "basis": [],
@@ -2142,18 +2109,23 @@
     "status": "unavailable"
    },
    "mispricing_thesis": {
-    "basis": [],
+    "basis": [
+     "provenance:mispricing=fallback"
+    ],
     "headline_hidden": false,
     "hidden_items": 0,
-    "reason": null,
-    "status": "available"
+    "reason": "template_fallback",
+    "status": "unavailable"
    },
    "one_sentence_thesis": {
-    "basis": [],
+    "basis": [
+     "event:PM Synthesis/DeterministicFallback",
+     "signature:pm_view_tail"
+    ],
     "headline_hidden": false,
     "hidden_items": 0,
-    "reason": null,
-    "status": "available"
+    "reason": "template_fallback",
+    "status": "unavailable"
    },
    "portfolio_fit": {
     "basis": [
@@ -2165,11 +2137,14 @@
     "status": "unavailable"
    },
    "rating_label": {
-    "basis": [],
+    "basis": [
+     "event:PM Synthesis/DeterministicFallback",
+     "signature:pm_view_tail"
+    ],
     "headline_hidden": false,
     "hidden_items": 0,
-    "reason": null,
-    "status": "available"
+    "reason": "pm_view_unavailable",
+    "status": "degraded"
    },
    "risk_committee_challenge": {
     "basis": [
@@ -2258,7 +2233,7 @@
   "section_provenance": {
    "confidence": "earned",
    "llm_configured": true,
-   "mispricing": "pm",
+   "mispricing": "fallback",
    "thesis": "pm",
    "v": 1
   },
@@ -3598,7 +3573,7 @@
    "data": {},
    "evidence": [
     {
-     "excerpt": "Base case implied price $57.58 vs current $118.00 (-51.2%). Bull $73.90 (-37.4%) | Bear $43.86 (-62.8%). ⚠ Model warnings: 0 errors, 1 warns",
+     "excerpt": "Base case implied price $29.73 vs current $118.00 (-74.8%). Bull $38.21 (-67.6%) | Bear $22.54 (-80.9%). ⚠ Model warnings: 0 errors, 1 warns",
      "kind": "dcf",
      "ref": "NVDA",
      "section": null
@@ -3644,7 +3619,7 @@
   "valuation_verdict": {
    "basis": "evidence",
    "comps_ev_ebitda_premium": 0.249,
-   "dcf_base_upside": -0.5119955506014283,
+   "dcf_base_upside": -0.7480677209724665,
    "factor_valuation": 11.1,
    "signals": {
     "available": [
@@ -3657,14 +3632,14 @@
      "vote": -1
     },
     "dcf_initial": {
-     "display": "-51%",
+     "display": "-75%",
      "tv_clamped": false,
-     "upside": -0.5119955506014283,
+     "upside": -0.7480677209724665,
      "vote": -1
     },
     "dcf_pm_adjusted": {
-     "display": "-51%",
-     "upside": -0.5119955506014283,
+     "display": "-75%",
+     "upside": -0.7480677209724665,
      "vote": null
     },
     "method": "centred-v1",
@@ -3673,43 +3648,15 @@
      "dcf_initial": -1
     }
    },
-   "summary": "Net read: overvalued (EV/EBITDA 25% premium vs peers, rich; consensus DCF base case -51% to fair value, rich).",
+   "summary": "Net read: overvalued (EV/EBITDA 25% premium vs peers, rich; consensus DCF base case -75% to fair value, rich).",
    "verdict": "overvalued"
   }
  },
  "meta": {
-  "expect": {
-   "declared_assumption": "18.5%",
-   "fabricated_pm_figure": "$123.45B",
-   "fabricated_view_figure": "$456.78B",
-   "withheld_point": "Hidden optionality worth $987.65B"
-  },
-  "generated_by": "python -m app.scripts.capture_memo_quality_fixture — graph.run_stock_memo on demo data with two scripted model answers, then memo_sections.present_memo, serialized as the API does",
+  "generated_by": "python -m app.scripts.capture_memo_quality_fixture — graph.run_stock_memo on demo data with two scripted model answers, then memo_sections.present_memo, serialized as the API does (PM synthesis NOT scripted)",
   "presentation_version": 1,
   "scripted": {
-   "everything_else": "no answer (deterministic fallback; the critic is rule-based)",
-   "pm_synthesis": {
-    "confidence_score": 82,
-    "final_pm_view": "Data-center revenue of $123.45B anchors the call. We assume revenue growth of 18.5% through FY2027 as hyperscaler capex stays elevated.",
-    "forecast_assumptions": [
-     {
-      "basis_ref": "financials:NVDA",
-      "horizon": "FY2027",
-      "unit": "pct",
-      "value": 18.5
-     }
-    ],
-    "mispricing_thesis": {
-     "consensus_view": "The market treats the AI build-out as a one-cycle spike.",
-     "falsifiers": [
-      "Two consecutive quarters of data-center revenue decline"
-     ],
-     "gap": "Duration of data-center demand.",
-     "our_view": "Share gains in networking and software extend the cycle to $456.78B."
-    },
-    "one_sentence_thesis": "NVDA compounds data-center share faster than the market prices, but the multiple already assumes much of it.",
-    "rating_label": "Bullish"
-   },
+   "everything_else": "no answer (the PM synthesis is template-filled; the critic is rule-based)",
    "valuation_analyst": {
     "confidence": 0.7,
     "headline": "Valuation view",
@@ -3720,413 +3667,8 @@
      "FCF yield 2.0%"
     ],
     "summary": "Multiples look full against the DCF."
-   },
-   "variant_reasons": {
-    "quoted": "The EV/EBITDA premium of 25% vs peers understates durable networking and software share gains that extend data-center demand for several more years.",
-    "thin": "We think the market underestimates growth."
    }
   },
   "ticker": "NVDA"
- },
- "variants": {
-  "accepted_supported": {
-   "confidence": {
-    "binding": "template_sections",
-    "caps": [
-     {
-      "cap": 45.0,
-      "code": "template_sections",
-      "detail": "3 core analyst section(s) template-filled: sector_agent_view, earnings_agent_view, filing_agent_view."
-     },
-     {
-      "cap": 60.0,
-      "code": "critic_not_live",
-      "detail": "No live critic review (review mode: rule_based)."
-     },
-     {
-      "cap": 70.0,
-      "code": "untraceable_figures",
-      "detail": "3 distinct figure(s) not found in the data the analysts were given (3 of 50 checked)."
-     }
-    ],
-    "final": 45.0,
-    "raw": 74.46545454545455
-   },
-   "confidence_score": 45.0,
-   "rating_label": "Bullish",
-   "rating_reconciliation": {
-    "blended_rating": "Bullish",
-    "critic_assessment": "supported",
-    "divergence": true,
-    "final_rating": "Bullish",
-    "note": "Rated Bullish although the valuation evidence reads overvalued. PM's reason: The EV/EBITDA premium of 25% vs peers understates durable networking and software share gains that extend data-center demand for several more years. (critic: supported).",
-    "outcome": "accepted",
-    "pm_confidence": 82.0,
-    "pm_rating": "Bullish",
-    "reason": "The EV/EBITDA premium of 25% vs peers understates durable networking and software share gains that extend data-center demand for several more years.",
-    "reason_checks": {
-     "names_signal": true,
-     "quotes_value": true,
-     "substantive": true
-    },
-    "valuation_verdict": "overvalued"
-   }
-  },
-  "accepted_unreviewed": {
-   "confidence": {
-    "binding": "template_sections",
-    "caps": [
-     {
-      "cap": 45.0,
-      "code": "template_sections",
-      "detail": "3 core analyst section(s) template-filled: sector_agent_view, earnings_agent_view, filing_agent_view."
-     },
-     {
-      "cap": 60.0,
-      "code": "critic_not_live",
-      "detail": "No live critic review (review mode: rule_based)."
-     },
-     {
-      "cap": 70.0,
-      "code": "untraceable_figures",
-      "detail": "3 distinct figure(s) not found in the data the analysts were given (3 of 50 checked)."
-     }
-    ],
-    "final": 45.0,
-    "raw": 74.46545454545455
-   },
-   "confidence_score": 45.0,
-   "rating_label": "Bullish",
-   "rating_reconciliation": {
-    "blended_rating": "Bullish",
-    "critic_assessment": "not_assessed",
-    "divergence": true,
-    "final_rating": "Bullish",
-    "note": "Rated Bullish although the valuation evidence reads overvalued. PM's reason: The EV/EBITDA premium of 25% vs peers understates durable networking and software share gains that extend data-center demand for several more years. (not independently reviewed).",
-    "outcome": "accepted",
-    "pm_confidence": 82.0,
-    "pm_rating": "Bullish",
-    "reason": "The EV/EBITDA premium of 25% vs peers understates durable networking and software share gains that extend data-center demand for several more years.",
-    "reason_checks": {
-     "names_signal": true,
-     "quotes_value": true,
-     "substantive": true
-    },
-    "valuation_verdict": "overvalued"
-   }
-  },
-  "critic_unsupported": {
-   "confidence": {
-    "binding": "template_sections",
-    "caps": [
-     {
-      "cap": 45.0,
-      "code": "template_sections",
-      "detail": "3 core analyst section(s) template-filled: sector_agent_view, earnings_agent_view, filing_agent_view."
-     },
-     {
-      "cap": 60.0,
-      "code": "critic_not_live",
-      "detail": "No live critic review (review mode: rule_based)."
-     },
-     {
-      "cap": 70.0,
-      "code": "untraceable_figures",
-      "detail": "3 distinct figure(s) not found in the data the analysts were given (3 of 50 checked)."
-     }
-    ],
-    "final": 45.0,
-    "raw": 74.46545454545455
-   },
-   "confidence_score": 45.0,
-   "rating_label": "Neutral",
-   "rating_reconciliation": {
-    "blended_rating": "Bullish",
-    "critic_assessment": "unsupported",
-    "divergence": true,
-    "final_rating": "Neutral",
-    "note": "Rating set to Neutral: the blended rating was Bullish but the valuation evidence reads overvalued, and the live critic judged the stated reason unsupported. Net read: overvalued (EV/EBITDA 25% premium vs peers, rich; consensus DCF base case -51% to fair value, rich).",
-    "outcome": "downgraded",
-    "pm_confidence": 82.0,
-    "pm_rating": "Bullish",
-    "reason": "The EV/EBITDA premium of 25% vs peers understates durable networking and software share gains that extend data-center demand for several more years.",
-    "reason_checks": {
-     "names_signal": true,
-     "quotes_value": true,
-     "substantive": true
-    },
-    "valuation_verdict": "overvalued"
-   }
-  },
-  "failed_reason": {
-   "confidence": {
-    "binding": "template_sections",
-    "caps": [
-     {
-      "cap": 45.0,
-      "code": "template_sections",
-      "detail": "3 core analyst section(s) template-filled: sector_agent_view, earnings_agent_view, filing_agent_view."
-     },
-     {
-      "cap": 60.0,
-      "code": "critic_not_live",
-      "detail": "No live critic review (review mode: rule_based)."
-     },
-     {
-      "cap": 70.0,
-      "code": "untraceable_figures",
-      "detail": "3 distinct figure(s) not found in the data the analysts were given (3 of 50 checked)."
-     }
-    ],
-    "final": 45.0,
-    "raw": 74.46545454545455
-   },
-   "confidence_score": 45.0,
-   "rating_label": "Neutral",
-   "rating_reconciliation": {
-    "blended_rating": "Bullish",
-    "critic_assessment": "not_assessed",
-    "divergence": true,
-    "final_rating": "Neutral",
-    "note": "Rating set to Neutral: the blended rating was Bullish but the valuation evidence reads overvalued, and the stated reason was not substantive enough (failed: substantive, names_signal, quotes_value). Net read: overvalued (EV/EBITDA 25% premium vs peers, rich; consensus DCF base case -51% to fair value, rich).",
-    "outcome": "downgraded",
-    "pm_confidence": 82.0,
-    "pm_rating": "Bullish",
-    "reason": "We think the market underestimates growth.",
-    "reason_checks": {
-     "names_signal": false,
-     "quotes_value": false,
-     "substantive": false
-    },
-    "valuation_verdict": "overvalued"
-   }
-  },
-  "patch_after_accepted": {
-   "confidence": {
-    "binding": null,
-    "caps": [
-     {
-      "cap": 45.0,
-      "code": "template_sections",
-      "detail": "3 core analyst section(s) template-filled: sector_agent_view, earnings_agent_view, filing_agent_view."
-     },
-     {
-      "cap": 60.0,
-      "code": "critic_not_live",
-      "detail": "No live critic review (review mode: rule_based)."
-     },
-     {
-      "cap": 70.0,
-      "code": "untraceable_figures",
-      "detail": "3 distinct figure(s) not found in the data the analysts were given (3 of 50 checked)."
-     },
-     {
-      "cap": 45.0,
-      "code": "last_full_run",
-      "detail": "A news update may lower confidence but never raise it above the last full run."
-     }
-    ],
-    "final": 45.0,
-    "raw": 45.0
-   },
-   "confidence_score": 45.0,
-   "rating_label": "Very Bullish",
-   "rating_reconciliation": {
-    "blended_rating": "Bullish",
-    "critic_assessment": "not_assessed",
-    "divergence": true,
-    "final_rating": "Bullish",
-    "note": "Rated Bullish although the valuation evidence reads overvalued. PM's reason: The EV/EBITDA premium of 25% vs peers understates durable networking and software share gains that extend data-center demand for several more years. (not independently reviewed).",
-    "outcome": "accepted",
-    "pm_confidence": 82.0,
-    "pm_rating": "Bullish",
-    "reason": "The EV/EBITDA premium of 25% vs peers understates durable networking and software share gains that extend data-center demand for several more years.",
-    "reason_checks": {
-     "names_signal": true,
-     "quotes_value": true,
-     "substantive": true
-    },
-    "valuation_verdict": "overvalued"
-   }
-  },
-  "patch_guard": {
-   "confidence": {
-    "binding": null,
-    "caps": [
-     {
-      "cap": 45.0,
-      "code": "template_sections",
-      "detail": "3 core analyst section(s) template-filled: sector_agent_view, earnings_agent_view, filing_agent_view."
-     },
-     {
-      "cap": 60.0,
-      "code": "critic_not_live",
-      "detail": "No live critic review (review mode: rule_based)."
-     },
-     {
-      "cap": 70.0,
-      "code": "untraceable_figures",
-      "detail": "3 distinct figure(s) not found in the data the analysts were given (3 of 50 checked)."
-     },
-     {
-      "cap": 45.0,
-      "code": "last_full_run",
-      "detail": "A news update may lower confidence but never raise it above the last full run."
-     }
-    ],
-    "final": 45.0,
-    "raw": 45.0
-   },
-   "confidence_score": 45.0,
-   "rating_label": "Neutral",
-   "rating_reconciliation": {
-    "blended_rating": "Very Bullish",
-    "critic_assessment": "not_assessed",
-    "divergence": true,
-    "final_rating": "Neutral",
-    "note": "A news update moved the rating to Very Bullish against the valuation evidence (overvalued) without a valuation reason; rating set to Neutral.",
-    "outcome": "downgraded",
-    "pm_confidence": null,
-    "pm_rating": "Very Bullish",
-    "reason": "",
-    "reason_checks": {},
-    "valuation_verdict": "overvalued"
-   }
-  },
-  "patch_guard_record_mode": {
-   "confidence": {
-    "binding": null,
-    "caps": [
-     {
-      "cap": 45.0,
-      "code": "template_sections",
-      "detail": "3 core analyst section(s) template-filled: sector_agent_view, earnings_agent_view, filing_agent_view."
-     },
-     {
-      "cap": 60.0,
-      "code": "critic_not_live",
-      "detail": "No live critic review (review mode: rule_based)."
-     },
-     {
-      "cap": 70.0,
-      "code": "untraceable_figures",
-      "detail": "3 distinct figure(s) not found in the data the analysts were given (3 of 50 checked)."
-     },
-     {
-      "cap": 45.0,
-      "code": "last_full_run",
-      "detail": "A news update may lower confidence but never raise it above the last full run."
-     }
-    ],
-    "final": 45.0,
-    "raw": 45.0
-   },
-   "confidence_score": 45.0,
-   "rating_label": "Very Bullish",
-   "rating_reconciliation": {
-    "blended_rating": "Very Bullish",
-    "critic_assessment": "not_assessed",
-    "divergence": true,
-    "final_rating": "Very Bullish",
-    "note": "Recorded only (rating_reconciliation_mode=record); not enforced. A news update moved the rating to Very Bullish against the valuation evidence (overvalued) without a valuation reason; rating set to Neutral.",
-    "outcome": "downgraded",
-    "pm_confidence": null,
-    "pm_rating": "Very Bullish",
-    "reason": "",
-    "reason_checks": {},
-    "valuation_verdict": "overvalued"
-   }
-  },
-  "patch_kept_record": {
-   "confidence": {
-    "binding": null,
-    "caps": [
-     {
-      "cap": 45.0,
-      "code": "template_sections",
-      "detail": "3 core analyst section(s) template-filled: sector_agent_view, earnings_agent_view, filing_agent_view."
-     },
-     {
-      "cap": 60.0,
-      "code": "critic_not_live",
-      "detail": "No live critic review (review mode: rule_based)."
-     },
-     {
-      "cap": 70.0,
-      "code": "untraceable_figures",
-      "detail": "3 distinct figure(s) not found in the data the analysts were given (3 of 50 checked)."
-     },
-     {
-      "cap": 45.0,
-      "code": "last_full_run",
-      "detail": "A news update may lower confidence but never raise it above the last full run."
-     }
-    ],
-    "final": 45.0,
-    "raw": 45.0
-   },
-   "confidence_score": 45.0,
-   "rating_label": "Bearish",
-   "rating_reconciliation": {
-    "blended_rating": "Bullish",
-    "critic_assessment": "not_assessed",
-    "divergence": true,
-    "final_rating": "Neutral",
-    "note": "Rating set to Neutral: the blended rating was Bullish but the valuation evidence reads overvalued, and no reason was given. Net read: overvalued (EV/EBITDA 25% premium vs peers, rich; consensus DCF base case -51% to fair value, rich).",
-    "outcome": "downgraded",
-    "pm_confidence": 82.0,
-    "pm_rating": "Bullish",
-    "reason": "",
-    "reason_checks": {
-     "names_signal": false,
-     "quotes_value": false,
-     "substantive": false
-    },
-    "valuation_verdict": "overvalued"
-   }
-  },
-  "record_mode": {
-   "confidence": {
-    "binding": "template_sections",
-    "caps": [
-     {
-      "cap": 45.0,
-      "code": "template_sections",
-      "detail": "3 core analyst section(s) template-filled: sector_agent_view, earnings_agent_view, filing_agent_view."
-     },
-     {
-      "cap": 60.0,
-      "code": "critic_not_live",
-      "detail": "No live critic review (review mode: rule_based)."
-     },
-     {
-      "cap": 70.0,
-      "code": "untraceable_figures",
-      "detail": "3 distinct figure(s) not found in the data the analysts were given (3 of 50 checked)."
-     }
-    ],
-    "final": 45.0,
-    "raw": 74.46545454545455
-   },
-   "confidence_score": 45.0,
-   "rating_label": "Bullish",
-   "rating_reconciliation": {
-    "blended_rating": "Bullish",
-    "critic_assessment": "not_assessed",
-    "divergence": true,
-    "final_rating": "Bullish",
-    "note": "Recorded only (rating_reconciliation_mode=record); not enforced. Rating set to Neutral: the blended rating was Bullish but the valuation evidence reads overvalued, and no reason was given. Net read: overvalued (EV/EBITDA 25% premium vs peers, rich; consensus DCF base case -51% to fair value, rich).",
-    "outcome": "downgraded",
-    "pm_confidence": 82.0,
-    "pm_rating": "Bullish",
-    "reason": "",
-    "reason_checks": {
-     "names_signal": false,
-     "quotes_value": false,
-     "substantive": false
-    },
-    "valuation_verdict": "overvalued"
-   }
-  }
  }
 }
