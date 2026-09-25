@@ -19,6 +19,15 @@ import {
   UNPRICED_DCF_SUMMARY,
   makeMemo,
 } from "@/test/fixtures/memo";
+import {
+  QUALITY_EXPECT,
+  qualityMemo,
+  qualityMemoConfidenceHidden,
+  qualityMemoPmTemplate,
+  qualityMemoWithClaimAt,
+  qualityVariant,
+} from "@/test/fixtures/memoQuality";
+import { CHECKED_CONFIDENCE_TOOLTIP } from "@/lib/memoQuality";
 import type { StockMemoOut } from "@/types";
 
 // MemoryRouter because CrossSectorChips renders react-router <Link>s when
@@ -371,5 +380,214 @@ describe("MemoCard W2a banner and notes (review fixes)", () => {
     ) as HTMLElement;
     expect(within(misp).getByText("Where We Differ From Consensus")).toBeInTheDocument();
     expect(within(misp).getByText(REASON_TEXT.not_produced)).toBeInTheDocument();
+  });
+});
+
+describe("MemoCard W2b research checks", () => {
+  it("renders a legacy memo (no quality) exactly as a memo whose quality is null, with nothing new", () => {
+    const legacy = renderCard(makeMemo());
+    const html = legacy.container.innerHTML;
+    legacy.unmount();
+    const nulled = renderCard(makeMemo({ quality: null }));
+    expect(nulled.container.innerHTML).toBe(html);
+    expect(screen.queryByTestId("research-checks")).toBeNull();
+    expect(screen.queryByTestId("rating-reconciliation-note")).toBeNull();
+    expect(screen.queryByTestId("confidence-capped")).toBeNull();
+    expect(nulled.container.querySelector("[data-claim-status]")).toBeNull();
+    // The legacy tooltip still describes how a pre-W2b number was made.
+    expect(nulled.container.querySelector('[title^="How sure the PM is"]')).not.toBeNull();
+    nulled.unmount();
+    for (const name of PRESENTED_MEMO_NAMES) {
+      const { container, unmount } = renderCard(presentedMemo(name));
+      expect(container.querySelector('[data-testid="research-checks"], [data-claim-status]')).toBeNull();
+      unmount();
+    }
+    // The contrast that makes the absence meaningful: the captured W2b memo
+    // does carry every one of them.
+    const { container } = renderCard(qualityMemo());
+    expect(container.querySelector('[data-testid="research-checks"]')).not.toBeNull();
+    expect(container.querySelector("[data-claim-status]")).not.toBeNull();
+  });
+
+  it("shows the Research checks panel and marks the untraceable PM figure in place", () => {
+    const memo = qualityMemo();
+    const { container } = renderCard(memo);
+    expect(within(screen.getByTestId("research-checks")).getByText("Research checks")).toBeInTheDocument();
+    // The panel adds no placeholder: the banner still counts exactly the
+    // ones the card shows on this captured presented memo.
+    const banner = screen.getByTestId("unavailable-count");
+    expect(Number(/(\d+) sections? unavailable/.exec(banner.textContent ?? "")![1])).toBe(
+      countedPlaceholders(memo, container).length,
+    );
+    const marked = Array.from(document.querySelectorAll('[data-claim-status="untraceable"]')).map((e) => e.textContent);
+    expect(marked).toEqual([QUALITY_EXPECT.fabricated_pm_figure, QUALITY_EXPECT.fabricated_view_figure]);
+    expect(document.querySelector('[data-claim-status="assumption"]')).toHaveTextContent(
+      QUALITY_EXPECT.declared_assumption,
+    );
+    // The withheld point is gone from the valuation card; the panel keeps
+    // it behind its disclosure.
+    expect(document.body.textContent).not.toContain(QUALITY_EXPECT.withheld_point);
+  });
+
+  it("puts the downgrade note under the rating badge", () => {
+    renderCard(qualityMemo());
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(
+      "Set to Neutral: a Bullish call conflicted with the valuation evidence (overvalued) without a supported reason.",
+    );
+  });
+
+  it("notes an accepted divergence under the badge, and nothing for a consistent rating", () => {
+    const a = renderCard(qualityVariant("accepted_unreviewed"));
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(
+      "Bullish despite overvalued valuation evidence, on the PM's stated reason (not independently reviewed).",
+    );
+    a.unmount();
+    const s = renderCard(qualityVariant("accepted_supported"));
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(
+      "Bullish despite overvalued valuation evidence, on the PM's stated reason (reviewed and supported).",
+    );
+    s.unmount();
+    const consistent = qualityMemo();
+    consistent.quality!.rating_reconciliation!.outcome = "consistent";
+    renderCard(consistent);
+    expect(screen.queryByTestId("rating-reconciliation-note")).toBeNull();
+  });
+
+  it("never says the check set a rating it did not set (record mode)", () => {
+    // `reconcile_rating(enforce=False)`: outcome downgraded, rating left Bullish.
+    renderCard(qualityVariant("record_mode"));
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(
+      "Kept at Bullish: the call conflicts with the valuation evidence (overvalued), but the rating check is recording only, not changing ratings.",
+    );
+    expect(screen.getByTestId("rating-reconciliation-note")).not.toHaveTextContent(/Set to/);
+  });
+
+  it("drops the badge note when a news patch moved the rating away from the record", () => {
+    // `enforce_after_patch` re-checks only a move against the evidence, so
+    // these patches leave the full run's record under a different rating.
+    for (const name of ["patch_kept_record", "patch_after_accepted"] as const) {
+      const memo = qualityVariant(name);
+      expect(memo.quality!.rating_reconciliation!.final_rating).not.toBe(memo.rating_label);
+      const r = renderCard(memo);
+      expect(screen.queryByTestId("rating-reconciliation-note")).toBeNull();
+      // The panel says the check is from the last full run instead.
+      expect(screen.getByTestId("research-checks-rating")).toHaveTextContent(
+        `A news update has since moved the rating to ${memo.rating_label}; this check describes the last full run.`,
+      );
+      r.unmount();
+    }
+  });
+
+  it("words the news-patch guard's downgrade, and its record mode", () => {
+    const g = renderCard(qualityVariant("patch_guard"));
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(
+      "Set to Neutral: a news update moved the call to Very Bullish against the valuation evidence (overvalued).",
+    );
+    g.unmount();
+    renderCard(qualityVariant("patch_guard_record_mode"));
+    expect(screen.getByTestId("rating-reconciliation-note")).toHaveTextContent(
+      "Kept at Very Bullish: the call conflicts with the valuation evidence (overvalued), but the rating check is recording only, not changing ratings.",
+    );
+  });
+
+  // Every CheckedText call site on the card, each with one real stored
+  // claim re-pointed at it (`qualityMemoWithClaimAt`).
+  const CARD_SITES = [
+    "one_sentence_thesis",
+    "final_pm_view",
+    "mispricing_thesis.consensus_view",
+    "mispricing_thesis.our_view",
+    "mispricing_thesis.gap",
+    "valuation_agent_view.headline",
+    "valuation_agent_view.summary",
+    "valuation_agent_view.key_points[0]",
+    "earnings_agent_view.summary",
+    "bull_case.headline",
+    "bull_case.key_points[0]",
+    "bear_case.key_points[0]",
+    "catalysts[0].title",
+    "catalysts[0].detail",
+    "key_risks[0].title",
+  ];
+  it.each(CARD_SITES)("marks a stored claim at %s", (path) => {
+    const { memo, raw } = qualityMemoWithClaimAt(path);
+    const { container } = renderCard(memo);
+    const marked = Array.from(container.querySelectorAll('[data-claim-status="untraceable"]'));
+    expect(marked.map((e) => e.textContent)).toEqual([raw]);
+    // Marked in the prose (its sentence), not only listed in the panel.
+    expect(marked[0].parentElement?.textContent).toContain(`Revenue of ${raw} next year.`);
+  });
+
+  it("shows the earned confidence, not the template's, when the PM synthesis was template-filled", () => {
+    const memo = qualityMemoPmTemplate();
+    renderCard(memo);
+    const conf = memo.quality!.confidence!;
+    expect(screen.getByTestId("confidence-capped")).toHaveTextContent(
+      "Capped at 40 — The PM synthesis was template-filled.",
+    );
+    expect(screen.getByTestId("research-checks-confidence").textContent).not.toMatch(
+      new RegExp(`\\b${Math.round(conf.raw)}\\b`),
+    );
+  });
+
+  it("shows the capped-confidence line and the rewritten tooltip", () => {
+    const { container } = renderCard(qualityMemo());
+    expect(screen.getByTestId("confidence-capped")).toHaveTextContent(
+      "Capped at 45 — 3 core analyst sections were template-filled (sector, earnings, filing).",
+    );
+    expect(container.querySelector(`[title="${CHECKED_CONFIDENCE_TOOLTIP}"]`)).not.toBeNull();
+    expect(container.querySelector('[title^="How sure the PM is"]')).toBeNull();
+  });
+
+  it("shows no capped line when confidence was not lowered", () => {
+    const memo = qualityMemo();
+    const conf = memo.quality!.confidence!;
+    conf.final = conf.raw;
+    conf.binding = null;
+    renderCard(memo);
+    expect(screen.queryByTestId("confidence-capped")).toBeNull();
+    expect(screen.getByTestId("research-checks-confidence-line")).toHaveTextContent(
+      `PM confidence ${Math.round(conf.final)}; no research check lowered it.`,
+    );
+  });
+
+  it("prints neither the capped line nor the panel's numbers while confidence is hidden", () => {
+    renderCard(qualityMemoConfidenceHidden());
+    expect(screen.queryByTestId("confidence-capped")).toBeNull();
+    expect(screen.queryByTestId("research-checks-confidence-line")).toBeNull();
+    // The panel still renders, and says the confidence is unavailable.
+    expect(screen.getByTestId("research-checks-confidence")).toHaveTextContent(
+      "Confidence is unavailable in this version.",
+    );
+    expect(document.querySelector('[data-section="confidence_score"]')).toHaveTextContent(UNAVAILABLE_TEXT);
+  });
+
+  it("keeps quality events off the degraded banner and real failures on it", () => {
+    const memo = qualityMemo();
+    memo.degraded_agents = ["Number Check", "Sector Analyst"];
+    memo.degradation_events = [
+      { agent: "Number Check", error_type: "UntraceableNumbers", message: "2 figures" },
+      { agent: "Sector Analyst", error_type: "DeterministicFallback", message: "" },
+    ];
+    const first = renderCard(memo);
+    const banner = screen.getByTestId("partial-result-banner");
+    expect(banner).toHaveTextContent("1 agent degraded — Sector Analyst.");
+    expect(banner).not.toHaveTextContent("Number Check");
+    first.unmount();
+    // A crash of the check itself is an outage and stays.
+    memo.degradation_events = [{ agent: "Number Check", error_type: "RuntimeError", message: "boom" }];
+    memo.degraded_agents = ["Number Check"];
+    renderCard(memo);
+    expect(screen.getByTestId("partial-result-banner")).toHaveTextContent("Number Check");
+  });
+
+  it("drops the banner entirely when its only entry is a quality event", () => {
+    renderCard(
+      makeMemo({
+        degraded_agents: ["Number Check"],
+        degradation_events: [{ agent: "Number Check", error_type: "UntraceableNumbers", message: "" }],
+      }),
+    );
+    expect(screen.queryByTestId("partial-result-banner")).toBeNull();
   });
 });

@@ -4,7 +4,8 @@ import Samples from "@/pages/public/Samples";
 import SampleDetail from "@/pages/public/SampleDetail";
 import { resetAnalyticsForTests } from "@/lib/analytics";
 import { SIGNED_OUT, calls, errJson, okJson, renderWithProviders, stubFetch } from "@/test/providers";
-import { SAMPLE_TICKERS, sampleRoutes } from "@/test/fixtures/sample";
+import { NVDA_SAMPLE, SAMPLE_TICKERS, makeSample, sampleRoutes, unbuiltSample } from "@/test/fixtures/sample";
+import { QUALITY_EXPECT, qualityMemo } from "@/test/fixtures/memoQuality";
 
 vi.mock("recharts", () => {
   const Noop = () => null;
@@ -89,5 +90,21 @@ describe("/samples/:ticker", () => {
     expect(screen.getAllByText(/no stored memo/)).toHaveLength(4);
     expect(screen.getByTestId("data-freshness")).toHaveTextContent("This sample has not been built yet.");
     expect(screen.queryByRole("heading", { name: "The full committee memo" })).not.toBeInTheDocument();
+  });
+  it("shows no research checks on the public memo (design W2b §9: public pages are unchanged)", async () => {
+    // The public payload carries `quality` (strip_for_public keeps it); the
+    // page renders the memo as it did before W2b.
+    const memo = qualityMemo();
+    stubFetch(sampleRoutes({ NVDA: { ...NVDA_SAMPLE, memo }, COST: makeSample(), JPM: unbuiltSample() }));
+    const { container } = mount("/samples/NVDA");
+    await screen.findByRole("heading", { name: "The full committee memo" });
+    expect(container.querySelector('[data-testid="research-checks"]')).toBeNull();
+    expect(container.querySelector("[data-claim-status]")).toBeNull();
+    expect(container.querySelector('[data-testid="rating-reconciliation-note"]')).toBeNull();
+    expect(container.querySelector('[data-testid="confidence-capped"]')).toBeNull();
+    expect(container.textContent).not.toContain(QUALITY_EXPECT.withheld_point);
+    expect(container.querySelector('[title^="How sure the PM is"]')).not.toBeNull();
+    // The memo itself is there, figures unmarked.
+    expect(container.textContent).toContain(QUALITY_EXPECT.fabricated_pm_figure);
   });
 });

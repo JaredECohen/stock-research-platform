@@ -17,6 +17,15 @@ import {
   MEMO_CARD_SECTIONS,
 } from "@/lib/memoSections";
 import UnavailableSection, { DegradedNote } from "./UnavailableSection";
+import CheckedText from "./memo/CheckedText";
+import QualityPanel from "./memo/QualityPanel";
+import {
+  bannerDegradedAgents,
+  cappedConfidenceLine,
+  claimsFor,
+  confidenceTooltip,
+  reconciliationBadgeNote,
+} from "@/lib/memoQuality";
 import CrossSectorChips from "./CrossSectorChips";
 import TerminalClampBadge from "./TerminalClampBadge";
 import DiligenceDialog from "./DiligenceDialog";
@@ -44,6 +53,8 @@ function ScorecardRow({
   confidenceAvailability,
   factorPmScore,
   rating,
+  tooltip,
+  cappedLine,
 }: {
   confidence: number;
   // W2a: when the presenter hid the confidence (its PM input was a
@@ -53,6 +64,12 @@ function ScorecardRow({
   confidenceAvailability?: SectionAvailability;
   factorPmScore?: number;
   rating: string;
+  // W2b 7(c): what the confidence number is, worded for how this memo's
+  // number was produced (`lib/memoQuality.confidenceTooltip`).
+  tooltip: string;
+  // "Capped at N — reason" when the research checks lowered the PM's
+  // confidence; "" otherwise (and always "" while confidence is hidden).
+  cappedLine?: string;
 }) {
   const confidenceHidden =
     confidenceAvailability?.status === "unavailable" &&
@@ -116,7 +133,7 @@ function ScorecardRow({
       {/* CONFIDENCE — secondary, compact, smaller numerals */}
       <div
         className="card-tight !p-3 border-ink-700"
-        title={`How sure the PM is that "${rating}" is the right call. From signal counts across all 8 specialist findings, dampened by source-evidence quality.`}
+        title={tooltip}
       >
         <div className="flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest text-slate-500">
@@ -143,6 +160,11 @@ function ScorecardRow({
                 style={{ width: `${Math.max(0, Math.min(100, conf))}%` }}
               />
             </div>
+            {cappedLine && (
+              <div className="mt-1.5 text-[11px] text-warn-500 leading-snug" data-testid="confidence-capped">
+                {cappedLine}
+              </div>
+            )}
           </>
         )}
         <div className="mt-2 text-[11px] text-slate-400 leading-snug">
@@ -362,12 +384,18 @@ function FindingBlock({
     <div className="card-tight">
       <div className="section-title mb-1">{title}</div>
       <DegradedNote availability={av} className="mb-1" />
-      <div className="text-sm font-medium text-slate-100">{body.headline}</div>
-      <div className="text-sm text-slate-300 mt-1">{body.summary}</div>
+      <div className="text-sm font-medium text-slate-100">
+        <CheckedText text={body.headline} claims={section ? claimsFor(memo, `${section}.headline`) : undefined} />
+      </div>
+      <div className="text-sm text-slate-300 mt-1">
+        <CheckedText text={body.summary} claims={section ? claimsFor(memo, `${section}.summary`) : undefined} />
+      </div>
       {body.key_points && body.key_points.length > 0 && (
         <ul className="text-xs text-slate-400 mt-2 list-disc pl-5 space-y-0.5">
           {body.key_points.slice(0, 4).map((p, i) => (
-            <li key={i}>{p}</li>
+            <li key={i}>
+              <CheckedText text={p} claims={section ? claimsFor(memo, `${section}.key_points[${i}]`) : undefined} />
+            </li>
           ))}
         </ul>
       )}
@@ -432,11 +460,17 @@ function CaseCard({
         // explained by the degraded note below.
         <UnavailableSection variant="inline" section={section} availability={hidden ? av : undefined} />
       ) : (
-        <div className={`text-sm font-medium ${color}`}>{data.headline}</div>
+        <div className={`text-sm font-medium ${color}`}>
+          <CheckedText text={data.headline} claims={claimsFor(memo, `${section}.headline`)} />
+        </div>
       )}
       {data.key_points.length > 0 && (
         <ul className="text-sm text-slate-300 mt-2 list-disc pl-5 space-y-1">
-          {data.key_points.map((p, i) => <li key={i}>{p}</li>)}
+          {data.key_points.map((p, i) => (
+            <li key={i}>
+              <CheckedText text={p} claims={claimsFor(memo, `${section}.key_points[${i}]`)} />
+            </li>
+          ))}
         </ul>
       )}
       {/* An unavailable case's placeholder already carries its item count. */}
@@ -447,7 +481,10 @@ function CaseCard({
 
 export default function MemoCard({ memo }: { memo: StockMemoOut }) {
   const dcf = memo.dcf_summary as Record<string, unknown>;
-  const degraded = memo.degraded_agents ?? [];
+  // W2b: a quality event (untraceable figures) is a finding about the
+  // memo's content, shown in Research checks — not an agent outage.
+  const degraded = bannerDegradedAgents(memo);
+  const badgeNote = reconciliationBadgeNote(memo);
   // Phase 6 sector-finding fields ride on `sector_agent_view.data`.
   const sectorData = memo.sector_agent_view.data;
   const crossSector = sectorData?.cross_sector_relevance ?? [];
@@ -504,6 +541,15 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
               availability={availability(memo, "rating_label")}
               className="max-w-[16rem] text-right"
             />
+            {/* W2b 7(b): the rating check changed or overrode the call. */}
+            {badgeNote && (
+              <div
+                className="max-w-[16rem] text-right text-[11px] text-slate-400 leading-snug"
+                data-testid="rating-reconciliation-note"
+              >
+                {badgeNote}
+              </div>
+            )}
             <div
               className="text-[10px] uppercase tracking-widest text-slate-600"
               title={
@@ -531,7 +577,10 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
           ) : (
             <>
               <div className="text-base md:text-lg text-slate-100 leading-snug">
-                {memo.one_sentence_thesis}
+                <CheckedText
+                  text={memo.one_sentence_thesis}
+                  claims={claimsFor(memo, "one_sentence_thesis")}
+                />
               </div>
               {/* A degraded thesis is a builder rewrite around the analyst's
                   claim; it stays visible only with this note (critique
@@ -568,6 +617,8 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
           confidenceAvailability={availability(memo, "confidence_score")}
           factorPmScore={memo.scores?.factor_pm_score}
           rating={memo.rating_label}
+          tooltip={confidenceTooltip(memo)}
+          cappedLine={cappedConfidenceLine(memo)}
         />
 
         <FactorScorePanel scores={memo.scores} />
@@ -580,11 +631,16 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
               availability={availability(memo, "final_pm_view")}
             />
           ) : (
-            <p>{memo.final_pm_view}</p>
+            <p>
+              <CheckedText text={memo.final_pm_view} claims={claimsFor(memo, "final_pm_view")} />
+            </p>
           )}
           {crossSector.length > 0 && <CrossSectorChips tickers={crossSector} className="mt-3" />}
         </div>
       </div>
+
+      {/* W2b: renders nothing for a memo without `quality`. */}
+      <QualityPanel memo={memo} />
 
       {/* The one section whose `not_produced` also gets a placeholder: the
           card used to vanish, which read as "no view" rather than "none
@@ -606,19 +662,28 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
               {memo.mispricing_thesis.consensus_view && (
                 <p>
                   <span className="text-slate-400">Consensus:</span>{" "}
-                  {memo.mispricing_thesis.consensus_view}
+                  <CheckedText
+                    text={memo.mispricing_thesis.consensus_view}
+                    claims={claimsFor(memo, "mispricing_thesis.consensus_view")}
+                  />
                 </p>
               )}
               {memo.mispricing_thesis.our_view && (
                 <p>
                   <span className="text-slate-400">Our view:</span>{" "}
-                  {memo.mispricing_thesis.our_view}
+                  <CheckedText
+                    text={memo.mispricing_thesis.our_view}
+                    claims={claimsFor(memo, "mispricing_thesis.our_view")}
+                  />
                 </p>
               )}
               {memo.mispricing_thesis.gap && (
                 <p>
                   <span className="text-slate-400">The gap:</span>{" "}
-                  {memo.mispricing_thesis.gap}
+                  <CheckedText
+                    text={memo.mispricing_thesis.gap}
+                    claims={claimsFor(memo, "mispricing_thesis.gap")}
+                  />
                 </p>
               )}
               {memo.mispricing_thesis.falsifiers?.length > 0 && (
@@ -733,9 +798,13 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
               <ul className="text-sm text-slate-300 space-y-1">
                 {memo.catalysts.map((c, i) => (
                   <li key={i}>
-                    <span className="font-medium text-slate-100">{c.title}</span>
+                    <span className="font-medium text-slate-100">
+                      <CheckedText text={c.title} claims={claimsFor(memo, `catalysts[${i}].title`)} />
+                    </span>
                     <span className="text-xs text-slate-400 ml-2">[{c.horizon} · {c.impact}]</span>
-                    <div className="text-xs text-slate-400">{c.detail}</div>
+                    <div className="text-xs text-slate-400">
+                      <CheckedText text={c.detail} claims={claimsFor(memo, `catalysts[${i}].detail`)} />
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -754,7 +823,9 @@ export default function MemoCard({ memo }: { memo: StockMemoOut }) {
               <ul className="text-sm text-slate-300 space-y-1">
                 {memo.key_risks.map((r, i) => (
                   <li key={i}>
-                    <span className="font-medium text-slate-100">{r.title}</span>
+                    <span className="font-medium text-slate-100">
+                      <CheckedText text={r.title} claims={claimsFor(memo, `key_risks[${i}].title`)} />
+                    </span>
                     <span className="text-xs text-slate-400 ml-2">[{r.severity} · {r.type}]</span>
                   </li>
                 ))}

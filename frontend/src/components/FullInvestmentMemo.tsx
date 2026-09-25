@@ -19,6 +19,15 @@ import {
   isUnavailable,
 } from "@/lib/memoSections";
 import UnavailableSection, { DegradedNote } from "./UnavailableSection";
+import CheckedText, { placeable } from "./memo/CheckedText";
+import QualityPanel from "./memo/QualityPanel";
+import {
+  bannerDegradedAgents,
+  cappedConfidenceLine,
+  claimsFor,
+  qualityOf,
+  reconciliationBadgeNote,
+} from "@/lib/memoQuality";
 import { profileText } from "./scorecard/ScorecardPanel";
 import { familyLabel, fmtCoverage, fmtPercentile, fmtScore, fmtZ, humanize, isNum, na } from "./scorecard/format";
 import { Markdown } from "./Markdown";
@@ -49,6 +58,11 @@ import TerminalClampBadge from "./TerminalClampBadge";
  * DOM, so it inherits the placeholders and never carries template prose.
  * Portfolio Fit is omitted outright when it is `template_always`: no
  * analyst writes it, and a placeholder on every memo would be noise.
+ *
+ * W2b: figures the number check could not trace are marked in place
+ * (`CheckedText`), the cover's Conviction line says when the research
+ * checks capped it, and a "Research Checks" section precedes the sources.
+ * A memo without `quality` renders as it always did.
  */
 
 interface Props {
@@ -81,7 +95,8 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
   const hasMispricing = Boolean(
     misp && (misp.consensus_view || misp.our_view || misp.gap),
   );
-  const degraded = memo.degraded_agents || [];
+  // W2b: quality events are findings shown under Research Checks, not outages.
+  const degraded = bannerDegradedAgents(memo);
   const dcf = memo.dcf_summary || {};
   // `hasDcf` separates "the model ran" (numbers may still be null → "n/a")
   // from "no DCF on this memo" (the section shows "—").
@@ -97,6 +112,13 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
   const confidenceHidden = isHidden(memo, "confidence_score");
   const pfAv = availability(memo, "portfolio_fit");
   const portfolioFitOmitted = pfAv?.status === "unavailable" && pfAv.reason === "template_always";
+  const capLine = cappedConfidenceLine(memo);
+  const badgeNote = reconciliationBadgeNote(memo);
+  // The PM view is Markdown; only when a checked figure in it can be marked
+  // is it rendered as plain paragraphs instead, so a memo with nothing to
+  // mark (every memo stored before W2b) keeps its Markdown rendering.
+  const pmViewClaims = claimsFor(memo, "final_pm_view");
+  const markPmView = placeable(memo.final_pm_view || "", pmViewClaims).length > 0;
 
   return (
     <div
@@ -157,6 +179,14 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                   availability={availability(memo, "rating_label")}
                   className="mt-1 max-w-[16rem] ml-auto"
                 />
+                {badgeNote && (
+                  <div
+                    className="mt-1 max-w-[16rem] ml-auto text-[11px] text-slate-400 print:text-slate-600"
+                    data-testid="rating-reconciliation-note"
+                  >
+                    {badgeNote}
+                  </div>
+                )}
                 <div
                   className="mt-2 text-xs text-slate-400 print:text-slate-600"
                   data-testid="cover-conviction"
@@ -166,6 +196,14 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                     ? "Conviction: unavailable in this version"
                     : `Conviction: ${Math.round(memo.confidence_score)}/100`}
                 </div>
+                {capLine && (
+                  <div
+                    className="mt-0.5 max-w-[16rem] ml-auto text-[11px] text-slate-400 print:text-slate-600"
+                    data-testid="cover-conviction-cap"
+                  >
+                    {capLine}
+                  </div>
+                )}
                 {hasDcf && (
                   <div className="mt-1 text-xs text-slate-400 print:text-slate-600">
                     Fair value: {fmtPrice(dcfFair)} ({fmtUpside(dcfImpliedUpside)})
@@ -219,8 +257,14 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
             ) : (
               <>
                 <p className="text-base leading-relaxed italic text-slate-200 print:text-slate-800 mb-3">
-                  {memo.one_sentence_thesis ||
-                    (isHidden(memo, "final_verdict") ? "" : memo.final_verdict)}
+                  {memo.one_sentence_thesis ? (
+                    <CheckedText
+                      text={memo.one_sentence_thesis}
+                      claims={claimsFor(memo, "one_sentence_thesis")}
+                    />
+                  ) : (
+                    isHidden(memo, "final_verdict") ? "" : memo.final_verdict
+                  )}
                 </p>
                 {/* A degraded thesis keeps the analyst's claim beside the
                     builder's canned sentence; the note keeps that sentence
@@ -240,7 +284,14 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                 availability={availability(memo, "final_pm_view")}
               />
             ) : (
-              memo.final_pm_view && <Markdown text={memo.final_pm_view} />
+              memo.final_pm_view &&
+              (markPmView ? (
+                <p className="text-sm leading-relaxed whitespace-pre-line text-slate-200 print:text-slate-800">
+                  <CheckedText text={memo.final_pm_view} claims={pmViewClaims} />
+                </p>
+              ) : (
+                <Markdown text={memo.final_pm_view} />
+              ))
             )}
           </Section>
 
@@ -259,18 +310,19 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                 {misp.consensus_view && (
                   <p>
                     <span className="font-semibold">Consensus:</span>{" "}
-                    {misp.consensus_view}
+                    <CheckedText text={misp.consensus_view} claims={claimsFor(memo, "mispricing_thesis.consensus_view")} />
                   </p>
                 )}
                 {misp.our_view && (
                   <p>
                     <span className="font-semibold">Our view:</span>{" "}
-                    {misp.our_view}
+                    <CheckedText text={misp.our_view} claims={claimsFor(memo, "mispricing_thesis.our_view")} />
                   </p>
                 )}
                 {misp.gap && (
                   <p>
-                    <span className="font-semibold">The gap:</span> {misp.gap}
+                    <span className="font-semibold">The gap:</span>{" "}
+                    <CheckedText text={misp.gap} claims={claimsFor(memo, "mispricing_thesis.gap")} />
                   </p>
                 )}
                 {misp.falsifiers && misp.falsifiers.length > 0 && (
@@ -297,8 +349,8 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
           {/* BULL / BEAR */}
           <Section title="Investment Thesis — Bull vs Bear">
             <div className="grid md:grid-cols-2 gap-6 print:grid-cols-2">
-              <CaseBlock label="Bull case" tone="bull" headline={memo.bull_case?.headline} points={memo.bull_case?.key_points} availability={availability(memo, "bull_case")} />
-              <CaseBlock label="Bear case" tone="bear" headline={memo.bear_case?.headline} points={memo.bear_case?.key_points} availability={availability(memo, "bear_case")} />
+              <CaseBlock label="Bull case" tone="bull" headline={memo.bull_case?.headline} points={memo.bull_case?.key_points} availability={availability(memo, "bull_case")} memo={memo} />
+              <CaseBlock label="Bear case" tone="bear" headline={memo.bear_case?.headline} points={memo.bear_case?.key_points} availability={availability(memo, "bear_case")} memo={memo} />
             </div>
           </Section>
 
@@ -423,12 +475,16 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                 {memo.catalysts.map((cat, i) => (
                   <li key={i} className="text-sm">
                     <div className="flex items-baseline gap-2">
-                      <span className="font-semibold">{cat.title}</span>
+                      <span className="font-semibold">
+                        <CheckedText text={cat.title} claims={claimsFor(memo, `catalysts[${i}].title`)} />
+                      </span>
                       <span className="text-xs uppercase tracking-wider text-slate-400 print:text-slate-600">
                         {cat.horizon.replace("_", " ")} · {cat.impact} impact
                       </span>
                     </div>
-                    <div className="text-slate-300 print:text-slate-700">{cat.detail}</div>
+                    <div className="text-slate-300 print:text-slate-700">
+                      <CheckedText text={cat.detail} claims={claimsFor(memo, `catalysts[${i}].detail`)} />
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -454,7 +510,7 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                     Key risks
                   </h4>
                   <DegradedNote availability={availability(memo, "key_risks")} className="mb-2" />
-                  <RiskList items={memo.key_risks} />
+                  <RiskList items={memo.key_risks} memo={memo} field="key_risks" />
                 </>
               )}
               {isHidden(memo, "thesis_breakers") ? (
@@ -471,7 +527,7 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
                     Thesis breakers
                   </h4>
                   <DegradedNote availability={availability(memo, "thesis_breakers")} className="mb-2" />
-                  <RiskList items={memo.thesis_breakers} />
+                  <RiskList items={memo.thesis_breakers} memo={memo} field="thesis_breakers" />
                 </>
               )}
             </Section>
@@ -546,6 +602,13 @@ export default function FullInvestmentMemo({ memo, open, onClose }: Props) {
             </Section>
           )}
 
+          {/* RESEARCH CHECKS (W2b) — nothing for a memo without `quality`. */}
+          {qualityOf(memo) && (
+            <Section title="Research Checks">
+              <QualityPanel memo={memo} variant="paper" />
+            </Section>
+          )}
+
           {/* APPENDIX */}
           <Section title="Sources & Disclaimer">
             {memo.sources_used && memo.sources_used.length > 0 && (
@@ -584,11 +647,14 @@ function CaseBlock({
   headline,
   points,
   availability: av,
+  memo,
 }: {
   label: string;
   tone: "bull" | "bear";
   headline?: string;
   points?: string[];
+  // W2b: the memo whose number check marks figures in the headline/points.
+  memo?: StockMemoOut;
   // W2a: an unavailable case shows the placeholder and reason (plus any
   // computed item the presenter kept); a partial one shows a headline
   // placeholder and the "N template items not shown" note.
@@ -612,12 +678,16 @@ function CaseBlock({
           className="mt-1"
         />
       ) : headline && (
-        <div className="mt-1 text-sm font-semibold">{headline}</div>
+        <div className="mt-1 text-sm font-semibold">
+          <CheckedText text={headline} claims={claimsFor(memo, `${tone}_case.headline`)} />
+        </div>
       )}
       {points && points.length > 0 && (
         <ul className="mt-2 list-disc pl-4 space-y-1 text-sm text-slate-200 print:text-slate-800">
           {points.map((p, i) => (
-            <li key={i}>{p}</li>
+            <li key={i}>
+              <CheckedText text={p} claims={claimsFor(memo, `${tone}_case.key_points[${i}]`)} />
+            </li>
           ))}
         </ul>
       )}
@@ -664,17 +734,21 @@ function AgentBlock({
       )}
       <DegradedNote availability={av} className="mb-1" />
       {finding.headline && (
-        <div className="text-sm font-semibold mb-1">{finding.headline}</div>
+        <div className="text-sm font-semibold mb-1">
+          <CheckedText text={finding.headline} claims={section ? claimsFor(memo, `${section}.headline`) : undefined} />
+        </div>
       )}
       {finding.summary && (
         <p className="text-sm leading-relaxed text-slate-200 print:text-slate-800">
-          {finding.summary}
+          <CheckedText text={finding.summary} claims={section ? claimsFor(memo, `${section}.summary`) : undefined} />
         </p>
       )}
       {finding.key_points && finding.key_points.length > 0 && (
         <ul className="mt-2 list-disc pl-5 space-y-1 text-sm text-slate-300 print:text-slate-700">
           {finding.key_points.map((p, i) => (
-            <li key={i}>{p}</li>
+            <li key={i}>
+              <CheckedText text={p} claims={section ? claimsFor(memo, `${section}.key_points[${i}]`) : undefined} />
+            </li>
           ))}
         </ul>
       )}
@@ -850,18 +924,33 @@ function KvTable({ title, rows }: { title: string; rows: [string, string][] }) {
   );
 }
 
-function RiskList({ items }: { items: RiskItem[] }) {
+function RiskList({
+  items,
+  memo,
+  field,
+}: {
+  items: RiskItem[];
+  // W2b: risks are flagged in place, never withheld (downside information).
+  memo?: StockMemoOut;
+  field?: "key_risks" | "thesis_breakers";
+}) {
+  const marks = (i: number, part: "title" | "detail") =>
+    field ? claimsFor(memo, `${field}[${i}].${part}`) : undefined;
   return (
     <ul className="space-y-2">
       {items.map((r, i) => (
         <li key={i} className="text-sm">
           <div className="flex items-baseline gap-2">
-            <span className="font-semibold">{r.title}</span>
+            <span className="font-semibold">
+              <CheckedText text={r.title} claims={marks(i, "title")} />
+            </span>
             <span className="text-[10px] uppercase tracking-wider text-slate-400 print:text-slate-600">
               {r.type} · {r.severity}
             </span>
           </div>
-          <div className="text-slate-300 print:text-slate-700">{r.detail}</div>
+          <div className="text-slate-300 print:text-slate-700">
+            <CheckedText text={r.detail} claims={marks(i, "detail")} />
+          </div>
         </li>
       ))}
     </ul>
@@ -941,6 +1030,13 @@ function downloadPdf(memo: StockMemoOut, container: HTMLDivElement | null) {
     [class*="text-slate-400"], [class*="text-slate-500"], [class*="text-slate-600"] { color: #4b5563 !important; }
     [class*="bg-ink-"], [class*="bg-black"] { background: transparent !important; }
     .border-ink-700, .border-slate-700, .border-ink-800 { border-color: #cbd5e1 !important; }
+    /* W2b: checked figures keep their marks on paper. CheckedText styles
+       them with Tailwind classes this popup does not load, so key on the
+       data attribute instead (the Research Checks section explains them). */
+    [data-claim-status="untraceable"], [data-claim-status="mis_anchored"] {
+      text-decoration: underline dotted #b45309; text-underline-offset: 2px;
+    }
+    [data-claim-status="assumption"] { text-decoration: underline dotted #64748b; text-underline-offset: 2px; }
     /* Bull / bear accents stay visible in print */
     .border-emerald-500\\/40 { border-color: #047857 !important; }
     .border-rose-500\\/40 { border-color: #be123c !important; }
