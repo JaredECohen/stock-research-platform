@@ -9,8 +9,19 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Effort levels any provider accepts (Anthropic output_config.effort: low..max;
+# OpenAI reasoning_effort: none..max). "" means "not sent".
+_EFFORT_VALUES = frozenset({"", "none", "minimal", "low", "medium", "high", "xhigh", "max"})
+# LLM_ACTION_TIER_OVERRIDES targets: a routing tier, or "legacy" (ignore the
+# tier and use the call site's own route). Mirrors
+# `agents.llm_attribution.TIERS`, which this module cannot import when it is
+# loaded standalone (the image-defaults test).
+_OVERRIDE_TIERS = frozenset({
+    "legacy", "research", "utility", "reviewer", "debate", "chat", "news", "embed",
+})
 
 
 def _project_env_files() -> list[str]:
@@ -148,6 +159,177 @@ class Settings(BaseSettings):
         if mode not in ("strict", "warn", "off"):
             raise ValueError("llm_attribution_mode must be 'strict', 'warn' or 'off'")
         return mode
+
+    # ------------------------------------------------------------------
+    # 2026-09-25 program: model migration, bull/bear debate, full-report
+    # reviewer (integration plan §7, the settings manifest). Every knob the
+    # program's later slices read lives here so this hot file has one owner
+    # (slice B7-M1). Code defaults are blank or off: a deployment that sets
+    # nothing sends exactly today's requests to today's models. Production
+    # values ship in render.yaml at the named wave (H: models + reviewer +
+    # chat; I: debate), on BOTH services.
+    # ------------------------------------------------------------------
+    # Routing tiers (plan P1; `llm.resolve_action_route`). A blank tier
+    # model means "today's route/model logic" for every action in the tier.
+    # The research tier is the PM, every analyst, news-impact, postmortems,
+    # weekly industry reports, the DCF updater and legacy chat (item 7).
+    llm_research_model: str = ""
+    llm_research_failover_model: str = ""
+    # Effort per research action: "pm" actions (synthesis, revision,
+    # counterfactual) read LLM_PM_EFFORT, every other LLM_DEFAULT_EFFORT;
+    # the failover hop reads the LLM_FAILOVER_* pair.
+    llm_pm_effort: str = ""
+    llm_default_effort: str = ""
+    llm_failover_pm_effort: str = ""
+    llm_failover_default_effort: str = ""
+    # Per-action tier override, a rollback lever for one agent without a
+    # code change (plan P15): "industry.report:legacy,news.impact:utility".
+    llm_action_tier_overrides: str = ""
+    # G1: fetch fresh news at memo time (consumer: slice G1).
+    news_fetch_at_memo_time: bool = True
+    # Reviewer (owner item 8, plan P4): "legacy" = today's critic bytes and
+    # order; "full" = the full-report reviewer with one bounded PM revision
+    # pass and one re-check (slices D7/R1).
+    reviewer_mode: str = "legacy"
+    risk_reviewer_provider: str = ""
+    risk_reviewer_model: str = ""
+    risk_reviewer_effort: str = ""
+    # For OpenAI gpt-6 only; an Anthropic route is clamped by
+    # LLM_ANTHROPIC_NONSTREAM_MAX_TOKENS (bull/bear critique #5).
+    risk_reviewer_max_tokens: int = 25000
+    review_recheck_effort: str = ""
+    review_revision_max_usd: float = 1.00
+    reviewer_caps_enabled: bool = True
+    # Ask-the-PM chat on the OpenAI Agents SDK (plan P14). Separate from
+    # USE_AGENTS_SDK, which would also route chat's inline memo through
+    # sdk_runtime and run the memo twice.
+    chat_agents_sdk: bool = False
+    chat_model: str = ""
+    chat_effort: str = ""
+    # Bull/bear debate (owner items 1, 9). Off until local validation passes.
+    debate_mode: str = "off"
+    debate_provider: str = ""
+    debate_model: str = ""
+    debate_effort: str = ""
+    debate_research_effort: str = ""
+    # Protocol v1 has exactly one rebuttal round; a second needs protocol
+    # v2, so the value is clamped to [0, 1].
+    debate_rebuttal_rounds: int = 1
+    debate_max_tokens_research: int = 8000
+    debate_max_tokens_opening: int = 16000
+    debate_max_tokens_rebuttal: int = 16000
+    debate_pm_max_tokens: int = 4000
+    # The PM sees the rebuttal ARGUMENTS, not only stance labels (bull/bear
+    # critique #3), which is why the block grew from 10,000 to 14,000.
+    debate_pm_block_max_chars: int = 14000
+    debate_queries_per_side: int = 3
+    debate_pool_max: int = 16
+    debate_max_claims: int = 5
+    debate_horizon: str = "12 months"
+    debate_max_usd_per_memo: float = 1.50
+    debate_max_calls: int = 10
+    memo_max_usd: float = 5.00  # owner item 9 (the design said 4.00)
+    debate_parallel: bool = True
+    debate_counterfactual_sample: int = 0
+    debate_counterfactual_max_usd: float = 0.40
+
+    @field_validator(
+        "llm_pm_effort", "llm_default_effort", "llm_failover_pm_effort",
+        "llm_failover_default_effort", "risk_reviewer_effort", "review_recheck_effort",
+        "chat_effort", "debate_effort", "debate_research_effort",
+    )
+    @classmethod
+    def _effort_known(cls, v: str) -> str:
+        effort = str(v or "").strip().lower()
+        if effort not in _EFFORT_VALUES:
+            raise ValueError(f"effort must be blank or one of {sorted(_EFFORT_VALUES - {''})}")
+        return effort
+
+    @field_validator(
+        "llm_research_model", "llm_research_failover_model", "risk_reviewer_model",
+        "chat_model", "debate_model",
+    )
+    @classmethod
+    def _tier_model_trimmed(cls, v: str) -> str:
+        return str(v or "").strip()
+
+    @field_validator("risk_reviewer_provider", "debate_provider")
+    @classmethod
+    def _tier_provider_known(cls, v: str) -> str:
+        provider = str(v or "").strip().lower()
+        if provider not in ("", "anthropic", "openai"):
+            raise ValueError("provider must be blank, 'anthropic' or 'openai'")
+        return provider
+
+    @field_validator("reviewer_mode")
+    @classmethod
+    def _reviewer_mode_known(cls, v: str) -> str:
+        mode = str(v).strip().lower()
+        if mode not in ("legacy", "full"):
+            raise ValueError("reviewer_mode must be 'legacy' or 'full'")
+        return mode
+
+    @field_validator("debate_mode")
+    @classmethod
+    def _debate_mode_known(cls, v: str) -> str:
+        mode = str(v).strip().lower()
+        if mode not in ("off", "on"):
+            raise ValueError("debate_mode must be 'off' or 'on'")
+        return mode
+
+    @field_validator("debate_rebuttal_rounds")
+    @classmethod
+    def _rebuttal_rounds_clamped(cls, v: int) -> int:
+        return max(0, min(1, int(v)))
+
+    @field_validator("llm_action_tier_overrides")
+    @classmethod
+    def _tier_overrides_well_formed(cls, v: str) -> str:
+        # Shape and tier names only: action names are checked against the
+        # registry by `llm.tier_overrides()`, because this module is also
+        # loaded standalone (the image-defaults test), where the agents
+        # package cannot be imported.
+        text = str(v or "").strip()
+        for item in (p.strip() for p in text.split(",") if p.strip()):
+            action, sep, tier = item.partition(":")
+            if not sep or not action.strip() or tier.strip().lower() not in _OVERRIDE_TIERS:
+                raise ValueError(
+                    f"llm_action_tier_overrides entry {item!r} must be '<action>:<tier>' "
+                    f"with tier in {sorted(_OVERRIDE_TIERS)}"
+                )
+        return text
+
+    @model_validator(mode="after")
+    def _program_settings_consistent(self) -> Settings:
+        # gpt-6-astra rejects reasoning_effort "none" (model research
+        # 2026-09-25): refuse the pairing at boot instead of 400-ing every
+        # review.
+        pairs = (
+            (self.risk_reviewer_model, self.risk_reviewer_effort, "RISK_REVIEWER_EFFORT"),
+            (self.risk_reviewer_model, self.review_recheck_effort, "REVIEW_RECHECK_EFFORT"),
+            (self.chat_model, self.chat_effort, "CHAT_EFFORT"),
+            (self.debate_model, self.debate_effort, "DEBATE_EFFORT"),
+            (self.debate_model, self.debate_research_effort, "DEBATE_RESEARCH_EFFORT"),
+            (self.llm_research_model, self.llm_pm_effort, "LLM_PM_EFFORT"),
+            (self.llm_research_model, self.llm_default_effort, "LLM_DEFAULT_EFFORT"),
+            (self.llm_research_failover_model, self.llm_failover_pm_effort,
+             "LLM_FAILOVER_PM_EFFORT"),
+            (self.llm_research_failover_model, self.llm_failover_default_effort,
+             "LLM_FAILOVER_DEFAULT_EFFORT"),
+        )
+        for model, effort, name in pairs:
+            if (model or "").lower().startswith("gpt-6-astra") and effort == "none":
+                raise ValueError(f"{name}=none is rejected by {model}; use low or higher")
+        if self.debate_mode == "on" and self.reviewer_mode == "legacy":
+            # Allowed (the debate can be observed under the legacy critic),
+            # but the owner's architecture reviews the debated report with
+            # the full-report reviewer, so say so at boot.
+            import logging
+            logging.getLogger(__name__).warning(
+                "DEBATE_MODE=on with REVIEWER_MODE=legacy: the debate runs but the report "
+                "is reviewed by the legacy critic, not the full-report reviewer"
+            )
+        return self
 
     # Database
     database_url: str = Field(default="sqlite:///./marketmosaic.db", repr=False)

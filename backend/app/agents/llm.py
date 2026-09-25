@@ -24,6 +24,7 @@ import re
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 from ..config import settings
@@ -441,15 +442,247 @@ def unpriced_configured_models() -> list[str]:
     return sorted(set(missing))
 
 
+# ---------------------------------------------------------------------------
+# Routing by action tier (integration plan P1, §2)
+# ---------------------------------------------------------------------------
+# Every call names an action; the action belongs to a tier; a CONFIGURED
+# tier resolves to (provider, model, effort, failover). A blank tier is
+# today's route/model logic exactly, so the code defaults change nothing and
+# the owner's model migration (wave H) is a render.yaml change that can be
+# rolled back per agent (LLM_ACTION_TIER_OVERRIDES) or wholesale.
+
+# Model-based failover when a tier is configured (DEVPLAN 2026-09-25 items
+# 2, 7): Opus 5.5 -> gpt-6-sol, Haiku 4.5 -> gpt-4.1-mini, and the GPT-6
+# models back to Opus 5.5. A blank tier keeps today's partner-route default.
+FAILOVER_MODEL_MAP: dict[str, tuple[str, str]] = {
+    "claude-opus-5-5": ("openai", "gpt-6-sol"),
+    "claude-haiku-4-5": ("openai", "gpt-4.1-mini"),
+    "gpt-6-astra": ("anthropic", "claude-opus-5-5"),
+    "gpt-6-sol": ("anthropic", "claude-opus-5-5"),
+}
+
+# Tiers whose resolved route `chat_json`/`chat_text` actually dispatch. The
+# news tier is reported (it IS the Gemini news model) but its callers use
+# the gemini entries directly; utility and embed are today's routes.
+_DISPATCH_TIERS = frozenset({"research", "debate", "reviewer", "chat"})
+
+
+@dataclass(frozen=True)
+class ActionRoute:
+    """Where one action runs. `configured=False` means today's legacy
+    route: the call site's own provider/model/route decide, and the other
+    fields only describe that legacy default where it is knowable."""
+
+    action: str
+    tier: str
+    configured: bool
+    provider: str | None = None
+    model: str | None = None
+    effort: str | None = None
+    floor: int | None = None
+    failover_provider: str | None = None
+    failover_model: str | None = None
+    failover_effort: str | None = None
+    reason: str = ""
+
+    @property
+    def failover(self) -> tuple[str, str, str | None] | None:
+        if self.failover_provider and self.failover_model:
+            return (self.failover_provider, self.failover_model, self.failover_effort)
+        return None
+
+    def describe(self) -> str:
+        if not self.configured:
+            return f"legacy({self.reason})" if self.reason else "legacy"
+        text = f"{self.provider}:{self.model}@{self.effort or '-'}"
+        if self.failover:
+            text += f" failover={self.failover_provider}:{self.failover_model}@{self.failover_effort or '-'}"
+        return text
+
+
+def tier_overrides() -> dict[str, str]:
+    """LLM_ACTION_TIER_OVERRIDES as {action: tier}. An unknown action is an
+    unresolvable request and raises (config.py checks only the shape)."""
+    out: dict[str, str] = {}
+    text = settings.llm_action_tier_overrides or ""
+    for item in (p.strip() for p in text.split(",") if p.strip()):
+        action, _, tier = item.partition(":")
+        action, tier = action.strip(), tier.strip().lower()
+        if action not in attribution.ACTIONS:
+            raise ValueError(f"LLM_ACTION_TIER_OVERRIDES names an unknown action: {action!r}")
+        out[action] = tier
+    return out
+
+
+def _effort_for(provider: str | None, model: str | None, effort: str | None) -> str | None:
+    """The effort that would actually be sent to (provider, model)."""
+    if not model:
+        return None
+    if provider == "anthropic":
+        return _anthropic_effort(model, effort)
+    if provider == "openai":
+        return _openai_effort(model, effort)
+    return None
+
+
+def _route_floor(provider: str | None, model: str | None) -> int | None:
+    if provider not in ("anthropic", "openai") or not model:
+        return None
+    floor = _effective_max_tokens(provider, model, 0, hop=False)
+    return floor or None
+
+
+def _legacy_route(action: str, tier: str, reason: str) -> ActionRoute:
+    """Describe today's route for a non-configured tier: the active
+    provider on the cheap route for utility actions (the only tier whose
+    legacy route is fixed), with its partner's cheap default as failover."""
+    provider = settings.active_llm_provider
+    if tier == "embed":
+        return ActionRoute(action, tier, False, "openai", "text-embedding-3-small", reason=reason)
+    if tier != "utility" or provider not in _FAILOVER_PARTNER:
+        return ActionRoute(action, tier, False, reason=reason)
+    partner = _FAILOVER_PARTNER[provider]
+    has_partner = _has_key(partner)
+    return ActionRoute(
+        action, tier, False, provider, _model_for(provider, "cheap"),
+        failover_provider=partner if has_partner else None,
+        failover_model=_model_for(partner, "cheap") if has_partner else None,
+        reason=reason,
+    )
+
+
+def resolve_action_route(action: str) -> ActionRoute:
+    """(provider, model, effort, floor, failover) for `action`.
+
+    Raises ValueError for an unregistered action. A tier with no model
+    configured, a model whose provider has no key, an override to
+    "legacy", or an action that owns its route (`routed=False`) all
+    resolve to `configured=False`: today's route/model logic.
+    """
+    spec = attribution.ACTIONS.get(action)
+    if spec is None:
+        raise ValueError(f"unregistered LLM action: {action!r}")
+    tier = tier_overrides().get(action, spec.tier)
+    if tier == "legacy":
+        return _legacy_route(action, spec.tier, "override:legacy")
+    if not spec.routed:
+        # Its route is the call site's own (the legacy critic, the SDK memo
+        # exchange), so nothing about it is describable from the tier.
+        return ActionRoute(action, tier, False, reason="call site owns its route")
+    effort_key = spec.effort_key or "default"
+    fo_key = spec.failover_effort_key or effort_key
+
+    provider: str | None
+    model: str
+    effort: str
+    fo: tuple[str, str] | None
+    fo_effort: str
+    if tier == "research":
+        model = settings.llm_research_model
+        provider = provider_of_model(model)
+        effort = settings.llm_pm_effort if effort_key == "pm" else settings.llm_default_effort
+        fo_model = settings.llm_research_failover_model
+        fo = ((provider_of_model(fo_model) or "", fo_model) if fo_model
+              else FAILOVER_MODEL_MAP.get(model))
+        fo_effort = (settings.llm_failover_pm_effort if fo_key == "pm"
+                     else settings.llm_failover_default_effort)
+    elif tier == "debate":
+        provider = settings.debate_provider or provider_of_model(settings.debate_model)
+        model = settings.debate_model
+        if provider and not _model_matches_provider(model, provider):
+            model = ""
+        if provider and not model:
+            # The design's blank-model rule: the provider's strong default.
+            model = _model_for(provider, "strong")
+        effort = (settings.debate_research_effort if effort_key == "debate_research"
+                  else settings.debate_effort)
+        fo = FAILOVER_MODEL_MAP.get(model)
+        fo_effort = effort
+    elif tier == "reviewer":
+        provider = settings.risk_reviewer_provider or None
+        model = settings.risk_reviewer_model
+        if provider and not (model and _model_matches_provider(model, provider)):
+            model = (settings.anthropic_critic_model if provider == "anthropic"
+                     else settings.openai_strong_model)
+        effort = (settings.review_recheck_effort if effort_key == "recheck"
+                  else settings.risk_reviewer_effort)
+        fo = FAILOVER_MODEL_MAP.get(model)
+        fo_effort = effort
+    elif tier == "chat":
+        model = settings.chat_model
+        provider = provider_of_model(model)
+        effort = settings.chat_effort
+        fo = FAILOVER_MODEL_MAP.get(model)
+        fo_effort = effort
+    elif tier == "news":
+        model = _resolve_gemini_model(None, settings.gemini_news_model)
+        return ActionRoute(action, tier, True, "gemini", model,
+                           effort=_gemini_thinking(model)[0])
+    else:  # utility, embed: today's routes
+        return _legacy_route(action, tier, f"{tier} tier")
+
+    if not model or provider not in ("anthropic", "openai"):
+        return _legacy_route(action, tier, f"{tier} tier blank")
+    if not _has_key(provider):
+        return _legacy_route(action, tier, f"no {provider} key")
+    fo_provider = fo_model_name = fo_sent_effort = None
+    if fo is not None and fo[0] in ("anthropic", "openai") and _has_key(fo[0]):
+        fo_provider, fo_model_name = fo
+        # Effort is re-resolved for the failover (provider, model): the
+        # debate's "high" stays "high" on gpt-6-sol, and a level the
+        # partner does not accept is dropped (bull/bear critique #12).
+        fo_sent_effort = _effort_for(fo_provider, fo_model_name, fo_effort or None)
+    return ActionRoute(
+        action, tier, True, provider, model,
+        effort=_effort_for(provider, model, effort or None),
+        floor=_route_floor(provider, model),
+        failover_provider=fo_provider, failover_model=fo_model_name,
+        failover_effort=fo_sent_effort,
+    )
+
+
+def _dispatch_route(action: str | None) -> ActionRoute | None:
+    """The configured route a chat entry should use for `action`, or None
+    for today's behaviour (no action, a legacy tier, or a Gemini tier)."""
+    if not action or action not in attribution.ACTIONS:
+        return None
+    route = resolve_action_route(action)
+    if not route.configured or route.tier not in _DISPATCH_TIERS:
+        return None
+    return route
+
+
 def model_summary() -> dict[str, Any]:
     """Routing snapshot for the startup log and the status endpoint.
 
-    Contains model names and booleans only — never key material.
+    Contains model names and booleans only — never key material. Beyond
+    the per-role table: the tier routes (one representative action per
+    tier, so the worker's and web's routing lines can be compared at a
+    glance after a render.yaml change), the Gemini models, the chat
+    surface, the failover map, and the attribution mode (design §4.10).
     """
     try:
         unpriced_configured_models()
     except Exception as exc:  # pragma: no cover - a summary must not fail on it
         log_safely(log, "price-row check failed", exc)
+    tiers: dict[str, str] = {}
+    for label, action in (("research", "analyst.sector"), ("research_pm", "pm.synthesis"),
+                          ("debate", "debate.bull_open"), ("reviewer", "risk.review"),
+                          ("chat", "chat.sdk_turn"), ("news", "news.search"),
+                          ("utility", "chat.classify")):
+        try:
+            tiers[label] = resolve_action_route(action).describe()
+        except Exception as exc:  # pragma: no cover - e.g. a bad override
+            tiers[label] = f"error:{type(exc).__name__}"
+    gemini = {
+        "news": _resolve_gemini_model(None, settings.gemini_news_model),
+        "social": _resolve_gemini_model(None, settings.gemini_social_model),
+        "longdoc": _resolve_gemini_model(None, settings.gemini_longdoc_model),
+        "backend": "vertex" if settings.has_vertex else ("api" if settings.gemini_api_key else "off"),
+    }
+    chat_route = resolve_action_route("chat.sdk_turn")
+    chat = (f"sdk:{chat_route.model if chat_route.configured else resolve_role_model('pm', 'openai')}"
+            if settings.chat_agents_sdk else f"legacy:{_model_for(settings.active_llm_provider, 'strong')}")
     return {
         "active_provider": settings.active_llm_provider,
         "provider_choice": settings.llm_provider,
@@ -459,7 +692,79 @@ def model_summary() -> dict[str, Any]:
             "anthropic": settings.has_anthropic,
             "gemini": settings.has_gemini,
         },
+        "tiers": tiers,
+        "gemini": gemini,
+        "chat": chat,
+        "failover_map": {k: f"{p}:{m}" for k, (p, m) in FAILOVER_MODEL_MAP.items()},
+        "attribution_mode": attribution_mode(),
+        "reviewer_mode": settings.reviewer_mode,
+        "debate_mode": settings.debate_mode,
     }
+
+
+def _configured_model_names() -> dict[str, set[str]]:
+    """Every model the live settings can send, by provider."""
+    names: dict[str, set[str]] = {"anthropic": set(), "openai": set(), "gemini": set()}
+    for field in type(settings).model_fields:
+        if not field.endswith("_model"):
+            continue
+        value = str(getattr(settings, field, "") or "").strip()
+        provider = provider_of_model(value)
+        if value and provider in names:
+            names[provider].add(value)
+    # The failover targets a configured model can reach are sent too.
+    for configured in [m for group in names.values() for m in group]:
+        target = FAILOVER_MODEL_MAP.get(configured)
+        if target is not None:
+            names[target[0]].add(target[1])
+    return names
+
+
+def _listed_ids(client: Any) -> set[str]:
+    ids: set[str] = set()
+    for item in client.models.list():
+        raw = getattr(item, "id", None) or getattr(item, "name", None) or ""
+        if isinstance(raw, str) and raw:
+            ids.add(raw.split("/", 1)[1] if raw.startswith("models/") else raw)
+    return ids
+
+
+def model_access_report() -> dict[str, str]:
+    """Can this deployment's keys reach every configured model?
+
+    Uses each provider's `models.list` ONLY — never a generation, so it
+    costs nothing and can run at startup (plan §8.1: the owner confirms
+    model access before wave H from this line). A dated listing
+    (`claude-haiku-4-5-20251001`) satisfies its alias. Logs one line:
+    `model_access claude-opus-5-5=ok gpt-6-sol=missing ...`.
+    """
+    factories = {"anthropic": _anthropic_client, "openai": _openai_client, "gemini": _gemini_client}
+    report: dict[str, str] = {}
+    for provider, models in _configured_model_names().items():
+        if not models:
+            continue
+        try:
+            client = factories[provider]()
+        except Exception as exc:  # pragma: no cover - factories already swallow
+            client = None
+            log_safely(log, f"model_access: {provider} client failed", exc)
+        if client is None:
+            for model in models:
+                report[model] = "unchecked:no_client"
+            continue
+        try:
+            listed = _listed_ids(client)
+        except Exception as exc:
+            for model in models:
+                report[model] = f"unchecked:{type(exc).__name__}"
+            continue
+        for model in models:
+            hit = model in listed or any(i.startswith(model + "-") for i in listed)
+            report[model] = "ok" if hit else "missing"
+    line = "model_access " + attribution.format_kv(sorted(report.items()))
+    level = logging.WARNING if any(v == "missing" for v in report.values()) else logging.INFO
+    _emit(log, level, line)
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -1906,7 +2211,29 @@ def _call_text(
     return text
 
 
-def _with_failover(provider: str, call: Any, *, failover: bool = True, **kwargs: Any) -> Any:
+def _failover_hop(provider: str, failover_route: tuple[str, str, str | None] | None,
+                  effort: str | None) -> tuple[str, str | None, str | None, str] | None:
+    """(partner, partner model or None, effort, resolution) or None.
+
+    A configured tier fails over by MODEL (Opus 5.5 -> gpt-6-sol, …) with
+    its own failover effort; otherwise today's rule: the partner provider
+    on its own route default, carrying the caller's effort (re-resolved for
+    whatever model that is).
+    """
+    if failover_route is not None:
+        partner, model, fo_effort = failover_route
+        if not settings.llm_failover_enabled or _demo_only() or not _has_key(partner):
+            return None
+        return partner, model, fo_effort, "failover_mapped"
+    legacy = _failover_partner(provider)
+    if legacy is None:
+        return None
+    return legacy, None, effort, "failover_default"
+
+
+def _with_failover(provider: str, call: Any, *, failover: bool = True,
+                   failover_route: tuple[str, str, str | None] | None = None,
+                   **kwargs: Any) -> Any:
     """Run `call(provider, **kwargs)`, hopping to the partner provider once.
 
     The hop happens when `provider`'s breaker is already open, its client
@@ -1951,28 +2278,42 @@ def _with_failover(provider: str, call: Any, *, failover: bool = True, **kwargs:
 
     if not failover:
         return None
-    partner = _failover_partner(provider)
-    if partner is None:
+    hop = _failover_hop(provider, failover_route, kwargs.get("effort"))
+    if hop is None:
         return None
-    partner_model = _model_for(partner, route)
+    partner, mapped_model, partner_effort, resolution = hop
+    partner_model = mapped_model or _model_for(partner, route)
     if att is not None:
         att.update(attempt=2, failover_from=provider, failover_reason=reason,
-                   model_resolution="failover_default")
+                   model_resolution=resolution)
     if _breaker_open(partner):
         log.debug("LLM failover from %s to %s skipped: partner breaker open", provider, partner)
         _record_skip(partner, partner_model, "skipped:partner_breaker_open")
         return None
     _record_failover(provider, partner, reason, from_model=sent, to_model=partner_model)
-    return call(partner, failover=failover, **{**kwargs, "model": None})
+    return call(partner, failover=failover,
+                **{**kwargs, "model": mapped_model, "effort": partner_effort})
 
 
-def _prepare(provider: str, model: str | None, route: str) -> str | None:
+def _tier_request(action: str | None, provider: str, model: str | None, effort: str | None
+                  ) -> tuple[str, str | None, str | None, tuple[str, str, str | None] | None, bool]:
+    """Apply a configured tier route: (provider, model, effort, failover
+    route, tiered). The tier replaces the call site's provider and model
+    (the per-role env knobs are today's routing; the tier IS the owner's
+    migration) but an explicit `effort=` from the caller still wins."""
+    route = _dispatch_route(action or _CALL_CONTEXT.get().get("action"))
+    if route is None or route.provider is None:
+        return provider, model, effort, None, False
+    return route.provider, route.model, (effort or route.effort), route.failover, True
+
+
+def _prepare(provider: str, model: str | None, route: str, *, tiered: bool = False) -> str | None:
     """Record the requested provider/model on the call scope and drop a
     provider-foreign model override (the route default is used instead)."""
     att = _ATTEMPT.get()
     literal = (model or "").strip()
     requested = literal or _model_for(provider, route)
-    resolution = "explicit" if literal else "route_default"
+    resolution = "tier" if tiered else ("explicit" if literal else "route_default")
     if not _model_matches_provider(model, provider):
         # Wave 9b's silent drop, now visible: the row says which name was
         # asked for and why another one was sent.
@@ -2035,12 +2376,13 @@ def chat_json(
         provider = (provider_override or settings.active_llm_provider).lower()
         if provider == "none":
             return None
+        provider, model, effort, fo_route, tiered = _tier_request(action, provider, model, effort)
         if provider == "gemini":
             return gemini_chat_json(prompt, system=system, model=model, max_tokens=max_tokens,
                                     action=action, ticker=ticker)
-        model = _prepare(provider, model, route)
+        model = _prepare(provider, model, route, tiered=tiered)
         out = _with_failover(
-            provider, _call_json, failover=failover,
+            provider, _call_json, failover=failover, failover_route=fo_route,
             prompt=prompt, system=system, route=route, max_tokens=max_tokens, model=model,
             effort=effort, schema=schema,
         )
@@ -2068,12 +2410,13 @@ def chat_text(
         provider = (provider_override or settings.active_llm_provider).lower()
         if provider == "none":
             return None
+        provider, model, effort, fo_route, tiered = _tier_request(action, provider, model, effort)
         if provider == "gemini":
             return gemini_chat_text(prompt, system=system, model=model, max_tokens=max_tokens,
                                     action=action, ticker=ticker)
-        model = _prepare(provider, model, route)
+        model = _prepare(provider, model, route, tiered=tiered)
         out = _with_failover(
-            provider, _call_text, failover=failover,
+            provider, _call_text, failover=failover, failover_route=fo_route,
             prompt=prompt, system=system, route=route, max_tokens=max_tokens, model=model,
             effort=effort, schema=schema,
         )
