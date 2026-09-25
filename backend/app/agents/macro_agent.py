@@ -22,6 +22,7 @@ from ..config import settings
 from ..schemas import AgentFinding, MacroScenarioResult
 from ..services.macro_service import macro_snapshot
 from . import llm, prompts
+from .source_ledger import register_source
 
 SCENARIO_TEMPLATES: dict[str, MacroScenarioResult] = {
     "soft_landing": MacroScenarioResult(
@@ -229,6 +230,11 @@ def run_macro_scenario(scenario: str) -> MacroScenarioResult:
     )
     base = SCENARIO_TEMPLATES[key]
     snapshot = macro_snapshot()
+    # W2b 7(a): the FRED snapshot (printed in percent) and the regime
+    # archetype template. The LLM-rewritten narrative and the regime
+    # probabilities are model output, never sources.
+    register_source("macro", "macro:snapshot", snapshot, pct=True)
+    register_source("macro", f"macro:{key}", base, exclude_keys=("regime_probabilities",))
 
     # LLM-driven narrative + research views; deterministic concat fallback.
     if settings.has_llm:

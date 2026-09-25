@@ -423,7 +423,21 @@ figures is not a reason. Without a reason that meets this bar the
 published rating will be Neutral. Omit the key when there is no
 divergence.
 
+FORECAST ASSUMPTIONS. Every figure in the memo is checked against the
+data the analysts were given, and a forward number (a growth rate,
+margin, multiple or price you expect) is not in that data. If your text
+states one, declare it in `forecast_assumptions`: at most 5 objects
+{value, unit, basis_ref, horizon}. `value` is the number as your text
+prints it in plain units (25 for 25%, 1200000000 for $1.2B); `unit` is
+one of "pct", "pp", "multiple", "usd", "number"; `basis_ref` is one of
+the refs listed under "Source refs" — the observed data the assumption
+departs from; `horizon` says when (for example "FY2027" or "next 4
+quarters"). Declared figures are shown to readers labelled as
+assumptions; an undeclared forward figure is shown as not found in the
+source data. Omit the key when you state no forward figure.
+
 Return JSON with keys: final_pm_view, one_sentence_thesis, rating_label,
 confidence_score, mispricing_thesis (object: consensus_view, our_view,
-gap, falsifiers list), optionally scorecard_reconciliation (string), and
-optionally valuation_divergence_reason (string)."""
+gap, falsifiers list), optionally scorecard_reconciliation (string),
+optionally valuation_divergence_reason (string), and optionally
+forecast_assumptions (list of at most 5 objects)."""

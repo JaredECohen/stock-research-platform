@@ -8,6 +8,7 @@ from typing import Any
 from ..config import settings
 from ..schemas import AgentFinding, RiskItem, RiskRecommendation
 from .log_safety import log_safely, safe_exc
+from .source_ledger import register_source
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +102,11 @@ def run_risk_agent(
 ) -> AgentFinding:
     risks: list[str] = profile.get("risks") or []
     summary_lines: list[str] = []
+    # W2b 7(a): the ratios and structural risks this analyst reads.
+    register_source("financials", f"risk_inputs:{profile.get('ticker', '')}",
+                    {"ratios": ratios, "structural_risks": risks})
+    if dcf_summary:
+        register_source("dcf", f"dcf_summary:{profile.get('ticker', '')}", dcf_summary)
 
     debt_to_eb = ratios.get("debt_to_ebitda")
     if debt_to_eb and debt_to_eb > 3.5:

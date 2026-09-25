@@ -15,8 +15,9 @@ now an evidence read that never looks at the rating
 when the PM synthesis or core analyst sections were template-filled, when
 no live critic reviewed the memo, when the transcript or the filing
 review is missing, or when a divergence was accepted without independent
-review (`earned_confidence`). Caps based on the number-to-source check
-arrive with that check (S15) and are skipped while it has not run.
+review (`earned_confidence`). The number-to-source check (7(a), S15) adds
+its caps: no or one primary source kind traced, untraceable figures, or
+figures that could not be checked at all.
 
 Everything here is pure: no DB, no LLM, no settings reads except where a
 caller passes the value in. `graph.py` owns when these run; this module
@@ -27,7 +28,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..finance import scorecard_spec
@@ -35,6 +36,7 @@ from ..schemas import (
     ConfidenceAssessment,
     ConfidenceCap,
     CriticReview,
+    NumberCheck,
     RatingReconciliation,
     SectionAvailability,
     StockMemoOut,
@@ -586,6 +588,37 @@ LAST_FULL_RUN_CAP = "last_full_run"
 class PatchGuard:
     rating_downgraded: bool = False
     confidence_clamped: bool = False
+    unchecked_fields: list[str] = field(default_factory=list)
+
+
+# Fields a news patch can rewrite wholesale; their stored claims described
+# the text the patch replaced.
+_PATCH_TEXT_FIELDS = ("one_sentence_thesis", "final_pm_view", "mispricing_thesis",
+                      "catalysts", "thesis_breakers", "final_verdict")
+
+
+def _patched_paths(prior: StockMemoOut, patched: StockMemoOut, fields: set[str]) -> list[str]:
+    """The number-check paths a patch changed. Appended case points and
+    risks are named item by item (the stored items keep their check);
+    anything else the patch set is named by its top-level field."""
+    out: list[str] = []
+    for side in ("bull_case", "bear_case"):
+        if side not in fields:
+            continue
+        old, new = getattr(prior, side), getattr(patched, side)
+        if (new.headline or "") != (old.headline or ""):
+            out.append(f"{side}.headline")
+        out += [f"{side}.key_points[{i}]" for i in range(len(old.key_points or []), len(new.key_points or []))]
+    if "key_risks" in fields:
+        out += [f"key_risks[{i}]" for i in range(len(prior.key_risks or []), len(patched.key_risks or []))]
+    for f in sorted(fields):
+        if f not in ("bull_case", "bear_case", "key_risks", "rating_label", "confidence_score"):
+            out.append(f)
+    return out
+
+
+def _covers(path: str, claim_field: str) -> bool:
+    return claim_field == path or claim_field.startswith(path + ".") or claim_field.startswith(path + "[")
 
 
 def enforce_after_patch(
@@ -613,6 +646,19 @@ def enforce_after_patch(
     out = patched.model_copy(deep=True)
     q = out.quality
     assert q is not None
+
+    # (a) A patch runs no number check: every field it rewrote or appended is
+    # labelled "not source-checked", and the claims stored for replaced text
+    # (whose offsets no longer index anything) are dropped.
+    nc = q.number_check
+    if nc is not None:
+        changed = _patched_paths(prior, out, fields)
+        if changed:
+            nc = nc.model_copy(deep=True)
+            nc.claims = [c for c in nc.claims if not any(_covers(p, c.field) for p in changed)]
+            nc.unchecked_fields = list(dict.fromkeys([*nc.unchecked_fields, *changed]))
+            q.number_check = nc
+            guard.unchecked_fields = changed
 
     vv = out.valuation_verdict
     if "rating_label" in fields and vv.basis == "evidence" and diverges(out.rating_label, vv.verdict):
@@ -721,14 +767,19 @@ def earned_confidence(
     transcript_given: bool,
     filing_reviewed: bool,
     divergence_unreviewed: bool,
-    number_check: Any | None = None,
+    number_check: NumberCheck | None = None,
 ) -> ConfidenceAssessment:
     """Deterministic caps on the PM's confidence; the minimum binds.
 
     `final = min(raw, max(20, min(caps)))`: a cap can lower confidence to
-    no less than 20, and nothing here ever raises `raw`. `number_check` is
-    accepted and ignored until the number-to-source check lands (S15):
-    number-based caps must not fire on a check that did not run."""
+    no less than 20, and nothing here ever raises `raw`.
+
+    Number-based caps (7(a)) apply only when the check ran:
+    `number_check=None` (a memo that pre-dates it, a fixture) adds none; an
+    UNCHECKED result (the registry was incomplete — a resumed run without
+    stored sources — or the check crashed) adds only `figures_unchecked`,
+    because tracing verdicts on a partial registry would flag real figures;
+    a checked result adds the evidence caps."""
     caps: list[ConfidenceCap] = []
     if pm_template:
         caps.append(ConfidenceCap(code="pm_template", cap=CAP_PM_TEMPLATE,
@@ -753,6 +804,7 @@ def earned_confidence(
             code="divergence_unreviewed", cap=CAP_DIVERGENCE_UNREVIEWED,
             detail="The rating diverges from the valuation evidence on a reason no live critic reviewed.",
         ))
+    caps += number_caps(number_check)
     raw_f = float(raw)
     if not caps:
         return ConfidenceAssessment(raw=raw_f, final=raw_f, caps=[], binding=None)
@@ -762,3 +814,82 @@ def earned_confidence(
         raw=raw_f, final=final, caps=caps,
         binding=lowest.code if final < raw_f else None,
     )
+
+
+# ---------------------------------------------------------------------------
+# 7(a) number-based caps and declared forecast assumptions
+# ---------------------------------------------------------------------------
+
+CAP_NO_PRIMARY_TRACE = 50.0
+CAP_SINGLE_PRIMARY_KIND = 65.0
+CAP_FIGURES_UNCHECKED = 70.0
+# (minimum distinct flagged figures, cap), strictest first.
+CAP_UNTRACEABLE_TIERS: tuple[tuple[int, float], ...] = ((11, 50.0), (6, 60.0), (3, 70.0))
+# A memo with >= 10 checked figures of which >= 15% are flagged is in the
+# strictest tier however few distinct values that is.
+UNTRACEABLE_RATIO = 0.15
+UNTRACEABLE_RATIO_MIN_CLAIMS = 10
+
+
+def number_caps(nc: NumberCheck | None) -> list[ConfidenceCap]:
+    if nc is None:
+        return []
+    if not nc.checked:
+        why = "; ".join(nc.notes[:2]) or "the number check did not complete"
+        return [ConfidenceCap(code="figures_unchecked", cap=CAP_FIGURES_UNCHECKED,
+                              detail=f"Figures were not source-checked: {why}.")]
+    caps: list[ConfidenceCap] = []
+    kinds = sorted(set(nc.primary_kinds_cited))
+    if not kinds:
+        caps.append(ConfidenceCap(
+            code="no_primary_trace", cap=CAP_NO_PRIMARY_TRACE,
+            detail="No figure traced to the financials, a filing or a transcript."))
+    elif len(kinds) == 1:
+        caps.append(ConfidenceCap(
+            code="single_primary_kind", cap=CAP_SINGLE_PRIMARY_KIND,
+            detail=f"Figures trace to one primary source kind only ({kinds[0]})."))
+    counts = nc.counts or {}
+    distinct = int(counts.get("flagged_distinct", 0))
+    total = int(counts.get("claims_total", 0))
+    flagged = int(counts.get("untraceable", 0)) + int(counts.get("mis_anchored", 0))
+    ratio_hit = total >= UNTRACEABLE_RATIO_MIN_CLAIMS and flagged / total >= UNTRACEABLE_RATIO
+    for floor, cap in CAP_UNTRACEABLE_TIERS:
+        if distinct >= floor or (ratio_hit and cap == CAP_UNTRACEABLE_TIERS[0][1]):
+            caps.append(ConfidenceCap(
+                code="untraceable_figures", cap=cap,
+                detail=(f"{distinct} distinct figure(s) not found in the data the analysts were "
+                        f"given ({flagged} of {total} checked).")))
+            break
+    return caps
+
+
+MAX_FORECAST_ASSUMPTIONS = 5
+ASSUMPTION_UNITS = ("pct", "pp", "multiple", "usd", "number")
+_UNIT_ALIASES = {"%": "pct", "percent": "pct", "x": "multiple", "$": "usd", "dollars": "usd",
+                 "bps": "pp", "percentage points": "pp"}
+
+
+def parse_forecast_assumptions(raw: Any) -> list[dict[str, Any]]:
+    """The PM's declared forward figures, shape-checked: at most 5 of
+    `{value, unit, basis_ref, horizon}`; anything malformed is dropped.
+    Whether `basis_ref` resolves is decided by the quality stage, against
+    the ledger."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if len(out) >= MAX_FORECAST_ASSUMPTIONS:
+            break
+        if not isinstance(item, dict):
+            continue
+        v = _num(item.get("value"))
+        unit = str(item.get("unit") or "").strip().lower()
+        unit = _UNIT_ALIASES.get(unit, unit)
+        ref = str(item.get("basis_ref") or "").strip()[:200]
+        horizon = " ".join(str(item.get("horizon") or "").split())[:60]
+        if v is None or unit not in ASSUMPTION_UNITS or not ref or not horizon:
+            continue
+        if unit == "pp" and str(item.get("unit") or "").strip().lower() == "bps":
+            v = v / 100.0
+        out.append({"value": abs(v), "unit": unit, "basis_ref": ref, "horizon": horizon})
+    return out

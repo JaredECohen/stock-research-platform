@@ -66,11 +66,14 @@ def save_step(
     payload: Any, ticker: str | None = None,
     ttl_hours: int = DEFAULT_TTL_HOURS,
     db: Session | None = None,
+    sources: dict[str, Any] | None = None,
 ) -> bool:
     """Persist `payload` for `(run_id, step_name)`. Returns True on success.
 
     Idempotent on `(run_id, step_name)` — re-saving overwrites the prior
-    payload (useful when a step's output evolves mid-run).
+    payload (useful when a step's output evolves mid-run). `sources` is the
+    step's exported source-ledger facts (W2b 7(a)); None leaves the column
+    null.
     """
     own = db is None
     if own:
@@ -93,13 +96,14 @@ def save_step(
         expires = _now() + timedelta(hours=ttl_hours)
         if existing is not None:
             existing.payload = blob
+            existing.sources = sources
             existing.ticker = ticker or existing.ticker
             existing.generated_at = _now()
             existing.expires_at = expires
         else:
             db.add(MemoRunCheckpoint(
                 run_id=run_id, step_name=step_name, ticker=ticker,
-                payload=blob, generated_at=_now(), expires_at=expires,
+                payload=blob, sources=sources, generated_at=_now(), expires_at=expires,
             ))
         if own:
             db.commit()
@@ -133,6 +137,30 @@ def load_step(
         if row.expires_at and _now() >= row.expires_at:
             return None
         return row.payload
+    finally:
+        if own:
+            db.close()
+
+
+def load_step_sources(
+    run_id: str, step_name: str, *, db: Session | None = None,
+) -> dict[str, Any] | None:
+    """The source-ledger facts saved with a step, or None (no row, or a row
+    written before the column existed / without capture)."""
+    own = db is None
+    if own:
+        db = SessionLocal()
+    try:
+        _ensure_table(db)
+        row = db.execute(
+            select(MemoRunCheckpoint).where(
+                MemoRunCheckpoint.run_id == run_id,
+                MemoRunCheckpoint.step_name == step_name,
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        return row.sources
     finally:
         if own:
             db.close()
@@ -194,6 +222,7 @@ def _from_json_safe(value: Any, return_type: type | None = None) -> Any:
 def checkpointed(
     step_name: str, *, return_type: type | None = None,
     ttl_hours: int = DEFAULT_TTL_HOURS,
+    capture_sources: bool = False,
 ):
     """Decorator: cache the function's return value under `(run_id, step_name)`.
 
@@ -202,6 +231,15 @@ def checkpointed(
     fall-through happens when the return value can't be JSON-serialized,
     or when the underlying store fails — never block a memo on a
     checkpoint hiccup.
+
+    `capture_sources=True` (W2b 7(a); roster analyst steps only): an
+    analyst registers its prompt payload on the run's source ledger from
+    INSIDE the step, so a resumed run that loads the stored finding would
+    otherwise lose those facts silently. On a miss the facts registered
+    inside the step are saved beside the payload; on a hit they are
+    replayed, and a row without them (written before the column, or by a
+    capture that failed) marks the ledger incomplete — the number check
+    then reports "not checked" rather than flag real figures.
     """
     def decorator(fn: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(fn)
@@ -210,19 +248,49 @@ def checkpointed(
             assert_current(run_id=run_id)
             if not run_id:
                 return fn(*args, **kwargs)
+            ledger = _active_ledger() if capture_sources else None
             cached = load_step(run_id, step_name)
             if cached is not None:
                 hydrated = _from_json_safe(cached, return_type=return_type)
+                if ledger is not None:
+                    _replay_sources(ledger, run_id, step_name)
                 return hydrated
-            result = fn(*args, **kwargs)
+            sources: dict[str, Any] | None = None
+            if ledger is not None:
+                with ledger.capture() as captured:
+                    result = fn(*args, **kwargs)
+                sources = ledger.export(captured)
+            else:
+                result = fn(*args, **kwargs)
             try:
-                save_step(run_id, step_name, payload=result, ttl_hours=ttl_hours)
+                save_step(run_id, step_name, payload=result, ttl_hours=ttl_hours, sources=sources)
             except Exception as exc:  # pragma: no cover — defensive
                 log.debug("checkpoint save failed for %s/%s: %s",
                           run_id, step_name, exc)
             return result
         return wrapper
     return decorator
+
+
+def _active_ledger() -> Any:
+    try:
+        from ..agents.source_ledger import active_ledger
+    except ImportError:  # pragma: no cover
+        return None
+    return active_ledger()
+
+
+def _replay_sources(ledger: Any, run_id: str, step_name: str) -> None:
+    try:
+        sources = load_step_sources(run_id, step_name)
+        if sources is None:
+            ledger.mark_incomplete(step_name)
+            return
+        ledger.replay(sources)
+    except Exception as exc:
+        log.warning("checkpoint sources replay failed for %s/%s: %s",
+                    run_id, step_name, type(exc).__name__)
+        ledger.mark_incomplete(step_name)
 
 
 def _current_run_id() -> str | None:

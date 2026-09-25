@@ -14,6 +14,7 @@ from typing import Any
 
 from ..schemas import AgentFinding, CompsHistoryStats, CompsResult
 from .log_safety import log_safely, safe_exc
+from .source_ledger import register_source
 
 log = logging.getLogger(__name__)
 
@@ -150,6 +151,9 @@ def run_comps_agent(
         )
 
     ticker = profile.get("ticker", "")
+    # W2b 7(a): the peer table this analyst reads (the gather stage
+    # registered the same object; the ledger dedupes it).
+    register_source("comps", f"comps:{ticker}", comps, exclude_keys=("exposure_rationale",))
     history = comps.history
     key_points: list[str] = _peer_relative_points(comps)
 

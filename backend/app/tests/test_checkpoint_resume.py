@@ -199,3 +199,88 @@ def test_checkpointed_falls_through_when_save_fails(monkeypatch):
     assert first == {"v": 1}
     assert second == {"v": 1}
     assert len(calls) == 2  # save kept failing → re-runs.
+
+
+# ---------------------------------------------------------------------------
+# W2b 7(a) — source-ledger facts survive a resume (opt-in, roster steps only)
+# ---------------------------------------------------------------------------
+
+def _analyst_step(calls: list[int]):
+    from app.agents.source_ledger import register_source
+
+    @checkpoint_store.checkpointed("graph.test_finding", return_type=AgentFinding, capture_sources=True)
+    def run() -> AgentFinding:
+        calls.append(1)
+        # What an analyst does inside its step: register its prompt payload.
+        register_source("technical", "technical:T", {"rsi_14": 68.2, "sma_50": 109.79})
+        return AgentFinding(agent="Technical Analyst", headline="h", summary="RSI at 68.", confidence=0.6)
+
+    return run
+
+
+def test_checkpoint_capture_and_replay():
+    """A resumed run loads the stored finding instead of re-running the
+    analyst, so the facts it registered inside the step are replayed from
+    the row; without them the registry would be silently incomplete."""
+    from app.agents.source_ledger import SourceLedger
+    _reset_table()
+    calls: list[int] = []
+    step = _analyst_step(calls)
+    first = SourceLedger()
+    with first.activate(), llm_call_context(run_id="run-src"):
+        step()
+    stored = checkpoint_store.load_step_sources("run-src", "graph.test_finding")
+    assert stored is not None and stored["v"] == 1 and len(stored["facts"]) == 2
+
+    resumed = SourceLedger()
+    with resumed.activate(), llm_call_context(run_id="run-src"):
+        step()
+    assert calls == [1]                                   # the analyst did not re-run ...
+    snap = resumed.snapshot()
+    assert snap.complete                                  # ... and nothing is missing
+    assert {round(f.value, 2) for f in snap.facts} == {68.2, 109.79}
+    assert snap.resolves("technical:T")
+
+
+def test_checkpoint_row_without_sources_marks_registry_incomplete():
+    """A row written before the `sources` column (or by a failed capture):
+    the number check must report "not checked", not flag real figures."""
+    from app.agents.source_ledger import SourceLedger
+    _reset_table()
+    checkpoint_store.save_step("run-old", "graph.test_finding", payload=AgentFinding(
+        agent="Technical Analyst", headline="h", summary="s", confidence=0.6).model_dump(mode="json"))
+    assert checkpoint_store.load_step_sources("run-old", "graph.test_finding") is None
+    calls: list[int] = []
+    ledger = SourceLedger()
+    with ledger.activate(), llm_call_context(run_id="run-old"):
+        finding = _analyst_step(calls)()
+    assert calls == [] and finding.headline == "h"
+    assert ledger.snapshot().incomplete_steps == ("graph.test_finding",)
+
+
+def test_capture_is_opt_in():
+    """Non-roster steps never write `sources` (and never mark anything)."""
+    from app.agents.source_ledger import SourceLedger, register_source
+    _reset_table()
+
+    @checkpoint_store.checkpointed("graph.plain")
+    def plain() -> dict:
+        register_source("technical", "technical:T", {"rsi_14": 50.0})
+        return {"v": 1}
+
+    ledger = SourceLedger()
+    with ledger.activate(), llm_call_context(run_id="run-plain"):
+        plain()
+        plain()
+    assert checkpoint_store.load_step_sources("run-plain", "graph.plain") is None
+    assert ledger.snapshot().complete
+
+
+def test_roster_steps_capture_sources():
+    from app.agents import roster
+    for spec in roster.AGENTS:
+        runner = roster.checkpointed_runner(spec)
+        assert runner.__closure__ is not None
+    # The decorator's flag is what the roster passes; pinned by source.
+    import inspect
+    assert "capture_sources=True" in inspect.getsource(roster._build_checkpointed)

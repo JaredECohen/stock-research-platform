@@ -25,6 +25,7 @@ from ..services.market_data_service import get_price_series
 from . import llm, prompts
 from .log_safety import log_safely, redact, safe_exc
 from .safe_runner import note_soft
+from .source_ledger import register_source
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +157,8 @@ def run_technical_agent(
     # buy/sell language. Falls back deterministically if the call fails.
     from .earnings_agent import _critique_block as _q
     payload_for_prompt = signals.model_dump()
+    # W2b 7(a): the computed indicators are the analyst's whole input.
+    register_source("technical", f"technical:{ticker}", payload_for_prompt)
     user_prompt = (
         prompts.TECHNICAL_ANALYST_PROMPT.format(
             ticker=ticker,

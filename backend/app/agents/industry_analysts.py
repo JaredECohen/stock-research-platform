@@ -79,6 +79,7 @@ from ..services.industry_group_knowledge import (
 from . import llm, prompts
 from .log_safety import log_safely
 from .safe_runner import note_soft
+from .source_ledger import register_source
 
 if TYPE_CHECKING:
     from .memo_context import MemoInputs
@@ -733,10 +734,19 @@ def run_industry_group_agent(
             memory_block = analyst.memory().as_prompt_context_for(ticker, max_chars=1500)
         except Exception:  # pragma: no cover — memory must never block a memo
             memory_block = ""
+    company_context = analyst.company_context_block(profile, classification, max_chars=5000)
+    profile_snapshot = _profile_snapshot(profile)
+    ratios_snapshot = _ratios_snapshot(ratios)
+    # W2b 7(a): the group analyst's inputs, under a code-free ref (owner
+    # decision 10: no industry codes on public surfaces). Group memory is a
+    # prior, not a source.
+    register_source("industry", f"industry_group:{analyst.slug}", {
+        "company_context": company_context, "profile": profile_snapshot, "ratios": ratios_snapshot,
+    })
     user_prompt = prompts.INDUSTRY_GROUP_ANALYST_PROMPT.format(
-        company_context=analyst.company_context_block(profile, classification, max_chars=5000),
-        profile_snapshot=json.dumps(_profile_snapshot(profile), default=str)[:2500],
-        ratios_snapshot=json.dumps(_ratios_snapshot(ratios), default=str)[:1500],
+        company_context=company_context,
+        profile_snapshot=json.dumps(profile_snapshot, default=str)[:2500],
+        ratios_snapshot=json.dumps(ratios_snapshot, default=str)[:1500],
         critique_block=critique_block,
     )
     if memory_block:

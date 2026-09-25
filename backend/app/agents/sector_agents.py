@@ -30,6 +30,7 @@ from ..services.data_service import get_data_service
 from ..services.sector_research_service import run_sector_research
 from . import industry_analysts, llm, prompts, sector_tools
 from .log_safety import log_safely
+from .source_ledger import register_source
 
 log = logging.getLogger(__name__)
 
@@ -410,6 +411,16 @@ def run_sector_agent(
                 memory_context = "\n\n".join(chunks)
         except Exception:  # pragma: no cover — memory should never block a memo
             memory_context = ""
+    # W2b 7(a): the computed cohort research, the macro broadcast, the
+    # sector data overlays, pending news and the industry-group block are
+    # what this analyst reads. Long-term memory is a prior, not a source.
+    register_source("sector_research", f"sector:{ticker}", research)
+    register_source("macro", "macro:broadcast", macro_broadcast)
+    register_source("macro", f"sector_context:{ticker}", {"context": sector_context,
+                                                         "block": sector_context_block})
+    register_source("news", f"news_alerts:{ticker}", news_alerts)
+    if industry_group_block and industry_analyst is not None:
+        register_source("industry", f"industry_group:{industry_analyst.slug}", industry_group_block)
     sector = research["sector"]
     sub_industry = research["sub_industry"]
     cohort = research["cohort"]
