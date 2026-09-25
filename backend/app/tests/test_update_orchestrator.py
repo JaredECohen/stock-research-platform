@@ -378,7 +378,8 @@ def test_patch_cannot_raise_confidence_or_publish_divergence(monkeypatch):
     rec = m.quality.rating_reconciliation
     assert rec.outcome == "downgraded" and rec.pm_rating == "Bullish" and rec.final_rating == "Neutral"
     assert "without a valuation reason" in rec.note
-    assert snap.revision_log[0]["quality_guard"] == {"rating_downgraded": True, "confidence_clamped": True}
+    assert snap.revision_log[0]["quality_guard"] == {
+        "rating_downgraded": True, "confidence_clamped": True, "fields_unchecked": []}
 
     # Lowering is allowed ...
     _patch_with("TSTGUARD", {"confidence_score": 40.0})
@@ -428,4 +429,48 @@ def test_patch_guard_leaves_legacy_memos_alone():
     snap = memo_store.latest_memo("TSTLEG")
     m = memo_store.memo_to_pydantic(snap)
     assert (m.rating_label, m.confidence_score, m.quality) == ("Very Bullish", 65.0, None)
-    assert snap.revision_log[0]["quality_guard"] == {"rating_downgraded": False, "confidence_clamped": False}
+    assert snap.revision_log[0]["quality_guard"] == {
+        "rating_downgraded": False, "confidence_clamped": False, "fields_unchecked": []}
+
+
+def test_patched_fields_marked_unchecked(monkeypatch):
+    """W2b 7(a): a patch runs no number check. Every field it rewrote or
+    appended is labelled unchecked, and the stored claims on replaced text
+    (whose offsets index text that no longer exists) are dropped; claims on
+    untouched fields and on the stored case points keep their check."""
+    from app.schemas import NumberCheck, NumberClaim
+    monkeypatch.setattr(update_orchestrator, "MAX_PATCHES_PER_DAY", 10)
+    _reset_memos("TSTNUM")
+    base = _guarded_memo("TSTNUM")
+    thesis_claim = NumberClaim(field="one_sentence_thesis", start=0, end=3, raw="12%", status="untraceable")
+    view_claim = NumberClaim(field="final_pm_view", start=0, end=3, raw="$5B", status="weak")
+    base = base.model_copy(update={
+        "one_sentence_thesis": "12% growth.", "final_pm_view": "$5B of revenue.",
+        "quality": base.quality.model_copy(update={"number_check": NumberCheck(
+            checked=True, claims=[thesis_claim, view_claim])}),
+    })
+    n_bull = len(base.bull_case.key_points)
+    n_risks = len(base.key_risks)
+    memo_store.save_memo(base, trigger="full_reanalysis")
+
+    _patch_with("TSTNUM", {"one_sentence_thesis": "News moved the thesis: 45% growth.",
+                           "bull_case": {"key_points": ["New order worth $9.9B."]},
+                           "key_risks": [{"title": "Probe", "detail": "A 25% tariff on imports.",
+                                          "severity": "medium"}]})
+    snap = memo_store.latest_memo("TSTNUM")
+    m = memo_store.memo_to_pydantic(snap)
+    nc = m.quality.number_check
+    added = f"bull_case.key_points[{n_bull}]"
+    risk = f"key_risks[{n_risks}]"
+    assert m.key_risks[n_risks].detail == "A 25% tariff on imports."
+    assert nc.unchecked_fields == [added, risk, "one_sentence_thesis"]
+    assert [c.field for c in nc.claims] == ["final_pm_view"]   # the thesis claim went with its text
+    assert m.final_pm_view[0:3] == "$5B"
+    assert snap.revision_log[0]["quality_guard"]["fields_unchecked"] == [added, risk, "one_sentence_thesis"]
+
+    # A memo whose check never ran carries no number_check to label.
+    _reset_memos("TSTNUM2")
+    memo_store.save_memo(_guarded_memo("TSTNUM2"), trigger="full_reanalysis")
+    _patch_with("TSTNUM2", {"one_sentence_thesis": "Changed."})
+    m2 = memo_store.memo_to_pydantic(memo_store.latest_memo("TSTNUM2"))
+    assert m2.quality.number_check is None

@@ -854,6 +854,42 @@ def test_number_check_paths_follow_dropped_items():
     assert ms._renumbered("bull_case.headline", {}, {"bull_case"}) is None
     assert ms._renumbered("bull_case.headline", {}, set()) == "bull_case.headline"
 
+    # Fields a news patch changed are named by their STORED index too, and
+    # move with the dropped items; one on a dropped item goes with it.
+    memo = raw.model_copy(update={"quality": MemoQuality(number_check=NumberCheck(
+        checked=True, unchecked_fields=[f"key_risks[{first_gone}]", f"key_risks[{last}]",
+                                        "one_sentence_thesis"]))})
+    nc = present_memo(memo).quality.number_check
+    assert nc.unchecked_fields == [f"key_risks[{moved}]", "one_sentence_thesis"]
+
+
+def test_long_form_claims_index_the_presented_expansion():
+    """The number check stores long-form offsets into the FULL stored
+    report; the presenter shows only the stripped analyst expansion, so
+    each claim moves back by what was cut in front of it (a renderer relies
+    on text[start:end] == raw)."""
+    from app.agents import number_check
+    from app.agents.source_ledger import SourceLedger
+    report = ("## Sector\n\nDeterministic body with 12.5% restated.\n\n### Analyst expansion\n"
+              "  The stock trades at 77.7x trailing earnings after 999% growth.")
+    memo = make_memo(sector_agent_view=make_finding("Sector Analyst", long_form_report=report))
+    result = number_check.check_memo(memo, SourceLedger().snapshot(), withhold=False)
+    memo.quality = MemoQuality(number_check=number_check.summarize(result, assumptions=[], notes=[]))
+    stored = [c for c in memo.quality.number_check.claims if c.field.endswith(".long_form_report")]
+    assert {c.raw for c in stored} == {"77.7x", "999%"}
+    assert all(report[c.start:c.end] == c.raw for c in stored)
+
+    shown = present_memo(memo)
+    text = shown.sector_agent_view.long_form_report
+    assert text == "The stock trades at 77.7x trailing earnings after 999% growth."
+    moved = [c for c in shown.quality.number_check.claims if c.field.endswith(".long_form_report")]
+    assert sorted(c.raw for c in moved) == ["77.7x", "999%"]
+    assert all(text[c.start:c.end] == c.raw for c in moved)
+    # A claim that no longer indexes the shown text is dropped, not served stale.
+    bad = stored[0].model_copy(update={"start": 3, "end": 8})
+    memo.quality.number_check.claims = [bad]
+    assert present_memo(memo).quality.number_check.claims == []
+
 
 def _builder_base() -> StockMemoOut:
     """An LLM-PM memo whose thesis the verdict guard rewrote with the builder

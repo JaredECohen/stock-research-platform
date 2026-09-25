@@ -529,7 +529,13 @@ def build_notes_block_for_agent(
             render_summary_block(summaries),
             render_body_block(excerpts),
         ]
-        return "\n\n".join(b for b in blocks if b)
+        block = "\n\n".join(b for b in blocks if b)
+        if block:
+            # W2b 7(a): the one choke point every note reaches an agent
+            # through (seven specialists and the PM).
+            from ..agents.source_ledger import register_source
+            register_source("research_note", f"notes:{agent_name}", block)
+        return block
     except Exception as exc:  # pragma: no cover — research notes never block a memo
         log.debug("research notes build failed for %s: %s", agent_name, exc)
         return ""

@@ -10,6 +10,7 @@ from ..schemas import AgentFinding
 from . import llm, prompts
 from .log_safety import log_safely, redact, safe_exc
 from .safe_runner import note_soft
+from .source_ledger import register_source
 
 log = logging.getLogger(__name__)
 
@@ -271,6 +272,10 @@ def run_earnings_agent(
         # AND the high-relevance specific blocks.
         "retrieved_chunks": retrieved_chunks,
     }
+    # W2b 7(a): the call itself is a primary source. The multi-pass
+    # addendum is an LLM's reading of the back half, never a source.
+    register_source("transcript", f"transcript:{transcript.get('period') or profile.get('ticker')}",
+                    payload, exclude_keys=("multi_pass_addendum",))
     from ..services.research_notes import build_notes_block_for_agent
     notes_block = build_notes_block_for_agent(
         "earnings", profile, extra_query="guidance margins capex demand",
@@ -392,6 +397,9 @@ def run_earnings_agent(
         summary = (
             f"No substantive transcript text available for {period}." + next_line
         )
+    # The canned text quotes the transcript's length: a fact about the source.
+    register_source("transcript", f"transcript:{transcript.get('period') or profile.get('ticker')}",
+                    {"transcript_chars": text_len})
     if settings.has_llm:
         # (b) RP-001: an LLM was configured and returned nothing usable, so
         # this canned text stands in for the analyst's read. The graph

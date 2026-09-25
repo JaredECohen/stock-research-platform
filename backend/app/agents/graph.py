@@ -51,6 +51,7 @@ from ..schemas import (
     DCFResult,
     MemoQuality,
     MispricingThesis,
+    NumberCheck,
     RatingReconciliation,
     RiskItem,
     RoundFindings,
@@ -63,7 +64,7 @@ from ..services.filings_service import get_filings
 from ..services.fundamentals_service import get_full_financials
 from ..services.transcripts_service import latest_transcript
 from ..services.valuation_service import build_comps, build_dcf
-from . import llm, memo_quality, prompts, roster, scorecard_context
+from . import llm, memo_quality, number_check, prompts, roster, scorecard_context
 from .critic_agent import run_critic
 from .log_safety import redact
 from .memo_context import (
@@ -83,6 +84,7 @@ from .safe_runner import (
     safe_critic,
     safe_finding,
 )
+from .source_ledger import SourceLedger, active_ledger, register_source
 from .tools import evidence_quality
 
 if TYPE_CHECKING:  # the ORM stays a lazy import at runtime (see _persist_memo_snapshot)
@@ -91,6 +93,18 @@ if TYPE_CHECKING:  # the ORM stays a lazy import at runtime (see _persist_memo_s
 log = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+# W2b 7(a) source registration for DCF results: prose is read only under
+# these keys (the engine's own labels, summary and guardrail messages;
+# `name` is for DCFSensitivity.name). Scenario drivers are written by an
+# LLM in live runs (`scenario_assumptions._parse_side` copies each driver's
+# name, rationale and assumption_changes from its JSON), so the whole
+# `drivers` subtree is never a source for the figures it quotes — a figure
+# in a driver name would otherwise trace to "dcf:initial" (the memo prints
+# it as "DCF driver — {name}: ..."). The other keys stay excluded wherever
+# they appear.
+DCF_TEXT_KEYS = ("summary", "message", "label", "name", "row_axis", "col_axis", "metric")
+DCF_LLM_KEYS = ("drivers", "rationale", "assumption_changes")
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +691,11 @@ def _market_gap_clause(
         consensus = _consensus_growth_path(estimates)
         if consensus:
             consensus_avg = sum(consensus) / len(consensus)
+        # W2b 7(a): the thesis quotes the consensus path and its average.
+        register_source("estimates", f"estimates:{ticker}", {
+            "consensus_revenue_growth": consensus, "consensus_revenue_growth_average": consensus_avg,
+            "estimates": estimates,
+        })
     except Exception as exc:
         # (a) the clause degrades to its "vs. trend" framing below, which is
         # the same output as "no consensus published" — not a memo change.
@@ -1215,6 +1234,11 @@ def _pm_synthesis(
     # outside the JSON cut. "" without evidence keeps the prompt byte-identical.
     evidence = memo_quality.valuation_evidence_block(valuation_evidence)
     evidence_block = ("\n\n" + evidence) if evidence else ""
+    # W2b 7(a): the source refs a declared forecast assumption may name as
+    # its basis. Volatile, after the evidence block; "" outside a memo run
+    # (no active ledger) keeps the prompt byte-identical.
+    refs = _source_refs_block()
+    refs_block = ("\n\n" + refs) if refs else ""
     # The synthesis template is byte-stable across memos; declare it as the
     # cached prefix so each PM call reads it instead of re-paying for it. The
     # volatile pm_ctx / digests / findings follow the "\n\n" join and stay
@@ -1225,6 +1249,7 @@ def _pm_synthesis(
             + (("\n\n" + pm_ctx) if pm_ctx else "")
             + digest_block
             + evidence_block
+            + refs_block
             + "\n\nFindings:\n"
             + json.dumps({k: v.model_dump() for k, v in view.findings.items()}, default=str)[: settings.max_agent_context_chars],
             system=prompts.PM_SYSTEM, route="strong",
@@ -1302,6 +1327,20 @@ def _pm_synthesis(
         rating_label=rating,
         confidence_score=confidence,
     )
+
+
+MAX_SOURCE_REFS_IN_PROMPT = 40
+
+
+def _source_refs_block() -> str:
+    """The ledger's source refs, for the PM's `forecast_assumptions`."""
+    ledger = active_ledger()
+    if ledger is None:
+        return ""
+    refs = ledger.source_refs()[:MAX_SOURCE_REFS_IN_PROMPT]
+    if not refs:
+        return ""
+    return "## Source refs (for forecast_assumptions basis_ref)\n" + ", ".join(refs)
 
 
 def _portfolio_fit(profile: dict, rating: str) -> str:
@@ -1413,10 +1452,15 @@ def run_stock_memo(
     # line of the memo run is covered, and the token is reset in `finally`
     # so the regen worker's next memo in the same thread starts empty.
     degradation = DegradationLog()
+    # W2b 7(a): the source ledger — every fact the analysts are given is
+    # registered where its payload is built (`register_source`), and the
+    # quality stage checks the memo's figures against it. Same activation
+    # discipline as the degradation log: one per run, reset in `finally`.
+    ledger = SourceLedger()
     try:
         with as_of_context(as_of_date), llm_call_context(
             agent_name="run_stock_memo", run_id=run_id,
-        ), degradation.activate():
+        ), degradation.activate(), ledger.activate():
             return _run_stock_memo_inner(
                 ticker, scenario=scenario, force_refresh=force_refresh,
                 run_id=run_id, as_of_date=as_of_date, degradation=degradation,
@@ -1532,6 +1576,10 @@ def _gather_inputs(
     if not profile:
         raise ValueError(f"Unknown ticker: {ticker}")
     ratios = fin.get("ratios", {}) or {}
+    # W2b 7(a): the fundamentals every analyst reads (profile text, the
+    # statements, ratios, earnings history). Derived growth and margins
+    # (D1/D2) are computed at registration.
+    register_source("financials", f"financials:{ticker}", fin)
 
     # Failover events are context-local and the regen worker runs memos
     # back to back in one long-lived thread, so whatever the previous run
@@ -1549,6 +1597,12 @@ def _gather_inputs(
                     name="DCF Engine", log_to=degradation)
     comps = safe_call(_checkpointed_comps, ticker, force_refresh=force_refresh, fallback=None,
                       name="Comps Engine", log_to=degradation)
+    if dcf is not None:
+        register_source("dcf", "dcf:initial", dcf, text_keys=DCF_TEXT_KEYS,
+                        exclude_keys=DCF_LLM_KEYS)
+    if comps is not None:
+        # `exposure_rationale` is an LLM's pick of cross-sector peers.
+        register_source("comps", f"comps:{ticker}", comps, exclude_keys=("exposure_rationale",))
 
     # Phase 6 — the scorecard read, point-in-time at `as_of_date`. A crash
     # here is a hard "Fundamental Scorecard" degradation (the read failed);
@@ -1563,6 +1617,8 @@ def _gather_inputs(
             scorecard_context.load_for_memo, ticker, as_of_date, fallback=None,
             name=scorecard_context.AGENT_NAME, log_to=degradation,
         )
+        if scorecard is not None:
+            register_source("scorecard", f"scorecard:{ticker}", scorecard)
         # Review seeds are only meaningful where the dialog will run (live
         # memo, deep research on) — the same gate `_run_analyst_round` uses.
         if settings.enable_deep_research and as_of_date is None:
@@ -1589,6 +1645,7 @@ def _gather_inputs(
         earnings=earnings, transcript=transcript, filings=filings,
         dcf=dcf, comps=comps, degradation=degradation,
         scorecard=scorecard, scorecard_seeds=seeds, industry_group=industry_group,
+        ledger=active_ledger(),
     )
 
 
@@ -1758,6 +1815,12 @@ def _adjust_dcf(inputs: MemoInputs, analysts: AnalystRound) -> DCFStage:
                 # Replace the working DCF — downstream synthesis, bull/bear,
                 # factor scoring all see the PM-adjusted version.
                 dcf = adjusted_dcf
+                # W2b 7(a): the final model is a source; the adjuster's
+                # from/to values are too, its rationale (LLM prose) is not.
+                register_source("dcf", "dcf:pm_adjusted", dcf, text_keys=DCF_TEXT_KEYS,
+                                exclude_keys=DCF_LLM_KEYS)
+                register_source("dcf_adjustment", "dcf:adjustments", pm_dcf_adjustments,
+                                text_keys=(), exclude_keys=("rationale",))
                 # B2 — the valuation agent already ran on the pre-adjustment
                 # DCF and baked those numbers into its prose. Rewrite the
                 # stale references so ONE DCF appears everywhere in the memo.
@@ -1909,6 +1972,11 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     # (the reader sees it with the reconciliation note), capped like the
     # other PM strings.
     divergence_reason = str(synth.get("valuation_divergence_reason") or "").strip()[:1200]
+    # W2b 7(a): forward figures the PM declared as assumptions (at most 5,
+    # shape-checked here; the quality stage keeps only those whose basis
+    # resolves in the ledger).
+    inputs.forecast_assumptions = memo_quality.parse_forecast_assumptions(
+        synth.get("forecast_assumptions"))
 
     # Phase 6 — the scorecard summary the memo carries. No row on file is a
     # SOFT degradation the reader must see (the section says n/a and why),
@@ -1979,6 +2047,8 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
         price_at_memo = get_current_price(profile.get("ticker", ticker))
     except Exception as exc:  # pragma: no cover — never block a memo
         log.debug("price_at_memo capture failed: %s", exc)
+    if price_at_memo is not None:
+        register_source("price", f"price:{ticker}", {"price_at_memo": price_at_memo})
 
     # Wave 10 — forward catalyst calendar (next 90d). Best-effort —
     # the table may be empty until the cron has run at least once.
@@ -1986,6 +2056,7 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     try:
         from ..services.catalyst_service import get_upcoming
         forward_catalysts = get_upcoming(profile.get("ticker", ticker), days_ahead=90)
+        register_source("catalyst_calendar", f"catalysts:{ticker}", forward_catalysts)
     except Exception as exc:  # pragma: no cover
         # (a) the catalyst tile is legitimately empty before the calendar
         # cron has run, so an empty tile is not a memo degradation — but a
@@ -2042,6 +2113,8 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
                     str(k): float(v) for k, v in snap.items()
                     if isinstance(v, (int, float))
                 }
+                # FRED series are printed in percent already.
+                register_source("macro", "macro:snapshot_at_memo", macro_snapshot_at_memo, pct=True)
     except Exception as exc:  # pragma: no cover
         log.debug("macro snapshot freeze failed: %s", exc)
 
@@ -2127,6 +2200,13 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
         # verdict stage adds "thesis" and "mispricing" (VerdictOutcome.apply).
         section_provenance={"v": 1, "llm_configured": bool(settings.has_llm)},
     )
+
+    # W2b 7(a): the quant factor block the memo prints beside the rating.
+    # The confidence entries are the PM's own numbers, never a source.
+    register_source("factor_scores", f"factor_scores:{ticker}", {
+        k: v for k, v in (memo.scores or {}).items()
+        if k.startswith("factor_") or k in ("beat_streak", "guidance_net_direction")
+    })
 
     # Wave 9 — surface deep-research counters on `memo.scores` so the
     # admin dashboard can chart how often the dialog converges vs. caps
@@ -2480,24 +2560,93 @@ def _build_verdict(
 
 
 # ---------------------------------------------------------------------------
-# Stage 6b — quality (pure): 7(c) earned confidence
+# Stage 6b — quality (pure): 7(a) number check + 7(c) earned confidence
 # ---------------------------------------------------------------------------
 
+def _check_numbers(
+    memo: StockMemoOut, inputs: MemoInputs, notes: list[DegradationNote],
+) -> tuple[NumberCheck | None, number_check.WithholdPlan | None]:
+    """7(a): the memo's figures against the run's source ledger.
+
+    None when there is no ledger (a direct stage call; nothing was
+    registered, so nothing can be judged). An incomplete registry (a
+    resumed step without stored sources, a registration that failed) is
+    "not checked": no flags, no withholding, the `figures_unchecked` cap —
+    judging figures against a partial registry would flag real ones. A
+    crash is a hard "Number Check" degradation with the same unchecked
+    result. `UntraceableNumbers` are recorded in `quality`, never on the
+    degraded-agents banner: an untraceable figure is a finding about the
+    memo, not an analyst outage."""
+    ledger = getattr(inputs, "ledger", None)
+    if ledger is None:
+        return None, None
+    try:
+        registry = ledger.snapshot()
+        declared, dropped = _resolve_assumptions(getattr(inputs, "forecast_assumptions", []), registry)
+        if not registry.complete:
+            steps = ", ".join(registry.incomplete_steps[:3])
+            log.info("number check %s: not checked, source registry incomplete (%s)", memo.ticker, steps)
+            return NumberCheck(
+                checked=False, method_version=number_check.METHOD_VERSION,
+                counts={"registry_facts": len(registry.facts), "registry_sources": len(registry.sources)},
+                assumptions=[{**a, "status": "assumption"} for a in declared],
+                notes=[f"source registry incomplete ({steps})", *dropped],
+            ), None
+        result = number_check.check_memo(
+            memo, registry, withhold=settings.number_check_withhold, assumptions=declared)
+        nc = number_check.summarize(result, assumptions=declared, notes=dropped)
+    except Exception as exc:
+        log.warning("number check failed for %s: %s", memo.ticker, type(exc).__name__)
+        notes.append(DegradationNote(agent="Number Check", error_type=type(exc).__name__,
+                                     message=redact(exc), soft=False))
+        return NumberCheck(checked=False, notes=[f"the number check crashed ({type(exc).__name__})"]), None
+    c = nc.counts
+    log.info(
+        "number check %s: fields=%d claims=%d traced=%d weak=%d mis_anchored=%d untraceable=%d "
+        "distinct=%d planned_withheld=%d registry=%d facts/%d sources",
+        memo.ticker, c.get("fields_checked", 0), c.get("claims_total", 0), c.get("traced", 0),
+        c.get("weak", 0), c.get("mis_anchored", 0), c.get("untraceable", 0),
+        c.get("flagged_distinct", 0), sum(len(v) for v in result.plan.items.values()),
+        c.get("registry_facts", 0), c.get("registry_sources", 0),
+    )
+    return nc, result.plan
+
+
+def _resolve_assumptions(
+    declared: list[dict[str, Any]], registry: Any,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Declared forecast assumptions whose `basis_ref` names a registered
+    source; the rest are dropped with a note (their figures stay unchecked
+    claims, i.e. untraceable)."""
+    kept: list[dict[str, Any]] = []
+    notes: list[str] = []
+    for a in declared or []:
+        if registry.resolves(a.get("basis_ref", "")):
+            kept.append(a)
+        else:
+            notes.append(f"forecast assumption not accepted: basis_ref "
+                         f"{str(a.get('basis_ref'))[:60]!r} is not a registered source")
+    return kept, notes
+
+
 def _assess_quality(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound) -> QualityOutcome:
-    """The 7(c) caps on the PM's confidence, from the post-verdict memo.
+    """7(a) the number-to-source check and 7(c) the caps on the PM's
+    confidence, from the post-verdict memo.
 
     Pure: reads the memo and the inputs; the orchestrator applies the
-    returned `QualityOutcome`. Template-filled sections come from the W2a
-    presenter's `compute_availability` (contract C2) so the caps and the
-    "unavailable in this version" placeholders can never disagree about
-    which section was a template. A section that map could not classify
-    raises (`memo_quality.template_filled`), so `_quality_fallback` caps
-    the memo instead of the template caps silently dropping out. The
-    number-to-source caps arrive with that check (S15) and are skipped
-    while it has not run.
+    returned `QualityOutcome` (withholding included). Template-filled
+    sections come from the W2a presenter's `compute_availability` (contract
+    C2) so the caps and the "unavailable in this version" placeholders can
+    never disagree about which section was a template. A section that map
+    could not classify raises (`memo_quality.template_filled`), so
+    `_quality_fallback` caps the memo instead of the template caps silently
+    dropping out. The number-based caps apply only when the number check
+    ran (`memo_quality.number_caps`).
     """
     from ..services.memo_sections import compute_availability
 
+    notes: list[DegradationNote] = []
+    nc, plan = _check_numbers(memo, inputs, notes)
     pm_template, template_sections = memo_quality.template_filled(compute_availability(memo))
     filing = analysts.findings.get("filing")
     filing_skipped = bool(
@@ -2522,14 +2671,14 @@ def _assess_quality(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRou
         transcript_given=inputs.transcript is not None,
         filing_reviewed=bool(inputs.filings) and not filing_skipped,
         divergence_unreviewed=divergence_unreviewed,
-        number_check=memo.quality.number_check if memo.quality is not None else None,
+        number_check=nc,
     )
     log.info(
         "confidence check %s: raw=%.1f final=%.1f binding=%s caps=%s",
         memo.ticker, confidence.raw, confidence.final, confidence.binding,
         ",".join(f"{c.code}:{c.cap:g}" for c in confidence.caps) or "none",
     )
-    return QualityOutcome(confidence=confidence)
+    return QualityOutcome(confidence=confidence, number_check=nc, withhold=plan, degradations=notes)
 
 
 def _quality_fallback(memo: StockMemoOut) -> QualityOutcome:
@@ -2560,6 +2709,7 @@ def _render_final_texts(memo: StockMemoOut, verdict: VerdictOutcome, initial: PM
         only the risk review and blend involved the wording is unchanged.
     """
     memo.final_verdict = verdict.render(memo)
+    nc = memo.quality.number_check if memo.quality is not None else None
     if memo.rating_label == initial.rating and float(memo.confidence_score) == initial.confidence:
         memo.final_pm_view = initial.text
         return
@@ -2572,12 +2722,16 @@ def _render_final_texts(memo: StockMemoOut, verdict: VerdictOutcome, initial: PM
     if conf is not None and conf.final < conf.raw:
         steps.append("evidence cap on confidence")
     after = " and ".join(steps) if len(steps) == 2 else ", ".join(steps[:-1]) + " and " + steps[-1]
-    memo.final_pm_view = (
+    prefix = (
         f"Final rating after {after}: {memo.rating_label} "
         f"(confidence {memo.confidence_score:g}/100).\n\n"
         f"PM rationale before those adjustments (rating {initial.rating}; "
-        f"confidence {initial.confidence:g}/100):\n{initial.text}"
+        f"confidence {initial.confidence:g}/100):\n"
     )
+    memo.final_pm_view = prefix + initial.text
+    # 7(a) claims on the PM view were located in the PM's own text; the
+    # preface moves them (`text[start:end] == raw` must hold as stored).
+    number_check.shift_field(nc, "final_pm_view", len(prefix))
 
 
 def _run_reflection(memo: StockMemoOut, inputs: MemoInputs) -> None:

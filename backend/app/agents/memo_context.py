@@ -57,6 +57,7 @@ from ..schemas import (
     DCFResult,
     MemoQuality,
     MispricingThesis,
+    NumberCheck,
     RoundFindings,
     ScorecardSummary,
     StockMemoOut,
@@ -66,6 +67,8 @@ from .safe_runner import DegradationLog
 
 if TYPE_CHECKING:  # intake -> roster -> memo_context; keep the runtime edge one-way
     from .intake import IntakeDecision
+    from .number_check import WithholdPlan
+    from .source_ledger import SourceLedger
 
 
 @dataclass
@@ -118,6 +121,16 @@ class MemoInputs:
     # `{industry_group_block}` both read it here, so a memo never looks the
     # mapping up twice. With routing off it stays None and nothing reads it.
     industry_group: dict[str, Any] | None = None
+    # W2b 7(a) — the run's source ledger (activated by `run_stock_memo`;
+    # None for a direct stage call, in which case the number check does not
+    # run). Analysts register their payloads through the context var, not
+    # this handle; the quality stage reads the snapshot from here.
+    ledger: SourceLedger | None = None
+    # W2b 7(a) — forward figures the PM declared (`forecast_assumptions`),
+    # shape-checked. Written by the compose stage (the PM speaks there), read
+    # by the quality stage; like `scorecard_seeds_consumed`, a stage output
+    # carried on the inputs because no memo field holds it before the check.
+    forecast_assumptions: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -239,19 +252,31 @@ class VerdictOutcome:
 
 @dataclass
 class QualityOutcome:
-    """What `_assess_quality` decided (7(c) earned confidence).
+    """What `_assess_quality` decided: 7(a) number check, 7(c) confidence.
 
     Pure stage output, applied by the orchestrator. `apply` is the one
     place that writes confidence after the quality stage, and it writes it
     everywhere at once: `confidence_score == scores["confidence"] ==
-    quality.confidence.final`."""
+    quality.confidence.final`. It also carries out the number check's
+    withholding plan (`number_check.apply_withholding`), which is the only
+    edit the quality stage makes to memo prose."""
     confidence: ConfidenceAssessment
     degradations: list[DegradationNote] = field(default_factory=list)
+    # None when the check did not run (no ledger) — the memo then carries no
+    # `number_check` and no number-based cap.
+    number_check: NumberCheck | None = None
+    withhold: WithholdPlan | None = None
 
     def apply(self, memo: StockMemoOut, degradation: DegradationLog) -> None:
         final = float(self.confidence.final)
         quality = memo.quality or MemoQuality()
-        memo.quality = quality.model_copy(update={"confidence": self.confidence})
+        nc = self.number_check.model_copy(deep=True) if self.number_check is not None else None
+        if nc is not None:
+            from . import number_check as _nc
+            _nc.apply_withholding(memo, nc, self.withhold)
+            nc.counts = {**nc.counts, "withheld": len(nc.withheld)}
+            _nc.drop_stale_claims(memo, nc)
+        memo.quality = quality.model_copy(update={"confidence": self.confidence, "number_check": nc})
         memo.confidence_score = final
         if isinstance(memo.scores, dict):
             memo.scores = {**memo.scores, "confidence": final}

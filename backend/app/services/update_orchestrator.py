@@ -324,8 +324,10 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
     # W2b: a patch runs neither the PM nor the critic, so it can neither
     # state a valuation-divergence reason nor earn confidence. Re-apply 7(b)
     # against the STORED evidence verdict and hold confidence at or below
-    # the last full run's earned value. A no-op on memos written before
-    # these guards (no `quality`): they behave exactly as before.
+    # the last full run's earned value. A patch runs no number check
+    # either (7(a)): every field it rewrote or appended is labelled
+    # "figures not source-checked". A no-op on memos written before these
+    # guards (no `quality`): they behave exactly as before.
     from ..agents.memo_quality import enforce_after_patch
     from ..config import settings
     patched_memo, guard = enforce_after_patch(
@@ -351,6 +353,7 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
             "quality_guard": {
                 "rating_downgraded": guard.rating_downgraded,
                 "confidence_clamped": guard.confidence_clamped,
+                "fields_unchecked": guard.unchecked_fields,
             },
             "alert": {
                 "title": alert.title, "severity": alert.severity,

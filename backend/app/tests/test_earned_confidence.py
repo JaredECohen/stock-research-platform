@@ -5,8 +5,9 @@ template-filled, sources are thin, or the critic failed. Caps are
 deterministic, the lowest binds, nothing ever raises the PM's number, and
 the result is the ONE confidence the memo carries everywhere
 (`confidence_score == scores["confidence"] == quality.confidence.final`).
-Number-based caps belong to the number-to-source check (S15) and must not
-fire while that check has not run.
+The number-based caps (S15) apply only when the number-to-source check
+ran: none without a check, only `figures_unchecked` when it could not
+complete, the evidence caps when it did.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ KNOWN_CODES = {
     "pm_template", "template_sections", "critic_not_live", "no_transcript",
     "no_filing_review", "divergence_unreviewed",
 }
+BOTH_PRIMARY = ["financials", "filing"]
 
 
 def conf(**kw):
@@ -77,17 +79,53 @@ def test_never_raises_and_floor(monkeypatch):
 
 
 def test_number_caps_skipped_when_unchecked():
-    """7(c)'s number-based caps come with the number check (S15). Until it
-    runs, no NumberCheck — present, unchecked, or even carrying counts —
-    produces a cap."""
-    for nc in (None, NumberCheck(), NumberCheck(checked=False, counts={"untraceable": 30}),
-               NumberCheck(checked=True, counts={"untraceable": 30, "traced": 0})):
+    """No check (a memo that pre-dates it, a direct stage call): no number
+    cap. A check that could not complete (a resumed run without stored
+    sources, a crash): ONLY `figures_unchecked` — tracing verdicts on a
+    partial registry would flag real figures, so the evidence caps are
+    skipped however bad the partial counts look."""
+    assert conf(number_check=None).caps == []
+    for nc in (NumberCheck(), NumberCheck(checked=False, counts={"untraceable": 30, "flagged_distinct": 30})):
         out = conf(number_check=nc)
-        assert out.caps == [] and out.final == 90.0
+        assert [(c.code, c.cap) for c in out.caps] == [("figures_unchecked", 70.0)]
+        assert out.final == 70.0
     full = conf(pm_template=True, template_sections=["a"], critic_mode="unknown",
                 transcript_given=False, filing_reviewed=False, divergence_unreviewed=True,
-                number_check=NumberCheck(checked=True, counts={"untraceable": 30}))
-    assert {c.code for c in full.caps} == KNOWN_CODES
+                number_check=NumberCheck(checked=True, counts={"untraceable": 30, "flagged_distinct": 30,
+                                                               "claims_total": 40}))
+    assert {c.code for c in full.caps} == KNOWN_CODES | {"no_primary_trace", "untraceable_figures"}
+
+
+def checked(**kw):
+    counts = {"claims_total": 100, "traced": 100, "untraceable": 0, "mis_anchored": 0, "flagged_distinct": 0}
+    counts.update(kw.pop("counts", {}))
+    return NumberCheck(checked=True, counts=counts, primary_kinds_cited=kw.pop("kinds", BOTH_PRIMARY), **kw)
+
+
+@pytest.mark.parametrize("nc, code, cap", [
+    (checked(kinds=[]), "no_primary_trace", 50.0),
+    (checked(kinds=["financials"]), "single_primary_kind", 65.0),
+    (checked(counts={"flagged_distinct": 3, "untraceable": 3}), "untraceable_figures", 70.0),
+    (checked(counts={"flagged_distinct": 5, "untraceable": 5}), "untraceable_figures", 70.0),
+    (checked(counts={"flagged_distinct": 6, "untraceable": 6}), "untraceable_figures", 60.0),
+    (checked(counts={"flagged_distinct": 10, "mis_anchored": 10}), "untraceable_figures", 60.0),
+    (checked(counts={"flagged_distinct": 11, "untraceable": 11}), "untraceable_figures", 50.0),
+    # >= 10 checked figures with >= 15% flagged: the strictest tier even
+    # when few distinct values are involved (one figure repeated).
+    (checked(counts={"claims_total": 20, "flagged_distinct": 1, "untraceable": 3}), "untraceable_figures", 50.0),
+    (NumberCheck(checked=False, notes=["source registry incomplete (graph.sector_finding)"]),
+     "figures_unchecked", 70.0),
+])
+def test_each_number_cap(nc, code, cap):
+    out = conf(number_check=nc)
+    assert [(c.code, c.cap) for c in out.caps] == [(code, cap)]
+    assert out.final == cap and out.binding == code
+
+
+def test_number_caps_below_threshold_do_not_fire():
+    for nc in (checked(), checked(counts={"flagged_distinct": 2, "untraceable": 2}),
+               checked(counts={"claims_total": 9, "flagged_distinct": 2, "untraceable": 2})):
+        assert conf(number_check=nc).caps == []
 
 
 def _llm_memo(**overrides):

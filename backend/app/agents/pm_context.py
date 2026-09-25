@@ -237,9 +237,14 @@ def industry_context_block(
         return ""
     scope = [t for t in ([ticker] if ticker else []) + list(tickers or []) if t]
     render_cap = min(int(max_chars), INDUSTRY_BLOCK_MAX_CHARS)
+    rendered = render_pm_block(snapshot, max_chars=render_cap)
+    # W2b 7(a): the snapshot's observed statistics are facts the PM reads.
+    # The report excerpts below are analyst interpretation, never sources.
+    from .source_ledger import register_source
+    register_source("industry", "industry_snapshot:weekly", rendered)
     parts = [
         "## Cross-industry snapshot (weekly, persisted; observed data + rule-based reads)",
-        render_pm_block(snapshot, max_chars=render_cap),
+        rendered,
     ]
     if scope:
         detail = relevant_groups_detail(scope)
