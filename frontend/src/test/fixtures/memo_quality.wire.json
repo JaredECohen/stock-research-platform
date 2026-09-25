@@ -1,0 +1,3711 @@
+{
+ "memo": {
+  "agent_influence": {
+   "comps": 0.8974,
+   "earnings": 0.0,
+   "filing": 0.0,
+   "macro": 0.4121,
+   "risk": 0.8974,
+   "sector": 1.0,
+   "technical": 0.0,
+   "valuation": 0.0
+  },
+  "bear_case": {
+   "headline": "Unavailable in this version.",
+   "key_points": [
+    "DCF bear case implies $43.86 (-63%).",
+    "Risk lens: Multiple compression risk: EV/EBITDA 34.4x",
+    "Risk lens: DCF bear scenario maps explicit downside"
+   ]
+  },
+  "bull_case": {
+   "headline": "Unavailable in this version.",
+   "key_points": [
+    "DCF bull case implies $73.90 (-37%)."
+   ]
+  },
+  "business_summary": "Designs GPUs and accelerated computing platforms for AI training and inference, gaming, professional visualization, and data center workloads.",
+  "catalysts": [],
+  "company_name": "NVIDIA Corporation",
+  "comps_agent_view": {
+   "agent": "Comps Analyst",
+   "confidence": 0.7,
+   "data": {
+    "research_notes": "## Discretionary investment context\n- **Pat Dorsey: Moat Durability Heuristics** (The Little Book That Builds Wealth (2008), Ch. 4): Five durability tests — switching costs, network effects, intangible assets, cost advantages, efficient scale. The most durable moats compound; the rest get arbitraged away within 5-7 years.\n\n## Discretionary investment context (relevant excerpts)\n\n### Pat Dorsey: Moat Durability Heuristics (The Little Book That Builds Wealth (2008), Ch. 4)\n\n# Pat Dorsey: Moat Durability Heuristics\n\nThe four-source taxonomy is well-known. What's underappreciated is the **durability**\ntest — most \"moats\" in screens are fragile, regression-to-the-mean stories that\nlook like moats only because the screening window happened to capture an\nabove-average year.\n\n## The five tests\n\n1. **Switching costs** — does the customer pay a real cost to leave (data, retraining, integration)?\n2. **Network effects** — does each new participant raise the value for incumbents?\n3. **Intangible assets** — patents, regulatory moats, brand premium that buyers actually pay for.\n4. **Cost advantages** — process, scale, or location that competitors can't replicate.\n5. **Efficient scale** — markets where the incumbent's economics deter entry by virtue of small TAM.\n\n## How to apply\n\nWhen the cohort says a name's gross margin is in the top quartile, ask which\nof the five sources is producing the premium. If you can't name one, the\nquartile placement is suspect — it's likely a timing artifact rather than a\nmoat.\n\nWhen the comps say a stock is at a premium multiple, the question isn't \"is the\npremium deserved?\" — it's \"is the moat that produces the premium *durable*?\"\nPremium without durability is volatility risk wearing a costume.\n"
+   },
+   "evidence": [
+    {
+     "excerpt": "Advanced Micro Devices, Inc.: EV/EBITDA 71.3x, op margin 10%.",
+     "kind": "peer",
+     "ref": "AMD",
+     "section": null
+    },
+    {
+     "excerpt": "Broadcom Inc.: EV/EBITDA 31.1x, op margin 45%.",
+     "kind": "peer",
+     "ref": "AVGO",
+     "section": null
+    },
+    {
+     "excerpt": "Intel Corporation: EV/EBITDA 23.9x, op margin 4%.",
+     "kind": "peer",
+     "ref": "INTC",
+     "section": null
+    },
+    {
+     "excerpt": "QUALCOMM Incorporated: EV/EBITDA 15.9x, op margin 28%.",
+     "kind": "peer",
+     "ref": "QCOM",
+     "section": null
+    }
+   ],
+   "headline": "NVDA trades at a 25% EV/EBITDA premium to peers with above-peer growth.",
+   "key_points": [
+    "EV/EBITDA: target 34.4x vs peer median 27.5x.",
+    "Op margin: 61% vs peers 19%.",
+    "Growth: +55% vs peers +14%.",
+    "FCF yield: 2.0% vs peers 2.1%."
+   ],
+   "long_form_report": null,
+   "sources": [
+    "peer:AMD",
+    "peer:AVGO",
+    "peer:INTC",
+    "peer:QCOM"
+   ],
+   "summary": "Peer set: AMD, AVGO, INTC, QCOM. Trades at a +24.9% premium to peers on EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median."
+  },
+  "confidence_score": 45.0,
+  "dcf_initial_summary": {},
+  "dcf_pm_adjustment_headline": "",
+  "dcf_pm_adjustments": [],
+  "dcf_summary": {
+   "base_implied_price": 57.58452502903146,
+   "base_upside": -0.5119955506014283,
+   "bear_implied_price": 43.862010429313834,
+   "bear_upside": -0.6282880472092047,
+   "bull_implied_price": 73.90063209210219,
+   "bull_upside": -0.37372345684659164,
+   "current_price": 118.0,
+   "summary": "Base case implied price $57.58 vs current $118.00 (-51.2%). Bull $73.90 (-37.4%) | Bear $43.86 (-62.8%). ⚠ Model warnings: 0 errors, 1 warns",
+   "terminal_growth": 0.025,
+   "tv_clamped": false,
+   "wacc": 0.1123
+  },
+  "degradation_events": [
+   {
+    "agent": "DCF Scenarios",
+    "error_type": "DeterministicFallback",
+    "message": "bull/bear driver LLM returned no usable output; sector-templated bumps used"
+   },
+   {
+    "agent": "Sector Analyst",
+    "error_type": "DeterministicFallback",
+    "message": "Sector LLM returned no usable output; cohort-grounded deterministic summary shipped instead."
+   },
+   {
+    "agent": "Earnings Analyst",
+    "error_type": "DeterministicFallback",
+    "message": "Earnings LLM returned no usable output; deterministic transcript summary shipped instead."
+   },
+   {
+    "agent": "Filing Analyst",
+    "error_type": "DeterministicFallback",
+    "message": "Filing LLM returned no usable output; deterministic MD&A / risk-factor extract shipped instead."
+   },
+   {
+    "agent": "Macro Analyst",
+    "error_type": "DeterministicFallback",
+    "message": "Macro LLM returned no usable output; regime template shipped instead of a company-specific read."
+   },
+   {
+    "agent": "Technical Analyst",
+    "error_type": "DeterministicFallback",
+    "message": "Technical LLM returned no usable output; deterministic indicator read-out shipped instead."
+   },
+   {
+    "agent": "PM DCF Adjuster",
+    "error_type": "DeterministicFallback",
+    "message": "LLM returned no usable proposal; DCF kept consensus assumptions"
+   },
+   {
+    "agent": "Fundamental Scorecard",
+    "error_type": "DataUnavailable",
+    "message": "no scorecard row on file for NVDA; section renders n/a"
+   },
+   {
+    "agent": "Risk Committee",
+    "error_type": "CriticUnavailable",
+    "message": "Live critic unavailable; only rule-based checks were completed."
+   }
+  ],
+  "degraded_agents": [
+   "DCF Scenarios",
+   "Sector Analyst",
+   "Earnings Analyst",
+   "Filing Analyst",
+   "Macro Analyst",
+   "Technical Analyst",
+   "PM DCF Adjuster",
+   "Fundamental Scorecard",
+   "Risk Committee"
+  ],
+  "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
+  "earnings_agent_view": {
+   "agent": "Earnings Analyst",
+   "confidence": 0.4,
+   "data": {
+    "deterministic_fallback": "Earnings LLM returned no usable output; deterministic transcript summary shipped instead."
+   },
+   "evidence": [],
+   "headline": "Unavailable in this version.",
+   "key_points": [],
+   "long_form_report": null,
+   "sources": [
+    "transcript:2024Q4"
+   ],
+   "summary": "Unavailable in this version."
+  },
+  "earnings_qoq_delta": null,
+  "extra_agent_views": {},
+  "filing_agent_view": {
+   "agent": "Filing Analyst",
+   "confidence": 0.6,
+   "data": {
+    "deterministic_fallback": "Filing LLM returned no usable output; deterministic MD&A / risk-factor extract shipped instead."
+   },
+   "evidence": [],
+   "headline": "Unavailable in this version.",
+   "key_points": [],
+   "long_form_report": null,
+   "sources": [
+    "filing:0001-DEMO-10K"
+   ],
+   "summary": "Unavailable in this version."
+  },
+  "final_pm_view": "Final rating after risk review, factor blend, valuation check and evidence cap on confidence: Neutral (confidence 45/100).\n\nPM rationale before those adjustments (rating Bullish; confidence 79.4655/100):\nData-center revenue of $123.45B anchors the call. We assume revenue growth of 18.5% through FY2027 as hyperscaler capex stays elevated.",
+  "final_verdict": "PM final view: Neutral (confidence 45). NVDA compounds data-center share faster than the market prices, but the multiple already assumes much of it. Watch items: Custom-silicon competition",
+  "forward_catalysts": [],
+  "generated_at": "2026-09-25T02:05:49.151285",
+  "generation_mode": "demo",
+  "intake_decision": {},
+  "key_risks": [
+   {
+    "detail": "AI capex digestion",
+    "severity": "medium",
+    "title": "AI capex digestion",
+    "type": "company"
+   },
+   {
+    "detail": "Geopolitical export restrictions",
+    "severity": "medium",
+    "title": "Geopolitical export restrictions",
+    "type": "company"
+   },
+   {
+    "detail": "Custom-silicon competition",
+    "severity": "high",
+    "title": "Custom-silicon competition",
+    "type": "company"
+   }
+  ],
+  "macro_regime_at_memo": "",
+  "macro_sensitivity": {
+   "agent": "Macro Analyst",
+   "confidence": 0.75,
+   "data": {
+    "deterministic_fallback": "Macro LLM returned no usable output; regime template shipped instead of a company-specific read."
+   },
+   "evidence": [],
+   "headline": "Unavailable in this version.",
+   "key_points": [],
+   "long_form_report": null,
+   "sources": [
+    "macro_scenario_framework"
+   ],
+   "summary": "Unavailable in this version."
+  },
+  "macro_snapshot_at_memo": {},
+  "mispricing_thesis": {
+   "consensus_view": "The market treats the AI build-out as a one-cycle spike.",
+   "falsifiers": [
+    "Two consecutive quarters of data-center revenue decline"
+   ],
+   "gap": "Duration of data-center demand.",
+   "our_view": "Share gains in networking and software extend the cycle."
+  },
+  "one_sentence_thesis": "NVDA compounds data-center share faster than the market prices, but the multiple already assumes much of it.",
+  "portfolio_fit": "Unavailable in this version.",
+  "price_at_memo": 118.0,
+  "price_at_memo_at": "2026-09-25T02:05:49.151212",
+  "quality": {
+   "confidence": {
+    "binding": "template_sections",
+    "caps": [
+     {
+      "cap": 45.0,
+      "code": "template_sections",
+      "detail": "3 core analyst section(s) template-filled: sector_agent_view, earnings_agent_view, filing_agent_view."
+     },
+     {
+      "cap": 60.0,
+      "code": "critic_not_live",
+      "detail": "No live critic review (review mode: rule_based)."
+     }
+    ],
+    "final": 45.0,
+    "raw": 74.46545454545455
+   },
+   "number_check": {
+    "assumptions": [
+     {
+      "basis_ref": "financials:NVDA",
+      "horizon": "FY2027",
+      "status": "assumption",
+      "unit": "pct",
+      "value": 18.5
+     }
+    ],
+    "checked": true,
+    "claims": [
+     {
+      "end": 235,
+      "field": "final_pm_view",
+      "raw": "$123.45B",
+      "source_refs": [],
+      "start": 227,
+      "status": "untraceable",
+      "unit": "usd",
+      "value": 123450000000.0
+     },
+     {
+      "end": 287,
+      "field": "final_pm_view",
+      "raw": "18.5%",
+      "source_refs": [],
+      "start": 282,
+      "status": "assumption",
+      "unit": "pct",
+      "value": 18.5
+     }
+    ],
+    "counts": {
+     "assumption": 1,
+     "claims_total": 49,
+     "fields_checked": 70,
+     "flagged_distinct": 2,
+     "mis_anchored": 0,
+     "registry_facts": 1392,
+     "registry_sources": 26,
+     "threshold": 0,
+     "traced": 47,
+     "untraceable": 2,
+     "weak": 0,
+     "withheld": 1
+    },
+    "lists_not_withheld": [],
+    "method_version": "1",
+    "notes": [],
+    "primary_kinds_cited": [
+     "filing",
+     "financials",
+     "transcript"
+    ],
+    "sources_cited": [
+     "dcf:initial",
+     "dcf_summary:NVDA",
+     "financials:NVDA",
+     "risk_inputs:NVDA",
+     "comps:NVDA",
+     "sector:NVDA",
+     "sector_context:NVDA",
+     "macro:snapshot",
+     "chunk:3",
+     "filing:0001-DEMO-10K",
+     "transcript:2024Q4",
+     "technical:NVDA",
+     "price:NVDA"
+    ],
+    "unchecked_fields": [],
+    "withheld": [
+     {
+      "claims": [
+       {
+        "end": 33,
+        "field": "valuation_agent_view.key_points[2]",
+        "raw": "$987.65B",
+        "source_refs": [],
+        "start": 25,
+        "status": "untraceable",
+        "unit": "usd",
+        "value": 987650000000.0
+       }
+      ],
+      "field": "valuation_agent_view.key_points",
+      "index": 2,
+      "text": "Hidden optionality worth $987.65B"
+     }
+    ]
+   },
+   "rating_reconciliation": {
+    "blended_rating": "Bullish",
+    "critic_assessment": "not_assessed",
+    "divergence": true,
+    "final_rating": "Neutral",
+    "note": "Rating set to Neutral: the blended rating was Bullish but the valuation evidence reads overvalued, and no reason was given. Net read: overvalued (EV/EBITDA 25% premium vs peers, rich; consensus DCF base case -51% to fair value, rich).",
+    "outcome": "downgraded",
+    "pm_confidence": 82.0,
+    "pm_rating": "Bullish",
+    "reason": "",
+    "reason_checks": {
+     "names_signal": false,
+     "quotes_value": false,
+     "substantive": false
+    },
+    "valuation_verdict": "overvalued"
+   },
+   "v": 1
+  },
+  "rating_label": "Neutral",
+  "risk_committee_challenge": {
+   "advice_compliance_check": "Advice compliance was not assessed by this rule-based check.",
+   "challenges": [],
+   "overall_assessment": "Unavailable in this version.",
+   "review_mode": "rule_based",
+   "suggested_revisions": [],
+   "underweighted_risks": [],
+   "valuation_divergence_assessment": "not_assessed"
+  },
+  "round_findings": [
+   {
+    "early_exit": false,
+    "findings": {
+     "comps": {
+      "agent": "Comps Analyst",
+      "confidence": 0.7,
+      "data": {
+       "research_notes": "## Discretionary investment context\n- **Pat Dorsey: Moat Durability Heuristics** (The Little Book That Builds Wealth (2008), Ch. 4): Five durability tests — switching costs, network effects, intangible assets, cost advantages, efficient scale. The most durable moats compound; the rest get arbitraged away within 5-7 years.\n\n## Discretionary investment context (relevant excerpts)\n\n### Pat Dorsey: Moat Durability Heuristics (The Little Book That Builds Wealth (2008), Ch. 4)\n\n# Pat Dorsey: Moat Durability Heuristics\n\nThe four-source taxonomy is well-known. What's underappreciated is the **durability**\ntest — most \"moats\" in screens are fragile, regression-to-the-mean stories that\nlook like moats only because the screening window happened to capture an\nabove-average year.\n\n## The five tests\n\n1. **Switching costs** — does the customer pay a real cost to leave (data, retraining, integration)?\n2. **Network effects** — does each new participant raise the value for incumbents?\n3. **Intangible assets** — patents, regulatory moats, brand premium that buyers actually pay for.\n4. **Cost advantages** — process, scale, or location that competitors can't replicate.\n5. **Efficient scale** — markets where the incumbent's economics deter entry by virtue of small TAM.\n\n## How to apply\n\nWhen the cohort says a name's gross margin is in the top quartile, ask which\nof the five sources is producing the premium. If you can't name one, the\nquartile placement is suspect — it's likely a timing artifact rather than a\nmoat.\n\nWhen the comps say a stock is at a premium multiple, the question isn't \"is the\npremium deserved?\" — it's \"is the moat that produces the premium *durable*?\"\nPremium without durability is volatility risk wearing a costume.\n"
+      },
+      "evidence": [
+       {
+        "excerpt": "Advanced Micro Devices, Inc.: EV/EBITDA 71.3x, op margin 10%.",
+        "kind": "peer",
+        "ref": "AMD",
+        "section": null
+       },
+       {
+        "excerpt": "Broadcom Inc.: EV/EBITDA 31.1x, op margin 45%.",
+        "kind": "peer",
+        "ref": "AVGO",
+        "section": null
+       },
+       {
+        "excerpt": "Intel Corporation: EV/EBITDA 23.9x, op margin 4%.",
+        "kind": "peer",
+        "ref": "INTC",
+        "section": null
+       },
+       {
+        "excerpt": "QUALCOMM Incorporated: EV/EBITDA 15.9x, op margin 28%.",
+        "kind": "peer",
+        "ref": "QCOM",
+        "section": null
+       }
+      ],
+      "headline": "NVDA trades at a 25% EV/EBITDA premium to peers with above-peer growth.",
+      "key_points": [
+       "EV/EBITDA: target 34.4x vs peer median 27.5x.",
+       "Op margin: 61% vs peers 19%.",
+       "Growth: +55% vs peers +14%.",
+       "FCF yield: 2.0% vs peers 2.1%."
+      ],
+      "long_form_report": null,
+      "sources": [
+       "peer:AMD",
+       "peer:AVGO",
+       "peer:INTC",
+       "peer:QCOM"
+      ],
+      "summary": "Peer set: AMD, AVGO, INTC, QCOM. Trades at a +24.9% premium to peers on EV/EBITDA. Operating margin runs above peer median, supporting a quality premium. Growth is above peer median."
+     },
+     "earnings": {
+      "agent": "Earnings Analyst",
+      "confidence": 0.4,
+      "data": {
+       "deterministic_fallback": "Earnings LLM returned no usable output; deterministic transcript summary shipped instead."
+      },
+      "evidence": [],
+      "headline": "Unavailable in this version.",
+      "key_points": [],
+      "long_form_report": null,
+      "sources": [
+       "transcript:2024Q4"
+      ],
+      "summary": "Unavailable in this version."
+     },
+     "filing": {
+      "agent": "Filing Analyst",
+      "confidence": 0.6,
+      "data": {
+       "deterministic_fallback": "Filing LLM returned no usable output; deterministic MD&A / risk-factor extract shipped instead."
+      },
+      "evidence": [],
+      "headline": "Unavailable in this version.",
+      "key_points": [],
+      "long_form_report": null,
+      "sources": [
+       "filing:0001-DEMO-10K"
+      ],
+      "summary": "Unavailable in this version."
+     },
+     "macro": {
+      "agent": "Macro Analyst",
+      "confidence": 0.75,
+      "data": {
+       "deterministic_fallback": "Macro LLM returned no usable output; regime template shipped instead of a company-specific read."
+      },
+      "evidence": [],
+      "headline": "Unavailable in this version.",
+      "key_points": [],
+      "long_form_report": null,
+      "sources": [
+       "macro_scenario_framework"
+      ],
+      "summary": "Unavailable in this version."
+     },
+     "risk": {
+      "agent": "Risk Analyst",
+      "confidence": 0.7,
+      "data": {
+       "applied_recommendations": [
+        {
+         "applied_change": {
+          "field": "confidence_score",
+          "from": 79.46545454545455,
+          "to": 74.46545454545455
+         },
+         "detail": "EV/EBITDA 34.4x is rich",
+         "direction": "lower",
+         "magnitude": "small",
+         "rationale": "Stretched multiple amplifies the rerating risk on any miss; lower confidence by small magnitude.",
+         "target": "confidence"
+        },
+        {
+         "applied_change": {
+          "appended": "Risk lens: Multiple compression risk: EV/EBITDA 34.4x",
+          "field": "bear_case.key_points"
+         },
+         "detail": "Multiple compression risk: EV/EBITDA 34.4x",
+         "direction": "flag",
+         "magnitude": "medium",
+         "rationale": "Stretched valuation needs to land in the bear case.",
+         "target": "bear_case"
+        },
+        {
+         "applied_change": {
+          "appended": "Risk lens: DCF bear scenario maps explicit downside",
+          "field": "bear_case.key_points"
+         },
+         "detail": "DCF bear scenario maps explicit downside",
+         "direction": "flag",
+         "magnitude": "small",
+         "rationale": "DCF bear case quantifies what happens if growth + margin assumptions slip; should land in bear key_points.",
+         "target": "bear_case"
+        }
+       ],
+       "recommendations": [
+        {
+         "detail": "EV/EBITDA 34.4x is rich",
+         "direction": "lower",
+         "magnitude": "small",
+         "rationale": "Stretched multiple amplifies the rerating risk on any miss; lower confidence by small magnitude.",
+         "target": "confidence"
+        },
+        {
+         "detail": "Multiple compression risk: EV/EBITDA 34.4x",
+         "direction": "flag",
+         "magnitude": "medium",
+         "rationale": "Stretched valuation needs to land in the bear case.",
+         "target": "bear_case"
+        },
+        {
+         "detail": "Custom-silicon competition",
+         "direction": "flag",
+         "magnitude": "medium",
+         "rationale": "Profile risk matches a thesis-breaker keyword (competition / regulator / concentration / fraud); must surface in thesis_breakers.",
+         "target": "thesis_breakers"
+        },
+        {
+         "detail": "DCF bear scenario maps explicit downside",
+         "direction": "flag",
+         "magnitude": "small",
+         "rationale": "DCF bear case quantifies what happens if growth + margin assumptions slip; should land in bear key_points.",
+         "target": "bear_case"
+        }
+       ],
+       "research_notes": "## Discretionary investment context\n- **Quality compounders: pre-purchase checklist** (Personal framework, refined 2025): Six tests a name must pass before sizing as a long-term core position: ROIC > 15% sustainable, owner-operator or aligned management, customer concentration < 25%, decade-plus addressable runway, FCF conversion > 80%, and downside scenario clear and survivable.\n\n## Discretionary investment context (relevant excerpts)\n\n### Quality compounders: pre-purchase checklist (Personal framework, refined 2025)\n\n# Quality compounders: pre-purchase checklist\n\nA name only earns the \"core position\" treatment after passing all six. Failing\neven one drops it into the trading-position bucket where sizing is half and\nexit discipline tightens.\n\n1. **Sustainable ROIC > 15%.** Not LTM — five-year average through at least one\n   downturn. Mean-reverting ROIC is a cycle play, not a compounder.\n2. **Owner-operator or shareholder-aligned management.** Insider ownership,\n   compensation tied to per-share economics, not stock-based-comp issuance for\n   \"alignment\".\n3. **Customer concentration < 25%** in the top customer. Above that, the moat\n   is the customer's, not yours.\n4. **Decade-plus addressable runway.** TAM that doesn't exhaust within the\n   forward DCF window.\n5. **FCF conversion > 80%.** Income that doesn't translate to cash means the\n   accounting and the economics aren't the same animal.\n6. **Downside scenario clear and survivable.** If the bear thesis materializes\n   and you can't articulate the recovery path, position-sizing should reflect\n   that ambiguity.\n"
+      },
+      "evidence": [
+       {
+        "excerpt": "AI capex digestion",
+        "kind": "other",
+        "ref": "profile.risks",
+        "section": null
+       },
+       {
+        "excerpt": "Geopolitical export restrictions",
+        "kind": "other",
+        "ref": "profile.risks",
+        "section": null
+       },
+       {
+        "excerpt": "Custom-silicon competition",
+        "kind": "other",
+        "ref": "profile.risks",
+        "section": null
+       },
+       {
+        "excerpt": "debt_to_ebitda=0.20",
+        "kind": "ratio",
+        "ref": "debt_to_ebitda",
+        "section": null
+       },
+       {
+        "excerpt": "EV_EBITDA=34.37",
+        "kind": "ratio",
+        "ref": "EV_EBITDA",
+        "section": null
+       },
+       {
+        "excerpt": "FCF_yield=0.02",
+        "kind": "ratio",
+        "ref": "FCF_yield",
+        "section": null
+       },
+       {
+        "excerpt": "Base case implied price $57.58 vs current $118.00 (-51.2%). Bull $73.90 (-37.4%) | Bear $43.86 (-62.8%). ⚠ Model warnings: 0 errors, 1 warns",
+        "kind": "dcf",
+        "ref": "NVDA",
+        "section": null
+       }
+      ],
+      "headline": "Risk profile for NVDA",
+      "key_points": [
+       "Risk: AI capex digestion",
+       "Risk: Geopolitical export restrictions",
+       "Risk: Custom-silicon competition"
+      ],
+      "long_form_report": null,
+      "sources": [],
+      "summary": "Multiple is high — valuation risk elevated to growth slippage. 4 structured rec(s) applied to the memo (see data.recommendations)."
+     },
+     "sector": {
+      "agent": "Sector Analyst",
+      "confidence": 0.78,
+      "data": {
+       "cohort": {
+        "peers": [],
+        "selection_basis": "sector",
+        "size": 0
+       },
+       "deterministic_fallback": "Sector LLM returned no usable output; cohort-grounded deterministic summary shipped instead.",
+       "industry": "Semiconductors",
+       "industry_structure": {
+        "concentration_label": "highly concentrated",
+        "hhi_revenue": 1.0,
+        "n_in_cohort": 1,
+        "top_3_revenue_share": 1.0
+       },
+       "kpi_placements": {},
+       "macro_alignment": "neutral",
+       "macro_broadcast": {},
+       "outliers": {
+        "fcf_yield_leader": "NVDA",
+        "growth_leader": "NVDA",
+        "margin_leader": "NVDA",
+        "roic_leader": "NVDA",
+        "valuation_cheapest": "NVDA"
+       },
+       "pending_news_alerts": [],
+       "regime": "Operating leverage cycle",
+       "sector": "Technology",
+       "sector_data_context": {
+        "discovered_catalog": {
+         "category_relevant": [
+          {
+           "category": "inflation",
+           "description": "Consumer Price Index All Urban Consumers. Top-line inflation print.",
+           "documentation_url": "https://fred.stlouisfed.org/series/CPIAUCSL",
+           "frequency": "monthly",
+           "name": "Headline CPI",
+           "region": "US",
+           "sector_tags": [
+            "Consumer Staples",
+            "Consumer Discretionary"
+           ],
+           "series_id": "CPIAUCSL",
+           "source": "FRED",
+           "sub_industry_tags": [],
+           "units": "index"
+          },
+          {
+           "category": "inflation",
+           "description": "Atlanta Fed sticky-price CPI ex food and energy YoY. The Fed's preferred inflation persistence gauge.",
+           "documentation_url": "https://fred.stlouisfed.org/series/CORESTICKM159SFRBATL",
+           "frequency": "monthly",
+           "name": "Sticky Core CPI YoY",
+           "region": "US",
+           "sector_tags": [],
+           "series_id": "CORESTICKM159SFRBATL",
+           "source": "FRED",
+           "sub_industry_tags": [],
+           "units": "%"
+          },
+          {
+           "category": "inflation",
+           "description": "Personal Consumption Expenditures price index. The FOMC's preferred inflation measure.",
+           "documentation_url": "https://fred.stlouisfed.org/series/PCEPI",
+           "frequency": "monthly",
+           "name": "PCE Price Index",
+           "region": "US",
+           "sector_tags": [],
+           "series_id": "PCEPI",
+           "source": "FRED",
+           "sub_industry_tags": [],
+           "units": "index"
+          },
+          {
+           "category": "inflation",
+           "description": "BLS Consumer Price Index for All Urban Consumers, all items.",
+           "documentation_url": "https://www.bls.gov/cpi/",
+           "frequency": "monthly",
+           "name": "BLS Headline CPI",
+           "region": "US",
+           "sector_tags": [],
+           "series_id": "CUUR0000SA0",
+           "source": "BLS",
+           "sub_industry_tags": [],
+           "units": "index"
+          },
+          {
+           "category": "inflation",
+           "description": "Grocery price component of CPI. Direct margin pressure on supermarkets.",
+           "documentation_url": "https://www.bls.gov/cpi/",
+           "frequency": "monthly",
+           "name": "BLS Food at Home CPI",
+           "region": "US",
+           "sector_tags": [
+            "Consumer Staples"
+           ],
+           "series_id": "CUUR0000SAF1",
+           "source": "BLS",
+           "sub_industry_tags": [
+            "Food Retail",
+            "Packaged Foods"
+           ],
+           "units": "index"
+          },
+          {
+           "category": "inflation",
+           "description": "New car price component. Pricing power for OEMs and dealers.",
+           "documentation_url": "https://www.bls.gov/cpi/",
+           "frequency": "monthly",
+           "name": "BLS New Vehicle CPI",
+           "region": "US",
+           "sector_tags": [
+            "Consumer Discretionary"
+           ],
+           "series_id": "CUUR0000SETA01",
+           "source": "BLS",
+           "sub_industry_tags": [
+            "Auto Manufacturers",
+            "Auto Retail"
+           ],
+           "units": "index"
+          },
+          {
+           "category": "inflation",
+           "description": "Used vehicle price component. Pricing for CarMax, Carvana, AutoNation used books.",
+           "documentation_url": "https://www.bls.gov/cpi/",
+           "frequency": "monthly",
+           "name": "BLS Used Vehicle CPI",
+           "region": "US",
+           "sector_tags": [
+            "Consumer Discretionary",
+            "Financials"
+           ],
+           "series_id": "CUUR0000SETA02",
+           "source": "BLS",
+           "sub_industry_tags": [
+            "Auto Retail",
+            "Consumer Finance"
+           ],
+           "units": "index"
+          },
+          {
+           "category": "inflation",
+           "description": "Medical care services + commodities. Hospital and pharma pricing pass-through.",
+           "documentation_url": "https://www.bls.gov/cpi/",
+           "frequency": "monthly",
+           "name": "BLS Medical Care CPI",
+           "region": "US",
+           "sector_tags": [
+            "Health Care"
+           ],
+           "series_id": "CUUR0000SAM",
+           "source": "BLS",
+           "sub_industry_tags": [],
+           "units": "index"
+          },
+          {
+           "category": "credit",
+           "description": "ICE BofA US High Yield Index OAS. Widening signals stress in junk credit.",
+           "documentation_url": "https://fred.stlouisfed.org/series/BAMLH0A0HYM2",
+           "frequency": "daily",
+           "name": "High-Yield Credit Spread",
+           "region": "US",
+           "sector_tags": [
+            "Financials",
+            "Energy",
+            "Consumer Discretionary"
+           ],
+           "series_id": "BAMLH0A0HYM2",
+           "source": "FRED",
+           "sub_industry_tags": [],
+           "units": "%"
+          }
+         ],
+         "geography_relevant": [],
+         "sector_relevant": [],
+         "sub_industry_relevant": []
+        },
+        "errors": [],
+        "overlays": {
+         "bundles": {
+          "credit": {
+           "available": true,
+           "narrative_hints": [
+            "High-yield credit spread at 3.40%, -0.07pp over 3 months."
+           ],
+           "series": [
+            {
+             "category": "credit",
+             "change_12m": -0.06800000000000006,
+             "change_1m": -0.06899999999999995,
+             "change_3m": -0.06899999999999995,
+             "description": "ICE BofA US High Yield Index OAS. Widening signals stress in junk credit.",
+             "error": null,
+             "frequency": "daily",
+             "latest": {
+              "date": "2026-09-24",
+              "value": 3.4
+             },
+             "name": "High-Yield Credit Spread",
+             "prior": {
+              "date": "2026-08-25",
+              "value": 3.469
+             },
+             "region": "US",
+             "sample_points": [
+              {
+               "date": "2024-11-03",
+               "value": 3.352
+              },
+              {
+               "date": "2024-12-03",
+               "value": 3.412
+              },
+              {
+               "date": "2025-01-02",
+               "value": 3.467
+              },
+              {
+               "date": "2025-02-01",
+               "value": 3.49
+              },
+              {
+               "date": "2025-03-03",
+               "value": 3.471
+              },
+              {
+               "date": "2025-04-02",
+               "value": 3.419
+              },
+              {
+               "date": "2025-05-02",
+               "value": 3.357
+              },
+              {
+               "date": "2025-06-01",
+               "value": 3.316
+              },
+              {
+               "date": "2025-07-01",
+               "value": 3.315
+              },
+              {
+               "date": "2025-07-31",
+               "value": 3.353
+              },
+              {
+               "date": "2025-08-30",
+               "value": 3.413
+              },
+              {
+               "date": "2025-09-29",
+               "value": 3.468
+              },
+              {
+               "date": "2025-10-29",
+               "value": 3.49
+              },
+              {
+               "date": "2025-11-28",
+               "value": 3.47
+              },
+              {
+               "date": "2025-12-28",
+               "value": 3.417
+              },
+              {
+               "date": "2026-01-27",
+               "value": 3.356
+              },
+              {
+               "date": "2026-02-26",
+               "value": 3.316
+              },
+              {
+               "date": "2026-03-28",
+               "value": 3.315
+              },
+              {
+               "date": "2026-04-27",
+               "value": 3.354
+              },
+              {
+               "date": "2026-05-27",
+               "value": 3.415
+              },
+              {
+               "date": "2026-06-26",
+               "value": 3.469
+              },
+              {
+               "date": "2026-07-26",
+               "value": 3.49
+              },
+              {
+               "date": "2026-08-25",
+               "value": 3.469
+              },
+              {
+               "date": "2026-09-24",
+               "value": 3.4
+              }
+             ],
+             "series_id": "BAMLH0A0HYM2",
+             "source": "FRED",
+             "units": "%",
+             "yoy_pct": -0.01960784313725492,
+             "z_score_5y": -0.13093399446111503
+            },
+            {
+             "category": "rates",
+             "change_12m": null,
+             "change_1m": null,
+             "change_3m": null,
+             "description": "Yield curve slope. Inverted curve historically precedes recessions.",
+             "error": "No data returned by FRED.",
+             "frequency": "daily",
+             "latest": null,
+             "name": "10Y-2Y Term Spread",
+             "prior": null,
+             "region": "US",
+             "sample_points": [],
+             "series_id": "T10Y2Y",
+             "source": "FRED",
+             "units": "%",
+             "yoy_pct": null,
+             "z_score_5y": null
+            },
+            {
+             "category": "credit",
+             "change_12m": null,
+             "change_1m": null,
+             "change_3m": null,
+             "description": "Total consumer credit. Reading on household leverage cycle.",
+             "error": "No data returned by FRED.",
+             "frequency": "monthly",
+             "latest": null,
+             "name": "Total Consumer Credit Outstanding",
+             "prior": null,
+             "region": "US",
+             "sample_points": [],
+             "series_id": "TOTALSL",
+             "source": "FRED",
+             "units": "billions $",
+             "yoy_pct": null,
+             "z_score_5y": null
+            },
+            {
+             "category": "credit",
+             "change_12m": null,
+             "change_1m": null,
+             "change_3m": null,
+             "description": "Delinquency rate on consumer credit card loans at commercial banks.",
+             "error": "No data returned by FRED.",
+             "frequency": "quarterly",
+             "latest": null,
+             "name": "Credit Card Delinquency Rate",
+             "prior": null,
+             "region": "US",
+             "sample_points": [],
+             "series_id": "DRCCLACBS",
+             "source": "FRED",
+             "units": "%",
+             "yoy_pct": null,
+             "z_score_5y": null
+            }
+           ],
+           "ticker": "NVDA"
+          },
+          "inflation": {
+           "available": true,
+           "narrative_hints": [
+            "Sticky core CPI at 3.6% YoY.",
+            "PCE inflation -0.5% YoY."
+           ],
+           "series": [
+            {
+             "category": "inflation",
+             "change_12m": -0.0009999999999998899,
+             "change_1m": 0.08899999999999997,
+             "change_3m": 0.0009999999999998899,
+             "description": "Consumer Price Index All Urban Consumers. Top-line inflation print.",
+             "error": null,
+             "frequency": "monthly",
+             "latest": {
+              "date": "2026-09-24",
+              "value": 2.9
+             },
+             "name": "Headline CPI",
+             "prior": {
+              "date": "2026-08-25",
+              "value": 2.811
+             },
+             "region": "US",
+             "sample_points": [
+              {
+               "date": "2024-11-03",
+               "value": 2.989
+              },
+              {
+               "date": "2024-12-03",
+               "value": 2.96
+              },
+              {
+               "date": "2025-01-02",
+               "value": 2.902
+              },
+              {
+               "date": "2025-02-01",
+               "value": 2.844
+              },
+              {
+               "date": "2025-03-03",
+               "value": 2.812
+              },
+              {
+               "date": "2025-04-02",
+               "value": 2.821
+              },
+              {
+               "date": "2025-05-02",
+               "value": 2.868
+              },
+              {
+               "date": "2025-06-01",
+               "value": 2.929
+              },
+              {
+               "date": "2025-07-01",
+               "value": 2.977
+              },
+              {
+               "date": "2025-07-31",
+               "value": 2.989
+              },
+              {
+               "date": "2025-08-30",
+               "value": 2.959
+              },
+              {
+               "date": "2025-09-29",
+               "value": 2.901
+              },
+              {
+               "date": "2025-10-29",
+               "value": 2.843
+              },
+              {
+               "date": "2025-11-28",
+               "value": 2.811
+              },
+              {
+               "date": "2025-12-28",
+               "value": 2.822
+              },
+              {
+               "date": "2026-01-27",
+               "value": 2.869
+              },
+              {
+               "date": "2026-02-26",
+               "value": 2.931
+              },
+              {
+               "date": "2026-03-28",
+               "value": 2.978
+              },
+              {
+               "date": "2026-04-27",
+               "value": 2.989
+              },
+              {
+               "date": "2026-05-27",
+               "value": 2.957
+              },
+              {
+               "date": "2026-06-26",
+               "value": 2.899
+              },
+              {
+               "date": "2026-07-26",
+               "value": 2.841
+              },
+              {
+               "date": "2026-08-25",
+               "value": 2.811
+              },
+              {
+               "date": "2026-09-24",
+               "value": 2.9
+              }
+             ],
+             "series_id": "CPIAUCSL",
+             "source": "FRED",
+             "units": "index",
+             "yoy_pct": -0.00034470872113060667,
+             "z_score_5y": -0.0013198459618491644
+            },
+            {
+             "category": "inflation",
+             "change_12m": -0.01200000000000001,
+             "change_1m": -0.08999999999999986,
+             "change_3m": -0.0129999999999999,
+             "description": "Personal Consumption Expenditures price index. The FOMC's preferred inflation measure.",
+             "error": null,
+             "frequency": "monthly",
+             "latest": {
+              "date": "2026-09-24",
+              "value": 2.5
+             },
+             "name": "PCE Price Index",
+             "prior": {
+              "date": "2026-08-25",
+              "value": 2.59
+             },
+             "region": "US",
+             "sample_points": [
+              {
+               "date": "2024-11-03",
+               "value": 2.414
+              },
+              {
+               "date": "2024-12-03",
+               "value": 2.45
+              },
+              {
+               "date": "2025-01-02",
+               "value": 2.51
+              },
+              {
+               "date": "2025-02-01",
+               "value": 2.566
+              },
+              {
+               "date": "2025-03-03",
+               "value": 2.59
+              },
+              {
+               "date": "2025-04-02",
+               "value": 2.572
+              },
+              {
+               "date": "2025-05-02",
+               "value": 2.52
+              },
+              {
+               "date": "2025-06-01",
+               "value": 2.459
+              },
+              {
+               "date": "2025-07-01",
+               "value": 2.417
+              },
+              {
+               "date": "2025-07-31",
+               "value": 2.414
+              },
+              {
+               "date": "2025-08-30",
+               "value": 2.452
+              },
+              {
+               "date": "2025-09-29",
+               "value": 2.512
+              },
+              {
+               "date": "2025-10-29",
+               "value": 2.567
+              },
+              {
+               "date": "2025-11-28",
+               "value": 2.59
+              },
+              {
+               "date": "2025-12-28",
+               "value": 2.571
+              },
+              {
+               "date": "2026-01-27",
+               "value": 2.519
+              },
+              {
+               "date": "2026-02-26",
+               "value": 2.457
+              },
+              {
+               "date": "2026-03-28",
+               "value": 2.416
+              },
+              {
+               "date": "2026-04-27",
+               "value": 2.415
+              },
+              {
+               "date": "2026-05-27",
+               "value": 2.453
+              },
+              {
+               "date": "2026-06-26",
+               "value": 2.513
+              },
+              {
+               "date": "2026-07-26",
+               "value": 2.568
+              },
+              {
+               "date": "2026-08-25",
+               "value": 2.59
+              },
+              {
+               "date": "2026-09-24",
+               "value": 2.5
+              }
+             ],
+             "series_id": "PCEPI",
+             "source": "FRED",
+             "units": "index",
+             "yoy_pct": -0.004777070063694272,
+             "z_score_5y": -0.023103810118595407
+            },
+            {
+             "category": "inflation",
+             "change_12m": -0.04899999999999993,
+             "change_1m": 0.06700000000000017,
+             "change_3m": -0.04800000000000004,
+             "description": "Atlanta Fed sticky-price CPI ex food and energy YoY. The Fed's preferred inflation persistence gauge.",
+             "error": null,
+             "frequency": "monthly",
+             "latest": {
+              "date": "2026-09-24",
+              "value": 3.6
+             },
+             "name": "Sticky Core CPI YoY",
+             "prior": {
+              "date": "2026-08-25",
+              "value": 3.533
+             },
+             "region": "US",
+             "sample_points": [
+              {
+               "date": "2024-11-03",
+               "value": 3.682
+              },
+              {
+               "date": "2024-12-03",
+               "value": 3.687
+              },
+              {
+               "date": "2025-01-02",
+               "value": 3.65
+              },
+              {
+               "date": "2025-02-01",
+               "value": 3.59
+              },
+              {
+               "date": "2025-03-03",
+               "value": 3.535
+              },
+              {
+               "date": "2025-04-02",
+               "value": 3.51
+              },
+              {
+               "date": "2025-05-02",
+               "value": 3.528
+              },
+              {
+               "date": "2025-06-01",
+               "value": 3.579
+              },
+              {
+               "date": "2025-07-01",
+               "value": 3.641
+              },
+              {
+               "date": "2025-07-31",
+               "value": 3.683
+              },
+              {
+               "date": "2025-08-30",
+               "value": 3.686
+              },
+              {
+               "date": "2025-09-29",
+               "value": 3.649
+              },
+              {
+               "date": "2025-10-29",
+               "value": 3.589
+              },
+              {
+               "date": "2025-11-28",
+               "value": 3.534
+              },
+              {
+               "date": "2025-12-28",
+               "value": 3.51
+              },
+              {
+               "date": "2026-01-27",
+               "value": 3.529
+              },
+              {
+               "date": "2026-02-26",
+               "value": 3.581
+              },
+              {
+               "date": "2026-03-28",
+               "value": 3.642
+              },
+              {
+               "date": "2026-04-27",
+               "value": 3.683
+              },
+              {
+               "date": "2026-05-27",
+               "value": 3.686
+              },
+              {
+               "date": "2026-06-26",
+               "value": 3.648
+              },
+              {
+               "date": "2026-07-26",
+               "value": 3.587
+              },
+              {
+               "date": "2026-08-25",
+               "value": 3.533
+              },
+              {
+               "date": "2026-09-24",
+               "value": 3.6
+              }
+             ],
+             "series_id": "CORESTICKM159SFRBATL",
+             "source": "FRED",
+             "units": "%",
+             "yoy_pct": -0.013428336530556298,
+             "z_score_5y": -0.09486427449574898
+            },
+            {
+             "category": "inflation",
+             "change_12m": null,
+             "change_1m": null,
+             "change_3m": null,
+             "description": "Grocery price component of CPI. Direct margin pressure on supermarkets.",
+             "error": "No data returned by BLS.",
+             "frequency": "monthly",
+             "latest": null,
+             "name": "BLS Food at Home CPI",
+             "prior": null,
+             "region": "US",
+             "sample_points": [],
+             "series_id": "CUUR0000SAF1",
+             "source": "BLS",
+             "units": "index",
+             "yoy_pct": null,
+             "z_score_5y": null
+            },
+            {
+             "category": "inflation",
+             "change_12m": null,
+             "change_1m": null,
+             "change_3m": null,
+             "description": "New car price component. Pricing power for OEMs and dealers.",
+             "error": "No data returned by BLS.",
+             "frequency": "monthly",
+             "latest": null,
+             "name": "BLS New Vehicle CPI",
+             "prior": null,
+             "region": "US",
+             "sample_points": [],
+             "series_id": "CUUR0000SETA01",
+             "source": "BLS",
+             "units": "index",
+             "yoy_pct": null,
+             "z_score_5y": null
+            },
+            {
+             "category": "inflation",
+             "change_12m": null,
+             "change_1m": null,
+             "change_3m": null,
+             "description": "Used vehicle price component. Pricing for CarMax, Carvana, AutoNation used books.",
+             "error": "No data returned by BLS.",
+             "frequency": "monthly",
+             "latest": null,
+             "name": "BLS Used Vehicle CPI",
+             "prior": null,
+             "region": "US",
+             "sample_points": [],
+             "series_id": "CUUR0000SETA02",
+             "source": "BLS",
+             "units": "index",
+             "yoy_pct": null,
+             "z_score_5y": null
+            },
+            {
+             "category": "inflation",
+             "change_12m": null,
+             "change_1m": null,
+             "change_3m": null,
+             "description": "Medical care services + commodities. Hospital and pharma pricing pass-through.",
+             "error": "No data returned by BLS.",
+             "frequency": "monthly",
+             "latest": null,
+             "name": "BLS Medical Care CPI",
+             "prior": null,
+             "region": "US",
+             "sample_points": [],
+             "series_id": "CUUR0000SAM",
+             "source": "BLS",
+             "units": "index",
+             "yoy_pct": null,
+             "z_score_5y": null
+            },
+            {
+             "category": "inflation",
+             "change_12m": null,
+             "change_1m": null,
+             "change_3m": null,
+             "description": "Retail gasoline price index.",
+             "error": "No data returned by BLS.",
+             "frequency": "monthly",
+             "latest": null,
+             "name": "BLS Gasoline CPI",
+             "prior": null,
+             "region": "US",
+             "sample_points": [],
+             "series_id": "CUUR0000SETB01",
+             "source": "BLS",
+             "units": "index",
+             "yoy_pct": null,
+             "z_score_5y": null
+            }
+           ],
+           "ticker": "NVDA"
+          }
+         },
+         "overlays_run": [
+          "credit",
+          "inflation"
+         ],
+         "sector": "Technology",
+         "ticker": "NVDA"
+        },
+        "prefetched_snapshots": [
+         {
+          "category": "inflation",
+          "change_12m": -0.0009999999999998899,
+          "change_1m": 0.08899999999999997,
+          "change_3m": 0.0009999999999998899,
+          "description": "Consumer Price Index All Urban Consumers. Top-line inflation print.",
+          "error": null,
+          "frequency": "monthly",
+          "latest": {
+           "date": "2026-09-24",
+           "value": 2.9
+          },
+          "name": "Headline CPI",
+          "prior": {
+           "date": "2026-08-25",
+           "value": 2.811
+          },
+          "region": "US",
+          "sample_points": [
+           {
+            "date": "2024-11-03",
+            "value": 2.989
+           },
+           {
+            "date": "2024-12-03",
+            "value": 2.96
+           },
+           {
+            "date": "2025-01-02",
+            "value": 2.902
+           },
+           {
+            "date": "2025-02-01",
+            "value": 2.844
+           },
+           {
+            "date": "2025-03-03",
+            "value": 2.812
+           },
+           {
+            "date": "2025-04-02",
+            "value": 2.821
+           },
+           {
+            "date": "2025-05-02",
+            "value": 2.868
+           },
+           {
+            "date": "2025-06-01",
+            "value": 2.929
+           },
+           {
+            "date": "2025-07-01",
+            "value": 2.977
+           },
+           {
+            "date": "2025-07-31",
+            "value": 2.989
+           },
+           {
+            "date": "2025-08-30",
+            "value": 2.959
+           },
+           {
+            "date": "2025-09-29",
+            "value": 2.901
+           },
+           {
+            "date": "2025-10-29",
+            "value": 2.843
+           },
+           {
+            "date": "2025-11-28",
+            "value": 2.811
+           },
+           {
+            "date": "2025-12-28",
+            "value": 2.822
+           },
+           {
+            "date": "2026-01-27",
+            "value": 2.869
+           },
+           {
+            "date": "2026-02-26",
+            "value": 2.931
+           },
+           {
+            "date": "2026-03-28",
+            "value": 2.978
+           },
+           {
+            "date": "2026-04-27",
+            "value": 2.989
+           },
+           {
+            "date": "2026-05-27",
+            "value": 2.957
+           },
+           {
+            "date": "2026-06-26",
+            "value": 2.899
+           },
+           {
+            "date": "2026-07-26",
+            "value": 2.841
+           },
+           {
+            "date": "2026-08-25",
+            "value": 2.811
+           },
+           {
+            "date": "2026-09-24",
+            "value": 2.9
+           }
+          ],
+          "series_id": "CPIAUCSL",
+          "source": "FRED",
+          "units": "index",
+          "yoy_pct": -0.00034470872113060667,
+          "z_score_5y": -0.0013198459618491644
+         },
+         {
+          "category": "inflation",
+          "change_12m": -0.04899999999999993,
+          "change_1m": 0.06700000000000017,
+          "change_3m": -0.04800000000000004,
+          "description": "Atlanta Fed sticky-price CPI ex food and energy YoY. The Fed's preferred inflation persistence gauge.",
+          "error": null,
+          "frequency": "monthly",
+          "latest": {
+           "date": "2026-09-24",
+           "value": 3.6
+          },
+          "name": "Sticky Core CPI YoY",
+          "prior": {
+           "date": "2026-08-25",
+           "value": 3.533
+          },
+          "region": "US",
+          "sample_points": [
+           {
+            "date": "2024-11-03",
+            "value": 3.682
+           },
+           {
+            "date": "2024-12-03",
+            "value": 3.687
+           },
+           {
+            "date": "2025-01-02",
+            "value": 3.65
+           },
+           {
+            "date": "2025-02-01",
+            "value": 3.59
+           },
+           {
+            "date": "2025-03-03",
+            "value": 3.535
+           },
+           {
+            "date": "2025-04-02",
+            "value": 3.51
+           },
+           {
+            "date": "2025-05-02",
+            "value": 3.528
+           },
+           {
+            "date": "2025-06-01",
+            "value": 3.579
+           },
+           {
+            "date": "2025-07-01",
+            "value": 3.641
+           },
+           {
+            "date": "2025-07-31",
+            "value": 3.683
+           },
+           {
+            "date": "2025-08-30",
+            "value": 3.686
+           },
+           {
+            "date": "2025-09-29",
+            "value": 3.649
+           },
+           {
+            "date": "2025-10-29",
+            "value": 3.589
+           },
+           {
+            "date": "2025-11-28",
+            "value": 3.534
+           },
+           {
+            "date": "2025-12-28",
+            "value": 3.51
+           },
+           {
+            "date": "2026-01-27",
+            "value": 3.529
+           },
+           {
+            "date": "2026-02-26",
+            "value": 3.581
+           },
+           {
+            "date": "2026-03-28",
+            "value": 3.642
+           },
+           {
+            "date": "2026-04-27",
+            "value": 3.683
+           },
+           {
+            "date": "2026-05-27",
+            "value": 3.686
+           },
+           {
+            "date": "2026-06-26",
+            "value": 3.648
+           },
+           {
+            "date": "2026-07-26",
+            "value": 3.587
+           },
+           {
+            "date": "2026-08-25",
+            "value": 3.533
+           },
+           {
+            "date": "2026-09-24",
+            "value": 3.6
+           }
+          ],
+          "series_id": "CORESTICKM159SFRBATL",
+          "source": "FRED",
+          "units": "%",
+          "yoy_pct": -0.013428336530556298,
+          "z_score_5y": -0.09486427449574898
+         },
+         {
+          "category": "inflation",
+          "change_12m": -0.01200000000000001,
+          "change_1m": -0.08999999999999986,
+          "change_3m": -0.0129999999999999,
+          "description": "Personal Consumption Expenditures price index. The FOMC's preferred inflation measure.",
+          "error": null,
+          "frequency": "monthly",
+          "latest": {
+           "date": "2026-09-24",
+           "value": 2.5
+          },
+          "name": "PCE Price Index",
+          "prior": {
+           "date": "2026-08-25",
+           "value": 2.59
+          },
+          "region": "US",
+          "sample_points": [
+           {
+            "date": "2024-11-03",
+            "value": 2.414
+           },
+           {
+            "date": "2024-12-03",
+            "value": 2.45
+           },
+           {
+            "date": "2025-01-02",
+            "value": 2.51
+           },
+           {
+            "date": "2025-02-01",
+            "value": 2.566
+           },
+           {
+            "date": "2025-03-03",
+            "value": 2.59
+           },
+           {
+            "date": "2025-04-02",
+            "value": 2.572
+           },
+           {
+            "date": "2025-05-02",
+            "value": 2.52
+           },
+           {
+            "date": "2025-06-01",
+            "value": 2.459
+           },
+           {
+            "date": "2025-07-01",
+            "value": 2.417
+           },
+           {
+            "date": "2025-07-31",
+            "value": 2.414
+           },
+           {
+            "date": "2025-08-30",
+            "value": 2.452
+           },
+           {
+            "date": "2025-09-29",
+            "value": 2.512
+           },
+           {
+            "date": "2025-10-29",
+            "value": 2.567
+           },
+           {
+            "date": "2025-11-28",
+            "value": 2.59
+           },
+           {
+            "date": "2025-12-28",
+            "value": 2.571
+           },
+           {
+            "date": "2026-01-27",
+            "value": 2.519
+           },
+           {
+            "date": "2026-02-26",
+            "value": 2.457
+           },
+           {
+            "date": "2026-03-28",
+            "value": 2.416
+           },
+           {
+            "date": "2026-04-27",
+            "value": 2.415
+           },
+           {
+            "date": "2026-05-27",
+            "value": 2.453
+           },
+           {
+            "date": "2026-06-26",
+            "value": 2.513
+           },
+           {
+            "date": "2026-07-26",
+            "value": 2.568
+           },
+           {
+            "date": "2026-08-25",
+            "value": 2.59
+           },
+           {
+            "date": "2026-09-24",
+            "value": 2.5
+           }
+          ],
+          "series_id": "PCEPI",
+          "source": "FRED",
+          "units": "index",
+          "yoy_pct": -0.004777070063694272,
+          "z_score_5y": -0.023103810118595407
+         },
+         {
+          "category": "inflation",
+          "change_12m": null,
+          "change_1m": null,
+          "change_3m": null,
+          "description": "BLS Consumer Price Index for All Urban Consumers, all items.",
+          "error": "No data returned by BLS.",
+          "frequency": "monthly",
+          "latest": null,
+          "name": "BLS Headline CPI",
+          "prior": null,
+          "region": "US",
+          "sample_points": [],
+          "series_id": "CUUR0000SA0",
+          "source": "BLS",
+          "units": "index",
+          "yoy_pct": null,
+          "z_score_5y": null
+         }
+        ],
+        "ticker": "NVDA"
+       },
+       "sub_industry": "AI Accelerators",
+       "target_ticker": "NVDA",
+       "trends": {
+        "cohort_capex_delta": 0.0,
+        "cohort_capex_intensity_now": 0.05,
+        "cohort_capex_intensity_then": 0.05,
+        "cohort_op_margin_delta": 0.030000000000000027,
+        "cohort_op_margin_now": 0.61,
+        "cohort_op_margin_then": 0.58,
+        "cohort_revenue_growth_recent": 0.5499999999999999
+       },
+       "valuation_exclusions": {
+        "count": 0,
+        "details": [],
+        "metric": "EV_EBITDA",
+        "tickers": []
+       }
+      },
+      "evidence": [],
+      "headline": "Unavailable in this version.",
+      "key_points": [],
+      "long_form_report": null,
+      "sources": [
+       "sector_config:Technology"
+      ],
+      "summary": "Unavailable in this version."
+     },
+     "technical": {
+      "agent": "Technical Analyst",
+      "confidence": 0.6,
+      "data": {
+       "deterministic_fallback": "Technical LLM returned no usable output; deterministic indicator read-out shipped instead.",
+       "signals": {
+        "bb_lower": 98.28456878640925,
+        "bb_middle": 108.68511000000001,
+        "bb_position": 0.9478079461782187,
+        "bb_upper": 119.08565121359076,
+        "ema_10": 106.51115604981037,
+        "ema_20": 107.95846389206476,
+        "high_52w": 119.7516,
+        "last_date": "2026-09-24",
+        "last_price": 118.0,
+        "low_52w": 75.2757,
+        "macd_histogram": 0.0067618893595138285,
+        "macd_line": -1.662110784766213,
+        "macd_signal": -1.668872674125727,
+        "momentum": "positive",
+        "notes": [
+         "Golden-cross alignment (SMA50 above SMA200)."
+        ],
+        "position_52w": 0.9606168734078456,
+        "rsi_14": 68.33472059356991,
+        "sma_200": 98.7948855,
+        "sma_50": 109.78634400000001,
+        "sma_50_above_200": true,
+        "trend": "up",
+        "vwma_20": 108.71450043196545
+       }
+      },
+      "evidence": [],
+      "headline": "Unavailable in this version.",
+      "key_points": [],
+      "long_form_report": null,
+      "sources": [
+       "prices:NVDA"
+      ],
+      "summary": "Unavailable in this version."
+     },
+     "valuation": {
+      "agent": "Valuation Analyst",
+      "confidence": 0.7,
+      "data": {},
+      "evidence": [
+       {
+        "excerpt": "Base case implied price $57.58 vs current $118.00 (-51.2%). Bull $73.90 (-37.4%) | Bear $43.86 (-62.8%). ⚠ Model warnings: 0 errors, 1 warns",
+        "kind": "dcf",
+        "ref": "NVDA",
+        "section": null
+       },
+       {
+        "excerpt": "PE=46.79",
+        "kind": "ratio",
+        "ref": "PE",
+        "section": null
+       },
+       {
+        "excerpt": "EV_EBITDA=34.37",
+        "kind": "ratio",
+        "ref": "EV_EBITDA",
+        "section": null
+       },
+       {
+        "excerpt": "FCF_yield=0.02",
+        "kind": "ratio",
+        "ref": "FCF_yield",
+        "section": null
+       },
+       {
+        "excerpt": "ROIC=0.70",
+        "kind": "ratio",
+        "ref": "ROIC",
+        "section": null
+       }
+      ],
+      "headline": "Valuation view",
+      "key_points": [
+       "P/E 46.8x",
+       "EV/EBITDA 34.4x",
+       "FCF yield 2.0%"
+      ],
+      "long_form_report": null,
+      "sources": [
+       "dcf",
+       "ratios"
+      ],
+      "summary": "Multiples look full against the DCF."
+     }
+    },
+    "pm_questions": [],
+    "pm_rationale": "",
+    "round": 0
+   },
+   {
+    "early_exit": true,
+    "findings": {},
+    "pm_questions": [],
+    "pm_rationale": "PM critique unavailable (LLM call failed) — round-0 findings used as-is.",
+    "round": 1
+   }
+  ],
+  "scorecard": null,
+  "scores": {
+   "beat_streak": 0.0,
+   "blended_pm_score": 70.2,
+   "confidence": 45.0,
+   "deep_research_questions": 0.0,
+   "deep_research_rounds": 1.0,
+   "evidence_quality": 92.3,
+   "factor_catalyst": 50.0,
+   "factor_earnings_momentum": 50.4,
+   "factor_growth": 100.0,
+   "factor_macro_fit": 60.0,
+   "factor_pm_score": 70.4,
+   "factor_quality": 100.0,
+   "factor_risk": 72.0,
+   "factor_valuation": 11.1,
+   "guidance_net_direction": 0.0,
+   "llm_rating_score": 70.0,
+   "llm_rating_weight": 0.4,
+   "raw_confidence": 82.0,
+   "risk_confidence": 70.0,
+   "risk_recs_applied": 3.0,
+   "sector_confidence": 78.0,
+   "valuation_confidence": 70.0
+  },
+  "section_availability": {
+   "bear_case": {
+    "basis": [
+     "fragments:template"
+    ],
+    "headline_hidden": true,
+    "hidden_items": 4,
+    "reason": "partial_template",
+    "status": "degraded"
+   },
+   "bull_case": {
+    "basis": [
+     "fragments:template"
+    ],
+    "headline_hidden": true,
+    "hidden_items": 4,
+    "reason": "template_fallback",
+    "status": "unavailable"
+   },
+   "business_summary": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   },
+   "catalysts": {
+    "basis": [
+     "derived:hidden_findings"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 3,
+    "reason": "template_fallback",
+    "status": "unavailable"
+   },
+   "comps_agent_view": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   },
+   "comps_agent_view.long_form_report": {
+    "basis": [
+     "long_form:no_analyst_expansion"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "template_fallback",
+    "status": "unavailable"
+   },
+   "confidence_score": {
+    "basis": [
+     "provenance:confidence=earned"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   },
+   "dcf_summary": {
+    "basis": [
+     "event:DCF Scenarios"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "templated_scenarios",
+    "status": "degraded"
+   },
+   "earnings_agent_view": {
+    "basis": [
+     "flag:deterministic_fallback"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "template_fallback",
+    "status": "unavailable"
+   },
+   "earnings_qoq_delta": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "not_produced",
+    "status": "unavailable"
+   },
+   "filing_agent_view": {
+    "basis": [
+     "flag:deterministic_fallback"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "template_fallback",
+    "status": "unavailable"
+   },
+   "final_pm_view": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   },
+   "final_verdict": {
+    "basis": [
+     "stripped:key_disagreement"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "partial_template",
+    "status": "degraded"
+   },
+   "forward_catalysts": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "not_produced",
+    "status": "unavailable"
+   },
+   "key_risks": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   },
+   "macro_sensitivity": {
+    "basis": [
+     "flag:deterministic_fallback"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "template_fallback",
+    "status": "unavailable"
+   },
+   "mispricing_thesis": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   },
+   "one_sentence_thesis": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   },
+   "portfolio_fit": {
+    "basis": [
+     "producer:graph._portfolio_fit"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "template_always",
+    "status": "unavailable"
+   },
+   "rating_label": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   },
+   "risk_committee_challenge": {
+    "basis": [
+     "review_mode:rule_based"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "critic_not_run",
+    "status": "unavailable"
+   },
+   "round_findings": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   },
+   "scorecard": {
+    "basis": [
+     "event:Fundamental Scorecard/DataUnavailable"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "no_source_data",
+    "status": "unavailable"
+   },
+   "sector_agent_view": {
+    "basis": [
+     "flag:deterministic_fallback"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "template_fallback",
+    "status": "unavailable"
+   },
+   "sector_synthesis": {
+    "basis": [
+     "derived:sector_agent_view",
+     "signature:bb_key_disagreement"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "derived_from_hidden",
+    "status": "unavailable"
+   },
+   "technical_agent_view": {
+    "basis": [
+     "flag:deterministic_fallback"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "template_fallback",
+    "status": "unavailable"
+   },
+   "thesis_breakers": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   },
+   "valuation_agent_view": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   },
+   "valuation_agent_view.long_form_report": {
+    "basis": [
+     "long_form:no_analyst_expansion"
+    ],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": "template_fallback",
+    "status": "unavailable"
+   },
+   "valuation_verdict": {
+    "basis": [],
+    "headline_hidden": false,
+    "hidden_items": 0,
+    "reason": null,
+    "status": "available"
+   }
+  },
+  "section_provenance": {
+   "confidence": "earned",
+   "llm_configured": true,
+   "mispricing": "pm",
+   "thesis": "pm",
+   "v": 1
+  },
+  "sector": "Technology",
+  "sector_agent_view": {
+   "agent": "Sector Analyst",
+   "confidence": 0.78,
+   "data": {
+    "cohort": {
+     "peers": [],
+     "selection_basis": "sector",
+     "size": 0
+    },
+    "deterministic_fallback": "Sector LLM returned no usable output; cohort-grounded deterministic summary shipped instead.",
+    "industry": "Semiconductors",
+    "industry_structure": {
+     "concentration_label": "highly concentrated",
+     "hhi_revenue": 1.0,
+     "n_in_cohort": 1,
+     "top_3_revenue_share": 1.0
+    },
+    "kpi_placements": {},
+    "macro_alignment": "neutral",
+    "macro_broadcast": {},
+    "outliers": {
+     "fcf_yield_leader": "NVDA",
+     "growth_leader": "NVDA",
+     "margin_leader": "NVDA",
+     "roic_leader": "NVDA",
+     "valuation_cheapest": "NVDA"
+    },
+    "pending_news_alerts": [],
+    "regime": "Operating leverage cycle",
+    "sector": "Technology",
+    "sector_data_context": {
+     "discovered_catalog": {
+      "category_relevant": [
+       {
+        "category": "inflation",
+        "description": "Consumer Price Index All Urban Consumers. Top-line inflation print.",
+        "documentation_url": "https://fred.stlouisfed.org/series/CPIAUCSL",
+        "frequency": "monthly",
+        "name": "Headline CPI",
+        "region": "US",
+        "sector_tags": [
+         "Consumer Staples",
+         "Consumer Discretionary"
+        ],
+        "series_id": "CPIAUCSL",
+        "source": "FRED",
+        "sub_industry_tags": [],
+        "units": "index"
+       },
+       {
+        "category": "inflation",
+        "description": "Atlanta Fed sticky-price CPI ex food and energy YoY. The Fed's preferred inflation persistence gauge.",
+        "documentation_url": "https://fred.stlouisfed.org/series/CORESTICKM159SFRBATL",
+        "frequency": "monthly",
+        "name": "Sticky Core CPI YoY",
+        "region": "US",
+        "sector_tags": [],
+        "series_id": "CORESTICKM159SFRBATL",
+        "source": "FRED",
+        "sub_industry_tags": [],
+        "units": "%"
+       },
+       {
+        "category": "inflation",
+        "description": "Personal Consumption Expenditures price index. The FOMC's preferred inflation measure.",
+        "documentation_url": "https://fred.stlouisfed.org/series/PCEPI",
+        "frequency": "monthly",
+        "name": "PCE Price Index",
+        "region": "US",
+        "sector_tags": [],
+        "series_id": "PCEPI",
+        "source": "FRED",
+        "sub_industry_tags": [],
+        "units": "index"
+       },
+       {
+        "category": "inflation",
+        "description": "BLS Consumer Price Index for All Urban Consumers, all items.",
+        "documentation_url": "https://www.bls.gov/cpi/",
+        "frequency": "monthly",
+        "name": "BLS Headline CPI",
+        "region": "US",
+        "sector_tags": [],
+        "series_id": "CUUR0000SA0",
+        "source": "BLS",
+        "sub_industry_tags": [],
+        "units": "index"
+       },
+       {
+        "category": "inflation",
+        "description": "Grocery price component of CPI. Direct margin pressure on supermarkets.",
+        "documentation_url": "https://www.bls.gov/cpi/",
+        "frequency": "monthly",
+        "name": "BLS Food at Home CPI",
+        "region": "US",
+        "sector_tags": [
+         "Consumer Staples"
+        ],
+        "series_id": "CUUR0000SAF1",
+        "source": "BLS",
+        "sub_industry_tags": [
+         "Food Retail",
+         "Packaged Foods"
+        ],
+        "units": "index"
+       },
+       {
+        "category": "inflation",
+        "description": "New car price component. Pricing power for OEMs and dealers.",
+        "documentation_url": "https://www.bls.gov/cpi/",
+        "frequency": "monthly",
+        "name": "BLS New Vehicle CPI",
+        "region": "US",
+        "sector_tags": [
+         "Consumer Discretionary"
+        ],
+        "series_id": "CUUR0000SETA01",
+        "source": "BLS",
+        "sub_industry_tags": [
+         "Auto Manufacturers",
+         "Auto Retail"
+        ],
+        "units": "index"
+       },
+       {
+        "category": "inflation",
+        "description": "Used vehicle price component. Pricing for CarMax, Carvana, AutoNation used books.",
+        "documentation_url": "https://www.bls.gov/cpi/",
+        "frequency": "monthly",
+        "name": "BLS Used Vehicle CPI",
+        "region": "US",
+        "sector_tags": [
+         "Consumer Discretionary",
+         "Financials"
+        ],
+        "series_id": "CUUR0000SETA02",
+        "source": "BLS",
+        "sub_industry_tags": [
+         "Auto Retail",
+         "Consumer Finance"
+        ],
+        "units": "index"
+       },
+       {
+        "category": "inflation",
+        "description": "Medical care services + commodities. Hospital and pharma pricing pass-through.",
+        "documentation_url": "https://www.bls.gov/cpi/",
+        "frequency": "monthly",
+        "name": "BLS Medical Care CPI",
+        "region": "US",
+        "sector_tags": [
+         "Health Care"
+        ],
+        "series_id": "CUUR0000SAM",
+        "source": "BLS",
+        "sub_industry_tags": [],
+        "units": "index"
+       },
+       {
+        "category": "credit",
+        "description": "ICE BofA US High Yield Index OAS. Widening signals stress in junk credit.",
+        "documentation_url": "https://fred.stlouisfed.org/series/BAMLH0A0HYM2",
+        "frequency": "daily",
+        "name": "High-Yield Credit Spread",
+        "region": "US",
+        "sector_tags": [
+         "Financials",
+         "Energy",
+         "Consumer Discretionary"
+        ],
+        "series_id": "BAMLH0A0HYM2",
+        "source": "FRED",
+        "sub_industry_tags": [],
+        "units": "%"
+       }
+      ],
+      "geography_relevant": [],
+      "sector_relevant": [],
+      "sub_industry_relevant": []
+     },
+     "errors": [],
+     "overlays": {
+      "bundles": {
+       "credit": {
+        "available": true,
+        "narrative_hints": [
+         "High-yield credit spread at 3.40%, -0.07pp over 3 months."
+        ],
+        "series": [
+         {
+          "category": "credit",
+          "change_12m": -0.06800000000000006,
+          "change_1m": -0.06899999999999995,
+          "change_3m": -0.06899999999999995,
+          "description": "ICE BofA US High Yield Index OAS. Widening signals stress in junk credit.",
+          "error": null,
+          "frequency": "daily",
+          "latest": {
+           "date": "2026-09-24",
+           "value": 3.4
+          },
+          "name": "High-Yield Credit Spread",
+          "prior": {
+           "date": "2026-08-25",
+           "value": 3.469
+          },
+          "region": "US",
+          "sample_points": [
+           {
+            "date": "2024-11-03",
+            "value": 3.352
+           },
+           {
+            "date": "2024-12-03",
+            "value": 3.412
+           },
+           {
+            "date": "2025-01-02",
+            "value": 3.467
+           },
+           {
+            "date": "2025-02-01",
+            "value": 3.49
+           },
+           {
+            "date": "2025-03-03",
+            "value": 3.471
+           },
+           {
+            "date": "2025-04-02",
+            "value": 3.419
+           },
+           {
+            "date": "2025-05-02",
+            "value": 3.357
+           },
+           {
+            "date": "2025-06-01",
+            "value": 3.316
+           },
+           {
+            "date": "2025-07-01",
+            "value": 3.315
+           },
+           {
+            "date": "2025-07-31",
+            "value": 3.353
+           },
+           {
+            "date": "2025-08-30",
+            "value": 3.413
+           },
+           {
+            "date": "2025-09-29",
+            "value": 3.468
+           },
+           {
+            "date": "2025-10-29",
+            "value": 3.49
+           },
+           {
+            "date": "2025-11-28",
+            "value": 3.47
+           },
+           {
+            "date": "2025-12-28",
+            "value": 3.417
+           },
+           {
+            "date": "2026-01-27",
+            "value": 3.356
+           },
+           {
+            "date": "2026-02-26",
+            "value": 3.316
+           },
+           {
+            "date": "2026-03-28",
+            "value": 3.315
+           },
+           {
+            "date": "2026-04-27",
+            "value": 3.354
+           },
+           {
+            "date": "2026-05-27",
+            "value": 3.415
+           },
+           {
+            "date": "2026-06-26",
+            "value": 3.469
+           },
+           {
+            "date": "2026-07-26",
+            "value": 3.49
+           },
+           {
+            "date": "2026-08-25",
+            "value": 3.469
+           },
+           {
+            "date": "2026-09-24",
+            "value": 3.4
+           }
+          ],
+          "series_id": "BAMLH0A0HYM2",
+          "source": "FRED",
+          "units": "%",
+          "yoy_pct": -0.01960784313725492,
+          "z_score_5y": -0.13093399446111503
+         },
+         {
+          "category": "rates",
+          "change_12m": null,
+          "change_1m": null,
+          "change_3m": null,
+          "description": "Yield curve slope. Inverted curve historically precedes recessions.",
+          "error": "No data returned by FRED.",
+          "frequency": "daily",
+          "latest": null,
+          "name": "10Y-2Y Term Spread",
+          "prior": null,
+          "region": "US",
+          "sample_points": [],
+          "series_id": "T10Y2Y",
+          "source": "FRED",
+          "units": "%",
+          "yoy_pct": null,
+          "z_score_5y": null
+         },
+         {
+          "category": "credit",
+          "change_12m": null,
+          "change_1m": null,
+          "change_3m": null,
+          "description": "Total consumer credit. Reading on household leverage cycle.",
+          "error": "No data returned by FRED.",
+          "frequency": "monthly",
+          "latest": null,
+          "name": "Total Consumer Credit Outstanding",
+          "prior": null,
+          "region": "US",
+          "sample_points": [],
+          "series_id": "TOTALSL",
+          "source": "FRED",
+          "units": "billions $",
+          "yoy_pct": null,
+          "z_score_5y": null
+         },
+         {
+          "category": "credit",
+          "change_12m": null,
+          "change_1m": null,
+          "change_3m": null,
+          "description": "Delinquency rate on consumer credit card loans at commercial banks.",
+          "error": "No data returned by FRED.",
+          "frequency": "quarterly",
+          "latest": null,
+          "name": "Credit Card Delinquency Rate",
+          "prior": null,
+          "region": "US",
+          "sample_points": [],
+          "series_id": "DRCCLACBS",
+          "source": "FRED",
+          "units": "%",
+          "yoy_pct": null,
+          "z_score_5y": null
+         }
+        ],
+        "ticker": "NVDA"
+       },
+       "inflation": {
+        "available": true,
+        "narrative_hints": [
+         "Sticky core CPI at 3.6% YoY.",
+         "PCE inflation -0.5% YoY."
+        ],
+        "series": [
+         {
+          "category": "inflation",
+          "change_12m": -0.0009999999999998899,
+          "change_1m": 0.08899999999999997,
+          "change_3m": 0.0009999999999998899,
+          "description": "Consumer Price Index All Urban Consumers. Top-line inflation print.",
+          "error": null,
+          "frequency": "monthly",
+          "latest": {
+           "date": "2026-09-24",
+           "value": 2.9
+          },
+          "name": "Headline CPI",
+          "prior": {
+           "date": "2026-08-25",
+           "value": 2.811
+          },
+          "region": "US",
+          "sample_points": [
+           {
+            "date": "2024-11-03",
+            "value": 2.989
+           },
+           {
+            "date": "2024-12-03",
+            "value": 2.96
+           },
+           {
+            "date": "2025-01-02",
+            "value": 2.902
+           },
+           {
+            "date": "2025-02-01",
+            "value": 2.844
+           },
+           {
+            "date": "2025-03-03",
+            "value": 2.812
+           },
+           {
+            "date": "2025-04-02",
+            "value": 2.821
+           },
+           {
+            "date": "2025-05-02",
+            "value": 2.868
+           },
+           {
+            "date": "2025-06-01",
+            "value": 2.929
+           },
+           {
+            "date": "2025-07-01",
+            "value": 2.977
+           },
+           {
+            "date": "2025-07-31",
+            "value": 2.989
+           },
+           {
+            "date": "2025-08-30",
+            "value": 2.959
+           },
+           {
+            "date": "2025-09-29",
+            "value": 2.901
+           },
+           {
+            "date": "2025-10-29",
+            "value": 2.843
+           },
+           {
+            "date": "2025-11-28",
+            "value": 2.811
+           },
+           {
+            "date": "2025-12-28",
+            "value": 2.822
+           },
+           {
+            "date": "2026-01-27",
+            "value": 2.869
+           },
+           {
+            "date": "2026-02-26",
+            "value": 2.931
+           },
+           {
+            "date": "2026-03-28",
+            "value": 2.978
+           },
+           {
+            "date": "2026-04-27",
+            "value": 2.989
+           },
+           {
+            "date": "2026-05-27",
+            "value": 2.957
+           },
+           {
+            "date": "2026-06-26",
+            "value": 2.899
+           },
+           {
+            "date": "2026-07-26",
+            "value": 2.841
+           },
+           {
+            "date": "2026-08-25",
+            "value": 2.811
+           },
+           {
+            "date": "2026-09-24",
+            "value": 2.9
+           }
+          ],
+          "series_id": "CPIAUCSL",
+          "source": "FRED",
+          "units": "index",
+          "yoy_pct": -0.00034470872113060667,
+          "z_score_5y": -0.0013198459618491644
+         },
+         {
+          "category": "inflation",
+          "change_12m": -0.01200000000000001,
+          "change_1m": -0.08999999999999986,
+          "change_3m": -0.0129999999999999,
+          "description": "Personal Consumption Expenditures price index. The FOMC's preferred inflation measure.",
+          "error": null,
+          "frequency": "monthly",
+          "latest": {
+           "date": "2026-09-24",
+           "value": 2.5
+          },
+          "name": "PCE Price Index",
+          "prior": {
+           "date": "2026-08-25",
+           "value": 2.59
+          },
+          "region": "US",
+          "sample_points": [
+           {
+            "date": "2024-11-03",
+            "value": 2.414
+           },
+           {
+            "date": "2024-12-03",
+            "value": 2.45
+           },
+           {
+            "date": "2025-01-02",
+            "value": 2.51
+           },
+           {
+            "date": "2025-02-01",
+            "value": 2.566
+           },
+           {
+            "date": "2025-03-03",
+            "value": 2.59
+           },
+           {
+            "date": "2025-04-02",
+            "value": 2.572
+           },
+           {
+            "date": "2025-05-02",
+            "value": 2.52
+           },
+           {
+            "date": "2025-06-01",
+            "value": 2.459
+           },
+           {
+            "date": "2025-07-01",
+            "value": 2.417
+           },
+           {
+            "date": "2025-07-31",
+            "value": 2.414
+           },
+           {
+            "date": "2025-08-30",
+            "value": 2.452
+           },
+           {
+            "date": "2025-09-29",
+            "value": 2.512
+           },
+           {
+            "date": "2025-10-29",
+            "value": 2.567
+           },
+           {
+            "date": "2025-11-28",
+            "value": 2.59
+           },
+           {
+            "date": "2025-12-28",
+            "value": 2.571
+           },
+           {
+            "date": "2026-01-27",
+            "value": 2.519
+           },
+           {
+            "date": "2026-02-26",
+            "value": 2.457
+           },
+           {
+            "date": "2026-03-28",
+            "value": 2.416
+           },
+           {
+            "date": "2026-04-27",
+            "value": 2.415
+           },
+           {
+            "date": "2026-05-27",
+            "value": 2.453
+           },
+           {
+            "date": "2026-06-26",
+            "value": 2.513
+           },
+           {
+            "date": "2026-07-26",
+            "value": 2.568
+           },
+           {
+            "date": "2026-08-25",
+            "value": 2.59
+           },
+           {
+            "date": "2026-09-24",
+            "value": 2.5
+           }
+          ],
+          "series_id": "PCEPI",
+          "source": "FRED",
+          "units": "index",
+          "yoy_pct": -0.004777070063694272,
+          "z_score_5y": -0.023103810118595407
+         },
+         {
+          "category": "inflation",
+          "change_12m": -0.04899999999999993,
+          "change_1m": 0.06700000000000017,
+          "change_3m": -0.04800000000000004,
+          "description": "Atlanta Fed sticky-price CPI ex food and energy YoY. The Fed's preferred inflation persistence gauge.",
+          "error": null,
+          "frequency": "monthly",
+          "latest": {
+           "date": "2026-09-24",
+           "value": 3.6
+          },
+          "name": "Sticky Core CPI YoY",
+          "prior": {
+           "date": "2026-08-25",
+           "value": 3.533
+          },
+          "region": "US",
+          "sample_points": [
+           {
+            "date": "2024-11-03",
+            "value": 3.682
+           },
+           {
+            "date": "2024-12-03",
+            "value": 3.687
+           },
+           {
+            "date": "2025-01-02",
+            "value": 3.65
+           },
+           {
+            "date": "2025-02-01",
+            "value": 3.59
+           },
+           {
+            "date": "2025-03-03",
+            "value": 3.535
+           },
+           {
+            "date": "2025-04-02",
+            "value": 3.51
+           },
+           {
+            "date": "2025-05-02",
+            "value": 3.528
+           },
+           {
+            "date": "2025-06-01",
+            "value": 3.579
+           },
+           {
+            "date": "2025-07-01",
+            "value": 3.641
+           },
+           {
+            "date": "2025-07-31",
+            "value": 3.683
+           },
+           {
+            "date": "2025-08-30",
+            "value": 3.686
+           },
+           {
+            "date": "2025-09-29",
+            "value": 3.649
+           },
+           {
+            "date": "2025-10-29",
+            "value": 3.589
+           },
+           {
+            "date": "2025-11-28",
+            "value": 3.534
+           },
+           {
+            "date": "2025-12-28",
+            "value": 3.51
+           },
+           {
+            "date": "2026-01-27",
+            "value": 3.529
+           },
+           {
+            "date": "2026-02-26",
+            "value": 3.581
+           },
+           {
+            "date": "2026-03-28",
+            "value": 3.642
+           },
+           {
+            "date": "2026-04-27",
+            "value": 3.683
+           },
+           {
+            "date": "2026-05-27",
+            "value": 3.686
+           },
+           {
+            "date": "2026-06-26",
+            "value": 3.648
+           },
+           {
+            "date": "2026-07-26",
+            "value": 3.587
+           },
+           {
+            "date": "2026-08-25",
+            "value": 3.533
+           },
+           {
+            "date": "2026-09-24",
+            "value": 3.6
+           }
+          ],
+          "series_id": "CORESTICKM159SFRBATL",
+          "source": "FRED",
+          "units": "%",
+          "yoy_pct": -0.013428336530556298,
+          "z_score_5y": -0.09486427449574898
+         },
+         {
+          "category": "inflation",
+          "change_12m": null,
+          "change_1m": null,
+          "change_3m": null,
+          "description": "Grocery price component of CPI. Direct margin pressure on supermarkets.",
+          "error": "No data returned by BLS.",
+          "frequency": "monthly",
+          "latest": null,
+          "name": "BLS Food at Home CPI",
+          "prior": null,
+          "region": "US",
+          "sample_points": [],
+          "series_id": "CUUR0000SAF1",
+          "source": "BLS",
+          "units": "index",
+          "yoy_pct": null,
+          "z_score_5y": null
+         },
+         {
+          "category": "inflation",
+          "change_12m": null,
+          "change_1m": null,
+          "change_3m": null,
+          "description": "New car price component. Pricing power for OEMs and dealers.",
+          "error": "No data returned by BLS.",
+          "frequency": "monthly",
+          "latest": null,
+          "name": "BLS New Vehicle CPI",
+          "prior": null,
+          "region": "US",
+          "sample_points": [],
+          "series_id": "CUUR0000SETA01",
+          "source": "BLS",
+          "units": "index",
+          "yoy_pct": null,
+          "z_score_5y": null
+         },
+         {
+          "category": "inflation",
+          "change_12m": null,
+          "change_1m": null,
+          "change_3m": null,
+          "description": "Used vehicle price component. Pricing for CarMax, Carvana, AutoNation used books.",
+          "error": "No data returned by BLS.",
+          "frequency": "monthly",
+          "latest": null,
+          "name": "BLS Used Vehicle CPI",
+          "prior": null,
+          "region": "US",
+          "sample_points": [],
+          "series_id": "CUUR0000SETA02",
+          "source": "BLS",
+          "units": "index",
+          "yoy_pct": null,
+          "z_score_5y": null
+         },
+         {
+          "category": "inflation",
+          "change_12m": null,
+          "change_1m": null,
+          "change_3m": null,
+          "description": "Medical care services + commodities. Hospital and pharma pricing pass-through.",
+          "error": "No data returned by BLS.",
+          "frequency": "monthly",
+          "latest": null,
+          "name": "BLS Medical Care CPI",
+          "prior": null,
+          "region": "US",
+          "sample_points": [],
+          "series_id": "CUUR0000SAM",
+          "source": "BLS",
+          "units": "index",
+          "yoy_pct": null,
+          "z_score_5y": null
+         },
+         {
+          "category": "inflation",
+          "change_12m": null,
+          "change_1m": null,
+          "change_3m": null,
+          "description": "Retail gasoline price index.",
+          "error": "No data returned by BLS.",
+          "frequency": "monthly",
+          "latest": null,
+          "name": "BLS Gasoline CPI",
+          "prior": null,
+          "region": "US",
+          "sample_points": [],
+          "series_id": "CUUR0000SETB01",
+          "source": "BLS",
+          "units": "index",
+          "yoy_pct": null,
+          "z_score_5y": null
+         }
+        ],
+        "ticker": "NVDA"
+       }
+      },
+      "overlays_run": [
+       "credit",
+       "inflation"
+      ],
+      "sector": "Technology",
+      "ticker": "NVDA"
+     },
+     "prefetched_snapshots": [
+      {
+       "category": "inflation",
+       "change_12m": -0.0009999999999998899,
+       "change_1m": 0.08899999999999997,
+       "change_3m": 0.0009999999999998899,
+       "description": "Consumer Price Index All Urban Consumers. Top-line inflation print.",
+       "error": null,
+       "frequency": "monthly",
+       "latest": {
+        "date": "2026-09-24",
+        "value": 2.9
+       },
+       "name": "Headline CPI",
+       "prior": {
+        "date": "2026-08-25",
+        "value": 2.811
+       },
+       "region": "US",
+       "sample_points": [
+        {
+         "date": "2024-11-03",
+         "value": 2.989
+        },
+        {
+         "date": "2024-12-03",
+         "value": 2.96
+        },
+        {
+         "date": "2025-01-02",
+         "value": 2.902
+        },
+        {
+         "date": "2025-02-01",
+         "value": 2.844
+        },
+        {
+         "date": "2025-03-03",
+         "value": 2.812
+        },
+        {
+         "date": "2025-04-02",
+         "value": 2.821
+        },
+        {
+         "date": "2025-05-02",
+         "value": 2.868
+        },
+        {
+         "date": "2025-06-01",
+         "value": 2.929
+        },
+        {
+         "date": "2025-07-01",
+         "value": 2.977
+        },
+        {
+         "date": "2025-07-31",
+         "value": 2.989
+        },
+        {
+         "date": "2025-08-30",
+         "value": 2.959
+        },
+        {
+         "date": "2025-09-29",
+         "value": 2.901
+        },
+        {
+         "date": "2025-10-29",
+         "value": 2.843
+        },
+        {
+         "date": "2025-11-28",
+         "value": 2.811
+        },
+        {
+         "date": "2025-12-28",
+         "value": 2.822
+        },
+        {
+         "date": "2026-01-27",
+         "value": 2.869
+        },
+        {
+         "date": "2026-02-26",
+         "value": 2.931
+        },
+        {
+         "date": "2026-03-28",
+         "value": 2.978
+        },
+        {
+         "date": "2026-04-27",
+         "value": 2.989
+        },
+        {
+         "date": "2026-05-27",
+         "value": 2.957
+        },
+        {
+         "date": "2026-06-26",
+         "value": 2.899
+        },
+        {
+         "date": "2026-07-26",
+         "value": 2.841
+        },
+        {
+         "date": "2026-08-25",
+         "value": 2.811
+        },
+        {
+         "date": "2026-09-24",
+         "value": 2.9
+        }
+       ],
+       "series_id": "CPIAUCSL",
+       "source": "FRED",
+       "units": "index",
+       "yoy_pct": -0.00034470872113060667,
+       "z_score_5y": -0.0013198459618491644
+      },
+      {
+       "category": "inflation",
+       "change_12m": -0.04899999999999993,
+       "change_1m": 0.06700000000000017,
+       "change_3m": -0.04800000000000004,
+       "description": "Atlanta Fed sticky-price CPI ex food and energy YoY. The Fed's preferred inflation persistence gauge.",
+       "error": null,
+       "frequency": "monthly",
+       "latest": {
+        "date": "2026-09-24",
+        "value": 3.6
+       },
+       "name": "Sticky Core CPI YoY",
+       "prior": {
+        "date": "2026-08-25",
+        "value": 3.533
+       },
+       "region": "US",
+       "sample_points": [
+        {
+         "date": "2024-11-03",
+         "value": 3.682
+        },
+        {
+         "date": "2024-12-03",
+         "value": 3.687
+        },
+        {
+         "date": "2025-01-02",
+         "value": 3.65
+        },
+        {
+         "date": "2025-02-01",
+         "value": 3.59
+        },
+        {
+         "date": "2025-03-03",
+         "value": 3.535
+        },
+        {
+         "date": "2025-04-02",
+         "value": 3.51
+        },
+        {
+         "date": "2025-05-02",
+         "value": 3.528
+        },
+        {
+         "date": "2025-06-01",
+         "value": 3.579
+        },
+        {
+         "date": "2025-07-01",
+         "value": 3.641
+        },
+        {
+         "date": "2025-07-31",
+         "value": 3.683
+        },
+        {
+         "date": "2025-08-30",
+         "value": 3.686
+        },
+        {
+         "date": "2025-09-29",
+         "value": 3.649
+        },
+        {
+         "date": "2025-10-29",
+         "value": 3.589
+        },
+        {
+         "date": "2025-11-28",
+         "value": 3.534
+        },
+        {
+         "date": "2025-12-28",
+         "value": 3.51
+        },
+        {
+         "date": "2026-01-27",
+         "value": 3.529
+        },
+        {
+         "date": "2026-02-26",
+         "value": 3.581
+        },
+        {
+         "date": "2026-03-28",
+         "value": 3.642
+        },
+        {
+         "date": "2026-04-27",
+         "value": 3.683
+        },
+        {
+         "date": "2026-05-27",
+         "value": 3.686
+        },
+        {
+         "date": "2026-06-26",
+         "value": 3.648
+        },
+        {
+         "date": "2026-07-26",
+         "value": 3.587
+        },
+        {
+         "date": "2026-08-25",
+         "value": 3.533
+        },
+        {
+         "date": "2026-09-24",
+         "value": 3.6
+        }
+       ],
+       "series_id": "CORESTICKM159SFRBATL",
+       "source": "FRED",
+       "units": "%",
+       "yoy_pct": -0.013428336530556298,
+       "z_score_5y": -0.09486427449574898
+      },
+      {
+       "category": "inflation",
+       "change_12m": -0.01200000000000001,
+       "change_1m": -0.08999999999999986,
+       "change_3m": -0.0129999999999999,
+       "description": "Personal Consumption Expenditures price index. The FOMC's preferred inflation measure.",
+       "error": null,
+       "frequency": "monthly",
+       "latest": {
+        "date": "2026-09-24",
+        "value": 2.5
+       },
+       "name": "PCE Price Index",
+       "prior": {
+        "date": "2026-08-25",
+        "value": 2.59
+       },
+       "region": "US",
+       "sample_points": [
+        {
+         "date": "2024-11-03",
+         "value": 2.414
+        },
+        {
+         "date": "2024-12-03",
+         "value": 2.45
+        },
+        {
+         "date": "2025-01-02",
+         "value": 2.51
+        },
+        {
+         "date": "2025-02-01",
+         "value": 2.566
+        },
+        {
+         "date": "2025-03-03",
+         "value": 2.59
+        },
+        {
+         "date": "2025-04-02",
+         "value": 2.572
+        },
+        {
+         "date": "2025-05-02",
+         "value": 2.52
+        },
+        {
+         "date": "2025-06-01",
+         "value": 2.459
+        },
+        {
+         "date": "2025-07-01",
+         "value": 2.417
+        },
+        {
+         "date": "2025-07-31",
+         "value": 2.414
+        },
+        {
+         "date": "2025-08-30",
+         "value": 2.452
+        },
+        {
+         "date": "2025-09-29",
+         "value": 2.512
+        },
+        {
+         "date": "2025-10-29",
+         "value": 2.567
+        },
+        {
+         "date": "2025-11-28",
+         "value": 2.59
+        },
+        {
+         "date": "2025-12-28",
+         "value": 2.571
+        },
+        {
+         "date": "2026-01-27",
+         "value": 2.519
+        },
+        {
+         "date": "2026-02-26",
+         "value": 2.457
+        },
+        {
+         "date": "2026-03-28",
+         "value": 2.416
+        },
+        {
+         "date": "2026-04-27",
+         "value": 2.415
+        },
+        {
+         "date": "2026-05-27",
+         "value": 2.453
+        },
+        {
+         "date": "2026-06-26",
+         "value": 2.513
+        },
+        {
+         "date": "2026-07-26",
+         "value": 2.568
+        },
+        {
+         "date": "2026-08-25",
+         "value": 2.59
+        },
+        {
+         "date": "2026-09-24",
+         "value": 2.5
+        }
+       ],
+       "series_id": "PCEPI",
+       "source": "FRED",
+       "units": "index",
+       "yoy_pct": -0.004777070063694272,
+       "z_score_5y": -0.023103810118595407
+      },
+      {
+       "category": "inflation",
+       "change_12m": null,
+       "change_1m": null,
+       "change_3m": null,
+       "description": "BLS Consumer Price Index for All Urban Consumers, all items.",
+       "error": "No data returned by BLS.",
+       "frequency": "monthly",
+       "latest": null,
+       "name": "BLS Headline CPI",
+       "prior": null,
+       "region": "US",
+       "sample_points": [],
+       "series_id": "CUUR0000SA0",
+       "source": "BLS",
+       "units": "index",
+       "yoy_pct": null,
+       "z_score_5y": null
+      }
+     ],
+     "ticker": "NVDA"
+    },
+    "sub_industry": "AI Accelerators",
+    "target_ticker": "NVDA",
+    "trends": {
+     "cohort_capex_delta": 0.0,
+     "cohort_capex_intensity_now": 0.05,
+     "cohort_capex_intensity_then": 0.05,
+     "cohort_op_margin_delta": 0.030000000000000027,
+     "cohort_op_margin_now": 0.61,
+     "cohort_op_margin_then": 0.58,
+     "cohort_revenue_growth_recent": 0.5499999999999999
+    },
+    "valuation_exclusions": {
+     "count": 0,
+     "details": [],
+     "metric": "EV_EBITDA",
+     "tickers": []
+    }
+   },
+   "evidence": [],
+   "headline": "Unavailable in this version.",
+   "key_points": [],
+   "long_form_report": null,
+   "sources": [
+    "sector_config:Technology"
+   ],
+   "summary": "Unavailable in this version."
+  },
+  "sources_used": [
+   "profile:NVDA",
+   "financials:NVDA",
+   "transcript:2024Q4",
+   "filing:0001-DEMO-10K",
+   "filing:0001-DEMO-10Q",
+   "filing:0001-DEMO-8K",
+   "peer:AMD",
+   "peer:AVGO",
+   "peer:INTC",
+   "peer:QCOM",
+   "dcf:base"
+  ],
+  "technical_agent_view": {
+   "agent": "Technical Analyst",
+   "confidence": 0.6,
+   "data": {
+    "deterministic_fallback": "Technical LLM returned no usable output; deterministic indicator read-out shipped instead.",
+    "signals": {
+     "bb_lower": 98.28456878640925,
+     "bb_middle": 108.68511000000001,
+     "bb_position": 0.9478079461782187,
+     "bb_upper": 119.08565121359076,
+     "ema_10": 106.51115604981037,
+     "ema_20": 107.95846389206476,
+     "high_52w": 119.7516,
+     "last_date": "2026-09-24",
+     "last_price": 118.0,
+     "low_52w": 75.2757,
+     "macd_histogram": 0.0067618893595138285,
+     "macd_line": -1.662110784766213,
+     "macd_signal": -1.668872674125727,
+     "momentum": "positive",
+     "notes": [
+      "Golden-cross alignment (SMA50 above SMA200)."
+     ],
+     "position_52w": 0.9606168734078456,
+     "rsi_14": 68.33472059356991,
+     "sma_200": 98.7948855,
+     "sma_50": 109.78634400000001,
+     "sma_50_above_200": true,
+     "trend": "up",
+     "vwma_20": 108.71450043196545
+    }
+   },
+   "evidence": [],
+   "headline": "Unavailable in this version.",
+   "key_points": [],
+   "long_form_report": null,
+   "sources": [
+    "prices:NVDA"
+   ],
+   "summary": "Unavailable in this version."
+  },
+  "thesis_breakers": [
+   {
+    "detail": "Custom-silicon competition",
+    "severity": "high",
+    "title": "Custom-silicon competition",
+    "type": "company"
+   }
+  ],
+  "ticker": "NVDA",
+  "valuation_agent_view": {
+   "agent": "Valuation Analyst",
+   "confidence": 0.7,
+   "data": {},
+   "evidence": [
+    {
+     "excerpt": "Base case implied price $57.58 vs current $118.00 (-51.2%). Bull $73.90 (-37.4%) | Bear $43.86 (-62.8%). ⚠ Model warnings: 0 errors, 1 warns",
+     "kind": "dcf",
+     "ref": "NVDA",
+     "section": null
+    },
+    {
+     "excerpt": "PE=46.79",
+     "kind": "ratio",
+     "ref": "PE",
+     "section": null
+    },
+    {
+     "excerpt": "EV_EBITDA=34.37",
+     "kind": "ratio",
+     "ref": "EV_EBITDA",
+     "section": null
+    },
+    {
+     "excerpt": "FCF_yield=0.02",
+     "kind": "ratio",
+     "ref": "FCF_yield",
+     "section": null
+    },
+    {
+     "excerpt": "ROIC=0.70",
+     "kind": "ratio",
+     "ref": "ROIC",
+     "section": null
+    }
+   ],
+   "headline": "Valuation view",
+   "key_points": [
+    "P/E 46.8x",
+    "EV/EBITDA 34.4x",
+    "FCF yield 2.0%"
+   ],
+   "long_form_report": null,
+   "sources": [
+    "dcf",
+    "ratios"
+   ],
+   "summary": "Multiples look full against the DCF."
+  },
+  "valuation_verdict": {
+   "basis": "evidence",
+   "comps_ev_ebitda_premium": 0.249,
+   "dcf_base_upside": -0.5119955506014283,
+   "factor_valuation": 11.1,
+   "signals": {
+    "available": [
+     "comps_ev_ebitda",
+     "dcf_initial"
+    ],
+    "comps_ev_ebitda": {
+     "display": "25% premium",
+     "premium": 0.249,
+     "vote": -1
+    },
+    "dcf_initial": {
+     "display": "-51%",
+     "tv_clamped": false,
+     "upside": -0.5119955506014283,
+     "vote": -1
+    },
+    "dcf_pm_adjusted": {
+     "display": "-51%",
+     "upside": -0.5119955506014283,
+     "vote": null
+    },
+    "method": "centred-v1",
+    "votes": {
+     "comps_ev_ebitda": -1,
+     "dcf_initial": -1
+    }
+   },
+   "summary": "Net read: overvalued (EV/EBITDA 25% premium vs peers, rich; consensus DCF base case -51% to fair value, rich).",
+   "verdict": "overvalued"
+  }
+ },
+ "meta": {
+  "expect": {
+   "declared_assumption": "18.5%",
+   "fabricated_pm_figure": "$123.45B",
+   "withheld_point": "Hidden optionality worth $987.65B"
+  },
+  "generated_by": "python -m app.scripts.capture_memo_quality_fixture — graph.run_stock_memo on demo data with two scripted model answers, then memo_sections.present_memo, serialized as the API does",
+  "presentation_version": 1,
+  "scripted": {
+   "everything_else": "no answer (deterministic fallback; the critic is rule-based)",
+   "pm_synthesis": {
+    "confidence_score": 82,
+    "final_pm_view": "Data-center revenue of $123.45B anchors the call. We assume revenue growth of 18.5% through FY2027 as hyperscaler capex stays elevated.",
+    "forecast_assumptions": [
+     {
+      "basis_ref": "financials:NVDA",
+      "horizon": "FY2027",
+      "unit": "pct",
+      "value": 18.5
+     }
+    ],
+    "mispricing_thesis": {
+     "consensus_view": "The market treats the AI build-out as a one-cycle spike.",
+     "falsifiers": [
+      "Two consecutive quarters of data-center revenue decline"
+     ],
+     "gap": "Duration of data-center demand.",
+     "our_view": "Share gains in networking and software extend the cycle."
+    },
+    "one_sentence_thesis": "NVDA compounds data-center share faster than the market prices, but the multiple already assumes much of it.",
+    "rating_label": "Bullish"
+   },
+   "valuation_analyst": {
+    "confidence": 0.7,
+    "headline": "Valuation view",
+    "key_points": [
+     "P/E 46.8x",
+     "EV/EBITDA 34.4x",
+     "Hidden optionality worth $987.65B",
+     "FCF yield 2.0%"
+    ],
+    "summary": "Multiples look full against the DCF."
+   }
+  },
+  "ticker": "NVDA"
+ }
+}
