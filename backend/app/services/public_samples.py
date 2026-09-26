@@ -771,21 +771,30 @@ def _build_commentary(
         "You write neutral, research-and-education-only commentary for an investment research tool. "
         "Never give personalized advice or tell the reader to buy or sell."
     )
+    llm.last_usage()  # drop a stale reading so the one after the call is this call's
     try:
-        text = llm.chat_text(prompt, system=system, route="cheap", max_tokens=300)
+        text = llm.chat_text(prompt, system=system, route="cheap", max_tokens=300,
+                             action="samples.commentary", ticker=ticker)
     except Exception as exc:
         note_soft("public_samples", f"commentary failed: {type(exc).__name__}")
         return None, None, [f"commentary: LLM call failed ({type(exc).__name__})"]
     if not text or not text.strip():
         return None, None, ["commentary: LLM returned nothing"]
+    usage = llm.last_usage() or {}
     return {
         "text": text.strip()[:2000],
         "generated_at": now.isoformat(),
         "model": f"{settings.active_llm_provider}:cheap",
         # What the text was written from; `assemble` serves it only beside
         # that memo row under these presentation rules.
+        # G20: which model actually wrote it — the model sent and the one the
+        # provider reports serving (a failover or a dated alias differ from
+        # "provider:cheap"). Provenance, so it lives in `basis`, which is
+        # never served: the wire shape stays {text, generated_at, model}.
         "basis": {"presentation_version": PRESENTATION_VERSION,
-                  "memo_source_ref": _stored_ref(memo_source_ref)},
+                  "memo_source_ref": _stored_ref(memo_source_ref),
+                  "provider": usage.get("provider"), "model_sent": usage.get("model"),
+                  "served_model": usage.get("served_model")},
     }, "llm:cheap", []
 
 
@@ -859,7 +868,10 @@ def build_for_ticker(
             except Exception as exc:
                 # Last good row stays; the failure is visible in the loop's
                 # note and on the page as a "kept from an earlier build" flag.
-                log.warning("public sample %s/%s failed: %s", ticker, kind, type(exc).__name__, exc_info=True)
+                # Type only, no traceback: exc_info printed the exception's
+                # message, which can quote provider or model text (attribution
+                # critique #15). The type is in the loop's note as well.
+                log.warning("public sample %s/%s failed: %s", ticker, kind, type(exc).__name__)
                 db.rollback()
                 degraded.append(f"{kind}: build failed ({type(exc).__name__}); previous row kept")
                 continue

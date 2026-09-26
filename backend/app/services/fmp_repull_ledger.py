@@ -563,12 +563,21 @@ def _loop(shutdown: threading.Event) -> None:
             return
 
 
+def _loop_with_origin(shutdown: threading.Event) -> None:
+    """`_loop` under `origin=worker:fmp_repull`: the thread runs outside the
+    scheduler proxy, so nothing else would name it on an LLM row
+    (attribution critique #16)."""
+    from ..agents.llm import llm_call_context
+    with llm_call_context(origin="worker:fmp_repull"):
+        _loop(shutdown)
+
+
 def start_thread(shutdown: threading.Event) -> threading.Thread | None:
     """Start the worker's re-pull thread (daemon; per-ticker transactions make a kill safe)."""
     if not enabled():
         log.info("fundamentals repull disabled (%s=off)", ENABLE_ENV)
         observe_worker_env({"skipped_reason": f"{ENABLE_ENV}=off"}, is_enabled=False)
         return None
-    thread = threading.Thread(target=_loop, args=(shutdown,), name="fmp-repull", daemon=True)
+    thread = threading.Thread(target=_loop_with_origin, args=(shutdown,), name="fmp-repull", daemon=True)
     thread.start()
     return thread

@@ -209,6 +209,7 @@ def _llm_exposure_peers(ticker: str) -> list[str]:
             prompt,
             system="You are a buy-side PM. Pick non-obvious peers that share underlying drivers.",
             route="cheap",
+            action="dcf.exposure_peers", ticker=ticker,
         )
         peers = (out or {}).get("peers") or []
         return [

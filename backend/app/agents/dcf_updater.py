@@ -29,6 +29,7 @@ from typing import Any
 from ..config import settings
 from ..schemas import DCFAssumptions
 from . import llm
+from .log_safety import log_safely
 
 log = logging.getLogger(__name__)
 
@@ -170,9 +171,11 @@ def _llm_propose_updates(
         out = llm.chat_json(
             user, system="You are a careful equity-research valuations analyst.",
             route="strong", model=settings.openai_pm_model,
+            action="dcf.update", ticker=ticker,
         )
     except Exception as exc:  # pragma: no cover — defensive
-        log.warning("DCF updater LLM call failed for %s: %s", ticker, exc)
+        # Type only: the exception text can quote the model or the request.
+        log_safely(log, f"DCF updater LLM call failed for {ticker}", exc)
         return None
     if not isinstance(out, dict):
         return None

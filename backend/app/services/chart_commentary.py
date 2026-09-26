@@ -770,6 +770,7 @@ def generate(
                 raw = llm.chat_json(
                     built.text, system=prompt_mod.SYSTEM_PROMPT, route="cheap", max_tokens=MAX_TOKENS,
                     model=settings.fundamentals_commentary_model or None,
+                    action="chart.commentary",
                 )
         except Exception as exc:  # the wrappers return None on failure; belt and braces
             log_safely(log, "chart commentary: LLM call raised", exc)

@@ -25,6 +25,7 @@ from ..memory import CompanyMemory, MemoryEntry, SectorMemory
 from ..memory.longterm import CrossCompanyPattern
 from ..schemas import StockMemoOut
 from . import llm
+from .log_safety import log_safely
 
 log = logging.getLogger(__name__)
 
@@ -167,7 +168,7 @@ def _compose_company_entry(memo: StockMemoOut, triggers: list[dict[str, Any]]) -
             f"\n\nTriggers: {json.dumps([t['label'] for t in triggers])}"
             f"\n\nMemo summary:\n{json.dumps(_compact_memo(memo))[:4500]}"
         )
-        out = llm.chat_json(prompt, route="cheap")
+        out = llm.chat_json(prompt, route="cheap", action="memo.reflect_company", ticker=memo.ticker)
         if isinstance(out, dict):
             obs = (out.get("observation") or "").strip()
             upd = (out.get("update_to_thesis") or "").strip()
@@ -207,7 +208,7 @@ def _compose_sector_entry(memo: StockMemoOut, triggers: list[dict[str, Any]]) ->
             "{reinforced, contradicted, takeaway}."
             f"\n\nMemo summary:\n{json.dumps(_compact_memo(memo))[:4500]}"
         )
-        out = llm.chat_json(prompt, route="cheap")
+        out = llm.chat_json(prompt, route="cheap", action="memo.reflect_sector", ticker=memo.ticker)
         if isinstance(out, dict):
             r = (out.get("reinforced") or "").strip()
             c = (out.get("contradicted") or "").strip()
@@ -263,7 +264,7 @@ def _compose_cross_company_pattern(
             "{\"lesson\": \"...\"} (1-3 sentences, plain text)."
             f"\n\nMemo summary:\n{json.dumps(_compact_memo(memo))[:4500]}"
         )
-        out = llm.chat_json(prompt, route="cheap")
+        out = llm.chat_json(prompt, route="cheap", action="memo.reflect_pattern", ticker=memo.ticker)
         if isinstance(out, dict):
             v = out.get("lesson")
             if isinstance(v, str) and v.strip():
@@ -334,7 +335,7 @@ def _llm_condenser(entries: list[MemoryEntry], existing: str) -> str:
         f"\n\nExisting condensed block:\n{existing or '(none yet)'}"
         f"\n\nOld entries:\n{rendered[:6000]}"
     )
-    text = llm.chat_text(prompt, route="cheap")
+    text = llm.chat_text(prompt, route="cheap", action="memo.memory_condense")
     if text and text.strip():
         return text.strip()
     from ..memory.longterm import _deterministic_summary
@@ -377,7 +378,8 @@ def run(memo: StockMemoOut) -> tuple[list[dict[str, Any]], list[str]]:
             log.debug("history backfill silenced for %s: %s", memo.ticker, exc)
         structured_facts = collect_structured_facts(memo.ticker, triggers)
     except Exception as exc:  # pragma: no cover — fact extraction must never block memory
-        log.warning("structured fact extraction failed for %s: %s", memo.ticker, exc)
+        # Type only: the exception text can quote filing or model text.
+        log_safely(log, f"structured fact extraction failed for {memo.ticker}", exc)
         structured_facts = None
 
     # Company entry

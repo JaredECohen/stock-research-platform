@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncIterator
 from datetime import datetime
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -101,6 +102,36 @@ async def _http_logging_middleware(request: Request, call_next):
             log.debug("ui-log write failed: %s", exc)
 
 
+async def llm_request_origin(request: Request) -> AsyncIterator[None]:
+    """Every LLM call a request makes carries `origin=api:<route template>`
+    (attribution slice A2a, design §4.8).
+
+    The ROUTE TEMPLATE (`/api/stocks/{ticker}/memo`) from
+    `scope["route"].path`, never the raw path (attribution critique #6): raw
+    paths carry ids, can exceed the `llm_call_logs.origin` column (Postgres
+    rejects the INSERT and the whole row is lost) and could carry
+    user-supplied segments into logs.
+
+    An app-level dependency rather than the pure-ASGI middleware the plan
+    sketched: FastAPI records the matched route in `scope["route"]` only
+    AFTER every middleware has run, so a middleware would have to re-run the
+    router's matching itself — and the pinned FastAPI (0.141) nests included
+    routers in private `_IncludedRouter` objects whose matching mutates
+    FastAPI's own scope keys; re-implementing that is the framework-internals
+    trap that once disabled the rate limiter (`rate_limit._find_route_handler`).
+    A dependency runs after routing, reads the public `scope["route"]`, and
+    runs in the request's own task, from which FastAPI copies the context
+    into the thread pool that runs a sync endpoint (a test pins this). It
+    names the origin only — an umbrella never names an agent.
+    """
+    from .agents.llm import llm_call_context
+
+    route = request.scope.get("route")
+    template = getattr(route, "path", None) or "unmatched"
+    with llm_call_context(origin=f"api:{template}"):
+        yield
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MarketMosaic API",
@@ -109,6 +140,9 @@ def create_app() -> FastAPI:
             "Research / education only — not personalized financial advice."
         ),
         version="0.1.0",
+        # Applies to every route included below: LLM rows say which
+        # endpoint paid for them.
+        dependencies=[Depends(llm_request_origin)],
     )
 
     app.add_middleware(
@@ -159,6 +193,12 @@ def create_app() -> FastAPI:
     # code has one code path. See `auth/middleware.py` for the order note.
     app.middleware("http")(customer_auth_middleware)
 
+    # No `prefix=` here, and no router nested inside another with one: on
+    # the pinned FastAPI a mount-time prefix is missing from
+    # `scope["route"].path`, so `llm_request_origin` would log short,
+    # colliding route templates. Put a prefix on the APIRouter itself
+    # (folded into each route's path). test_route_templates_are_the_public_paths
+    # fails if a mounted prefix appears.
     app.include_router(routes_health.router, tags=["system"])
     app.include_router(routes_stocks.router, tags=["stocks"])
     app.include_router(routes_screener.router, tags=["screener"])
@@ -215,21 +255,15 @@ def create_app() -> FastAPI:
         from .database import bootstrap_runtime_schema
         bootstrap_runtime_schema()
 
-        # One line saying which provider and which model each role actually
-        # resolved to — the answer to "why did the sector agent run on
-        # haiku?" without grepping env. Names and booleans only.
-        try:
-            from .agents.llm import model_summary
-            ms = model_summary()
-            roles = " ".join(f"{r}={m}" for r, m in ms["role_models"].items())
-            cfg = ",".join(k for k, v in ms["configured"].items() if v) or "none"
-            log.info(
-                "LLM routing: provider=%s choice=%s configured=%s failover=%s %s",
-                ms["active_provider"], ms["provider_choice"], cfg,
-                "on" if settings.llm_failover_enabled else "off", roles,
-            )
-        except Exception as exc:  # pragma: no cover - startup hardening
-            log.warning("LLM routing summary failed: %s", type(exc).__name__)
+        # One line saying which provider and which model each role and tier
+        # actually resolved to — the answer to "why did the sector agent run
+        # on haiku?" without grepping env — and, off the boot path, whether
+        # this deployment's keys can reach every configured model
+        # (`models.list` only). The worker logs the same two lines.
+        # Names and booleans only.
+        from . import llm_startup
+        llm_startup.log_routing(log)
+        llm_startup.start_model_access_check()
 
         try:
             from .seed_universe import run_full_seed

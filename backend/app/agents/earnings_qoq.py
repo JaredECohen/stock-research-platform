@@ -142,6 +142,7 @@ def _llm_delta(
             "for years. Be specific. No filler."
         ),
         route="cheap",
+        action="memo.earnings_qoq", ticker=ticker,
     )
     return out if isinstance(out, dict) else None
 

@@ -194,6 +194,7 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
         system=prompts.PM_SYSTEM, route="strong",
         provider_override=provider_override,
         model=critic_model,
+        action="risk.committee_review", ticker=ticker,
     )
     assessment = llm_out.get("overall_assessment") if isinstance(llm_out, dict) else None
     if isinstance(assessment, str) and assessment.strip():

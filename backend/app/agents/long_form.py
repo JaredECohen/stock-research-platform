@@ -25,6 +25,7 @@ from ..config import settings
 from ..finance.comps_history import PERCENT_POINT_METRICS
 from ..schemas import AgentFinding
 from . import llm
+from .log_safety import log_safely
 
 log = logging.getLogger(__name__)
 
@@ -513,12 +514,18 @@ def _enriched_long_form(
         + json.dumps(payload, default=str)[:1800]
     )
     try:
-        text = llm.chat_text(
-            user, system="You are a careful equity research editor.",
-            route="cheap", model=settings.openai_tool_model,
-        )
+        # Credited to the specialist whose finding this expands (an
+        # AGENT_CONTEXT_SITE), so the memo run's rows say "Sector Analyst /
+        # memo.long_form" rather than nine anonymous writer calls.
+        with llm.llm_call_context(agent_name=agent_name):
+            text = llm.chat_text(
+                user, system="You are a careful equity research editor.",
+                route="cheap", model=settings.openai_tool_model,
+                action="memo.long_form", ticker=ticker,
+            )
     except Exception as exc:  # pragma: no cover — defensive
-        log.warning("Long-form enrichment failed for %s/%s: %s", ticker, agent_name, exc)
+        # Type only: the exception text can quote the finding or the model.
+        log_safely(log, f"Long-form enrichment failed for {ticker}/{agent_name}", exc)
         return None
     if not text:
         return None
@@ -565,5 +572,5 @@ def attach_long_form(
             finding, ticker=ticker, agent_name=agent_name, profile=profile,
         )
     except Exception as exc:  # pragma: no cover — defensive
-        log.warning("Long-form build failed for %s/%s: %s", ticker, agent_name, exc)
+        log_safely(log, f"Long-form build failed for {ticker}/{agent_name}", exc)
     return finding

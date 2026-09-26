@@ -427,6 +427,12 @@ def _gemini_items(
         model=settings.gemini_news_model,
         enable_search_grounding=True,
         max_tokens=2500,
+        # The loop's search is `news.search`; a memo-time fetch opens
+        # `llm_call_context(action="news.memo_fetch")` around `run()`, and
+        # this keyword (which outranks the context) must not relabel it.
+        action=("news.memo_fetch" if llm.current_call_context().get("action") == "news.memo_fetch"
+                else "news.search"),
+        ticker=ticker,
     )
     if out is None and skip:
         report["gemini_skipped"] = skip

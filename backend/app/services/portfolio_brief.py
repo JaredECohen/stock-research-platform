@@ -165,6 +165,7 @@ def extract_brief(req: PortfolioRequest) -> PortfolioBrief:
             "quality and add 'concentrated' constraint."
         ),
         route="cheap",
+        action="portfolio.brief",
     )
     if not isinstance(out, dict):
         return _deterministic_brief(req)
@@ -195,5 +196,7 @@ def extract_brief(req: PortfolioRequest) -> PortfolioBrief:
             rationale=str(out.get("rationale") or ""),
         )
     except Exception as exc:  # pragma: no cover
-        log.warning("brief parse failed; falling back: %s", exc)
+        # Type only: a float()/int() ValueError quotes the model's (and so
+        # the user's) text (attribution critique #15).
+        log.warning("brief parse failed; falling back: %s", type(exc).__name__)
         return _deterministic_brief(req)

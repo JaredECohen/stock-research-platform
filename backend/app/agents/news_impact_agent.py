@@ -272,6 +272,7 @@ def assess(
         out = llm.chat_json(
             prompt, system="You are a careful equity-research news-impact analyst.",
             route="cheap", model=settings.anthropic_cheap_model,
+            action="news.impact", ticker=memo.ticker,
         )
     except Exception as exc:  # pragma: no cover — defensive
         log_safely(log, f"news_impact_agent LLM call failed for {memo.ticker}", exc)
