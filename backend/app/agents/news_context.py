@@ -260,7 +260,6 @@ def from_alerts(
     now = now or datetime.utcnow()
     oldest = now - timedelta(days=NEWS_MAX_AGE_DAYS)
     parsed: list[tuple[NewsItem, datetime | None]] = []
-    seen: set[str] = set()
     for raw in alerts or []:
         if hasattr(raw, "model_dump"):
             raw = raw.model_dump()
@@ -269,12 +268,6 @@ def from_alerts(
         item = _item_from_alert(t, raw)
         if item is None:
             continue
-        # The same story twice (a provider row and a re-worded repeat keep
-        # different titles, so this only drops exact repeats) wastes a slot.
-        key = item.title.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
         dt = None if item.date_unknown else _parse_published(item.published_at)
         if dt is not None and dt < oldest:
             continue
@@ -282,7 +275,21 @@ def from_alerts(
     # Newest first within a severity; undated items after dated ones.
     parsed.sort(key=lambda p: (SEVERITY_RANK[p[0].severity], p[1] is None,
                                -(p[1].timestamp() if p[1] is not None else 0.0)))
-    items = [p[0] for p in parsed[:NEWS_ITEMS_MAX]]
+    # The same story twice (a provider row and a re-worded repeat keep
+    # different titles, so this only drops exact repeats) wastes a slot.
+    # Deduped AFTER the age gate and the sort, so the copy kept is the
+    # best-ranked one: a stale or advisory copy stored first must not
+    # displace a fresh or breaking copy of the same headline.
+    items: list[NewsItem] = []
+    seen: set[str] = set()
+    for item, _dt in parsed:
+        key = item.title.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(item)
+        if len(items) >= NEWS_ITEMS_MAX:
+            break
     ctx = NewsContext(ticker=t, items=(), collected_at=collected_at)
     # Whole items only: drop from the lowest rank until the block fits.
     while items and len(_render(ctx, items, _LONGEST_HINT)) > NEWS_BLOCK_MAX_CHARS:
@@ -294,7 +301,8 @@ def render_block(ctx: NewsContext | None, audience: str) -> str:
     """The block for one audience ("sector", "industry_group", "pm").
 
     Empty context: the sector's "none on file" line, "" for everyone else
-    (so the industry and PM prompts are byte-identical to the pre-news ones).
+    (so the industry and PM prompts carry no news block, as before G1; the
+    PM's source-refs line does change, see `register`).
     Raises KeyError on an unknown audience: a new reader must choose its hint.
     """
     hint = USAGE_HINTS[audience]
@@ -308,7 +316,15 @@ def register(ctx: NewsContext | None) -> bool:
     under `news_alerts:{T}`. Gemini items register their title only (their
     summary is model-written); provider items register title and summary.
     Dates, URLs and severities never register (their digits are not facts
-    about the company). A no-op outside a memo run or for an empty context."""
+    about the company). A no-op outside a memo run or for an empty context.
+
+    Declared change (G1 review): before G1 the sector analyst registered
+    `news_alerts:{T}` even for an empty alert list, so every no-news PM
+    prompt listed that ref in its "Source refs" line and a forecast
+    assumption could name it as a basis and "resolve" against nothing.
+    An empty context now registers nothing, so the ref is offered only
+    when there is news behind it. This is the one byte change to a no-news
+    PM prompt; `test_memo_news_flow` pins it."""
     if ctx is None or ctx.is_empty:
         return False
     items = [

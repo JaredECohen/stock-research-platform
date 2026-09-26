@@ -130,6 +130,25 @@ def test_items_older_than_the_window_are_dropped_and_dates_are_shown():
     assert "date unknown | reuters.com | Model story with no date" in block
 
 
+def test_dedupe_keeps_the_best_ranked_copy_of_a_headline():
+    """REGRESSION (G1 review): repeats were dropped BEFORE the age gate and
+    the ranking, so whichever copy came first won: a stale copy stored
+    first erased a fresh one, and an advisory copy displaced a breaking one."""
+    stale_first = news_context.from_alerts("T", [
+        _alert("Acme wins big contract", published_at=_days_ago(90)),
+        _alert("Acme wins big contract", published_at=_days_ago(1)),
+    ])
+    assert [(it.title, it.published_at) for it in stale_first.items] == [
+        ("Acme wins big contract", _days_ago(1))]
+    advisory_first = news_context.from_alerts("T", [
+        _alert("Acme CEO resigns", published_at=_days_ago(2)),
+        _alert("acme ceo resigns", severity="breaking", published_at=_days_ago(2)),
+        _alert("Another story", published_at=_days_ago(3)),
+    ])
+    assert [it.severity for it in advisory_first.items] == ["breaking", "advisory"]
+    assert advisory_first.items[1].title == "Another story"
+
+
 def test_backtest_reads_no_news():
     t = _ticker()
     _seed(t, [_alert("Something happened", severity="breaking")])

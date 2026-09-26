@@ -172,3 +172,32 @@ def test_gather_registers_the_news_once(monkeypatch):
     news = [(ref, obj) for kind, ref, obj in registered if kind == "news"]
     # Once, under the ref the block tells the PM to cite, with the shown text.
     assert news == [(f"news_alerts:{TICKER}", {"items": [{"title": MARKER, "summary": SUMMARY_MARKER}]})]
+
+
+_REFS_HEADER = "## Source refs (for forecast_assumptions basis_ref)\n"
+
+
+def _refs(pm_prompt: str) -> list[str]:
+    head = pm_prompt.split("\n\nFindings:\n", 1)[0]
+    return head.split(_REFS_HEADER, 1)[1].split("\n", 1)[0].split(", ")
+
+
+def test_pm_refs_offer_news_only_when_there_is_news(monkeypatch):
+    """Declared change (G1 review): before G1 the sector analyst registered
+    `news_alerts:{T}` even for an empty alert list, so every no-news PM
+    prompt offered it as a `basis_ref` and an assumption citing it resolved
+    against nothing. The ref is now offered only with news behind it; this
+    is the one byte change to a no-news PM prompt."""
+    seen = _spy(monkeypatch)
+    graph.run_stock_memo(TICKER)
+    (pm,) = seen["pm"]
+    assert f"news_alerts:{TICKER}" in _refs(pm)
+
+    invalidate(f"news_hot:{TICKER}", "news_hot")
+    seen = _spy(monkeypatch)
+    graph.run_stock_memo(TICKER)
+    (pm,) = seen["pm"]
+    assert "## Recent news" not in pm
+    refs = _refs(pm)
+    assert refs and f"news_alerts:{TICKER}" not in refs
+

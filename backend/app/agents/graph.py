@@ -1294,7 +1294,8 @@ def _pm_synthesis(
     # FIX-018, C7: the run's news block goes after the digests and before the
     # evidence block. The PM used to get news only nested in the sector
     # entry of the Findings JSON with no instruction to weigh it. "" with no
-    # news keeps the prompt byte-identical.
+    # news adds no block (the refs line below then omits `news_alerts:{T}`,
+    # a declared change: see `news_context.register`).
     news_text = news_context.render_block(news, "pm")
     news_block = ("\n\n" + news_text) if news_text else ""
     # W2b 7(b), C7: the deterministic valuation-evidence read goes after the
