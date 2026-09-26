@@ -145,6 +145,25 @@ def test_fake_registry_exposes_the_documented_tools(tools):
     assert list(tools) == EXPECTED_TOOLS
 
 
+def test_instructions_ask_for_cited_figures_not_visible_reasoning(monkeypatch):
+    """Model research 2026-09-25: reasoning models are asked to cite the
+    figures they relied on, not to "reason out loud" / "show the working"
+    (their reasoning is internal and billed), and the specialist-cost line
+    no longer quotes the old ~$0.05."""
+    fake = types.ModuleType("agents")
+    fake.Agent = _FakeAgent
+    fake.function_tool = lambda fn: fn
+    monkeypatch.setitem(sys.modules, "agents", fake)
+    monkeypatch.setattr(chat_sdk, "_can_use_sdk", lambda: True)
+    agent = chat_sdk._build_chat_agent()
+    assert agent is not None
+    text = " ".join(agent.kwargs["instructions"].split())
+    assert "cite the specific figures you relied on" in text
+    assert "Cite the specific figures you relied on" in text
+    assert "reason out loud" not in text and "Show the working" not in text
+    assert "~$0.05" not in text
+
+
 # ---------------------------------------------------------------------------
 # Memo / DCF tools
 # ---------------------------------------------------------------------------

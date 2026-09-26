@@ -96,7 +96,7 @@ def classify_intent(message: str) -> tuple[IntentType, list[str], str | None]:
     """Classify intent. Tries LLM first, falls back to deterministic rules."""
     llm_out = llm.chat_json(
         prompts.INTENT_CLASSIFIER_PROMPT + "\n\nMessage:\n" + message,
-        system=prompts.PM_SYSTEM, route="cheap",
+        system=prompts.PM_SYSTEM, route="cheap", action="chat.classify",
     )
     if llm_out and llm_out.get("intent"):
         intent = llm_out["intent"]
@@ -156,6 +156,57 @@ def _rating_note(memo: StockMemoOut) -> str:
     return ""
 
 
+DEBATE_OUTCOME_MAX_CHARS = 800
+_DEBATE_CRUX_MAX_CHARS = 400
+_DEBATE_STATUS_TEXT = {
+    "complete": "Bull/bear debate complete.",
+    "partial": "Bull/bear debate partly complete (one phase did not finish).",
+}
+
+
+def _clip(text: str, n: int) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+def _debate_outcome(m: StockMemoOut) -> str | None:
+    """The chat's bounded read of the bull/bear debate (design §12.4), or
+    None when there is nothing to say.
+
+    Built from a PRESENTED memo, so it shows only what the memo page shows:
+    nothing when the debate section is hidden or never ran (every memo
+    written with DEBATE_MODE off, so today's chat context is unchanged), no
+    PM crux or rulings when the PM view is hidden or the PM did not rule,
+    and an unanswered count over the claims the page displays (dropped and
+    unsupported claims are withheld there). Status, crux, rulings per side,
+    unanswered count; at most DEBATE_OUTCOME_MAX_CHARS characters.
+    """
+    rec = m.debate
+    if rec is None or rec.status == "not_run" or memo_sections.is_hidden(m, "debate"):
+        return None
+    if rec.status == "unavailable":
+        return "The bull/bear debate was unavailable for this memo."
+    parts = [_DEBATE_STATUS_TEXT.get(rec.status, "Bull/bear debate ran.")]
+    res = rec.resolution
+    if res.status == "ruled" and not memo_sections.is_hidden(m, "final_pm_view"):
+        if res.crux.strip():
+            parts.append(f"PM crux: {_clip(res.crux, _DEBATE_CRUX_MAX_CHARS)}")
+        tally = {"bull": 0, "bear": 0, "split": 0, "unresolved": 0}
+        for ruling in res.rulings:
+            key = ruling.ruling if ruling.ruling in tally else "unresolved"
+            tally[key] += 1
+        parts.append(
+            f"PM rulings on the disputes: bull {tally['bull']}, bear {tally['bear']}, "
+            f"split {tally['split']}, unresolved {tally['unresolved']}."
+        )
+    else:
+        parts.append("The PM did not adjudicate this debate.")
+    shown = {c.id for c in rec.claims if not c.dropped and c.grade != "unsupported"}
+    unanswered = sum(1 for claim_id in rec.unanswered if claim_id in shown)
+    parts.append(f"Claims left unanswered by the other side: {unanswered}.")
+    return _clip(" ".join(parts), DEBATE_OUTCOME_MAX_CHARS)
+
+
 def _render_memo_answer(memo: StockMemoOut) -> str:
     """Chat rendering of a PRESENTED memo (W2a): hidden prose already reads
     `UNAVAILABLE_TEXT` and hidden list items are already filtered, so each
@@ -185,6 +236,9 @@ def _render_memo_answer(memo: StockMemoOut) -> str:
     bullets.append("**Bear case:**")
     for k in memo.bear_case.key_points[:4]:
         bullets.append(f"- {k}")
+    debate = _debate_outcome(memo)
+    if debate:
+        bullets.append(f"**Debate:** {debate}")
     bullets.append("")
     bullets.append(f"**Risk Committee:** {memo.risk_committee_challenge.overall_assessment}")
     if memo.risk_committee_challenge.challenges:
@@ -324,16 +378,45 @@ def _is_conceptual_followup(message: str, history: list[ChatMessage]) -> bool:
     return False
 
 
-def _try_sdk_chat(message: str, history: list[ChatMessage] | None) -> str | None:
-    """Try the OpenAI Agents SDK chat agent (8 tools); return None on
-    any failure so callers can fall back to legacy handlers."""
-    if not settings.use_agents_sdk:
-        return None
+def _try_sdk_chat(message: str, history: list[ChatMessage] | None) -> tuple[str | None, bool]:
+    """Try the OpenAI Agents SDK chat agent (14 tools).
+
+    Returns (answer or None, attempted). None on any failure or refusal so
+    callers fall back to the legacy handlers; `attempted` says whether the
+    SDK spent this turn's OpenAI attempt (plan C1: at most one attempt per
+    provider per turn). Gated on `CHAT_AGENTS_SDK` (plan P14), not on the
+    legacy `USE_AGENTS_SDK`."""
+    if not settings.chat_agents_sdk:
+        return None, False
     try:
-        from .chat_sdk import answer_via_sdk
-        return answer_via_sdk(message=message, history=history or [])
-    except Exception:
-        return None
+        from .chat_sdk import run_chat_turn
+        return run_chat_turn(message=message, history=history or [])
+    except Exception as exc:
+        # Unknown how far it got, so the attempt counts as spent.
+        log.warning("chat-SDK turn raised %s; answering on the legacy path", type(exc).__name__)
+        return None, True
+
+
+def _legacy_answer_route(sdk_attempted: bool) -> dict[str, Any]:
+    """chat_text kwargs for the single-shot `chat.answer` fallback.
+
+    Before any SDK attempt: today's call (its own failover included). After
+    the SDK has run on OpenAI this turn, the fallback makes ONE attempt on a
+    provider the turn has not tried: no failover hop (with the research
+    tier on, Opus 5.5 would otherwise fail over to gpt-6-sol, a second
+    OpenAI attempt), and a legacy route that would itself land on OpenAI
+    moves to Anthropic when a key is configured. An OpenAI-only deployment
+    still gets its one single-shot attempt: the SDK run failing (a tool
+    loop, max turns, a refusal) says little about a plain completion.
+    """
+    if not sdk_attempted:
+        return {}
+    kwargs: dict[str, Any] = {"failover": False}
+    route = llm.resolve_action_route("chat.answer")
+    primary = route.provider if route.configured else settings.active_llm_provider
+    if primary == "openai" and settings.has_anthropic:
+        kwargs["provider_override"] = "anthropic"
+    return kwargs
 
 
 def _stored_memo(ticker: str) -> StockMemoOut | None:
@@ -387,6 +470,7 @@ class Orchestrator:
         """
         intent, tickers, theme = classify_intent(message)
         trace = default_agent_trace(intent)
+        sdk_attempted = False
 
         # Wave 9b — flexible chat routing. When the user is on a
         # follow-up turn (history non-empty) or asking a conceptual
@@ -398,7 +482,7 @@ class Orchestrator:
         # asks ("Analyze NVDA", "Compare MSFT and GOOGL") so the heavy
         # memo path runs only when the user actually wants it.
         if _is_conceptual_followup(message, history or []):
-            sdk_answer = _try_sdk_chat(message, history)
+            sdk_answer, sdk_attempted = _try_sdk_chat(message, history)
             if sdk_answer:
                 return ChatResponse(
                     intent="general_research_chat",
@@ -417,7 +501,9 @@ class Orchestrator:
                     )
             # Phase 3: route through the Agents SDK runtime when enabled. The
             # runtime ultimately returns the same StockMemoOut shape, so the
-            # downstream rendering / tracing is identical.
+            # downstream rendering / tracing is identical. Only the legacy
+            # USE_AGENTS_SDK does this: CHAT_AGENTS_SDK (plan P14) moves the
+            # chat agent alone, so the inline memo stays on the graph.
             elif settings.use_agents_sdk:
                 from .sdk_runtime import run_stock_memo_via_sdk
                 memo = memo_sections.present_memo(run_stock_memo_via_sdk(ticker))
@@ -533,7 +619,9 @@ class Orchestrator:
         # and ask the LLM to answer the user's question grounded in that
         # data. Falls back to the help-text path only when NO usable
         # context exists (cold start with a vague question).
-        contextual = self._answer_with_memo_context(message, history or [])
+        contextual = self._answer_with_memo_context(
+            message, history or [], sdk_attempted=sdk_attempted,
+        )
         if contextual is not None:
             return ChatResponse(intent=intent, answer=contextual, agent_trace=trace)
 
@@ -555,7 +643,7 @@ class Orchestrator:
         return ChatResponse(intent=intent, answer=ans, agent_trace=trace)
 
     def _answer_with_memo_context(
-        self, message: str, history: list[ChatMessage],
+        self, message: str, history: list[ChatMessage], *, sdk_attempted: bool = False,
     ) -> str | None:
         """Wave 8S — answer a free-form follow-up question using the
         memos already produced in this conversation.
@@ -565,15 +653,17 @@ class Orchestrator:
         when the conversation has no prior memo to anchor on (so the
         caller falls through to the help text).
 
-        Wave 10: when `USE_AGENTS_SDK=true` + the SDK is installed +
+        Wave 10: when `CHAT_AGENTS_SDK=true` + the SDK is installed +
         `OPENAI_API_KEY` is set, route through a real `Agent` with
         `function_tool` access to memo / DCF / comps / macro fetchers.
         The agent decides what to fetch. Falls through to the legacy
-        single-shot path on any failure so the chat handler is robust.
+        single-shot path on any failure or refusal so the chat handler is
+        robust. `sdk_attempted` says the turn already ran the SDK (the
+        conceptual-follow-up branch): it is not run twice, and the
+        fallback does not return to OpenAI (`_legacy_answer_route`).
         """
-        if settings.use_agents_sdk:
-            from .chat_sdk import answer_via_sdk
-            sdk_answer = answer_via_sdk(message=message, history=history)
+        if not sdk_attempted:
+            sdk_answer, sdk_attempted = _try_sdk_chat(message, history)
             if sdk_answer:
                 return sdk_answer
             # else: fall through to legacy single-shot path
@@ -686,7 +776,8 @@ class Orchestrator:
         # OpenAI now just hard-fails on deployments configured with
         # only an Anthropic key.
         text = llm.chat_text(
-            prompt, system=system, route="strong",
+            prompt, system=system, route="strong", action="chat.answer",
+            **_legacy_answer_route(sdk_attempted),
         )
         if not text or not text.strip():
             return None
@@ -855,6 +946,16 @@ def _influence_section(roster_key: str) -> str:
 
 
 def _memo_context_fields(m: StockMemoOut, scores: dict[str, Any], dcf: dict[str, Any]) -> dict[str, Any]:
+    fields = _memo_context_base(m, scores, dcf)
+    debate = _debate_outcome(m)
+    if debate:
+        # Only when a debate ran and the page shows it: a memo written with
+        # DEBATE_MODE off sends exactly the fields it always did.
+        fields["debate_outcome"] = debate
+    return fields
+
+
+def _memo_context_base(m: StockMemoOut, scores: dict[str, Any], dcf: dict[str, Any]) -> dict[str, Any]:
     return {
         "ticker": m.ticker,
         "name": m.company_name,

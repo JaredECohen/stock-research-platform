@@ -1145,6 +1145,92 @@ def _record_skip(provider: str, model: str, reason: str, *, grounded: bool | Non
                   grounded=grounded, update_last_usage=False)
 
 
+def _sdk_response_refused(response: Any) -> bool:
+    """True when an Agents SDK model response carries a refusal part (the
+    Responses API's `{"type": "refusal"}` content in an output message)."""
+    for item in getattr(response, "output", None) or []:
+        content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
+        for part in content or []:
+            kind = part.get("type") if isinstance(part, dict) else getattr(part, "type", None)
+            if kind == "refusal":
+                return True
+    return False
+
+
+def record_sdk_usage(
+    response: Any | None,
+    *,
+    agent: str,
+    model: str,
+    action: str,
+    call_id: str,
+    attempt: int,
+    effort: str | None = None,
+    ticker: str | None = None,
+    duration_ms: int = 0,
+    error: str = "",
+) -> bool:
+    """One `llm_call_logs` row and one `app.llm.calls` line for one OpenAI
+    Agents SDK model response, or (with `response=None` and `error`) for a
+    run that failed (attribution critique #4; FIX-020).
+
+    The SDK bypasses `chat_json`, so its turns used to leave no row at all.
+    The caller is a `RunHooks.on_llm_end` hook: `ModelResponse` carries
+    usage but no model name, and with handoffs each agent runs on its own
+    model, so the hook passes the answering agent's name and model — the
+    model SENT (`model_resolution=sdk_agent_model`). `served_model` stays
+    NULL because the pinned SDK (0.22.0) does not expose it. Every response
+    of one run shares `call_id`; `attempt` counts them. The row never
+    touches `last_usage()`, which describes this thread's last `chat_json`.
+
+    Usage fields are the Responses API's: `input_tokens` INCLUDES cached
+    reads (the OpenAI convention `estimate_cost_usd` prices), and
+    `reasoning_tokens` are already inside `output_tokens` (information
+    only, never billed twice). Returns True when the response was a
+    refusal, which the caller treats like a failure (legacy fallback).
+    """
+    if action not in attribution.ACTIONS:
+        raise ValueError(f"unregistered LLM action: {action!r}")
+    usage = getattr(response, "usage", None)
+    in_details = getattr(usage, "input_tokens_details", None)
+    reasoning = getattr(getattr(usage, "output_tokens_details", None), "reasoning_tokens", None)
+    refused = response is not None and _sdk_response_refused(response)
+    if refused and not error:
+        # The Responses API gives no refusal category.
+        error = "refusal:unspecified"
+    att: dict[str, Any] = {
+        "call_id": call_id, "attempt": int(attempt), "action": action, "ticker": ticker,
+        "route": "", "max_tokens": None, "requested_provider": "openai",
+        "requested_model": model, "model_resolution": "sdk_agent_model",
+        "effort": effort, "call_cost_usd": 0.0,
+    }
+    ctx = _CALL_CONTEXT.get()
+    # The SDK agent that answered is the most specific agent there is; it is
+    # set on a copy of the context for this one write, never through
+    # `llm_call_context(agent_name=...)` (an umbrella must not name agents).
+    ctx_token = _CALL_CONTEXT.set({**ctx, "agent_name": agent}) if agent else None
+    att_token = _ATTEMPT.set(att)
+    try:
+        _record_usage(
+            "openai", model,
+            int(getattr(usage, "input_tokens", 0) or 0),
+            int(getattr(usage, "output_tokens", 0) or 0),
+            duration_ms=duration_ms,
+            success=not error,
+            error=error,
+            cache_read_tokens=int(getattr(in_details, "cached_tokens", 0) or 0),
+            cache_write_tokens=int(getattr(in_details, "cache_write_tokens", 0) or 0),
+            reasoning_tokens=reasoning if isinstance(reasoning, int) else None,
+            refused=refused,
+            update_last_usage=False,
+        )
+    finally:
+        _ATTEMPT.reset(att_token)
+        if ctx_token is not None:
+            _CALL_CONTEXT.reset(ctx_token)
+    return refused
+
+
 def last_usage() -> dict[str, Any] | None:
     """Return the usage dict from the most recent provider call on this thread.
 
