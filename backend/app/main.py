@@ -193,6 +193,12 @@ def create_app() -> FastAPI:
     # code has one code path. See `auth/middleware.py` for the order note.
     app.middleware("http")(customer_auth_middleware)
 
+    # No `prefix=` here, and no router nested inside another with one: on
+    # the pinned FastAPI a mount-time prefix is missing from
+    # `scope["route"].path`, so `llm_request_origin` would log short,
+    # colliding route templates. Put a prefix on the APIRouter itself
+    # (folded into each route's path). test_route_templates_are_the_public_paths
+    # fails if a mounted prefix appears.
     app.include_router(routes_health.router, tags=["system"])
     app.include_router(routes_stocks.router, tags=["stocks"])
     app.include_router(routes_screener.router, tags=["screener"])

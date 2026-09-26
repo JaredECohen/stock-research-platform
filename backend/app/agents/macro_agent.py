@@ -176,13 +176,22 @@ def detect_scenario_key(text: str) -> str:
     return _detect_scenario_key_regex(text)
 
 
-def detect_regime_probabilities(text: str) -> dict[str, float]:
+def detect_regime_probabilities(text: str, *, action: str = "macro.scenario") -> dict[str, float]:
     """Wave 10 — continuous regime probabilities across the 5 archetypes.
 
     Real macro states are mixtures. Returns a dict
     `{regime_key: probability}` summing to ~1.0. When the LLM isn't
     available, falls back to a one-hot (1.0 on the regex match,
     0.0 elsewhere) so the downstream contract is stable.
+
+    `action` is the caller's: the action decides the tier, and this
+    120-token classifier serves both the memo's Macro Analyst
+    (`analyst.macro_regime`, research tier — `run_macro_agent` passes it)
+    and utility callers — the /api/macro/scenario route, chat and portfolio
+    construction — which keep the utility `macro.scenario` their own
+    narrative call uses (owner decision 2026-09-25 item 3: utility tasks
+    stay on Haiku). Hard-coding the analyst action here sent every one of
+    those requests to the research model once a research tier is set.
     """
     if not settings.has_llm or not text:
         key = _detect_scenario_key_regex(text)
@@ -198,7 +207,7 @@ def detect_regime_probabilities(text: str) -> dict[str, float]:
         route="cheap",
         model=settings.openai_macro_model,
         max_tokens=120,
-        action="analyst.macro_regime",
+        action=action,
     )
     raw = (out or {}).get("probabilities") if isinstance(out, dict) else None
     if not isinstance(raw, dict):
@@ -213,7 +222,7 @@ def detect_regime_probabilities(text: str) -> dict[str, float]:
     return {k: v / total for k, v in cleaned.items()}
 
 
-def run_macro_scenario(scenario: str) -> MacroScenarioResult:
+def run_macro_scenario(scenario: str, *, regime_action: str = "macro.scenario") -> MacroScenarioResult:
     """Live narrative rewrite anchored to the FRED snapshot.
 
     The canned template still seeds the structure (sector_impacts, favored,
@@ -223,8 +232,11 @@ def run_macro_scenario(scenario: str) -> MacroScenarioResult:
     Wave 10 — also emits a continuous regime probability mixture
     (`regime_probabilities`). The single `scenario` tag carries the
     modal regime for backward compatibility.
+
+    `regime_action` labels (and so routes) the regime classifier; see
+    `detect_regime_probabilities`.
     """
-    probs = detect_regime_probabilities(scenario)
+    probs = detect_regime_probabilities(scenario, action=regime_action)
     key = (
         max(probs.items(), key=lambda kv: kv[1])[0]
         if probs else _detect_scenario_key_regex(scenario)
@@ -289,7 +301,9 @@ def run_macro_agent(
     name*, not a generic regime read. Deterministic template-based fallback
     runs when no LLM is configured.
     """
-    s = run_macro_scenario(scenario)
+    # The memo's regime read is the Macro Analyst's (research tier); the
+    # same classifier behind a user route stays utility.
+    s = run_macro_scenario(scenario, regime_action="analyst.macro_regime")
     sector = profile.get("sector", "")
     sector_view = s.sector_impacts.get(sector, "Macro impact mapped via sector framework.")
 

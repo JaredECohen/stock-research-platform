@@ -42,10 +42,6 @@ DIRECT_PROVIDER_CALLS_REASON = (
 )
 ORIGIN = "script:validate_model_access"
 
-# Allow live behavior for this validation regardless of conftest's defaults.
-os.environ.pop("ENABLE_LIVE_DATA", None)
-os.environ.pop("USE_DEMO_DATA", None)
-
 
 def _green(s: str) -> str: return f"\033[32m{s}\033[0m"
 def _red(s: str) -> str: return f"\033[31m{s}\033[0m"
@@ -146,6 +142,14 @@ def _check_gemini(api_key: str, models: Iterable[Tuple[str, str]]) -> list:
 
 
 def main() -> int:
+    # Allow live behavior for this validation regardless of the caller's
+    # demo defaults. Here, not at import: `app.config` reads the env when
+    # it is first imported (the line below), and an import-time pop leaked
+    # into every test that merely imported this module — the rest of the
+    # session then ran without the CI data flags, and a fresh `Settings()`
+    # or a child process read config.env's ENABLE_LIVE_DATA=true.
+    os.environ.pop("ENABLE_LIVE_DATA", None)
+    os.environ.pop("USE_DEMO_DATA", None)
     # Anything this script reaches through the LLM layer (none of its
     # checks today) is labelled with it; its direct SDK calls are not rows.
     from app.agents.llm import llm_call_context

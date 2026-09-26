@@ -83,8 +83,11 @@ def test_scheduler_proxy_origin_per_job_and_known_loops(monkeypatch):
         # An umbrella names the origin only.
         assert ctx["agent_name"] in (None, "unknown"), loop
     assert leaked == [None] * len(leaked), "a job saw the previous job's context"
-    # And the caller's own context is untouched by the jobs it ran.
-    assert llm._FAILOVER_EVENTS.get() is None
+    # The reused thread's own context carries nothing a job set: that is the
+    # #11 property (the pytest main thread's context is another object, and
+    # whatever earlier tests left in it says nothing about these jobs).
+    assert thread_ctx.get(llm._FAILOVER_EVENTS, None) is None
+    assert thread_ctx.get(llm._CALL_CONTEXT, None) is None
 
 
 def test_scheduler_proxy_passes_everything_else_through():
@@ -135,6 +138,34 @@ def test_middleware_origin_is_route_template_on_sync_endpoint(monkeypatch):
     assert seen[0]["agent_name"] in (None, "unknown")
     # Nothing leaks back into the test's context.
     assert _context()["origin"] is None
+
+
+def test_route_templates_are_the_public_paths():
+    """`llm_request_origin` reads `scope["route"].path`, and on the pinned
+    FastAPI (0.141) that path does NOT include a prefix given to
+    `include_router(..., prefix=...)` or an outer router's prefix: a
+    router mounted that way would log short templates that collide
+    between routers. Every documented path must therefore be the path of
+    a route object as declared, which fails the moment a mount-time
+    prefix appears (a prefix on the `APIRouter` itself is fine: FastAPI
+    folds it into each route's own path)."""
+    import sys
+
+    from fastapi import APIRouter
+    from fastapi.routing import APIRoute
+
+    from app.main import app
+
+    declared: set[str] = set()
+    for name, module in list(sys.modules.items()):
+        if not name.startswith("app.api.") or module is None:
+            continue
+        router = getattr(module, "router", None)
+        if isinstance(router, APIRouter):
+            declared.update(r.path for r in router.routes if isinstance(r, APIRoute))
+    public = set(app.openapi()["paths"])
+    assert public, "the app documents no paths"
+    assert public <= declared, sorted(public - declared)
 
 
 # ---------------------------------------------------------------------------
@@ -221,23 +252,72 @@ def test_worker_umbrella_keeps_an_outer_origin(monkeypatch):
             db.commit()
 
 
-def test_worker_threads_name_their_origin(monkeypatch):
-    """The seed and fmp-repull threads run outside the scheduler proxy
-    (critique #16)."""
+def test_fmp_repull_thread_names_its_origin(monkeypatch):
+    """The fmp-repull thread runs outside the scheduler proxy (critique
+    #16): the thread the worker actually starts names it. (The seed
+    thread's origin is pinned in test_worker_service, through
+    `worker.main()`.)"""
     import threading
 
     from app.services import fmp_repull_ledger
 
     seen: list[str | None] = []
+    monkeypatch.setattr(fmp_repull_ledger, "enabled", lambda: True)
     monkeypatch.setattr(fmp_repull_ledger, "_loop", lambda shutdown: seen.append(_context()["origin"]))
-    t = threading.Thread(target=fmp_repull_ledger._loop_with_origin, args=(threading.Event(),))
-    t.start()
-    t.join(5)
+    thread = fmp_repull_ledger.start_thread(threading.Event())
+    assert thread is not None
+    thread.join(5)
     assert seen == ["worker:fmp_repull"]
 
-    src = (BACKEND / "app" / "worker.py").read_text()
-    assert 'llm_call_context(origin="worker:seed")' in src
-    assert "target=_seed_with_origin" in src
+
+# ---------------------------------------------------------------------------
+# Labels that depend on the caller
+# ---------------------------------------------------------------------------
+
+def test_news_search_label_follows_the_memo_fetch_context(monkeypatch):
+    """The loop's grounded search is `news.search`; inside a memo-time
+    `news.memo_fetch` context the same call keeps that label (the keyword
+    outranks the context, so the call site must read it)."""
+    from app.agents import news_agent
+    from app.tests.llm_fakes import gemini_response
+
+    client = FakeClient(gemini_response('{"items": []}'))
+    llm_fakes.live(monkeypatch, gemini=client)
+    with llm.llm_call_context(run_id="origins-news-label-loop"):
+        news_agent._gemini_items("ZZNL", "ZZNL Corp", ["zznl"], {})
+    with llm.llm_call_context(run_id="origins-news-label-memo", action="news.memo_fetch"):
+        news_agent._gemini_items("ZZNL", "ZZNL Corp", ["zznl"], {})
+    (loop_row,) = llm_fakes.rows_for("origins-news-label-loop")
+    (memo_row,) = llm_fakes.rows_for("origins-news-label-memo")
+    assert (loop_row.action, loop_row.ticker) == ("news.search", "ZZNL")
+    assert (memo_row.action, memo_row.ticker) == ("news.memo_fetch", "ZZNL")
+
+
+def test_macro_regime_label_follows_the_caller(monkeypatch):
+    """The regime classifier is the memo Macro Analyst's research-tier
+    `analyst.macro_regime` only under `run_macro_agent`; behind the macro
+    route, chat and portfolio construction it is utility work and carries
+    `macro.scenario`, like its sibling narrative call (owner decision
+    2026-09-25 item 3). A hard-coded analyst label moved every one of those
+    requests to the research model once a research tier was configured."""
+    from app.agents import macro_agent
+
+    body = ('{"probabilities": {"recession": 0.7, "soft_landing": 0.3}, "narrative": "n", '
+            '"suggested_research_views": ["v"], "headline": "h", "summary": "s", '
+            '"key_points": ["k"], "confidence": 0.6}')
+    llm_fakes.live(monkeypatch, anthropic=FakeClient(anthropic_response(body)), active="anthropic")
+
+    with llm.llm_call_context(run_id="origins-macro-route"):
+        macro_agent.run_macro_scenario("what if a recession hits")
+        macro_agent.detect_regime_probabilities("rates fall")
+    with llm.llm_call_context(run_id="origins-macro-memo"):
+        macro_agent.run_macro_agent({"ticker": "ZZMAC", "sector": "Technology"}, "recession")
+
+    route_actions = [r.action for r in llm_fakes.rows_for("origins-macro-route")]
+    assert route_actions == ["macro.scenario"] * 3
+    assert {llm_attribution.ACTIONS[a].tier for a in route_actions} == {"utility"}
+    memo_actions = [r.action for r in llm_fakes.rows_for("origins-macro-memo")]
+    assert memo_actions == ["analyst.macro_regime", "macro.scenario", "analyst.macro"]
 
 
 # ---------------------------------------------------------------------------
@@ -302,18 +382,88 @@ def test_audit_unit_costs_origin():
     assert seen[0]["agent_name"] in (None, "unknown")
 
 
-@pytest.mark.parametrize("module,origin", [
-    ("scripts.index_research_notes", "script:index_research_notes"),
-    ("scripts.postmortem_backfill", "script:postmortem_backfill"),
-    ("scripts.corpus_repair", "script:corpus_repair"),
-    ("scripts.validate_model_access", "script:validate_model_access"),
-    ("app.scripts.capture_industry_ui_fixture", "script:capture_industry_ui_fixture"),
-])
-def test_scripts_declare_their_origin(module, origin):
+def _record_origin(seen: list[str | None], result: Any = None):
+    def fn(*_a: Any, **_k: Any) -> Any:
+        seen.append(_context()["origin"])
+        return result
+    return fn
+
+
+@pytest.fixture()
+def keep_data_flags(monkeypatch):
+    """Scripts that insist on live data pop the CI data flags. Registering
+    both with monkeypatch first means teardown puts them back, so nothing
+    after this test runs without them."""
+    import os
+    for name in ("ENABLE_LIVE_DATA", "USE_DEMO_DATA"):
+        monkeypatch.setenv(name, os.environ.get(name, ""))
+
+
+def test_corpus_repair_script_origin(monkeypatch):
+    import scripts.corpus_repair as script
+    seen: list[str | None] = []
+    monkeypatch.setattr(script.corpus_repair, "run", _record_origin(seen, {"exit_code": 0}))
+    assert script.main(["--inventory"]) == 0
+    assert script.ORIGIN == "script:corpus_repair"
+    assert seen == ["script:corpus_repair"]
+
+
+def test_postmortem_backfill_script_origin(monkeypatch):
+    import sys
+
+    import scripts.postmortem_backfill as script
+    from app.services import postmortem_service
+    seen: list[str | None] = []
+    monkeypatch.setattr(postmortem_service, "run_postmortems",
+                        _record_origin(seen, {"due": 0, "written": 0, "skipped": 0}))
+    monkeypatch.setattr(sys, "argv", ["postmortem_backfill", "--horizon", "30", "--limit", "1"])
+    assert script.main() == 0
+    assert seen == ["script:postmortem_backfill"]
+
+
+def test_index_research_notes_script_origin(monkeypatch, tmp_path):
+    import sys
+
+    import scripts.index_research_notes as script
+    (tmp_path / "note.md").write_text("---\ntitle: t\n---\nbody\n")
+    seen: list[str | None] = []
+    monkeypatch.setattr(script, "_rewrite_note", _record_origin(seen, False))
+    monkeypatch.setattr(sys, "argv", ["index_research_notes", "--root", str(tmp_path), "--check"])
+    script.main()
+    assert seen == ["script:index_research_notes"]
+
+
+def test_capture_industry_ui_fixture_script_origin(monkeypatch, tmp_path):
+    from app.scripts import capture_industry_ui_fixture as script
+    seen: list[str | None] = []
+    monkeypatch.setattr(script, "_refuse_unsafe_database", lambda: None)
+    monkeypatch.setattr(script, "capture", _record_origin(seen, {"meta": {"trimmed": {}}}))
+    assert script.main(["--output", str(tmp_path / "fixture.json")]) == 0
+    assert seen == ["script:capture_industry_ui_fixture"]
+
+
+def test_validate_model_access_script_origin(monkeypatch, keep_data_flags):
+    import scripts.validate_model_access as script
+    seen: list[str | None] = []
+    monkeypatch.setattr(script, "_main", _record_origin(seen, 0))
+    assert script.main() == 0
+    assert seen == ["script:validate_model_access"]
+
+
+def test_importing_validate_model_access_keeps_the_data_flags(monkeypatch, keep_data_flags):
+    """The live-data override belongs to the script's run, not its import:
+    an import-time pop took ENABLE_LIVE_DATA / USE_DEMO_DATA away from the
+    rest of the pytest session (and any child process it started)."""
     import importlib
-    mod = importlib.import_module(module)
-    assert mod.ORIGIN == origin
-    assert "llm_call_context(origin=ORIGIN)" in inspect.getsource(mod)
+    import os
+    import sys
+
+    monkeypatch.setenv("ENABLE_LIVE_DATA", "false")
+    monkeypatch.setenv("USE_DEMO_DATA", "true")
+    monkeypatch.delitem(sys.modules, "scripts.validate_model_access", raising=False)
+    importlib.import_module("scripts.validate_model_access")
+    assert os.environ.get("ENABLE_LIVE_DATA") == "false"
+    assert os.environ.get("USE_DEMO_DATA") == "true"
 
 
 def test_validate_model_access_is_allow_listed_with_a_reason():
