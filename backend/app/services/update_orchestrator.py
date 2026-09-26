@@ -68,17 +68,19 @@ _NEWS_ASSESSED_KIND = "news_assessed"
 # trailing clause merged them, so the second was never assessed.
 _TRAILING_SEGMENT_RE = re.compile(r"\s+[-–—|]\s+([^-–—|]+?)\s*$")
 
-# Outlets that tag their headlines, beyond the governed domains in
-# `app/data/news_domains.json` (whose names are added at call time).
-# Compared after `_publisher_key` folding.
+# Outlets that tag their headlines, compared after `_publisher_key`
+# folding. The governed domains in `app/data/news_domains.json` are added
+# at call time, but the major outlets are listed here too: whether two
+# headlines are one story must not change when that file is edited.
 _PUBLISHER_NAMES = frozenset({
-    "apnews", "associatedpress", "ap", "benzinga", "businessinsider",
-    "cnn", "cnnbusiness", "economist", "financialtimes", "forbes",
-    "fortune", "foxbusiness", "globenewswire", "insider",
-    "investorsbusinessdaily", "morningstar", "motleyfool", "nasdaq",
-    "newyorktimes", "prnewswire", "businesswire", "seekingalpha",
-    "tipranks", "wallstreetjournal", "yahoofinance", "zacks",
-    "zacksinvestmentresearch",
+    "apnews", "associatedpress", "ap", "axios", "barrons", "benzinga",
+    "bloomberg", "businessinsider", "businesswire", "cnbc", "cnn",
+    "cnnbusiness", "economist", "financialtimes", "forbes", "fortune",
+    "foxbusiness", "ft", "globenewswire", "insider", "investors",
+    "investorsbusinessdaily", "marketwatch", "morningstar", "motleyfool",
+    "nasdaq", "newyorktimes", "nytimes", "prnewswire", "reuters",
+    "seekingalpha", "techcrunch", "tipranks", "wallstreetjournal", "wsj",
+    "yahoo", "yahoofinance", "zacks", "zacksinvestmentresearch",
 })
 
 # Per-ticker FIFO queue (singleton). Largely superseded for
