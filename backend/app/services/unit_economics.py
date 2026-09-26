@@ -411,6 +411,10 @@ def _units_for(op: Operation, rows: Sequence[Any],
         unit.cost_usd += estimate_cost_usd(
             r.provider, r.model, r.tokens_in, r.tokens_out,
             cache_read_tokens=r.cache_read_tokens, cache_write_tokens=r.cache_write_tokens,
+            # The rate in force the day the row was written (DATED_PRICES),
+            # as llm_metrics._row_cost prices it: a window read after a
+            # scheduled price change must not reprice last year's calls.
+            on=r.generated_at,
         )
         if not priced:
             unit.problems.add("unpriced_model")

@@ -668,3 +668,18 @@ def test_the_route_does_not_claim_a_bound_the_count_does_not_have():
     row = next(line for line in audit.splitlines()
                if re.match(r"\|\s*GET\s*\|\s*`/api/admin/unit-economics`", line))
     assert claim in row
+
+
+def test_a_row_is_priced_at_the_rate_in_force_the_day_it_was_written(monkeypatch):
+    """DATED_PRICES: a scheduled price change applies from its date on.
+    The 2019 rows here predate a (test-only) doubling of haiku's rate, so
+    the report must price them at the old rate, as `llm_metrics._row_cost`
+    does; pricing at today's rate would double a past window's cost."""
+    from datetime import date
+
+    from app.services import llm_metrics
+    monkeypatch.setitem(llm_metrics.DATED_PRICES, MODEL,
+                        [(date(2020, 1, 1), (2.00, 10.00), (0.20, None))])
+    _seed([{"feature": "chart_commentary", **_cents(5)} for _ in range(20)])
+    block = _report()["operations"]["chart_commentary"]
+    assert block["cost_usd_per_unit"]["median"] == pytest.approx(0.05)
