@@ -122,7 +122,15 @@ def test_configure_logging_quiets_the_per_request_loggers():
     )
 
 
-@pytest.mark.parametrize("sdk", ["openai", "anthropic", "google.genai._api_client"])
+@pytest.mark.parametrize("sdk", [
+    "openai",
+    "google.genai._api_client",
+    # A forward GUARD, not a regression case: the pinned anthropic SDK still
+    # imports httpx, which ca08521 already silenced, so this one passes on
+    # the base by design. It is here so an anthropic move to httpx2 fails
+    # the build the way openai's did not.
+    pytest.param("anthropic", id="anthropic-guard"),
+])
 def test_the_transport_each_pinned_sdk_uses_is_quieted(sdk, caplog):
     """Attribution critique #20: openai 3.8 moved to `httpx2`/`httpcore2`,
     whose INFO lines (`POST https://api.openai.com/...`, one per call) the

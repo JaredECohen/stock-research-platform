@@ -403,3 +403,32 @@ def test_call_cost_accumulates_across_attempts(monkeypatch):
     usage = llm.last_usage()
     assert usage["call_cost_usd"] == pytest.approx(first.cost_usd + second.cost_usd)
     assert usage["cost_usd"] == pytest.approx(second.cost_usd)
+
+
+def test_the_row_and_line_carry_the_real_process_role(monkeypatch, caplog):
+    """`process_role` must be the process that made the call. A constant
+    "web" is exactly the cron-health mislabel (every worker loop reported
+    as web), so the worker role is forced and checked by value."""
+    from app import runtime_role
+    monkeypatch.setenv(runtime_role.PROCESS_ROLE_ENV, "worker")
+    monkeypatch.setattr(llm, "_PROC", None)      # computed once per process
+    llm_fakes.live(monkeypatch, openai=FakeClient(openai_response()))
+    run_id = _run_id()
+    with caplog.at_level(logging.INFO, logger="app.llm.calls"), \
+            llm.llm_call_context(run_id=run_id):
+        llm.chat_json("p", action="analyst.sector")
+    (row,) = llm_fakes.rows_for(run_id)
+    assert row.process_role == "worker"
+    (line,) = _lines(caplog)
+    assert line["proc"] == "worker"
+
+
+def test_failover_events_are_capped_but_every_failover_is_counted(monkeypatch):
+    """Long-lived loop threads never drain their context's event list, so
+    it is bounded (design gap G18); the process counter still sees all."""
+    monkeypatch.setattr(llm, "_FAILOVER_EVENTS_MAX", 2)
+    llm.reset_failover_state()
+    for _ in range(5):
+        llm._record_failover("openai", "anthropic", "call_failed")
+    assert len(llm.consume_failover_events()) == 2
+    assert llm.get_failover_state()["count"] == 5
