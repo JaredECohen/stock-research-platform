@@ -563,3 +563,51 @@ def test_llm_call_ignores_stale_usage_when_no_request_is_sent(monkeypatch):
     res = debate.llm_call(_request(route))
     assert len(refusing.requests) == before, "the breaker skipped the call"
     assert (res.out, res.usage, res.outcome()) == (None, None, "none")
+
+
+_LEAK = "GICS 453010 (Semiconductors & Semiconductor Equipment)"
+
+
+def _leaky(side: str) -> dict:
+    out = F.opening(side)
+    for c in out["claims"]:
+        for k in ("claim", "pillar", "falsifier"):
+            c[k] = f"{c[k]} per {_LEAK}"
+        c["quote"] = {"evidence": "E01", "text": f"{_LEAK} leadership per the filing"}
+        c["contests_analyst"] = "GICS 4530 analyst"
+    out["headline"] = f"{out['headline']} in {_LEAK}"
+    return out
+
+
+def test_advocate_text_scrubbed_on_every_record_field(monkeypatch):
+    """S9/S10 on the whole stored record (the memo JSON is a public surface):
+    queries, whys, claims, pillars, falsifiers, unverified quotes, analyst
+    keys, headlines, arguments and cruxes carry no taxonomy code or brand."""
+    F.enable(monkeypatch)
+    script = F.default_script()
+    for side in debate.SIDE_NAMES:
+        script[(side, "research")] = [{"queries": [
+            {"corpus": "filings", "query": f"{_LEAK} data center demand", "why": f"tests the {_LEAK} read"}]}]
+        script[(side, "openings")] = [_leaky(side)]
+        reb = F.rebuttal(side)
+        for r in reb["responses"]:
+            r["argument"] = f"{r['argument']} in {_LEAK}"
+        reb["crux"] = f"Whether {_LEAK} demand holds"
+        reb["revised_headline"] = f"Revised for {_LEAK}"
+        script[(side, "rebuttals")] = [reb]
+    record = F.run(F.ScriptedCall(script))
+    assert record.status == "complete"
+    dumped = record.model_dump_json()
+    for leak in ("GICS", "453010", "4530", "Semiconductors & Semiconductor Equipment"):
+        assert leak not in dumped, leak
+    assert all(c.contests_analyst is None for c in record.claims), "an unknown analyst key is not stored"
+    assert all(c.quote and c.quote["verified"] is False for c in record.claims)
+
+
+def test_contests_analyst_kept_for_a_shown_analyst():
+    raw = F.opening("bull")
+    raw["claims"][0]["contests_analyst"] = "analyst:earnings"
+    raw["claims"][1]["contests_analyst"] = "filing"  # a template finding: never shown as an argument
+    _, claims = debate.parse_opening(raw, "bull", max_claims=5, pool=POOL, registry=None,
+                                     usable_analysts=["earnings", "sector"])
+    assert [c.contests_analyst for c in claims] == ["earnings", None, None]

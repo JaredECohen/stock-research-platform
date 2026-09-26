@@ -695,10 +695,12 @@ def parse_research_plan(raw: Any, max_queries: int) -> list[dict[str, str]] | No
         if not isinstance(q, Mapping):
             continue
         corpus = str(q.get("corpus") or "").strip().lower()
-        text = clean(q.get("query"), MAX_QUERY)
+        # Scrubbed (S9/S10): the query and its why are stored on the memo
+        # (`record.research`, each passage's `query`), a public surface.
+        text = _scrub(clean(q.get("query"), MAX_QUERY))
         if corpus not in CORPORA or not text:
             continue
-        out.append({"corpus": corpus, "query": text, "why": clean(q.get("why"), MAX_WHY)})
+        out.append({"corpus": corpus, "query": text, "why": _scrub(clean(q.get("why"), MAX_WHY))})
     return out or None
 
 
@@ -1064,6 +1066,7 @@ def parse_opening(raw: Any, side: str, *, max_claims: int, pool: Sequence[Debate
     if not isinstance(raw, Mapping):
         return "", []
     usable = list(usable_analysts)
+    known = set(usable)
     claims: list[DebateClaim] = []
     items = [c for c in list(raw.get("claims") or []) if isinstance(c, Mapping)][:max(0, max_claims)]
     for c in items:
@@ -1081,7 +1084,16 @@ def parse_opening(raw: Any, side: str, *, max_claims: int, pool: Sequence[Debate
                         pool=pool, registry=registry, usable_analysts=usable)
         if quote is not None:
             quote["verified"] = bool(g.quote_verified)
+            if not quote["verified"]:
+                # Not a passage's words, so it is advocate text and gets the
+                # S9/S10 scrub; a verified quote is third-party text kept
+                # verbatim, like the pool excerpt it matched.
+                quote["text"] = _scrub(quote["text"])
+        # Only an analyst the case file showed: free model text here would be
+        # stored on the memo unscrubbed (a key like "gics_4530_analyst").
         contests = _analyst_key(c.get("contests_analyst")) or None
+        if contests not in known:
+            contests = None
         claims.append(DebateClaim(
             id=f"{side.upper()}-{len(claims) + 1}", side=side,  # type: ignore[arg-type]
             pillar=_scrub(clean(c.get("pillar"), MAX_PILLAR)), claim=text,
