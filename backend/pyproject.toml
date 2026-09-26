@@ -190,6 +190,8 @@ files = [
     "app/agents/memo_quality.py",
     "app/agents/number_check.py",
     "app/agents/source_ledger.py",
+    "app/agents/debate.py",
+    "app/agents/debate_prompts.py",
 ]
 follow_imports = "silent"
 ignore_missing_imports = true
