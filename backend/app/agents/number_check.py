@@ -672,6 +672,14 @@ class CheckedClaim:
     status: str
     sources: tuple[str, ...] = ()
     kinds: tuple[str, ...] = ()
+    # EVERY registered source whose fact carries this figure's value, for a
+    # traced claim (the anchored facts, or the verbatim ones at 4+ digits)
+    # and for a weak one (the unanchored matches), sorted. `sources` is the
+    # capped, primary-first list that is stored; this is uncapped, so a
+    # caller can tell a figure that traces ONLY to some refs (debate-
+    # registered passages, critique #7) from one that also traces to data
+    # an analyst was given.
+    support: tuple[str, ...] = ()
 
 
 def check_text(
@@ -695,13 +703,14 @@ def check_text(
             continue
         traced = status == "traced"
         sources = _credited(facts) if traced else ()
+        support = tuple(sorted({f.source for f in facts}))
         # Kinds come from EVERY supporting fact, not only the stored refs:
         # the same note block is registered once per agent (notes:comps,
         # notes:earnings ...), and truncating to eight refs must not drop the
         # transcript that also carries the figure (primary-kind credit feeds
         # the no_primary_trace / single_primary_kind caps).
         kinds = tuple(sorted({f.kind for f in facts})) if traced else ()
-        out.append(CheckedClaim(c, status, sources, kinds))
+        out.append(CheckedClaim(c, status, sources, kinds, support))
     return out
 
 
@@ -821,6 +830,38 @@ def iter_fields(memo: Any) -> Iterator[FieldSpec]:
     rec = q.rating_reconciliation if q is not None else None
     if rec is not None and rec.reason:
         yield FieldSpec("quality.rating_reconciliation.reason", rec.reason, POLICY_PARAGRAPH)
+    yield from _debate_fields(getattr(memo, "debate", None))
+
+
+def _debate_fields(debate: Any) -> Iterator[FieldSpec]:
+    """The debate texts a reader is shown (design-bullbear-final §12.2), only
+    for a debate that is shown (complete or partial).
+
+    Claim texts are NOT read here: a shown claim is displayed as its side's
+    case key point, which `bull_case.*` / `bear_case.*` already check (and
+    withhold), so reading it twice would double its weight in the ratio cap.
+    Responses are FLAG, never withheld: withholding one would orphan the
+    claim id the matrix points at. Only the parts of the record the
+    presenter shows are read: a response to a claim that is not displayable
+    is never shown, so it must not move the untraceable caps either. The
+    deterministic checks are computed facts and are not read."""
+    from ..services.memo_sections import DEBATE_SHOWN_STATUSES, debate_claim_displayable
+
+    if debate is None or debate.status not in DEBATE_SHOWN_STATUSES:
+        return
+    displayable = {c.id for c in debate.claims if debate_claim_displayable(c)}
+    for i, r in enumerate(debate.responses or []):
+        if r.target in displayable:
+            yield FieldSpec(f"debate.responses[{i}].argument", r.argument or "", POLICY_FLAG,
+                            list_path="debate.responses", index=i)
+    for side in ("bull", "bear"):
+        crux = (debate.cruxes or {}).get(side)
+        if isinstance(crux, str):
+            yield FieldSpec(f"debate.cruxes.{side}", crux, POLICY_PARAGRAPH)
+    for i, c in enumerate(debate.claims or []):
+        if debate_claim_displayable(c) and c.falsifier:
+            yield FieldSpec(f"debate.claims[{i}].falsifier", c.falsifier, POLICY_THRESHOLD)
+    yield FieldSpec("debate.resolution.crux", debate.resolution.crux or "", POLICY_PARAGRAPH)
 
 
 # ---------------------------------------------------------------------------
@@ -862,7 +903,9 @@ PM_FIELDS = frozenset({
     "mispricing_thesis.our_view", "mispricing_thesis.gap", "dcf_pm_adjustment_headline",
     "quality.rating_reconciliation.reason",
 })
-_PM_FIELD_PREFIXES = ("dcf_pm_adjustments[",)
+# The debate resolution is the PM's ruling (design §12.2), so the PM's own
+# declared forecast assumptions apply to its figures.
+_PM_FIELD_PREFIXES = ("dcf_pm_adjustments[", "debate.resolution.")
 
 
 def is_pm_field(path: str) -> bool:
@@ -957,6 +1000,43 @@ def _plan_withholding(results: list[FieldResult], plan: WithholdPlan) -> None:
             plan.items[lp] = gone
         if len(gone) < len(idx):
             plan.lists_not_withheld.append(lp)
+
+
+@dataclass(frozen=True, slots=True)
+class FigureSupport:
+    """One checked figure and the refs that support it. `start`/`end` index
+    the field's text as `resolve_field` returns it (the stored offsets)."""
+    field: str
+    start: int
+    end: int
+    raw: str
+    status: str
+    refs: tuple[str, ...]
+
+
+def figure_support(result: MemoCheck) -> list[FigureSupport]:
+    """Every checked figure (thresholds included, with no refs) and ALL the
+    registered sources that carry its value, in field order.
+
+    The stored record keeps traced figures only as tallies and credited
+    refs (`summarize`), which cannot answer "which figures trace only via
+    X". Registering debate passages widens the ledger for the whole memo
+    (critique #7), so the review flow (R1) counts the figures traced via
+    debate-registered refs alone from this."""
+    return [
+        FigureSupport(field=fr.spec.path, start=fr.spec.offset_base + cc.claim.start,
+                      end=fr.spec.offset_base + cc.claim.end, raw=cc.claim.raw, status=cc.status,
+                      refs=cc.support)
+        for fr in result.fields for cc in fr.claims
+    ]
+
+
+def traced_only_via(result: MemoCheck, refs: Iterable[str]) -> list[FigureSupport]:
+    """Traced figures whose every supporting source is in `refs`: without
+    those refs registered, each would not have traced."""
+    allowed = frozenset(refs)
+    return [f for f in figure_support(result)
+            if f.status == "traced" and f.refs and set(f.refs) <= allowed]
 
 
 def distinct_flagged(checked: Iterable[CheckedClaim]) -> int:
