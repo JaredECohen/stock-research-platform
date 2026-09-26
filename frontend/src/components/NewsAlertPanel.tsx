@@ -19,9 +19,18 @@ function severityClasses(s: NewsSeverity): string {
   }
 }
 
+/**
+ * A bare "YYYY-MM-DD" is a calendar day, and the backend now stores
+ * date-only published dates that way. `new Date()` reads that form as UTC
+ * midnight, which is the previous evening for a viewer west of UTC, so the
+ * panel showed every date-only story one day early in the US. Build it as
+ * a local date instead; anything with a time is an instant and is left to
+ * `Date` to convert.
+ */
 function fmtDate(s?: string | null): string {
   if (!s) return "";
-  const d = new Date(s);
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  const d = day ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])) : new Date(s);
   if (Number.isNaN(d.getTime())) return s.slice(0, 10);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
