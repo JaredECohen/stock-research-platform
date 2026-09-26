@@ -137,7 +137,7 @@
     "rating_too_high": null,
     "rating_too_low": null,
     "review_mode": "unknown",
-    "review_status": "",
+    "review_status": "not_independent",
     "reviewer_model": "",
     "revision": null,
     "suggested_revisions": [],
@@ -641,6 +641,13 @@
      "hidden_items": 0,
      "reason": null,
      "status": "available"
+    },
+    "debate": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
     },
     "earnings_agent_view": {
      "basis": [
@@ -1165,7 +1172,7 @@
     "rating_too_high": null,
     "rating_too_low": null,
     "review_mode": "unknown",
-    "review_status": "",
+    "review_status": "not_independent",
     "reviewer_model": "",
     "revision": null,
     "suggested_revisions": [],
@@ -1462,6 +1469,13 @@
      "hidden_items": 0,
      "reason": null,
      "status": "available"
+    },
+    "debate": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
     },
     "earnings_agent_view": {
      "basis": [
@@ -1972,7 +1986,7 @@
     "rating_too_high": null,
     "rating_too_low": null,
     "review_mode": "unknown",
-    "review_status": "",
+    "review_status": "not_independent",
     "reviewer_model": "",
     "revision": null,
     "suggested_revisions": [],
@@ -2359,6 +2373,13 @@
      "hidden_items": 0,
      "reason": null,
      "status": "available"
+    },
+    "debate": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
     },
     "earnings_agent_view": {
      "basis": [],
@@ -2960,7 +2981,7 @@
     "rating_too_high": null,
     "rating_too_low": null,
     "review_mode": "rule_based",
-    "review_status": "",
+    "review_status": "not_independent",
     "reviewer_model": "",
     "revision": null,
     "suggested_revisions": [],
@@ -3542,6 +3563,13 @@
      "hidden_items": 0,
      "reason": null,
      "status": "available"
+    },
+    "debate": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
     },
     "earnings_agent_view": {
      "basis": [],
@@ -4133,7 +4161,7 @@
     "rating_too_high": null,
     "rating_too_low": null,
     "review_mode": "unknown",
-    "review_status": "",
+    "review_status": "not_independent",
     "reviewer_model": "",
     "revision": null,
     "suggested_revisions": [],
@@ -4539,6 +4567,13 @@
      "reason": null,
      "status": "available"
     },
+    "debate": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
     "earnings_agent_view": {
      "basis": [],
      "headline_hidden": false,
@@ -4907,5 +4942,5 @@
    }
   }
  },
- "presentation_version": 1
+ "presentation_version": 2
 }

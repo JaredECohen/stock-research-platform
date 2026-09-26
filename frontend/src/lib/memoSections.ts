@@ -46,18 +46,59 @@ export const REASON_TEXT: Record<SectionReason, string> = {
   partial_template: "Template text was removed from this section.",
   follow_up_unanswered: "The follow-up went unanswered; the first-round read is shown.",
   templated_scenarios: "The bull and bear DCF scenarios use sector-default assumptions.",
+  debate_unavailable: "The bull and bear debate did not complete for this version.",
+  not_run: "The bull and bear debate was not run for this version.",
+  rebuttals_unavailable: "Rebuttals unavailable in this version.",
 };
 
 // Reasons that do not count toward the "N sections unavailable" banner.
 // `template_always` (Portfolio Fit) is never written by an analyst, so it
 // would add one to every memo and the banner would stop meaning anything;
 // `skipped_by_intake` is a PM decision, not a failure; `not_produced` means
-// there was nothing to hide (an optional section the run had no input for).
+// there was nothing to hide (an optional section the run had no input for);
+// `not_run` is a debate the run had no model for, which hid nothing either.
 const NOT_COUNTED: ReadonlySet<SectionReason> = new Set<SectionReason>([
   "template_always",
   "skipped_by_intake",
   "not_produced",
+  "not_run",
 ]);
+
+// The presenter's stable section keys, in display order: must equal
+// `memo_sections.SECTION_KEYS` (`test_memo_sections_fixture_contract.py`
+// compares the two). Dynamic keys (`extra_agent_views.<key>`,
+// `<finding>.long_form_report`) are added per memo and are not listed.
+export const SECTION_KEYS = [
+  "final_pm_view",
+  "one_sentence_thesis",
+  "rating_label",
+  "confidence_score",
+  "mispricing_thesis",
+  "valuation_verdict",
+  "business_summary",
+  "sector_agent_view",
+  "sector_synthesis",
+  "earnings_agent_view",
+  "filing_agent_view",
+  "valuation_agent_view",
+  "comps_agent_view",
+  "macro_sensitivity",
+  "technical_agent_view",
+  "earnings_qoq_delta",
+  "bull_case",
+  "bear_case",
+  "debate",
+  "catalysts",
+  "key_risks",
+  "thesis_breakers",
+  "forward_catalysts",
+  "dcf_summary",
+  "risk_committee_challenge",
+  "portfolio_fit",
+  "final_verdict",
+  "scorecard",
+  "round_findings",
+] as const;
 
 /** The presenter's verdict on one section, or undefined when the memo has
  * no map (a pre-W2a body) or the map has no entry for the key. */

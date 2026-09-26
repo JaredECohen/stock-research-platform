@@ -312,9 +312,13 @@ def test_critic_failure_stub_writes_no_item8_field():
 
 
 def test_unavailable_review_presented_keeps_item8_provenance():
-    """The presenter blanks a not-live review's content, and must keep its
-    provenance: this branch is exactly the review `not_independent` labels,
-    and dropping the label would present it as an unlabelled review."""
+    """The presenter blanks a not-live review's legacy prose, and must keep
+    its provenance: this branch is exactly the review `not_independent`
+    labels, and dropping the label would present it as an unlabelled review.
+
+    D4 (the review projection) keeps the item-8 findings too: a verdict and
+    issues are structured findings the open-issue cap rests on (R1), so
+    blanking them would show a capped confidence with no reason for it."""
     from app.services import memo_sections
 
     memo = StockMemoOut.model_validate(json.loads(PRE_S2.read_text()))
@@ -327,6 +331,8 @@ def test_unavailable_review_presented_keeps_item8_provenance():
     assert out.section_availability["risk_committee_challenge"].status == "unavailable"
     review = out.risk_committee_challenge
     assert (review.review_status, review.reviewer_model) == ("not_independent", "openai:gpt-6-astra")
-    # Content from a review that was not live is blanked with the challenges.
-    assert (review.verdict, review.issues) == ("", [])
+    # The legacy critic prose of a review that was not live is blanked...
+    assert review.overall_assessment == memo_sections.UNAVAILABLE_TEXT and review.challenges == []
+    # ...and its item-8 findings are kept, labelled not independent.
+    assert (review.verdict, [i.id for i in review.issues]) == ("unsound", ["R1"])
     assert memo.risk_committee_challenge.review_status == "not_independent"
