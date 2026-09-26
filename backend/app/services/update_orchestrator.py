@@ -31,9 +31,11 @@ Why a separate service vs. inlining in news_loop:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..schemas import NewsAlert, StockMemoOut
@@ -50,6 +52,36 @@ MAX_PATCHES_PER_DAY = 2
 # memo regen waits for a user request. Configurable via env;
 # essentially the cost ceiling on the universe expansion.
 AUTO_REGEN_RECENCY_DAYS = 30
+
+# News patch path (FIX-017). One story is assessed once per window: the
+# same headline used to be re-assessed on every 2-hourly fetch until the
+# daily cap, and GOOG was patched 4 times on one headline with confidence
+# stepping up each time. The same window is the age gate: an alert older
+# than this is not news the memo is waiting on.
+NEWS_ASSESSED_WINDOW = timedelta(hours=72)
+_NEWS_ASSESSED_KIND = "news_assessed"
+
+# " - Reuters", " | Bloomberg", " — The Wall Street Journal": the last
+# segment after a spaced dash or bar. It is stripped ONLY when it names a
+# publisher (`_is_publisher_tag`): "Tesla Q3 deliveries - beat estimates"
+# and "... - miss estimates" are two stories, and stripping any short
+# trailing clause merged them, so the second was never assessed.
+_TRAILING_SEGMENT_RE = re.compile(r"\s+[-–—|]\s+([^-–—|]+?)\s*$")
+
+# Outlets that tag their headlines, compared after `_publisher_key`
+# folding. The governed domains in `app/data/news_domains.json` are added
+# at call time, but the major outlets are listed here too: whether two
+# headlines are one story must not change when that file is edited.
+_PUBLISHER_NAMES = frozenset({
+    "apnews", "associatedpress", "ap", "axios", "barrons", "benzinga",
+    "bloomberg", "businessinsider", "businesswire", "cnbc", "cnn",
+    "cnnbusiness", "economist", "financialtimes", "forbes", "fortune",
+    "foxbusiness", "ft", "globenewswire", "insider", "investors",
+    "investorsbusinessdaily", "marketwatch", "morningstar", "motleyfool",
+    "nasdaq", "newyorktimes", "nytimes", "prnewswire", "reuters",
+    "seekingalpha", "techcrunch", "tipranks", "wallstreetjournal", "wsj",
+    "yahoo", "yahoofinance", "zacks", "zacksinvestmentresearch",
+})
 
 # Per-ticker FIFO queue (singleton). Largely superseded for
 # full_reanalysis by the durable `regen_jobs` queue — kept because the
@@ -285,9 +317,134 @@ def on_filing_event(ticker: str, *, source: str = "filing_event") -> dict[str, A
     }
 
 
+def _publisher_key(text: str) -> str:
+    """"The Wall Street Journal" -> "wallstreetjournal", "Reuters.com" ->
+    "reuters", "Barron's" -> "barrons": one folding for tags and names."""
+    t = text.strip().lower()
+    t = re.sub(r"^www\.", "", t)
+    t = re.sub(r"\.(com|net|org|co\.uk|co)$", "", t)
+    t = re.sub(r"^the\s+", "", t)
+    return re.sub(r"[^a-z0-9]+", "", t)
+
+
+def _domain_label(url: str) -> str:
+    """"https://www.reuters.com/x" -> "reuters"; "" when there is no host."""
+    host = re.sub(r"^[a-z]+://", "", (url or "").strip().lower()).split("/", 1)[0].split(":", 1)[0]
+    if host.startswith("vertexaisearch."):
+        # Gemini's grounding redirect: the host says nothing about the
+        # publisher, and its label ("google") is a company name.
+        return ""
+    parts = [p for p in host.split(".") if p and p != "www"]
+    return parts[-2] if len(parts) >= 2 else ""
+
+
+def _is_publisher_tag(segment: str, url: str) -> bool:
+    key = _publisher_key(segment)
+    if not key:
+        return False
+    if key in _PUBLISHER_NAMES:
+        return True
+    label = _domain_label(url)
+    if label and key == label:
+        return True
+    from ..agents.news_agent import allowed_domains, blocked_domains
+    return any(key == _publisher_key(d) for d in allowed_domains() | blocked_domains())
+
+
+def news_fingerprint(ticker: str, title: str, url: str = "") -> str:
+    """Stable id for "the same story" about `ticker`.
+
+    Title-based: lowercased, a trailing publisher tag stripped, punctuation
+    removed, whitespace collapsed. So "Southern Co signs deal with Google -
+    Reuters" and "southern co. signs deal with google" are one story. A
+    tag counts as a publisher when it names a known outlet, a governed news
+    domain, or the alert's own `url` host. A genuinely reworded duplicate
+    is missed; the window bounds that cost.
+    """
+    t = (title or "").strip()
+    m = _TRAILING_SEGMENT_RE.search(t)
+    if m and _is_publisher_tag(m.group(1), url):
+        t = t[: m.start()]
+    t = re.sub(r"[^\w\s]+", "", t.lower())
+    t = re.sub(r"\s+", " ", t).strip()
+    return hashlib.sha1(f"{ticker.upper()}|{t}".encode(), usedforsecurity=False).hexdigest()
+
+
+def _assessed_subject(ticker: str) -> str:
+    return f"news_assessed:{ticker.upper()}"
+
+
+def _assessed_map(ticker: str, *, now: datetime) -> dict[str, dict[str, Any]]:
+    """fingerprint → {verdict, at} for stories assessed within the window.
+
+    ONE row per ticker, rewritten whole: `snapshot_gc` never deletes the
+    newest row per (subject, kind), so a subject per alert would grow
+    without bound.
+    """
+    from ..cache import cache_get
+    snap = cache_get(_assessed_subject(ticker), _NEWS_ASSESSED_KIND)
+    entries = (snap.payload or {}).get("assessed") if snap is not None and isinstance(snap.payload, dict) else None
+    if not isinstance(entries, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for fp, entry in entries.items():
+        try:
+            at = datetime.fromisoformat(str(entry.get("at")))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if now - at <= NEWS_ASSESSED_WINDOW:
+            out[str(fp)] = entry
+    return out
+
+
+def _remember_assessment(ticker: str, fingerprint: str, verdict: str, *, now: datetime) -> None:
+    from ..cache import cache_put
+    entries = _assessed_map(ticker, now=now)
+    entries[fingerprint] = {"verdict": verdict, "at": now.isoformat()}
+    cache_put(
+        _assessed_subject(ticker), _NEWS_ASSESSED_KIND,
+        payload={"assessed": entries},
+        sources_used=[f"news_assessed:{ticker.upper()}"],
+        generated_by="update_orchestrator", cost_tokens=0,
+        ttl_seconds=int(NEWS_ASSESSED_WINDOW.total_seconds()),
+    )
+
+
+def _news_age_gate(alert: NewsAlert, memo_generated_at: datetime | None, *, now: datetime) -> str | None:
+    """Why an alert is too old to assess against this memo, or None.
+
+    - older than the memo: the full run that wrote it could already see
+      the story (patches copy the full run's `generated_at`);
+    - older than the window: not news any more; the 60-day Gemini prompt
+      used to re-surface weeks-old "material" stories on every pass;
+    - a Gemini alert with no readable date: the date is model-written, so
+      "unknown" cannot be taken for "fresh". Provider rows with no date are
+      publisher feed items and keep today's leniency.
+    """
+    from ..agents.news_agent import parse_published_at
+    published = parse_published_at(alert.published_at, now=now)
+    if published is None:
+        return "undated_model_alert" if alert.source == "gemini" else None
+    if now - published > NEWS_ASSESSED_WINDOW:
+        return "stale_alert"
+    if memo_generated_at is not None:
+        generated = memo_generated_at
+        if generated.tzinfo is not None:
+            generated = generated.astimezone(UTC).replace(tzinfo=None)
+        if published < generated:
+            return "older_than_memo"
+    return None
+
+
 def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
     """A material/breaking news alert came in → run news_impact_agent
     against the latest memo, persist a patch if material.
+
+    Gates, in order: the daily patch cap, a prior memo, the alert's age
+    (`_news_age_gate`), and whether the story was already assessed within
+    `NEWS_ASSESSED_WINDOW`. A verdict is remembered after `not_material`
+    and after a published patch, never after `assessment_error`, so a
+    crashed assessment is retried on the next pass.
 
     Returns `{patched: bool, version: int|None, reason: str}` so callers
     can log what happened.
@@ -302,6 +459,14 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
     if snap is None:
         return {"patched": False, "ticker": ticker, "reason": "no_prior_memo"}
     prior_memo = memo_store.memo_to_pydantic(snap)
+
+    now = _utcnow()
+    too_old = _news_age_gate(alert, prior_memo.generated_at, now=now)
+    if too_old:
+        return {"patched": False, "ticker": ticker, "reason": too_old}
+    fingerprint = news_fingerprint(ticker, alert.title, alert.url or "")
+    if fingerprint in _assessed_map(ticker, now=now):
+        return {"patched": False, "ticker": ticker, "reason": "already_assessed"}
 
     from ..agents.news_impact_agent import apply_patch, assess
     assessment = assess(prior_memo, alert)
@@ -318,6 +483,7 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
             "error": assessment["error"],
         }
     if not assessment.get("material"):
+        _remember_assessment(ticker, fingerprint, "not_material", now=now)
         return {"patched": False, "ticker": ticker, "reason": "not_material"}
 
     patched_memo: StockMemoOut = apply_patch(prior_memo, assessment["patch"])
@@ -367,6 +533,8 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
         parent_version=snap.version,
         revision_log=revision_log,
     )
+    # After the publish, not before: a patch that failed to save is retried.
+    _remember_assessment(ticker, fingerprint, "patched", now=now)
     return {
         "patched": True,
         "ticker": ticker,
@@ -376,7 +544,8 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
 
 
 def _utcnow() -> datetime:
-    """Clock seam for the scorecard review cap (tests pin the UTC day)."""
+    """Clock seam for the scorecard review cap and the news-alert age and
+    dedup windows (tests pin the UTC day)."""
     return datetime.utcnow()
 
 

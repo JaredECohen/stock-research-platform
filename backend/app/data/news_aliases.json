@@ -1,0 +1,9 @@
+{
+  "_comment": "Names the press uses for a company that its legal name does not contain, keyed by ticker. The news agent's relevance filter (`_is_about_company`) accepts an item whose title or URL slug mentions one as a whole word. Without this, BK (legally 'The Bank of New York Mellon Corporation', branded 'BNY' since 2024) failed relevance on every 'BNY ...' headline and was left with zero alerts. Add a name only when headlines routinely use it on its own; a generic word here would let sector roundups through. Same-security ticker renames (BK -> BNY) are also picked up from services/ticker_symbols.market_data_symbols.",
+  "aliases": {
+    "BK": ["BNY"],
+    "C": ["Citi"],
+    "GOOG": ["Google"],
+    "GOOGL": ["Google"]
+  }
+}

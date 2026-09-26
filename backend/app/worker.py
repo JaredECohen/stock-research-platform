@@ -52,6 +52,15 @@ def _handle_signal(signum, _frame) -> None:
     _shutdown.set()
 
 
+def _gemini_backend(settings) -> str:
+    """`vertex`, `api` or `off`, in `llm._gemini_client`'s precedence."""
+    if settings.has_vertex:
+        return "vertex"
+    if settings.gemini_api_key:
+        return "api"
+    return "off"
+
+
 def _heartbeat() -> None:
     """Persist a liveness marker readable by the web service.
 
@@ -83,6 +92,12 @@ def _heartbeat() -> None:
             # no HTTP port and a Blueprint sync may not apply a new render.yaml
             # key, so this is where a post-deploy check can see it.
             f"industry_routing={'on' if settings.enable_industry_analyst_routing else 'off'}; "
+            # The worker is the only process that calls Gemini (news_loop),
+            # and nothing else shows which backend it loaded. Vertex wins
+            # when both are set (llm._gemini_client) and needs ADC Render
+            # lacks, so "vertex" here in production is a misconfiguration.
+            # The backend name only; never the key.
+            f"gemini={_gemini_backend(settings)}; "
             f"build={os.environ.get('RENDER_GIT_COMMIT', 'unknown')}"
         )
         if rss is not None:
