@@ -302,7 +302,9 @@ def _llm_diff(prior: FilingDoc, new: FilingDoc) -> dict[str, Any] | None:
         system="You are an experienced filings analyst. Be concise and specific.",
         route="strong",
         model=getattr(settings, "openai_tool_model", None),
-        action="filing.delta", ticker=new.ticker,
+        # A duck-typed filing (tests, callers) may carry no ticker; it is
+        # attribution only.
+        action="filing.delta", ticker=getattr(new, "ticker", None),
     )
     if not isinstance(out, dict):
         return None
