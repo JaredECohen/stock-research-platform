@@ -29,12 +29,13 @@ trivially.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar, get_args
 
 from ..config import settings
 from ..finance.dcf import fmt_price, fmt_upside
@@ -52,12 +53,14 @@ from ..schemas import (
     MemoQuality,
     MispricingThesis,
     NumberCheck,
+    RatingLabel,
     RatingReconciliation,
     RiskItem,
     RoundFindings,
     ScorecardSummary,
     StockMemoOut,
     ValuationVerdict,
+    score_from_rating_label,
 )  # CriticReview imported for the safe-runner fallback path  # noqa: F401
 from ..services.checkpoint_store import checkpointed
 from ..services.filings_service import get_filings
@@ -1209,6 +1212,31 @@ def _pm_view(findings: dict[str, AgentFinding]) -> PMView:
     return PMView(digests, rest, visible)
 
 
+# L6 (TradingAgents lessons, 2026-09-25): the five labels, by their
+# case-folded form. `RatingLabel` is a strict Literal, so an off-enum label
+# from the PM ("bullish", "Bullish ", "Moderately Bullish", "Buy") used to
+# raise a ValidationError when the memo was built and lose the whole run.
+_RATING_LABELS: tuple[str, ...] = get_args(RatingLabel)
+_RATING_BY_FOLDED: dict[str, str] = {label.casefold(): label for label in _RATING_LABELS}
+
+# `_pm_synthesis` marks where its rating came from under this key; the
+# compose stage pops it into `scores` (P6 recording) before building the memo.
+RATING_SOURCE_KEY = "_rating_source"
+
+
+def normalize_rating_label(value: Any) -> str | None:
+    """The canonical label for `value`, or None when it is not one.
+
+    Strip, collapse inner whitespace, case-fold, then an EXACT match against
+    the five labels. Never a substring or prefix match: "Moderately Bullish"
+    is not "Bullish", and "Sell-side" is not "Sell" (the misread TradingAgents
+    #1383 shipped). None is an explicit state the caller must handle, never
+    a silent default."""
+    if not isinstance(value, str):
+        return None
+    return _RATING_BY_FOLDED.get(" ".join(value.split()).casefold())
+
+
 def _pm_synthesis(
     profile: dict, findings: dict[str, AgentFinding], dcf: DCFResult | None,
     *, scorecard: Any | None = None, valuation_evidence: ValuationVerdict | None = None,
@@ -1275,6 +1303,7 @@ def _pm_synthesis(
             + json.dumps(json_findings, default=str)[: settings.max_agent_context_chars],
             system=prompts.PM_SYSTEM, route="strong",
             model=settings.openai_pm_model,
+            action="pm.synthesis", ticker=profile.get("ticker"),
         )
     if isinstance(llm_out, dict) and llm_out.get("priors_considered") is not None:
         # W7: which shown priors the PM applied or contradicted, kept on the
@@ -1285,10 +1314,22 @@ def _pm_synthesis(
             learning_context.record_considered, llm.current_call_context().get("run_id"),
             llm_out.get("priors_considered"), fallback=0, name="Learning considered", log_to=None,
         )
-    if llm_out and "rating_label" in llm_out:
-        return llm_out
+    invalid_label = False
+    if isinstance(llm_out, dict) and "rating_label" in llm_out:
+        label = normalize_rating_label(llm_out.get("rating_label"))
+        if label is not None:
+            return {**llm_out, "rating_label": label, RATING_SOURCE_KEY: "llm"}
+        # L6: an unreadable rating is an explicit PM failure, not a crash in
+        # compose and not a guessed label. The memo completes on the
+        # deterministic view and says so.
+        invalid_label = True
 
-    if settings.has_llm:
+    if invalid_label:
+        note_soft(
+            "PM Synthesis",
+            "LLM returned an invalid rating_label; deterministic PM view shipped",
+        )
+    elif settings.has_llm:
         # (b) The PM view is the memo's headline. Templated prose standing in
         # for it while an LLM was configured is a degradation the reader must
         # see; in deterministic mode (no keys) this path IS the design, so it
@@ -1351,12 +1392,13 @@ def _pm_synthesis(
         f"Sector framing supports the cohort thesis; valuation-relative read is the main swing factor. "
         f"The risk committee flagged the dominant downside scenarios; portfolio fit depends on macro view."
     )
-    return dict(
-        final_pm_view=pm_view,
-        one_sentence_thesis=thesis,
-        rating_label=rating,
-        confidence_score=confidence,
-    )
+    return {
+        "final_pm_view": pm_view,
+        "one_sentence_thesis": thesis,
+        "rating_label": rating,
+        "confidence_score": confidence,
+        RATING_SOURCE_KEY: "keyword",
+    }
 
 
 MAX_SOURCE_REFS_IN_PROMPT = 40
@@ -1488,8 +1530,14 @@ def run_stock_memo(
     # discipline as the degradation log: one per run, reset in `finally`.
     ledger = SourceLedger()
     try:
+        # The run context is an UMBRELLA: it sets run_id and ticker, never
+        # an agent (attribution critique #1). A named agent here was
+        # credited with every call nested under it that opened no context of
+        # its own; each call now names its action, and the stages that are
+        # an agent (`_run_analyst_round`, `_compose_memo`, `_review_memo`)
+        # open their own agent context.
         with as_of_context(as_of_date), llm_call_context(
-            agent_name="run_stock_memo", run_id=run_id,
+            run_id=run_id, ticker=ticker,
         ), degradation.activate(), ledger.activate():
             return _run_stock_memo_inner(
                 ticker, scenario=scenario, force_refresh=force_refresh,
@@ -1732,7 +1780,7 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
         if not intake.runs(spec.key):
             findings[spec.key] = AgentFinding(**stub_finding(spec.key, intake.rationale))
             continue
-        with llm_call_context(agent_name=spec.display_name, run_id=run_id):
+        with llm_call_context(agent_name=spec.display_name, run_id=run_id, role="analyst"):
             findings[spec.key] = safe_finding(
                 spec.display_name, roster.checkpointed_runner(spec), inputs,
                 log_to=degradation,
@@ -2012,6 +2060,10 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
             valuation_evidence=valuation_verdict, news=inputs.news,
             fallback=synth_fallback, name="PM Synthesis", log_to=degradation,
         )
+    # L6 / P6 recording: where the rating came from. Only the LLM PM's own
+    # label is "llm"; the keyword synthesis and the crash fallback are not.
+    # Recorded as float score keys only: no schema change, no published change.
+    rating_source_llm = 1.0 if synth.pop(RATING_SOURCE_KEY, None) == "llm" else 0.0
     rating = synth.get("rating_label", "Neutral")
     raw_confidence = float(synth.get("confidence_score", 60))
     # The PM's stated reason for rating against the evidence. Memo content
@@ -2205,16 +2257,26 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
             overall_assessment="Pending critic review.", review_mode="pending",
         ),
         final_verdict="",
-        scores=_build_scores_dict(
-            blended_confidence=blended_confidence,
-            raw_confidence=raw_confidence,
-            ev_q=ev_q,
-            sector_finding=sector_finding,
-            valuation_finding=valuation_finding,
-            risk_finding=risk_finding,
-            earnings_finding=earnings_finding,
-            profile=profile, ratios=inputs.ratios, earnings=inputs.earnings,
-        ),
+        scores={
+            **_build_scores_dict(
+                blended_confidence=blended_confidence,
+                raw_confidence=raw_confidence,
+                ev_q=ev_q,
+                sector_finding=sector_finding,
+                valuation_finding=valuation_finding,
+                risk_finding=risk_finding,
+                earnings_finding=earnings_finding,
+                profile=profile, ratios=inputs.ratios, earnings=inputs.earnings,
+            ),
+            # P6 recording (bullish-skew diagnosis; L6): 1.0 when the LLM PM
+            # produced the label, else 0.0, and the PM's label as a bucket
+            # centre BEFORE risk recommendations, the blend and 7(b) move it.
+            # Lets the track record and the learning ledger segment by where
+            # a rating came from instead of measuring the keyword fallback as
+            # if it were the committee.
+            "rating_source_llm": rating_source_llm,
+            "pm_rating_score": score_from_rating_label(rating),
+        },
         sources_used=sources,
         generated_at=datetime.utcnow(),
         # Label follows the SAME flag that gates the data path
@@ -2478,12 +2540,17 @@ def _build_verdict(
     # would itself be the anti-pattern, and the PM's words then stand.
     thesis_rewritten = False
     if rewrite_fired:
-        # B7 — log every rewrite with the original thesis so the
-        # false-positive rate of this guard is measurable in prod logs.
+        # B7 — log every rewrite so the false-positive rate of this guard is
+        # measurable in prod logs. The thesis is PM model output, so the line
+        # carries its length and sha1, never its text (attribution critique
+        # #15): the stored memo version holds the words, and the sha1 finds
+        # the one a line is about.
+        original = thesis or ""
         log.info(
             "thesis rewrite fired for %s (anti_pattern=%s, stated=%r, "
-            "expected=%r); original=%r",
-            ticker, is_anti_pattern, stated_word, expected_word, thesis,
+            "expected=%r); original_len=%d original_sha1=%s",
+            ticker, is_anti_pattern, stated_word, expected_word,
+            len(original), hashlib.sha1(original.encode("utf-8")).hexdigest(),
         )
         try:
             rewritten = _build_thesis_from_findings(

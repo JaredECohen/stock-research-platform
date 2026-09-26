@@ -1078,7 +1078,9 @@ def test_a_digest_that_raises_withholds_the_read_not_the_synthesis(monkeypatch):
     view = graph._pm_view({"sector": sector, "industry_group": routed})
     assert view.digests == [] and list(view.findings) == ["sector"] and list(view.visible) == ["sector"]
     seen = _spy_llm(monkeypatch, pm_reply=_PM_REPLY)
-    assert graph._pm_synthesis(_PROFILE, {"sector": sector, "industry_group": routed}, None) == _PM_REPLY
+    out = graph._pm_synthesis(_PROFILE, {"sector": sector, "industry_group": routed}, None)
+    # L6: the LLM's reply, marked as the LLM PM's (the compose stage pops it).
+    assert out.pop(graph.RATING_SOURCE_KEY) == "llm" and out == _PM_REPLY
     assert len(seen["pm"]) == 1 and _DIGEST_HEAD not in seen["pm"][0]
 
 

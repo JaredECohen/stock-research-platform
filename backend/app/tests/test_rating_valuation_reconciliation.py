@@ -823,6 +823,34 @@ def test_pm_prompt_assembly_order_digest_news_evidence_refs_findings(monkeypatch
     assert offsets == sorted(offsets)
 
 
+def test_pm_synthesis_call_is_attributed(monkeypatch):
+    from app.agents import llm as llm_mod
+    kwargs_seen: list[dict] = []
+    monkeypatch.setattr(llm_mod, "chat_json", lambda p, **kw: kwargs_seen.append(kw))
+    graph._pm_synthesis({"ticker": "TEST"}, {}, None)
+    assert kwargs_seen[-1]["action"] == "pm.synthesis" and kwargs_seen[-1]["ticker"] == "TEST"
+
+
+def test_thesis_log_has_no_text(caplog):
+    """REGRESSION (attribution critique #15): the thesis-rewrite line logged
+    the PM's thesis verbatim. The line keeps its signal (ticker, words,
+    length, sha1) and never the model's text."""
+    import hashlib
+    import logging
+
+    anti = ("TEST Corp — Technology / Software, AI hook SENTINEL-PROSE; "
+            "DCF base case +25% suggests material upside.")
+    memo = make_memo(rating_label="Neutral", valuation_verdict=ev(**OVERVALUED), one_sentence_thesis=anti)
+    with caplog.at_level(logging.INFO, logger="app.agents.graph"):
+        out = _verdict_out(memo)
+    assert out.thesis_rewrite_fired
+    (line,) = [r.getMessage() for r in caplog.records if "thesis rewrite fired" in r.getMessage()]
+    assert "SENTINEL-PROSE" not in line
+    assert f"original_len={len(anti)}" in line
+    assert f"original_sha1={hashlib.sha1(anti.encode('utf-8')).hexdigest()}" in line
+    assert not [r for r in caplog.records if "SENTINEL-PROSE" in r.getMessage()]
+
+
 def test_pm_prompt_is_byte_identical_without_evidence(monkeypatch):
     import json
 
