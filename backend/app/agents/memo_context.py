@@ -131,6 +131,14 @@ class MemoInputs:
     # gather stage (tests, a direct stage call); the roster then passes no
     # `news=` kwarg and the runners behave as they do outside a memo.
     news: NewsContext | None = None
+    # L6 / P6 recording (slice G1): where the PM's rating came from
+    # (`rating_source_llm`, 1.0 for the LLM PM's own label) and that label as
+    # a bucket centre (`pm_rating_score`). Written by the compose stage and
+    # merged into `memo.scores` by the review stage only AFTER the critic
+    # has read its draft: `scores` is serialized into the legacy Risk
+    # Committee prompt, and these diagnostic keys must not change the bytes
+    # the live critic reads (plan P4) or push memo text out of its 60k cut.
+    pm_rating_record: dict[str, float] | None = None
     # W2b 7(a) — the run's source ledger (activated by `run_stock_memo`;
     # None for a direct stage call, in which case the number check does not
     # run). Analysts register their payloads through the context var, not

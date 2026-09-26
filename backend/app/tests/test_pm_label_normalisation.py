@@ -101,6 +101,31 @@ def test_rating_source_recorded(monkeypatch):
     assert memo.quality.rating_reconciliation.pm_rating == "Very Bullish"
 
 
+def test_p6_keys_recorded_but_never_shown_to_the_legacy_critic(monkeypatch):
+    """REGRESSION (G1 review): the P6 keys were written into `memo.scores` at
+    compose, and `_review_memo` dumps the whole draft into the legacy Risk
+    Committee prompt. With both modes off that changed the bytes the live
+    critic reads and pushed memo text out of its 60k window (plan P4)."""
+    monkeypatch.setattr(settings, "enable_agent_critic", True)
+    assert settings.debate_mode == "off" and settings.reviewer_mode == "legacy"
+    critic_prompts: list[str] = []
+
+    def spy(prompt, **kw):
+        if llm.current_call_context().get("agent_name") == "Risk Committee":
+            critic_prompts.append(prompt)
+        return None
+
+    monkeypatch.setattr(llm, "chat_json", spy)
+    memo = graph.run_stock_memo("MSFT")
+    assert critic_prompts, "the critic model was never asked"
+    for prompt in critic_prompts:
+        assert "rating_source_llm" not in prompt and "pm_rating_score" not in prompt
+    # Still recorded on the stored memo.
+    assert memo.scores["rating_source_llm"] == 0.0
+    assert memo.scores["pm_rating_score"] == score_from_rating_label(
+        memo.quality.rating_reconciliation.pm_rating)
+
+
 # --- FIX-019 end to end -----------------------------------------------------------------
 
 

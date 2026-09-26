@@ -1220,7 +1220,8 @@ _RATING_LABELS: tuple[str, ...] = get_args(RatingLabel)
 _RATING_BY_FOLDED: dict[str, str] = {label.casefold(): label for label in _RATING_LABELS}
 
 # `_pm_synthesis` marks where its rating came from under this key; the
-# compose stage pops it into `scores` (P6 recording) before building the memo.
+# compose stage pops it into `inputs.pm_rating_record` (P6 recording) and the
+# review stage merges that into `scores` after the critic has read the draft.
 RATING_SOURCE_KEY = "_rating_source"
 
 
@@ -2065,6 +2066,16 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     # Recorded as float score keys only: no schema change, no published change.
     rating_source_llm = 1.0 if synth.pop(RATING_SOURCE_KEY, None) == "llm" else 0.0
     rating = synth.get("rating_label", "Neutral")
+    # The PM's label as a bucket centre BEFORE risk recommendations, the
+    # blend and 7(b) move it. Lets the track record and the learning ledger
+    # segment by where a rating came from instead of measuring the keyword
+    # fallback as if it were the committee. Carried on `inputs`, not written
+    # into `memo.scores` here: the review stage adds it after the critic
+    # has read the draft (see `MemoInputs.pm_rating_record`).
+    inputs.pm_rating_record = {
+        "rating_source_llm": rating_source_llm,
+        "pm_rating_score": score_from_rating_label(rating),
+    }
     raw_confidence = float(synth.get("confidence_score", 60))
     # The PM's stated reason for rating against the evidence. Memo content
     # (the reader sees it with the reconciliation note), capped like the
@@ -2257,26 +2268,16 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
             overall_assessment="Pending critic review.", review_mode="pending",
         ),
         final_verdict="",
-        scores={
-            **_build_scores_dict(
-                blended_confidence=blended_confidence,
-                raw_confidence=raw_confidence,
-                ev_q=ev_q,
-                sector_finding=sector_finding,
-                valuation_finding=valuation_finding,
-                risk_finding=risk_finding,
-                earnings_finding=earnings_finding,
-                profile=profile, ratios=inputs.ratios, earnings=inputs.earnings,
-            ),
-            # P6 recording (bullish-skew diagnosis; L6): 1.0 when the LLM PM
-            # produced the label, else 0.0, and the PM's label as a bucket
-            # centre BEFORE risk recommendations, the blend and 7(b) move it.
-            # Lets the track record and the learning ledger segment by where
-            # a rating came from instead of measuring the keyword fallback as
-            # if it were the committee.
-            "rating_source_llm": rating_source_llm,
-            "pm_rating_score": score_from_rating_label(rating),
-        },
+        scores=_build_scores_dict(
+            blended_confidence=blended_confidence,
+            raw_confidence=raw_confidence,
+            ev_q=ev_q,
+            sector_finding=sector_finding,
+            valuation_finding=valuation_finding,
+            risk_finding=risk_finding,
+            earnings_finding=earnings_finding,
+            profile=profile, ratios=inputs.ratios, earnings=inputs.earnings,
+        ),
         sources_used=sources,
         generated_at=datetime.utcnow(),
         # Label follows the SAME flag that gates the data path
@@ -2365,6 +2366,14 @@ def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound)
         memo.risk_committee_challenge = critic
     # Refresh degraded_agents in case the critic recorded a failure.
     _sync_degradation(memo, degradation)
+
+    # P6 recording (bullish-skew diagnosis 6.2; L6): merged only now, after
+    # the critic read `draft_for_critic` and before risk recommendations,
+    # the blend and 7(b) move the rating. Written at compose, these keys
+    # changed the legacy critic's prompt with both modes off and pushed
+    # memo text out of its 60k window.
+    if inputs.pm_rating_record and isinstance(memo.scores, dict):
+        memo.scores = {**memo.scores, **inputs.pm_rating_record}
 
     # Wave 8H — apply the risk analyst's structured recommendations.
     # Runs AFTER the memo body is assembled but BEFORE final_verdict +
