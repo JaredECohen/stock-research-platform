@@ -24,8 +24,9 @@ from pathlib import Path
 import pytest
 
 from app.agents import deep_research as dr
-from app.agents import graph, intake, prompts, roster, safe_runner
+from app.agents import graph, intake, news_context, prompts, roster, safe_runner
 from app.agents import industry_analysts as ia
+from app.agents.news_context import EMPTY_SECTOR_LINE
 from app.config import settings
 from app.schemas import AgentFinding
 from app.services import gics_registry as reg
@@ -289,7 +290,7 @@ def test_industry_group_summary_carries_provenance_and_caveat():
 def _format_sector_prompt(block: str) -> str:
     return prompts.SECTOR_ANALYST_PROMPT.format(
         sector="Technology", drivers="d", kpis="k", valuation_lens="v", macro_sensitivities="m",
-        industry_group_block=block, macro_broadcast="{}", news_alerts="[]",
+        industry_group_block=block, macro_broadcast="{}", news_block=EMPTY_SECTOR_LINE,
     )
 
 
@@ -622,7 +623,8 @@ def test_intake_is_offered_only_the_specialists_this_run_will_run(monkeypatch):
         return {"skip": ["industry_group", "technical"], "rationale": "r"}
 
     monkeypatch.setattr(intake.llm, "chat_json", fake_chat_json)
-    monkeypatch.setattr(intake.settings, "openai_api_key", "sk-test")
+    # G1 (plan P3): intake is gated on `llm_enabled`, not on the OpenAI key.
+    monkeypatch.setattr(type(intake.settings), "llm_enabled", property(lambda self: True))
     offered = [k for k in intake.ALL_SPECIALISTS if k != "industry_group"]
     decision = intake.run_intake({"ticker": "MSFT"}, specialists=offered)
     assert "industry_group" not in seen["prompt"]
@@ -874,26 +876,89 @@ def test_pm_prompt_is_byte_identical_without_a_digest_spec(monkeypatch):
     assert seen["pm"] == [expected]
 
 
+_NEWS = news_context.from_alerts("JPM", [
+    {"title": "JPMorgan raises its dividend", "summary": "Board approves a higher payout.",
+     "severity": "material", "source": "news_service", "url": "https://www.reuters.com/x"},
+])
+
+
+@pytest.mark.parametrize("with_news", [False, True])
 @pytest.mark.parametrize("pm_ctx", ["PM-CONTEXT", ""])
-def test_pm_prompt_assembly_order(monkeypatch, pm_ctx):
+def test_pm_prompt_assembly_order(monkeypatch, pm_ctx, with_news):
     """Contract C7: template + pm_ctx, then the industry digest, then the
-    capped JSON. Later slices insert their blocks between the digest and
-    "Findings:"; this pins the order they extend."""
+    news block (FIX-018), then the capped JSON. Later slices insert their
+    blocks between the digest and "Findings:"; this pins the order they
+    extend. With news, the sector entry of the JSON copy drops its
+    `pending_news_alerts` (the block carries the same items)."""
     routed = _routed_finding(monkeypatch)
-    sector = AgentFinding(agent="Sector Analyst", headline="Sector read", summary="Neutral.")
+    alerts = _NEWS.alerts() if with_news else []
+    sector = AgentFinding(agent="Sector Analyst", headline="Sector read", summary="Neutral.",
+                          data={"pending_news_alerts": alerts, "macro_alignment": "neutral"})
     from app.agents import pm_context
     monkeypatch.setattr(pm_context, "build_pm_context", lambda **kw: pm_ctx)
     seen = _spy_llm(monkeypatch, pm_reply=_PM_REPLY)
-    graph._pm_synthesis(_PROFILE, {"sector": sector, "industry_group": routed}, None)
+    graph._pm_synthesis(_PROFILE, {"sector": sector, "industry_group": routed}, None,
+                        news=_NEWS if with_news else news_context.NewsContext.empty("JPM"))
     digest = ia.pm_digest(routed)
     assert digest
+    news_block = news_context.render_block(_NEWS, "pm")
+    sector_json = sector.model_dump()
+    if with_news:
+        sector_json["data"] = {"macro_alignment": "neutral"}
     assert seen["pm"] == [
         prompts.PM_SYNTHESIS_PROMPT
         + (f"\n\n{pm_ctx}" if pm_ctx else "")
         + "\n\n" + digest
+        + (f"\n\n{news_block}" if with_news else "")
         + "\n\nFindings:\n"
-        + json.dumps({"sector": sector.model_dump()}, default=str)[: settings.max_agent_context_chars]
+        + json.dumps({"sector": sector_json}, default=str)[: settings.max_agent_context_chars]
     ]
+    # The stored finding keeps its alerts: only the prompt copy drops them.
+    assert sector.data["pending_news_alerts"] == alerts
+
+
+def test_industry_prompt_carries_the_news_block(monkeypatch):
+    """REGRESSION (FIX-018): the routed Industry Group Analyst got no news
+    at all: no read, no prompt slot."""
+    seen: list[str] = []
+    monkeypatch.setattr(ia.llm, "chat_json", lambda p, **k: seen.append(p) or dict(_ROUTED_READ))
+    row = ic.current_for(["JPM"])["JPM"]
+    ia.run_industry_group_agent({"ticker": "JPM"}, {"roe": 0.17}, classification=row, news=_NEWS)
+    (prompt,) = seen
+    block = news_context.render_block(_NEWS, "industry_group")
+    assert block in prompt and news_context.USAGE_HINTS["industry_group"] in prompt
+    ratios_at = prompt.index("Ratios (observed): ")
+    ratios_end = prompt.index("\n", ratios_at)
+    assert prompt[ratios_end:].startswith("\n\n" + block)
+
+
+def test_industry_prompt_byte_identical_without_news(monkeypatch):
+    seen: list[str] = []
+    monkeypatch.setattr(ia.llm, "chat_json", lambda p, **k: seen.append(p) or dict(_ROUTED_READ))
+    row = ic.current_for(["JPM"])["JPM"]
+    ia.run_industry_group_agent({"ticker": "JPM"}, {"roe": 0.17}, classification=row)
+    ia.run_industry_group_agent({"ticker": "JPM"}, {"roe": 0.17}, classification=row,
+                                news=news_context.NewsContext.empty("JPM"))
+    assert len(seen) == 2 and seen[0] == seen[1]
+    assert "<news>" not in seen[0] and "Recent news" not in seen[0]
+    # The pre-G1 template, formatted with the same values.
+    legacy = prompts.INDUSTRY_GROUP_ANALYST_PROMPT.replace("{news_block}", "")
+    assert "Ratios (observed): {ratios_snapshot}\n{critique_block}" in legacy
+    # Pinned against an independent expectation, not only no-kwarg against
+    # an empty context (both new code; G1 review): the with-news prompt
+    # minus exactly "\n\n" + block IS the no-news prompt, so the empty case
+    # adds nothing (not even a blank line) and the news case adds only that.
+    ia.run_industry_group_agent({"ticker": "JPM"}, {"roe": 0.17}, classification=row, news=_NEWS)
+    block = news_context.render_block(_NEWS, "industry_group")
+    assert seen[2].count("\n\n" + block) == 1
+    assert seen[2].replace("\n\n" + block, "") == seen[0]
+
+
+def test_industry_call_is_attributed(monkeypatch):
+    seen: list[dict] = []
+    monkeypatch.setattr(ia.llm, "chat_json", lambda p, **k: seen.append(k) or dict(_ROUTED_READ))
+    ia.run_industry_group_agent({"ticker": "JPM"}, {}, classification=ic.current_for(["JPM"])["JPM"])
+    assert seen[-1]["action"] == "analyst.industry_group" and seen[-1]["ticker"] == "JPM"
 
 
 _WITHHELD = {
@@ -1021,7 +1086,9 @@ def test_a_digest_that_raises_withholds_the_read_not_the_synthesis(monkeypatch):
     view = graph._pm_view({"sector": sector, "industry_group": routed})
     assert view.digests == [] and list(view.findings) == ["sector"] and list(view.visible) == ["sector"]
     seen = _spy_llm(monkeypatch, pm_reply=_PM_REPLY)
-    assert graph._pm_synthesis(_PROFILE, {"sector": sector, "industry_group": routed}, None) == _PM_REPLY
+    out = graph._pm_synthesis(_PROFILE, {"sector": sector, "industry_group": routed}, None)
+    # L6: the LLM's reply, marked as the LLM PM's (the compose stage pops it).
+    assert out.pop(graph.RATING_SOURCE_KEY) == "llm" and out == _PM_REPLY
     assert len(seen["pm"]) == 1 and _DIGEST_HEAD not in seen["pm"][0]
 
 

@@ -780,6 +780,77 @@ def test_pm_prompt_assembly_order_with_the_evidence_block(monkeypatch, pm_ctx):
     assert prefixes == [len(prompts.PM_SYNTHESIS_PROMPT) + 2]
 
 
+def test_pm_prompt_assembly_order_digest_news_evidence_refs_findings(monkeypatch):
+    """C7 as extended by G1 (FIX-018): template + pm_ctx, then the industry
+    digest, then the NEWS block, then the valuation evidence, then the
+    source refs (S15), then the capped JSON. The news block sits outside the
+    cached prefix like every other volatile block."""
+    import json
+
+    from app.agents import news_context, pm_context, prompts
+    from app.agents.source_ledger import SourceLedger
+    from app.schemas import AgentFinding
+    monkeypatch.setattr(pm_context, "build_pm_context", lambda **kw: "PM-CONTEXT")
+    news = news_context.from_alerts("TEST", [{"title": "TEST Corp wins an order", "severity": "material",
+                                              "summary": "A large one.", "source": "news_service"}])
+    sector = AgentFinding(agent="Sector Analyst", headline="Sector read", summary="Neutral.",
+                          data={"pending_news_alerts": news.alerts()})
+    monkeypatch.setattr(graph, "_pm_view", lambda f: graph.PMView(["## Industry group read — DIGEST"], f, f))
+    seen = _spy_pm(monkeypatch)
+    vv = ev(**OVERVALUED)
+    ledger = SourceLedger()
+    with ledger.activate():
+        ledger.register("financials", "financials:TEST", {"revenue": 1.0})
+        news_context.register(news)
+        graph._pm_synthesis({"ticker": "TEST"}, {"sector": sector}, None, valuation_evidence=vv, news=news)
+        refs = graph._source_refs_block()
+    assert "news_alerts:TEST" in refs
+    (prompt,) = seen
+    parts = [
+        "## Industry group read — DIGEST",
+        news_context.render_block(news, "pm"),
+        memo_quality.valuation_evidence_block(vv),
+        refs,
+    ]
+    assert prompt == (
+        prompts.PM_SYNTHESIS_PROMPT + "\n\nPM-CONTEXT"
+        + "".join("\n\n" + p for p in parts)
+        + "\n\nFindings:\n"
+        + json.dumps({"sector": {**sector.model_dump(), "data": {}}}, default=str)[
+            : settings.max_agent_context_chars]
+    )
+    offsets = [prompt.index(p) for p in parts] + [prompt.index("\n\nFindings:\n")]
+    assert offsets == sorted(offsets)
+
+
+def test_pm_synthesis_call_is_attributed(monkeypatch):
+    from app.agents import llm as llm_mod
+    kwargs_seen: list[dict] = []
+    monkeypatch.setattr(llm_mod, "chat_json", lambda p, **kw: kwargs_seen.append(kw))
+    graph._pm_synthesis({"ticker": "TEST"}, {}, None)
+    assert kwargs_seen[-1]["action"] == "pm.synthesis" and kwargs_seen[-1]["ticker"] == "TEST"
+
+
+def test_thesis_log_has_no_text(caplog):
+    """REGRESSION (attribution critique #15): the thesis-rewrite line logged
+    the PM's thesis verbatim. The line keeps its signal (ticker, words,
+    length, sha1) and never the model's text."""
+    import hashlib
+    import logging
+
+    anti = ("TEST Corp — Technology / Software, AI hook SENTINEL-PROSE; "
+            "DCF base case +25% suggests material upside.")
+    memo = make_memo(rating_label="Neutral", valuation_verdict=ev(**OVERVALUED), one_sentence_thesis=anti)
+    with caplog.at_level(logging.INFO, logger="app.agents.graph"):
+        out = _verdict_out(memo)
+    assert out.thesis_rewrite_fired
+    (line,) = [r.getMessage() for r in caplog.records if "thesis rewrite fired" in r.getMessage()]
+    assert "SENTINEL-PROSE" not in line
+    assert f"original_len={len(anti)}" in line
+    assert f"original_sha1={hashlib.sha1(anti.encode('utf-8')).hexdigest()}" in line
+    assert not [r for r in caplog.records if "SENTINEL-PROSE" in r.getMessage()]
+
+
 def test_pm_prompt_is_byte_identical_without_evidence(monkeypatch):
     import json
 

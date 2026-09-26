@@ -45,6 +45,11 @@ Also extract any tickers mentioned (uppercase symbols, $TICKER, or company names
 Return strict JSON with keys: intent, tickers (list of uppercase symbols), theme (if any).
 """
 
+# FIX-018 (slice G1): `{news_block}` is `news_context.render_block(ctx,
+# "sector")` — the run's ranked, bounded, untrusted-labelled news block, or
+# "Recent news for this name: none on file." It replaced
+# "Pending news alerts for this name: {news_alerts}." (the alerts JSON cut
+# at 600 chars: about one unranked alert, cut mid-JSON, unlabelled).
 SECTOR_ANALYST_PROMPT = """You are a sector analyst for {sector}.
 Sector drivers: {drivers}.
 Important KPIs: {kpis}.
@@ -52,7 +57,7 @@ Valuation lens: {valuation_lens}.
 Macro sensitivities: {macro_sensitivities}.{industry_group_block}
 
 Macro broadcast (current regime + favored/pressured sectors): {macro_broadcast}.
-Pending news alerts for this name: {news_alerts}.
+{news_block}
 
 You will also be handed a "Sector data context" block (further down) that
 the system pre-fetched on your behalf. It contains:
@@ -143,10 +148,13 @@ Classification: {classification_label} (state: {state}; as of {source_as_of}); \
 Name the group and sector only by the labels above; never write numeric classification codes.
 {mandate_block}"""
 
+# `{news_block}` (FIX-018, slice G1) is "\n\n" + the run's news block
+# (`news_context.render_block(ctx, "industry_group")`), or "" when the run has
+# no news, which keeps this prompt byte-identical to the pre-news one.
 INDUSTRY_GROUP_ANALYST_PROMPT = """{company_context}
 
 Company snapshot (observed): {profile_snapshot}
-Ratios (observed): {ratios_snapshot}
+Ratios (observed): {ratios_snapshot}{news_block}
 {critique_block}
 Using ONLY the mandate above and the observed snapshot, write the industry group read on this company:
 

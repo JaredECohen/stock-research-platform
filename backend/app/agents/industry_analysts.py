@@ -76,8 +76,9 @@ from ..services.industry_group_knowledge import (
     thesis_stages,
     universal_rules_prompt_block,
 )
-from . import llm, prompts
+from . import llm, news_context, prompts
 from .log_safety import log_safely
+from .news_context import NewsContext
 from .safe_runner import note_soft
 from .source_ledger import register_source
 
@@ -697,16 +698,29 @@ def _public_finding(
     )
 
 
+def _news_block(news: NewsContext | None) -> str:
+    block = news_context.render_block(news, "industry_group")
+    return ("\n\n" + block) if block else ""
+
+
 def run_industry_group_agent(
     profile: dict[str, Any], ratios: dict[str, Any], *,
     prior_round_critique: str | None = None,
     classification: dict[str, Any] | None = None,
+    news: NewsContext | None = None,
 ) -> AgentFinding:
     """The Industry Group Analyst's read on one company.
 
     `classification` is the row the gather stage already read; when None
     (a direct call outside a memo run) it is looked up here. An unmapped
     company gets an explicit "no mapping" finding rather than a guess.
+
+    `news` (FIX-018) is the memo run's news context. The analyst used to get
+    no news at all, so its read and its PM digest could not reflect a world
+    change the sector analyst and the PM were shown. The block sits right
+    after the observed ratios; with no news (or no context) it is "" and
+    the prompt is byte-identical. No new `data` keys: the presenter and the
+    PM digest are unchanged.
     """
     ticker = str(profile.get("ticker") or "").upper()
     if not ticker:
@@ -752,6 +766,7 @@ def run_industry_group_agent(
         company_context=company_context,
         profile_snapshot=json.dumps(profile_snapshot, default=str)[:2500],
         ratios_snapshot=json.dumps(ratios_snapshot, default=str)[:1500],
+        news_block=_news_block(news),
         critique_block=critique_block,
     )
     if memory_block:
@@ -769,6 +784,7 @@ def run_industry_group_agent(
     llm_out = llm.chat_json(
         user_prompt, system=analyst.system_prompt(), route="cheap",
         model=llm.resolve_role_model("sector"), max_tokens=ANALYST_MAX_TOKENS,
+        action="analyst.industry_group", ticker=ticker,
     )
     if not llm_out:
         return _deterministic_finding(analyst, profile, classification)
