@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -1238,6 +1239,34 @@ def normalize_rating_label(value: Any) -> str | None:
     return _RATING_BY_FOLDED.get(" ".join(value.split()).casefold())
 
 
+# The PM reply's headline strings; compose passes them straight into the
+# strict `StockMemoOut`, so each must be a non-empty string.
+_PM_TEXT_FIELDS: tuple[str, ...] = ("final_pm_view", "one_sentence_thesis")
+
+
+def _is_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _pm_confidence(value: Any) -> float | None:
+    """The PM's confidence as a float in [0, 100], or None when it is not
+    one. A number, or a string that is exactly a number ("72"), which
+    `float()` in compose always accepted; never "72%", "high", a bool, NaN
+    or an out-of-scale value. None is a failed reply, not a default."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        x = float(value)
+    elif isinstance(value, str):
+        try:
+            x = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    return x if math.isfinite(x) and 0.0 <= x <= 100.0 else None
+
+
 def _pm_synthesis(
     profile: dict, findings: dict[str, AgentFinding], dcf: DCFResult | None,
     *, scorecard: Any | None = None, valuation_evidence: ValuationVerdict | None = None,
@@ -1315,20 +1344,30 @@ def _pm_synthesis(
             learning_context.record_considered, llm.current_call_context().get("run_id"),
             llm_out.get("priors_considered"), fallback=0, name="Learning considered", log_to=None,
         )
-    invalid_label = False
+    invalid_field: str | None = None
     if isinstance(llm_out, dict) and "rating_label" in llm_out:
         label = normalize_rating_label(llm_out.get("rating_label"))
-        if label is not None:
-            return {**llm_out, "rating_label": label, RATING_SOURCE_KEY: "llm"}
-        # L6: an unreadable rating is an explicit PM failure, not a crash in
-        # compose and not a guessed label. The memo completes on the
-        # deterministic view and says so.
-        invalid_label = True
+        confidence = _pm_confidence(llm_out.get("confidence_score"))
+        if label is None:
+            invalid_field = "rating_label"
+        elif confidence is None:
+            invalid_field = "confidence_score"
+        else:
+            invalid_field = next((k for k in _PM_TEXT_FIELDS if not _is_text(llm_out.get(k))), None)
+        if invalid_field is None:
+            return {**llm_out, "rating_label": label, "confidence_score": confidence,
+                    RATING_SOURCE_KEY: "llm"}
+        # L6: an unreadable reply is an explicit PM failure, not a crash in
+        # compose and not a guessed value. The memo completes on the
+        # deterministic view and says so. The label, the confidence and
+        # the two headline strings are the fields compose reads without a
+        # guard (`float(...)` and the strict `StockMemoOut`), so a bad value
+        # in any of them used to lose the whole run.
 
-    if invalid_label:
+    if invalid_field is not None:
         note_soft(
             "PM Synthesis",
-            "LLM returned an invalid rating_label; deterministic PM view shipped",
+            f"LLM returned an invalid {invalid_field}; deterministic PM view shipped",
         )
     elif settings.has_llm:
         # (b) The PM view is the memo's headline. Templated prose standing in

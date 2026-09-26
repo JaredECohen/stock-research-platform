@@ -101,6 +101,67 @@ def test_rating_source_recorded(monkeypatch):
     assert memo.quality.rating_reconciliation.pm_rating == "Very Bullish"
 
 
+def _spy_pm_reply(monkeypatch, reply: dict) -> list[str]:
+    seen: list[str] = []
+
+    def spy(prompt, **kw):
+        if prompt.startswith(prompts.PM_SYNTHESIS_PROMPT):
+            seen.append(prompt)
+            return dict(reply)
+        return None
+
+    monkeypatch.setattr(llm, "chat_json", spy)
+    return seen
+
+
+_BAD_FIELDS = [
+    ("confidence_score", None),
+    ("confidence_score", "high"),
+    ("confidence_score", "72%"),
+    ("confidence_score", float("nan")),
+    ("confidence_score", 150),
+    ("confidence_score", True),
+    ("final_pm_view", None),
+    ("final_pm_view", ["a", "list"]),
+    ("final_pm_view", "   "),
+    ("one_sentence_thesis", None),
+]
+
+
+@pytest.mark.parametrize("field, bad", _BAD_FIELDS)
+def test_invalid_pm_reply_field_takes_the_deterministic_path(monkeypatch, field, bad):
+    """REGRESSION (G1 review): L6 hardened only `rating_label`. A valid label
+    beside an unreadable confidence (`float(None)`, `float("72%")`) or a
+    null headline string passed through `_pm_synthesis` unchecked and failed
+    compose, losing the whole memo run; an out-of-scale confidence shipped
+    as the committee's."""
+    _spy_pm_reply(monkeypatch, {**_PM_REPLY, "rating_label": "Bullish", field: bad})
+    out = graph._pm_synthesis({"ticker": "TEST"}, {}, None)
+    assert out[graph.RATING_SOURCE_KEY] == "keyword"
+    assert out["final_pm_view"] != "PM view." and out["one_sentence_thesis"] != "Thesis."
+    assert 0 <= out["confidence_score"] <= 100
+
+
+def test_numeric_string_confidence_is_still_accepted(monkeypatch):
+    # `float()` in compose always read "72"; the check keeps that reply.
+    _spy_pm_reply(monkeypatch, {**_PM_REPLY, "rating_label": "Bullish", "confidence_score": " 72 "})
+    out = graph._pm_synthesis({"ticker": "TEST"}, {}, None)
+    assert out[graph.RATING_SOURCE_KEY] == "llm" and out["confidence_score"] == 72.0
+
+
+@pytest.mark.parametrize("field, bad", [("confidence_score", "72%"), ("final_pm_view", None)])
+def test_invalid_pm_reply_field_degrades_not_crashes(monkeypatch, field, bad):
+    """End to end: the run completes on the deterministic view and names
+    the field that was unreadable (it raised in compose before)."""
+    seen = _spy_pm_reply(monkeypatch, {**_PM_REPLY, "rating_label": "Bullish", field: bad})
+    memo = graph.run_stock_memo("MSFT")
+    assert seen, "the PM model was never asked"
+    (event,) = [e for e in memo.degradation_events if e["agent"] == "PM Synthesis"]
+    assert f"invalid {field}" in event["message"]
+    assert "PM view." not in memo.final_pm_view
+    assert memo.scores["rating_source_llm"] == 0.0
+
+
 def test_p6_keys_recorded_but_never_shown_to_the_legacy_critic(monkeypatch):
     """REGRESSION (G1 review): the P6 keys were written into `memo.scores` at
     compose, and `_review_memo` dumps the whole draft into the legacy Risk
