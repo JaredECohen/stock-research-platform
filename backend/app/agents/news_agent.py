@@ -132,29 +132,113 @@ def _company_name(ticker: str) -> str:
         return ""
 
 
+# Words too common in company names to identify one on their own. Matched
+# alone they let sector roundups through: BK's name tokens used to be
+# ["bank", "york", "mellon"], so "Big bank stocks rally" and "New York Fed
+# survey ..." counted as BK news while "BNY beats estimates" did not.
+_GENERIC_NAME_TOKENS = frozenset({
+    "america", "american", "bank", "bancorp", "brands", "capital",
+    "communications", "energy", "financial", "first", "general", "global",
+    "industries", "insurance", "international", "investment", "investments",
+    "national", "partners", "platforms", "products", "resources",
+    "services", "solutions", "systems",
+    "technologies", "technology", "trust", "united", "york",
+})
+
+_NEWS_ALIASES_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "news_aliases.json"
+)
+
+
+@lru_cache(maxsize=1)
+def _alias_map() -> dict[str, tuple[str, ...]]:
+    """ticker -> press names from `app/data/news_aliases.json` (reviewable,
+    like the domain lists). A missing or malformed file means no aliases:
+    the filter then matches on ticker and legal name only, as it did."""
+    try:
+        with open(_NEWS_ALIASES_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        log.warning("news_aliases.json unreadable (%s) — no press aliases", exc)
+        return {}
+    raw = data.get("aliases") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(t).strip().upper(): tuple(str(a) for a in names if str(a).strip())
+        for t, names in raw.items() if isinstance(names, list)
+    }
+
+
+def _normalized_text(value: str) -> str:
+    """Lowercase words separated by single spaces, padded, so a URL slug
+    (`/bny-q3-results`) and a title compare the same way and a whole-word
+    test is a plain substring test on `" term "`."""
+    return " " + " ".join(re.split(r"[^a-z0-9&]+", (value or "").lower())).strip() + " "
+
+
+def _mentions(text: str, term: str) -> bool:
+    """Whole-word (or whole-phrase) mention of `term` in normalised `text`.
+
+    Substring matching was the bug: "bank" matched "bankruptcy" and
+    "morgan" matched "jpmorgan"."""
+    t = _normalized_text(term).strip()
+    return bool(t) and f" {t} " in text
+
+
+def _ticker_aliases(ticker: str) -> list[str]:
+    """Other names that identify `ticker` in a headline: curated press names
+    plus verified same-security ticker renames (BK -> BNY)."""
+    from ..services.ticker_symbols import market_data_symbols
+    out = list(_alias_map().get(ticker.upper(), ()))
+    for sym in market_data_symbols(ticker):
+        # Short symbols ("BK", "C") are ordinary words and initials in
+        # headlines; only 3+ characters identify a company on their own.
+        if sym.upper() != ticker.upper() and len(sym) >= 3:
+            out.append(sym)
+    return out
+
+
 def _name_tokens(name: str) -> list[str]:
-    """Lowercase tokens from a company name with corporate suffixes stripped.
-    Used to decide whether a grounded item is actually about the company."""
+    """Terms from a company name that identify it in a headline.
+
+    Corporate suffixes are stripped. Distinctive words of 4+ characters
+    count on their own; generic ones (`_GENERIC_NAME_TOKENS`) do not. The
+    run-together form of a multi-word name counts too ("Exxon Mobil" ->
+    "exxonmobil", as the press writes it). A name with no distinctive word
+    ("Bank of America", "American International Group", "BNY") falls back
+    to the whole name as one phrase."""
     cleaned = _NAME_SUFFIX_RE.sub(" ", name or "")
-    return [t for t in re.split(r"[^a-z0-9&]+", cleaned.lower()) if len(t) >= 4]
+    words = [t for t in re.split(r"[^a-z0-9&]+", cleaned.lower()) if t]
+    distinctive = [t for t in words if len(t) >= 4 and t not in _GENERIC_NAME_TOKENS]
+    if not distinctive:
+        phrase = " ".join(words)
+        return [phrase] if len(phrase) >= 3 else []
+    if len(words) > 1:
+        distinctive.append("".join(words))
+    return distinctive
 
 
 def _is_about_company(item: dict[str, Any], ticker: str, name_tokens: list[str]) -> bool:
-    """Drop grounded items that don't mention the ticker or any significant
-    token of the company name. Gemini's `google_search` tool sometimes
-    returns sector roundups or peer-comparison articles where the target
-    ticker is barely a footnote — those are noise for a per-ticker alert.
+    """Drop grounded items that don't mention the ticker, a press alias or
+    a distinctive term of the company name. Gemini's `google_search` tool
+    sometimes returns sector roundups or peer-comparison articles where the
+    target ticker is barely a footnote — those are noise for a per-ticker
+    alert.
 
     We only check the title and the URL slug. Summary-text mentions are too
     permissive: dividend-list articles like "Cardinal Health Among 9 Companies
     …" cite Apple in the body but aren't *about* Apple. Headlines and URL
-    slugs reflect the article's primary subject."""
-    title = (item.get("title") or item.get("headline") or "").lower()
-    url = (item.get("url") or item.get("source_url") or "").lower()
-    text = f"{title} {url}"
-    if len(ticker) >= 3 and ticker.lower() in text:
+    slugs reflect the article's primary subject. Every term is matched as a
+    whole word (`_mentions`)."""
+    title = str(item.get("title") or item.get("headline") or "")
+    url = str(item.get("url") or item.get("source_url") or "")
+    text = _normalized_text(f"{title} {url}")
+    if len(ticker) >= 3 and _mentions(text, ticker):
         return True
-    return any(tok in text for tok in name_tokens)
+    if any(_mentions(text, alias) for alias in _ticker_aliases(ticker)):
+        return True
+    return any(_mentions(text, tok) for tok in name_tokens)
 
 
 def _filter_grounded_sources(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -162,7 +246,10 @@ def _filter_grounded_sources(items: list[dict[str, Any]]) -> list[dict[str, Any]
     blocked = blocked_domains()
     out: list[dict[str, Any]] = []
     for it in items:
-        d = _domain_of(it.get("url", ""))
+        # Same `url or source_url` fallback the alert is built with: reading
+        # only `url` let an item whose link sat under `source_url` pass as
+        # URL-less, past the block and allow lists alike.
+        d = _domain_of(str(it.get("url") or it.get("source_url") or ""))
         if not d:
             out.append(it)
             continue
@@ -289,8 +376,8 @@ def _gemini_skip_reason() -> str | None:
     Both short-circuits return None exactly like an empty answer, so
     without this the news_loop note cannot tell "Gemini was never asked"
     from "Gemini had nothing" (news critique: the shared breaker silently
-    turns Gemini news off for 120 s). `grounding_cap_reached` is the llm
-    core's grounded-call daily cap; until it exists the cap is not counted.
+    turns Gemini news off for 120 s). The grounding cap is the llm core's
+    grounded-call daily cap (GEMINI_GROUNDED_MAX_PER_DAY).
     """
     try:
         breaker = getattr(llm, "breaker_open", None) or llm._breaker_open
@@ -298,7 +385,10 @@ def _gemini_skip_reason() -> str | None:
             return "breaker_open"
     except Exception:  # pragma: no cover — diagnostics must not break news
         pass
-    cap = getattr(llm, "grounding_cap_reached", None)
+    # The llm core (M1) names it `_grounding_cap_reached`; probe the public
+    # spelling first, as the breaker probe does, so a later rename to a
+    # public name keeps working.
+    cap = getattr(llm, "grounding_cap_reached", None) or getattr(llm, "_grounding_cap_reached", None)
     if callable(cap):
         try:
             if cap():

@@ -188,3 +188,128 @@ def test_breaker_open_is_reported_not_mistaken_for_no_news(gemini_on, monkeypatc
     report: dict = {}
     assert news_agent.run(TICKER, force_refresh=True, report=report) == []
     assert report == {"gemini_skipped": "breaker_open", "origin": "empty"}
+
+
+# --- relevance: BK / BNY (production: "all 5 Gemini items for BK failed
+# relevance filter") -----------------------------------------------------
+
+BK_NAME = "The Bank of New York Mellon Corporation"
+BK_TOKENS = news_agent._name_tokens(BK_NAME)
+_REUTERS = "https://www.reuters.com/business/finance/story"
+
+
+@pytest.mark.parametrize("title", [
+    "BNY beats third-quarter profit estimates on fee growth",
+    "BNY to buy stake in fintech firm",
+    "BNY names new CFO",
+    "BNY Mellon reports record custody assets",
+])
+def test_bny_headlines_are_about_bk(title):
+    # A 2-letter ticker is not matched and BNY is not in the legal name, so
+    # every "BNY ..." headline used to fail relevance.
+    assert news_agent._is_about_company({"title": title, "url": _REUTERS}, "BK", BK_TOKENS)
+
+
+@pytest.mark.parametrize("title", [
+    "Big bank stocks rally after Fed decision",
+    "Regional bank earnings roundup: 9 lenders to watch",
+    "New York Fed survey shows inflation expectations ease",
+    "Bankruptcy filings rise in August",
+])
+def test_generic_bank_and_new_york_stories_are_not_about_bk(title):
+    # "bank" and "york" matched as substrings, so these counted as BK news.
+    assert not news_agent._is_about_company({"title": title, "url": _REUTERS}, "BK", BK_TOKENS)
+
+
+@pytest.mark.parametrize("ticker,name,title,expected", [
+    ("C", "Citigroup Inc.", "Citi to cut 2,000 more jobs", True),
+    ("C", "Citigroup Inc.", "Citizens Financial raises outlook", False),
+    ("GOOG", "Alphabet Inc.", "DOJ wins search remedy against Google", True),
+    ("XOM", "Exxon Mobil Corporation", "ExxonMobil raises Permian output", True),
+    ("BAC", "Bank of America Corporation", "Bank of America beats on trading", True),
+    ("BAC", "Bank of America Corporation", "America's regional banks brace for rules", False),
+    ("MS", "Morgan Stanley", "JPMorgan tops estimates", False),
+    ("SOCO", "Southern Company", "Southern Company files 8-K", True),
+])
+def test_relevance_matches_whole_words_and_press_names(ticker, name, title, expected):
+    tokens = news_agent._name_tokens(name)
+    assert news_agent._is_about_company({"title": title, "url": _REUTERS}, ticker, tokens) is expected
+
+
+def test_bny_items_reach_news_hot_for_bk(monkeypatch):
+    # End to end on both paths: Gemini's BNY items survive; and when Gemini
+    # has nothing, the provider fallback (same filter) keeps its BNY item
+    # and drops the sector roundup.
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key-not-real")
+    monkeypatch.setattr(settings, "vertex_project_id", "")
+    monkeypatch.setattr(news_agent, "_company_name", lambda t: BK_NAME)
+    news_agent.reload_domain_lists()
+    llm.reset_circuit_breaker()
+    _fake_gemini(monkeypatch, [
+        {"title": "BNY reports third-quarter results", "summary": "s",
+         "url": "https://www.reuters.com/a", "published_at": _today_iso()},
+        {"title": "BNY to buy wealth unit", "summary": "s",
+         "url": "https://www.bloomberg.com/b", "published_at": _today_iso()},
+    ])
+    _fake_provider(monkeypatch, [])
+    report: dict = {}
+    alerts = news_agent.run("BK", force_refresh=True, report=report)
+    assert [a.title for a in alerts] == ["BNY reports third-quarter results", "BNY to buy wealth unit"]
+    assert report["origin"] == "gemini"
+
+    _fake_gemini(monkeypatch, [])
+    _fake_provider(monkeypatch, [
+        {"title": "BNY names new CFO", "summary": "p", "url": "https://www.reuters.com/c"},
+        {"title": "Big bank stocks rally after Fed decision", "summary": "p",
+         "url": "https://www.reuters.com/d"},
+    ])
+    alerts = news_agent.run("BK", force_refresh=True)
+    assert [(a.title, a.source) for a in alerts] == [("BNY names new CFO", "news_service")]
+
+
+def test_source_url_only_gemini_item_is_governed(gemini_on, monkeypatch):
+    # The Gemini URL check read `url or source_url`, the allow-list read only
+    # `url`: a link under `source_url` passed as URL-less, past both lists.
+    _fake_gemini(monkeypatch, [
+        {"title": "SOCO signs nuclear deal", "summary": "s", "source_url": "https://msn.com/a",
+         "published_at": _today_iso()},
+        {"title": "SOCO raises capex", "summary": "s", "url": None,
+         "source_url": "https://random-blog.example/b", "published_at": _today_iso()},
+    ])
+    _fake_provider(monkeypatch, [
+        {"title": "Southern Company files 8-K", "summary": "p", "url": "https://www.reuters.com/x"},
+    ])
+    report: dict = {}
+    alerts = news_agent.run(TICKER, force_refresh=True, report=report)
+    assert [(a.title, a.source) for a in alerts] == [("Southern Company files 8-K", "news_service")]
+    assert report["origin"] == "provider"
+
+
+def test_filter_grounded_sources_reads_source_url():
+    news_agent.reload_domain_lists()
+    kept = news_agent._filter_grounded_sources([
+        {"title": "a", "source_url": "https://msn.com/a"},
+        {"title": "b", "source_url": "https://www.reuters.com/b"},
+    ])
+    assert [it["title"] for it in kept] == ["b"]
+
+
+def test_grounding_cap_under_the_llm_core_name_is_reported(gemini_on, monkeypatch):
+    # The llm core (M1) names the predicate `_grounding_cap_reached`; probing
+    # only `grounding_cap_reached` counted every capped call as "no news".
+    monkeypatch.setattr(llm, "_grounding_cap_reached", lambda: True, raising=False)
+    monkeypatch.setattr(llm, "gemini_chat_json", lambda *a, **k: None)
+    _fake_provider(monkeypatch, [])
+    report: dict = {}
+    assert news_agent.run(TICKER, force_refresh=True, report=report) == []
+    assert report == {"gemini_skipped": "grounding_cap", "origin": "empty"}
+
+
+def test_grounding_cap_predicate_exists_wherever_the_cap_setting_does():
+    # Tripwire for the merge with the llm core: once the cap is configurable,
+    # the news note can only count capped calls if one of the names it
+    # probes exists. Skipped where the llm core has not landed yet.
+    if not hasattr(settings, "gemini_grounded_max_per_day"):
+        pytest.skip("llm core grounding cap not in this tree")
+    assert callable(getattr(llm, "grounding_cap_reached", None)
+                    or getattr(llm, "_grounding_cap_reached", None))
