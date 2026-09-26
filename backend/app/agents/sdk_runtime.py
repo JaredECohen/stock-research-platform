@@ -61,7 +61,13 @@ if _real_agents_pkg is not None:
 
 
 def _can_use_real_sdk() -> bool:
-    """Production path is active iff the package is installed AND a key is set."""
+    """Production path is active iff the package is installed AND a key is
+    set AND this is not demo-only mode. `llm.py` never builds a client in
+    demo-only mode; the SDK builds its own, so it has to ask the same
+    question (as `chat_sdk._can_use_sdk` does), or a developer key would
+    run a real exchange while every other LLM client stays silent."""
+    if llm._demo_only():
+        return False
     return _HAS_REAL_SDK and bool(settings.openai_api_key)
 
 
@@ -456,8 +462,10 @@ def _run_via_real_sdk(
     returned nor persisted (FIX-020). Each model response writes a
     `memo.sdk_exchange` usage row through the hooks.
 
-    Returns None if the real SDK isn't available or the call fails — the
-    caller falls back to the legacy graph in either case.
+    Returns None if the real SDK isn't available or the call fails before
+    the tool produced the memo — the caller falls back to the legacy graph
+    in either case. A failure after the tool ran returns that memo with
+    `failed=True`.
     """
     if not _can_use_real_sdk():
         return None
@@ -544,6 +552,14 @@ def _run_via_real_sdk(
                 run_id=run_id, ticker=ticker, surface="memo",
                 new_items=None, error=type(exc).__name__, duration_ms=elapsed_ms,
             )
+        # The run can fail AFTER the tool built the memo (max turns, a
+        # refusal or a transport error on the summary turn). That memo is
+        # complete and saved under this run_id; discarding it would send the
+        # caller to the shim, which bills PM synthesis again and saves a
+        # second memo version (attribution critique #5).
+        memo = produced.get((ticker or "").strip().upper())
+        if memo is not None:
+            return {"items": 0, "chars": 0, "memo": memo, "failed": True}
         return None
 
 
@@ -569,9 +585,11 @@ def run_stock_memo_via_sdk(ticker: str) -> StockMemoOut:
     sdk_trace = _run_via_real_sdk(ticker, run_id=run_id)
     if sdk_trace is not None:
         # Counts only: the model's summary is output, and output is not
-        # logged (FIX-020).
-        log.info("Agents SDK exchange for %s (run %s): items=%d chars=%d",
-                 ticker, run_id, sdk_trace.get("items", 0), sdk_trace.get("chars", 0))
+        # logged (FIX-020). A run that failed after its tool call already
+        # logged its warning; only the reuse of its memo is news.
+        if not sdk_trace.get("failed"):
+            log.info("Agents SDK exchange for %s (run %s): items=%d chars=%d",
+                     ticker, run_id, sdk_trace.get("items", 0), sdk_trace.get("chars", 0))
         memo = sdk_trace.get("memo")
         if memo is not None:
             # The tool already ran the memo under this run_id; running the
