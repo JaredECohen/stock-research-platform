@@ -66,6 +66,13 @@ def test_bm25_fallback_chunks_long_docs_stable_ids(monkeypatch):
     assert whole["text"].startswith("Paragraph 0 ") and "id" not in whole
 
 
+def test_chunk_ids_are_process_stable():
+    """Ids are a content hash, not Python's per-process salted hash(): the
+    web and worker processes, and a resume, must agree on them (and on the
+    tie-break order search_many sorts by)."""
+    assert rs.chunk_id("filing", "0001-25-000001", "mda", 0) == "0001-25-000001:mda:64e9151676"
+
+
 def test_search_many_can_leave_out_the_tickers_news(monkeypatch):
     monkeypatch.setattr(rs, "_chunks_for_ticker", _docs)
     extra = [{"id": "pack1", "source_type": "news", "title": "Pack item", "text": "Export ban widened."}]

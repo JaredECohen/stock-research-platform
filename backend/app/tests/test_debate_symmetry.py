@@ -269,3 +269,38 @@ def test_opening_has_no_opponent_text(monkeypatch):
         assert "The other advocate's case is not available to you" in req.suffix
         assert "zebra unicorn" not in req.prompt and "SECRET" not in req.prompt
         assert not re.search(r"\b(BULL|BEAR)-\d", req.prompt), "no claim ids exist before the openings"
+
+
+# --- S8 on the advocates' inputs (fixer regression) ------------------------------
+
+def test_rebuttal_input_and_sector_sketches_follow_presentation_order(monkeypatch):
+    """The side shown first to the rebuttals, and the sector sketch shown
+    first in the case file, is the run's presentation order, for BOTH
+    parities (a bull-first constant would still pass every record test)."""
+    F.enable(monkeypatch)
+    for order, rid in F.run_ids_by_parity().items():
+        call = F.ScriptedCall()
+        record = F.run(call, run_id=rid, inputs=F.inputs(rid))
+        assert record.presentation_order == order
+        first, second = debate.ordered(order)
+        rebut = call.calls("bull", "rebuttals")[0].prefix
+        assert rebut == call.calls("bear", "rebuttals")[0].prefix
+        tail = rebut.split("<<<OPENINGS (", 1)[1]
+        heads = [P.SIDES[s]["Side"] for s in (first, second)]
+        assert tail.index(f"### {heads[0]} opening") < tail.index(f"### {heads[1]} opening"), order
+        assert f"shown {first} first this run" in tail
+        research = call.calls("bull", "research")[0].prefix
+        assert research.index(f"Sector {first} sketch") < research.index(f"Sector {second} sketch"), order
+
+
+def test_pm_block_default_cap_is_the_setting(monkeypatch):
+    """D6 calls render_pm_block without max_chars: the default must be
+    DEBATE_PM_BLOCK_MAX_CHARS (14k), not unbounded."""
+    rec = _record(text="t" * 380, argument="a" * 380, n=5)
+    assert len(debate.render_pm_block(rec, max_chars=100_000)) > 3_000
+    assert settings.debate_pm_block_max_chars == 14_000
+    assert len(debate.render_pm_block(rec)) <= 14_000
+    monkeypatch.setattr(settings, "debate_pm_block_max_chars", 3_000)
+    block = debate.render_pm_block(rec)
+    assert len(block) <= 3_000
+    assert block == debate.render_pm_block(rec, max_chars=3_000)
