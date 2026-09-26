@@ -72,6 +72,7 @@
   "terminal_growth": 0.025,
   "wacc": 0.06
  },
+ "debate": null,
  "degradation_events": [
   {
    "agent": "Stored memo compatibility",
@@ -161,8 +162,15 @@
   "challenges": [
    "Risks list is thin — add specific operational and macro risks."
   ],
+  "debate_review": null,
+  "issues": [],
   "overall_assessment": "Memo is structurally sound; balance and source citations should be tightened.",
+  "rating_too_high": null,
+  "rating_too_low": null,
   "review_mode": "unknown",
+  "review_status": "",
+  "reviewer_model": "",
+  "revision": null,
   "suggested_revisions": [
    "Tag every claim with a source: filing, transcript, or ratio.",
    "Verify the bull case is symmetric to the bear case.",
@@ -171,7 +179,8 @@
   "underweighted_risks": [
    "Re-emphasize the sector cohort context if quality deteriorates."
   ],
-  "valuation_divergence_assessment": "not_assessed"
+  "valuation_divergence_assessment": "not_assessed",
+  "verdict": ""
  },
  "round_findings": [
   {
