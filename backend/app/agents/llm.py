@@ -502,8 +502,10 @@ class ActionRoute:
 
 
 def tier_overrides() -> dict[str, str]:
-    """LLM_ACTION_TIER_OVERRIDES as {action: tier}. An unknown action is an
-    unresolvable request and raises (config.py checks only the shape)."""
+    """LLM_ACTION_TIER_OVERRIDES as {action: tier}. config.py already
+    rejects an unknown action at boot; this raise is the backstop for a
+    value set after boot (tests, a setattr), since an unknown action is an
+    unresolvable request."""
     out: dict[str, str] = {}
     text = settings.llm_action_tier_overrides or ""
     for item in (p.strip() for p in text.split(",") if p.strip()):
@@ -600,7 +602,11 @@ def resolve_action_route(action: str) -> ActionRoute:
         fo = FAILOVER_MODEL_MAP.get(model)
         fo_effort = effort
     elif tier == "reviewer":
-        provider = settings.risk_reviewer_provider or None
+        # Inferred from the model when the provider is blank, as the debate
+        # tier does: RISK_REVIEWER_MODEL=gpt-6-astra alone must not quietly
+        # keep risk.review on the legacy critic (owner item 8).
+        provider = (settings.risk_reviewer_provider
+                    or provider_of_model(settings.risk_reviewer_model))
         model = settings.risk_reviewer_model
         if provider and not (model and _model_matches_provider(model, provider)):
             model = (settings.anthropic_critic_model if provider == "anthropic"
@@ -721,6 +727,23 @@ def _configured_model_names() -> dict[str, set[str]]:
     return names
 
 
+def _is_listed(model: str, listed: set[str]) -> bool:
+    """`model` itself, or one of its DATED snapshots, is in `listed`.
+
+    Only a date suffix counts (llm_metrics' snapshot rule). A bare prefix
+    match would accept a different model that shares the prefix —
+    gemini-3.1-pro "reachable" because gemini-3.1-pro-preview is listed,
+    claude-opus-5 because claude-opus-5-5 is — which is exactly the
+    unreachable id this report exists to catch.
+    """
+    from ..services.llm_metrics import price_key
+    if model in listed:
+        return True
+    # price_key strips only a dated snapshot suffix (and lowercases).
+    wanted = model.strip().lower()
+    return any(price_key(i) == wanted for i in listed)
+
+
 def _listed_ids(client: Any) -> set[str]:
     ids: set[str] = set()
     for item in client.models.list():
@@ -760,8 +783,7 @@ def model_access_report() -> dict[str, str]:
                 report[model] = f"unchecked:{type(exc).__name__}"
             continue
         for model in models:
-            hit = model in listed or any(i.startswith(model + "-") for i in listed)
-            report[model] = "ok" if hit else "missing"
+            report[model] = "ok" if _is_listed(model, listed) else "missing"
     line = "model_access " + attribution.format_kv(sorted(report.items()))
     level = logging.WARNING if any(v == "missing" for v in report.values()) else logging.INFO
     _emit(log, level, line)
@@ -1101,10 +1123,24 @@ def _record_usage(
         log_safely(log, "LLMCallLog persist failed", exc)
 
 
-def _record_skip(provider: str, model: str, reason: str, *, grounded: bool | None = None) -> None:
+def _record_skip(provider: str, model: str, reason: str, *, grounded: bool | None = None,
+                 requested_max_tokens: int | None = None, effort: str | None = None) -> None:
     """A row and a WARNING line for an attempt that made no provider
     request (design gap G11): zero tokens, zero cost, and it never touches
-    `last_usage()`, which describes the last request actually made."""
+    `last_usage()`, which describes the last request actually made.
+
+    With `requested_max_tokens`, the row's effort and max_tokens are the
+    ones THIS attempt would have sent to (provider, model). Without it the
+    scope still holds the previous attempt's values (attempt 1's
+    Anthropic-clamped budget on a skipped gpt-6-sol hop), which would
+    misattribute the skipped attempt."""
+    if requested_max_tokens is not None and provider in ("anthropic", "openai"):
+        _begin_request(
+            _ATTEMPT.get(),
+            max_tokens=_effective_max_tokens(provider, model, requested_max_tokens,
+                                             hop=_is_failover_hop()),
+            effort=_effort_for(provider, model, effort),
+        )
     _record_usage(provider, model, 0, 0, success=False, error=reason,
                   grounded=grounded, update_last_usage=False)
 
@@ -2272,7 +2308,8 @@ def _with_failover(provider: str, call: Any, *, failover: bool = True,
     sent = (kwargs.get("model") or "").strip() or _model_for(provider, route)
     if _breaker_open(provider):
         reason = "breaker_open"
-        _record_skip(provider, sent, "skipped:breaker_open")
+        _record_skip(provider, sent, "skipped:breaker_open",
+                     requested_max_tokens=kwargs.get("max_tokens"), effort=kwargs.get("effort"))
     else:
         out = call(provider, failover=failover, **kwargs)
         if out is _NO_CLIENT:
@@ -2285,7 +2322,9 @@ def _with_failover(provider: str, call: Any, *, failover: bool = True,
                 # A key but no client: the SDK failed to import or construct.
                 # Written, so the partner's attempt 2 is never orphaned. With
                 # no key at all it is configuration the routing line reports.
-                _record_skip(provider, sent, "skipped:client_unavailable")
+                _record_skip(provider, sent, "skipped:client_unavailable",
+                             requested_max_tokens=kwargs.get("max_tokens"),
+                             effort=kwargs.get("effort"))
         elif out is not None:
             return out
         else:
@@ -2303,7 +2342,8 @@ def _with_failover(provider: str, call: Any, *, failover: bool = True,
                    model_resolution=resolution)
     if _breaker_open(partner):
         log.debug("LLM failover from %s to %s skipped: partner breaker open", provider, partner)
-        _record_skip(partner, partner_model, "skipped:partner_breaker_open")
+        _record_skip(partner, partner_model, "skipped:partner_breaker_open",
+                     requested_max_tokens=kwargs.get("max_tokens"), effort=partner_effort)
         return None
     _record_failover(provider, partner, reason, from_model=sent, to_model=partner_model)
     return call(partner, failover=failover,

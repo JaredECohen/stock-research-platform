@@ -130,6 +130,17 @@ def prod_env(monkeypatch):
     return settings
 
 
+@pytest.fixture(autouse=True)
+def _fresh_breakers():
+    """Breakers and failover counters are process-wide: a test that opens
+    one must not route the next test's call."""
+    llm.reset_circuit_breaker()
+    llm.reset_failover_state()
+    yield
+    llm.reset_circuit_breaker()
+    llm.reset_failover_state()
+
+
 def _row(route: llm.ActionRoute) -> tuple:
     return (route.configured, route.provider, route.model, route.effort,
             route.failover_provider, route.failover_model, route.failover_effort)
@@ -364,3 +375,174 @@ def test_model_access_report_lists_only(prod_env, monkeypatch, caplog):
     assert a_gen == [] and o_gen == [], "no generation, ever"
     (line,) = [r for r in caplog.records if r.getMessage().startswith("model_access ")]
     assert f"{ASTRA}=missing" in line.getMessage() and line.levelno == logging.WARNING
+
+
+def test_model_access_accepts_only_the_id_or_its_dated_snapshot(prod_env, monkeypatch):
+    """A listed id that merely STARTS with the configured one is a
+    different model. gemini-3.1-pro is the id DEVPLAN 2026-09-25 item 4
+    records as unlisted for the production key; reporting it `ok` because
+    gemini-3.1-pro-preview is listed would pass the §8.1 access check for
+    exactly the model it exists to catch."""
+    monkeypatch.setattr(prod_env, "gemini_longdoc_model", "gemini-3.1-pro")
+    monkeypatch.setattr(prod_env, "gemini_social_model", "gemini-3.5-flash")
+    prod_env.anthropic_cheap_model = "claude-opus-5"
+    prod_env.openai_cheap_model = "gpt-6"
+
+    def _client(ids, attr="id"):
+        return SimpleNamespace(models=SimpleNamespace(
+            list=lambda: [SimpleNamespace(**{attr: i}) for i in ids]))
+
+    monkeypatch.setattr(llm, "_anthropic_client", lambda: _client([f"{OPUS}-20260901"]))
+    monkeypatch.setattr(llm, "_openai_client", lambda: _client(
+        ["gpt-6-sol-2026-08-01", ASTRA, "gpt-6-mini"]))
+    monkeypatch.setattr(llm, "_gemini_client", lambda: _client(
+        ["models/gemini-3.1-pro-preview", "models/gemini-3.5-flash-lite"], attr="name"))
+    report = llm.model_access_report()
+    # Different models sharing a prefix: missing.
+    assert report["gemini-3.1-pro"] == "missing"
+    assert report["gemini-3.5-flash"] == "missing"
+    assert report["claude-opus-5"] == "missing"
+    assert report["gpt-6"] == "missing"
+    # The id itself, or a dated snapshot of it (both date forms): ok.
+    assert report[OPUS] == "ok" and report[SOL] == "ok" and report[ASTRA] == "ok"
+    assert report["gemini-3.5-flash-lite"] == "ok"
+
+
+def test_reviewer_provider_is_inferred_from_the_model(prod_env):
+    """RISK_REVIEWER_MODEL alone routes the reviewer, as DEBATE_MODEL alone
+    routes the debate. A silent legacy fallback here would keep risk.review
+    off the owner's item-8 reviewer with nothing in the routing line but
+    `legacy(reviewer tier blank)`."""
+    prod_env.risk_reviewer_provider = ""
+    assert _row(llm.resolve_action_route("risk.review")) == EXPECTED["risk.review"]
+    assert _row(llm.resolve_action_route("review.recheck")) == EXPECTED["review.recheck"]
+
+
+def _tier_failover_setup(monkeypatch):
+    partner = FakeClient(openai_response())
+    primary = FakeClient(anthropic_response("not json"))
+    monkeypatch.setattr(llm, "_demo_only", lambda: False)
+    monkeypatch.setattr(llm, "_anthropic_client", lambda: primary)
+    monkeypatch.setattr(llm, "_openai_client", lambda: partner)
+    llm.reset_circuit_breaker()
+    llm.reset_failover_state()
+    return primary, partner
+
+
+def test_tier_failover_honours_the_kill_switch(prod_env, monkeypatch):
+    """The configured-tier hop (`_failover_hop` with a mapped route) has
+    its own LLM_FAILOVER_ENABLED check; from wave H it carries every
+    research, debate, reviewer and chat call."""
+    primary, partner = _tier_failover_setup(monkeypatch)
+    monkeypatch.setattr(prod_env, "llm_failover_enabled", False)
+    assert llm.chat_json("p", route="strong", action="pm.synthesis") is None
+    assert len(primary.requests) == 1
+    assert partner.requests == [] and llm.get_failover_state()["count"] == 0
+
+
+def test_tier_failover_needs_the_partner_key(prod_env, monkeypatch):
+    primary, partner = _tier_failover_setup(monkeypatch)
+    monkeypatch.setattr(prod_env, "llm_failover_enabled", True)
+    prod_env.openai_api_key = ""
+    assert llm.chat_json("p", route="strong", action="pm.synthesis") is None
+    assert len(primary.requests) == 1
+    assert partner.requests == [] and llm.get_failover_state()["count"] == 0
+
+
+def test_skip_rows_record_the_skipped_attempts_own_budget(prod_env, monkeypatch):
+    """A skipped attempt's row carries the effort and max_tokens THAT
+    attempt would have sent, not the previous attempt's: a skipped
+    gpt-6-sol hop is 25,000 tokens at its failover effort, and a skipped
+    Opus primary is the 16k floor, not the caller's 1,600."""
+    primary, partner = _tier_failover_setup(monkeypatch)
+    monkeypatch.setattr(prod_env, "llm_failover_enabled", True)
+    for _ in range(3):
+        llm._record_failure("openai")
+    assert llm.breaker_open("openai")
+    run_id = f"skip-{uuid.uuid4().hex[:8]}"
+    with llm.llm_call_context(run_id=run_id):
+        assert llm.chat_json("p", route="strong", max_tokens=1600,
+                             action="analyst.valuation") is None
+    first, skipped = llm_fakes.rows_for(run_id)
+    assert (first.provider, first.effort, first.max_tokens) == ("anthropic", "medium", 16000)
+    assert skipped.error_type == "skipped:partner_breaker_open"
+    # analyst.valuation fails over at HIGH (owner item 3's table).
+    assert (skipped.provider, skipped.model) == ("openai", SOL)
+    assert (skipped.effort, skipped.max_tokens) == ("high", 25000)
+
+    llm.reset_circuit_breaker()
+    for _ in range(3):
+        llm._record_failure("anthropic")
+    run_id = f"skip-{uuid.uuid4().hex[:8]}"
+    with llm.llm_call_context(run_id=run_id):
+        assert llm.chat_json("p", route="strong", max_tokens=1600,
+                             action="pm.synthesis") == {"ok": True}
+    skipped, hop = llm_fakes.rows_for(run_id)
+    assert skipped.error_type == "skipped:breaker_open" and skipped.model == OPUS
+    assert (skipped.effort, skipped.max_tokens) == ("high", 16000)
+    assert (hop.model, hop.effort, hop.max_tokens) == (SOL, "high", 25000)
+
+
+def test_an_explicit_effort_beats_the_tier(prod_env, monkeypatch):
+    client = FakeClient(anthropic_response())
+    monkeypatch.setattr(llm, "_demo_only", lambda: False)
+    monkeypatch.setattr(llm, "_anthropic_client", lambda: client)
+    monkeypatch.setattr(llm, "_openai_client", lambda: None)
+    assert llm.chat_json("p", route="strong", action="pm.synthesis", effort="low") == {"ok": True}
+    (sent,) = client.requests
+    assert sent["model"] == OPUS and sent["output_config"] == {"effort": "low"}
+
+
+def test_an_action_on_the_context_routes_the_call(prod_env, monkeypatch):
+    """Call sites wrapped in `llm_call_context(action=...)` pass no action=
+    of their own; the tier must still apply to them."""
+    anthropic = FakeClient(anthropic_response())
+    openai = FakeClient(openai_response())
+    monkeypatch.setattr(llm, "_demo_only", lambda: False)
+    monkeypatch.setattr(llm, "_anthropic_client", lambda: anthropic)
+    monkeypatch.setattr(llm, "_openai_client", lambda: openai)
+    with llm.llm_call_context(action="pm.synthesis"):
+        llm.chat_json("p", route="strong", provider_override="openai", model="gpt-5.5")
+    assert openai.requests == []
+    (sent,) = anthropic.requests
+    assert sent["model"] == OPUS and sent["output_config"] == {"effort": "high"}
+
+
+def test_a_gemini_tier_is_never_dispatched_through_chat_json(prod_env, monkeypatch):
+    """The news tier is Gemini's own entry points; an Anthropic/OpenAI call
+    site that happens to carry a news action keeps its provider."""
+    anthropic = FakeClient(anthropic_response())
+    openai = FakeClient(openai_response())
+    gemini = FakeClient(llm_fakes.gemini_response())
+    monkeypatch.setattr(llm, "_demo_only", lambda: False)
+    monkeypatch.setattr(llm, "_anthropic_client", lambda: anthropic)
+    monkeypatch.setattr(llm, "_openai_client", lambda: openai)
+    monkeypatch.setattr(llm, "_gemini_client", lambda: gemini)
+    assert llm.chat_json("p", action="news.search", provider_override="anthropic") == {"ok": True}
+    assert len(anthropic.requests) == 1 and gemini.requests == [] and openai.requests == []
+
+
+def test_boot_rejects_an_unknown_override_action_before_the_agents_import():
+    """Production imports app.config before the agents package, so the
+    registry is read by FILE PATH there — the branch an in-process test
+    never reaches (llm_attribution is already in sys.modules)."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = ("import sys\n"
+            "try:\n"
+            "    import app.config\n"
+            "except Exception as exc:\n"
+            "    assert 'app.agents.llm_attribution' not in sys.modules\n"
+            "    print(type(exc).__name__, exc)\n"
+            "    sys.exit(3)\n")
+    env = {**os.environ, "LLM_ACTION_TIER_OVERRIDES": "industry.reprot:legacy"}
+    for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+        env[key] = ""
+    proc = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True,
+                          text=True, timeout=120,
+                          cwd=Path(__file__).resolve().parents[2])
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert "ValidationError" in proc.stdout and "industry.reprot" in proc.stdout
