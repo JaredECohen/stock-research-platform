@@ -987,7 +987,9 @@ def grade_claim(*, text: str, evidence: Sequence[str], quote: Mapping[str, Any] 
     kinds: list[str] = []
     dropped_refs = 0
     for raw in list(evidence)[:MAX_EVIDENCE_IDS]:
-        ref = str(raw or "").strip()
+        # "E7" / "e07" name pool passage E07, as they do for the PM's
+        # resolution (`_norm_id`); a ledger ref passes through unchanged.
+        ref = _norm_id(str(raw or "").strip())
         if not ref:
             continue
         if ref in by_id:
@@ -1003,7 +1005,7 @@ def grade_claim(*, text: str, evidence: Sequence[str], quote: Mapping[str, Any] 
 
     quote_verified: bool | None = None
     if isinstance(quote, Mapping) and str(quote.get("text") or "").strip():
-        cited = by_id.get(str(quote.get("evidence") or "").strip())
+        cited = by_id.get(_norm_id(str(quote.get("evidence") or "").strip()))
         quote_verified = cited is not None and _norm_quote(str(quote["text"])) in _norm_quote(cited.excerpt)
 
     usable = set(usable_analysts)
@@ -1077,7 +1079,8 @@ def parse_opening(raw: Any, side: str, *, max_claims: int, pool: Sequence[Debate
         materiality = str(c.get("materiality") or "medium").strip().lower()
         quote_raw = c.get("quote") if isinstance(c.get("quote"), Mapping) else None
         quote: dict[str, Any] | None = (
-            {"evidence": clean(quote_raw.get("evidence"), 20), "text": clean(quote_raw.get("text"), MAX_QUOTE)}
+            {"evidence": _norm_id(clean(quote_raw.get("evidence"), 20)),
+             "text": clean(quote_raw.get("text"), MAX_QUOTE)}
             if quote_raw and clean(quote_raw.get("text"), MAX_QUOTE) else None)
         evidence = _ids_list(c.get("evidence"))
         g = grade_claim(text=text, evidence=evidence, quote=quote, analyst_refs=_ids_list(c.get("analyst_refs")),
@@ -1120,7 +1123,7 @@ def parse_rebuttal(raw: Any, side: str, opponent: Sequence[DebateClaim], *, pool
         for r in list(raw.get("responses") or []):
             if not isinstance(r, Mapping):
                 continue
-            target = clean(r.get("target"), 20).upper()
+            target = _norm_id(clean(r.get("target"), 20).upper())
             stance = str(r.get("stance") or "").strip().lower()
             if target not in targets or target in answers or stance not in STANCES:
                 continue

@@ -565,6 +565,19 @@ def test_llm_call_ignores_stale_usage_when_no_request_is_sent(monkeypatch):
     assert (res.out, res.usage, res.outcome()) == (None, None, "none")
 
 
+def test_evidence_ids_normalised_like_the_resolution():
+    """"E1" and "e01" name pool passage E01, as they do for the PM's basis."""
+    g = _grade(evidence=["E1", "financials:ACME"], registry=F.ledger_with_facts().snapshot())
+    assert (g.grade, g.resolved, g.dropped_refs) == ("sourced", ["E01", "financials:ACME"], 0)
+    g = _grade(evidence=["e01"], quote={"evidence": "e1", "text": "Backlog doubled to a record"})
+    assert (g.grade, g.resolved, g.quote_verified) == ("sourced", ["E01"], True)
+    opp = [DebateClaim(id="BULL-1", side="bull", claim="c", evidence=["E01"], grade="sourced")]
+    responses, _, _ = debate.parse_rebuttal(
+        {"responses": [{"target": "bull-01", "stance": "rebut", "argument": "No.", "evidence": ["e2"]}]},
+        "bear", opp, pool=POOL, registry=None)
+    assert [(r.target, r.stance, r.evidence) for r in responses] == [("BULL-1", "rebut", ["E02"])]
+
+
 _LEAK = "GICS 453010 (Semiconductors & Semiconductor Equipment)"
 
 
