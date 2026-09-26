@@ -32,6 +32,9 @@ def accounting(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "vertex_project_id", "")
     monkeypatch.setattr(settings, "llm_failover_enabled", False)
     monkeypatch.setattr(cache, "log_cost", lambda *args, **kwargs: None)
+    # Offline clients stand in for live ones, so this runs as a live
+    # deployment would: demo-only mode has no failover partner (critique #2).
+    monkeypatch.setattr(llm, "_demo_only", lambda: False)
     llm.reset_circuit_breaker()
     llm.reset_failover_state()
     llm.last_usage()
@@ -151,7 +154,12 @@ def test_repeated_unusable_json_trips_existing_breaker_without_extra_calls(accou
         for _ in range(4):
             assert llm.chat_json("same request", provider_override=provider) is None
     assert len(calls) == 3
-    assert len(_rows(accounting)) == 3
+    # The fourth call made no request: it is written as a skip row (design
+    # gap G11), which every cost aggregate excludes.
+    rows = _rows(accounting)
+    assert len(rows) == 4
+    assert [r.error_type for r in rows][-1] == "skipped:breaker_open"
+    assert (rows[-1].tokens_in, rows[-1].tokens_out) == (0, 0)
     assert llm._FAILURE_COUNTERS[provider] == 3
     assert llm._breaker_open(provider)
     info = llm_metrics.cost_per_run("breaker-json")

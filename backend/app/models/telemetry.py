@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
@@ -51,6 +51,44 @@ class LLMCallLog(Base):
     # every sweep-driven call stays NULL, which reads as "system spend".
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     feature: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # LLM attribution (owner, 2026-09-25: "log which agent/llm model does
+    # what action"). One row per provider ATTEMPT: a failover writes two
+    # rows sharing `call_id`, a skipped attempt (open breaker, no client,
+    # grounding cap) writes one with `error_type="skipped:<why>"` and zero
+    # tokens. Every column is nullable with no server default so
+    # `reconcile_missing_columns` can add it to the live Postgres table at
+    # boot; rows written before these existed read NULL ("unknown").
+    # `_record_usage` truncates every string to the declared length,
+    # because Postgres rejects an over-long value and the swallowed INSERT
+    # would lose the whole row (SQLite in CI would not notice).
+    call_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    action: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    role: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    origin: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    job_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    process_role: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    requested_provider: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    requested_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # What the provider SAYS served the request (Anthropic `msg.model`,
+    # OpenAI `resp.model`, Gemini `model_version`); `model` stays the name
+    # that was sent, and cost is priced from that one.
+    served_model: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    model_resolution: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    failover_reason: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    effort: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Informational for OpenAI (already inside completion_tokens) and
+    # Anthropic; Gemini thoughts are ALSO added to tokens_out because they
+    # bill as output and `candidates_token_count` leaves them out.
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    finish_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # A Search-grounded Gemini call. The daily grounding cap counts these
+    # (successful, today UTC) from the table so web and worker share it.
+    grounded: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
 
 Index("ix_llm_call_run", LLMCallLog.run_id, LLMCallLog.generated_at)

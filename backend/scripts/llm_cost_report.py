@@ -24,6 +24,7 @@ from app.services.llm_metrics import (
     cost_per_agent,
     cost_per_provider,
     cost_per_run,
+    skipped_attempts,
     slowest_calls,
 )
 
@@ -72,6 +73,15 @@ def main() -> int:
         print(f"  {prov:<10s}  calls={agg['n_calls']:>5d}  "
               f"tok={_fmt_int(agg['tokens_in'] + agg['tokens_out'])}  "
               f"fails={agg['n_failures']}")
+
+    # Skip rows (open breaker, no client, grounding cap) made no provider
+    # request and are excluded from every figure above; shown here so a
+    # breaker that kept skipping is still visible in the report.
+    skipped = skipped_attempts(since=since)
+    if skipped:
+        print("\nSkipped attempts (no request made; excluded above):")
+        for reason, n in sorted(skipped.items()):
+            print(f"  {reason:<34s} {n:>6d}")
 
     slow = slowest_calls(since=since, n=10)
     if slow:

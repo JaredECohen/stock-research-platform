@@ -36,6 +36,34 @@ def pytest_runtest_protocol(item, nextitem):
     netguard.set_current(f"<after {item.nodeid}>")
 
 
+# LLM attribution (slice B7-M1): the runtime guard records every LLM call a
+# production site made without a registered `action=`. Pipeline code
+# swallows exceptions (safe_call), so a strict-mode raise alone would be
+# invisible in memo tests; this fixture reads the guard's record per test,
+# fails the test under LLM_ATTRIBUTION_MODE=strict (slice A2a flips the
+# suite to strict once every site passes an action), and in warn mode only
+# lists the sites in the terminal summary — a live inventory of the sweep.
+_unattributed: dict[str, dict[str, int]] = {}
+
+
+@pytest.fixture(autouse=True)
+def _llm_attribution_guard(request):
+    from app.agents import llm, llm_attribution
+    llm_attribution.reset_violations()
+    yield
+    seen = dict(llm_attribution.VIOLATIONS)
+    llm_attribution.reset_violations()
+    if not seen:
+        return
+    _unattributed[request.node.nodeid] = seen
+    if llm.attribution_mode() == "strict":
+        pytest.fail(
+            "LLM call(s) without a registered action: "
+            + ", ".join(f"{site} x{n}" for site, n in sorted(seen.items())),
+            pytrace=False,
+        )
+
+
 _REUSED_DB_TABLES = ("memo_snapshots", "research_snapshots")
 _reused_db: dict[str, int] = {}
 
@@ -110,6 +138,20 @@ def pytest_terminal_summary(terminalreporter):
                 f"moved. TIKTOKEN_CACHE_DIR={os.environ.get('TIKTOKEN_CACHE_DIR')!r} "
                 "overrides the vendored directory when set."
             )
+
+    if _unattributed:
+        sites: dict[str, int] = {}
+        for per_test in _unattributed.values():
+            for site, n in per_test.items():
+                sites[site] = sites.get(site, 0) + n
+        terminalreporter.section("unattributed LLM calls (no registered action=)")
+        for site, n in sorted(sites.items()):
+            terminalreporter.line(f"{site}: {n} call(s)")
+        terminalreporter.line(
+            f"{len(sites)} call site(s) across {len(_unattributed)} test(s). Warn mode: "
+            "recorded, not failed. Register the action in agents/llm_attribution.py and "
+            "pass action= at the site (slice A2a makes this strict)."
+        )
 
     offenders = netguard.hits()
     if not offenders:
