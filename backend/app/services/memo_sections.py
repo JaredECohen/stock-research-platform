@@ -68,7 +68,8 @@ UNAVAILABLE_TEXT = "Unavailable in this version."
 #     projection, and the item-8 review projection. On a memo written before
 #     the debate existed the only visible change is the review label: a
 #     review that was not live now reads "not independently reviewed"
-#     (`review_status`), and a live one "independent".
+#     (`review_status`). A legacy live review stays unlabelled: only the
+#     item-8 reviewer's stored label says "independent".
 PRESENTATION_VERSION = 2
 
 # Stable vocabulary shared by the backend, the frontend and W2b, in display
@@ -767,17 +768,21 @@ def _classify(memo: StockMemoOut, *, patched_fields: frozenset[str], base: Stock
     scenarios_templated = ctx.llm_off or "DCF Scenarios" in ctx.presence
     plan.fragments, plan.scenarios_templated, plan.llm_bb = fragments, scenarios_templated, llm_bb
     hidden_case_texts: set[str] = set()
+    # The case texts hidden because the debate failed, NOT because they are
+    # template output: a risk hidden for restating one says so, rather than
+    # "template text was removed" (they are real analysis).
+    debate_hidden_texts: set[str] = set()
     debate_av = _classify_debate(memo.debate)
     for key in ("bull_case", "bear_case"):
         case = getattr(memo, key)
         if debate_av.reason == "debate_unavailable":
             # §12.1: with the debate on and failed, the stored cases are the
             # legacy builders' (the payload is never rewritten), and they
-            # must not read as the debate's output. Both go, whole; their
-            # items join `hidden_case_texts`, so a risk that restates a
-            # bear point goes with it. The sector block is untouched.
-            points = [p for p in (case.key_points or []) if isinstance(p, str)]
-            hidden_case_texts.update(points)
+            # must not read as the debate's output. Both go, whole; a risk
+            # that restates a hidden point goes with it (below). The sector
+            # block is untouched.
+            points = [p.strip() for p in (case.key_points or []) if isinstance(p, str)]
+            debate_hidden_texts.update(p for p in points if p)
             plan.case_hidden[key] = (True, list(range(len(case.key_points or []))))
             # No `hidden_items`: the frontend words that count as "template
             # items not shown", which these are not.
@@ -807,32 +812,45 @@ def _classify(memo: StockMemoOut, *, patched_fields: frozenset[str], base: Stock
         )
     av["debate"] = debate_av
 
+    # A risk or breaker is hidden as template output when it restates a
+    # template case item (or is one); as the failed debate's when it only
+    # restates a case text the failed debate hid (§12.1).
     risk_hidden_details: set[str] = set()
+    risk_debate_details: set[str] = set()
     idx: list[int] = []
-    kept = False
+    n_debate, kept = 0, False
     for i, r in enumerate(memo.key_risks or []):
         text = (r.detail or r.title or "").strip()
         if (text in hidden_case_texts
                 or _case_item_template(text, fragments, scenarios_templated, llm_bb)):
             idx.append(i)
             risk_hidden_details.add(text)
+        elif text in debate_hidden_texts:
+            idx.append(i)
+            risk_debate_details.add(text)
+            n_debate += 1
         else:
             kept = True
     plan.list_hidden["key_risks"] = idx
-    av["key_risks"] = _list_status(hidden=len(idx), survivor=kept,
-                                   basis=["derived:bear_case"] if idx else [])
+    av["key_risks"] = _derived_list_status(
+        template=len(idx) - n_debate, debate=n_debate, survivor=kept,
+        basis=["derived:bear_case"], debate_basis=debate_av.basis)
 
-    idx, kept = [], False
+    idx, n_debate, kept = [], 0, False
     for i, r in enumerate(memo.thesis_breakers or []):
         text = (r.detail or r.title or "").strip()
         if (text in risk_hidden_details or text in hidden_case_texts
                 or _case_item_template(text, fragments, scenarios_templated, llm_bb)):
             idx.append(i)
+        elif text in risk_debate_details or text in debate_hidden_texts:
+            idx.append(i)
+            n_debate += 1
         else:
             kept = True
     plan.list_hidden["thesis_breakers"] = idx
-    av["thesis_breakers"] = _list_status(hidden=len(idx), survivor=kept,
-                                         basis=["derived:key_risks"] if idx else [])
+    av["thesis_breakers"] = _derived_list_status(
+        template=len(idx) - n_debate, debate=n_debate, survivor=kept,
+        basis=["derived:key_risks"], debate_basis=debate_av.basis)
 
     idx, kept = [], False
     for i, c in enumerate(memo.catalysts or []):
@@ -1012,6 +1030,24 @@ def _list_status(*, hidden: int, survivor: bool, basis: list[str],
                headline_hidden=headline_hidden)
 
 
+def _derived_list_status(*, template: int, debate: int, survivor: bool, basis: list[str],
+                         debate_basis: list[str]) -> SectionAvailability:
+    """`_list_status` for a list derived from the cases (risks, breakers),
+    whose items can also be hidden for restating a case text the failed
+    debate hid. Those are real analysis, so they are never counted or
+    worded as template items: with no template item hidden the reason is
+    the debate's own (`debate_unavailable`, basis `debate:<reason>`); with
+    some, the template reason and count cover only the template items and
+    the basis records the debate too."""
+    if template:
+        return _list_status(hidden=template, survivor=survivor,
+                            basis=[*basis, *(debate_basis if debate else [])])
+    if not debate:
+        return _AVAILABLE.model_copy()
+    return _av("degraded" if survivor else "unavailable", "debate_unavailable",
+               [*debate_basis, *basis])
+
+
 def _classify_thesis(memo: StockMemoOut, ctx: _Ctx, pm_template: bool, pm_basis: list[str],
                      fragments: set[str], available_findings: list[AgentFinding],
                      llm_bb: dict[str, Any] | None) -> SectionAvailability:
@@ -1128,6 +1164,12 @@ def _classify_final_verdict(memo: StockMemoOut, plan: _Plan, fragments: set[str]
         return
     if basis:
         plan.final_verdict = stripped
+        breakers = av.get("thesis_breakers")
+        if basis == ["stripped:watch_items"] and breakers is not None and breakers.reason == "debate_unavailable":
+            # The only text removed is watch items the failed debate hid
+            # (real analysis, not template): say so, as the breakers do.
+            av["final_verdict"] = _av("degraded", "debate_unavailable", [*breakers.basis, *basis])
+            return
         av["final_verdict"] = _av("degraded", "partial_template", basis)
         return
     av["final_verdict"] = _AVAILABLE.model_copy()
@@ -1290,17 +1332,20 @@ def presented_review_status(review: CriticReview, *, live: bool) -> str:
 
     `live` is the presenter's verdict on the review section (available).
     A label the writer stored wins, except that a review which was not
-    live is never shown as independent. Memos written before the label
-    existed get it from the same verdict: a live review is independent, a
-    review that was not (rule-based, failed, pending) is not independently
-    reviewed (plan P12). An old review of unknown provenance that reads as
-    a real one stays unlabelled: nothing says which it was."""
+    live is never shown as independent. A review that was not live
+    (rule-based, failed, pending) is "not independently reviewed" however
+    old it is (plan P12).
+
+    "independent" is a claim about WHO reviewed, so it comes only from the
+    writer that knew (the item-8 reviewer stores it). A live review with no
+    stored label, which is every legacy critic review, stays unlabelled:
+    that critic crossed provider families only when Anthropic was
+    configured and otherwise ran on the author's own provider, and the
+    stored review does not record which happened."""
     stored = review.review_status
     if stored and not (stored == "independent" and not live):
         return stored
-    if not live:
-        return "not_independent"
-    return "independent" if review.review_mode == "live" else ""
+    return "" if live else "not_independent"
 
 
 def issue_is_open(issue: ReviewIssue, review: CriticReview) -> bool:
@@ -1429,6 +1474,36 @@ def _section_of_field(name: str) -> str:
     return head
 
 
+def _present_unclassified(memo: StockMemoOut) -> StockMemoOut:
+    """The memo as stored, when the classifier failed: nothing can be
+    judged template, so every section is shown ("unclassified").
+
+    What was never for display still does not leave: the debate goes
+    through its own projection (`_present_debate` against the stored cases,
+    which drops the dropped and unsupported claims, the research plans, the
+    usage record and the L1 counterfactual), and the review carries its
+    label. Neither depends on the classifier; if the debate projection
+    fails too, only the record's routing is shown."""
+    out = memo.model_copy(deep=True)
+    av = {k: _av("available", None, ["unclassified"]) for k in SECTION_KEYS}
+    debate_av = _classify_debate(memo.debate)
+    av["debate"] = debate_av.model_copy(update={"basis": [*debate_av.basis, "unclassified"]})
+    if memo.debate is not None:
+        try:
+            if debate_av.status == "unavailable":
+                out.debate = _hidden_debate(memo.debate)
+            else:
+                out.debate = _present_debate(memo.debate, out.bull_case, out.bear_case)[0]
+        except Exception:
+            out.debate = _hidden_debate(memo.debate)
+            av["debate"] = _av("unavailable", "unclassified", [*debate_av.basis, "unclassified"])
+    review = out.risk_committee_challenge
+    review.review_status = presented_review_status(  # type: ignore[assignment]
+        review, live=review.review_mode == "live")
+    out.section_availability = av
+    return out
+
+
 def present_memo(
     memo: StockMemoOut, *, patched_fields: frozenset[str] = frozenset(),
     base: StockMemoOut | None = None, chain_complete: bool = True,
@@ -1445,9 +1520,7 @@ def present_memo(
         plan = _classify(memo, patched_fields=frozenset(patched_fields), base=base,
                          chain_complete=chain_complete)
     except Exception:  # never 500 a memo that validated
-        out = memo.model_copy(deep=True)
-        out.section_availability = {k: _av("available", None, ["unclassified"]) for k in SECTION_KEYS}
-        return out
+        return _present_unclassified(memo)
     av = plan.avail
     out = memo.model_copy(deep=True)
 
