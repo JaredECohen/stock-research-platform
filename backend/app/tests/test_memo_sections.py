@@ -30,10 +30,19 @@ from app.schemas import (
     BullBearCase,
     CatalystItem,
     CriticReview,
+    DebateClaim,
+    DebateEvidence,
+    DebateRecord,
+    DebateResolution,
+    DebateResponse,
+    DebateRuling,
     MemoQuality,
     MispricingThesis,
     NumberCheck,
     NumberClaim,
+    ReviewIssue,
+    ReviewRecheck,
+    ReviewRevision,
     RiskItem,
     StockMemoOut,
     TechnicalSignals,
@@ -1013,3 +1022,339 @@ def test_condensed_history_line_template_probe():
         "- 2026-09-01 (memo_run): **Trigger:** memo run  **Observation:** Ads grew faster than modelled.")
     assert not ms.is_condensed_reflection_template(
         "**Condensed 2026-08-01 → 2026-09-01** (3 entries; memo_run=3)")
+
+
+# ---------------------------------------------------------------------------
+# D4 (2026-09-25): the debate section, its projection and the item-8 review
+# (design-bullbear-final §12.1; integration plan B8-D4, P12)
+# ---------------------------------------------------------------------------
+
+def _dclaim(cid: str, side: str, text: str, **over: Any) -> DebateClaim:
+    return DebateClaim.model_validate({"id": cid, "side": side, "claim": text, "grade": "sourced", **over})
+
+
+def _record(**over: Any) -> DebateRecord:
+    base: dict[str, Any] = dict(
+        status="complete", reason="", presentation_order="bear_first",
+        route={"provider": "anthropic", "model": "claude-opus-5-5", "phases": []},
+        headlines={"bull": "Share gains compound", "bear": "Margins mean-revert"},
+        cruxes={"bull": "Share gains hold [E01].", "bear": "Pricing breaks."},
+        research={"bull": [{"query": "share gains", "why": "test"}]},
+        evidence=[
+            DebateEvidence(id="E01", kind="filing", ref="filing:10-K:2025", title="10-K", date="2026-02-01",
+                           excerpt="Share rose to 31%.", found_by=["bull"], query="share"),
+            DebateEvidence(id="E02", kind="news", ref="news:1", title="Price cut", excerpt="Cut prices.",
+                           found_by=["bear"], query="pricing"),
+            DebateEvidence(id="E03", kind="filing", ref="filing:10-Q:2026", excerpt="Only the dropped claim."),
+            DebateEvidence(id="E04", kind="transcript", ref="transcript:Q2", excerpt="Only a rebuttal."),
+        ],
+        claims=[
+            _dclaim("BULL-1", "bull", "Share rose to 31% on product wins.", evidence=["E01"],
+                    quote={"evidence": "E01", "text": "Share rose to 31%.", "verified": True}),
+            _dclaim("BEAR-1", "bear", "A competitor cut prices.", evidence=["E02"], falsifier="Price cut > 10%"),
+            _dclaim("BEAR-2", "bear", "Channel stuffing hides weak demand.", grade="unsupported"),
+            _dclaim("BULL-2", "bull", "A dropped claim.", dropped=True, drop_reason="asymmetric",
+                    evidence=["E03"]),
+        ],
+        responses=[
+            DebateResponse(side="bear", target="BULL-1", stance="rebut", argument="Share is peaking [E04].",
+                           evidence=["E04"]),
+            DebateResponse(side="bull", target="BEAR-2", stance="rebut", argument="No evidence of stuffing."),
+            DebateResponse(side="bull", target="BEAR-1", stance="partial", argument="The cut was regional."),
+        ],
+        disputes=["BULL-1"], unanswered=["BEAR-1", "BEAR-2"],
+        resolution=DebateResolution(status="ruled", crux="Share gains outweigh the price cut.",
+                                    rulings=[DebateRuling(dispute="D1", claim="BULL-1", ruling="bull",
+                                                          basis=["E01"])]),
+        deterministic_checks=["The rating and the valuation verdict agree."],
+        outcome={"conceded": 0, "contested": 2, "cf_rating_score": 61.5, "cf_shift": 1},
+        usage={"calls": 6, "usd": 0.91},
+    )
+    base.update(over)
+    return DebateRecord(**base)
+
+
+def _debated(record: DebateRecord | None = None, **over: Any) -> StockMemoOut:
+    record = record if record is not None else _record()
+    cases = {side: ms.debate_case_projection(record, side) for side in ("bull", "bear")}
+    return make_memo(bull_case=cases["bull"], bear_case=cases["bear"], debate=record, **over)
+
+
+def test_legacy_memo_debate_not_produced_and_availability_unchanged():
+    """Every memo written with the debate off (and every memo before it) has
+    `debate=None`: the section is "not produced" and nothing else moves."""
+    for name in _FIXTURE_NAMES:
+        memo = _fixture(name)
+        assert memo.debate is None
+        av = compute_availability(memo)
+        assert _status(av, "debate") == ("unavailable", "not_produced"), name
+        shown = present_memo(memo)
+        assert shown.debate is None
+        assert shown.section_availability["debate"] == av["debate"]
+    # A debate that ran with no model keeps today's rules for every other
+    # section, so only the `debate` entry tells the two apart.
+    memo = _fixture("msft_live")
+    ran = memo.model_copy(update={"debate": DebateRecord(status="not_run", reason="no_llm")})
+    base_av, ran_av = compute_availability(memo), compute_availability(ran)
+    assert {k: v for k, v in ran_av.items() if k != "debate"} == {
+        k: v for k, v in base_av.items() if k != "debate"}
+
+
+def test_section_keys_place_debate_after_the_cases():
+    keys = ms.SECTION_KEYS
+    assert keys.index("debate") == keys.index("bear_case") + 1
+
+
+def test_not_run_keeps_legacy_w2a_rules():
+    memo = _fixture("googl_live_prepflag")
+    ran = memo.model_copy(update={"debate": DebateRecord(status="not_run", reason="no_llm")})
+    av = compute_availability(ran)
+    assert _status(av, "debate") == ("unavailable", "not_run")
+    assert av["debate"].basis == ["debate:no_llm"]
+    legacy = compute_availability(memo)
+    for key in ("bull_case", "bear_case", "key_risks", "thesis_breakers", "sector_synthesis"):
+        assert av[key] == legacy[key], key
+    shown, before = present_memo(ran), present_memo(memo)
+    assert (shown.bull_case, shown.bear_case) == (before.bull_case, before.bear_case)
+    assert shown.debate is not None and (shown.debate.status, shown.debate.reason) == ("not_run", "no_llm")
+
+
+def test_debate_unavailable_hides_both_cases_with_reason_and_keeps_sector_block():
+    memo = _fixture("meta_v1")
+    down = memo.model_copy(update={"debate": _record(status="unavailable", reason="refused:policy")})
+    av = compute_availability(down)
+    for key in ("bull_case", "bear_case", "debate"):
+        assert _status(av, key) == ("unavailable", "debate_unavailable"), key
+        assert av[key].basis == ["debate:refused:policy"], key
+    # Not "template items": the frontend would word a count as that.
+    assert (av["bull_case"].hidden_items, av["bull_case"].headline_hidden) == (0, False)
+    shown = present_memo(down)
+    for case in (shown.bull_case, shown.bear_case):
+        assert (case.headline, case.key_points) == (UNAVAILABLE_TEXT, [])
+    # The key risks that restate the hidden bear points go with them.
+    bear_points = set(memo.bear_case.key_points)
+    assert memo.key_risks and all(r.detail in bear_points for r in memo.key_risks)
+    assert shown.key_risks == []
+    assert _status(av, "key_risks") == ("unavailable", "template_fallback")
+    # The sector block stays visible under its own title.
+    assert av["sector_synthesis"] == compute_availability(memo)["sector_synthesis"]
+    assert av["sector_synthesis"].status == "available"
+    assert "bull_bear_analysis" in shown.sector_agent_view.data
+    # The debate's content is not served; why it failed, how it was routed
+    # and the computed checks are.
+    d = shown.debate
+    assert (d.status, d.reason, d.claims, d.responses, d.evidence, d.cruxes) == (
+        "unavailable", "refused:policy", [], [], [], {})
+    assert d.route == down.debate.route
+    assert d.deterministic_checks == down.debate.deterministic_checks
+    # The stored payload is never rewritten.
+    assert down.bull_case == memo.bull_case
+
+
+def test_partial_shows_note():
+    memo = _debated(_record(status="partial", reason="rebuttals_failed", responses=[]))
+    av = compute_availability(memo)
+    assert _status(av, "debate") == ("degraded", "rebuttals_unavailable")
+    assert av["bull_case"].status == "available" and av["bear_case"].status == "available"
+    shown = present_memo(memo)
+    assert [c.id for c in shown.debate.claims] == ["BULL-1", "BEAR-1"]
+    assert shown.bull_case == memo.bull_case
+
+
+def test_complete_debate_cases_available_and_projection_is_the_case():
+    record = _record()
+    bull = ms.debate_case_projection(record, "bull")
+    bear = ms.debate_case_projection(record, "bear")
+    # Displayable claims only, verbatim, in id order; the final headline.
+    assert bull == BullBearCase(headline="Share gains compound", key_points=["Share rose to 31% on product wins."])
+    assert bear == BullBearCase(headline="Margins mean-revert", key_points=["A competitor cut prices."])
+    many = _record(claims=[_dclaim(f"BULL-{i}", "bull", f"Point {i}.") for i in (10, 2, 7, 1, 3, 4)])
+    assert ms.debate_case_projection(many, "bull").key_points == [
+        "Point 1.", "Point 2.", "Point 3.", "Point 4.", "Point 7."]
+    av = compute_availability(_debated(record))
+    assert av["debate"].status == "available"
+    assert av["bull_case"].status == "available" and av["bear_case"].status == "available"
+
+
+def test_projection_drops_dropped_and_unsupported_claims_and_excerpts():
+    memo = _debated()
+    before = memo.model_dump(mode="json")
+    d = present_memo(memo).debate
+    assert memo.model_dump(mode="json") == before, "the stored record is never rewritten"
+    assert [c.id for c in d.claims] == ["BULL-1", "BEAR-1"]
+    # A response to a claim the reader cannot see goes with it.
+    assert [(r.side, r.target) for r in d.responses] == [("bear", "BULL-1"), ("bull", "BEAR-1")]
+    assert d.unanswered == ["BEAR-1"]
+    # The evidence map holds what the shown text cites (claims, a quote, a
+    # rebuttal, a ruling, a crux), without the retrieval audit; the passage
+    # only the dropped claim cited is not served.
+    assert [e.id for e in d.evidence] == ["E01", "E02", "E04"]
+    assert all(e.found_by == [] and e.query == "" for e in d.evidence)
+    assert d.evidence[0].excerpt == "Share rose to 31%."
+    assert len(d.evidence) <= ms.DEBATE_EVIDENCE_MAP_MAX
+    # Audit data and the L1 counterfactual are never served.
+    assert d.research == {} and d.usage == {}
+    assert d.outcome == {"conceded": 0, "contested": 2}
+    # What the design keeps.
+    record = memo.debate
+    assert (d.status, d.presentation_order, d.route, d.headlines, d.cruxes, d.disputes) == (
+        record.status, record.presentation_order, record.route, record.headlines, record.cruxes,
+        record.disputes)
+    assert d.resolution == record.resolution and d.deterministic_checks == record.deterministic_checks
+    StockMemoOut.model_validate(present_memo(memo).model_dump(mode="json"))
+
+
+def test_debate_claims_join_the_checked_case_text():
+    """A claim the number check withheld from its case (the stored case no
+    longer carries it) leaves the debate panel too, with its responses, so
+    the withheld figure is shown nowhere."""
+    memo = _debated()
+    memo.bull_case.key_points = []           # BULL-1 withheld before storage
+    d = present_memo(memo).debate
+    assert [c.id for c in d.claims] == ["BEAR-1"]
+    assert [r.target for r in d.responses] == ["BEAR-1"]
+    # The same for a case item the presenter's template rules hide.
+    memo = _debated(_record(claims=[
+        _dclaim("BULL-1", "bull", SIG["case_bull_last_resort"].text),
+        _dclaim("BEAR-1", "bear", "A competitor cut prices."),
+    ]))
+    shown = present_memo(memo)
+    assert shown.bull_case.key_points == []
+    assert [c.id for c in shown.debate.claims] == ["BEAR-1"]
+
+
+def test_debate_number_check_paths_follow_shown_items():
+    memo = _debated()
+    claims = [
+        NumberClaim(field="debate.responses[0].argument", start=0, end=1, raw="S", status="untraceable"),
+        NumberClaim(field="debate.responses[1].argument", start=0, end=1, raw="N", status="untraceable"),
+        NumberClaim(field="debate.responses[2].argument", start=0, end=1, raw="T", status="untraceable"),
+        NumberClaim(field="debate.claims[1].falsifier", start=0, end=1, raw="P", status="threshold"),
+        NumberClaim(field="debate.claims[2].falsifier", start=0, end=1, raw="x", status="threshold"),
+        NumberClaim(field="debate.resolution.crux", start=0, end=1, raw="S", status="untraceable"),
+    ]
+    memo = memo.model_copy(update={"quality": MemoQuality(number_check=NumberCheck(
+        checked=True, claims=claims, unchecked_fields=["debate.responses[2].argument",
+                                                       "debate.responses[1].argument"]))})
+    shown = present_memo(memo)
+    nc = shown.quality.number_check
+    assert [c.field for c in nc.claims] == [
+        "debate.responses[0].argument", "debate.responses[1].argument",
+        "debate.claims[1].falsifier", "debate.resolution.crux"]
+    assert nc.unchecked_fields == ["debate.responses[1].argument"]
+    # Every surviving claim still indexes its presented text.
+    from app.agents import number_check
+    for c in nc.claims:
+        assert number_check.resolve_field(shown, c.field)[c.start:c.end] == c.raw, c
+    # A hidden debate takes its claims with it.
+    down = memo.model_copy(update={"debate": _record(status="unavailable", reason="timeout")})
+    assert not [c for c in present_memo(down).quality.number_check.claims if c.field.startswith("debate.")]
+
+
+def test_deterministic_checks_shown_as_computed_facts():
+    """The deterministic checks are facts the code computed: shown with the
+    debate, kept when the debate is not, and never read by the number check."""
+    from app.agents import number_check
+    for status in ("complete", "partial", "unavailable", "not_run"):
+        memo = _debated(_record(status=status, deterministic_checks=["Rating up 2 steps vs 12.5% upside."]))
+        assert present_memo(memo).debate.deterministic_checks == ["Rating up 2 steps vs 12.5% upside."]
+        assert not [s for s in number_check.iter_fields(memo) if "deterministic" in s.path]
+
+
+def _review(**over: Any) -> CriticReview:
+    return CriticReview.model_validate({"overall_assessment": "Live review.", "review_mode": "live", **over})
+
+
+def _issue(iid: str, severity: str = "material", status: str = "open", **over: Any) -> ReviewIssue:
+    return ReviewIssue.model_validate({"id": iid, "category": "thesis_logic", "severity": severity,
+                                       "text": f"Issue {iid}.", "status": status, **over})
+
+
+@pytest.mark.parametrize(("review", "label"), [
+    ({"review_mode": "live"}, "independent"),
+    ({"review_mode": "rule_based", "overall_assessment": SIG["critic_rule_based"].text}, "not_independent"),
+    ({"review_mode": "unavailable", "overall_assessment": "Critic agent unavailable for this run."},
+     "not_independent"),
+    ({"review_mode": "pending", "overall_assessment": "Pending critic review."}, "not_independent"),
+    # Legacy reviews that pre-date `review_mode`, told apart by signature.
+    ({"review_mode": "unknown", "overall_assessment": SIG["critic_legacy_rule_based"].text}, "not_independent"),
+    # A stored label wins, except that a review that was not live is never
+    # shown as independent.
+    ({"review_mode": "unavailable", "review_status": "independent",
+      "overall_assessment": "Critic agent unavailable for this run."}, "not_independent"),
+])
+def test_not_independently_reviewed_label_when_review_not_live(review, label):
+    memo = make_memo(risk_committee_challenge=_review(**review))
+    shown = present_memo(memo).risk_committee_challenge
+    assert shown.review_status == label
+    assert memo.risk_committee_challenge.review_status == review.get("review_status", "")
+
+
+# Guards, not regressions: the version-1 presenter already passed these
+# through unchanged, and the label derivation must keep doing so.
+@pytest.mark.parametrize(("review", "label"), [
+    # An old review of unknown provenance that reads as real stays unlabelled.
+    ({"review_mode": "unknown", "overall_assessment": "The thesis holds."}, ""),
+    # A label the writer stored wins.
+    ({"review_mode": "live", "review_status": "not_independent"}, "not_independent"),
+    ({"review_mode": "rule_based", "review_status": "rule_based",
+      "overall_assessment": SIG["critic_rule_based"].text}, "rule_based"),
+])
+def test_review_label_keeps_stored_and_unknown_provenance(review, label):
+    shown = present_memo(make_memo(risk_committee_challenge=_review(**review))).risk_committee_challenge
+    assert shown.review_status == label
+
+
+def test_open_issue_projection():
+    """Open material issues first; an issue the re-check did not resolve
+    reads as addressed by the PM (still open), however it was stored."""
+    revision = ReviewRevision(status="revised", recheck=ReviewRecheck(
+        status="complete", resolved=["R2", "R5"], open=["R5"]))
+    review = _review(verdict="sound_with_issues", revision=revision, issues=[
+        _issue("R1", "minor"),
+        _issue("R2", status="resolved"),
+        _issue("R3", status="rejected_by_pm"),
+        _issue("R4", status="resolved"),          # the re-check never resolved it
+        _issue("R5", status="resolved"),          # the re-check also lists it open
+        _issue("R6", "minor", status="addressed_by_pm"),
+    ])
+    shown = present_memo(make_memo(risk_committee_challenge=review)).risk_committee_challenge
+    assert [(i.id, i.status) for i in shown.issues] == [
+        ("R3", "rejected_by_pm"), ("R4", "addressed_by_pm"), ("R5", "addressed_by_pm"),
+        ("R1", "open"), ("R6", "addressed_by_pm"), ("R2", "resolved"),
+    ]
+    assert [i.id for i in ms.open_issues(review)] == ["R3", "R4", "R5", "R1", "R6"]
+    assert shown.revision == revision and shown.verdict == "sound_with_issues"
+    # A failed re-check resolves nothing.
+    failed = review.model_copy(update={"revision": ReviewRevision(
+        status="revised", recheck=ReviewRecheck(status="failed", resolved=["R2"]))})
+    assert "R2" in {i.id for i in ms.open_issues(failed)}
+    # The stored review is not rewritten.
+    assert [i.status for i in review.issues][:2] == ["open", "resolved"]
+
+
+def test_legacy_presentation_diff_is_only_the_review_label():
+    """P12: on a memo written before the debate, PRESENTATION_VERSION 2
+    changes only the review label (and adds the `debate` map entry).
+
+    Each digest is the version-1 presenter's output (1caa063) over the five
+    fixture memos, taken with the label blanked and the debate entry
+    removed; the version-2 output normalised the same way must match it."""
+    import hashlib
+    v1 = {
+        "aapl_demo": "bedcf54d90a84bb6b9295e19d5a096f43970d1489fc736f172f4849aa5da92f6",
+        "abbv_v7_patch": "f33527225ea33dd35d6be0ea9a4bce66554fa1e19b7b65b897e6548139b05b8a",
+        "googl_live_prepflag": "627cb5ba339add464336223c84a81b247f175cc9b527b93d0987534a2cf84f09",
+        "meta_v1": "189e05ee1164c272c9ca508bef706aec4b0b28e257d433cf683d60cf7cbdcabb",
+        "msft_live": "d836a4033b3c65bb88eee803cc473f2ecd17b614850c89098435167ec1160816",
+    }
+    assert ms.PRESENTATION_VERSION == 2
+    for name, digest in v1.items():
+        body = json.loads(present_memo(_fixture(name)).model_dump_json())
+        # Every fixture's review is not live: each now says so.
+        assert body["risk_committee_challenge"]["review_status"] == "not_independent", name
+        assert body["section_availability"]["debate"]["reason"] == "not_produced", name
+        body["risk_committee_challenge"]["review_status"] = ""
+        body["section_availability"].pop("debate")
+        blob = json.dumps(body, sort_keys=True, separators=(",", ":"))
+        assert hashlib.sha256(blob.encode()).hexdigest() == digest, name

@@ -772,6 +772,32 @@ def test_commentary_cache_key_includes_presentation_version(monkeypatch):
     assert cc.cache_key(**base) != k
 
 
+def test_presentation_version_2_and_commentary_cache_key():
+    """D4 (plan P12): the presenter labels reviews and adds the debate, so
+    the version is 2, and every commentary row cached under version 1 misses
+    once (and is regenerated) because the key reads the constant at call
+    time rather than a copy taken at import."""
+    import hashlib
+    import json as _json
+
+    from app.services import memo_sections
+    assert memo_sections.PRESENTATION_VERSION == 2
+    base = dict(tickers=["A"], metrics=["revenue"], years=None, normalize="none", fingerprint="f" * 64,
+                memo_versions={"A": {"version": 1, "generated_at": "x"}})
+
+    def key_at(version: int) -> str:
+        payload = {
+            "catalog_version": cc.catalog.CATALOG_VERSION, "prompt_version": P.PROMPT_VERSION,
+            "presentation_version": version, "tickers": ["A"], "metrics": ["revenue"], "years": None,
+            "normalize": "none", "fingerprint": "f" * 64, "memo_versions": {"A": 1},
+        }
+        blob = _json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(blob.encode()).hexdigest()
+
+    assert cc.cache_key(**base) == key_at(2)
+    assert cc.cache_key(**base) != key_at(1)
+
+
 def test_memo_excerpt_drops_hidden_fields(seeded):
     """The model never relates the chart to text the memo page withholds:
     the template thesis, the fallback mispricing card and the template case

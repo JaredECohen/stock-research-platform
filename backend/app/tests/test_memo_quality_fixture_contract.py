@@ -241,15 +241,19 @@ def test_fixtures_carry_the_d2_contract_with_both_modes_off(which, request):
     absent) with the review's key set the model's both ways.
 
     These are PRESENTED bodies, and in both the review is rule-based, so
-    the presenter rebuilt it (`memo_sections`: an unavailable review keeps
-    only its provenance). The values here therefore pin the presenter's
-    output, not what the producer wrote; that is checked on the stored
-    memo in `test_fixture_is_what_the_pipeline_produces`."""
+    the presenter rebuilt it (`memo_sections._present_review`). The values
+    here therefore pin the presenter's output, not what the producer wrote;
+    that is checked on the stored memo in
+    `test_fixture_is_what_the_pipeline_produces`. The one item-8 value the
+    presenter sets is the label (D4, plan P12): a review that was not live
+    reads "not independently reviewed"."""
     memo = request.getfixturevalue(which)["memo"]
     assert "debate" in memo and memo["debate"] is None, RECAPTURE
+    assert memo["section_availability"]["debate"]["reason"] == "not_produced", RECAPTURE
     review = memo["risk_committee_challenge"]
     _same_keys(review, CriticReview, "memo.risk_committee_challenge")
-    assert {k: review[k] for k in ITEM8_UNWRITTEN} == ITEM8_UNWRITTEN, RECAPTURE
+    assert {k: review[k] for k in ITEM8_UNWRITTEN} == {
+        **ITEM8_UNWRITTEN, "review_status": "not_independent"}, RECAPTURE
 
 
 def test_field_paths_the_renderers_build(wire):

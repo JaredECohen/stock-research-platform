@@ -43,12 +43,17 @@ from typing import Any, Literal
 
 from ..schemas import (
     AgentFinding,
+    BullBearCase,
     CriticReview,
+    DebateClaim,
+    DebateRecord,
     MispricingThesis,
     NumberClaim,
+    ReviewIssue,
     SectionAvailability,
     StockMemoOut,
 )
+from ..schemas.agents import CRITIC_REVIEW_ITEM8_FIELDS
 
 # The owner's wording (decision 2), with the full stop the integration plan
 # (C2) fixed. Every hidden prose field reads exactly this, so a renderer that
@@ -59,7 +64,12 @@ UNAVAILABLE_TEXT = "Unavailable in this version."
 # Bumped whenever the classification rules or the presented shape change.
 # Caches of text derived from a presented memo (chart commentary) key on it,
 # so a rule change never serves prose built from the old presentation.
-PRESENTATION_VERSION = 1
+#   2 (D4, 2026-09-25; integration plan P12): the `debate` section and its
+#     projection, and the item-8 review projection. On a memo written before
+#     the debate existed the only visible change is the review label: a
+#     review that was not live now reads "not independently reviewed"
+#     (`review_status`), and a live one "independent".
+PRESENTATION_VERSION = 2
 
 # Stable vocabulary shared by the backend, the frontend and W2b, in display
 # order. Dynamic keys are added per memo: `extra_agent_views.<roster key>` and
@@ -69,7 +79,7 @@ SECTION_KEYS: tuple[str, ...] = (
     "mispricing_thesis", "valuation_verdict", "business_summary",
     "sector_agent_view", "sector_synthesis", "earnings_agent_view", "filing_agent_view",
     "valuation_agent_view", "comps_agent_view", "macro_sensitivity", "technical_agent_view",
-    "earnings_qoq_delta", "bull_case", "bear_case", "catalysts", "key_risks",
+    "earnings_qoq_delta", "bull_case", "bear_case", "debate", "catalysts", "key_risks",
     "thesis_breakers", "forward_catalysts", "dcf_summary", "risk_committee_challenge",
     "portfolio_fit", "final_verdict", "scorecard", "round_findings",
 )
@@ -757,8 +767,22 @@ def _classify(memo: StockMemoOut, *, patched_fields: frozenset[str], base: Stock
     scenarios_templated = ctx.llm_off or "DCF Scenarios" in ctx.presence
     plan.fragments, plan.scenarios_templated, plan.llm_bb = fragments, scenarios_templated, llm_bb
     hidden_case_texts: set[str] = set()
+    debate_av = _classify_debate(memo.debate)
     for key in ("bull_case", "bear_case"):
         case = getattr(memo, key)
+        if debate_av.reason == "debate_unavailable":
+            # §12.1: with the debate on and failed, the stored cases are the
+            # legacy builders' (the payload is never rewritten), and they
+            # must not read as the debate's output. Both go, whole; their
+            # items join `hidden_case_texts`, so a risk that restates a
+            # bear point goes with it. The sector block is untouched.
+            points = [p for p in (case.key_points or []) if isinstance(p, str)]
+            hidden_case_texts.update(points)
+            plan.case_hidden[key] = (True, list(range(len(case.key_points or []))))
+            # No `hidden_items`: the frontend words that count as "template
+            # items not shown", which these are not.
+            av[key] = _av("unavailable", "debate_unavailable", debate_av.basis)
+            continue
         head = case.headline or ""
         # `_bull_case` also builds "Bull case: <valuation headline>", so a
         # label-stripped copy of a hidden finding's headline counts too.
@@ -781,6 +805,7 @@ def _classify(memo: StockMemoOut, *, patched_fields: frozenset[str], base: Stock
             survivor=(bool(head.strip()) and not head_hidden) or substantive_kept,
             basis=(["fragments:template"] if hidden_idx or head_hidden else []),
         )
+    av["debate"] = debate_av
 
     risk_hidden_details: set[str] = set()
     idx: list[int] = []
@@ -1109,6 +1134,225 @@ def _classify_final_verdict(memo: StockMemoOut, plan: _Plan, fragments: set[str]
 
 
 # ---------------------------------------------------------------------------
+# The bull/bear debate (D4; design-bullbear-final §12.1)
+# ---------------------------------------------------------------------------
+
+# Debate states whose record is shown (and whose texts the number check reads).
+DEBATE_SHOWN_STATUSES: frozenset[str] = frozenset({"complete", "partial"})
+# The claims each side's case carries (design §4.3: at most five per side).
+DEBATE_CASE_MAX_POINTS = 5
+# The evidence map served beside a shown debate: the pool is E01..E16.
+DEBATE_EVIDENCE_MAP_MAX = 16
+_ID_NUMBER = re.compile(r"(\d+)")
+
+
+def _classify_debate(debate: DebateRecord | None) -> SectionAvailability:
+    """The `debate` section, by the record's own status (§12.1).
+
+    None is every memo written with `DEBATE_MODE` off and every memo that
+    pre-dates the field: nothing was produced, and the cases keep today's
+    rules. `not_run` (no model, a backtest) also keeps today's case rules;
+    `unavailable` hides both cases (see `_classify`)."""
+    if debate is None:
+        return _av("unavailable", "not_produced")
+    basis = [f"debate:{debate.reason or debate.status}"]
+    if debate.status == "not_run":
+        return _av("unavailable", "not_run", basis)
+    if debate.status == "unavailable":
+        return _av("unavailable", "debate_unavailable", basis)
+    if debate.status == "partial":
+        # Openings argued, rebuttals lost: shown, with a note saying so.
+        # "degraded" is the presenter's "shown with a note" state.
+        return _av("degraded", "rebuttals_unavailable", basis)
+    return _AVAILABLE.model_copy()
+
+
+def debate_claim_displayable(claim: DebateClaim) -> bool:
+    """A claim a reader may see: not dropped by the grader and not graded
+    `unsupported`. The rest stay in the stored record for the audit only."""
+    return not claim.dropped and claim.grade != "unsupported"
+
+
+def _id_order(claim_id: str) -> tuple[str, int, str]:
+    m = _ID_NUMBER.search(claim_id or "")
+    return ((claim_id or "")[: m.start()] if m else claim_id or "",
+            int(m.group(1)) if m else -1, claim_id or "")
+
+
+def debate_case_projection(record: DebateRecord, side: str) -> BullBearCase:
+    """The case a complete or partial debate writes into `bull_case` /
+    `bear_case` (§12.1): the side's final headline, and its displayable
+    claims' texts verbatim, in id order, at most five.
+
+    The presenter joins the debate's shown claims to the case by that exact
+    text (`_present_debate`), so the writer (D6) builds the case with this
+    function: a claim the number check withholds from the case then leaves
+    the debate panel too, and a withheld figure appears nowhere else."""
+    claims = sorted((c for c in record.claims if c.side == side and debate_claim_displayable(c)),
+                    key=lambda c: _id_order(c.id))
+    return BullBearCase(
+        headline=(record.headlines or {}).get(side, "") or "",
+        key_points=[c.claim for c in claims[:DEBATE_CASE_MAX_POINTS]],
+    )
+
+
+def _hidden_debate(record: DebateRecord) -> DebateRecord:
+    """What a reader gets of a debate whose section is unavailable: why,
+    and how it was routed. The deterministic checks stay: they are facts
+    the code computed about the memo, not an advocate's argument."""
+    return DebateRecord(
+        protocol_version=record.protocol_version, status=record.status, reason=record.reason,
+        presentation_order=record.presentation_order, route=dict(record.route or {}),
+        deterministic_checks=list(record.deterministic_checks or []),
+    )
+
+
+def _present_debate(
+    record: DebateRecord, bull: BullBearCase, bear: BullBearCase,
+) -> tuple[DebateRecord, dict[int, int], dict[int, int]]:
+    """The presented debate and the stored->presented index maps of its
+    claims and responses (for the number-check paths).
+
+    Shown claims are the displayable ones whose text the PRESENTED case of
+    their side still carries: the join drops a claim the number check
+    withheld from the case, or the presenter's template rules hid there.
+    Responses to a claim that is not shown go with it (they would point at
+    an id the reader cannot find), as do those claims' `unanswered` entries.
+    The evidence map keeps the pool entries the shown text cites (≤16),
+    without the retrieval audit (`found_by`, `query`); the research plans
+    and the usage record are audit data, and the L1 counterfactual
+    (`outcome.cf_*`) is stored, never displayed."""
+    case_texts = {
+        "bull": {p.strip() for p in bull.key_points if isinstance(p, str)},
+        "bear": {p.strip() for p in bear.key_points if isinstance(p, str)},
+    }
+    shown = [(i, c) for i, c in enumerate(record.claims)
+             if debate_claim_displayable(c) and (c.claim or "").strip() in case_texts.get(c.side, set())]
+    claim_map = {i: n for n, (i, _) in enumerate(shown)}
+    shown_ids = {c.id for _, c in shown}
+    hidden_ids = {c.id for c in record.claims} - shown_ids
+    responses = [(j, r) for j, r in enumerate(record.responses) if r.target in shown_ids]
+    response_map = {j: n for n, (j, _) in enumerate(responses)}
+
+    cited: set[str] = set()
+    for _, c in shown:
+        cited.update(c.evidence)
+        quoted = (c.quote or {}).get("evidence")
+        if isinstance(quoted, str):
+            cited.add(quoted)
+    for _, r in responses:
+        cited.update(r.evidence)
+    for ruling in record.resolution.rulings:
+        cited.update(ruling.basis)
+    prose = " ".join([
+        record.resolution.crux or "", *(v for v in (record.cruxes or {}).values() if isinstance(v, str)),
+        *(r.argument or "" for _, r in responses), *(c.falsifier or "" for _, c in shown),
+    ])
+    evidence = []
+    for ev in record.evidence:
+        if ev.id in cited or (ev.id and re.search(rf"(?<![\w-]){re.escape(ev.id)}(?![\w-])", prose)):
+            evidence.append(ev.model_copy(update={"found_by": [], "query": ""}))
+        if len(evidence) >= DEBATE_EVIDENCE_MAP_MAX:
+            break
+    out = record.model_copy(deep=True)
+    out.claims = [c.model_copy(deep=True) for _, c in shown]
+    out.responses = [r.model_copy(deep=True) for _, r in responses]
+    out.unanswered = [u for u in record.unanswered if u not in hidden_ids]
+    out.evidence = evidence
+    out.research = {}
+    out.usage = {}
+    out.outcome = {k: v for k, v in (record.outcome or {}).items() if not k.startswith("cf_")}
+    return out, claim_map, response_map
+
+
+_DEBATE_ITEM_PATH = re.compile(r"^debate\.(?P<list>claims|responses)\[(?P<index>\d+)\](?P<rest>.*)$")
+
+
+def _debate_renumbered(path: str, claim_map: dict[int, int], response_map: dict[int, int]) -> str | None:
+    """A number-check path into the debate after the presenter filtered its
+    claims and responses: None when it pointed at an item not shown, else
+    the path with the item's presented index."""
+    m = _DEBATE_ITEM_PATH.match(path)
+    if m is None:
+        return path
+    mapping = claim_map if m.group("list") == "claims" else response_map
+    new = mapping.get(int(m.group("index")))
+    return None if new is None else f"debate.{m.group('list')}[{new}]{m.group('rest')}"
+
+
+# ---------------------------------------------------------------------------
+# The item-8 review (D4; owner decision 2026-09-25 item 8)
+# ---------------------------------------------------------------------------
+
+def presented_review_status(review: CriticReview, *, live: bool) -> str:
+    """The review label a reader sees: `independent`, `not_independent`
+    (the W2a "not independently reviewed" label), `rule_based`, or "".
+
+    `live` is the presenter's verdict on the review section (available).
+    A label the writer stored wins, except that a review which was not
+    live is never shown as independent. Memos written before the label
+    existed get it from the same verdict: a live review is independent, a
+    review that was not (rule-based, failed, pending) is not independently
+    reviewed (plan P12). An old review of unknown provenance that reads as
+    a real one stays unlabelled: nothing says which it was."""
+    stored = review.review_status
+    if stored and not (stored == "independent" and not live):
+        return stored
+    if not live:
+        return "not_independent"
+    return "independent" if review.review_mode == "live" else ""
+
+
+def issue_is_open(issue: ReviewIssue, review: CriticReview) -> bool:
+    """True unless the re-check resolved it (P5). The PM's own revision
+    never closes an issue: a status of `resolved` counts only when the
+    completed re-check lists the id as resolved (and not as open), so a
+    superficial edit cannot escape the open-issue display or its cap."""
+    if issue.status != "resolved":
+        return True
+    recheck = review.revision.recheck if review.revision is not None else None
+    return not (recheck is not None and recheck.status == "complete"
+                and issue.id in recheck.resolved and issue.id not in recheck.open)
+
+
+def open_issues(review: CriticReview) -> list[ReviewIssue]:
+    """The reviewer's open issues, material first (the display order)."""
+    return [i for i in _ordered_issues(review) if issue_is_open(i, review)]
+
+
+def _ordered_issues(review: CriticReview) -> list[ReviewIssue]:
+    return sorted(review.issues, key=lambda i: (not issue_is_open(i, review), i.severity != "material"))
+
+
+def _present_review(review: CriticReview, *, live: bool) -> CriticReview:
+    """The item-8 review projection. A review that was not live loses its
+    prose (the legacy critic's template text, W2a) but keeps what item 8
+    must show: the label, the model asked, and any verdict and issues,
+    which are structured findings a cap may rest on, so hiding them would
+    show a capped confidence with no reason. Issues are ordered open
+    material first; one the re-check did not resolve reads as addressed by
+    the PM, i.e. still open."""
+    if not live:
+        review = CriticReview(
+            overall_assessment=UNAVAILABLE_TEXT, review_mode=review.review_mode, challenges=[],
+            underweighted_risks=[], suggested_revisions=[],
+            advice_compliance_check=review.advice_compliance_check,
+            valuation_divergence_assessment=review.valuation_divergence_assessment,
+            **{k: getattr(review, k) for k in CRITIC_REVIEW_ITEM8_FIELDS},
+        )
+    else:
+        review = review.model_copy(deep=True)
+    issues = [
+        i.model_copy(update={"status": "addressed_by_pm"})
+        if i.status == "resolved" and issue_is_open(i, review) else i.model_copy()
+        for i in _ordered_issues(review)
+    ]
+    review.review_status = presented_review_status(review, live=live)  # type: ignore[assignment]
+    review.issues = issues
+    return review
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -1232,22 +1476,8 @@ def present_memo(
             consensus_view=UNAVAILABLE_TEXT, our_view=UNAVAILABLE_TEXT, gap=UNAVAILABLE_TEXT,
             falsifiers=[],
         )
-    if av["risk_committee_challenge"].status == "unavailable":
-        rc = out.risk_committee_challenge
-        out.risk_committee_challenge = CriticReview(
-            overall_assessment=UNAVAILABLE_TEXT, review_mode=rc.review_mode, challenges=[],
-            underweighted_risks=[], suggested_revisions=[],
-            advice_compliance_check=rc.advice_compliance_check,
-            valuation_divergence_assessment=rc.valuation_divergence_assessment,
-            # Item-8 provenance survives like `review_mode`: this branch is
-            # exactly the not-live review that `review_status`
-            # ("not_independent") exists to label, and `reviewer_model` says
-            # which model was asked. The review's content (verdict, issues,
-            # rating cases, revision, debate review) is blanked with the
-            # challenges; D4 owns the full review projection.
-            reviewer_model=rc.reviewer_model,
-            review_status=rc.review_status,
-        )
+    out.risk_committee_challenge = _present_review(
+        out.risk_committee_challenge, live=av["risk_committee_challenge"].status != "unavailable")
 
     # Lists.
     hidden_case_points: dict[str, set[str]] = {}
@@ -1261,6 +1491,15 @@ def present_memo(
     for key, idx in plan.list_hidden.items():
         drop = set(idx)
         setattr(out, key, [x for i, x in enumerate(getattr(out, key)) if i not in drop])
+
+    # The debate, joined to the cases as they are now presented.
+    claim_map: dict[int, int] = {}
+    response_map: dict[int, int] = {}
+    if out.debate is not None:
+        if av["debate"].status == "unavailable":
+            out.debate = _hidden_debate(out.debate)
+        else:
+            out.debate, claim_map, response_map = _present_debate(out.debate, out.bull_case, out.bear_case)
 
     # Diligence rounds.
     for r_i, rnd in enumerate(out.round_findings or []):
@@ -1301,15 +1540,22 @@ def present_memo(
             **{k: sorted(v) for k, v in plan.list_hidden.items()},
         }
         hidden_heads = {k for k, (h, _) in plan.case_hidden.items() if h}
+
+        def moved_path(path: str) -> str | None:
+            if path.startswith("debate."):
+                return _debate_renumbered(path, claim_map, response_map)
+            return _renumbered(path, dropped, hidden_heads)
+
         claims = []
         for c in nc.claims:
             if _section_of_field(c.field) in hidden:
                 continue
             if c.field.endswith(".long_form_report"):
-                c = _rebased_long_form_claim(memo, out, c)
-                if c is None:
+                rebased = _rebased_long_form_claim(memo, out, c)
+                if rebased is None:
                     continue
-            moved = _renumbered(c.field, dropped, hidden_heads)
+                c = rebased
+            moved = moved_path(c.field)
             if moved is not None:
                 claims.append(c if moved == c.field else c.model_copy(update={"field": moved}))
         nc.claims = claims
@@ -1318,7 +1564,7 @@ def present_memo(
         nc.unchecked_fields = [
             moved for p in nc.unchecked_fields
             if _section_of_field(p) not in hidden
-            and (moved := _renumbered(p, dropped, hidden_heads)) is not None
+            and (moved := moved_path(p)) is not None
         ]
         # A withheld item was removed before storage, so its index refers to
         # the pre-check list and is left alone; its TEXT is judged by the
