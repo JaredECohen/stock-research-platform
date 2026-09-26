@@ -29,12 +29,14 @@ import logging
 import math
 import os
 import re
+import time
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from ..config import settings
 
@@ -156,23 +158,58 @@ def _hash_embed(text: str, dim: int = FALLBACK_DIM) -> list[float]:
     return [x / norm for x in nums]
 
 
-def embed(texts: Sequence[str]) -> list[list[float]]:
+def embed(texts: Sequence[str], *, action: str | None = None,
+          ticker: str | None = None) -> list[list[float]]:
     """Return one embedding per input text, or raise `EmbeddingUnavailable`.
 
     OpenAI when configured and live; deterministic hash vectors only where
     `_hash_allowed()`. See the module docstring for why there is no silent
     fallback.
+
+    `action` names the caller in the attribution registry (`embed.index`,
+    `embed.query`, `embed.repair`). Every OpenAI request writes one
+    `llm_call_logs` row, and every raise after the guard writes its row
+    first, so an embedding outage is visible in the call log rather than
+    only as an emptied search (design gap G10). Hash vectors make no
+    request and write nothing.
     """
     if not texts:
         return []
+    from ..agents import llm
+
+    # The guard runs first, as in every other public LLM entry (attribution
+    # critique #9): a caller that names no action is found in demo and CI,
+    # where the hash path below would otherwise hide it. `embed_one` opens
+    # the scope as the outer entry and this call reuses it.
+    with llm._call_scope("embed", action=action, ticker=ticker, route="", max_tokens=0) as att:
+        return _embed_in_scope(texts, att)
+
+
+def _embed_in_scope(texts: Sequence[str], att: dict[str, Any]) -> list[list[float]]:
+    from ..agents import llm
+
     if _hash_allowed():
         return [_hash_embed(t) for t in texts]
+    att.update(requested_provider="openai", requested_model=EMBEDDING_MODEL,
+               model_resolution="fixed")
+
+    def _row(error: str, *, started: float | None = None) -> None:
+        # `update_last_usage=False`: `last_usage()` describes the last CHAT
+        # call on this thread, and callers read it right after one to cache
+        # the spend. An embedding lookup in between (a retrieval tool during
+        # an analyst turn) would otherwise be billed as the analyst's call.
+        ms = int((time.monotonic() - started) * 1000) if started is not None else 0
+        llm._record_usage("openai", EMBEDDING_MODEL, 0, 0, duration_ms=ms, success=False,
+                          error=error, update_last_usage=False)
+
     if not _is_openai_available():
+        _row("skipped:client_unavailable")
         raise EmbeddingUnavailable("no embedding provider configured in production")
     try:
         from openai import OpenAI
         client = OpenAI(api_key=settings.openai_api_key)
     except Exception as exc:
+        _row("skipped:client_unavailable")
         raise EmbeddingUnavailable(f"openai client unavailable: {type(exc).__name__}") from None
     # Unchanged in position, and outside every `try`: a stale memo or
     # industry lease must cancel the dispatch. `LeaseLost` subclasses
@@ -181,31 +218,49 @@ def embed(texts: Sequence[str]) -> list[list[float]]:
     assert_current()
     from .industry_lease import assert_current as assert_industry_current
     assert_industry_current()
+    started = time.monotonic()
     try:
         resp = client.embeddings.create(model=EMBEDDING_MODEL, input=list(texts))
     except Exception as exc:
         # Type only, and `from None`: a provider exception can carry the
         # request body or a key, and a chained cause would be logged too.
+        _row(f"provider_error:{type(exc).__name__}", started=started)
         raise EmbeddingUnavailable(f"openai embeddings failed: {type(exc).__name__}") from None
+    ms = int((time.monotonic() - started) * 1000)
+    used = getattr(getattr(resp, "usage", None), "total_tokens", None)
+    # None when the response omits usage: the meter then estimates, while
+    # the row records 0 rather than an estimate it would present as billed.
+    billed: int | None = (used if isinstance(used, int) and not isinstance(used, bool)
+                          and used >= 0 else None)
+    served = getattr(resp, "model", None)
+    served_model = served if isinstance(served, str) and served else None
     try:
         vecs = [list(d.embedding) for d in resp.data]
     except Exception:
-        raise EmbeddingUnavailable("openai embeddings returned an unexpected shape") from None
-    if len(vecs) != len(texts) or any(len(v) != EMBEDDING_DIM for v in vecs):
+        vecs = None
+    if vecs is None or len(vecs) != len(texts) or any(len(v) != EMBEDDING_DIM for v in vecs):
+        # Billed all the same, so the row carries the tokens it reported.
+        llm._record_usage("openai", EMBEDDING_MODEL, billed or 0, 0, duration_ms=ms,
+                          success=False, error="unexpected_shape", served_model=served_model,
+                          update_last_usage=False)
         raise EmbeddingUnavailable("openai embeddings returned an unexpected shape")
+    llm._record_usage("openai", EMBEDDING_MODEL, billed or 0, 0, duration_ms=ms,
+                      served_model=served_model, update_last_usage=False)
     meter = _usage_meter.get()
     if meter is not None:
         meter.calls += 1
-        used = getattr(getattr(resp, "usage", None), "total_tokens", None)
-        if isinstance(used, int) and not isinstance(used, bool) and used >= 0:
-            meter.tokens += used
+        if billed is not None:
+            meter.tokens += billed
         else:
             meter.estimated_tokens += sum(count_tokens(t) for t in texts)
     return vecs
 
 
-def embed_one(text: str) -> list[float]:
-    return embed([text])[0]
+def embed_one(text: str, *, action: str | None = None, ticker: str | None = None) -> list[float]:
+    from ..agents import llm
+
+    with llm._call_scope("embed_one", action=action, ticker=ticker, route="", max_tokens=0):
+        return embed([text], action=action, ticker=ticker)[0]
 
 
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:

@@ -39,6 +39,7 @@ sources, ≤$0.10, ≤20 MB a night). Nothing here runs on import.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import uuid
@@ -123,6 +124,20 @@ def _ceiling_stop(db_bytes: int | None, projected_bytes: int, max_db_mb: float |
     if db_bytes + max(projected_bytes, 0) > max_db_mb * inv_svc.MB:
         return STOP_MAX_DB_MB
     return None
+
+
+def _repair_origin() -> Any:
+    """Tag the re-index's `embed.index` rows `origin=repair:corpus`.
+
+    The indexer is the ordinary ingest path, so without this its rows read
+    like any other filing index. Only when no origin is set: the nightly
+    retry inside `history_backfill` runs under its loop's origin, and that
+    is the more useful answer to "what spent this"."""
+    from ..agents.llm import current_call_context, llm_call_context
+
+    if current_call_context().get("origin"):
+        return contextlib.nullcontext()
+    return llm_call_context(origin="repair:corpus")
 
 
 def _measure_db() -> int | None:
@@ -232,7 +247,7 @@ def reembed(
             continue
         with emb_svc.usage_meter() as meter:
             try:
-                vectors = emb_svc.embed([r.text for r in work])
+                vectors = emb_svc.embed([r.text for r in work], action="embed.repair")
             except emb_svc.EmbeddingUnavailable:
                 vectors = None
         res["tokens"] += meter.total_tokens
@@ -384,7 +399,7 @@ def index_missing(
             res["skipped_changed"].append(src.identity)
             continue
         indexer = filing_memory.index_filing if src.kind == "filing" else filing_memory.index_transcript
-        with emb_svc.usage_meter() as meter:
+        with emb_svc.usage_meter() as meter, _repair_origin():
             try:
                 written = indexer(row)
                 error: str | None = None
