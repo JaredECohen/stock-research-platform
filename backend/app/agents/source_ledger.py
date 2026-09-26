@@ -20,6 +20,12 @@ extractions ARE its inputs, so they are registered under the labelled,
 non-primary kind `prior_extraction`: a figure traced there is traced to
 an earlier model reading, never to a filing or a transcript.
 
+News (FIX-018) is registered once per run by `news_context.register`, as the
+non-primary kind `news`, and only the text the models were shown: title and
+summary of a provider-feed item (publisher text), the title ONLY of a
+search-grounded Gemini item, whose summary is model-written and falls under
+the "any other LLM output" rule above.
+
 Registration can never hurt the analyst that calls it:
 `register_source` contains every error except the closed-vocabulary
 check (a programming error the tests enforce), marks the ledger
