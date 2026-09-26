@@ -197,3 +197,71 @@ def test_template_queries_are_mirrored():
     plans = debate.template_plans()
     assert [q["corpus"] for q in plans["bull"]] == [q["corpus"] for q in plans["bear"]]
     assert len(plans["bull"]) == len(plans["bear"]) <= 3
+
+
+# --- news retrieval stays inside the pack's date rules (L8, §5.2-§5.3) -------------
+
+def test_news_retrieval_never_bypasses_the_pack_window(monkeypatch):
+    """The store's own get_news chunks carry no date: indexed beside the
+    pack, a story older than the window reached the advocates "date unknown",
+    and a URL-less story appeared twice under two refs."""
+    from app.services import retrieval_service as rs
+
+    rows = [
+        {"title": "Acme export ban hits sales", "url": "", "published_at": (NOW - timedelta(days=2)).isoformat(),
+         "source": "Reuters", "summary": "Shipments to two regions halted."},
+        {"title": "Acme export ban first reported", "url": "", "published_at": "2026-05-01T00:00:00+00:00",
+         "source": "Reuters", "summary": "An export ban was first floated."},
+        {"title": "Acme opens a plant", "url": "https://n.example/plant",
+         "published_at": (NOW - timedelta(days=3)).isoformat(), "source": "AP", "summary": "New capacity."},
+    ]
+    monkeypatch.setattr(rs, "get_news", lambda t: rows)
+    monkeypatch.setattr(rs, "get_filings", lambda t: [])
+    monkeypatch.setattr(rs, "get_transcripts", lambda t: [])
+    F.enable(monkeypatch)
+    script = F.default_script()
+    script[("bull", "research")] = [F.plan("news", "export ban")]
+    record = F.run(F.ScriptedCall(script), inputs=F.inputs(news_rows=rows), search_many=None, now=NOW)
+    assert record.status == "complete"
+    news = [e for e in record.evidence if e.kind == "news"]
+    assert [e.title for e in news] == ["Acme export ban hits sales"], "one entry, the in-window story only"
+    assert news[0].date == (NOW - timedelta(days=2)).date().isoformat()
+    assert all(e.date for e in news), "no news passage reaches the advocates undated"
+
+
+def test_news_retrieval_reaches_in_window_stories_beyond_the_pack_cap():
+    rows = [_row(f"story {i} routine update", days=i) for i in range(10)]
+    rows.append(_row("story zeta export ban", days=12))
+    pack = debate.news_pack([], rows, None, now=NOW)
+    assert "story zeta export ban" not in [i.title for i in pack.items]
+    assert "story zeta export ban" in [i.title for i in pack.candidates]
+    queries = [DebateQuery(corpus="news", query="zeta export ban")]
+
+    def many(ticker, qs, *, extra_chunks, include_ticker_news, **kw):
+        assert include_ticker_news is False
+        return [[c for c in extra_chunks if "zeta" in c["text"]] for _ in qs]
+
+    results, _ = debate.retrieve(queries, "ACME", pack.candidates, vector_search=F.vector_search,
+                                 search_many=many)
+    pool = debate.build_pool(queries, results, 16)
+    assert [(e.title, e.date) for e in pool] == [("story zeta export ban", (NOW - timedelta(days=12)).date().isoformat())]
+
+
+def test_pool_dedupes_by_content_when_refs_differ():
+    """§5.3: dedupe by chunk id, falling back to a text hash; a news story
+    by its normalised title."""
+    queries = [DebateQuery(corpus="filings", query="x", found_by=["bull"]),
+               DebateQuery(corpus="filings", query="y", found_by=["bear"]),
+               DebateQuery(corpus="news", query="z", found_by=["bear"])]
+    same = "Backlog doubled to a record."
+    results = [
+        [{"kind": "filing", "ref": "chunk:101", "chunk": "101", "text": same, "title": "", "date": ""}],
+        [{"kind": "filing", "ref": "chunk:acc:mda:ab12", "chunk": "acc:mda:ab12", "text": f"  {same.upper()} ",
+          "title": "", "date": ""}],
+        [{"kind": "news", "ref": "news:aaa", "chunk": "news:aaa", "text": "Acme wins. Summary one.",
+          "title": "Acme wins!", "date": "2026-09-19"},
+         {"kind": "news", "ref": "news:bbb", "chunk": "news:bbb", "text": "Acme wins. Summary two.",
+          "title": "Acme wins", "date": "2026-09-19"}],
+    ]
+    pool = debate.build_pool(queries, results, 16)
+    assert [(e.ref, e.found_by) for e in pool] == [("chunk:101", ["bull", "bear"]), ("news:aaa", ["bear"])]

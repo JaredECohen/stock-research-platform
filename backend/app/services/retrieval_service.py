@@ -242,6 +242,7 @@ def search_many(
     limit: int = 3,
     source_types: Sequence[str | None] | None = None,
     extra_chunks: Sequence[dict[str, Any]] = (),
+    include_ticker_news: bool = True,
 ) -> list[list[dict[str, Any]]]:
     """BM25 over the ticker's filings, transcripts and news (plus
     `extra_chunks`, e.g. the debate's news pack), building the index ONCE for
@@ -249,7 +250,13 @@ def search_many(
 
     `source_types[i]` restricts query i to one corpus ("filing",
     "transcript", "news"); None searches all. Ties break on the stable
-    chunk id, so the same corpus always gives the same order. Raises
+    chunk id, so the same corpus always gives the same order.
+
+    `include_ticker_news=False` leaves the ticker's own news rows out of
+    the index, so `extra_chunks` is the only news searched. The debate
+    passes its date-windowed news pack that way: a get_news chunk carries
+    no publication date, so it would slip past the pack's window and as-of
+    rule and duplicate a pack story under another id. Raises
     ValueError when `source_types` does not line up with `queries`, and on a
     blank ticker (an unscoped search is never what a caller means).
     """
@@ -259,7 +266,10 @@ def search_many(
         raise ValueError("source_types must have one entry per query")
     if not queries:
         return []
-    chunks = split_long_documents([*_chunks_for_ticker(ticker), *extra_chunks])
+    own = _chunks_for_ticker(ticker)
+    if not include_ticker_news:
+        own = [c for c in own if c.get("source_type") != "news"]
+    chunks = split_long_documents([*own, *extra_chunks])
     if not chunks:
         return [[] for _ in queries]
     index = _build_index(chunks)

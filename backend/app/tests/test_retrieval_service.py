@@ -64,3 +64,15 @@ def test_bm25_fallback_chunks_long_docs_stable_ids(monkeypatch):
     # so the analyst's prompt and refs are unchanged while the debate is off.
     whole = rs.search("ACME", "export license revoked regulators", limit=1)[0]
     assert whole["text"].startswith("Paragraph 0 ") and "id" not in whole
+
+
+def test_search_many_can_leave_out_the_tickers_news(monkeypatch):
+    monkeypatch.setattr(rs, "_chunks_for_ticker", _docs)
+    extra = [{"id": "pack1", "source_type": "news", "title": "Pack item", "text": "Export ban widened."}]
+    both = rs.search_many("ACME", ["export"], source_types=["news"], extra_chunks=extra)[0]
+    assert {h["id"] for h in both} == {"pack1", rs.chunk_id("news", "https://n.example/1", "article", 0)}
+    only_pack = rs.search_many("ACME", ["export"], source_types=["news"], extra_chunks=extra,
+                               include_ticker_news=False)[0]
+    assert [h["id"] for h in only_pack] == ["pack1"]
+    # Filings and transcripts are still indexed.
+    assert rs.search_many("ACME", ["export"], source_types=["transcript"], include_ticker_news=False)[0]
