@@ -310,9 +310,10 @@ def _pm_chat(index: int, tickers: list[str]):
     (`_INLINE_MEMO_ENTRY_POINTS`) for a stored-memo lookup — otherwise a
     `single_stock_analysis` intent would bill a 5-9 minute memo run against
     the chat sample and the number would be meaningless for pm_chat.
-    `settings.use_agents_sdk` is left as configured on purpose: the SDK
-    chat agent (tool reads over stored data) is the production chat path
-    and is what the sample should cost.
+    `settings.chat_agents_sdk` (and the legacy `use_agents_sdk`) are left
+    as configured on purpose: the SDK chat agent (tool reads over stored
+    data) is the production chat path once CHAT_AGENTS_SDK is on, and is
+    what the sample should cost.
     """
     t = tickers[index % len(tickers)]
     u = tickers[(index + 1) % len(tickers)]

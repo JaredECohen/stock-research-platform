@@ -100,12 +100,14 @@ Caveats the reader must carry into §5:
 - `pm_chat` cost depends on the question class. The three representative
   questions (risk summary, rating rationale with history, moat comparison)
   are chosen to hit the SDK chat path with tool reads; a purely conversational
-  turn is cheaper. `USE_AGENTS_SDK` is left as configured (true in
-  `config.env`) so the SDK chat agent is what gets measured; only the two
+  turn is cheaper. The SDK chat agent runs only with `CHAT_AGENTS_SDK=true`
+  (since the 2026-09-25 flag split; `USE_AGENTS_SDK` now moves only the
+  inline memo), and both flags are left as configured so the production
+  chat path is what gets measured; only the two
   inline-memo entry points are swapped, and
   `test_route_audit.py::test_pm_chat_sample_never_generates_a_memo` pins
-  that a `single_stock_analysis` turn cannot start a memo run under either
-  flag value. A sample whose `llm.n_calls` is in the twenties is a memo
+  that a `single_stock_analysis` turn cannot start a memo run under any
+  combination of the two flags. A sample whose `llm.n_calls` is in the twenties is a memo
   run leaking in — treat it as a script bug, not a chat cost.
 
 ## 3. Worst-case monthly variable cost per user
