@@ -2411,9 +2411,11 @@ def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound)
     # the critic read `draft_for_critic` and before risk recommendations,
     # the blend and 7(b) move the rating. Written at compose, these keys
     # changed the legacy critic's prompt with both modes off and pushed
-    # memo text out of its 60k window.
-    if inputs.pm_rating_record and isinstance(memo.scores, dict):
-        memo.scores = {**memo.scores, **inputs.pm_rating_record}
+    # memo text out of its 60k window. `getattr`: a direct stage call may
+    # hand in a stand-in for MemoInputs that never went through compose.
+    pm_rating_record = getattr(inputs, "pm_rating_record", None)
+    if pm_rating_record and isinstance(memo.scores, dict):
+        memo.scores = {**memo.scores, **pm_rating_record}
 
     # Wave 8H — apply the risk analyst's structured recommendations.
     # Runs AFTER the memo body is assembled but BEFORE final_verdict +
