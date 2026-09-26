@@ -250,6 +250,7 @@ def run_comps_agent(
                 route="cheap",
                 model=settings.openai_tool_model,
                 max_tokens=300,
+                action="analyst.comps", ticker=ticker,
             )
             if isinstance(narr, dict) and narr.get("narrative"):
                 finding_data["narrative"] = str(narr["narrative"]).strip()
@@ -327,6 +328,7 @@ def run_comps_agent(
                     "Comps context:\n" + _json.dumps(payload, default=str)[:3000],
                     system=prompts.PM_SYSTEM, route="cheap",
                     model=settings.openai_tool_model,
+                    action="analyst.comps_followup", ticker=ticker,
                 )
                 if isinstance(llm_out, dict) and llm_out.get("summary"):
                     finding = AgentFinding(

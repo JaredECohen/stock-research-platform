@@ -1100,7 +1100,7 @@ def _llm_call(analyst: IndustryAnalyst, facts: dict[str, dict[str, Any]], sectio
     started = time.monotonic()
     with llm.llm_call_context(agent_name=analyst.display_name, run_id=run_id, route="cheap"):
         out = llm.chat_json(prompt, system=system, route="cheap", model=llm.resolve_role_model("sector"),
-                            max_tokens=max_tokens)
+                            max_tokens=max_tokens, action="industry.report")
     generation["llm_calls"] += 1
     generation["latency_ms"] += int((time.monotonic() - started) * 1000)
     usage = llm.last_usage() or {}

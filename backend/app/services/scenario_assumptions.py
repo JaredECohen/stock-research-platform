@@ -274,6 +274,7 @@ def build_bull_bear(
             route="cheap",
             model=getattr(settings, "openai_tool_model", None),
             max_tokens=1200,
+            action="dcf.scenarios", ticker=profile.get("ticker"),
         )
     except Exception as exc:  # pragma: no cover — never block DCF
         _fell_back_to_deterministic(profile, exc)
@@ -318,10 +319,10 @@ def build_bull_bear(
             assumption_changes=[],
         ))
 
+    # Counts only: the driver names are model-written text (attribution
+    # critique #15), and the memo carries them anyway.
     log.info(
-        "scenario assumptions for %s: bull=%s bear=%s",
-        profile.get("ticker"),
-        [d.name for d in bull_drivers],
-        [d.name for d in bear_drivers],
+        "scenario assumptions for %s: bull_drivers=%d bear_drivers=%d",
+        profile.get("ticker"), len(bull_drivers), len(bear_drivers),
     )
     return bull_assumptions, bull_drivers, bear_assumptions, bear_drivers

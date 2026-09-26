@@ -153,7 +153,8 @@ def _extract_from_filings(ticker: str) -> dict[str, Any] | None:
     )
 
     try:
-        result = llm.chat_json(prompt, route="cheap", max_tokens=1200)
+        result = llm.chat_json(prompt, route="cheap", max_tokens=1200,
+                               action="geography.extract", ticker=ticker)
     except Exception as exc:  # pragma: no cover
         log.debug("Geography extraction LLM call failed for %s: %s", ticker, exc)
         return None

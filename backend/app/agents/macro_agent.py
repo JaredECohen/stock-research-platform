@@ -198,6 +198,7 @@ def detect_regime_probabilities(text: str) -> dict[str, float]:
         route="cheap",
         model=settings.openai_macro_model,
         max_tokens=120,
+        action="analyst.macro_regime",
     )
     raw = (out or {}).get("probabilities") if isinstance(out, dict) else None
     if not isinstance(raw, dict):
@@ -251,6 +252,7 @@ def run_macro_scenario(scenario: str) -> MacroScenarioResult:
         out = llm.chat_json(
             prompt, system=prompts.MACRO_ANALYST_PROMPT, route="cheap",
             model=settings.openai_macro_model, max_tokens=600,
+            action="macro.scenario",
         )
         if isinstance(out, dict) and (out.get("narrative") or out.get("suggested_research_views")):
             return base.model_copy(update={
@@ -330,6 +332,7 @@ def run_macro_agent(
         out = llm.chat_json(
             prompt, system=prompts.MACRO_ANALYST_PROMPT, route="cheap",
             model=settings.openai_macro_model, max_tokens=600,
+            action="analyst.macro", ticker=profile.get("ticker"),
         )
         # Wave 10 — typed citations for FRED snapshot values + scenario.
         from ..schemas import Citation

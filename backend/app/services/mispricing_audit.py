@@ -118,6 +118,7 @@ def run_audit(*, limit: int = 20) -> dict[str, Any]:
         system="You are a senior buy-side editor. Be honest and specific.",
         route="cheap",
         max_tokens=2000,
+        action="mispricing.audit",
     )
     if not isinstance(out, dict):
         return {

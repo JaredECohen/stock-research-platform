@@ -42,6 +42,8 @@ from app.services.research_notes import (  # noqa: E402
 
 
 log = logging.getLogger("index_research_notes")
+# What started the work, on every LLM row and line this script causes.
+ORIGIN = "script:index_research_notes"
 
 
 def _llm_summarize(body: str) -> str:
@@ -61,11 +63,13 @@ def _llm_summarize(body: str) -> str:
             prompt,
             system="You are a careful equity-research editor.",
             route="cheap", model=settings.openai_tool_model,
+            action="notes.summarize",
         )
         if text and text.strip():
             return text.strip()[:240]
     except Exception as exc:
-        log.warning("LLM summary failed; falling back: %s", exc)
+        # Type only: the exception text can quote the note or the model.
+        log.warning("LLM summary failed; falling back: %s", type(exc).__name__)
     return _deterministic_summary(body)
 
 
@@ -170,13 +174,16 @@ def main() -> int:
     paths = sorted(root.rglob("*.md"))
     log.info("found %d note(s) under %s", len(paths), root)
 
+    from app.agents.llm import llm_call_context
+
     changed = 0
-    for p in paths:
-        if _rewrite_note(p, use_llm=args.llm, dry_run=args.check):
-            changed += 1
-            log.info("%s %s",
-                     "would update" if args.check else "updated",
-                     p.relative_to(root) if p.is_relative_to(root) else p)
+    with llm_call_context(origin=ORIGIN):
+        for p in paths:
+            if _rewrite_note(p, use_llm=args.llm, dry_run=args.check):
+                changed += 1
+                log.info("%s %s",
+                         "would update" if args.check else "updated",
+                         p.relative_to(root) if p.is_relative_to(root) else p)
 
     notes = list_notes(corpus_root=root)
     index = _build_index(notes)

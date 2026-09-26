@@ -25,6 +25,7 @@ from typing import Any
 
 from ..config import settings
 from . import llm
+from .log_safety import log_safely
 
 log = logging.getLogger(__name__)
 
@@ -173,10 +174,11 @@ def _llm_enrich(
         + text[:6000]
     )
     try:
-        out = llm.chat_json(prompt, route="cheap", model=settings.openai_tool_model)
+        out = llm.chat_json(prompt, route="cheap", model=settings.openai_tool_model,
+                            action="memo.fact_extract", ticker=ticker)
     except Exception as exc:  # pragma: no cover — defensive
-        log.warning("Fact extraction LLM call failed for %s/%s: %s",
-                    ticker, source_id, exc)
+        # Type only: the exception text can quote the source or the model.
+        log_safely(log, f"Fact extraction LLM call failed for {ticker}/{source_id}", exc)
         return None
     if not isinstance(out, dict):
         return None

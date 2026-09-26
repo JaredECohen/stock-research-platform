@@ -209,6 +209,7 @@ def apply_sector_overrides(
             route="cheap",
             model=getattr(settings, "openai_tool_model", None),
             max_tokens=900,
+            action="dcf.sector_defaults", ticker=profile.get("ticker"),
         )
     except Exception as exc:  # pragma: no cover — never block DCF
         _fell_back_to_baseline(profile, exc)

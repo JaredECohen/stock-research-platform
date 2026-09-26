@@ -180,6 +180,7 @@ def run_risk_agent(
                 route="cheap",
                 model=settings.openai_tool_model,
                 max_tokens=300,
+                action="analyst.risk_breakers", ticker=profile.get("ticker"),
             )
             if isinstance(narr, dict):
                 tb = str(narr.get("thesis_breaker") or "").strip()
@@ -252,6 +253,7 @@ def run_risk_agent(
                 "Context:\n" + json.dumps(payload, default=str),
                 system=prompts.PM_SYSTEM, route="cheap",
                 model=settings.openai_tool_model,
+                action="analyst.risk_followup", ticker=profile.get("ticker"),
             )
             if isinstance(llm_out, dict) and llm_out.get("summary"):
                 finding = AgentFinding(
