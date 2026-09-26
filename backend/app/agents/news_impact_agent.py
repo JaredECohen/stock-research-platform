@@ -168,7 +168,11 @@ def _clamp_patch(memo: StockMemoOut, patch: dict[str, Any]) -> dict[str, Any]:
         if k not in allowed_fields:
             continue
         if k == "rating_label":
-            if v in allowed_ratings:
+            # isinstance first: a {"from": .., "to": ..} or list value is
+            # unhashable, and the TypeError escaped `assess` (this runs
+            # outside its try), so the story was never remembered and was
+            # re-assessed on every pass.
+            if isinstance(v, str) and v in allowed_ratings:
                 cleaned[k] = v
             continue
         if k == "confidence_score":

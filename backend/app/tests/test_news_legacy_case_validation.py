@@ -230,3 +230,24 @@ def test_only_invalid_shapes_is_not_material(monkeypatch):
     })
     out = news_impact_agent.assess(_stub_memo("ABBV"), _stub_alert())
     assert out["material"] is False and out["patch"] == {} and out["rationales"] == {}
+
+
+@pytest.mark.parametrize("value", [
+    {"from": "Bullish", "to": "Neutral"},
+    ["Neutral"],
+    None,
+    3,
+])
+def test_non_string_rating_label_is_dropped_not_raised(monkeypatch, value):
+    # `value in allowed_ratings` raised TypeError on a dict or list. It ran
+    # outside assess's try, so the error escaped on_news_alert, the story
+    # was never remembered, and it was re-assessed on every pass.
+    _llm_returns(monkeypatch, {
+        "material": True,
+        "patch": {"rating_label": value, "confidence_score": 55},
+        "rationales": {"rating_label": "a", "confidence_score": "b"},
+        "delta_summary": "news",
+    })
+    out = news_impact_agent.assess(_stub_memo("ABBV"), _stub_alert())
+    assert "rating_label" not in out["patch"]
+    assert out["rationales"] == {"confidence_score": "b"}
