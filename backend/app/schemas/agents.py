@@ -226,6 +226,213 @@ class EarningsStructured(BaseModel):
 DivergenceAssessment = Literal["supported", "unsupported", "not_assessed"]
 
 
+# ---------------------------------------------------------------------------
+# Bull/bear debate record (D2, 2026-09-25; design-bullbear-final §11).
+#
+# Expand-only: nothing writes these yet. The debate engine (D3) and graph
+# wiring (D6) fill them behind `DEBATE_MODE`; until then every memo carries
+# `debate=None`, and every stored memo reads back the same way. The record
+# is the whole debate as it ran, not a presentation: the presenter (D4)
+# decides what a reader sees, so dropped and unsupported claims stay here
+# for the audit and the number check.
+# ---------------------------------------------------------------------------
+
+DebateSideName = Literal["bull", "bear"]
+# The side-blind grader's verdict on a claim's sourcing (design §4.4).
+ClaimGrade = Literal["sourced", "partially_sourced", "analyst_only", "unsupported"]
+
+# Quotes are verified against the excerpt, so the bound is part of the
+# contract: a longer excerpt would let a "verified" quote come from text the
+# reader is never shown. The engine clamps; the schema refuses.
+DEBATE_EXCERPT_MAX_CHARS = 650
+
+
+class DebateEvidence(BaseModel):
+    """One passage or news item in the shared evidence pool (E01..E16).
+
+    Both sides review the same pool; `found_by` records whose research plan
+    retrieved it, which the symmetry audit reads, not the grader.
+    """
+    id: str
+    kind: str
+    ref: str
+    title: str = ""
+    date: str = ""
+    excerpt: str = Field(default="", max_length=DEBATE_EXCERPT_MAX_CHARS)
+    found_by: list[DebateSideName] = Field(default_factory=list)
+    query: str = ""
+
+
+class DebateClaim(BaseModel):
+    """One opening claim (≤5 per side), graded side-blind in code."""
+    id: str
+    side: DebateSideName
+    pillar: str = ""
+    claim: str
+    category: str = "other"
+    materiality: Literal["high", "medium", "low"] = "medium"
+    evidence: list[str] = Field(default_factory=list)
+    # {evidence, text, verified}: a verbatim quote and whether the grader
+    # found it in that evidence item's excerpt.
+    quote: dict[str, Any] | None = None
+    analyst_refs: list[str] = Field(default_factory=list)
+    contests_analyst: str | None = None
+    falsifier: str = ""
+    grade: ClaimGrade = "unsupported"
+    dropped: bool = False
+    drop_reason: str = ""
+    figures: dict[str, int] = Field(default_factory=dict)
+    status: Literal["conceded", "partial", "contested", "unanswered"] = "unanswered"
+
+
+class DebateResponse(BaseModel):
+    """One side's rebuttal to one of the other side's claims."""
+    side: DebateSideName
+    target: str
+    stance: Literal["rebut", "concede", "partial", "unanswered"]
+    argument: str = ""
+    evidence: list[str] = Field(default_factory=list)
+    grade: ClaimGrade = "unsupported"
+
+
+class DebateRuling(BaseModel):
+    """The PM's ruling on one decisive dispute."""
+    dispute: str
+    claim: str
+    ruling: Literal["bull", "bear", "split", "unresolved", "not_ruled"] = "not_ruled"
+    basis: list[str] = Field(default_factory=list)
+    flags: list[str] = Field(default_factory=list)
+
+
+class DebateResolution(BaseModel):
+    """How the PM resolved the debate. `pm_unavailable` when the keyword
+    (no-LLM) PM wrote the memo, so no ruling can be claimed."""
+    status: Literal["ruled", "pm_unavailable", "not_applicable"] = "not_applicable"
+    crux: str = ""
+    rulings: list[DebateRuling] = Field(default_factory=list)
+    unresolved: list[str] = Field(default_factory=list)
+    relied_unsupported: list[str] = Field(default_factory=list)
+
+
+class DebateRecord(BaseModel):
+    """The bull/bear debate as it ran for one memo (`StockMemoOut.debate`)."""
+    protocol_version: int = 1
+    status: Literal["complete", "partial", "unavailable", "not_run"] = "not_run"
+    # Why a debate is partial or unavailable, e.g. "refused:<category>"
+    # when the model declined and pair failover could not recover (P16).
+    reason: str = ""
+    rebuttal_status: str = ""
+    research_status: str = "directed"
+    presentation_order: Literal["bull_first", "bear_first"] = "bull_first"
+    # {provider, model, effort, failed_over, phases: [...]}. Free-form on
+    # purpose: each `phases[]` entry records one phase's outcome, including
+    # a refusal and the pair-failover hop, and the engine's typed step
+    # payloads (D3) own that shape. The record only has to carry it.
+    route: dict[str, Any] = Field(default_factory=dict)
+    headlines: dict[str, str] = Field(default_factory=dict)
+    cruxes: dict[str, str] = Field(default_factory=dict)
+    research: dict[str, list[dict[str, str]]] = Field(default_factory=dict)
+    evidence: list[DebateEvidence] = Field(default_factory=list)
+    claims: list[DebateClaim] = Field(default_factory=list)
+    responses: list[DebateResponse] = Field(default_factory=list)
+    disputes: list[str] = Field(default_factory=list)
+    unanswered: list[str] = Field(default_factory=list)
+    resolution: DebateResolution = Field(default_factory=DebateResolution)
+    deterministic_checks: list[str] = Field(default_factory=list)
+    # Integer tallies (conceded/contested counts, ...) plus the L1
+    # counterfactual PM call's `cf_rating_score` / `cf_confidence` /
+    # `cf_shift`, which are not integers. The design's `dict[str, int]`
+    # would reject (or, in lax mode, truncate) those, so the value type is
+    # widened here, before anything writes it. Stored, never displayed.
+    outcome: dict[str, float | int] = Field(default_factory=dict)
+    # Set by news patches (D5): {at, headline, alert_ref}, capped at 5.
+    # Patches never re-run the debate; they note what arrived after it.
+    news_since: list[dict[str, Any]] = Field(default_factory=list)
+    # calls, tokens_in/out, usd, cap_usd.
+    usage: dict[str, float] = Field(default_factory=dict)
+
+
+class DebateReview(BaseModel):
+    """The reviewer's read of how the PM handled the debate (item 8 (3))."""
+    dispute_views: list[dict[str, Any]] = Field(default_factory=list)
+    unaddressed: list[str] = Field(default_factory=list)
+    one_sided: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Full-report reviewer (owner decision 2026-09-25 item 8; D2 contract).
+#
+# The reviewer judges the whole published report, not only risk: thesis
+# logic, evidence quality (with the number-check results), debate handling,
+# risks and blind spots, and it returns a verdict with specific issues.
+# Every field below is defaulted so the critic reviews already stored — and
+# every review written while `REVIEWER_MODE=legacy` — read back unchanged,
+# with "" / [] / None meaning "this review did not produce it".
+# ---------------------------------------------------------------------------
+
+ReviewVerdict = Literal["", "sound", "sound_with_issues", "unsound"]
+ReviewIssueCategory = Literal[
+    "thesis_logic", "evidence_quality", "debate_handling", "risk_blind_spot",
+    "valuation_consistency",
+]
+# Which way the issue says the published call leans wrong (L5). A revision
+# request must name a direction, so "neutral" is for issues that do not
+# bear on the rating (a contradiction in the prose, a missing source).
+ReviewIssueDirection = Literal["too_high", "too_low", "neutral"]
+REVIEW_ISSUE_TEXT_MAX_CHARS = 300
+REVIEW_FIX_REQUEST_MAX_CHARS = 200
+
+
+class ReviewIssue(BaseModel):
+    """One specific issue the reviewer raised.
+
+    The vocabularies are closed (unknown values are refused, not coerced):
+    `severity` decides whether an issue triggers the PM revision pass and an
+    earned-confidence cap, so an off-list value must never be read as either.
+    The writer (D7) downgrades a `material` issue that cites no resolvable
+    evidence or deterministic-check id to `minor` before building this.
+    """
+    id: str
+    category: ReviewIssueCategory
+    severity: Literal["material", "minor"]
+    direction: ReviewIssueDirection = "neutral"
+    text: str = Field(max_length=REVIEW_ISSUE_TEXT_MAX_CHARS)
+    # Evidence ids (debate E-ids, source-ledger refs) or deterministic-check ids.
+    evidence: list[str] = Field(default_factory=list)
+    fix_request: str = Field(default="", max_length=REVIEW_FIX_REQUEST_MAX_CHARS)
+    # open -> addressed_by_pm (the PM revised) -> resolved (the re-check
+    # agreed); rejected_by_pm when the PM kept its call and said why. Only
+    # `resolved` stops an issue counting as open.
+    status: Literal["open", "addressed_by_pm", "resolved", "rejected_by_pm"] = "open"
+
+
+class ReviewRatingCase(BaseModel):
+    """The reviewer's best case that the rating is too high, or too low (L5).
+    Both are asked for on every review so a one-sided review is visible."""
+    text: str = ""
+    evidence: list[str] = Field(default_factory=list)
+
+
+class ReviewRecheck(BaseModel):
+    """The one bounded re-check of the issues the PM revision addressed.
+    `not_run` / `failed` / `skipped_budget` leave every issue open, shown as
+    "revised by the PM, not re-reviewed"."""
+    status: Literal["not_run", "complete", "failed", "skipped_budget"] = "not_run"
+    resolved: list[str] = Field(default_factory=list)
+    open: list[str] = Field(default_factory=list)
+
+
+class ReviewRevision(BaseModel):
+    """The one bounded PM revision pass that material issues trigger."""
+    status: Literal["not_needed", "revised", "failed", "skipped_budget"] = "not_needed"
+    rating_before: str = ""
+    rating_after: str = ""
+    confidence_before: float | None = None
+    confidence_after: float | None = None
+    notes: list[str] = Field(default_factory=list)
+    recheck: ReviewRecheck = Field(default_factory=ReviewRecheck)
+
+
 class CriticReview(BaseModel):
     overall_assessment: str
     # Older stored reviews lack provenance; do not relabel them as live.
@@ -238,6 +445,30 @@ class CriticReview(BaseModel):
     # the truth for every stored review and for any run with no divergence,
     # so the default reads old snapshots without relabelling them.
     valuation_divergence_assessment: DivergenceAssessment = "not_assessed"
+    # Item-8 full-report reviewer (D2, expand-only; D7/R1 write them).
+    # "provider:model" that actually served the review, after any failover,
+    # so a review is never attributed to a model that did not write it.
+    reviewer_model: str = ""
+    verdict: ReviewVerdict = ""
+    issues: list[ReviewIssue] = Field(default_factory=list)
+    rating_too_high: ReviewRatingCase | None = None
+    rating_too_low: ReviewRatingCase | None = None
+    # Separate from `review_mode` (which says whether a live model answered):
+    # this says whether the review counts as INDEPENDENT. A reviewer failure
+    # publishes "not independently reviewed" (W2a) rather than canned text.
+    review_status: Literal["independent", "not_independent", "rule_based", ""] = ""
+    revision: ReviewRevision | None = None
+    debate_review: DebateReview | None = None
+
+
+# The item-8 fields above, by name. The legacy critic serializes the whole
+# draft memo into its prompt, so it drops these while they hold their
+# defaults (`critic_agent._legacy_critic_draft`): with both modes off its
+# prompt stays byte-identical to the pre-D2 pipeline (plan §0.3, P4).
+CRITIC_REVIEW_ITEM8_FIELDS: tuple[str, ...] = (
+    "reviewer_model", "verdict", "issues", "rating_too_high", "rating_too_low",
+    "review_status", "revision", "debate_review",
+)
 
 
 # ---------------------------------------------------------------------------

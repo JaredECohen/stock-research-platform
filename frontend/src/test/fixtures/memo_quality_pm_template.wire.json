@@ -92,6 +92,7 @@
    "tv_clamped": false,
    "wacc": 0.1123
   },
+  "debate": null,
   "degradation_events": [
    {
     "agent": "DCF Scenarios",
@@ -192,7 +193,7 @@
   "final_pm_view": "Unavailable in this version.",
   "final_verdict": "Unavailable in this version.",
   "forward_catalysts": [],
-  "generated_at": "2026-09-25T04:33:58.216846",
+  "generated_at": "2026-09-25T05:55:01.716270",
   "generation_mode": "demo",
   "intake_decision": {},
   "key_risks": [
@@ -241,7 +242,7 @@
   "one_sentence_thesis": "Unavailable in this version.",
   "portfolio_fit": "Unavailable in this version.",
   "price_at_memo": 118.0,
-  "price_at_memo_at": "2026-09-25T04:33:58.216643",
+  "price_at_memo_at": "2026-09-25T05:55:01.715945",
   "quality": {
    "confidence": {
     "binding": "pm_template",
@@ -350,11 +351,19 @@
   "risk_committee_challenge": {
    "advice_compliance_check": "Advice compliance was not assessed by this rule-based check.",
    "challenges": [],
+   "debate_review": null,
+   "issues": [],
    "overall_assessment": "Unavailable in this version.",
+   "rating_too_high": null,
+   "rating_too_low": null,
    "review_mode": "rule_based",
+   "review_status": "",
+   "reviewer_model": "",
+   "revision": null,
    "suggested_revisions": [],
    "underweighted_risks": [],
-   "valuation_divergence_assessment": "not_assessed"
+   "valuation_divergence_assessment": "not_assessed",
+   "verdict": ""
   },
   "round_findings": [
    {

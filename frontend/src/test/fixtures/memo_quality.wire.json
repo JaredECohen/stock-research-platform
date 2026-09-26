@@ -92,6 +92,7 @@
    "tv_clamped": false,
    "wacc": 0.1123
   },
+  "debate": null,
   "degradation_events": [
    {
     "agent": "DCF Scenarios",
@@ -186,7 +187,7 @@
   "final_pm_view": "Final rating after risk review, factor blend, valuation check and evidence cap on confidence: Neutral (confidence 45/100).\n\nPM rationale before those adjustments (rating Bullish; confidence 79.4655/100):\nData-center revenue of $123.45B anchors the call. We assume revenue growth of 18.5% through FY2027 as hyperscaler capex stays elevated.",
   "final_verdict": "PM final view: Neutral (confidence 45). NVDA compounds data-center share faster than the market prices, but the multiple already assumes much of it. Watch items: Custom-silicon competition",
   "forward_catalysts": [],
-  "generated_at": "2026-09-25T04:33:57.219540",
+  "generated_at": "2026-09-25T05:54:58.603609",
   "generation_mode": "demo",
   "intake_decision": {},
   "key_risks": [
@@ -237,7 +238,7 @@
   "one_sentence_thesis": "NVDA compounds data-center share faster than the market prices, but the multiple already assumes much of it.",
   "portfolio_fit": "Unavailable in this version.",
   "price_at_memo": 118.0,
-  "price_at_memo_at": "2026-09-25T04:33:57.219280",
+  "price_at_memo_at": "2026-09-25T05:54:58.603255",
   "quality": {
    "confidence": {
     "binding": "template_sections",
@@ -385,11 +386,19 @@
   "risk_committee_challenge": {
    "advice_compliance_check": "Advice compliance was not assessed by this rule-based check.",
    "challenges": [],
+   "debate_review": null,
+   "issues": [],
    "overall_assessment": "Unavailable in this version.",
+   "rating_too_high": null,
+   "rating_too_low": null,
    "review_mode": "rule_based",
+   "review_status": "",
+   "reviewer_model": "",
+   "revision": null,
    "suggested_revisions": [],
    "underweighted_risks": [],
-   "valuation_divergence_assessment": "not_assessed"
+   "valuation_divergence_assessment": "not_assessed",
+   "verdict": ""
   },
   "round_findings": [
    {
