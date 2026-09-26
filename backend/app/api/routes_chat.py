@@ -1,6 +1,8 @@
 """Chat endpoint — main entry point for the 'Ask the PM' interface."""
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, Request, Response
 
 from ..agents.llm import llm_call_context
@@ -41,5 +43,10 @@ def chat(
     """
     principal = current_principal(request)
     allow_inline = not customer_wall_on() and settings.memo_inline_generation_effective
-    with llm_call_context(user_id=principal.user_id, feature="pm_chat"):
+    # One run id per turn (attribution critique #5): the Agents SDK usage
+    # rows, its SDKTrace row and a legacy fallback's rows all carry it, so a
+    # turn reads as one timeline. An umbrella context names no agent
+    # (critique #1); an inline memo opens its own run id underneath.
+    with llm_call_context(user_id=principal.user_id, feature="pm_chat",
+                          run_id=f"chat:{uuid.uuid4().hex}", origin="api:/api/chat"):
         return _orch.chat(req.message, req.history, allow_inline_memo=allow_inline)

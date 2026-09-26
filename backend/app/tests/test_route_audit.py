@@ -261,8 +261,10 @@ def _load_cost_script():
     return mod
 
 
-@pytest.mark.parametrize("use_agents_sdk", [False, True])
-def test_pm_chat_sample_never_generates_a_memo(monkeypatch, use_agents_sdk):
+@pytest.mark.parametrize("use_agents_sdk,chat_agents_sdk", [
+    (False, False), (True, False), (False, True), (True, True),
+])
+def test_pm_chat_sample_never_generates_a_memo(monkeypatch, use_agents_sdk, chat_agents_sdk):
     """A `single_stock_analysis` chat turn must answer from the stored memo
     on BOTH inline entry points.
 
@@ -289,6 +291,8 @@ def test_pm_chat_sample_never_generates_a_memo(monkeypatch, use_agents_sdk):
     monkeypatch.setattr(orch_mod, "run_stock_memo", memo_ran)
     monkeypatch.setattr(sdk_runtime, "run_stock_memo_via_sdk", memo_ran)
     monkeypatch.setattr(settings, "use_agents_sdk", use_agents_sdk)
+    # CHAT_AGENTS_SDK (plan P14) must not open an inline-memo path either.
+    monkeypatch.setattr(settings, "chat_agents_sdk", chat_agents_sdk)
     # Deterministic routing into the inline-memo branch, no LLM and no
     # SDK chat agent involved (both would need keys).
     monkeypatch.setattr(orch_mod, "classify_intent",

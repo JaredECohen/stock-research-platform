@@ -1149,6 +1149,92 @@ def _record_skip(provider: str, model: str, reason: str, *, grounded: bool | Non
                   grounded=grounded, update_last_usage=False)
 
 
+def _sdk_response_refused(response: Any) -> bool:
+    """True when an Agents SDK model response carries a refusal part (the
+    Responses API's `{"type": "refusal"}` content in an output message)."""
+    for item in getattr(response, "output", None) or []:
+        content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
+        for part in content or []:
+            kind = part.get("type") if isinstance(part, dict) else getattr(part, "type", None)
+            if kind == "refusal":
+                return True
+    return False
+
+
+def record_sdk_usage(
+    response: Any | None,
+    *,
+    agent: str,
+    model: str,
+    action: str,
+    call_id: str,
+    attempt: int,
+    effort: str | None = None,
+    ticker: str | None = None,
+    duration_ms: int = 0,
+    error: str = "",
+) -> bool:
+    """One `llm_call_logs` row and one `app.llm.calls` line for one OpenAI
+    Agents SDK model response, or (with `response=None` and `error`) for a
+    run that failed (attribution critique #4; FIX-020).
+
+    The SDK bypasses `chat_json`, so its turns used to leave no row at all.
+    The caller is a `RunHooks.on_llm_end` hook: `ModelResponse` carries
+    usage but no model name, and with handoffs each agent runs on its own
+    model, so the hook passes the answering agent's name and model — the
+    model SENT (`model_resolution=sdk_agent_model`). `served_model` stays
+    NULL because the pinned SDK (0.22.0) does not expose it. Every response
+    of one run shares `call_id`; `attempt` counts them. The row never
+    touches `last_usage()`, which describes this thread's last `chat_json`.
+
+    Usage fields are the Responses API's: `input_tokens` INCLUDES cached
+    reads (the OpenAI convention `estimate_cost_usd` prices), and
+    `reasoning_tokens` are already inside `output_tokens` (information
+    only, never billed twice). Returns True when the response was a
+    refusal, which the caller treats like a failure (legacy fallback).
+    """
+    if action not in attribution.ACTIONS:
+        raise ValueError(f"unregistered LLM action: {action!r}")
+    usage = getattr(response, "usage", None)
+    in_details = getattr(usage, "input_tokens_details", None)
+    reasoning = getattr(getattr(usage, "output_tokens_details", None), "reasoning_tokens", None)
+    refused = response is not None and _sdk_response_refused(response)
+    if refused and not error:
+        # The Responses API gives no refusal category.
+        error = "refusal:unspecified"
+    att: dict[str, Any] = {
+        "call_id": call_id, "attempt": int(attempt), "action": action, "ticker": ticker,
+        "route": "", "max_tokens": None, "requested_provider": "openai",
+        "requested_model": model, "model_resolution": "sdk_agent_model",
+        "effort": effort, "call_cost_usd": 0.0,
+    }
+    ctx = _CALL_CONTEXT.get()
+    # The SDK agent that answered is the most specific agent there is; it is
+    # set on a copy of the context for this one write, never through
+    # `llm_call_context(agent_name=...)` (an umbrella must not name agents).
+    ctx_token = _CALL_CONTEXT.set({**ctx, "agent_name": agent}) if agent else None
+    att_token = _ATTEMPT.set(att)
+    try:
+        _record_usage(
+            "openai", model,
+            int(getattr(usage, "input_tokens", 0) or 0),
+            int(getattr(usage, "output_tokens", 0) or 0),
+            duration_ms=duration_ms,
+            success=not error,
+            error=error,
+            cache_read_tokens=int(getattr(in_details, "cached_tokens", 0) or 0),
+            cache_write_tokens=int(getattr(in_details, "cache_write_tokens", 0) or 0),
+            reasoning_tokens=reasoning if isinstance(reasoning, int) else None,
+            refused=refused,
+            update_last_usage=False,
+        )
+    finally:
+        _ATTEMPT.reset(att_token)
+        if ctx_token is not None:
+            _CALL_CONTEXT.reset(ctx_token)
+    return refused
+
+
 def last_usage() -> dict[str, Any] | None:
     """Return the usage dict from the most recent provider call on this thread.
 
@@ -2377,6 +2463,34 @@ def _tier_request(action: str | None, provider: str, model: str | None, effort: 
     return route.provider, route.model, (effort or route.effort), route.failover, "tier"
 
 
+def _avoid_spent_provider(
+    spent: str, provider: str, model: str | None, effort: str | None,
+    fo_route: tuple[str, str, str | None] | None, tiered: str | None, caller_effort: str | None,
+) -> tuple[str, str | None, str | None, tuple[str, str, str | None] | None, str | None]:
+    """Move a request that would land on `spent` to the other provider.
+
+    The tier's own failover route is preferred when it points elsewhere
+    (`chat.answer` on gpt-6-sol → Opus 5.5, the mapped hop, with the effort
+    already re-resolved for it); otherwise the partner's route default with
+    the caller's explicit effort (the tier's effort belonged to the spent
+    provider's model). Returns the request unchanged when it is not on
+    `spent`, or when the partner has no key: an OpenAI-only deployment
+    still makes its one single-shot attempt (the chat fallback's
+    documented exception, `orchestrator._legacy_answer_route`).
+    `tiered` is `_tier_request`'s resolution; the partner-default move
+    clears it (the request is no longer the tier's route).
+    """
+    if provider != spent:
+        return provider, model, effort, fo_route, tiered
+    if fo_route is not None and fo_route[0] != spent and _has_key(fo_route[0]):
+        fo_provider, fo_model, fo_effort = fo_route
+        return fo_provider, fo_model, fo_effort, None, tiered
+    partner = _FAILOVER_PARTNER.get(spent)
+    if partner is None or not _has_key(partner):
+        return provider, model, effort, fo_route, tiered
+    return partner, None, caller_effort, None, None
+
+
 def _prepare(provider: str, model: str | None, route: str, *,
              tiered: str | None = None) -> str | None:
     """Record the requested provider/model on the call scope and drop a
@@ -2476,17 +2590,32 @@ def chat_text(
     schema: dict[str, Any] | None = None,
     action: str | None = None,
     ticker: str | None = None,
+    spent_provider: str | None = None,
 ) -> str | None:
     """Same `model`, `failover`, `effort`, `action` semantics as `chat_json`
-    (`schema` is accepted and ignored). Returns plain text or None."""
+    (`schema` is accepted and ignored). Returns plain text or None.
+
+    `spent_provider` names a provider the caller has already spent its one
+    attempt on (plan C1: a chat turn whose Agents SDK run went to OpenAI).
+    It is applied AFTER the tier, because a configured tier replaces any
+    `provider_override` — which is how an OpenAI `chat.answer` tier used to
+    send the fallback straight back to OpenAI. See `_avoid_spent_provider`.
+    """
     with _call_scope("chat_text", action=action, ticker=ticker, route=route,
                      max_tokens=max_tokens):
         provider = (provider_override or settings.active_llm_provider).lower()
         if provider == "none":
             return None
+        caller_effort = effort
         provider, model, effort, fo_route, tiered = _tier_request(
             action, provider, model, effort,
             pair_leg=not failover and provider_override is not None)
+        if spent_provider:
+            provider, model, effort, fo_route, tiered = _avoid_spent_provider(
+                spent_provider, provider, model, effort, fo_route, tiered, caller_effort)
+            # One attempt per provider: failover pairs openai<->anthropic, so
+            # any hop from here would lead back to the spent provider.
+            failover = False
         if provider == "gemini":
             return gemini_chat_text(prompt, system=system, model=model, max_tokens=max_tokens,
                                     action=action, ticker=ticker)

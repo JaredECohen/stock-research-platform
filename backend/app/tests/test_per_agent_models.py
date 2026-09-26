@@ -238,7 +238,10 @@ def test_chat_sdk_agent_never_carries_a_blank_pm_model(monkeypatch):
 
     monkeypatch.setattr(real_sdk, "Agent", _FakeAgent)
     monkeypatch.setattr(real_sdk, "function_tool", lambda fn: fn)
-    monkeypatch.setattr(settings, "use_agents_sdk", True)
+    # CHAT_AGENTS_SDK gates the chat agent since the flag split (plan P14),
+    # and the gate is closed in demo-only mode like every LLM client.
+    monkeypatch.setattr(settings, "chat_agents_sdk", True)
+    monkeypatch.setattr(llm_mod, "_demo_only", lambda: False)
     monkeypatch.setattr(settings, "openai_api_key", "stub-key")
     monkeypatch.setattr(settings, "openai_pm_model", "")
     with _openai_active():

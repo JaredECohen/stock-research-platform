@@ -135,6 +135,52 @@ def test_default_flag_still_generates_inline(monkeypatch):
     assert resp.memo is not None and resp.needs_analysis == []
 
 
+def test_chat_flag_does_not_route_inline_memo_through_sdk(monkeypatch):
+    """CHAT_AGENTS_SDK (plan P14) moves the chat AGENT to the Agents SDK
+    and nothing else: the turn tries the SDK chat agent, and when that
+    yields no answer, "analyze X" still runs the graph's `run_stock_memo`,
+    never `sdk_runtime.run_stock_memo_via_sdk` (which would run the memo
+    twice under a run id nothing links to). Only the legacy
+    USE_AGENTS_SDK routes the inline memo through the SDK runtime."""
+    from app.agents import chat_sdk
+
+    monkeypatch.setattr(settings, "chat_agents_sdk", True)
+    monkeypatch.setattr(settings, "use_agents_sdk", False)
+    monkeypatch.setattr(orch_mod, "classify_intent", lambda _m: ("single_stock_analysis", ["NVDA"], None))
+    monkeypatch.setattr(orch_mod, "_is_conceptual_followup", lambda _m, _h: True)
+    turns: list[str] = []
+
+    def sdk_turn(*, message, history, run_id=None):
+        turns.append(message)
+        return None, True          # the SDK ran and produced no answer
+
+    monkeypatch.setattr(chat_sdk, "run_chat_turn", sdk_turn, raising=False)
+    graph_runs: list[str] = []
+
+    def fake_run(ticker, **_kw):
+        graph_runs.append(ticker)
+        return make_memo(ticker=ticker, company_name="NVIDIA")
+
+    def via_sdk(ticker, *_a, **_kw):
+        raise AssertionError("the chat flag routed the inline memo through sdk_runtime")
+
+    monkeypatch.setattr(orch_mod, "run_stock_memo", fake_run)
+    monkeypatch.setattr(sdk_runtime, "run_stock_memo_via_sdk", via_sdk)
+    resp = orch_mod.Orchestrator().chat("Analyze NVDA", [])
+    assert turns == ["Analyze NVDA"]        # the chat agent is on the SDK
+    assert graph_runs == ["NVDA"]           # the memo is not
+    assert resp.memo is not None and resp.memo.ticker == "NVDA"
+
+    # The legacy flag alone no longer turns the SDK chat agent on.
+    turns.clear()
+    monkeypatch.setattr(settings, "chat_agents_sdk", False)
+    monkeypatch.setattr(settings, "use_agents_sdk", True)
+    monkeypatch.setattr(sdk_runtime, "run_stock_memo_via_sdk",
+                        lambda t, *a, **k: make_memo(ticker=t, company_name="NVIDIA"))
+    orch_mod.Orchestrator().chat("Analyze NVDA", [])
+    assert turns == []
+
+
 def test_response_schema_defaults_needs_analysis_empty():
     assert ChatResponse(intent="general_research_chat", answer="hi").needs_analysis == []
 

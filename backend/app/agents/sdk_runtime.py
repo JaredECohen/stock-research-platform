@@ -53,9 +53,21 @@ except Exception:  # pragma: no cover
     _real_agents_pkg = None  # type: ignore
     _HAS_REAL_SDK = False
 
+if _real_agents_pkg is not None:
+    # No trace export to OpenAI from this process (FIX-020, attribution
+    # critique #18): the SDK uploads prompts and outputs by default, and a
+    # per-run RunConfig alone would not cover a future Runner call.
+    _real_agents_pkg.set_tracing_disabled(True)
+
 
 def _can_use_real_sdk() -> bool:
-    """Production path is active iff the package is installed AND a key is set."""
+    """Production path is active iff the package is installed AND a key is
+    set AND this is not demo-only mode. `llm.py` never builds a client in
+    demo-only mode; the SDK builds its own, so it has to ask the same
+    question (as `chat_sdk._can_use_sdk` does), or a developer key would
+    run a real exchange while every other LLM client stays silent."""
+    if llm._demo_only():
+        return False
     return _HAS_REAL_SDK and bool(settings.openai_api_key)
 
 
@@ -270,7 +282,9 @@ def _pm_handler(inputs: dict[str, Any], *, runner: Any, max_iterations: int) -> 
     """
     from .graph import run_stock_memo  # local import to avoid cycles
     ticker = inputs.get("ticker") or ""
-    return run_stock_memo(ticker)
+    # The caller's run id, so this memo's rows join the SDK exchange's
+    # (attribution critique #5); None mints a fresh one as before.
+    return run_stock_memo(ticker, run_id=inputs.get("run_id"))
 
 
 def _sector_handler(inputs: dict[str, Any], *, runner: Any, max_iterations: int) -> AgentFinding:
@@ -403,50 +417,33 @@ def get_agents() -> dict[str, Agent]:
 
 def _persist_sdk_trace(
     *, run_id: str, ticker: str | None, surface: str,
-    final_output: str, new_items: Any, error: str = "",
-    duration_ms: int = 0,
+    new_items: Any, error: str = "", duration_ms: int = 0,
 ) -> None:
     """Wave 10 — write a `SDKTrace` row keyed by `run_id`.
 
     Best-effort: never raises. The SDK exchange is informational, so
     losing one trace row to a DB hiccup must not affect the memo build.
-    `new_items` is whatever shape the SDK emitted (a list of provider
-    item dicts) — we serialize as-is and let the admin viewer interpret.
+    The row records what ran, never what the model wrote (FIX-020):
+    `final_output` is stored empty and `new_items` is reduced to
+    `{type, agent, tool}` per item.
     """
     try:
-        from ..db import SessionLocal
+        # `..database`: this read `..db`, a module that does not exist, so
+        # every memo-surface trace row was lost to the swallowed ImportError.
+        from ..database import SessionLocal
         from ..models import SDKTrace
-        # Coerce SDK item objects → JSON-serializable dicts. Most have a
-        # `.model_dump()` (Pydantic) or `__dict__`; fall back to repr.
-        items_payload: list = []
-        for item in (new_items or []):
-            if hasattr(item, "model_dump"):
-                try:
-                    items_payload.append(item.model_dump())
-                    continue
-                except Exception:
-                    pass
-            if hasattr(item, "__dict__"):
-                try:
-                    items_payload.append({
-                        k: v for k, v in vars(item).items()
-                        if not k.startswith("_")
-                    })
-                    continue
-                except Exception:
-                    pass
-            items_payload.append({"repr": repr(item)[:500]})
+        from .chat_sdk import trace_items
         with SessionLocal() as session:
             session.add(SDKTrace(
                 run_id=run_id, ticker=ticker, surface=surface,
-                final_output=str(final_output or "")[:8000],
-                new_items=items_payload[:200],  # hard cap on payload size
+                final_output="",
+                new_items=trace_items(new_items),
                 error=str(error or "")[:2000],
                 duration_ms=int(duration_ms),
             ))
             session.commit()
     except Exception as exc:  # pragma: no cover — telemetry must never block
-        log.debug("SDKTrace persistence failed (non-fatal): %s", exc)
+        log.debug("SDKTrace persistence failed (non-fatal): %s", type(exc).__name__)
 
 
 def _run_via_real_sdk(
@@ -456,22 +453,32 @@ def _run_via_real_sdk(
 
     Builds a real `agents.Agent` for the PM with sector-handoff agents and
     a `produce_legacy_memo` tool that calls into our existing graph. Runs
-    one synchronous turn against the user's actual model. Returns the
-    SDK's RunResult dict (final_output + new_items) for telemetry; callers
-    still pull the canonical `StockMemoOut` from the legacy graph because
-    that's what owns memo persistence + memory-store writes.
+    one synchronous turn against the user's actual model.
 
-    Returns None if the real SDK isn't available or the call fails — the
-    caller falls back to the legacy graph in either case.
+    Returns counts for the INFO line (`items`, `chars`) and `memo`, the
+    `StockMemoOut` the tool produced under `run_id` (None when the model
+    never called it for this ticker), so the caller does not run the memo
+    a second time (attribution critique #5). Model output is neither
+    returned nor persisted (FIX-020). Each model response writes a
+    `memo.sdk_exchange` usage row through the hooks.
+
+    Returns None if the real SDK isn't available or the call fails before
+    the tool produced the memo — the caller falls back to the legacy graph
+    in either case. A failure after the tool ran returns that memo with
+    `failed=True`.
     """
     if not _can_use_real_sdk():
         return None
     import time as _time
     started = _time.perf_counter()
+    produced: dict[str, StockMemoOut] = {}
+    hooks: Any = None
     try:
         from agents import Agent as RealAgent
         from agents import Runner as RealRunner
         from agents import function_tool as real_function_tool
+
+        from .chat_sdk import sdk_run_config, sdk_usage_hooks
 
         @real_function_tool
         def produce_legacy_memo(ticker: str) -> dict[str, Any]:
@@ -480,7 +487,10 @@ def _run_via_real_sdk(
             filing / valuation / comps / macro / risk + critic). Always
             call this tool exactly once, then return a 2-3 sentence summary."""
             from .graph import run_stock_memo as _legacy
-            memo = _legacy(ticker)
+            # The exchange's run id: this memo's rows, its checkpoints and
+            # the SDK trace are one run in the admin timeline.
+            memo = _legacy(ticker, run_id=run_id)
+            produced[(ticker or "").strip().upper()] = memo
             return memo.model_dump(mode="json")
 
         sector_agents_real = []
@@ -508,34 +518,48 @@ def _run_via_real_sdk(
             handoffs=sector_agents_real,
         )
 
-        result = RealRunner.run_sync(
-            pm, f"Analyze {ticker} as a long-term investment.",
-        )
+        hooks = sdk_usage_hooks("memo.sdk_exchange", ticker=ticker, run_id=run_id)
+        # Umbrella: the run id only. The memo graph opens its own context
+        # under the same id, and every nested call names its own action.
+        with llm.llm_call_context(run_id=run_id):
+            result = RealRunner.run_sync(
+                pm, f"Analyze {ticker} as a long-term investment.",
+                hooks=hooks, run_config=sdk_run_config(),
+            )
         elapsed_ms = int((_time.perf_counter() - started) * 1000)
         final_output = getattr(result, "final_output", None)
         new_items = getattr(result, "new_items", None)
         if run_id:
             _persist_sdk_trace(
                 run_id=run_id, ticker=ticker, surface="memo",
-                final_output=final_output or "", new_items=new_items,
-                duration_ms=elapsed_ms,
+                new_items=new_items, duration_ms=elapsed_ms,
             )
         return {
-            "final_output": final_output,
-            "new_items": new_items,
+            "items": len(list(new_items or [])),
+            "chars": len(str(final_output or "")),
+            "memo": produced.get((ticker or "").strip().upper()),
         }
     except Exception as exc:
-        # The real SDK's AuthenticationError / httpx errors quote the
-        # request headers; neither the log nor the persisted trace row may
-        # carry that body.
-        log_safely(log, f"real Agents SDK exchange failed for {ticker}", exc)
+        # Type only, in the log and in the trace row: the real SDK's
+        # AuthenticationError / httpx errors quote the request headers, and
+        # its refusal / behaviour errors quote the model's output.
+        log.warning("real Agents SDK exchange failed for %s: %s", ticker, type(exc).__name__)
+        if hooks is not None:
+            hooks.record_failure(exc, agent="pm", model=_sdk_model("pm"))
         if run_id:
             elapsed_ms = int((_time.perf_counter() - started) * 1000)
             _persist_sdk_trace(
                 run_id=run_id, ticker=ticker, surface="memo",
-                final_output="", new_items=None,
-                error=safe_exc(exc), duration_ms=elapsed_ms,
+                new_items=None, error=type(exc).__name__, duration_ms=elapsed_ms,
             )
+        # The run can fail AFTER the tool built the memo (max turns, a
+        # refusal or a transport error on the summary turn). That memo is
+        # complete and saved under this run_id; discarding it would send the
+        # caller to the shim, which bills PM synthesis again and saves a
+        # second memo version (attribution critique #5).
+        memo = produced.get((ticker or "").strip().upper())
+        if memo is not None:
+            return {"items": 0, "chars": 0, "memo": memo, "failed": True}
         return None
 
 
@@ -544,26 +568,38 @@ def run_stock_memo_via_sdk(ticker: str) -> StockMemoOut:
 
     When `OPENAI_API_KEY` is set + the official `openai-agents` package is
     installed, this fires a real LLM-driven Agents SDK exchange first
-    (exercising real handoffs / tool calls) and then returns the canonical
-    `StockMemoOut` from the legacy graph. When keys aren't present, only
-    the legacy graph runs — the SDK shim's topology stays observable via
-    `get_agents()` for tests + introspection.
+    (exercising real handoffs / tool calls) and returns the canonical
+    `StockMemoOut` its `produce_legacy_memo` tool built. When keys aren't
+    present, or the model never called the tool, the legacy graph runs —
+    the SDK shim's topology stays observable via `get_agents()` for
+    tests + introspection. Either way the memo carries the exchange's
+    run_id and runs once.
     """
-    # Generate a run_id up-front so the SDK trace + the legacy graph's
-    # LLMCallLog rows share the same key. The admin viewer joins on it.
+    # Generate a run_id up-front so the SDK trace, its usage rows and the
+    # legacy graph's LLMCallLog rows share the same key. The admin viewer
+    # joins on it.
     import uuid as _uuid
     run_id = str(_uuid.uuid4())
 
     # Real-SDK exchange (no-op if keys missing or package unavailable).
     sdk_trace = _run_via_real_sdk(ticker, run_id=run_id)
     if sdk_trace is not None:
-        log.info("Agents SDK trace for %s (run %s): %s", ticker, run_id,
-                 (sdk_trace.get("final_output") or "")[:200])
+        # Counts only: the model's summary is output, and output is not
+        # logged (FIX-020). A run that failed after its tool call already
+        # logged its warning; only the reuse of its memo is news.
+        if not sdk_trace.get("failed"):
+            log.info("Agents SDK exchange for %s (run %s): items=%d chars=%d",
+                     ticker, run_id, sdk_trace.get("items", 0), sdk_trace.get("chars", 0))
+        memo = sdk_trace.get("memo")
+        if memo is not None:
+            # The tool already ran the memo under this run_id; running the
+            # shim below would bill a second full memo.
+            return memo
 
     # Shim path: keep the topology callable so tests / introspection see it.
     agents_map = get_agents()
     pm = agents_map["pm"]
-    result = Runner.run(pm, {"ticker": ticker})
+    result = Runner.run(pm, {"ticker": ticker, "run_id": run_id})
     if result.final_output is not None:
         return result.final_output
 
