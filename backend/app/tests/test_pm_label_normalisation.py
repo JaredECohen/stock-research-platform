@@ -225,10 +225,19 @@ def test_pm_synthesis_row_attributed_under_fake_client(monkeypatch):
     # them), so today their rows' role comes only from
     # `_run_analyst_round`'s context; once A2a registers them the registry
     # supplies the same role and this still holds.
+    # A row's role is its action's registry role; a specialist's own calls
+    # are analyst.* actions. Since A2a, the long-form write-up a specialist
+    # commissions is its own action (memo.long_form, a utility call) under
+    # the specialist's agent name, so it carries the utility role.
     specialists = [r for r in rows if r.agent_name in (
         "Earnings Analyst", "Filing Analyst", "Valuation Analyst", "Technical Analyst")]
     assert specialists, [(r.agent_name, r.action) for r in rows]
-    assert all(r.role == "analyst" for r in specialists), [
+    assert all(
+        r.role == (llm_attribution.ACTIONS[r.action].role if r.action else "analyst")
+        for r in specialists
+    ), [(r.agent_name, r.action, r.role) for r in specialists]
+    own_calls = [r for r in specialists if (r.action or "").startswith("analyst.")]
+    assert own_calls and all(r.role == "analyst" for r in own_calls), [
         (r.agent_name, r.action, r.role) for r in specialists]
     # No call from the files this slice owns is an unattributed site.
     owned = ("app/agents/graph.py", "app/agents/sector_agents.py", "app/agents/industry_analysts.py",
