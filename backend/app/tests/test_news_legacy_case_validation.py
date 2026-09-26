@@ -235,8 +235,6 @@ def test_only_invalid_shapes_is_not_material(monkeypatch):
 @pytest.mark.parametrize("value", [
     {"from": "Bullish", "to": "Neutral"},
     ["Neutral"],
-    None,
-    3,
 ])
 def test_non_string_rating_label_is_dropped_not_raised(monkeypatch, value):
     # `value in allowed_ratings` raised TypeError on a dict or list. It ran

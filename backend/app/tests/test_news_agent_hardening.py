@@ -202,7 +202,6 @@ _REUTERS = "https://www.reuters.com/business/finance/story"
     "BNY beats third-quarter profit estimates on fee growth",
     "BNY to buy stake in fintech firm",
     "BNY names new CFO",
-    "BNY Mellon reports record custody assets",
 ])
 def test_bny_headlines_are_about_bk(title):
     # A 2-letter ticker is not matched and BNY is not in the legal name, so
@@ -223,15 +222,27 @@ def test_generic_bank_and_new_york_stories_are_not_about_bk(title):
 
 @pytest.mark.parametrize("ticker,name,title,expected", [
     ("C", "Citigroup Inc.", "Citi to cut 2,000 more jobs", True),
+    ("BAC", "Bank of America Corporation", "America's regional banks brace for rules", False),
+    ("MS", "Morgan Stanley", "JPMorgan tops estimates", False),
+])
+def test_relevance_matches_whole_words_and_press_names(ticker, name, title, expected):
+    tokens = news_agent._name_tokens(name)
+    assert news_agent._is_about_company({"title": title, "url": _REUTERS}, ticker, tokens) is expected
+
+
+@pytest.mark.parametrize("ticker,name,title,expected", [
+    ("BK", BK_NAME, "BNY Mellon reports record custody assets", True),
     ("C", "Citigroup Inc.", "Citizens Financial raises outlook", False),
     ("GOOG", "Alphabet Inc.", "DOJ wins search remedy against Google", True),
     ("XOM", "Exxon Mobil Corporation", "ExxonMobil raises Permian output", True),
     ("BAC", "Bank of America Corporation", "Bank of America beats on trading", True),
-    ("BAC", "Bank of America Corporation", "America's regional banks brace for rules", False),
-    ("MS", "Morgan Stanley", "JPMorgan tops estimates", False),
     ("SOCO", "Southern Company", "Southern Company files 8-K", True),
 ])
-def test_relevance_matches_whole_words_and_press_names(ticker, name, title, expected):
+def test_whole_word_matching_keeps_what_substrings_matched(ticker, name, title, expected):
+    # Guards, not regressions: substring matching got these right, some by
+    # accident ("goog" inside "google", "exxon" inside "exxonmobil"). Whole
+    # words alone would lose them; the press alias, the run-together name
+    # and the whole-name phrase are what keep them.
     tokens = news_agent._name_tokens(name)
     assert news_agent._is_about_company({"title": title, "url": _REUTERS}, ticker, tokens) is expected
 

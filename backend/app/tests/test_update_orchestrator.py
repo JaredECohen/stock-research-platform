@@ -709,6 +709,7 @@ def test_distinct_stories_after_a_dash_keep_distinct_fingerprints(first, second)
     ("Deal signed - Benzinga", "https://www.benzinga.com/news/1"),
 ])
 def test_publisher_tags_are_still_stripped(tagged, url):
+    # Guard for the narrowing above: real publisher tags still merge.
     assert (update_orchestrator.news_fingerprint("TSTFP", tagged, url)
             == update_orchestrator.news_fingerprint("TSTFP", "Deal signed"))
 
