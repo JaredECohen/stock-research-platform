@@ -780,6 +780,49 @@ def test_pm_prompt_assembly_order_with_the_evidence_block(monkeypatch, pm_ctx):
     assert prefixes == [len(prompts.PM_SYNTHESIS_PROMPT) + 2]
 
 
+def test_pm_prompt_assembly_order_digest_news_evidence_refs_findings(monkeypatch):
+    """C7 as extended by G1 (FIX-018): template + pm_ctx, then the industry
+    digest, then the NEWS block, then the valuation evidence, then the
+    source refs (S15), then the capped JSON. The news block sits outside the
+    cached prefix like every other volatile block."""
+    import json
+
+    from app.agents import news_context, pm_context, prompts
+    from app.agents.source_ledger import SourceLedger
+    from app.schemas import AgentFinding
+    monkeypatch.setattr(pm_context, "build_pm_context", lambda **kw: "PM-CONTEXT")
+    news = news_context.from_alerts("TEST", [{"title": "TEST Corp wins an order", "severity": "material",
+                                              "summary": "A large one.", "source": "news_service"}])
+    sector = AgentFinding(agent="Sector Analyst", headline="Sector read", summary="Neutral.",
+                          data={"pending_news_alerts": news.alerts()})
+    monkeypatch.setattr(graph, "_pm_view", lambda f: graph.PMView(["## Industry group read — DIGEST"], f, f))
+    seen = _spy_pm(monkeypatch)
+    vv = ev(**OVERVALUED)
+    ledger = SourceLedger()
+    with ledger.activate():
+        ledger.register("financials", "financials:TEST", {"revenue": 1.0})
+        news_context.register(news)
+        graph._pm_synthesis({"ticker": "TEST"}, {"sector": sector}, None, valuation_evidence=vv, news=news)
+        refs = graph._source_refs_block()
+    assert "news_alerts:TEST" in refs
+    (prompt,) = seen
+    parts = [
+        "## Industry group read — DIGEST",
+        news_context.render_block(news, "pm"),
+        memo_quality.valuation_evidence_block(vv),
+        refs,
+    ]
+    assert prompt == (
+        prompts.PM_SYNTHESIS_PROMPT + "\n\nPM-CONTEXT"
+        + "".join("\n\n" + p for p in parts)
+        + "\n\nFindings:\n"
+        + json.dumps({"sector": {**sector.model_dump(), "data": {}}}, default=str)[
+            : settings.max_agent_context_chars]
+    )
+    offsets = [prompt.index(p) for p in parts] + [prompt.index("\n\nFindings:\n")]
+    assert offsets == sorted(offsets)
+
+
 def test_pm_prompt_is_byte_identical_without_evidence(monkeypatch):
     import json
 

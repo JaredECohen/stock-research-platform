@@ -64,7 +64,7 @@ from ..services.filings_service import get_filings
 from ..services.fundamentals_service import get_full_financials
 from ..services.transcripts_service import latest_transcript
 from ..services.valuation_service import build_comps, build_dcf
-from . import llm, memo_quality, number_check, prompts, roster, scorecard_context
+from . import llm, memo_quality, news_context, number_check, prompts, roster, scorecard_context
 from .critic_agent import run_critic
 from .log_safety import redact
 from .memo_context import (
@@ -1212,6 +1212,7 @@ def _pm_view(findings: dict[str, AgentFinding]) -> PMView:
 def _pm_synthesis(
     profile: dict, findings: dict[str, AgentFinding], dcf: DCFResult | None,
     *, scorecard: Any | None = None, valuation_evidence: ValuationVerdict | None = None,
+    news: news_context.NewsContext | None = None,
 ) -> dict:
     # PM uses its dedicated model (OPENAI_PM_MODEL — gpt-5.5-pro by default).
     # Wave 10 — read PM brain + company / sector memory + research_notes.
@@ -1232,6 +1233,12 @@ def _pm_synthesis(
     # then the capped JSON. The digests sit outside the cut on purpose (see
     # `_pm_view`), and "" when there are none keeps the prompt byte-identical.
     digest_block = ("\n\n" + "\n\n".join(view.digests)) if view.digests else ""
+    # FIX-018, C7: the run's news block goes after the digests and before the
+    # evidence block. The PM used to get news only nested in the sector
+    # entry of the Findings JSON with no instruction to weigh it. "" with no
+    # news keeps the prompt byte-identical.
+    news_text = news_context.render_block(news, "pm")
+    news_block = ("\n\n" + news_text) if news_text else ""
     # W2b 7(b), C7: the deterministic valuation-evidence read goes after the
     # digests and before "Findings:" — volatile, outside the cached prefix and
     # outside the JSON cut. "" without evidence keeps the prompt byte-identical.
@@ -1242,6 +1249,16 @@ def _pm_synthesis(
     # (no active ledger) keeps the prompt byte-identical.
     refs = _source_refs_block()
     refs_block = ("\n\n" + refs) if refs else ""
+    json_findings = {k: v.model_dump() for k, v in view.findings.items()}
+    if news_text:
+        # The sector finding stores the same items as `pending_news_alerts`
+        # (both come from `inputs.news`); with the block present that copy
+        # is a duplicate read of up to ~1,100 tokens, so it is dropped from
+        # this JSON copy only. The stored memo keeps it.
+        sector_json = json_findings.get("sector")
+        if isinstance(sector_json, dict) and isinstance(sector_json.get("data"), dict):
+            sector_json["data"] = {k: v for k, v in sector_json["data"].items()
+                                   if k != "pending_news_alerts"}
     # The synthesis template is byte-stable across memos; declare it as the
     # cached prefix so each PM call reads it instead of re-paying for it. The
     # volatile pm_ctx / digests / findings follow the "\n\n" join and stay
@@ -1251,10 +1268,11 @@ def _pm_synthesis(
             prompts.PM_SYNTHESIS_PROMPT
             + (("\n\n" + pm_ctx) if pm_ctx else "")
             + digest_block
+            + news_block
             + evidence_block
             + refs_block
             + "\n\nFindings:\n"
-            + json.dumps({k: v.model_dump() for k, v in view.findings.items()}, default=str)[: settings.max_agent_context_chars],
+            + json.dumps(json_findings, default=str)[: settings.max_agent_context_chars],
             system=prompts.PM_SYSTEM, route="strong",
             model=settings.openai_pm_model,
         )
@@ -1649,6 +1667,17 @@ def _gather_inputs(
         industry_group = safe_call(lookup_classification, ticker, fallback=None,
                                    name=_IG_NAME, log_to=degradation)
 
+    # FIX-018 — the run's one news read (N1), fetched at memo time when a
+    # live run finds nothing on file (N2). ALWAYS a context: a failed read is
+    # an empty one, so the sector analyst never falls back to a read of its
+    # own that the ledger would not hold. Registered here, once, with exactly
+    # the items every reader is shown.
+    news = safe_call(
+        news_context.load_for_memo, ticker, as_of_date=as_of_date,
+        fallback=news_context.NewsContext.empty(ticker), name="News Context", log_to=None,
+    )
+    news_context.register(news)
+
     # `profile` is shared with every later stage and mutated in place — see
     # the mutation contract in `memo_context`.
     return MemoInputs(
@@ -1657,7 +1686,7 @@ def _gather_inputs(
         earnings=earnings, transcript=transcript, filings=filings,
         dcf=dcf, comps=comps, degradation=degradation,
         scorecard=scorecard, scorecard_seeds=seeds, industry_group=industry_group,
-        ledger=active_ledger(),
+        news=news, ledger=active_ledger(),
     )
 
 
@@ -1686,7 +1715,12 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
     # The PM chooses among THIS run's roster: a spec whose predicate said no
     # is not on the run, so offering it would waste one of the three skips
     # and put an absent agent in the memo's intake audit line.
-    intake = run_intake(profile, specialists=[spec.key for spec in specs])
+    # FIX-018: intake sees the run's headlines (it was always told "no news"
+    # while its prompt skips specialists on "no recent material news").
+    intake = run_intake(
+        profile, news_alerts=(inputs.news.alerts() if inputs.news is not None else None),
+        specialists=[spec.key for spec in specs],
+    )
 
     # Round 0 fan-out, in roster order. Each specialist runs with its own
     # llm_call_context so any LLM calls it makes get tagged with the right
@@ -1975,7 +2009,7 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     with llm_call_context(agent_name="PM Synthesis", run_id=inputs.run_id, route="strong"):
         synth: dict[str, Any] = safe_call(
             _pm_synthesis, profile, findings, dcf, scorecard=inputs.scorecard,
-            valuation_evidence=valuation_verdict,
+            valuation_evidence=valuation_verdict, news=inputs.news,
             fallback=synth_fallback, name="PM Synthesis", log_to=degradation,
         )
     rating = synth.get("rating_label", "Neutral")

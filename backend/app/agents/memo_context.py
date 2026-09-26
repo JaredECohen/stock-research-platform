@@ -67,6 +67,7 @@ from .safe_runner import DegradationLog
 
 if TYPE_CHECKING:  # intake -> roster -> memo_context; keep the runtime edge one-way
     from .intake import IntakeDecision
+    from .news_context import NewsContext
     from .number_check import WithholdPlan
     from .source_ledger import SourceLedger
 
@@ -121,6 +122,15 @@ class MemoInputs:
     # `{industry_group_block}` both read it here, so a memo never looks the
     # mapping up twice. With routing off it stays None and nothing reads it.
     industry_group: dict[str, Any] | None = None
+    # FIX-018 (slice G1) — the run's one news read (`news_context`): ranked,
+    # bounded, sanitised, registered once on the ledger by the gather stage.
+    # The gather stage ALWAYS sets it (an empty context when the read
+    # fails), so inside a memo run the sector analyst, the industry analyst,
+    # intake and the PM all read this one snapshot and never re-read
+    # `news_hot` themselves. None only for a direct construction outside the
+    # gather stage (tests, a direct stage call); the roster then passes no
+    # `news=` kwarg and the runners behave as they do outside a memo.
+    news: NewsContext | None = None
     # W2b 7(a) — the run's source ledger (activated by `run_stock_memo`;
     # None for a direct stage call, in which case the number check does not
     # run). Analysts register their payloads through the context var, not
