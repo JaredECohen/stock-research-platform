@@ -25,6 +25,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from ..config import settings
@@ -1367,34 +1368,48 @@ def _gemini_thinking(model: str) -> tuple[str | None, dict[str, Any] | None]:
     return None, None
 
 
+def _utcnow() -> datetime:
+    """Naive UTC now, as `generated_at` is stored. A seam so tests can pin
+    the grounding cap's day boundary."""
+    return datetime.utcnow()
+
+
 def _grounding_cap_reached() -> bool:
-    """True when today's (UTC) successful grounded Gemini calls reached
-    GEMINI_GROUNDED_MAX_PER_DAY. Counted from llm_call_logs, not a
-    module-level counter, so the web and worker processes share one cap.
+    """True when today's (UTC calendar day, not a rolling 24 h) grounded
+    Gemini responses reached GEMINI_GROUNDED_MAX_PER_DAY; a cap <= 0 skips
+    every grounded call. Counted from llm_call_logs, not a module-level
+    counter, so the web and worker processes share one cap.
+
+    A grounded response counts whether or not its JSON parsed: Google
+    bills the search either way, and the cap bounds that spend (owner
+    decision A11, "grounded Gemini calls are capped"). Counting only
+    parsed ones would never trip during a parse-failure regime. Skip rows
+    and transport errors made no billed request and carry no tokens, so
+    they do not count.
+
     A DB error fails OPEN (logged): losing news is worse than a few
     over-cap grounded calls, which cost cents."""
     cap = int(settings.gemini_grounded_max_per_day)
     if cap <= 0:
         return True
     try:
-        from datetime import datetime
-
-        from sqlalchemy import func, select
+        from sqlalchemy import func, or_, select
 
         from ..database import SessionLocal
         from ..models import LLMCallLog
-        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         with SessionLocal() as db:
             LLMCallLog.__table__.create(bind=db.get_bind(), checkfirst=True)
             used = db.execute(
                 select(func.count()).select_from(LLMCallLog).where(
                     LLMCallLog.grounded.is_(True),
-                    LLMCallLog.success.is_(True),
+                    or_(LLMCallLog.success.is_(True),
+                        LLMCallLog.tokens_in > 0, LLMCallLog.tokens_out > 0),
                     LLMCallLog.generated_at >= today,
                 )
             ).scalar() or 0
         return int(used) >= cap
-    except Exception as exc:  # pragma: no cover - defense in depth
+    except Exception as exc:
         log_safely(log, "Gemini grounding-cap count failed; allowing the call", exc)
         return False
 
