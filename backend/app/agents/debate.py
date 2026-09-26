@@ -1350,8 +1350,15 @@ def llm_call(req: DebateRequest) -> CallResult:
     The debate fails over as a PAIR (harness), so the LLM layer must not
     hop one side alone, and its content failures must not open the shared
     breaker the PM relies on (critique #4, M1). `last_usage()` is read on
-    the same thread (it is thread-local)."""
+    the same thread (it is thread-local).
+
+    The slot is drained first: a skipped call (breaker open, no client)
+    records no usage, so without the drain this call would read an earlier,
+    unrelated call's usage on this thread (in sequential mode, the memo's
+    own) and could record a refusal, a served model and tokens for a
+    request that was never sent (learning/ledger.py guards the same way)."""
     from . import llm
+    llm.last_usage()  # consume any stale usage so the reading below is ours
     with llm.llm_call_context(static_prefix_chars=len(req.prefix)):
         out = llm.chat_json(req.prompt, system=req.system, route="strong", max_tokens=req.max_tokens,
                             provider_override=req.provider, model=req.model, effort=req.effort,

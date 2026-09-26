@@ -533,3 +533,33 @@ def test_note_soft_records_unavailable(monkeypatch):
 def test_ordered_rejects_unknown(bad):
     with pytest.raises(ValueError):
         debate.ordered(bad)
+
+
+def test_llm_call_ignores_stale_usage_when_no_request_is_sent(monkeypatch):
+    """A skipped call (no client, breaker open) records no usage, so the
+    harness must not read an earlier call's usage left on this thread and
+    record a refusal, served model and tokens for a request never sent."""
+    refusing = llm_fakes.FakeClient(
+        llm_fakes.anthropic_response("", stop_reason="refusal", refusal_category="cyber"))
+    _debate_tier(monkeypatch, refusing, llm_fakes.FakeClient(llm_fakes.openai_response()))
+    route = debate.resolve_route()
+
+    def stale_refusal():
+        # Another agent's refused call on this thread, its usage unread.
+        llm.chat_json("p", system="s", route="strong", provider_override="anthropic",
+                      model="claude-opus-5-5", failover=False)
+
+    stale_refusal()
+    monkeypatch.setattr(llm, "_anthropic_client", lambda: None)
+    res = debate.llm_call(_request(route))
+    assert (res.out, res.usage, res.outcome()) == (None, None, "none")
+
+    monkeypatch.setattr(llm, "_anthropic_client", lambda: refusing)
+    stale_refusal()
+    monkeypatch.setitem(llm._FAILURE_COUNTERS, "anthropic", llm._BREAKER_THRESHOLD)
+    import time
+    monkeypatch.setitem(llm._FAILURE_LAST_AT, "anthropic", time.time())
+    before = len(refusing.requests)
+    res = debate.llm_call(_request(route))
+    assert len(refusing.requests) == before, "the breaker skipped the call"
+    assert (res.out, res.usage, res.outcome()) == (None, None, "none")
