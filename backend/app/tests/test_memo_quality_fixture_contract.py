@@ -237,9 +237,14 @@ ITEM8_UNWRITTEN = {
 @pytest.mark.parametrize("which", ["wire", "pm_template_wire"])
 def test_fixtures_carry_the_d2_contract_with_both_modes_off(which, request):
     """D2: both captures are the pipeline with the debate and the item-8
-    reviewer off. The UI tests read `debate` and the review fields from
-    these bodies, so the keys must be on the wire (as null / empty, not
-    absent), and the review's key set must be the model's both ways."""
+    reviewer off, and the keys are on the wire (as null / empty, not
+    absent) with the review's key set the model's both ways.
+
+    These are PRESENTED bodies, and in both the review is rule-based, so
+    the presenter rebuilt it (`memo_sections`: an unavailable review keeps
+    only its provenance). The values here therefore pin the presenter's
+    output, not what the producer wrote; that is checked on the stored
+    memo in `test_fixture_is_what_the_pipeline_produces`."""
     memo = request.getfixturevalue(which)["memo"]
     assert "debate" in memo and memo["debate"] is None, RECAPTURE
     review = memo["risk_committee_challenge"]
@@ -310,14 +315,35 @@ def _variant_scenario(variants: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def test_fixture_is_what_the_pipeline_produces(wire):
+def test_fixture_is_what_the_pipeline_produces(wire, monkeypatch):
     """Re-run the capture (demo data, scripted answers, no keys): the
     pipeline must still write the same `quality` SHAPE, and the scripted
     scenario must still come out the same. A change to the number check,
     the reconciliation or the caps that alters what the UI reads fails here
     with the instruction to re-capture, instead of leaving the UI tested
-    against a record the pipeline no longer writes."""
+    against a record the pipeline no longer writes.
+
+    D2: the STORED memo (what the presenter is handed) is checked too. The
+    presenter rebuilds the capture's not-live review, which would hide a
+    legacy-mode writer that fills the item-8 fields, e.g. one claiming
+    `review_status="independent"` with both modes off."""
+    from app.services import memo_sections
+
+    handed: list[StockMemoOut] = []
+    present = memo_sections.present_memo
+
+    def recording_present(memo: StockMemoOut, *args: Any, **kwargs: Any) -> StockMemoOut:
+        handed.append(memo)
+        return present(memo, *args, **kwargs)
+
+    # `capture()` imports `present_memo` when it runs, so it gets this one.
+    monkeypatch.setattr(memo_sections, "present_memo", recording_present)
     fresh = capture.capture()
+    assert handed, "capture() no longer presents the memo through memo_sections.present_memo"
+    stored = handed[-1]
+    assert stored.debate is None
+    stored_review = stored.risk_committee_challenge.model_dump(mode="json")
+    assert {k: stored_review[k] for k in ITEM8_UNWRITTEN} == ITEM8_UNWRITTEN
     _assert_quality_shape(fresh["memo"]["quality"])
     assert set(fresh["memo"]) == set(wire["memo"]), RECAPTURE
     assert (set(fresh["memo"]["risk_committee_challenge"])
