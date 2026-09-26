@@ -121,6 +121,17 @@ def health() -> dict:
         # (no HTTP port) reports its own in the `worker_heartbeat` cron-health
         # note as `industry_routing=on|off`.
         "industry_analyst_routing": bool(settings.enable_industry_analyst_routing),
+        # The 2026-09-25 program's wave switches, as THIS process loaded
+        # them, so a post-deploy check can confirm waves G-I without the
+        # admin token. Mode names and a model name only — never a key.
+        # `llm_research_model` is null while the research tier is blank
+        # (legacy routing); `attribution_mode` is the EFFECTIVE mode
+        # (production always runs "warn").
+        "debate_mode": settings.debate_mode,
+        "reviewer_mode": settings.reviewer_mode,
+        "llm_research_model": settings.llm_research_model or None,
+        "chat_sdk": bool(settings.chat_agents_sdk),
+        "attribution_mode": llm.attribution_mode(),
     }
 
 
