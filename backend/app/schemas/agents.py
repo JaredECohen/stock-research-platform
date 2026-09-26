@@ -461,6 +461,16 @@ class CriticReview(BaseModel):
     debate_review: DebateReview | None = None
 
 
+# The item-8 fields above, by name. The legacy critic serializes the whole
+# draft memo into its prompt, so it drops these while they hold their
+# defaults (`critic_agent._legacy_critic_draft`): with both modes off its
+# prompt stays byte-identical to the pre-D2 pipeline (plan §0.3, P4).
+CRITIC_REVIEW_ITEM8_FIELDS: tuple[str, ...] = (
+    "reviewer_model", "verdict", "issues", "rating_too_high", "rating_too_low",
+    "review_status", "revision", "debate_review",
+)
+
+
 # ---------------------------------------------------------------------------
 # Multi-agent message contracts (Phase 4+)
 # Lightweight Pydantic shapes used as the interchange between PM, sectors,

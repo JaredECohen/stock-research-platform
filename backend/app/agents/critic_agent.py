@@ -5,6 +5,7 @@ import json
 
 from ..config import settings
 from ..schemas import CriticReview
+from ..schemas.agents import CRITIC_REVIEW_ITEM8_FIELDS
 from . import llm, prompts
 from .tools import lint_citations
 
@@ -129,6 +130,36 @@ def _divergence_block(memo_dict: dict) -> str:
     )
 
 
+# Each item-8 review field's "not produced" value ("" / [] / None).
+_ITEM8_UNWRITTEN = {
+    name: CriticReview.model_fields[name].get_default(call_default_factory=True)
+    for name in CRITIC_REVIEW_ITEM8_FIELDS
+}
+
+
+def _legacy_critic_draft(memo_dict: dict) -> dict:
+    """The draft without the D2 fields nothing has written.
+
+    D2 added `StockMemoOut.debate` and the item-8 reviewer fields expand-only,
+    so every draft dump now carries `"debate": null` and eight empty keys on
+    the pending review. This critic reads neither, but it serializes the
+    whole draft, and those ~180 bytes would change the prompt and push real
+    content out of the 60k window. With DEBATE_MODE and REVIEWER_MODE off the
+    prompt must stay byte-identical to the pre-D2 pipeline (plan §0.3, P4).
+    Only unwritten values are dropped: a field a later writer fills reaches
+    the critic, and the rest of the dict keeps its order."""
+    out = dict(memo_dict)
+    if "debate" in out and out["debate"] is None:
+        del out["debate"]
+    review = out.get("risk_committee_challenge")
+    if isinstance(review, dict):
+        out["risk_committee_challenge"] = {
+            k: v for k, v in review.items()
+            if not (k in _ITEM8_UNWRITTEN and v == _ITEM8_UNWRITTEN[k])
+        }
+    return out
+
+
 def run_critic(memo_dict: dict) -> CriticReview | None:
     if not settings.enable_agent_critic:
         return None
@@ -143,7 +174,7 @@ def run_critic(memo_dict: dict) -> CriticReview | None:
     memory_block = _company_memory_context(ticker, memo_dict.get("sector"))
 
     divergence_block = _divergence_block(memo_dict)
-    payload = json.dumps(memo_dict, default=str)[: settings.max_agent_context_chars]
+    payload = json.dumps(_legacy_critic_draft(memo_dict), default=str)[: settings.max_agent_context_chars]
     # Critic intentionally crosses provider families (Phase 4): if Anthropic is
     # configured, force-route through ANTHROPIC_CRITIC_MODEL regardless of
     # LLM_PROVIDER. Falls back to the active provider (or rule-based stub)

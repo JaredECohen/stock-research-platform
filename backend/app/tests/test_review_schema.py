@@ -17,6 +17,7 @@ reviewed" status when the review is not live. The writers are later slices
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,11 @@ from app.schemas import (
     ReviewRevision,
     StockMemoOut,
 )
-from app.schemas.agents import REVIEW_FIX_REQUEST_MAX_CHARS, REVIEW_ISSUE_TEXT_MAX_CHARS
+from app.schemas.agents import (
+    CRITIC_REVIEW_ITEM8_FIELDS,
+    REVIEW_FIX_REQUEST_MAX_CHARS,
+    REVIEW_ISSUE_TEXT_MAX_CHARS,
+)
 
 PRE_S2 = Path(__file__).parent / "fixtures" / "memo_contract" / "pre_s2_memo.json"
 
@@ -179,3 +184,129 @@ def test_full_review_roundtrip():
     assert again == review
     assert json.loads(again.model_dump_json()) == wire
     assert NEW_REVIEW_FIELDS <= set(wire)
+
+
+def test_item8_field_tuple_names_exactly_the_new_fields():
+    """The legacy critic strips the fields this tuple names; a reviewer
+    field added without it would leak an empty key into the critic prompt."""
+    assert set(CRITIC_REVIEW_ITEM8_FIELDS) == NEW_REVIEW_FIELDS
+    assert len(CRITIC_REVIEW_ITEM8_FIELDS) == len(NEW_REVIEW_FIELDS)
+
+
+# ---------------------------------------------------------------------------
+# With DEBATE_MODE and REVIEWER_MODE off, the legacy critic's prompt is the
+# pre-D2 pipeline's, byte for byte (plan §0.3, P4, design §8.3).
+#
+# The critic serializes the whole draft memo, cut at 60k chars, so the D2
+# expand alone (`"debate": null` plus eight empty reviewer keys on the
+# pending review, ~180 chars) changed the prompt and shifted the window.
+# These digests were captured at ca08521, the commit before D2, by running
+# `run_critic` on the same drafts; a change to them is a change to what the
+# live critic reads and needs an owner decision, not a re-pin.
+# ---------------------------------------------------------------------------
+
+PRE_D2_CRITIC_PAYLOAD = {
+    # The stored pre-S2 memo as it validates (its live review included).
+    "stored": (2850, "04fd35c627985b9a9181e21f20e9d3fb736fe3ea932bec65f32e069ee3c97c7a"),
+    # The draft the graph hands the critic: graph.py's pending placeholder.
+    "pending": (2873, "f2216cd35f0dfecd9a73f183c9b2eab3ab349715688bae2c1ae91c29a9d280a0"),
+    # A draft that just fits the 60k window before D2 (59,836 chars); with
+    # the D2 keys left in, its tail was cut.
+    "long": (59836, "734f1cdbd8334be1c2c7705b3b18fe5a8796490a90e12a1a3f1d96c116796436"),
+}
+
+
+def _critic_draft(case: str) -> dict[str, Any]:
+    memo = StockMemoOut.model_validate(json.loads(PRE_S2.read_text()))
+    if case == "long":
+        memo.final_pm_view = "".join(f"Long draft sentence {i:05d}. " for i in range(2110))
+    if case in ("pending", "long"):
+        memo.risk_committee_challenge = CriticReview(
+            overall_assessment="Pending critic review.", review_mode="pending")
+    # Exactly what `graph._review_memo` passes: the plain model dump.
+    return memo.model_dump()
+
+
+def _critic_prompts(monkeypatch, answer: dict[str, Any] | None = None) -> list[str]:
+    from app.agents import critic_agent
+    from app.config import settings
+
+    prompts: list[str] = []
+
+    def fake_chat_json(prompt: str, **_kw: Any) -> dict[str, Any]:
+        prompts.append(prompt)
+        return dict(answer or {})
+
+    monkeypatch.setattr(settings, "enable_agent_critic", True)
+    monkeypatch.setattr(critic_agent.llm, "chat_json", fake_chat_json)
+    # The prior-memo and company-memory blocks read the database and the
+    # memory files; the draft payload is what D2 touched.
+    monkeypatch.setattr(critic_agent, "_prior_memo_context", lambda _t: "")
+    monkeypatch.setattr(critic_agent, "_company_memory_context", lambda _t, _s=None: "")
+    return prompts
+
+
+@pytest.mark.parametrize("case", sorted(PRE_D2_CRITIC_PAYLOAD))
+def test_legacy_critic_payload_byte_identical_to_pre_d2(case, monkeypatch):
+    from app.agents import critic_agent
+
+    prompts = _critic_prompts(monkeypatch)
+    critic_agent.run_critic(_critic_draft(case))
+    assert len(prompts) == 1
+    payload = prompts[0].split("\n\nDraft memo:\n", 1)[1]
+    # Every case fits the window, so the payload parses: say WHAT differs
+    # before the digest says that something does.
+    sent = json.loads(payload)
+    assert "debate" not in sent
+    assert not NEW_REVIEW_FIELDS & set(sent["risk_committee_challenge"])
+    size, digest = PRE_D2_CRITIC_PAYLOAD[case]
+    assert (len(payload), hashlib.sha256(payload.encode()).hexdigest()) == (size, digest)
+
+
+def test_legacy_critic_draft_keeps_written_fields():
+    """Only UNWRITTEN D2 values are dropped: once a writer fills the debate
+    or a reviewer field, the critic sees it, and nothing else moves."""
+    from app.agents.critic_agent import _legacy_critic_draft
+
+    draft = _critic_draft("pending")
+    draft["debate"] = {"status": "complete"}
+    draft["risk_committee_challenge"]["verdict"] = "unsound"
+    draft["risk_committee_challenge"]["review_status"] = "not_independent"
+    out = _legacy_critic_draft(draft)
+    assert list(out) == list(draft)
+    assert out["debate"] == {"status": "complete"}
+    review = out["risk_committee_challenge"]
+    assert (review["verdict"], review["review_status"]) == ("unsound", "not_independent")
+    assert not {"reviewer_model", "issues", "revision", "debate_review"} & set(review)
+    # The caller's dict is not mutated.
+    assert draft["risk_committee_challenge"]["reviewer_model"] == ""
+
+
+@pytest.mark.parametrize("answer", [
+    {},  # no model answer: the rule-based stub
+    {"overall_assessment": "Live critic answer.", "challenges": ["c"],
+     "underweighted_risks": ["r"], "suggested_revisions": ["s"]},
+])
+def test_legacy_critic_writes_no_item8_field(answer, monkeypatch):
+    """With REVIEWER_MODE off the legacy critic, live or rule-based, makes
+    none of the item-8 claims: no verdict, no issues and, above all, no
+    `review_status` saying the review was independent."""
+    from app.agents import critic_agent
+
+    _critic_prompts(monkeypatch, answer)
+    review = critic_agent.run_critic(_critic_draft("pending"))
+    assert review is not None
+    assert review.review_mode == ("live" if answer else "rule_based")
+    _assert_item8_defaults(review)
+
+
+def test_critic_failure_stub_writes_no_item8_field():
+    from app.agents.safe_runner import safe_critic
+
+    def boom(_memo: dict[str, Any]) -> CriticReview | None:
+        raise RuntimeError("critic down")
+
+    review = safe_critic(boom, {})
+    assert review is not None and review.review_mode == "unavailable"
+    _assert_item8_defaults(review)
+
