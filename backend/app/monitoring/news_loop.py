@@ -191,7 +191,9 @@ def run_once(tickers: Iterable[str] | None = None) -> list[dict]:
             sources[skipped] += 1
 
         # Material or breaking → invalidate the sector warm snapshot for that
-        # ticker's sector so the next sector pass re-incorporates the news.
+        # ticker's sector. That only forces a sector-research recompute:
+        # sector_warm holds cohort research, not news, and the sector
+        # analyst reads the news itself from news_hot.
         material = [a for a in alerts if a.severity in ("material", "breaking")]
         if material:
             ds = get_data_service()
