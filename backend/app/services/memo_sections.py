@@ -1239,6 +1239,14 @@ def present_memo(
             underweighted_risks=[], suggested_revisions=[],
             advice_compliance_check=rc.advice_compliance_check,
             valuation_divergence_assessment=rc.valuation_divergence_assessment,
+            # Item-8 provenance survives like `review_mode`: this branch is
+            # exactly the not-live review that `review_status`
+            # ("not_independent") exists to label, and `reviewer_model` says
+            # which model was asked. The review's content (verdict, issues,
+            # rating cases, revision, debate review) is blanked with the
+            # challenges; D4 owns the full review projection.
+            reviewer_model=rc.reviewer_model,
+            review_status=rc.review_status,
         )
 
     # Lists.

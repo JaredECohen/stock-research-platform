@@ -310,3 +310,23 @@ def test_critic_failure_stub_writes_no_item8_field():
     assert review is not None and review.review_mode == "unavailable"
     _assert_item8_defaults(review)
 
+
+def test_unavailable_review_presented_keeps_item8_provenance():
+    """The presenter blanks a not-live review's content, and must keep its
+    provenance: this branch is exactly the review `not_independent` labels,
+    and dropping the label would present it as an unlabelled review."""
+    from app.services import memo_sections
+
+    memo = StockMemoOut.model_validate(json.loads(PRE_S2.read_text()))
+    memo.risk_committee_challenge = CriticReview(
+        overall_assessment="Rule-based review.", review_mode="rule_based",
+        review_status="not_independent", reviewer_model="openai:gpt-6-astra",
+        verdict="unsound", issues=[ReviewIssue.model_validate(_issue())],
+    )
+    out = memo_sections.present_memo(memo)
+    assert out.section_availability["risk_committee_challenge"].status == "unavailable"
+    review = out.risk_committee_challenge
+    assert (review.review_status, review.reviewer_model) == ("not_independent", "openai:gpt-6-astra")
+    # Content from a review that was not live is blanked with the challenges.
+    assert (review.verdict, review.issues) == ("", [])
+    assert memo.risk_committee_challenge.review_status == "not_independent"
