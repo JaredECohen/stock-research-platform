@@ -125,6 +125,21 @@ def _ceiling_stop(db_bytes: int | None, projected_bytes: int, max_db_mb: float |
     return None
 
 
+def _repair_origin() -> Any:
+    """Tag the repair's embedding rows `origin=repair:corpus` (attribution
+    design §4.7 and its call-site table).
+
+    Unconditional, even inside the nightly `history_backfill` retry that
+    already runs under its loop's origin: the re-index goes through the
+    ordinary ingest path, so under the loop origin its `embed.index` rows
+    are indistinguishable from the same loop's own `backfill_ticker`
+    indexing, and the capped repair spend could not be read off the call
+    log. Which loop ran the repair is still in its cron-run note."""
+    from ..agents.llm import llm_call_context
+
+    return llm_call_context(origin="repair:corpus")
+
+
 def _measure_db() -> int | None:
     with SessionLocal() as db:
         return inv_svc.database_bytes(db)
@@ -230,9 +245,9 @@ def reembed(
         last_id = rows[-1].id
         if not work:
             continue
-        with emb_svc.usage_meter() as meter:
+        with emb_svc.usage_meter() as meter, _repair_origin():
             try:
-                vectors = emb_svc.embed([r.text for r in work])
+                vectors = emb_svc.embed([r.text for r in work], action="embed.repair")
             except emb_svc.EmbeddingUnavailable:
                 vectors = None
         res["tokens"] += meter.total_tokens
@@ -384,7 +399,7 @@ def index_missing(
             res["skipped_changed"].append(src.identity)
             continue
         indexer = filing_memory.index_filing if src.kind == "filing" else filing_memory.index_transcript
-        with emb_svc.usage_meter() as meter:
+        with emb_svc.usage_meter() as meter, _repair_origin():
             try:
                 written = indexer(row)
                 error: str | None = None

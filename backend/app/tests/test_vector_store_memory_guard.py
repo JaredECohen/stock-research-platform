@@ -100,7 +100,7 @@ def test_missing_ticker_does_no_work_at_all(seeded, monkeypatch):
     calls = []
     monkeypatch.setattr(
         vector_store.emb_svc, "embed_one",
-        lambda text: calls.append(text) or [0.0] * emb_svc.FALLBACK_DIM,
+        lambda text, **kwargs: calls.append(text) or [0.0] * emb_svc.FALLBACK_DIM,
     )
     assert vector_store.search("anything", ticker=None) == []
     assert calls == [], "query was embedded despite the global-scan guard"
