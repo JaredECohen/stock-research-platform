@@ -63,7 +63,7 @@ from sqlalchemy import func, select, update
 from ..agents import industry_report_validator as validator
 from ..agents import industry_report_writer as writer
 from ..agents.industry_analysts import get_industry_analyst
-from ..agents.llm import llm_call_context
+from ..agents.llm import current_call_context, llm_call_context
 from ..agents.log_safety import redact, safe_exc
 from ..config import settings
 from ..database import SessionLocal
@@ -1151,11 +1151,19 @@ def execute_job(claim: industry_lease.IndustryClaim, *, book: ContextBook | None
                 log.info("industry job %d STARTING %s %s/%s (attempt %d/%d, run_id=%s)",
                          job_id, job["kind"], job["code"] or "-", job["period_key"],
                          job["attempts"], job["max_attempts"], job["run_id"])
-                if job["kind"] == KIND_CROSS:
-                    outcome = _run_cross_snapshot(job, info, as_of)
-                else:
-                    ctx = (book or ContextBook()).context_for(job["period_key"], as_of, info)
-                    outcome = _run_group_report(job, info, ctx, as_of)
+                # Umbrella for every LLM call the job makes: origin, job and
+                # run only. The writer's own context (`_run_group_report`, an
+                # AGENT_CONTEXT_SITE) names the analyst underneath it. An
+                # origin already set outside (a script draining the queue)
+                # is what started the work, so it is kept.
+                origin = current_call_context().get("origin") or "worker:industry"
+                with llm_call_context(origin=origin, job_id=f"industry:{job_id}",
+                                      run_id=job["run_id"]):
+                    if job["kind"] == KIND_CROSS:
+                        outcome = _run_cross_snapshot(job, info, as_of)
+                    else:
+                        ctx = (book or ContextBook()).context_for(job["period_key"], as_of, info)
+                        outcome = _run_group_report(job, info, ctx, as_of)
                 done = _finish_claim(claim, outcome=outcome)
                 if done is not None:
                     log.info("industry job %d SUCCEEDED in %.1fs (%s)", job_id,

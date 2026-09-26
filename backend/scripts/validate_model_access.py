@@ -26,6 +26,22 @@ from typing import Iterable, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Attribution allow-list entry (2026-09-25 attribution critique #8). This
+# script calls the provider SDKs DIRECTLY — the one place outside the LLM
+# layer that does — and that is deliberate: it asks "does this key reach
+# this model id at all", which the LLM layer would blur with its failover,
+# model resolution, breakers and demo-only gate. So its calls write no
+# `llm_call_logs` rows; it is an operator's manual check costing a fraction
+# of a cent, and the sweep that forbids provider SDK calls outside the LLM
+# layer (slice A2z) lists this file with this reason. For a check that costs
+# nothing and needs no generation, both services now log
+# `llm.model_access_report()` (`models.list` only) at startup.
+DIRECT_PROVIDER_CALLS_REASON = (
+    "manual key/model reachability check; bypasses failover and model resolution on purpose; "
+    "one tiny generation per model; writes no llm_call_logs rows"
+)
+ORIGIN = "script:validate_model_access"
+
 # Allow live behavior for this validation regardless of conftest's defaults.
 os.environ.pop("ENABLE_LIVE_DATA", None)
 os.environ.pop("USE_DEMO_DATA", None)
@@ -130,6 +146,14 @@ def _check_gemini(api_key: str, models: Iterable[Tuple[str, str]]) -> list:
 
 
 def main() -> int:
+    # Anything this script reaches through the LLM layer (none of its
+    # checks today) is labelled with it; its direct SDK calls are not rows.
+    from app.agents.llm import llm_call_context
+    with llm_call_context(origin=ORIGIN):
+        return _main()
+
+
+def _main() -> int:
     from app.config import settings
     print()
     print("Key presence:")

@@ -38,7 +38,7 @@ from typing import Any
 from sqlalchemy import select, update
 
 from ..agents.graph import run_stock_memo
-from ..agents.llm import llm_call_context
+from ..agents.llm import current_call_context, llm_call_context
 from ..config import settings
 from ..database import SessionLocal
 from ..models import Company, MemoRunCheckpoint, RegenJob
@@ -491,10 +491,18 @@ def execute_job(claim: JobClaim) -> dict[str, Any]:
             log.info("regen job %d STARTING for %s (scenario=%s, run_id=%s)", claim.job_id, ticker, scenario, run_id)
             if settings.app_env.lower() == "production" and not settings.llm_enabled:
                 raise RuntimeError("Production memo generation requires a configured LLM and live data")
-            _introduce_ticker(claim.job_id, ticker)
-            _pull_fundamentals_through(claim.job_id, ticker)
-            _append_progress(claim.job_id, "calling_run_stock_memo")
-            with llm_call_context(user_id=job.requested_by_user_id, feature="research_run", run_id=run_id):
+            # Opened right after the claim so the ticker introduction and the
+            # fundamentals pull are attributed too (design §4.8). An umbrella:
+            # origin, job, ticker and run only — never an agent, which would
+            # be credited with every specialist call inside the memo.
+            # An origin set outside (a script draining the queue) is what
+            # started the work, so it is kept.
+            origin = current_call_context().get("origin") or "worker:regen"
+            with llm_call_context(origin=origin, job_id=f"regen:{claim.job_id}", ticker=ticker,
+                                  run_id=run_id, user_id=job.requested_by_user_id, feature="research_run"):
+                _introduce_ticker(claim.job_id, ticker)
+                _pull_fundamentals_through(claim.job_id, ticker)
+                _append_progress(claim.job_id, "calling_run_stock_memo")
                 memo = run_stock_memo(ticker, scenario=scenario, force_refresh=True, run_id=run_id)
             _append_progress(claim.job_id, f"run_stock_memo_returned rating={memo.rating_label}")
             done = _finish_claim(claim)

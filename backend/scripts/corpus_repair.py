@@ -52,12 +52,19 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+# What started the work, on every embedding row and line this script causes.
+ORIGIN = "script:corpus_repair"
+
+
 def main(argv: list[str] | None = None) -> int:
+    from app.agents.llm import llm_call_context
+
     args = _parser().parse_args(argv)
-    receipt = corpus_repair.run(
-        mode=args.mode, klass=args.klass, max_usd=args.max_usd, max_rows=args.max_rows,
-        max_sources=args.max_sources, max_added_mb=args.max_added_mb, max_db_mb=args.max_db_mb,
-    )
+    with llm_call_context(origin=ORIGIN):
+        receipt = corpus_repair.run(
+            mode=args.mode, klass=args.klass, max_usd=args.max_usd, max_rows=args.max_rows,
+            max_sources=args.max_sources, max_added_mb=args.max_added_mb, max_db_mb=args.max_db_mb,
+        )
     label = "CORPUS_INVENTORY" if args.mode == "inventory" else "CORPUS_REPAIR_RECEIPT"
     print(f"{label} {json.dumps(receipt, sort_keys=True, default=str)}")
     return int(receipt["exit_code"])

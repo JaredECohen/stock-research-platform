@@ -153,6 +153,15 @@ def main() -> int:
     # This is DB-only; provider seeding remains on the daemon thread below.
     bootstrap_runtime_schema()
 
+    # The same two LLM lines the web service logs: the routing table this
+    # process loaded (the worker runs the loops, the regen queue and every
+    # Gemini call, so a render.yaml model change has to be checkable HERE)
+    # and, on a daemon thread, `models.list` reachability per configured
+    # model. Also fires the unpriced-configured-model WARNING on this side.
+    from . import llm_startup
+    llm_startup.log_routing(log)
+    llm_startup.start_model_access_check()
+
     # Idempotent — the web service runs the same seed on its boot. Doing
     # it here too means the worker doesn't depend on web having started
     # first (Render gives no ordering guarantee between services), and
@@ -221,7 +230,15 @@ def main() -> int:
         except Exception as exc:
             log.warning("worker scorecard registry failed (continuing): %s", type(exc).__name__)
 
-    threading.Thread(target=_seed, name="worker-seed", daemon=True).start()
+    def _seed_with_origin() -> None:
+        # A thread starts with an empty context, outside the scheduler
+        # proxy: without this, anything the seed reaches in the LLM layer
+        # would read the generic `worker:other` (attribution critique #16).
+        from .agents.llm import llm_call_context
+        with llm_call_context(origin="worker:seed"):
+            _seed()
+
+    threading.Thread(target=_seed_with_origin, name="worker-seed", daemon=True).start()
 
     scheduler = None
     if settings.enable_monitoring:

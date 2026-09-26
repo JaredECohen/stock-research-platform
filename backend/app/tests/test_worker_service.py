@@ -120,3 +120,39 @@ def test_worker_heartbeat_reports_gemini_backend(monkeypatch):
         worker._heartbeat()
         assert shown in calls[-1]["note"]
         assert secret not in calls[-1]["note"]
+
+
+def test_worker_logs_routing_line_and_model_access(monkeypatch, caplog):
+    """The worker runs the loops, the regen queue and every Gemini call, but
+    only the web service printed a routing line (M1 handoff, slice A2a). It
+    now logs the same `LLM routing:` summary — which also runs the
+    unpriced-configured-model check on this process — and starts the
+    `models.list` access check (`llm.model_access_report()`)."""
+    import logging
+    import threading
+
+    import app.worker as worker
+    from app.agents import llm
+
+    reported = threading.Event()
+    monkeypatch.setattr(llm, "model_access_report", lambda: reported.set() or {})
+    priced: list[bool] = []
+    real_unpriced = llm.unpriced_configured_models
+    monkeypatch.setattr(llm, "unpriced_configured_models", lambda: priced.append(True) or real_unpriced())
+    monkeypatch.setattr("app.seed_universe.run_full_seed", lambda *a, **k: {})
+    monkeypatch.setattr("app.services.regen_worker.start_worker", lambda: True)
+    monkeypatch.setattr("app.services.regen_worker.stop_worker", lambda *a, **k: None)
+    caplog.set_level(logging.INFO, logger="app.worker")
+
+    worker._shutdown.set()
+    try:
+        assert worker.main() == 0
+    finally:
+        worker._shutdown.clear()
+
+    lines = [r.getMessage() for r in caplog.records
+             if r.name == "app.worker" and r.getMessage().startswith("LLM routing: ")]
+    assert len(lines) == 1
+    assert "tier.research=" in lines[0] and "attribution=" in lines[0] and "gemini.news=" in lines[0]
+    assert priced, "the price-row check did not run on the worker"
+    assert reported.wait(5), "model_access_report was not started"

@@ -8,6 +8,8 @@ Loops are quiet — they push results into the snapshot cache as `*_hot`
 snapshots so other agents can read them through the same interface they use
 for warm/cold data.
 """
+import contextvars
+import functools
 from datetime import datetime
 
 # Module-level state used by `/api/admin/monitoring/status`. Defined BEFORE
@@ -225,8 +227,56 @@ __all__ = [
 ]
 
 
+def _job_with_origin(func, loop_id: str):
+    """`func` run as loop `loop_id`: every LLM call it makes carries
+    `origin=loop:<id>` (attribution slice A2a, design §4.8).
+
+    Each run gets a FRESH `contextvars.copy_context()` (attribution critique
+    #11): APScheduler's pool threads are reused, so a context variable set
+    by one job — the failover-event list, an attempt scope, a context layer
+    a loop forgot to close — would otherwise leak into the next job on that
+    thread, and on the long-lived worker the failover list would grow
+    without bound. An umbrella context names the origin only, never an
+    agent: the registry's per-action agents stay correct underneath it.
+
+    `functools.wraps` keeps `__module__`/`__name__`, which the KNOWN_LOOPS
+    pin and APScheduler's job repr read.
+    """
+    origin = f"loop:{loop_id}"
+
+    def _run(*args, **kwargs):
+        from ..agents.llm import llm_call_context
+        with llm_call_context(origin=origin):
+            return func(*args, **kwargs)
+
+    @functools.wraps(func)
+    def job(*args, **kwargs):
+        return contextvars.copy_context().run(_run, *args, **kwargs)
+
+    return job
+
+
+class _OriginScheduler:
+    """Scheduler proxy for `register_all`: wraps each job so it runs under
+    its loop's origin (above). Everything but `add_job` passes through."""
+
+    def __init__(self, scheduler) -> None:
+        self._scheduler = scheduler
+
+    def add_job(self, func, *args, **kwargs):
+        loop_id = kwargs.get("id") or getattr(func, "__module__", "unknown").rsplit(".", 1)[-1]
+        return self._scheduler.add_job(_job_with_origin(func, loop_id), *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._scheduler, name)
+
+
 def register_all(scheduler) -> None:
-    """Register every monitoring loop with an APScheduler instance."""
+    """Register every monitoring loop with an APScheduler instance.
+
+    The loops register against a proxy, so every job's LLM rows and
+    `llm_call` lines say which loop started them (`origin=loop:<id>`)."""
+    scheduler = _OriginScheduler(scheduler)
     edgar_poller.register(scheduler)
     transcripts_poller.register(scheduler)
     news_loop.register(scheduler)

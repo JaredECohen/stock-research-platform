@@ -156,6 +156,9 @@ def _llm_summary(run_id: str) -> dict[str, Any]:
     }
 
 
+ORIGIN = "script:audit_unit_costs"
+
+
 class _Sample:
     """One measured action. Built incrementally so a crash mid-action still
     leaves a row that says what happened."""
@@ -175,7 +178,10 @@ class _Sample:
         since = _utcnow()
         t0 = time.monotonic()
         try:
-            with llm_call_context(agent_name="unit_cost_audit", run_id=self.row["run_id"]):
+            # An umbrella: origin and run only (attribution critique #1). It
+            # used to name agent "unit_cost_audit", which credited every
+            # specialist call inside the measured memo/DCF/comps run to it.
+            with llm_call_context(origin=ORIGIN, run_id=self.row["run_id"]):
                 extra = fn(self.row["run_id"]) or {}
             self.row["status"] = extra.pop("status", "ok")
             self.row.update(extra)
