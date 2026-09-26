@@ -261,7 +261,9 @@ def test_sdk_rows_never_carry_model_output(live_chat, monkeypatch, caplog):
     run_id = _run_id()
     with caplog.at_level(logging.DEBUG):
         chat_sdk.answer_via_sdk(message="Tell me about it", history=[], run_id=run_id)
-    for row in _sdk_rows(run_id):
+    rows = _sdk_rows(run_id)
+    assert len(rows) == 2, "no rows written: the loop below would check nothing"
+    for row in rows:
         values = " ".join(str(v) for v in vars(row).values())
         assert OUTPUT_SENTINEL not in values and ARG_SENTINEL not in values
     assert OUTPUT_SENTINEL not in caplog.text and ARG_SENTINEL not in caplog.text
@@ -314,6 +316,59 @@ def test_run_config_disables_tracing_per_run():
     assert config.trace_include_sensitive_data is False
 
 
+def test_chat_turn_passes_the_no_tracing_run_config(live_chat, monkeypatch):
+    """The factory being right is not enough: the chat turn's own Runner
+    call must carry it (#18), as defence in depth under the global switch."""
+    import agents
+    live_chat()
+    ScriptedResponses(monkeypatch, message("An answer.", _usage(50, 5)))
+    seen: list[Any] = []
+    real_run_sync = agents.Runner.run_sync
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs.get("run_config"))
+        return real_run_sync(*args, **kwargs)
+
+    monkeypatch.setattr(agents.Runner, "run_sync", spy)
+    answer, attempted = chat_sdk.run_chat_turn(message="Macro?", history=[], run_id=_run_id())
+    assert answer and attempted
+    (config,) = seen
+    assert config is not None
+    assert config.tracing_disabled is True
+    assert config.trace_include_sensitive_data is False
+
+
+def test_demo_only_mode_closes_both_sdk_gates(live_chat, monkeypatch):
+    """The SDK builds its own OpenAI client, so it must ask the question
+    `llm._demo_only` answers for every other client: with a key present
+    and demo-only mode on, neither the chat agent nor the legacy memo
+    exchange may run (a developer key would otherwise spend money)."""
+    from app.agents import sdk_runtime
+    live_chat()
+    monkeypatch.setattr(llm, "_demo_only", lambda: True)
+    transport = ScriptedResponses(monkeypatch)
+    assert settings.openai_api_key and settings.chat_agents_sdk
+    assert chat_sdk._can_use_sdk() is False
+    assert chat_sdk.run_chat_turn(message="Macro?", history=[]) == (None, False)
+    assert sdk_runtime._can_use_real_sdk() is False
+    assert sdk_runtime._run_via_real_sdk(TICKER, run_id=_run_id()) is None
+    assert transport.requests == []
+
+
+def test_tier_resolving_chat_to_a_non_openai_model_is_refused(live_chat, monkeypatch):
+    """Not only CHAT_MODEL: a tier override can resolve `chat.sdk_turn` to
+    Claude, which the OpenAI-only Agents SDK must not be sent."""
+    live_chat(chat_model="")
+    monkeypatch.setattr(settings, "llm_research_model", "claude-opus-5-5")
+    monkeypatch.setattr(settings, "llm_action_tier_overrides", "chat.sdk_turn:research")
+    transport = ScriptedResponses(monkeypatch)
+    with pytest.raises(ValueError, match="speaks only OpenAI"):
+        chat_sdk.chat_model_and_settings()
+    assert chat_sdk._build_chat_agent() is None
+    assert chat_sdk.run_chat_turn(message="hi", history=[]) == (None, False)
+    assert transport.requests == []
+
+
 @pytest.mark.parametrize("module", ["app.agents.chat_sdk", "app.agents.sdk_runtime"])
 def test_tracing_disabled_globally(module, tmp_path):
     """Importing either SDK module turns trace export off for the whole
@@ -350,18 +405,35 @@ def _follow_up(monkeypatch) -> None:
     monkeypatch.setattr(orch_mod, "_extract_tickers", lambda _text: [TICKER])
 
 
+# (active provider, LLM_RESEARCH_MODEL, LLM_ACTION_TIER_OVERRIDES, the model
+# the one legacy attempt must be sent). The last three route `chat.answer`
+# to OpenAI, which a configured tier used to enforce over the fallback's
+# provider_override: a second OpenAI attempt and no Anthropic one at all.
+_FALLBACK_ROUTES = {
+    "blank_tier": ("anthropic", "", "", None),
+    "active_openai": ("openai", "", "", None),
+    "openai_research_tier": ("anthropic", "gpt-6-sol", "", "claude-opus-5-5"),
+    "chat_answer_on_chat_tier": ("anthropic", "", "chat.answer:chat", "claude-opus-5-5"),
+}
+
+
+@pytest.mark.parametrize("config", sorted(_FALLBACK_ROUTES))
 @pytest.mark.parametrize("sdk_outcome", ["error", "refusal"])
 @pytest.mark.parametrize("legacy_ok", [True, False])
 def test_chat_failover_to_legacy_single_attempt_per_provider(
-        live_chat, monkeypatch, stored_memo, sdk_outcome, legacy_ok):
+        live_chat, monkeypatch, stored_memo, sdk_outcome, legacy_ok, config):
     """An SDK failure or refusal falls back to ONE single-shot `chat.answer`
     on a provider the turn has not used: the SDK is not run a second time
-    (the old duplicate `answer_via_sdk` call), and a failed Anthropic answer
-    does not hop back to OpenAI."""
+    (the old duplicate `answer_via_sdk` call), a failed Anthropic answer
+    does not hop back to OpenAI, and a `chat.answer` route that itself
+    lands on OpenAI (active provider or configured tier) moves to Anthropic."""
+    active, research_model, overrides, expected_model = _FALLBACK_ROUTES[config]
     claude = FakeClient(anthropic_response("Legacy answer." if legacy_ok else "",
                                            stop_reason="end_turn"))
     gpt = FakeClient(openai_response("must not be reached"))
-    live_chat(anthropic=claude, openai=gpt, active="anthropic")
+    live_chat(anthropic=claude, openai=gpt, active=active)
+    monkeypatch.setattr(settings, "llm_research_model", research_model)
+    monkeypatch.setattr(settings, "llm_action_tier_overrides", overrides)
     step = (RuntimeError("SDK transport exploded") if sdk_outcome == "error"
             else refusal(REFUSAL_SENTINEL, _usage(300, 5)))
     transport = ScriptedResponses(monkeypatch, step)
@@ -382,6 +454,65 @@ def test_chat_failover_to_legacy_single_attempt_per_provider(
     assert [r.action for r in rows] == ["chat.sdk_turn", "chat.answer"]
     assert rows[0].provider == "openai" and rows[0].success is False
     assert rows[1].provider == "anthropic" and rows[1].attempt == 1
+    if expected_model:
+        # The tier's own mapped failover (gpt-6-sol -> Opus 5.5), not a guess.
+        assert rows[1].model == expected_model
+
+
+@pytest.mark.parametrize("sdk_state", ["flag_off", "gate_closed"])
+def test_legacy_chat_keeps_its_failover_when_the_sdk_did_not_run(
+        live_chat, monkeypatch, stored_memo, sdk_state):
+    """Every production chat turn until wave H: with no SDK attempt this
+    turn, the legacy `chat.answer` is today's call, failover included. A
+    failed Anthropic answer hops to OpenAI exactly once."""
+    claude = FakeClient(anthropic_response("", stop_reason="end_turn"))
+    gpt = FakeClient(openai_response("OpenAI partner answer."))
+    live_chat(anthropic=claude, openai=gpt, active="anthropic")
+    if sdk_state == "flag_off":
+        monkeypatch.setattr(settings, "chat_agents_sdk", False)
+    else:
+        # Flag on, but the gate refuses the turn before any request.
+        monkeypatch.setattr(settings, "chat_model", "claude-opus-5-5")
+    transport = ScriptedResponses(monkeypatch)
+    _follow_up(monkeypatch)
+    run_id = _run_id()
+    with llm.llm_call_context(run_id=run_id):
+        resp = orch_mod.Orchestrator().chat(
+            f"Why is {TICKER} cheap?", [ChatMessage(role="user", content=f"Tell me about {TICKER}")])
+
+    assert transport.requests == []
+    assert len(claude.requests) == 1
+    assert len(gpt.requests) == 1                 # today's failover hop
+    assert resp.answer.startswith("OpenAI partner answer.")
+    rows = llm_fakes.rows_for(run_id)
+    assert [(r.action, r.provider, r.attempt) for r in rows] == [
+        ("chat.answer", "anthropic", 1), ("chat.answer", "openai", 2)]
+
+
+def test_a_raised_sdk_turn_counts_as_the_openai_attempt(live_chat, monkeypatch, stored_memo):
+    """`run_chat_turn` raising after it reached the model: the attempt is
+    spent. The memo-context answer must not run the SDK again, and the
+    legacy answer must not go to OpenAI."""
+    claude = FakeClient(anthropic_response("Legacy answer.", stop_reason="end_turn"))
+    gpt = FakeClient(openai_response("must not be reached"))
+    live_chat(anthropic=claude, openai=gpt, active="openai")
+    transport = ScriptedResponses(monkeypatch, message("An answer.", _usage(50, 5)),
+                                  message("A second SDK answer.", _usage(50, 5)))
+    real_turn = chat_sdk.run_chat_turn
+
+    def turn_then_raise(**kwargs: Any) -> Any:
+        real_turn(**kwargs)
+        raise RuntimeError("post-processing blew up")
+
+    monkeypatch.setattr(chat_sdk, "run_chat_turn", turn_then_raise)
+    _follow_up(monkeypatch)
+    resp = orch_mod.Orchestrator().chat(
+        f"Why is {TICKER} cheap?", [ChatMessage(role="user", content=f"Tell me about {TICKER}")])
+
+    assert len(transport.requests) == 1          # the SDK ran once
+    assert gpt.requests == []                    # and the legacy answer avoided OpenAI
+    assert len(claude.requests) == 1
+    assert resp.answer.startswith("Legacy answer.")
 
 
 def test_chat_run_id_links_sdk_and_legacy_rows(live_chat, monkeypatch, stored_memo):

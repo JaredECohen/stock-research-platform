@@ -404,19 +404,18 @@ def _legacy_answer_route(sdk_attempted: bool) -> dict[str, Any]:
     the SDK has run on OpenAI this turn, the fallback makes ONE attempt on a
     provider the turn has not tried: no failover hop (with the research
     tier on, Opus 5.5 would otherwise fail over to gpt-6-sol, a second
-    OpenAI attempt), and a legacy route that would itself land on OpenAI
-    moves to Anthropic when a key is configured. An OpenAI-only deployment
-    still gets its one single-shot attempt: the SDK run failing (a tool
-    loop, max turns, a refusal) says little about a plain completion.
+    OpenAI attempt), and a route that would itself land on OpenAI moves to
+    Anthropic when a key is configured. That move is `spent_provider`, not
+    `provider_override`: a configured `chat.answer` tier replaces the
+    override, so an OpenAI tier (LLM_RESEARCH_MODEL=gpt-6-sol, or the
+    `chat.answer:chat` rollback) used to go straight back to OpenAI.
+    An OpenAI-only deployment still gets its one single-shot attempt: the
+    SDK run failing (a tool loop, max turns, a refusal) says little about a
+    plain completion.
     """
     if not sdk_attempted:
         return {}
-    kwargs: dict[str, Any] = {"failover": False}
-    route = llm.resolve_action_route("chat.answer")
-    primary = route.provider if route.configured else settings.active_llm_provider
-    if primary == "openai" and settings.has_anthropic:
-        kwargs["provider_override"] = "anthropic"
-    return kwargs
+    return {"failover": False, "spent_provider": "openai"}
 
 
 def _stored_memo(ticker: str) -> StockMemoOut | None:

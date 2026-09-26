@@ -2448,6 +2448,32 @@ def _tier_request(action: str | None, provider: str, model: str | None, effort: 
     return route.provider, route.model, (effort or route.effort), route.failover, True
 
 
+def _avoid_spent_provider(
+    spent: str, provider: str, model: str | None, effort: str | None,
+    fo_route: tuple[str, str, str | None] | None, tiered: bool, caller_effort: str | None,
+) -> tuple[str, str | None, str | None, tuple[str, str, str | None] | None, bool]:
+    """Move a request that would land on `spent` to the other provider.
+
+    The tier's own failover route is preferred when it points elsewhere
+    (`chat.answer` on gpt-6-sol → Opus 5.5, the mapped hop, with the effort
+    already re-resolved for it); otherwise the partner's route default with
+    the caller's explicit effort (the tier's effort belonged to the spent
+    provider's model). Returns the request unchanged when it is not on
+    `spent`, or when the partner has no key: an OpenAI-only deployment
+    still makes its one single-shot attempt (the chat fallback's
+    documented exception, `orchestrator._legacy_answer_route`).
+    """
+    if provider != spent:
+        return provider, model, effort, fo_route, tiered
+    if fo_route is not None and fo_route[0] != spent and _has_key(fo_route[0]):
+        fo_provider, fo_model, fo_effort = fo_route
+        return fo_provider, fo_model, fo_effort, None, tiered
+    partner = _FAILOVER_PARTNER.get(spent)
+    if partner is None or not _has_key(partner):
+        return provider, model, effort, fo_route, tiered
+    return partner, None, caller_effort, None, False
+
+
 def _prepare(provider: str, model: str | None, route: str, *, tiered: bool = False) -> str | None:
     """Record the requested provider/model on the call scope and drop a
     provider-foreign model override (the route default is used instead)."""
@@ -2543,15 +2569,30 @@ def chat_text(
     schema: dict[str, Any] | None = None,
     action: str | None = None,
     ticker: str | None = None,
+    spent_provider: str | None = None,
 ) -> str | None:
     """Same `model`, `failover`, `effort`, `action` semantics as `chat_json`
-    (`schema` is accepted and ignored). Returns plain text or None."""
+    (`schema` is accepted and ignored). Returns plain text or None.
+
+    `spent_provider` names a provider the caller has already spent its one
+    attempt on (plan C1: a chat turn whose Agents SDK run went to OpenAI).
+    It is applied AFTER the tier, because a configured tier replaces any
+    `provider_override` — which is how an OpenAI `chat.answer` tier used to
+    send the fallback straight back to OpenAI. See `_avoid_spent_provider`.
+    """
     with _call_scope("chat_text", action=action, ticker=ticker, route=route,
                      max_tokens=max_tokens):
         provider = (provider_override or settings.active_llm_provider).lower()
         if provider == "none":
             return None
+        caller_effort = effort
         provider, model, effort, fo_route, tiered = _tier_request(action, provider, model, effort)
+        if spent_provider:
+            provider, model, effort, fo_route, tiered = _avoid_spent_provider(
+                spent_provider, provider, model, effort, fo_route, tiered, caller_effort)
+            # One attempt per provider: failover pairs openai<->anthropic, so
+            # any hop from here would lead back to the spent provider.
+            failover = False
         if provider == "gemini":
             return gemini_chat_text(prompt, system=system, model=model, max_tokens=max_tokens,
                                     action=action, ticker=ticker)

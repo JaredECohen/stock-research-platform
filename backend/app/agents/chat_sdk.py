@@ -220,6 +220,14 @@ def chat_model_and_settings() -> tuple[str, Any | None]:
         )
     route = llm.resolve_action_route("chat.sdk_turn")
     if route.configured and route.model:
+        if route.provider != "openai":
+            # The tier can resolve elsewhere too: LLM_ACTION_TIER_OVERRIDES=
+            # chat.sdk_turn:research with an Opus research model would
+            # otherwise send a Claude model name to the OpenAI endpoint.
+            raise ValueError(
+                f"chat.sdk_turn resolves to {route.provider} model {route.model!r}; "
+                "the Agents SDK chat speaks only OpenAI"
+            )
         model, effort = route.model, route.effort
     else:
         model = llm.resolve_role_model("pm", provider="openai")
