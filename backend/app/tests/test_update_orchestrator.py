@@ -25,6 +25,8 @@ import itertools
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+import pytest
+
 from app.agents import llm, news_impact_agent
 from app.cache.snapshots import ResearchSnapshot
 from app.config import settings
@@ -684,3 +686,80 @@ def test_alert_survives_a_long_pm_view(monkeypatch):
     prompt = _capture_impact_prompt(monkeypatch, memo, _alert("Unique marker headline"))
     assert "Unique marker headline" in prompt
 
+
+
+@pytest.mark.parametrize("first,second", [
+    ("Tesla Q3 deliveries - beat estimates", "Tesla Q3 deliveries - miss estimates"),
+    ("Boeing strike - union rejects offer", "Boeing strike - union accepts offer"),
+    ("Update - Apple cuts guidance", "Update - Apple raises dividend"),
+    ("GOOG - DOJ wins search remedy ruling", "GOOG - EU fines Google 3 billion"),
+    ("Caterpillar | Q3 earnings beat estimates", "Caterpillar | CFO resigns"),
+])
+def test_distinct_stories_after_a_dash_keep_distinct_fingerprints(first, second):
+    # Stripping ANY short clause after a spaced dash merged opposite
+    # developments; the second was then "already_assessed" for 72 hours.
+    assert (update_orchestrator.news_fingerprint("TSTFP", first)
+            != update_orchestrator.news_fingerprint("TSTFP", second))
+
+
+@pytest.mark.parametrize("tagged,url", [
+    ("Deal signed - Reuters", ""),
+    ("Deal signed - The Wall Street Journal", ""),
+    ("Deal signed | Barron's", ""),
+    ("Deal signed - Benzinga", "https://www.benzinga.com/news/1"),
+])
+def test_publisher_tags_are_still_stripped(tagged, url):
+    assert (update_orchestrator.news_fingerprint("TSTFP", tagged, url)
+            == update_orchestrator.news_fingerprint("TSTFP", "Deal signed"))
+
+
+def test_distinct_story_after_a_dash_is_assessed(monkeypatch):
+    _seed("TSTDASH", generated_at=datetime.utcnow() - timedelta(hours=1))
+    calls, assess = _counting_assess([_NOT_MATERIAL, _NOT_MATERIAL])
+    with patch.object(news_impact_agent, "assess", side_effect=assess):
+        update_orchestrator.on_news_alert("TSTDASH", _alert("Tesla Q3 deliveries - beat estimates"))
+        out = update_orchestrator.on_news_alert("TSTDASH", _alert("Tesla Q3 deliveries - miss estimates"))
+    assert out["reason"] == "not_material"
+    assert len(calls) == 2
+
+
+def test_alert_past_the_72h_window_is_stale_even_when_newer_than_the_memo():
+    # Pins the window itself: the 30-day case above passes for any gate
+    # under 30 days. Four days old, but written after a ten-day-old memo.
+    _seed("TSTSTALE72", generated_at=datetime.utcnow() - timedelta(days=10))
+    calls, assess = _counting_assess([_NOT_MATERIAL, _NOT_MATERIAL])
+    now = datetime.utcnow()
+    with patch.object(news_impact_agent, "assess", side_effect=assess):
+        old = update_orchestrator.on_news_alert(
+            "TSTSTALE72", _alert("Four days old", published_at=(now - timedelta(days=4)).isoformat()))
+        recent = update_orchestrator.on_news_alert(
+            "TSTSTALE72", _alert("Seventy-one hours old", published_at=(now - timedelta(hours=71)).isoformat()))
+    assert old["reason"] == "stale_alert"
+    assert recent["reason"] == "not_material"
+    assert calls == ["Seventy-one hours old"]
+
+
+def test_failed_publish_is_not_remembered_and_is_retried():
+    # The verdict is remembered only after save_memo succeeds; remembering it
+    # first would turn a failed publish into a story that is never patched.
+    _seed("TSTSAVEFAIL", generated_at=datetime.utcnow() - timedelta(hours=1))
+    material = {"material": True, "patch": {"confidence_score": 60.0},
+                "rationales": {"confidence_score": "news"}, "delta_summary": "news"}
+    calls, assess = _counting_assess([material, material])
+    real_save = memo_store.save_memo
+    attempts: list[int] = []
+
+    def flaky_save(*args, **kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("database unavailable")
+        return real_save(*args, **kwargs)
+
+    with patch.object(news_impact_agent, "assess", side_effect=assess), \
+            patch.object(memo_store, "save_memo", side_effect=flaky_save):
+        with pytest.raises(RuntimeError):
+            update_orchestrator.on_news_alert("TSTSAVEFAIL", _alert())
+        retry = update_orchestrator.on_news_alert("TSTSAVEFAIL", _alert())
+    assert retry["patched"] is True
+    assert len(calls) == 2
+    assert memo_store.latest_memo("TSTSAVEFAIL").version == 2

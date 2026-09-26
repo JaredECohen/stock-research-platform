@@ -61,9 +61,25 @@ AUTO_REGEN_RECENCY_DAYS = 30
 NEWS_ASSESSED_WINDOW = timedelta(hours=72)
 _NEWS_ASSESSED_KIND = "news_assessed"
 
-# " - Reuters", " | Bloomberg", " — The Wall Street Journal": a trailing
-# publisher tag of at most five words after a spaced dash or bar.
-_PUBLISHER_SUFFIX_RE = re.compile(r"\s+[-–—|]\s+(?:\S+\s+){0,4}\S+\s*$")
+# " - Reuters", " | Bloomberg", " — The Wall Street Journal": the last
+# segment after a spaced dash or bar. It is stripped ONLY when it names a
+# publisher (`_is_publisher_tag`): "Tesla Q3 deliveries - beat estimates"
+# and "... - miss estimates" are two stories, and stripping any short
+# trailing clause merged them, so the second was never assessed.
+_TRAILING_SEGMENT_RE = re.compile(r"\s+[-–—|]\s+([^-–—|]+?)\s*$")
+
+# Outlets that tag their headlines, beyond the governed domains in
+# `app/data/news_domains.json` (whose names are added at call time).
+# Compared after `_publisher_key` folding.
+_PUBLISHER_NAMES = frozenset({
+    "apnews", "associatedpress", "ap", "benzinga", "businessinsider",
+    "cnn", "cnnbusiness", "economist", "financialtimes", "forbes",
+    "fortune", "foxbusiness", "globenewswire", "insider",
+    "investorsbusinessdaily", "morningstar", "motleyfool", "nasdaq",
+    "newyorktimes", "prnewswire", "businesswire", "seekingalpha",
+    "tipranks", "wallstreetjournal", "yahoofinance", "zacks",
+    "zacksinvestmentresearch",
+})
 
 # Per-ticker FIFO queue (singleton). Largely superseded for
 # full_reanalysis by the durable `regen_jobs` queue — kept because the
@@ -299,15 +315,54 @@ def on_filing_event(ticker: str, *, source: str = "filing_event") -> dict[str, A
     }
 
 
-def news_fingerprint(ticker: str, title: str) -> str:
+def _publisher_key(text: str) -> str:
+    """"The Wall Street Journal" -> "wallstreetjournal", "Reuters.com" ->
+    "reuters", "Barron's" -> "barrons": one folding for tags and names."""
+    t = text.strip().lower()
+    t = re.sub(r"^www\.", "", t)
+    t = re.sub(r"\.(com|net|org|co\.uk|co)$", "", t)
+    t = re.sub(r"^the\s+", "", t)
+    return re.sub(r"[^a-z0-9]+", "", t)
+
+
+def _domain_label(url: str) -> str:
+    """"https://www.reuters.com/x" -> "reuters"; "" when there is no host."""
+    host = re.sub(r"^[a-z]+://", "", (url or "").strip().lower()).split("/", 1)[0].split(":", 1)[0]
+    if host.startswith("vertexaisearch."):
+        # Gemini's grounding redirect: the host says nothing about the
+        # publisher, and its label ("google") is a company name.
+        return ""
+    parts = [p for p in host.split(".") if p and p != "www"]
+    return parts[-2] if len(parts) >= 2 else ""
+
+
+def _is_publisher_tag(segment: str, url: str) -> bool:
+    key = _publisher_key(segment)
+    if not key:
+        return False
+    if key in _PUBLISHER_NAMES:
+        return True
+    label = _domain_label(url)
+    if label and key == label:
+        return True
+    from ..agents.news_agent import allowed_domains, blocked_domains
+    return any(key == _publisher_key(d) for d in allowed_domains() | blocked_domains())
+
+
+def news_fingerprint(ticker: str, title: str, url: str = "") -> str:
     """Stable id for "the same story" about `ticker`.
 
     Title-based: lowercased, a trailing publisher tag stripped, punctuation
     removed, whitespace collapsed. So "Southern Co signs deal with Google -
     Reuters" and "southern co. signs deal with google" are one story. A
-    genuinely reworded duplicate is missed; the window bounds that cost.
+    tag counts as a publisher when it names a known outlet, a governed news
+    domain, or the alert's own `url` host. A genuinely reworded duplicate
+    is missed; the window bounds that cost.
     """
-    t = _PUBLISHER_SUFFIX_RE.sub("", (title or "").strip())
+    t = (title or "").strip()
+    m = _TRAILING_SEGMENT_RE.search(t)
+    if m and _is_publisher_tag(m.group(1), url):
+        t = t[: m.start()]
     t = re.sub(r"[^\w\s]+", "", t.lower())
     t = re.sub(r"\s+", " ", t).strip()
     return hashlib.sha1(f"{ticker.upper()}|{t}".encode(), usedforsecurity=False).hexdigest()
@@ -407,7 +462,7 @@ def on_news_alert(ticker: str, alert: NewsAlert) -> dict[str, Any]:
     too_old = _news_age_gate(alert, prior_memo.generated_at, now=now)
     if too_old:
         return {"patched": False, "ticker": ticker, "reason": too_old}
-    fingerprint = news_fingerprint(ticker, alert.title)
+    fingerprint = news_fingerprint(ticker, alert.title, alert.url or "")
     if fingerprint in _assessed_map(ticker, now=now):
         return {"patched": False, "ticker": ticker, "reason": "already_assessed"}
 
