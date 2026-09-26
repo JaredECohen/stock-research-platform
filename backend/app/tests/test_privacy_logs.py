@@ -167,6 +167,18 @@ def _index_research_notes(monkeypatch):
     notes._llm_summarize("A research note body.")
 
 
+def _reflection_facts(monkeypatch):
+    from app.agents import fact_extraction, reflection_agent
+    from app.services import history_service
+    from app.tests.test_update_orchestrator import _stub_memo
+    monkeypatch.setattr(settings, "enable_long_term_memory", True)
+    monkeypatch.setattr(history_service, "backfill_ticker", lambda *_a, **_k: None)
+    monkeypatch.setattr(fact_extraction, "collect_structured_facts", _raise)
+    memo = _stub_memo("PRIV").model_copy(update={"sources_used": ["filing:0000000001-26-000001"]})
+    triggers, _written = reflection_agent.run(memo)
+    assert triggers, "no delta trigger: the fact-extraction site was not reached"
+
+
 SITES = {
     "dcf_pm_adjuster.call": _dcf_pm_adjuster_call,
     "dcf_pm_adjuster.rebuild": _dcf_pm_adjuster_rebuild,
@@ -181,11 +193,14 @@ SITES = {
     "scenario_assumptions.drivers": _scenario_drivers,
     "public_samples.builder": _public_sample_builder,
     "index_research_notes": _index_research_notes,
+    "reflection_agent.facts": _reflection_facts,
 }
 
 
 @pytest.mark.parametrize("site", sorted(SITES))
-def test_privacy_sentinel_never_logged(site, monkeypatch, caplog):
+def test_privacy_sentinel_never_logged(site, monkeypatch, caplog, tmp_path):
+    # Sites that write long-term memory write it here, never to the repo's.
+    monkeypatch.setattr(settings, "memory_dir", str(tmp_path))
     caplog.set_level(logging.INFO)
     SITES[site](monkeypatch)
     leaked = [f"{r.name} {r.levelname}: {r.getMessage()[:160]}"
@@ -222,6 +237,10 @@ def test_privacy_sentinel_never_logged_through_the_llm_layer(monkeypatch, caplog
     assert lines, "the fake-client calls reached the LLM layer"
     rows = llm_fakes.rows_for("priv-e2e")
     assert {r.action for r in rows} >= {"dcf.scenarios", "dcf.update", "memo.long_form"}
+    # A long-form row names the specialist it expands, not the registry's
+    # generic "Long-form Writer" (long_form.py is an AGENT_CONTEXT_SITE);
+    # both attempts (the failed one and its failover) say so.
+    assert {r.agent_name for r in rows if r.action == "memo.long_form"} == {"Sector Analyst"}
     for row in rows:
         for column in row.__table__.columns.keys():
             assert SENTINEL not in str(getattr(row, column)), column
@@ -242,3 +261,52 @@ def test_public_sample_commentary_records_the_served_model(monkeypatch):
     assert basis["provider"] == "anthropic" and basis["model_sent"]
     # Provenance only: the page still gets {text, generated_at, model}.
     assert set(public_samples._public_shape("commentary", payload)) == {"text", "generated_at", "model"}
+
+
+def _intake_still_logs_its_rationale() -> bool:
+    """G1 (FIX-020) owns `intake.py` and replaces its INFO line, which
+    prints the PM's model-written rationale, with a character count. Until
+    that lands the memo-run test tolerates exactly that one line; the
+    allowance switches itself off when the source no longer prints it, so
+    after G1 merges the test is strict with no edit."""
+    import inspect
+
+    from app.agents import intake
+    return "rationale=%s" in inspect.getsource(intake)
+
+
+def test_privacy_sentinel_never_logged_in_a_memo_run(monkeypatch, caplog, tmp_path):
+    """The contract's shape (critique #15): a whole fake-client memo run,
+    every provider answering with the sentinel in every field, and not one
+    INFO-or-above record, traceback included, carries it."""
+    from app.agents.graph import run_stock_memo
+    from app.tests.llm_fakes import gemini_response
+
+    body = json.dumps({
+        "rating_label": "Neutral", "confidence": 0.6, "confidence_score": 60,
+        "headline": SENTINEL, "summary": SENTINEL, "key_points": [SENTINEL],
+        "rationale": SENTINEL, "narrative": SENTINEL, "one_sentence_thesis": SENTINEL,
+        "final_pm_view": SENTINEL, "final_verdict": SENTINEL, "skip": [],
+        "items": [], "questions": [], "updates": {}, "rationales": {},
+    })
+    llm_fakes.live(
+        monkeypatch,
+        openai=FakeClient(openai_response(body)),
+        anthropic=FakeClient(anthropic_response(body)),
+        gemini=FakeClient(gemini_response(body)),
+        active="anthropic",
+    )
+    monkeypatch.setattr(settings, "memory_dir", str(tmp_path))
+    caplog.set_level(logging.INFO)
+    run_stock_memo("AAPL", run_id="priv-memo-run")
+    assert llm_fakes.rows_for("priv-memo-run"), "the memo run never reached the LLM layer"
+
+    tolerate_intake = _intake_still_logs_its_rationale()
+    leaked = [
+        f"{r.name}:{r.lineno} {r.levelname}"
+        for r in caplog.records
+        if r.levelno >= logging.INFO and SENTINEL in caplog.handler.format(r)
+        and not (tolerate_intake and r.name == "app.agents.intake"
+                 and r.getMessage().startswith("PM intake for "))
+    ]
+    assert not leaked, f"model or exception text reached the log: {leaked}"

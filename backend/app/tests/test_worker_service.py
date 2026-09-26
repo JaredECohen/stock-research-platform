@@ -139,7 +139,18 @@ def test_worker_logs_routing_line_and_model_access(monkeypatch, caplog):
     priced: list[bool] = []
     real_unpriced = llm.unpriced_configured_models
     monkeypatch.setattr(llm, "unpriced_configured_models", lambda: priced.append(True) or real_unpriced())
-    monkeypatch.setattr("app.seed_universe.run_full_seed", lambda *a, **k: {})
+    # The seed thread runs outside the scheduler proxy, so it names its own
+    # origin (attribution critique #16); recorded from inside the thread
+    # `worker.main()` really starts.
+    seeded: list[str | None] = []
+    seed_done = threading.Event()
+
+    def _seed(*_a, **_k):
+        seeded.append(llm.current_call_context()["origin"])
+        seed_done.set()
+        return {}
+
+    monkeypatch.setattr("app.seed_universe.run_full_seed", _seed)
     monkeypatch.setattr("app.services.regen_worker.start_worker", lambda: True)
     monkeypatch.setattr("app.services.regen_worker.stop_worker", lambda *a, **k: None)
     caplog.set_level(logging.INFO, logger="app.worker")
@@ -156,3 +167,5 @@ def test_worker_logs_routing_line_and_model_access(monkeypatch, caplog):
     assert "tier.research=" in lines[0] and "attribution=" in lines[0] and "gemini.news=" in lines[0]
     assert priced, "the price-row check did not run on the worker"
     assert reported.wait(5), "model_access_report was not started"
+    assert seed_done.wait(10), "the seed thread did not reach run_full_seed"
+    assert seeded == ["worker:seed"]
