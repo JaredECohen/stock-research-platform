@@ -138,6 +138,69 @@ def usage_meter() -> Iterator[UsageMeter]:
         _usage_meter.reset(token)
 
 
+# (attempt scope, call context, args, kwargs) of each row held back by
+# `deferred_call_rows`.
+_PendingRow = tuple[dict[str, Any] | None, dict[str, Any], tuple[Any, ...], dict[str, Any]]
+_deferred_rows: ContextVar[list[_PendingRow] | None] = ContextVar(
+    "embedding_deferred_call_rows", default=None)
+
+
+@contextmanager
+def deferred_call_rows() -> Iterator[None]:
+    """Hold the `llm_call_logs` rows of embeddings made inside the block and
+    write them when it exits, whether it exits cleanly or by raising.
+
+    For a caller that embeds while holding an open write transaction.
+    `vector_store.upsert_source` keeps one transaction across every batch
+    (its idempotency depends on it), and the row writer opens its own
+    connection: on one SQLite file that INSERT waited out the 5 s busy
+    timeout per batch and was then dropped as "database is locked", so the
+    index spend vanished from the call log and every batch stalled. Rows
+    keep the attempt scope and call context they were made under, so a
+    deferred row is identical to an immediate one. Nested blocks defer to
+    the outermost, which writes after the outermost caller has closed its
+    session.
+    """
+    if _deferred_rows.get() is not None:
+        yield
+        return
+    pending: list[_PendingRow] = []
+    token = _deferred_rows.set(pending)
+    try:
+        yield
+    finally:
+        _deferred_rows.reset(token)
+        for att, ctx, args, kwargs in pending:
+            _write_row(att, ctx, args, kwargs)
+
+
+def _write_row(att: dict[str, Any] | None, ctx: dict[str, Any],
+               args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+    from ..agents import llm
+
+    a_tok = llm._ATTEMPT.set(att)
+    c_tok = llm._CALL_CONTEXT.set(ctx)
+    try:
+        llm._record_usage(*args, **kwargs)
+    except Exception as exc:  # pragma: no cover - the writer already swallows DB errors
+        # A lost audit row must not replace the caller's own exception.
+        log.warning("deferred embedding call row failed: %s", type(exc).__name__)
+    finally:
+        llm._CALL_CONTEXT.reset(c_tok)
+        llm._ATTEMPT.reset(a_tok)
+
+
+def _record_row(*args: Any, **kwargs: Any) -> None:
+    """`llm._record_usage` now, or at the end of `deferred_call_rows`."""
+    from ..agents import llm
+
+    pending = _deferred_rows.get()
+    if pending is None:
+        llm._record_usage(*args, **kwargs)
+        return
+    pending.append((llm._ATTEMPT.get(), llm._CALL_CONTEXT.get(), args, kwargs))
+
+
 def _hash_embed(text: str, dim: int = FALLBACK_DIM) -> list[float]:
     """Deterministic, content-derived 'embedding' for tests.
 
@@ -171,7 +234,9 @@ def embed(texts: Sequence[str], *, action: str | None = None,
     `llm_call_logs` row, and every raise after the guard writes its row
     first, so an embedding outage is visible in the call log rather than
     only as an emptied search (design gap G10). Hash vectors make no
-    request and write nothing.
+    request and write nothing. Inside `deferred_call_rows` the rows are
+    written when that block exits instead, still before its caller sees
+    the raise.
     """
     if not texts:
         return []
@@ -186,7 +251,6 @@ def embed(texts: Sequence[str], *, action: str | None = None,
 
 
 def _embed_in_scope(texts: Sequence[str], att: dict[str, Any]) -> list[list[float]]:
-    from ..agents import llm
 
     if _hash_allowed():
         return [_hash_embed(t) for t in texts]
@@ -199,7 +263,7 @@ def _embed_in_scope(texts: Sequence[str], att: dict[str, Any]) -> list[list[floa
         # the spend. An embedding lookup in between (a retrieval tool during
         # an analyst turn) would otherwise be billed as the analyst's call.
         ms = int((time.monotonic() - started) * 1000) if started is not None else 0
-        llm._record_usage("openai", EMBEDDING_MODEL, 0, 0, duration_ms=ms, success=False,
+        _record_row("openai", EMBEDDING_MODEL, 0, 0, duration_ms=ms, success=False,
                           error=error, update_last_usage=False)
 
     if not _is_openai_available():
@@ -240,11 +304,11 @@ def _embed_in_scope(texts: Sequence[str], att: dict[str, Any]) -> list[list[floa
         vecs = None
     if vecs is None or len(vecs) != len(texts) or any(len(v) != EMBEDDING_DIM for v in vecs):
         # Billed all the same, so the row carries the tokens it reported.
-        llm._record_usage("openai", EMBEDDING_MODEL, billed or 0, 0, duration_ms=ms,
+        _record_row("openai", EMBEDDING_MODEL, billed or 0, 0, duration_ms=ms,
                           success=False, error="unexpected_shape", served_model=served_model,
                           update_last_usage=False)
         raise EmbeddingUnavailable("openai embeddings returned an unexpected shape")
-    llm._record_usage("openai", EMBEDDING_MODEL, billed or 0, 0, duration_ms=ms,
+    _record_row("openai", EMBEDDING_MODEL, billed or 0, 0, duration_ms=ms,
                       served_model=served_model, update_last_usage=False)
     meter = _usage_meter.get()
     if meter is not None:

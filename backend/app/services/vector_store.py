@@ -358,7 +358,12 @@ def upsert_source(
     batch_size = max(1, int(batch_size))
     written = 0
     try:
-        with SessionLocal() as db:
+        # `deferred_call_rows` is entered FIRST so it exits LAST: each
+        # batch's `llm_call_logs` row is written after this session has
+        # committed or rolled back. Written inside it, the row's INSERT (on
+        # its own connection) waits on this transaction's write lock, which
+        # on SQLite meant a 5 s stall per batch and a dropped row.
+        with emb_svc.deferred_call_rows(), SessionLocal() as db:
             # Replace prior chunks for this source so re-ingest is idempotent.
             # Inside the same transaction as the inserts below.
             if source_id is not None:

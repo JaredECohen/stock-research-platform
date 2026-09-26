@@ -39,7 +39,6 @@ sources, ≤$0.10, ≤20 MB a night). Nothing here runs on import.
 """
 from __future__ import annotations
 
-import contextlib
 import logging
 import math
 import uuid
@@ -127,16 +126,17 @@ def _ceiling_stop(db_bytes: int | None, projected_bytes: int, max_db_mb: float |
 
 
 def _repair_origin() -> Any:
-    """Tag the re-index's `embed.index` rows `origin=repair:corpus`.
+    """Tag the repair's embedding rows `origin=repair:corpus` (attribution
+    design §4.7 and its call-site table).
 
-    The indexer is the ordinary ingest path, so without this its rows read
-    like any other filing index. Only when no origin is set: the nightly
-    retry inside `history_backfill` runs under its loop's origin, and that
-    is the more useful answer to "what spent this"."""
-    from ..agents.llm import current_call_context, llm_call_context
+    Unconditional, even inside the nightly `history_backfill` retry that
+    already runs under its loop's origin: the re-index goes through the
+    ordinary ingest path, so under the loop origin its `embed.index` rows
+    are indistinguishable from the same loop's own `backfill_ticker`
+    indexing, and the capped repair spend could not be read off the call
+    log. Which loop ran the repair is still in its cron-run note."""
+    from ..agents.llm import llm_call_context
 
-    if current_call_context().get("origin"):
-        return contextlib.nullcontext()
     return llm_call_context(origin="repair:corpus")
 
 
@@ -245,7 +245,7 @@ def reembed(
         last_id = rows[-1].id
         if not work:
             continue
-        with emb_svc.usage_meter() as meter:
+        with emb_svc.usage_meter() as meter, _repair_origin():
             try:
                 vectors = emb_svc.embed([r.text for r in work], action="embed.repair")
             except emb_svc.EmbeddingUnavailable:
