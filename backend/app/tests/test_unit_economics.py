@@ -285,6 +285,36 @@ def test_a_tagged_pm_chat_turn_is_one_unit():
     assert block["cost_usd_per_unit"]["median"] == pytest.approx(0.05)
 
 
+def test_pm_chat_is_labelled_per_turn_only_when_every_row_is_tagged():
+    """B8-C1 made /api/chat tag every turn, so a window of tagged turns is
+    measured per turn and must not keep the per-call floor label. One
+    untagged legacy row puts the whole figure back to a floor: the median
+    would mix turns with single calls."""
+    rows = []
+    for turn in range(30):
+        rows.append({"feature": "pm_chat", "run_id": f"chat:{turn:032x}", **_cents(2)})
+        rows.append({"feature": "pm_chat", "run_id": f"chat:{turn:032x}", **_cents(8)})
+    _seed(rows)
+    report = _report()
+    block = report["operations"]["pm_chat"]
+    assert block["understates_unit"] is False
+    assert block["basis"] == ue.BASIS_RUN_ID
+    assert "turn" in block["unit"] and "LLM call inside" not in block["unit"]
+    assert "chat:<hex>" in block["basis_note"]
+    for plan in ("free", "pro"):
+        term = report["plans"][plan]["terms"]["pm_chat"]
+        assert "floor_only" not in term and "floor_reason" not in term
+
+    _seed([{"feature": "pm_chat", **_cents(3)}])      # one legacy, untagged call
+    mixed = _report()
+    block = mixed["operations"]["pm_chat"]
+    assert block["understates_unit"] is True
+    assert block["unit"] == "one LLM call inside an Ask-the-PM turn"
+    for plan in ("free", "pro"):
+        term = mixed["plans"][plan]["terms"]["pm_chat"]
+        assert term["floor_only"] is True and "classify_intent" in term["floor_reason"]
+
+
 def test_the_scan_cap_counts_the_rows_it_dropped():
     _seed([{"feature": "chart_commentary", **_cents(i)} for i in range(1, 11)])
     report = _report(max_rows=4)
