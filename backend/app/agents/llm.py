@@ -1052,6 +1052,10 @@ def _record_usage(
             # spend is not dropped (design gap G19; the learning judge).
             "call_cost_usd": att["call_cost_usd"],
             "refused": bool(refused),
+            # The failure category ("refusal:bio", "invalid_json_response",
+            # ...; None on success). The debate harness records a refusal
+            # as `refused:<category>` in its route phases (critique #11).
+            "error_type": error_type,
         }
 
     fields = {
@@ -2350,25 +2354,38 @@ def _with_failover(provider: str, call: Any, *, failover: bool = True,
                 **{**kwargs, "model": mapped_model, "effort": partner_effort})
 
 
-def _tier_request(action: str | None, provider: str, model: str | None, effort: str | None
-                  ) -> tuple[str, str | None, str | None, tuple[str, str, str | None] | None, bool]:
+def _tier_request(action: str | None, provider: str, model: str | None, effort: str | None,
+                  *, pair_leg: bool = False,
+                  ) -> tuple[str, str | None, str | None, tuple[str, str, str | None] | None, str | None]:
     """Apply a configured tier route: (provider, model, effort, failover
-    route, tiered). The tier replaces the call site's provider and model
+    route, resolution). The tier replaces the call site's provider and model
     (the per-role env knobs are today's routing; the tier IS the owner's
-    migration) but an explicit `effort=` from the caller still wins."""
+    migration) but an explicit `effort=` from the caller still wins.
+    `resolution` is None when no tier applies.
+
+    `pair_leg`: a caller that fails over on its own (`failover=False`) and
+    names the tier's OWN failover (provider, model) runs that leg as asked.
+    This is the debate pair failover (bull/bear design §4.7): both advocates
+    move to the partner route together, and without this the tier would send
+    the partner leg straight back to the primary that just failed."""
     route = _dispatch_route(action or _CALL_CONTEXT.get().get("action"))
     if route is None or route.provider is None:
-        return provider, model, effort, None, False
-    return route.provider, route.model, (effort or route.effort), route.failover, True
+        return provider, model, effort, None, None
+    if (pair_leg and route.failover is not None and provider == route.failover_provider
+            and (model or "").strip() == route.failover_model):
+        return provider, route.failover_model, (effort or route.failover_effort), None, "failover_pair"
+    return route.provider, route.model, (effort or route.effort), route.failover, "tier"
 
 
-def _prepare(provider: str, model: str | None, route: str, *, tiered: bool = False) -> str | None:
+def _prepare(provider: str, model: str | None, route: str, *,
+             tiered: str | None = None) -> str | None:
     """Record the requested provider/model on the call scope and drop a
-    provider-foreign model override (the route default is used instead)."""
+    provider-foreign model override (the route default is used instead).
+    `tiered` is `_tier_request`'s resolution ("tier" / "failover_pair")."""
     att = _ATTEMPT.get()
     literal = (model or "").strip()
     requested = literal or _model_for(provider, route)
-    resolution = "tier" if tiered else ("explicit" if literal else "route_default")
+    resolution = tiered if tiered else ("explicit" if literal else "route_default")
     if not _model_matches_provider(model, provider):
         # Wave 9b's silent drop, now visible: the row says which name was
         # asked for and why another one was sent.
@@ -2431,7 +2448,9 @@ def chat_json(
         provider = (provider_override or settings.active_llm_provider).lower()
         if provider == "none":
             return None
-        provider, model, effort, fo_route, tiered = _tier_request(action, provider, model, effort)
+        provider, model, effort, fo_route, tiered = _tier_request(
+            action, provider, model, effort,
+            pair_leg=not failover and provider_override is not None)
         if provider == "gemini":
             return gemini_chat_json(prompt, system=system, model=model, max_tokens=max_tokens,
                                     action=action, ticker=ticker)
@@ -2465,7 +2484,9 @@ def chat_text(
         provider = (provider_override or settings.active_llm_provider).lower()
         if provider == "none":
             return None
-        provider, model, effort, fo_route, tiered = _tier_request(action, provider, model, effort)
+        provider, model, effort, fo_route, tiered = _tier_request(
+            action, provider, model, effort,
+            pair_leg=not failover and provider_override is not None)
         if provider == "gemini":
             return gemini_chat_text(prompt, system=system, model=model, max_tokens=max_tokens,
                                     action=action, ticker=ticker)
