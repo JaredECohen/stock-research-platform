@@ -9,45 +9,234 @@ macro snapshot?").
 
 This module builds a real SDK Agent with `function_tool`s that lazily
 fetch the data the user actually asked for. The agent decides which
-tools to call. We persist `new_items` to `SDKTrace` (surface='chat') so
-reviewers can see what the agent fetched and how it reasoned.
+tools to call.
 
-Skip conditions:
-- `USE_AGENTS_SDK=false` → caller falls back to legacy single-shot.
-- `openai-agents` not installed → same.
-- No `OPENAI_API_KEY` → same.
+Privacy (FIX-020). The turn's `SDKTrace` row (surface='chat') records
+WHAT ran — item types, the agent, the tool names — never what the model
+wrote: `final_output` is stored empty and no item arguments, outputs or
+message text are kept. SDK trace export to OpenAI is disabled for the
+whole process at import and again per run, and failures are logged by
+exception type only (an SDK exception can quote the model's output).
+
+Attribution: every model response of a turn writes one `llm_call_logs`
+row (action `chat.sdk_turn`) through a `RunHooks.on_llm_end` hook, under
+the route's `chat:<hex>` run id, so a turn that falls back to the legacy
+single-shot answer reads as one timeline.
+
+Skip conditions (caller answers with the legacy single-shot path):
+- `CHAT_AGENTS_SDK=false` (plan P14; the legacy `USE_AGENTS_SDK` no longer
+  gates chat).
+- `openai-agents` not installed, no `OPENAI_API_KEY`, or demo-only mode.
 
 Failure conditions:
-- SDK call raises → returns None, caller falls back to legacy path.
+- SDK run raises or the model refuses → returns None, caller falls back.
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any
 
 from ..config import settings
 from . import llm
-from .log_safety import log_safely, safe_exc
+from .log_safety import log_safely
 
 log = logging.getLogger(__name__)
 
 
+def disable_sdk_tracing() -> None:
+    """Turn off openai-agents trace export for this process.
+
+    The SDK uploads traces — prompts, the user's message and history, tool
+    arguments and outputs — to OpenAI's trace store by default. A per-run
+    `RunConfig(tracing_disabled=True)` is passed too, but any future Runner
+    call without it would re-enable export, so the global switch is thrown
+    at import (attribution critique #18). `set_tracing_disabled` wins over
+    the OPENAI_AGENTS_DISABLE_TRACING env var, which production also sets.
+    """
+    try:
+        from agents import set_tracing_disabled
+    except Exception:  # pragma: no cover - the package is optional
+        return
+    set_tracing_disabled(True)
+
+
+disable_sdk_tracing()
+
+
+def sdk_run_config() -> Any:
+    """The RunConfig every Runner call passes: no trace export, and no
+    model/tool data in any trace a processor might still see."""
+    from agents import RunConfig
+    return RunConfig(tracing_disabled=True, trace_include_sensitive_data=False)
+
+
+_ITEM_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_.:\-]")
+
+
+def _item_name(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return _ITEM_NAME_UNSAFE.sub("_", value)[:64]
+
+
+def trace_items(new_items: Any) -> list[dict[str, Any]]:
+    """`new_items` reduced to `{type, agent, tool}` per item.
+
+    What the agent fetched stays reviewable (which tools, which agent,
+    in what order); the arguments the model chose, the tool outputs and
+    the message text do not reach the database (FIX-020)."""
+    out: list[dict[str, Any]] = []
+    for item in list(new_items or [])[:200]:
+        raw = getattr(item, "raw_item", None)
+        tool = raw.get("name") if isinstance(raw, dict) else getattr(raw, "name", None)
+        out.append({
+            "type": _item_name(getattr(item, "type", None)) or type(item).__name__[:64],
+            "agent": _item_name(getattr(getattr(item, "agent", None), "name", None)),
+            "tool": _item_name(tool),
+        })
+    return out
+
+
+def _agent_model_name(agent: Any) -> str:
+    model = getattr(agent, "model", None)
+    if isinstance(model, str):
+        return model
+    return str(getattr(model, "model", None) or "") or "unknown"
+
+
+def _agent_effort(agent: Any) -> str | None:
+    reasoning = getattr(getattr(agent, "model_settings", None), "reasoning", None)
+    effort = getattr(reasoning, "effort", None)
+    return effort if isinstance(effort, str) else None
+
+
+def sdk_usage_hooks(action: str, *, ticker: str | None = None, run_id: str | None = None) -> Any:
+    """RunHooks that write one `llm_call_logs` row per SDK model response
+    (attribution critique #4: `RunResult.raw_responses` knows no model, and
+    with handoffs each agent runs on its own).
+
+    The hook runs inside the SDK's event loop, which carries a copy of the
+    caller's context, so the row picks up the turn's run_id. A telemetry
+    failure is logged and swallowed: it must never fail the run.
+    `refused` / `responses` / `call_id` are read back by the caller.
+    """
+    from agents import RunHooks
+
+    class _UsageHooks(RunHooks):  # type: ignore[misc,type-arg]
+        def __init__(self) -> None:
+            super().__init__()
+            self.call_id = uuid.uuid4().hex
+            self.responses = 0
+            self.refused = False
+            self.last_model = ""
+            self._started = time.perf_counter()
+
+        async def on_llm_start(self, context: Any, agent: Any, *args: Any, **kwargs: Any) -> None:
+            self._started = time.perf_counter()
+
+        async def on_llm_end(self, context: Any, agent: Any, response: Any) -> None:
+            self.responses += 1
+            self.last_model = _agent_model_name(agent)
+            try:
+                self.refused = llm.record_sdk_usage(
+                    response, agent=str(getattr(agent, "name", "") or ""),
+                    model=self.last_model, action=action, call_id=self.call_id,
+                    attempt=self.responses, effort=_agent_effort(agent), ticker=ticker,
+                    duration_ms=int((time.perf_counter() - self._started) * 1000),
+                )
+            except Exception as exc:  # pragma: no cover - telemetry must not fail a run
+                log_safely(log, "SDK usage row failed (non-fatal)", exc, level=logging.DEBUG)
+
+        def record_failure(self, exc: BaseException, *, agent: str, model: str) -> None:
+            """One error row for a run that raised — unless the raise is the
+            refusal the last response's row already recorded."""
+            if self.refused:
+                return
+            where = "response_error" if self.responses else "provider_error"
+            try:
+                # Called after the run's context has closed: re-open the
+                # run id so the error row joins the response rows.
+                with llm.llm_call_context(run_id=run_id):
+                    llm.record_sdk_usage(
+                        None, agent=agent, model=self.last_model or model, action=action,
+                        call_id=self.call_id, attempt=self.responses + 1, ticker=ticker,
+                        duration_ms=int((time.perf_counter() - self._started) * 1000),
+                        error=f"{where}:{type(exc).__name__}",
+                    )
+            except Exception as rec_exc:  # pragma: no cover
+                log_safely(log, "SDK error row failed (non-fatal)", rec_exc, level=logging.DEBUG)
+
+    return _UsageHooks()
+
+
+def _is_refusal(exc: BaseException) -> bool:
+    """openai-agents 0.22 raises ModelRefusalError when the model declines."""
+    return type(exc).__name__ == "ModelRefusalError"
+
+
 def _can_use_sdk() -> bool:
-    """Same gate as `sdk_runtime._can_use_real_sdk` — kept inline so this
-    module's import doesn't pull in the legacy SDK runtime if we end up
-    deprecating it."""
-    if not settings.use_agents_sdk:
+    """Same gate shape as `sdk_runtime._can_use_real_sdk` — kept inline so
+    this module's import doesn't pull in the legacy SDK runtime if we end
+    up deprecating it.
+
+    Gated on `CHAT_AGENTS_SDK`, not `USE_AGENTS_SDK`: the legacy flag also
+    routes chat's inline "analyze X" memo through `sdk_runtime`, which runs
+    the memo twice under a run id nothing links to (plan P14). Demo-only
+    mode never builds an LLM client in `llm.py`; the SDK builds its own,
+    so it has to ask the same question.
+    """
+    if not settings.chat_agents_sdk:
         return False
     if not settings.openai_api_key:
+        return False
+    if llm._demo_only():
         return False
     try:
         import agents  # noqa: F401
         return True
     except Exception:
         return False
+
+
+def chat_model_and_settings() -> tuple[str, Any | None]:
+    """(model, ModelSettings or None) for the chat agent.
+
+    `CHAT_MODEL` / `CHAT_EFFORT` through the `chat.sdk_turn` tier route;
+    blank keeps today's model (`OPENAI_PM_MODEL`, else the strong route
+    default) with the SDK's own defaults for it. The effort goes out as
+    `reasoning.effort`, and no temperature is ever set: GPT-6 rejects it
+    whenever effort is not `none` (model research 2026-09-25). A
+    non-OpenAI CHAT_MODEL is unresolvable — this SDK path speaks only
+    OpenAI — so it raises, and the caller answers on the legacy path.
+    """
+    configured = (settings.chat_model or "").strip()
+    if configured and llm.provider_of_model(configured) != "openai":
+        raise ValueError(
+            f"CHAT_MODEL {configured!r} is not an OpenAI model; the Agents SDK chat speaks only OpenAI"
+        )
+    route = llm.resolve_action_route("chat.sdk_turn")
+    if route.configured and route.model:
+        if route.provider != "openai":
+            # The tier can resolve elsewhere too: LLM_ACTION_TIER_OVERRIDES=
+            # chat.sdk_turn:research with an Opus research model would
+            # otherwise send a Claude model name to the OpenAI endpoint.
+            raise ValueError(
+                f"chat.sdk_turn resolves to {route.provider} model {route.model!r}; "
+                "the Agents SDK chat speaks only OpenAI"
+            )
+        model, effort = route.model, route.effort
+    else:
+        model = llm.resolve_role_model("pm", provider="openai")
+        effort = llm._effort_for("openai", model, settings.chat_effort or None)
+    if not effort:
+        return model, None
+    from agents import ModelSettings
+    from openai.types.shared import Reasoning
+    return model, ModelSettings(reasoning=Reasoning(effort=effort))  # type: ignore[arg-type]
 
 
 def _profile_for(fin: dict[str, Any], ticker: str) -> dict[str, Any]:
@@ -114,6 +303,7 @@ def _build_chat_agent() -> Any | None:
         return None
     try:
         from agents import Agent, function_tool
+        model, model_settings = chat_model_and_settings()
 
         @function_tool
         def get_memo(ticker: str) -> dict[str, Any]:
@@ -456,7 +646,8 @@ def _build_chat_agent() -> Any | None:
                 "'which software names have the strongest moats' to "
                 "'what changed for ADBE in the latest 10-K'. You have "
                 "tools — call them aggressively to fetch grounding "
-                "data, then reason out loud over the numbers. "
+                "data, then answer and cite the specific figures you "
+                "relied on. "
                 "Tool playbook:\n"
                 "  • `get_memo(ticker)` — full memo with rating, score, "
                 "    DCF, factor scores, key risks. Try first when the "
@@ -485,8 +676,9 @@ def _build_chat_agent() -> Any | None:
                 "    report excerpts for one name, a portfolio (pass the "
                 "    list) or an explicit group slug. Observed data; "
                 "    treat analyst views as scenarios.\n"
-                "Live specialist follow-ups (use sparingly — ~$0.05 "
-                "each, max 2 per turn):\n"
+                "Live specialist follow-ups (use sparingly — each is "
+                "a full specialist model call, roughly $0.05-0.15, max "
+                "2 per turn):\n"
                 "  • `ask_sector(ticker, question)` — re-fire the "
                 "    sector analyst on a specific question.\n"
                 "  • `ask_earnings(ticker, question)` — earnings "
@@ -502,7 +694,8 @@ def _build_chat_agent() -> Any | None:
                 "    invent.\n"
                 "  • For open-ended questions, structure the answer "
                 "    as: theses you'd defend, theses you'd reject, "
-                "    where you're uncertain. Show the working.\n"
+                "    where you're uncertain. Cite the specific "
+                "    figures you relied on.\n"
                 "  • For mispricing questions, structure as: "
                 "    consensus view → our view → gap → falsifiers.\n"
                 "  • For comparative questions, rank candidates with "
@@ -516,10 +709,11 @@ def _build_chat_agent() -> Any | None:
                 "    education only and does not provide personalized "
                 "    financial advice._'"
             ),
-            # Same resolution as sdk_runtime: an unset OPENAI_PM_MODEL is ""
-            # and the real SDK rejects that, which used to drop chat to the
-            # non-SDK path with only a "build failed" line to show for it.
-            model=llm.resolve_role_model("pm", provider="openai"),
+            # CHAT_MODEL / CHAT_EFFORT (wave H: gpt-6-sol at medium); blank
+            # is today's resolution, where an unset OPENAI_PM_MODEL is ""
+            # and the real SDK rejects that, so the route default stands in.
+            model=model,
+            **({"model_settings": model_settings} if model_settings is not None else {}),
             tools=[
                 get_memo, get_dcf_summary, get_comps, get_macro_snapshot,
                 get_company_lite, list_universe, screener_query, custom_screen,
@@ -533,21 +727,32 @@ def _build_chat_agent() -> Any | None:
 
 
 def answer_via_sdk(
-    *, message: str, history: list[Any],
+    *, message: str, history: list[Any], run_id: str | None = None,
 ) -> str | None:
-    """Run the chat agent and return its final markdown answer.
+    """Run the chat agent and return its final markdown answer, or None
+    when the SDK isn't usable, the run failed or the model refused (the
+    caller falls back to the legacy single-shot path)."""
+    return run_chat_turn(message=message, history=history, run_id=run_id)[0]
 
-    Returns None if the SDK isn't usable or the run failed. Caller
-    falls back to the legacy single-shot path on None.
 
-    Persists the trace via `SDKTrace` (surface='chat') keyed by a fresh
-    `run_id` so the admin viewer can pull it up. The chat trace shares
-    no run_id with any memo run — chat is its own surface.
+def run_chat_turn(
+    *, message: str, history: list[Any], run_id: str | None = None,
+) -> tuple[str | None, bool]:
+    """(answer or None, whether an SDK model run was attempted).
+
+    The second value lets the orchestrator keep to one attempt per
+    provider per turn: once the SDK has spent the turn's OpenAI attempt,
+    the legacy fallback must not try the SDK again or hop back to OpenAI.
+
+    `run_id` is the turn's `chat:<hex>` id, minted by the chat route and
+    read from the call context when not passed (attribution critique #5):
+    the SDK usage rows, the `SDKTrace` row and the legacy fallback's rows
+    all carry it.
     """
     agent = _build_chat_agent()
     if agent is None:
-        return None
-    run_id = str(uuid.uuid4())
+        return None, False
+    run_id = run_id or llm.current_call_context().get("run_id") or f"chat:{uuid.uuid4().hex}"
     started = time.perf_counter()
 
     # Build the seed prompt from message + recent history. The agent
@@ -589,71 +794,62 @@ def answer_via_sdk(
         f"User's new question:\n{message}"
     )
 
+    hooks = sdk_usage_hooks("chat.sdk_turn", run_id=run_id)
     try:
         from agents import Runner as RealRunner
-        result = RealRunner.run_sync(agent, seed)
+        # An umbrella context: the run id only, never an agent name, so the
+        # specialist calls the `ask_*` tools make keep their own agents.
+        with llm.llm_call_context(run_id=run_id):
+            result = RealRunner.run_sync(agent, seed, hooks=hooks, run_config=sdk_run_config())
     except Exception as exc:
-        log_safely(log, "chat-SDK run failed", exc)
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        hooks.record_failure(exc, agent=str(getattr(agent, "name", "") or ""),
+                             model=_agent_model_name(agent))
+        kind = "refusal" if _is_refusal(exc) else "failure"
+        # Type only: an SDK exception can quote the model's output (a
+        # refusal's text, a malformed tool call's arguments).
+        log.warning("chat-SDK run %s (%s); answering on the legacy path", kind, type(exc).__name__)
         _persist_chat_trace(
-            run_id=run_id, final_output="", new_items=None,
-            error=safe_exc(exc), duration_ms=elapsed_ms,
+            run_id=run_id, new_items=None, error=type(exc).__name__,
+            duration_ms=int((time.perf_counter() - started) * 1000),
         )
-        return None
+        return None, True
 
-    elapsed_ms = int((time.perf_counter() - started) * 1000)
     final_output = getattr(result, "final_output", None)
-    new_items = getattr(result, "new_items", None)
     _persist_chat_trace(
-        run_id=run_id, final_output=final_output or "",
-        new_items=new_items, duration_ms=elapsed_ms,
+        run_id=run_id, new_items=getattr(result, "new_items", None),
+        error="refusal" if hooks.refused else "",
+        duration_ms=int((time.perf_counter() - started) * 1000),
     )
-
+    if hooks.refused:
+        log.warning("chat-SDK run refused; answering on the legacy path")
+        return None, True
     if not final_output or not str(final_output).strip():
-        return None
+        return None, True
     body = str(final_output).strip()
     if "research and education only" not in body.lower():
         body += (
             "\n\n_MarketMosaic is for research and education only and "
             "does not provide personalized financial advice._"
         )
-    return body
+    return body, True
 
 
 def _persist_chat_trace(
-    *, run_id: str, final_output: str, new_items: Any,
-    error: str = "", duration_ms: int = 0,
+    *, run_id: str, new_items: Any, error: str = "", duration_ms: int = 0,
 ) -> None:
-    """Write the chat-surface SDKTrace row. Shares the persistence helper
-    contract from `sdk_runtime._persist_sdk_trace` (best-effort, never
-    raises) but lives here to avoid an import cycle and to tag
+    """Write the chat-surface SDKTrace row: what ran, never what the model
+    wrote (FIX-020). `final_output` is stored empty and `new_items` is
+    reduced to `{type, agent, tool}`. Best-effort, never raises; lives
+    here rather than in `sdk_runtime` to avoid an import cycle and to tag
     `surface='chat'` correctly."""
     try:
         from ..database import SessionLocal
         from ..models import SDKTrace
-        items_payload: list = []
-        for item in (new_items or []):
-            if hasattr(item, "model_dump"):
-                try:
-                    items_payload.append(item.model_dump())
-                    continue
-                except Exception:
-                    pass
-            if hasattr(item, "__dict__"):
-                try:
-                    items_payload.append({
-                        k: v for k, v in vars(item).items()
-                        if not k.startswith("_")
-                    })
-                    continue
-                except Exception:
-                    pass
-            items_payload.append({"repr": repr(item)[:500]})
         with SessionLocal() as session:
             session.add(SDKTrace(
-                run_id=run_id, ticker=None, surface="chat",
-                final_output=str(final_output)[:8000],
-                new_items=items_payload[:200],
+                run_id=run_id[:64], ticker=None, surface="chat",
+                final_output="",
+                new_items=trace_items(new_items),
                 error=str(error)[:2000],
                 duration_ms=int(duration_ms),
             ))

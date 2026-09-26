@@ -82,6 +82,10 @@ def _dry_run(horizons: list[int], limit: int) -> int:
     return 1 if unclassified or sweep_failed else 0
 
 
+# What started the work, on every LLM row and line this script causes.
+ORIGIN = "script:postmortem_backfill"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -109,10 +113,12 @@ def main() -> int:
     if args.dry_run:
         return _dry_run(horizons, args.limit)
 
+    from app.agents.llm import llm_call_context
     from app.services.postmortem_service import run_postmortems
     total_written = 0
     for h in horizons:
-        res = run_postmortems(horizon_days=h, limit=args.limit)
+        with llm_call_context(origin=ORIGIN):
+            res = run_postmortems(horizon_days=h, limit=args.limit)
         print(
             f"horizon={h}d  due={res['due']}  written={res['written']}  "
             f"skipped={res['skipped']}"

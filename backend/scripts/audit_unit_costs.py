@@ -156,6 +156,9 @@ def _llm_summary(run_id: str) -> dict[str, Any]:
     }
 
 
+ORIGIN = "script:audit_unit_costs"
+
+
 class _Sample:
     """One measured action. Built incrementally so a crash mid-action still
     leaves a row that says what happened."""
@@ -175,7 +178,10 @@ class _Sample:
         since = _utcnow()
         t0 = time.monotonic()
         try:
-            with llm_call_context(agent_name="unit_cost_audit", run_id=self.row["run_id"]):
+            # An umbrella: origin and run only (attribution critique #1). It
+            # used to name agent "unit_cost_audit", which credited every
+            # specialist call inside the measured memo/DCF/comps run to it.
+            with llm_call_context(origin=ORIGIN, run_id=self.row["run_id"]):
                 extra = fn(self.row["run_id"]) or {}
             self.row["status"] = extra.pop("status", "ok")
             self.row.update(extra)
@@ -310,9 +316,10 @@ def _pm_chat(index: int, tickers: list[str]):
     (`_INLINE_MEMO_ENTRY_POINTS`) for a stored-memo lookup — otherwise a
     `single_stock_analysis` intent would bill a 5-9 minute memo run against
     the chat sample and the number would be meaningless for pm_chat.
-    `settings.use_agents_sdk` is left as configured on purpose: the SDK
-    chat agent (tool reads over stored data) is the production chat path
-    and is what the sample should cost.
+    `settings.chat_agents_sdk` (and the legacy `use_agents_sdk`) are left
+    as configured on purpose: the SDK chat agent (tool reads over stored
+    data) is the production chat path once CHAT_AGENTS_SDK is on, and is
+    what the sample should cost.
     """
     t = tickers[index % len(tickers)]
     u = tickers[(index + 1) % len(tickers)]

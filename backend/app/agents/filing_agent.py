@@ -276,6 +276,7 @@ def run_filing_agent(
         # truncating mid-response; the unparseable partial JSON sent
         # the agent into the deterministic stub fallback.
         max_tokens=2400,
+        action="analyst.filing", ticker=profile.get("ticker"),
     )
     if llm_out:
         # The LLM occasionally emits key_points as a list of category

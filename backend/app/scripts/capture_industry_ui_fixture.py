@@ -436,6 +436,9 @@ def capture(*, stub_analyst: bool = True) -> dict[str, Any]:
     return {"meta": meta, **out}
 
 
+ORIGIN = "script:capture_industry_ui_fixture"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT, help=f"default: {DEFAULT_OUT}")
@@ -448,7 +451,12 @@ def main(argv: list[str] | None = None) -> int:
         print(refusal, file=sys.stderr)
         return 2
 
-    payload = capture(stub_analyst=args.stub_analyst)
+    from app.agents.llm import llm_call_context
+
+    # The drained industry jobs keep an outer origin, so their rows say this
+    # script started them rather than the generic `worker:industry`.
+    with llm_call_context(origin=ORIGIN):
+        payload = capture(stub_analyst=args.stub_analyst)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=1, sort_keys=False) + "\n")
     print(

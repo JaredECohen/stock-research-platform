@@ -235,7 +235,7 @@ def test_transcript_cron_carries_raw_filing_post_pass_and_truncation_report(sour
 
 def test_vector_write_error_propagates_to_each_ingest_failure(source, monkeypatch, caplog):
     ticker, _, _ = source
-    monkeypatch.setattr(filing_memory.vector_store.emb_svc, "embed", lambda texts: (_ for _ in ()).throw(RuntimeError("private request")))
+    monkeypatch.setattr(filing_memory.vector_store.emb_svc, "embed", lambda texts, **kwargs: (_ for _ in ()).throw(RuntimeError("private request")))
     result = history_service.backfill_ticker(ticker)
     assert len(result["post_pass_failures"]) == 3
     assert all(f["error_type"] == "RuntimeError" for f in result["post_pass_failures"])

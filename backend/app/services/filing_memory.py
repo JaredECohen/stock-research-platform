@@ -302,6 +302,9 @@ def _llm_diff(prior: FilingDoc, new: FilingDoc) -> dict[str, Any] | None:
         system="You are an experienced filings analyst. Be concise and specific.",
         route="strong",
         model=getattr(settings, "openai_tool_model", None),
+        # A duck-typed filing (tests, callers) may carry no ticker; it is
+        # attribution only.
+        action="filing.delta", ticker=getattr(new, "ticker", None),
     )
     if not isinstance(out, dict):
         return None
@@ -568,6 +571,7 @@ def weekly_digest(
                 system="You are a buy-side analyst. Be concise.",
                 route="cheap",
                 max_tokens=300,
+                action="filing.digest_weekly", ticker=ticker,
             )
             if isinstance(out, dict):
                 summary = str(out.get("summary") or "")[:1000]
@@ -688,6 +692,7 @@ def weekly_sector_digest(sector: str, *, days_back: int = 7) -> dict[str, Any]:
                 system="You are a buy-side sector analyst.",
                 route="cheap",
                 max_tokens=400,
+                action="filing.digest_sector",
             )
             if isinstance(out, dict):
                 summary = str(out.get("summary") or "")[:1500]

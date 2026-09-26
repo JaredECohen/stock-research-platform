@@ -68,6 +68,7 @@
     "tv_clamped": false,
     "wacc": 0.0886
    },
+   "debate": null,
    "degradation_events": [],
    "degraded_agents": [],
    "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
@@ -130,11 +131,19 @@
    "risk_committee_challenge": {
     "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
     "challenges": [],
+    "debate_review": null,
+    "issues": [],
     "overall_assessment": "Unavailable in this version.",
+    "rating_too_high": null,
+    "rating_too_low": null,
     "review_mode": "unknown",
+    "review_status": "not_independent",
+    "reviewer_model": "",
+    "revision": null,
     "suggested_revisions": [],
     "underweighted_risks": [],
-    "valuation_divergence_assessment": "not_assessed"
+    "valuation_divergence_assessment": "not_assessed",
+    "verdict": ""
    },
    "round_findings": [
     {
@@ -633,6 +642,13 @@
      "reason": null,
      "status": "available"
     },
+    "debate": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
     "earnings_agent_view": {
      "basis": [
       "signature:earnings_no_transcript"
@@ -1070,6 +1086,7 @@
     "terminal_growth": 0.025,
     "wacc": 0.06
    },
+   "debate": null,
    "degradation_events": [
     {
      "agent": "Stored memo compatibility",
@@ -1149,11 +1166,19 @@
    "risk_committee_challenge": {
     "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
     "challenges": [],
+    "debate_review": null,
+    "issues": [],
     "overall_assessment": "Unavailable in this version.",
+    "rating_too_high": null,
+    "rating_too_low": null,
     "review_mode": "unknown",
+    "review_status": "not_independent",
+    "reviewer_model": "",
+    "revision": null,
     "suggested_revisions": [],
     "underweighted_risks": [],
-    "valuation_divergence_assessment": "not_assessed"
+    "valuation_divergence_assessment": "not_assessed",
+    "verdict": ""
    },
    "round_findings": [
     {
@@ -1444,6 +1469,13 @@
      "hidden_items": 0,
      "reason": null,
      "status": "available"
+    },
+    "debate": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
     },
     "earnings_agent_view": {
      "basis": [
@@ -1835,6 +1867,7 @@
     "terminal_growth": 0.035,
     "wacc": 0.0952
    },
+   "debate": null,
    "degradation_events": [],
    "degraded_agents": [],
    "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
@@ -1947,11 +1980,19 @@
    "risk_committee_challenge": {
     "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
     "challenges": [],
+    "debate_review": null,
+    "issues": [],
     "overall_assessment": "Unavailable in this version.",
+    "rating_too_high": null,
+    "rating_too_low": null,
     "review_mode": "unknown",
+    "review_status": "not_independent",
+    "reviewer_model": "",
+    "revision": null,
     "suggested_revisions": [],
     "underweighted_risks": [],
-    "valuation_divergence_assessment": "not_assessed"
+    "valuation_divergence_assessment": "not_assessed",
+    "verdict": ""
    },
    "round_findings": [
     {
@@ -2332,6 +2373,13 @@
      "hidden_items": 0,
      "reason": null,
      "status": "available"
+    },
+    "debate": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
     },
     "earnings_agent_view": {
      "basis": [],
@@ -2791,6 +2839,7 @@
     "tv_clamped": false,
     "wacc": 0.0902
    },
+   "debate": null,
    "degradation_events": [
     {
      "agent": "LLM provider",
@@ -2926,11 +2975,19 @@
    "risk_committee_challenge": {
     "advice_compliance_check": "Advice compliance was not assessed by this rule-based check.",
     "challenges": [],
+    "debate_review": null,
+    "issues": [],
     "overall_assessment": "Unavailable in this version.",
+    "rating_too_high": null,
+    "rating_too_low": null,
     "review_mode": "rule_based",
+    "review_status": "not_independent",
+    "reviewer_model": "",
+    "revision": null,
     "suggested_revisions": [],
     "underweighted_risks": [],
-    "valuation_divergence_assessment": "not_assessed"
+    "valuation_divergence_assessment": "not_assessed",
+    "verdict": ""
    },
    "round_findings": [
     {
@@ -3507,6 +3564,13 @@
      "reason": null,
      "status": "available"
     },
+    "debate": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
     "earnings_agent_view": {
      "basis": [],
      "headline_hidden": false,
@@ -3981,6 +4045,7 @@
     "terminal_growth": 0.035,
     "wacc": 0.08549999999999999
    },
+   "debate": null,
    "degradation_events": [],
    "degraded_agents": [
     "Valuation Analyst"
@@ -4090,11 +4155,19 @@
    "risk_committee_challenge": {
     "advice_compliance_check": "Output framed as research/education only; no direct buy/sell language detected.",
     "challenges": [],
+    "debate_review": null,
+    "issues": [],
     "overall_assessment": "Unavailable in this version.",
+    "rating_too_high": null,
+    "rating_too_low": null,
     "review_mode": "unknown",
+    "review_status": "not_independent",
+    "reviewer_model": "",
+    "revision": null,
     "suggested_revisions": [],
     "underweighted_risks": [],
-    "valuation_divergence_assessment": "not_assessed"
+    "valuation_divergence_assessment": "not_assessed",
+    "verdict": ""
    },
    "round_findings": [
     {
@@ -4494,6 +4567,13 @@
      "reason": null,
      "status": "available"
     },
+    "debate": {
+     "basis": [],
+     "headline_hidden": false,
+     "hidden_items": 0,
+     "reason": "not_produced",
+     "status": "unavailable"
+    },
     "earnings_agent_view": {
      "basis": [],
      "headline_hidden": false,
@@ -4862,5 +4942,5 @@
    }
   }
  },
- "presentation_version": 1
+ "presentation_version": 2
 }

@@ -29,12 +29,14 @@ trivially.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import math
 import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar, get_args
 
 from ..config import settings
 from ..finance.dcf import fmt_price, fmt_upside
@@ -52,19 +54,21 @@ from ..schemas import (
     MemoQuality,
     MispricingThesis,
     NumberCheck,
+    RatingLabel,
     RatingReconciliation,
     RiskItem,
     RoundFindings,
     ScorecardSummary,
     StockMemoOut,
     ValuationVerdict,
+    score_from_rating_label,
 )  # CriticReview imported for the safe-runner fallback path  # noqa: F401
 from ..services.checkpoint_store import checkpointed
 from ..services.filings_service import get_filings
 from ..services.fundamentals_service import get_full_financials
 from ..services.transcripts_service import latest_transcript
 from ..services.valuation_service import build_comps, build_dcf
-from . import llm, memo_quality, number_check, prompts, roster, scorecard_context
+from . import llm, memo_quality, news_context, number_check, prompts, roster, scorecard_context
 from .critic_agent import run_critic
 from .log_safety import redact
 from .memo_context import (
@@ -1209,9 +1213,64 @@ def _pm_view(findings: dict[str, AgentFinding]) -> PMView:
     return PMView(digests, rest, visible)
 
 
+# L6 (TradingAgents lessons, 2026-09-25): the five labels, by their
+# case-folded form. `RatingLabel` is a strict Literal, so an off-enum label
+# from the PM ("bullish", "Bullish ", "Moderately Bullish", "Buy") used to
+# raise a ValidationError when the memo was built and lose the whole run.
+_RATING_LABELS: tuple[str, ...] = get_args(RatingLabel)
+_RATING_BY_FOLDED: dict[str, str] = {label.casefold(): label for label in _RATING_LABELS}
+
+# `_pm_synthesis` marks where its rating came from under this key; the
+# compose stage pops it into `inputs.pm_rating_record` (P6 recording) and the
+# review stage merges that into `scores` after the critic has read the draft.
+RATING_SOURCE_KEY = "_rating_source"
+
+
+def normalize_rating_label(value: Any) -> str | None:
+    """The canonical label for `value`, or None when it is not one.
+
+    Strip, collapse inner whitespace, case-fold, then an EXACT match against
+    the five labels. Never a substring or prefix match: "Moderately Bullish"
+    is not "Bullish", and "Sell-side" is not "Sell" (the misread TradingAgents
+    #1383 shipped). None is an explicit state the caller must handle, never
+    a silent default."""
+    if not isinstance(value, str):
+        return None
+    return _RATING_BY_FOLDED.get(" ".join(value.split()).casefold())
+
+
+# The PM reply's headline strings; compose passes them straight into the
+# strict `StockMemoOut`, so each must be a non-empty string.
+_PM_TEXT_FIELDS: tuple[str, ...] = ("final_pm_view", "one_sentence_thesis")
+
+
+def _is_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _pm_confidence(value: Any) -> float | None:
+    """The PM's confidence as a float in [0, 100], or None when it is not
+    one. A number, or a string that is exactly a number ("72"), which
+    `float()` in compose always accepted; never "72%", "high", a bool, NaN
+    or an out-of-scale value. None is a failed reply, not a default."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        x = float(value)
+    elif isinstance(value, str):
+        try:
+            x = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    return x if math.isfinite(x) and 0.0 <= x <= 100.0 else None
+
+
 def _pm_synthesis(
     profile: dict, findings: dict[str, AgentFinding], dcf: DCFResult | None,
     *, scorecard: Any | None = None, valuation_evidence: ValuationVerdict | None = None,
+    news: news_context.NewsContext | None = None,
 ) -> dict:
     # PM uses its dedicated model (OPENAI_PM_MODEL — gpt-5.5-pro by default).
     # Wave 10 — read PM brain + company / sector memory + research_notes.
@@ -1232,6 +1291,13 @@ def _pm_synthesis(
     # then the capped JSON. The digests sit outside the cut on purpose (see
     # `_pm_view`), and "" when there are none keeps the prompt byte-identical.
     digest_block = ("\n\n" + "\n\n".join(view.digests)) if view.digests else ""
+    # FIX-018, C7: the run's news block goes after the digests and before the
+    # evidence block. The PM used to get news only nested in the sector
+    # entry of the Findings JSON with no instruction to weigh it. "" with no
+    # news adds no block (the refs line below then omits `news_alerts:{T}`,
+    # a declared change: see `news_context.register`).
+    news_text = news_context.render_block(news, "pm")
+    news_block = ("\n\n" + news_text) if news_text else ""
     # W2b 7(b), C7: the deterministic valuation-evidence read goes after the
     # digests and before "Findings:" — volatile, outside the cached prefix and
     # outside the JSON cut. "" without evidence keeps the prompt byte-identical.
@@ -1242,6 +1308,16 @@ def _pm_synthesis(
     # (no active ledger) keeps the prompt byte-identical.
     refs = _source_refs_block()
     refs_block = ("\n\n" + refs) if refs else ""
+    json_findings = {k: v.model_dump() for k, v in view.findings.items()}
+    if news_text:
+        # The sector finding stores the same items as `pending_news_alerts`
+        # (both come from `inputs.news`); with the block present that copy
+        # is a duplicate read of up to ~1,100 tokens, so it is dropped from
+        # this JSON copy only. The stored memo keeps it.
+        sector_json = json_findings.get("sector")
+        if isinstance(sector_json, dict) and isinstance(sector_json.get("data"), dict):
+            sector_json["data"] = {k: v for k, v in sector_json["data"].items()
+                                   if k != "pending_news_alerts"}
     # The synthesis template is byte-stable across memos; declare it as the
     # cached prefix so each PM call reads it instead of re-paying for it. The
     # volatile pm_ctx / digests / findings follow the "\n\n" join and stay
@@ -1251,12 +1327,14 @@ def _pm_synthesis(
             prompts.PM_SYNTHESIS_PROMPT
             + (("\n\n" + pm_ctx) if pm_ctx else "")
             + digest_block
+            + news_block
             + evidence_block
             + refs_block
             + "\n\nFindings:\n"
-            + json.dumps({k: v.model_dump() for k, v in view.findings.items()}, default=str)[: settings.max_agent_context_chars],
+            + json.dumps(json_findings, default=str)[: settings.max_agent_context_chars],
             system=prompts.PM_SYSTEM, route="strong",
             model=settings.openai_pm_model,
+            action="pm.synthesis", ticker=profile.get("ticker"),
         )
     if isinstance(llm_out, dict) and llm_out.get("priors_considered") is not None:
         # W7: which shown priors the PM applied or contradicted, kept on the
@@ -1267,10 +1345,32 @@ def _pm_synthesis(
             learning_context.record_considered, llm.current_call_context().get("run_id"),
             llm_out.get("priors_considered"), fallback=0, name="Learning considered", log_to=None,
         )
-    if llm_out and "rating_label" in llm_out:
-        return llm_out
+    invalid_field: str | None = None
+    if isinstance(llm_out, dict) and "rating_label" in llm_out:
+        label = normalize_rating_label(llm_out.get("rating_label"))
+        confidence = _pm_confidence(llm_out.get("confidence_score"))
+        if label is None:
+            invalid_field = "rating_label"
+        elif confidence is None:
+            invalid_field = "confidence_score"
+        else:
+            invalid_field = next((k for k in _PM_TEXT_FIELDS if not _is_text(llm_out.get(k))), None)
+        if invalid_field is None:
+            return {**llm_out, "rating_label": label, "confidence_score": confidence,
+                    RATING_SOURCE_KEY: "llm"}
+        # L6: an unreadable reply is an explicit PM failure, not a crash in
+        # compose and not a guessed value. The memo completes on the
+        # deterministic view and says so. The label, the confidence and
+        # the two headline strings are the fields compose reads without a
+        # guard (`float(...)` and the strict `StockMemoOut`), so a bad value
+        # in any of them used to lose the whole run.
 
-    if settings.has_llm:
+    if invalid_field is not None:
+        note_soft(
+            "PM Synthesis",
+            f"LLM returned an invalid {invalid_field}; deterministic PM view shipped",
+        )
+    elif settings.has_llm:
         # (b) The PM view is the memo's headline. Templated prose standing in
         # for it while an LLM was configured is a degradation the reader must
         # see; in deterministic mode (no keys) this path IS the design, so it
@@ -1333,12 +1433,13 @@ def _pm_synthesis(
         f"Sector framing supports the cohort thesis; valuation-relative read is the main swing factor. "
         f"The risk committee flagged the dominant downside scenarios; portfolio fit depends on macro view."
     )
-    return dict(
-        final_pm_view=pm_view,
-        one_sentence_thesis=thesis,
-        rating_label=rating,
-        confidence_score=confidence,
-    )
+    return {
+        "final_pm_view": pm_view,
+        "one_sentence_thesis": thesis,
+        "rating_label": rating,
+        "confidence_score": confidence,
+        RATING_SOURCE_KEY: "keyword",
+    }
 
 
 MAX_SOURCE_REFS_IN_PROMPT = 40
@@ -1470,8 +1571,14 @@ def run_stock_memo(
     # discipline as the degradation log: one per run, reset in `finally`.
     ledger = SourceLedger()
     try:
+        # The run context is an UMBRELLA: it sets run_id and ticker, never
+        # an agent (attribution critique #1). A named agent here was
+        # credited with every call nested under it that opened no context of
+        # its own; each call now names its action, and the stages that are
+        # an agent (`_run_analyst_round`, `_compose_memo`, `_review_memo`)
+        # open their own agent context.
         with as_of_context(as_of_date), llm_call_context(
-            agent_name="run_stock_memo", run_id=run_id,
+            run_id=run_id, ticker=ticker,
         ), degradation.activate(), ledger.activate():
             return _run_stock_memo_inner(
                 ticker, scenario=scenario, force_refresh=force_refresh,
@@ -1649,6 +1756,17 @@ def _gather_inputs(
         industry_group = safe_call(lookup_classification, ticker, fallback=None,
                                    name=_IG_NAME, log_to=degradation)
 
+    # FIX-018 — the run's one news read (N1), fetched at memo time when a
+    # live run finds nothing on file (N2). ALWAYS a context: a failed read is
+    # an empty one, so the sector analyst never falls back to a read of its
+    # own that the ledger would not hold. Registered here, once, with exactly
+    # the items every reader is shown.
+    news = safe_call(
+        news_context.load_for_memo, ticker, as_of_date=as_of_date,
+        fallback=news_context.NewsContext.empty(ticker), name="News Context", log_to=None,
+    )
+    news_context.register(news)
+
     # `profile` is shared with every later stage and mutated in place — see
     # the mutation contract in `memo_context`.
     return MemoInputs(
@@ -1657,7 +1775,7 @@ def _gather_inputs(
         earnings=earnings, transcript=transcript, filings=filings,
         dcf=dcf, comps=comps, degradation=degradation,
         scorecard=scorecard, scorecard_seeds=seeds, industry_group=industry_group,
-        ledger=active_ledger(),
+        news=news, ledger=active_ledger(),
     )
 
 
@@ -1686,7 +1804,12 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
     # The PM chooses among THIS run's roster: a spec whose predicate said no
     # is not on the run, so offering it would waste one of the three skips
     # and put an absent agent in the memo's intake audit line.
-    intake = run_intake(profile, specialists=[spec.key for spec in specs])
+    # FIX-018: intake sees the run's headlines (it was always told "no news"
+    # while its prompt skips specialists on "no recent material news").
+    intake = run_intake(
+        profile, news_alerts=(inputs.news.alerts() if inputs.news is not None else None),
+        specialists=[spec.key for spec in specs],
+    )
 
     # Round 0 fan-out, in roster order. Each specialist runs with its own
     # llm_call_context so any LLM calls it makes get tagged with the right
@@ -1698,7 +1821,7 @@ def _run_analyst_round(inputs: MemoInputs) -> AnalystRound:
         if not intake.runs(spec.key):
             findings[spec.key] = AgentFinding(**stub_finding(spec.key, intake.rationale))
             continue
-        with llm_call_context(agent_name=spec.display_name, run_id=run_id):
+        with llm_call_context(agent_name=spec.display_name, run_id=run_id, role="analyst"):
             findings[spec.key] = safe_finding(
                 spec.display_name, roster.checkpointed_runner(spec), inputs,
                 log_to=degradation,
@@ -1975,10 +2098,24 @@ def _compose_memo(inputs: MemoInputs, analysts: AnalystRound, dcf_stage: DCFStag
     with llm_call_context(agent_name="PM Synthesis", run_id=inputs.run_id, route="strong"):
         synth: dict[str, Any] = safe_call(
             _pm_synthesis, profile, findings, dcf, scorecard=inputs.scorecard,
-            valuation_evidence=valuation_verdict,
+            valuation_evidence=valuation_verdict, news=inputs.news,
             fallback=synth_fallback, name="PM Synthesis", log_to=degradation,
         )
+    # L6 / P6 recording: where the rating came from. Only the LLM PM's own
+    # label is "llm"; the keyword synthesis and the crash fallback are not.
+    # Recorded as float score keys only: no schema change, no published change.
+    rating_source_llm = 1.0 if synth.pop(RATING_SOURCE_KEY, None) == "llm" else 0.0
     rating = synth.get("rating_label", "Neutral")
+    # The PM's label as a bucket centre BEFORE risk recommendations, the
+    # blend and 7(b) move it. Lets the track record and the learning ledger
+    # segment by where a rating came from instead of measuring the keyword
+    # fallback as if it were the committee. Carried on `inputs`, not written
+    # into `memo.scores` here: the review stage adds it after the critic
+    # has read the draft (see `MemoInputs.pm_rating_record`).
+    inputs.pm_rating_record = {
+        "rating_source_llm": rating_source_llm,
+        "pm_rating_score": score_from_rating_label(rating),
+    }
     raw_confidence = float(synth.get("confidence_score", 60))
     # The PM's stated reason for rating against the evidence. Memo content
     # (the reader sees it with the reconciliation note), capped like the
@@ -2270,6 +2407,16 @@ def _review_memo(memo: StockMemoOut, inputs: MemoInputs, analysts: AnalystRound)
     # Refresh degraded_agents in case the critic recorded a failure.
     _sync_degradation(memo, degradation)
 
+    # P6 recording (bullish-skew diagnosis 6.2; L6): merged only now, after
+    # the critic read `draft_for_critic` and before risk recommendations,
+    # the blend and 7(b) move the rating. Written at compose, these keys
+    # changed the legacy critic's prompt with both modes off and pushed
+    # memo text out of its 60k window. `getattr`: a direct stage call may
+    # hand in a stand-in for MemoInputs that never went through compose.
+    pm_rating_record = getattr(inputs, "pm_rating_record", None)
+    if pm_rating_record and isinstance(memo.scores, dict):
+        memo.scores = {**memo.scores, **pm_rating_record}
+
     # Wave 8H — apply the risk analyst's structured recommendations.
     # Runs AFTER the memo body is assembled but BEFORE final_verdict +
     # persistence so confidence cap / rating downshift / thesis_breaker
@@ -2444,12 +2591,17 @@ def _build_verdict(
     # would itself be the anti-pattern, and the PM's words then stand.
     thesis_rewritten = False
     if rewrite_fired:
-        # B7 — log every rewrite with the original thesis so the
-        # false-positive rate of this guard is measurable in prod logs.
+        # B7 — log every rewrite so the false-positive rate of this guard is
+        # measurable in prod logs. The thesis is PM model output, so the line
+        # carries its length and sha1, never its text (attribution critique
+        # #15): the stored memo version holds the words, and the sha1 finds
+        # the one a line is about.
+        original = thesis or ""
         log.info(
             "thesis rewrite fired for %s (anti_pattern=%s, stated=%r, "
-            "expected=%r); original=%r",
-            ticker, is_anti_pattern, stated_word, expected_word, thesis,
+            "expected=%r); original_len=%d original_sha1=%s",
+            ticker, is_anti_pattern, stated_word, expected_word,
+            len(original), hashlib.sha1(original.encode("utf-8")).hexdigest(),
         )
         try:
             rewritten = _build_thesis_from_findings(

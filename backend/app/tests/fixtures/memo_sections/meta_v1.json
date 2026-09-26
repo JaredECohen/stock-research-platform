@@ -94,6 +94,7 @@
   "tv_clamped": false,
   "wacc": 0.0902
  },
+ "debate": null,
  "degradation_events": [
   {
    "agent": "LLM provider",
@@ -229,8 +230,15 @@
  "risk_committee_challenge": {
   "advice_compliance_check": "Advice compliance was not assessed by this rule-based check.",
   "challenges": [],
+  "debate_review": null,
+  "issues": [],
   "overall_assessment": "Rule-based check only; no live critic review was completed. Claim accuracy, completeness, and research quality were not independently assessed.",
+  "rating_too_high": null,
+  "rating_too_low": null,
   "review_mode": "rule_based",
+  "review_status": "",
+  "reviewer_model": "",
+  "revision": null,
   "suggested_revisions": [
    "Tag every claim with a source: filing, transcript, or ratio.",
    "Verify the bull case is symmetric to the bear case.",
@@ -239,7 +247,8 @@
   "underweighted_risks": [
    "Re-emphasize the sector cohort context if quality deteriorates."
   ],
-  "valuation_divergence_assessment": "not_assessed"
+  "valuation_divergence_assessment": "not_assessed",
+  "verdict": ""
  },
  "round_findings": [
   {

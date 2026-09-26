@@ -986,8 +986,12 @@ def judge_due(
         report["calls"] += 1
         llm.last_usage()  # consume any stale usage so the reading below is ours
         try:
-            with llm.llm_call_context(agent_name="Learning Judge", route="cheap", feature="learning_judge"):
-                out = chat(prompt, system=JUDGE_SYSTEM, route="cheap", max_tokens=JUDGE_MAX_TOKENS)
+            # `chat` is an injected stand-in for chat_json (a registered
+            # INDIRECT_ENTRY_SITE): its call names the action like any other.
+            with llm.llm_call_context(agent_name="Learning Judge", route="cheap", feature="learning_judge",
+                                      ticker=ticker, job_id=f"snapshot:{snapshot_id}"):
+                out = chat(prompt, system=JUDGE_SYSTEM, route="cheap", max_tokens=JUDGE_MAX_TOKENS,
+                           action="learning.judge", ticker=ticker)
         except Exception as exc:
             out = None
             log.warning("learning judge failed for %s#%s (%s)", ticker, snapshot_id, type(exc).__name__)

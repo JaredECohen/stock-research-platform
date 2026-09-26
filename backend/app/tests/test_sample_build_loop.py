@@ -497,7 +497,9 @@ def test_loop_is_registered_under_its_known_name():
     mine = [j for j in sched.jobs if j[2].get("id") == sample_build_loop.LOOP_NAME]
     assert len(mine) == 1, "exactly one job id, or cron-health expects a loop that never reports"
     fn, trigger, kw = mine[0]
-    assert fn is sample_build_loop.tick and trigger == "interval"
+    # register_all wraps each job to run under its loop origin (A2a);
+    # functools.wraps keeps the loop's own function reachable.
+    assert fn.__wrapped__ is sample_build_loop.tick and trigger == "interval"
     assert kw["minutes"] == sample_build_loop.POLL_MINUTES
 
 

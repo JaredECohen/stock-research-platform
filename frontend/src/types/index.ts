@@ -181,6 +181,157 @@ export interface CriticReview {
   // W2b 7(b): the critic's read of a rating that diverges from the
   // valuation evidence. "not_assessed" on every memo that pre-dates it.
   valuation_divergence_assessment?: DivergenceAssessment;
+  // Item-8 full-report reviewer (D2, 2026-09-25). Expand-only: every stored
+  // review, and every review written in the legacy reviewer mode, carries
+  // the empty values ("" / [] / null), which mean "not produced". Nothing
+  // renders them yet (D8 does).
+  // "provider:model" that actually served the review, after any failover.
+  reviewer_model?: string;
+  verdict?: ReviewVerdict;
+  issues?: ReviewIssue[];
+  rating_too_high?: ReviewRatingCase | null;
+  rating_too_low?: ReviewRatingCase | null;
+  // Whether the review counts as independent; "not_independent" is shown
+  // as "not independently reviewed", never as a review.
+  review_status?: ReviewStatus;
+  revision?: ReviewRevision | null;
+  debate_review?: DebateReview | null;
+}
+
+export type ReviewVerdict = "" | "sound" | "sound_with_issues" | "unsound";
+export type ReviewStatus = "independent" | "not_independent" | "rule_based" | "";
+
+export interface ReviewIssue {
+  id: string;
+  category:
+    | "thesis_logic"
+    | "evidence_quality"
+    | "debate_handling"
+    | "risk_blind_spot"
+    | "valuation_consistency";
+  // "material" issues drive the one PM revision pass and a confidence cap.
+  severity: "material" | "minor";
+  // Which way the issue says the published call leans wrong.
+  direction: "too_high" | "too_low" | "neutral";
+  text: string;
+  evidence: string[];
+  fix_request: string;
+  // Only "resolved" stops an issue counting as open.
+  status: "open" | "addressed_by_pm" | "resolved" | "rejected_by_pm";
+}
+
+export interface ReviewRatingCase {
+  text: string;
+  evidence: string[];
+}
+
+export interface ReviewRecheck {
+  status: "not_run" | "complete" | "failed" | "skipped_budget";
+  resolved: string[];
+  open: string[];
+}
+
+export interface ReviewRevision {
+  status: "not_needed" | "revised" | "failed" | "skipped_budget";
+  rating_before: string;
+  rating_after: string;
+  confidence_before: number | null;
+  confidence_after: number | null;
+  notes: string[];
+  recheck: ReviewRecheck;
+}
+
+export interface DebateReview {
+  dispute_views: Array<Record<string, unknown>>;
+  unaddressed: string[];
+  one_sided: string;
+}
+
+// Bull/bear debate record (D2, 2026-09-25): the debate as it ran, stored on
+// the memo. Null on every memo written with the debate off and on memos
+// that pre-date it. The raw record carries dropped and unsupported claims;
+// the presenter decides what a reader sees.
+export type DebateSideName = "bull" | "bear";
+export type ClaimGrade = "sourced" | "partially_sourced" | "analyst_only" | "unsupported";
+
+export interface DebateEvidence {
+  id: string;
+  kind: string;
+  ref: string;
+  title: string;
+  date: string;
+  excerpt: string;
+  found_by: DebateSideName[];
+  query: string;
+}
+
+export interface DebateClaim {
+  id: string;
+  side: DebateSideName;
+  pillar: string;
+  claim: string;
+  category: string;
+  materiality: "high" | "medium" | "low";
+  evidence: string[];
+  quote: Record<string, unknown> | null;
+  analyst_refs: string[];
+  contests_analyst: string | null;
+  falsifier: string;
+  grade: ClaimGrade;
+  dropped: boolean;
+  drop_reason: string;
+  figures: Record<string, number>;
+  status: "conceded" | "partial" | "contested" | "unanswered";
+}
+
+export interface DebateResponse {
+  side: DebateSideName;
+  target: string;
+  stance: "rebut" | "concede" | "partial" | "unanswered";
+  argument: string;
+  evidence: string[];
+  grade: ClaimGrade;
+}
+
+export interface DebateRuling {
+  dispute: string;
+  claim: string;
+  ruling: "bull" | "bear" | "split" | "unresolved" | "not_ruled";
+  basis: string[];
+  flags: string[];
+}
+
+export interface DebateResolution {
+  status: "ruled" | "pm_unavailable" | "not_applicable";
+  crux: string;
+  rulings: DebateRuling[];
+  unresolved: string[];
+  relied_unsupported: string[];
+}
+
+export interface DebateRecord {
+  protocol_version: number;
+  status: "complete" | "partial" | "unavailable" | "not_run";
+  reason: string;
+  rebuttal_status: string;
+  research_status: string;
+  presentation_order: "bull_first" | "bear_first";
+  // {provider, model, effort, failed_over, phases: [...]}; internal.
+  route: Record<string, unknown>;
+  headlines: Record<string, string>;
+  cruxes: Record<string, string>;
+  research: Record<string, Array<Record<string, string>>>;
+  evidence: DebateEvidence[];
+  claims: DebateClaim[];
+  responses: DebateResponse[];
+  disputes: string[];
+  unanswered: string[];
+  resolution: DebateResolution;
+  deterministic_checks: string[];
+  // Tallies plus the counterfactual PM's cf_* values; never rendered.
+  outcome: Record<string, number>;
+  news_since: Array<Record<string, unknown>>;
+  usage: Record<string, number>;
 }
 
 export interface DCFAssumptions {
@@ -475,7 +626,11 @@ export type SectionReason =
   | "pm_view_unavailable"
   | "partial_template"
   | "follow_up_unanswered"
-  | "templated_scenarios";
+  | "templated_scenarios"
+  // D4: the bull/bear debate's own states (design-bullbear-final §12.1).
+  | "debate_unavailable"
+  | "not_run"
+  | "rebuttals_unavailable";
 
 // Read-time verdict on one memo section. Computed by the backend presenter
 // on every read; never stored.
@@ -590,6 +745,9 @@ export interface StockMemoOut {
   technical_agent_view?: AgentFinding | null;
   bull_case: BullBearCase;
   bear_case: BullBearCase;
+  // D2 — the bull/bear debate record. Null or absent unless the memo was
+  // written with the debate on; the cases above are unchanged either way.
+  debate?: DebateRecord | null;
   catalysts: CatalystItem[];
   key_risks: RiskItem[];
   thesis_breakers: RiskItem[];

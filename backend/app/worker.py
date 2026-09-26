@@ -52,6 +52,15 @@ def _handle_signal(signum, _frame) -> None:
     _shutdown.set()
 
 
+def _gemini_backend(settings) -> str:
+    """`vertex`, `api` or `off`, in `llm._gemini_client`'s precedence."""
+    if settings.has_vertex:
+        return "vertex"
+    if settings.gemini_api_key:
+        return "api"
+    return "off"
+
+
 def _heartbeat() -> None:
     """Persist a liveness marker readable by the web service.
 
@@ -83,6 +92,12 @@ def _heartbeat() -> None:
             # no HTTP port and a Blueprint sync may not apply a new render.yaml
             # key, so this is where a post-deploy check can see it.
             f"industry_routing={'on' if settings.enable_industry_analyst_routing else 'off'}; "
+            # The worker is the only process that calls Gemini (news_loop),
+            # and nothing else shows which backend it loaded. Vertex wins
+            # when both are set (llm._gemini_client) and needs ADC Render
+            # lacks, so "vertex" here in production is a misconfiguration.
+            # The backend name only; never the key.
+            f"gemini={_gemini_backend(settings)}; "
             f"build={os.environ.get('RENDER_GIT_COMMIT', 'unknown')}"
         )
         if rss is not None:
@@ -137,6 +152,15 @@ def main() -> int:
     # queue can query mapped columns. Do not continue with a missing job fence.
     # This is DB-only; provider seeding remains on the daemon thread below.
     bootstrap_runtime_schema()
+
+    # The same two LLM lines the web service logs: the routing table this
+    # process loaded (the worker runs the loops, the regen queue and every
+    # Gemini call, so a render.yaml model change has to be checkable HERE)
+    # and, on a daemon thread, `models.list` reachability per configured
+    # model. Also fires the unpriced-configured-model WARNING on this side.
+    from . import llm_startup
+    llm_startup.log_routing(log)
+    llm_startup.start_model_access_check()
 
     # Idempotent — the web service runs the same seed on its boot. Doing
     # it here too means the worker doesn't depend on web having started
@@ -206,7 +230,15 @@ def main() -> int:
         except Exception as exc:
             log.warning("worker scorecard registry failed (continuing): %s", type(exc).__name__)
 
-    threading.Thread(target=_seed, name="worker-seed", daemon=True).start()
+    def _seed_with_origin() -> None:
+        # A thread starts with an empty context, outside the scheduler
+        # proxy: without this, anything the seed reaches in the LLM layer
+        # would read the generic `worker:other` (attribution critique #16).
+        from .agents.llm import llm_call_context
+        with llm_call_context(origin="worker:seed"):
+            _seed()
+
+    threading.Thread(target=_seed_with_origin, name="worker-seed", daemon=True).start()
 
     scheduler = None
     if settings.enable_monitoring:

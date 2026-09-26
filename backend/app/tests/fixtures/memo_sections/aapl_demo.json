@@ -82,6 +82,7 @@
   "tv_clamped": false,
   "wacc": 0.0886
  },
+ "debate": null,
  "degradation_events": [],
  "degraded_agents": [],
  "disclaimer": "MarketMosaic is for investment research and education only. It does not provide personalized financial, investment, legal, or tax advice.",
@@ -172,8 +173,15 @@
   "challenges": [
    "Rating (Bullish) is one-sided — list explicit thesis-breakers and the cost of being wrong."
   ],
+  "debate_review": null,
+  "issues": [],
   "overall_assessment": "Memo is structurally sound; balance and source citations should be tightened.",
+  "rating_too_high": null,
+  "rating_too_low": null,
   "review_mode": "unknown",
+  "review_status": "",
+  "reviewer_model": "",
+  "revision": null,
   "suggested_revisions": [
    "Tag every claim with a source: filing, transcript, or ratio.",
    "Verify the bull case is symmetric to the bear case.",
@@ -182,7 +190,8 @@
   "underweighted_risks": [
    "Re-emphasize the sector cohort context if quality deteriorates."
   ],
-  "valuation_divergence_assessment": "not_assessed"
+  "valuation_divergence_assessment": "not_assessed",
+  "verdict": ""
  },
  "round_findings": [
   {

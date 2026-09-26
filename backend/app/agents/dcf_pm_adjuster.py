@@ -26,6 +26,7 @@ from ..config import settings
 from ..schemas import AgentFinding, DCFAssumptions, DCFResult
 from . import llm
 from .dcf_updater import _apply_updates  # share the clamp + rationale gate
+from .log_safety import log_safely
 from .safe_runner import note_soft
 
 log = logging.getLogger(__name__)
@@ -120,9 +121,12 @@ def _propose_adjustments(
         ):
             out = llm.chat_json(
                 prompt, system=_PM_DCF_SYSTEM, route="strong",
+                action="pm.dcf_adjust", ticker=ticker,
             )
     except Exception as exc:  # pragma: no cover — defensive
-        log.warning("PM DCF adjuster LLM call failed for %s: %s", ticker, exc)
+        # Type only: an exception raised around a model call can quote the
+        # model's text or the request (attribution critique #15).
+        log_safely(log, f"PM DCF adjuster LLM call failed for {ticker}", exc)
         # (b) RP-001: the caller turns None into "no adjustments", which is
         # the same outcome as "the PM agreed with consensus" — the reader
         # could not tell a dead adjuster from a deliberate no-op. Record it
@@ -192,7 +196,7 @@ def adjust_dcf_for_pm_view(
             ticker, assumptions=new_assumptions, force_refresh=False,
         )
     except Exception as exc:  # pragma: no cover — defensive
-        log.warning("PM-adjusted DCF rebuild failed for %s: %s", ticker, exc)
+        log_safely(log, f"PM-adjusted DCF rebuild failed for {ticker}", exc)
         # (b) the PM *did* propose changes and they were lost — the memo
         # ships the consensus DCF as if the team had agreed with it.
         note_soft(

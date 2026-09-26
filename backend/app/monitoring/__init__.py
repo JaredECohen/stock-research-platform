@@ -8,6 +8,8 @@ Loops are quiet — they push results into the snapshot cache as `*_hot`
 snapshots so other agents can read them through the same interface they use
 for warm/cold data.
 """
+import contextvars
+import functools
 from datetime import datetime
 
 # Module-level state used by `/api/admin/monitoring/status`. Defined BEFORE
@@ -55,58 +57,16 @@ KNOWN_LOOPS: tuple[str, ...] = (
 )
 
 
-# Env override, read first so an operator can settle the question without
-# depending on any inference below. Unset in production today, which is why
-# the fallbacks have to work on their own.
-PROCESS_ROLE_ENV = "MM_PROCESS_ROLE"
-_ROLES = ("worker", "web")
-
-# What `python -m app.worker` names the running module. Checked against
-# `__main__.__spec__`, which runpy sets to the spec of the module it is
-# executing — the only signal that survives `-m` intact.
-_WORKER_MODULE = "app.worker"
-
-
-def _process_role() -> str:
-    """Which process is reporting a cron run: "worker" or "web".
-
-    This is `/api/admin/cron-health`'s `reported_by`, and it was wrong for
-    every row. The whole check used to be `any("app.worker" in a for a in
-    sys.argv)`, which is never true in production: `python -m app.worker`
-    rewrites `sys.argv[0]` to the module's *file path*, `/app/app/worker.py`.
-    The literal "app.worker" — with a dot — appears nowhere in it. So every
-    loop, `worker_heartbeat` included, was labelled "web", and the endpoint's
-    one cross-process signal said the opposite of the truth.
-
-    Three signals, most authoritative first:
-
-    1. `MM_PROCESS_ROLE`, when an operator sets it. Nothing in Render sets it
-       today, which is exactly why it cannot be the only signal.
-    2. `__main__.__spec__.name` — runpy sets this to "app.worker" under
-       `python -m app.worker`, dots intact, whatever it did to argv.
-    3. The basename of `sys.argv[0]`, for `python app/worker.py`, plus the
-       original substring check for a wrapper that really does carry the
-       dotted name on its command line.
-
-    Anything else is the web service: uvicorn, pytest, a shell.
-    """
-    import os
-    import sys
-
-    explicit = (os.environ.get(PROCESS_ROLE_ENV) or "").strip().lower()
-    if explicit in _ROLES:
-        return explicit
-
-    main = sys.modules.get("__main__")
-    if getattr(getattr(main, "__spec__", None), "name", "") == _WORKER_MODULE:
-        return "worker"
-
-    argv = list(sys.argv or [])
-    if argv and os.path.basename(argv[0].replace("\\", "/")) == "worker.py":
-        return "worker"
-    if any(_WORKER_MODULE in a for a in argv):
-        return "worker"
-    return "web"
+# `_process_role` moved to `app.runtime_role` (the LLM layer labels every
+# call row with it and must not import every loop to do so). Re-exported
+# here, names unchanged, for `record_run` below and for the callers and
+# tests that already use `monitoring._process_role` / `PROCESS_ROLE_ENV`.
+from ..runtime_role import (  # noqa: E402,F401
+    _ROLES,
+    _WORKER_MODULE,
+    PROCESS_ROLE_ENV,
+    _process_role,
+)
 
 
 def note_names(names) -> str:
@@ -267,8 +227,56 @@ __all__ = [
 ]
 
 
+def _job_with_origin(func, loop_id: str):
+    """`func` run as loop `loop_id`: every LLM call it makes carries
+    `origin=loop:<id>` (attribution slice A2a, design §4.8).
+
+    Each run gets a FRESH `contextvars.copy_context()` (attribution critique
+    #11): APScheduler's pool threads are reused, so a context variable set
+    by one job — the failover-event list, an attempt scope, a context layer
+    a loop forgot to close — would otherwise leak into the next job on that
+    thread, and on the long-lived worker the failover list would grow
+    without bound. An umbrella context names the origin only, never an
+    agent: the registry's per-action agents stay correct underneath it.
+
+    `functools.wraps` keeps `__module__`/`__name__`, which the KNOWN_LOOPS
+    pin and APScheduler's job repr read.
+    """
+    origin = f"loop:{loop_id}"
+
+    def _run(*args, **kwargs):
+        from ..agents.llm import llm_call_context
+        with llm_call_context(origin=origin):
+            return func(*args, **kwargs)
+
+    @functools.wraps(func)
+    def job(*args, **kwargs):
+        return contextvars.copy_context().run(_run, *args, **kwargs)
+
+    return job
+
+
+class _OriginScheduler:
+    """Scheduler proxy for `register_all`: wraps each job so it runs under
+    its loop's origin (above). Everything but `add_job` passes through."""
+
+    def __init__(self, scheduler) -> None:
+        self._scheduler = scheduler
+
+    def add_job(self, func, *args, **kwargs):
+        loop_id = kwargs.get("id") or getattr(func, "__module__", "unknown").rsplit(".", 1)[-1]
+        return self._scheduler.add_job(_job_with_origin(func, loop_id), *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._scheduler, name)
+
+
 def register_all(scheduler) -> None:
-    """Register every monitoring loop with an APScheduler instance."""
+    """Register every monitoring loop with an APScheduler instance.
+
+    The loops register against a proxy, so every job's LLM rows and
+    `llm_call` lines say which loop started them (`origin=loop:<id>`)."""
+    scheduler = _OriginScheduler(scheduler)
     edgar_poller.register(scheduler)
     transcripts_poller.register(scheduler)
     news_loop.register(scheduler)

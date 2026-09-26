@@ -486,9 +486,9 @@ def test_embedding_happens_in_bounded_batches(filing, monkeypatch):
     sizes: list[int] = []
     real = vector_store.emb_svc.embed
 
-    def spy(texts):
+    def spy(texts, **kwargs):
         sizes.append(len(texts))
-        return real(texts)
+        return real(texts, **kwargs)
 
     monkeypatch.setattr(vector_store.emb_svc, "embed", spy)
     written = vector_store.upsert_source(

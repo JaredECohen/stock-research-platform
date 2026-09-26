@@ -12,7 +12,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from app.agents import news_agent
+
+
+@pytest.fixture(autouse=True)
+def _shipped_lists_afterwards():
+    # The lists are lru-cached per process. The reload tests below point the
+    # path at a tmp file; monkeypatch restores the path but not the cache,
+    # so every later test in the session saw {"custom.example"} or nothing.
+    yield
+    news_agent.reload_domain_lists()
 
 
 def test_shipped_domains_file_parses():

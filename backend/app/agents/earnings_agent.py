@@ -63,6 +63,7 @@ def _multi_pass_qa_addendum(
             route="cheap",
             model=settings.openai_tool_model,
             max_tokens=600,
+            action="analyst.earnings_qa", ticker=ticker,
         )
         if not isinstance(out, dict):
             return {}
@@ -296,6 +297,7 @@ def run_earnings_agent(
         # JSON and silently drops the structured block. 6000 gives
         # ~50% headroom; cost impact ~$0.005/memo.
         max_tokens=6000,
+        action="analyst.earnings", ticker=profile.get("ticker"),
     )
     if llm_out:
         # Same flattening defense as filing_agent — prompt-tuned models

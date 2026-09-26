@@ -59,7 +59,11 @@ def test_direct_api_when_only_gemini_key_set(monkeypatch):
         fake_genai.Client.return_value = "api-client"
         client = _gemini_client()
         assert client == "api-client"
-        fake_genai.Client.assert_called_once_with(api_key="stub-key")
+        # The API-key client is bounded (30 s, in milliseconds); see
+        # test_llm_gemini.test_gemini_client_timeout_30000ms.
+        fake_genai.Client.assert_called_once_with(
+            api_key="stub-key", http_options=llm_mod._gemini_http_options(),
+        )
 
 
 def test_returns_none_when_nothing_configured(monkeypatch):

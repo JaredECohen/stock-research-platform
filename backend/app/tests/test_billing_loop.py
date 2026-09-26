@@ -66,7 +66,8 @@ def test_billing_loop_is_registered_and_known():
     register_all(sched)
     assert "billing_loop" in KNOWN_LOOPS and "billing_loop" in sched.jobs
     fn, trigger, kw = sched.jobs["billing_loop"]
-    assert trigger == "interval" and kw.get("hours") == 1 and fn is billing_loop.tick
+    # register_all wraps each job to run under its loop origin (A2a).
+    assert trigger == "interval" and kw.get("hours") == 1 and fn.__wrapped__ is billing_loop.tick
 
 
 # ---------------------------------------------------------------------------

@@ -85,6 +85,7 @@ def _llm_translate(query: str) -> dict[str, Any] | None:
         prompt,
         system="You are a buy-side screener. Convert prose to rules accurately.",
         route="cheap",
+        action="screener.translate",
     )
     return out if isinstance(out, dict) else None
 

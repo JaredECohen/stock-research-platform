@@ -33,6 +33,7 @@ from ..schemas import (
 from . import llm
 from .intake import ALL_SPECIALISTS
 from .llm import llm_call_context
+from .log_safety import log_safely
 
 log = logging.getLogger(__name__)
 
@@ -154,10 +155,11 @@ def pm_critique(
         try:
             out = llm.chat_json(
                 prompt, system=_PM_CRITIQUE_SYSTEM, route="strong",
-                max_tokens=1200,
+                max_tokens=1200, action="pm.critique",
             )
         except Exception as exc:  # pragma: no cover — defensive
-            log.warning("PM critique LLM call failed: %s", exc)
+            # Type only: the exception text can quote the model or the request.
+            log_safely(log, "PM critique LLM call failed", exc)
             out = None
     if not isinstance(out, dict):
         return CritiqueOutput(
@@ -273,9 +275,8 @@ def run_dialog_loop(
                     new_findings[q.target_agent] = disp(q.question)
                 any_success = True
             except Exception as exc:  # pragma: no cover — defensive
-                log.warning(
-                    "Deep-research re-fire failed for %s on round %d: %s",
-                    q.target_agent, r, exc,
+                log_safely(
+                    log, f"Deep-research re-fire failed for {q.target_agent} on round {r}", exc,
                 )
 
         rounds.append(RoundFindings(

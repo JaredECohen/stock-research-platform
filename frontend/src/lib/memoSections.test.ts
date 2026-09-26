@@ -4,6 +4,7 @@ import {
   MEMO_CARD_SECTIONS,
   REASON_TEXT,
   SAMPLE_SUMMARY_SECTIONS,
+  SECTION_KEYS,
   SECTION_REASON_TEXT,
   UNAVAILABLE_TEXT,
   availability,
@@ -37,6 +38,24 @@ describe("memoSections", () => {
       for (const entry of Object.values(presentedMemo(name).section_availability ?? {})) {
         if (entry.reason) expect(REASON_TEXT[entry.reason], `${name}: ${entry.reason}`).toBeTruthy();
       }
+    }
+  });
+
+  it("places the debate after the cases and words its states in plain language", () => {
+    // D4: `SECTION_KEYS` mirrors the presenter (the backend contract test
+    // compares the two); the debate's reasons carry no internal codes.
+    expect(SECTION_KEYS.indexOf("debate")).toBe(SECTION_KEYS.indexOf("bear_case") + 1);
+    for (const reason of ["debate_unavailable", "not_run", "rebuttals_unavailable"] as const) {
+      expect(REASON_TEXT[reason]).toMatch(/^[A-Z][a-z ,.]+\.$/);
+    }
+    // A partial debate's note is the design's wording.
+    expect(reasonText(av("degraded", "rebuttals_unavailable"))).toBe("Rebuttals unavailable in this version.");
+    // A debate that was not run hid nothing, so it never counts toward the banner.
+    const memo = makeMemo({ section_availability: { debate: av("unavailable", "not_run") } });
+    expect(isCounted(memo, "debate")).toBe(false);
+    // Every captured legacy memo has the entry, as not produced.
+    for (const name of PRESENTED_MEMO_NAMES) {
+      expect(availability(presentedMemo(name), "debate")?.reason, name).toBe("not_produced");
     }
   });
 

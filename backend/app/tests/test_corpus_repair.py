@@ -96,14 +96,14 @@ def test_concurrent_change_guard_skips(corpus_db, live_openai, monkeypatch):  # 
     raced = ids["hash"][1]  # mid-range, so the receipt's id ranges must show the gap
     real_embed = emb_svc.embed
 
-    def embed_while_reindexed(texts):
+    def embed_while_reindexed(texts, **kwargs):
         # A poller re-indexes this row between our read and our write.
         with corpus_db.Session() as db:
             row = db.get(DocChunk, raced)
             row.embedding, row.embedding_dim, row.embedding_model = [0.9] * 1536, 1536, "fresh"
             row.meta = {"fresh": True}
             db.commit()
-        return real_embed(texts)
+        return real_embed(texts, **kwargs)
 
     monkeypatch.setattr(emb_svc, "embed", embed_while_reindexed)
     res = cr.reembed(**GENEROUS, now=NOW)

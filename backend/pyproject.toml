@@ -187,9 +187,12 @@ files = [
     "app/agents/safe_runner.py",
     "app/agents/roster.py",
     "app/agents/memo_context.py",
+    "app/agents/news_context.py",
     "app/agents/memo_quality.py",
     "app/agents/number_check.py",
     "app/agents/source_ledger.py",
+    "app/agents/debate.py",
+    "app/agents/debate_prompts.py",
 ]
 follow_imports = "silent"
 ignore_missing_imports = true

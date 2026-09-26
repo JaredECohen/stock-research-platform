@@ -38,9 +38,11 @@ Three rules govern every number that leaves here:
 What one *unit* is differs per operation and is stated in the output
 (`basis`, `basis_note`): a `research_run` is a `run_id` (~26 calls), a
 `chart_commentary` is one call because `auth/features.py` documents exactly
-one cheap-route call per request, and a `pm_chat` *turn* has no identifier in
-the log at all — so its figure is per call and flagged as a floor for a turn,
-never quietly presented as the per-turn cost.
+one cheap-route call per request, and a `pm_chat` *turn* is its `chat:<hex>`
+run_id. Rows written before /api/chat began tagging turns (B8-C1) have no turn
+identifier at all; while a window holds any of them the pm_chat figure is per
+call and flagged as a floor for a turn, never quietly presented as the
+per-turn cost.
 """
 from __future__ import annotations
 
@@ -58,6 +60,7 @@ from ..database import SessionLocal
 from ..models import LLMCallLog
 from .llm_metrics import (
     estimate_cost_usd,
+    not_skipped_filter,
     price_source,
 )
 
@@ -128,11 +131,14 @@ OPERATIONS: tuple[Operation, ...] = (
         unit="one LLM call inside an Ask-the-PM turn",
         basis=BASIS_CALL,
         basis_note=(
-            "no per-turn identifier is written to llm_call_logs: /api/chat sets only "
-            "user_id and feature, and a turn issues classify_intent plus at least one "
-            "answer call. The figure below is therefore PER CALL, and a turn costs at "
-            "least that much — it is a floor, not the per-turn cost. Logging a turn id "
-            "in llm_call_context is what would close the gap"
+            "the window holds Ask-the-PM rows with no per-turn identifier: /api/chat "
+            "wrote only user_id and feature before it began tagging each turn with a "
+            "chat:<hex> run_id (B8-C1), and a turn issues classify_intent plus at least "
+            "one answer call. Those untagged rows are PER CALL, and a turn costs at least "
+            "that much — the figure is a floor, not the per-turn cost. Tagged rows are "
+            "already grouped into one unit per turn, and the attempts of one failed-over "
+            "call (a shared call_id) into one unit per call; once the window holds only "
+            "tagged turns the figure is exact and stops being flagged"
         ),
         plan_feature="pm_chat",
         understates_unit=True,
@@ -193,6 +199,8 @@ class _Unit:
     cost_usd: float = 0.0
     n_calls: int = 0
     problems: set[str] = field(default_factory=set)
+    # Call-grouped units only: did any attempt deliver?
+    succeeded: bool = False
 
 
 # Why a unit is unusable. Keys are stable (they appear in the output), values
@@ -247,6 +255,10 @@ def _scan(db: Session, *, since: datetime, until: datetime, max_rows: int,
         LLMCallLog.feature.in_(wanted),
         LLMCallLog.generated_at >= since,
         LLMCallLog.generated_at < until,
+        # A skip row (open breaker, no client) made no provider request;
+        # counted as a call it would inflate `failed_calls` and split units
+        # (attribution critique #14).
+        not_skipped_filter(),
     )
     total = int(db.execute(
         select(func.count()).select_from(LLMCallLog).where(*where)
@@ -257,6 +269,7 @@ def _scan(db: Session, *, since: datetime, until: datetime, max_rows: int,
             LLMCallLog.tokens_in, LLMCallLog.tokens_out, LLMCallLog.success,
             LLMCallLog.generated_at,
             LLMCallLog.cache_read_tokens, LLMCallLog.cache_write_tokens,
+            LLMCallLog.call_id,
         )
         .where(*where)
         .order_by(LLMCallLog.generated_at.desc())
@@ -361,6 +374,9 @@ def _units_for(op: Operation, rows: Sequence[Any],
     unpriced_models: set[str] = set()
     fallback_priced_models: set[str] = set()
     n_calls = 0
+    # pm_chat units that are a whole turn (a `chat:<hex>` run_id), as
+    # opposed to one untagged legacy call: `_pm_chat_basis` reads the mix.
+    tagged_units: set[str] = set()
 
     for i, r in enumerate(mine):
         model_label = f"{r.provider or '?'}/{r.model or '?'}"
@@ -379,21 +395,33 @@ def _units_for(op: Operation, rows: Sequence[Any],
                 continue
             key = r.run_id
         else:
-            if not r.success:
-                # One call is one delivered unit here, and a failed call
-                # delivered nothing. Counted separately so the failure rate
-                # stays visible.
-                failed_calls += 1
-                continue
-            key = f"{op.key}:{i}"
+            # One unit per logical CALL, not per row: a failover writes two
+            # rows (attempts) sharing a call_id, and a PM chat turn tagged
+            # with a `chat:<hex>` run_id is one turn of several calls
+            # (attribution critique #14). Legacy rows carry neither and stay
+            # one unit each, exactly as before.
+            call_id = getattr(r, "call_id", None)
+            if op.key == "pm_chat" and r.run_id:
+                key = f"run:{r.run_id}"
+                tagged_units.add(key)
+            elif call_id:
+                key = f"call:{call_id}"
+            else:
+                key = f"{op.key}:{i}"
         n_calls += 1
         unit = units.setdefault(key, _Unit())
         unit.n_calls += 1
+        if r.success:
+            unit.succeeded = True
         if op.basis == BASIS_RUN_ID and key in partial_runs:
             unit.problems.add("partial_unit")
         unit.cost_usd += estimate_cost_usd(
             r.provider, r.model, r.tokens_in, r.tokens_out,
             cache_read_tokens=r.cache_read_tokens, cache_write_tokens=r.cache_write_tokens,
+            # The rate in force the day the row was written (DATED_PRICES),
+            # as llm_metrics._row_cost prices it: a window read after a
+            # scheduled price change must not reprice last year's calls.
+            on=r.generated_at,
         )
         if not priced:
             unit.problems.add("unpriced_model")
@@ -401,6 +429,14 @@ def _units_for(op: Operation, rows: Sequence[Any],
             unit.problems.add("missing_token_counts")
         if op.basis == BASIS_RUN_ID and not r.success:
             failed_calls += 1
+
+    if op.basis != BASIS_RUN_ID:
+        # One call is one delivered unit here, and a call none of whose
+        # attempts succeeded delivered nothing. Counted separately so the
+        # failure rate stays visible.
+        for key in [k for k, u in units.items() if not u.succeeded]:
+            failed_calls += 1
+            n_calls -= units.pop(key).n_calls
 
     excluded: dict[str, int] = {}
     n_excluded = 0
@@ -418,6 +454,7 @@ def _units_for(op: Operation, rows: Sequence[Any],
     return {
         "units": usable,
         "n_units_seen": len(units),
+        "n_untagged_units": sum(1 for k in units if k not in tagged_units),
         "n_units_excluded": n_excluded,
         "n_calls_in_units": n_calls,
         "unattributed_calls": unattributed,
@@ -429,6 +466,28 @@ def _units_for(op: Operation, rows: Sequence[Any],
     }
 
 
+PM_CHAT_TURN_UNIT = "one Ask-the-PM turn (every LLM call it made, SDK and legacy)"
+PM_CHAT_TURN_NOTE = (
+    "/api/chat tags every call of a turn with the turn's chat:<hex> run_id (B8-C1), "
+    "and every pm_chat row in this window carries one, so a unit is exact: the "
+    "classify_intent call, the SDK agent's responses and any legacy answer of one "
+    "turn, summed"
+)
+
+
+def _pm_chat_basis(op: Operation, grouped: dict[str, Any]) -> tuple[str, str, str, bool]:
+    """(unit, basis, basis_note, understates_unit) as this window supports.
+
+    The Operation describes the untagged legacy rows, whose unit is one call
+    and a floor for a turn. When every unit the window shows is a tagged
+    turn, the figure IS per turn and must not keep the floor label; one
+    untagged unit in the mix keeps the whole figure a floor, because the
+    median then mixes turns with single calls."""
+    if op.key == "pm_chat" and grouped["n_units_seen"] and not grouped["n_untagged_units"]:
+        return PM_CHAT_TURN_UNIT, BASIS_RUN_ID, PM_CHAT_TURN_NOTE, False
+    return op.unit, op.basis, op.basis_note, op.understates_unit
+
+
 def _figures(op: Operation, grouped: dict[str, Any], *, window_days: int,
              rows_dropped: int) -> dict[str, Any]:
     """Turn one operation's usable units into the reported block.
@@ -438,6 +497,7 @@ def _figures(op: Operation, grouped: dict[str, Any], *, window_days: int,
     any one operation in the window is unknown — not the fraction of it that
     was read.
     """
+    unit_label, basis, basis_note, understates = _pm_chat_basis(op, grouped)
     units: list[float] = grouped["units"]
     n = len(units)
     reasons: dict[str, str] = {}
@@ -453,7 +513,7 @@ def _figures(op: Operation, grouped: dict[str, Any], *, window_days: int,
     else:
         status = "insufficient_sample"
         reasons["median"] = (
-            f"{n} usable unit(s) of {op.unit} in the window — fewer than the "
+            f"{n} usable unit(s) of {unit_label} in the window — fewer than the "
             f"{MIN_UNITS_FOR_MEDIAN} this module requires before it will state a cost"
             + (f"; {n_excluded} further unit(s) were excluded, see excluded_units"
                if n_excluded else "")
@@ -475,7 +535,7 @@ def _figures(op: Operation, grouped: dict[str, Any], *, window_days: int,
         reasons["units_per_30d"] = (
             f"the scan cap left {rows_dropped} row(s) of the window unread, and an "
             f"unread row cannot be attributed to an operation, so the number of "
-            f"{op.unit} in the window is unknown. Re-read with a larger max_rows or a "
+            f"{unit_label} in the window is unknown. Re-read with a larger max_rows or a "
             "narrower window"
         )
     else:
@@ -483,10 +543,10 @@ def _figures(op: Operation, grouped: dict[str, Any], *, window_days: int,
 
     excluded = grouped["excluded_units"]
     out: dict[str, Any] = {
-        "unit": op.unit,
-        "basis": op.basis,
-        "basis_note": op.basis_note,
-        "understates_unit": op.understates_unit,
+        "unit": unit_label,
+        "basis": basis,
+        "basis_note": basis_note,
+        "understates_unit": understates,
         "plan_feature": op.plan_feature,
         "status": status,
         "n_units": n,
@@ -556,9 +616,11 @@ def _allowance_term(op: Operation, block: dict[str, Any], plan: str) -> dict[str
     term["monthly_usd_p90"] = None if p90 is None else round(resolved.limit * p90, 4)
     if p90 is None:
         term["reason"] = block["reasons"].get("p90")
-    if op.understates_unit:
+    # The block's, not the Operation's: pm_chat stops being a floor once
+    # the window holds only tagged turns (`_pm_chat_basis`).
+    if block["understates_unit"]:
         term["floor_only"] = True
-        term["floor_reason"] = op.basis_note
+        term["floor_reason"] = block["basis_note"]
     return term
 
 

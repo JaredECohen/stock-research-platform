@@ -72,6 +72,7 @@ def run_valuation_agent(
         + "\n\nContext:\n" + json.dumps(payload, default=str),
         system=prompts.PM_SYSTEM, route="strong",
         model=settings.openai_tool_model,
+        action="analyst.valuation", ticker=profile.get("ticker"),
     )
     if llm_out:
         # Wave 10 — typed citations for the DCF + ratio-based claims.

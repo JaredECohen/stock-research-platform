@@ -30,6 +30,9 @@ def _clean_llm_state(monkeypatch):
     monkeypatch.setattr(
         type(settings), "active_llm_provider", property(lambda self: "openai"),
     )
+    # The client factories are patched, so this runs as a live deployment
+    # would: demo-only mode has no partner to fail over to (critique #2).
+    monkeypatch.setattr(llm, "_demo_only", lambda: False)
     llm.reset_circuit_breaker()
     llm.reset_failover_state()
     yield
@@ -263,18 +266,31 @@ def test_breaker_state_carries_failover_unless_told_otherwise():
     assert set(llm.get_breaker_state(include_failover=False)) == {"openai", "anthropic", "gemini"}
 
 
-def test_failover_is_logged_at_warning_through_log_safety(monkeypatch, caplog):
-    seen: list[tuple] = []
-    real = llm.log_safely
+def test_failover_is_logged_at_warning_with_the_legacy_prefix(monkeypatch, caplog):
+    """The legacy prefix is kept so existing Render searches still match;
+    the attribution suffix (call, agent, both models) follows it. The line
+    goes through the secret masks without `log_safely`'s 300-char cut
+    (attribution design §4.6), so the spy on `redact_unbounded` sees it."""
+    seen: list[str] = []
+    real = llm.redact_unbounded
 
-    def _spy(log, msg, exc, **kw):
-        seen.append((msg, exc))
-        real(log, msg, exc, **kw)
+    def _spy(text):
+        seen.append(text)
+        return real(text)
 
-    monkeypatch.setattr(llm, "log_safely", _spy)
+    monkeypatch.setattr(llm, "redact_unbounded", _spy)
     calls = _Calls(openai_result=None, anthropic_result='{"ok": true}')
-    with caplog.at_level(logging.WARNING, logger="app.agents.llm"):
-        _run(calls)
-    assert seen == [("LLM failover from openai to anthropic (call_failed)", None)]
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert [r.getMessage() for r in warnings] == ["LLM failover from openai to anthropic (call_failed)"]
+    with caplog.at_level(logging.WARNING, logger="app.agents.llm"), \
+            llm.llm_call_context(run_id="r-failover"):
+        _run(calls, route="cheap", action="analyst.sector", ticker="NVDA")
+    prefix = "LLM failover from openai to anthropic (call_failed) "
+    assert [s for s in seen if s.startswith("LLM failover")][0].startswith(prefix)
+    warnings = [r.getMessage() for r in caplog.records
+                if r.levelno == logging.WARNING and r.name == "app.agents.llm"]
+    assert len(warnings) == 1 and warnings[0].startswith(prefix)
+    line = warnings[0]
+    assert 'agent="Sector Analyst"' in line and "action=analyst.sector" in line
+    assert f"from_model={settings.openai_cheap_model}" in line
+    assert f"to_model={settings.anthropic_cheap_model}" in line
+    assert "run_id=r-failover" in line and "ticker=NVDA" in line
+    assert "call=" in line and "call=-" not in line

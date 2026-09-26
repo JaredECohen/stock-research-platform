@@ -358,7 +358,12 @@ def upsert_source(
     batch_size = max(1, int(batch_size))
     written = 0
     try:
-        with SessionLocal() as db:
+        # `deferred_call_rows` is entered FIRST so it exits LAST: each
+        # batch's `llm_call_logs` row is written after this session has
+        # committed or rolled back. Written inside it, the row's INSERT (on
+        # its own connection) waits on this transaction's write lock, which
+        # on SQLite meant a 5 s stall per batch and a dropped row.
+        with emb_svc.deferred_call_rows(), SessionLocal() as db:
             # Replace prior chunks for this source so re-ingest is idempotent.
             # Inside the same transaction as the inserts below.
             if source_id is not None:
@@ -370,7 +375,7 @@ def upsert_source(
                 texts = [c.get("text", "") for c in batch]
                 if not any(t.strip() for t in texts):
                     continue
-                vectors = emb_svc.embed(texts)
+                vectors = emb_svc.embed(texts, action="embed.index", ticker=ticker or None)
                 for c, vec in zip(batch, vectors):
                     text = c.get("text", "")
                     if not text.strip():
@@ -464,12 +469,15 @@ def search(
         _reject_global_scan(source_types, sections)
         return []
     try:
-        q_vec = emb_svc.embed_one(query)
+        q_vec = emb_svc.embed_one(query, action="embed.query", ticker=ticker)
     except Exception as exc:
         # `EmbeddingUnavailable` (W7 §8.1) lands here. [] puts the filing and
         # earnings analysts on BM25; the old hash query vector instead
-        # "matched" hash rows by byte pattern, which means nothing.
-        log.warning("embed query failed: %s", exc)
+        # "matched" hash rows by byte pattern, which means nothing. Through
+        # `log_safely`: anything other than `EmbeddingUnavailable` (whose
+        # text is type-only) can carry the request or a key in its message.
+        from ..agents.log_safety import log_safely  # lazy: agents imports services
+        log_safely(log, "embed query failed", exc)
         return []
 
     started = memory_probe.rss_mb()

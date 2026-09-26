@@ -48,6 +48,8 @@ def _seed(rows: list[dict[str, Any]]) -> None:
                 duration_ms=100,
                 success=row.get("success", True),
                 feature=row["feature"],
+                error_type=row.get("error_type"),
+                call_id=row.get("call_id"),
                 # Ordered backwards from the clock so "newest first" is
                 # well-defined for the scan-cap test.
                 generated_at=CLOCK - timedelta(minutes=row.get("minutes_ago", i + 1)),
@@ -238,6 +240,79 @@ def test_a_failed_call_is_not_a_delivered_unit():
     assert block["n_units"] == 20
     assert block["failed_calls"] == 4
     assert block["cost_usd_per_unit"]["median"] == pytest.approx(0.05)
+
+
+def test_skip_rows_are_not_calls_or_failures():
+    """A skipped attempt (open breaker, no client) made no provider request;
+    counted, it would inflate failed_calls and the scan (critique #14)."""
+    rows = [{"feature": "chart_commentary", **_cents(5)} for _ in range(20)]
+    rows += [{"feature": "chart_commentary", "success": False, "tokens_in": 0,
+              "tokens_out": 0, "error_type": "skipped:breaker_open"} for _ in range(6)]
+    _seed(rows)
+    report = _report()
+    block = report["operations"]["chart_commentary"]
+    assert block["n_units"] == 20
+    assert block["failed_calls"] == 0
+    assert report["scan"]["rows_in_window"] == 20
+
+
+def test_attempts_of_one_call_are_one_unit():
+    """A failover writes two rows sharing a call_id: one delivered call,
+    costing both attempts, not one failure plus one unit."""
+    rows = [{"feature": "chart_commentary", **_cents(5)} for _ in range(19)]
+    rows += [
+        {"feature": "chart_commentary", "success": False, "call_id": "c" * 32, **_cents(2)},
+        {"feature": "chart_commentary", "success": True, "call_id": "c" * 32, **_cents(3)},
+    ]
+    _seed(rows)
+    block = _report()["operations"]["chart_commentary"]
+    assert block["n_units"] == 20
+    assert block["failed_calls"] == 0
+    assert block["n_calls_in_units"] == 21
+    assert block["cost_usd_per_unit"]["median"] == pytest.approx(0.05)
+
+
+def test_a_tagged_pm_chat_turn_is_one_unit():
+    """Once /api/chat tags a turn with a run_id, the turn (classify + answer)
+    is the unit, not each call inside it."""
+    rows = []
+    for turn in range(20):
+        rows.append({"feature": "pm_chat", "run_id": f"chat:{turn:032x}", **_cents(1)})
+        rows.append({"feature": "pm_chat", "run_id": f"chat:{turn:032x}", **_cents(4)})
+    _seed(rows)
+    block = _report()["operations"]["pm_chat"]
+    assert block["n_units"] == 20
+    assert block["cost_usd_per_unit"]["median"] == pytest.approx(0.05)
+
+
+def test_pm_chat_is_labelled_per_turn_only_when_every_row_is_tagged():
+    """B8-C1 made /api/chat tag every turn, so a window of tagged turns is
+    measured per turn and must not keep the per-call floor label. One
+    untagged legacy row puts the whole figure back to a floor: the median
+    would mix turns with single calls."""
+    rows = []
+    for turn in range(30):
+        rows.append({"feature": "pm_chat", "run_id": f"chat:{turn:032x}", **_cents(2)})
+        rows.append({"feature": "pm_chat", "run_id": f"chat:{turn:032x}", **_cents(8)})
+    _seed(rows)
+    report = _report()
+    block = report["operations"]["pm_chat"]
+    assert block["understates_unit"] is False
+    assert block["basis"] == ue.BASIS_RUN_ID
+    assert "turn" in block["unit"] and "LLM call inside" not in block["unit"]
+    assert "chat:<hex>" in block["basis_note"]
+    for plan in ("free", "pro"):
+        term = report["plans"][plan]["terms"]["pm_chat"]
+        assert "floor_only" not in term and "floor_reason" not in term
+
+    _seed([{"feature": "pm_chat", **_cents(3)}])      # one legacy, untagged call
+    mixed = _report()
+    block = mixed["operations"]["pm_chat"]
+    assert block["understates_unit"] is True
+    assert block["unit"] == "one LLM call inside an Ask-the-PM turn"
+    for plan in ("free", "pro"):
+        term = mixed["plans"][plan]["terms"]["pm_chat"]
+        assert term["floor_only"] is True and "classify_intent" in term["floor_reason"]
 
 
 def test_the_scan_cap_counts_the_rows_it_dropped():
@@ -623,3 +698,18 @@ def test_the_route_does_not_claim_a_bound_the_count_does_not_have():
     row = next(line for line in audit.splitlines()
                if re.match(r"\|\s*GET\s*\|\s*`/api/admin/unit-economics`", line))
     assert claim in row
+
+
+def test_a_row_is_priced_at_the_rate_in_force_the_day_it_was_written(monkeypatch):
+    """DATED_PRICES: a scheduled price change applies from its date on.
+    The 2019 rows here predate a (test-only) doubling of haiku's rate, so
+    the report must price them at the old rate, as `llm_metrics._row_cost`
+    does; pricing at today's rate would double a past window's cost."""
+    from datetime import date
+
+    from app.services import llm_metrics
+    monkeypatch.setitem(llm_metrics.DATED_PRICES, MODEL,
+                        [(date(2020, 1, 1), (2.00, 10.00), (0.20, None))])
+    _seed([{"feature": "chart_commentary", **_cents(5)} for _ in range(20)])
+    block = _report()["operations"]["chart_commentary"]
+    assert block["cost_usd_per_unit"]["median"] == pytest.approx(0.05)

@@ -166,9 +166,12 @@ def _llm_theme_scores(
             route="cheap",
             model=getattr(settings, "openai_tool_model", None),
             max_tokens=1200,
+            action="theme.exposure", ticker=ticker,
         )
     except Exception as exc:  # pragma: no cover
-        log.warning("theme_exposure LLM call failed for %s: %s", ticker, exc)
+        # Type only: the exception text can quote transcript or model text.
+        from ..agents.log_safety import log_safely
+        log_safely(log, f"theme_exposure LLM call failed for {ticker}", exc)
         return None
     if not isinstance(out, dict):
         return None

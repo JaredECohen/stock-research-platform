@@ -28,8 +28,9 @@ from ..schemas import (
 from ..services import industry_labels
 from ..services.data_service import get_data_service
 from ..services.sector_research_service import run_sector_research
-from . import industry_analysts, llm, prompts, sector_tools
+from . import industry_analysts, llm, news_context, prompts, sector_tools
 from .log_safety import log_safely
+from .news_context import NewsContext
 from .source_ledger import register_source
 
 log = logging.getLogger(__name__)
@@ -91,13 +92,6 @@ def _macro_broadcast_payload() -> dict:
     """Subscribe to the latest MacroBroadcast (Phase 6) — empty if none yet."""
     snap = cache_get("macro:global", "macro_broadcast")
     return snap.payload if snap and isinstance(snap.payload, dict) else {}
-
-
-def _pending_news_alerts(ticker: str) -> list[dict]:
-    snap = cache_get(f"news_hot:{ticker}", "news_hot")
-    if not snap or not isinstance(snap.payload, dict):
-        return []
-    return list(snap.payload.get("alerts") or [])[:5]
 
 
 def _cross_sector_relevance_heuristic(ticker: str, sector: str) -> list[str]:
@@ -351,6 +345,7 @@ def run_sector_agent(
     profile: dict, ratios: dict, *,
     prior_round_critique: str | None = None,
     industry_group: dict | None = None,
+    news: NewsContext | None = None,
 ) -> AgentFinding:
     """Produce a deeply researched sector view.
 
@@ -362,6 +357,12 @@ def run_sector_agent(
     by the roster only when ENABLE_INDUSTRY_ANALYST_ROUTING is on). It adds
     the industry-group mandate to the prompt and a provenance block to
     `data["industry_group"]`; absent, nothing about the sector read changes.
+
+    FIX-018: `news` is the memo run's one news context (the roster always
+    passes it inside a memo run; the gather stage registered it on the
+    ledger). Absent — chat's `ask_sector`, a direct call — the analyst reads
+    the unexpired `news_hot` row itself, as it always did, and registers
+    nothing (there is no ledger outside a memo run).
     """
     ticker = profile.get("ticker")
     if not ticker:
@@ -373,7 +374,11 @@ def run_sector_agent(
         )
     research = run_sector_research(ticker)
     macro_broadcast = _macro_broadcast_payload()
-    news_alerts = _pending_news_alerts(ticker)
+    news_ctx = news if news is not None else news_context.load_cached(ticker)
+    # What `pending_news_alerts` stores is exactly what the prompt shows (the
+    # ranked, sanitised items, in NewsAlert dict shape), so the stored memo,
+    # the PM block and the ledger all describe the same news.
+    news_alerts = news_ctx.alerts()
 
     # ------------------------------------------------------------------
     # Smart sector context — discover & pre-fetch the data series that
@@ -419,13 +424,15 @@ def run_sector_agent(
         except Exception:  # pragma: no cover — memory should never block a memo
             memory_context = ""
     # W2b 7(a): the computed cohort research, the macro broadcast, the
-    # sector data overlays, pending news and the industry-group block are
-    # what this analyst reads. Long-term memory is a prior, not a source.
+    # sector data overlays and the industry-group block are what this
+    # analyst reads. Long-term memory is a prior, not a source. The news it
+    # reads is registered once by the gather stage (`news_context.register`),
+    # which registers only the text the models are shown: it used to be
+    # registered here in full while the model saw 600 characters of it.
     register_source("sector_research", f"sector:{ticker}", research)
     register_source("macro", "macro:broadcast", macro_broadcast)
     register_source("macro", f"sector_context:{ticker}", {"context": sector_context,
                                                          "block": sector_context_block})
-    register_source("news", f"news_alerts:{ticker}", news_alerts)
     if industry_group_block and industry_analyst is not None:
         register_source("industry", f"industry_group:{industry_analyst.slug}", industry_group_block)
     sector = research["sector"]
@@ -504,7 +511,7 @@ def run_sector_agent(
             # template byte-identical to the pre-FEAT-003 prompt.
             industry_group_block=industry_group_block,
             macro_broadcast=json.dumps(macro_broadcast, default=str)[:600] or "{}",
-            news_alerts=json.dumps(news_alerts, default=str)[:600] or "[]",
+            news_block=news_context.render_block(news_ctx, "sector"),
         )
         + critique_block
         + ("\n\nPrior context from long-term memory (use to inform but do not over-anchor):\n"
@@ -527,6 +534,7 @@ def run_sector_agent(
     llm_out = llm.chat_json(
         user_prompt, system=prompts.PM_SYSTEM, route="cheap",
         model=llm.resolve_role_model("sector"),
+        action="analyst.sector", ticker=ticker,
     )
 
     if llm_out:

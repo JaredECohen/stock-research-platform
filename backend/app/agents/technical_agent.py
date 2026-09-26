@@ -171,6 +171,7 @@ def run_technical_agent(
     llm_out = llm.chat_json(
         user_prompt, system=prompts.PM_SYSTEM, route="cheap",
         model=settings.openai_tool_model,
+        action="analyst.technical", ticker=profile.get("ticker"),
     )
 
     data: dict[str, Any] = {"signals": signals.model_dump()}

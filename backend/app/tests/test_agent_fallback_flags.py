@@ -457,10 +457,14 @@ def _stub_memo(ticker: str) -> StockMemoOut:
 
 
 def _alert(ticker: str):
+    from datetime import datetime
+
     from app.schemas import NewsAlert
+    # Dated now: the news age gate (N34) never assesses an alert older than
+    # 72 h or than the memo, and these tests are about the assessment.
     return NewsAlert(
         ticker=ticker, title="Guidance lowered", summary="CFO cut FY guidance.",
-        severity="material", source="test", published_at="2026-09-07T00:00:00",
+        severity="material", source="test", published_at=datetime.utcnow().isoformat(),
     )
 
 

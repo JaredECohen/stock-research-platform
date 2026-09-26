@@ -17,6 +17,7 @@ from .agents import (
     BullBearCase,
     CatalystItem,
     CriticReview,
+    DebateRecord,
     DivergenceAssessment,
     RiskItem,
     RoundFindings,
@@ -92,6 +93,13 @@ SectionReason = Literal[
     "unclassified",
     "agent_failed", "no_source_data", "pm_view_unavailable", "partial_template",
     "follow_up_unanswered", "templated_scenarios",
+    # D4 (2026-09-25, design-bullbear-final §12.1): the debate's own states.
+    # D2 shipped the debate record without them, and the table names them,
+    # so they are added here expand-only (read-time values; never stored).
+    # `debate_unavailable` hides both cases and the debate section,
+    # `not_run` is a debate the run had no model for (no LLM, a backtest),
+    # and `rebuttals_unavailable` is the note on a partial debate.
+    "debate_unavailable", "not_run", "rebuttals_unavailable",
 ]
 
 
@@ -229,6 +237,11 @@ class StockMemoOut(BaseModel):
     technical_agent_view: AgentFinding | None = None
     bull_case: BullBearCase
     bear_case: BullBearCase
+    # D2 (2026-09-25): the bull/bear debate as it ran, behind DEBATE_MODE.
+    # None on every memo written with the mode off and on every memo that
+    # pre-dates the field. `bull_case`/`bear_case` above are unchanged, so
+    # every existing consumer of the cases keeps working either way.
+    debate: DebateRecord | None = None
     catalysts: list[CatalystItem]
     key_risks: list[RiskItem]
     thesis_breakers: list[RiskItem]

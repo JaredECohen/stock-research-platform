@@ -917,3 +917,44 @@ def test_dates_come_from_the_clock_seam_not_the_wall_clock(monkeypatch):
     monkeypatch.setattr(jobs, "_utcnow", lambda: datetime(2031, 1, 5, 12, 0))
     assert jobs.close_day_before(jobs._utcnow()) == date(2031, 1, 3)
     assert jobs.period_for()[0] == ia.period_key_for(date(2031, 1, 3))
+
+
+# --- attribution umbrella (slice B8-A2a) --------------------------------------
+
+def _record_context_then_fail(seen: list[dict[str, Any]]):
+    from app.agents.llm import current_call_context
+
+    def write_report(*_a, **_kw):
+        seen.append(current_call_context())
+        raise RuntimeError("stop after recording")
+    return write_report
+
+
+def test_a_job_runs_under_its_origin_job_and_run(env, monkeypatch):
+    """Every LLM call a job makes carries origin=worker:industry, the job
+    and the run (attribution design §4.8): recorded where the writer is
+    called, inside the job's umbrella."""
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(jobs.writer, "write_report", _record_context_then_fail(seen))
+    job, _ = jobs.enqueue(env["codes"][0], PERIOD, version=env["info"])
+    jobs.process_next_job(now=SUNDAY)
+    assert seen, "the writer was not reached"
+    ctx = seen[0]
+    assert ctx["origin"] == "worker:industry"
+    assert ctx["job_id"] == f"industry:{job['id']}"
+    assert ctx["run_id"] == _job(job["id"])["run_id"] and ctx["run_id"]
+
+
+def test_a_script_draining_the_queue_keeps_its_origin(env, monkeypatch):
+    """capture_industry_ui_fixture drains jobs under its own origin: that
+    script started the work, so the job keeps it rather than relabelling
+    the rows as the generic worker."""
+    from app.agents.llm import llm_call_context
+
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(jobs.writer, "write_report", _record_context_then_fail(seen))
+    job, _ = jobs.enqueue(env["codes"][0], PERIOD, version=env["info"])
+    with llm_call_context(origin="script:capture_industry_ui_fixture"):
+        jobs.process_next_job(now=SUNDAY)
+    assert seen and seen[0]["origin"] == "script:capture_industry_ui_fixture"
+    assert seen[0]["job_id"] == f"industry:{job['id']}"

@@ -58,7 +58,7 @@ def test_record_usage_writes_a_row_with_default_context():
     assert r.tokens_out == 50
     assert r.duration_ms == 200
     assert r.success is True
-    assert r.agent_name == "unknown"      # default context
+    assert r.agent_name == "unattributed"  # no context agent, no action
     assert r.run_id is None
 
 
@@ -90,7 +90,7 @@ def test_context_unset_after_with_block():
     rows = sorted(_all_rows(), key=lambda r: r.id)
     assert rows[0].agent_name == "PM"
     assert rows[0].run_id == "r1"
-    assert rows[1].agent_name == "unknown"
+    assert rows[1].agent_name == "unattributed"
     assert rows[1].run_id is None
 
 
@@ -170,7 +170,7 @@ def test_gc_deletes_rows_older_than_window():
     # Fresh row survives
     remaining = _all_rows()
     assert len(remaining) == 1
-    assert remaining[0].agent_name == "unknown"
+    assert remaining[0].agent_name == "unattributed"
 
 
 # ---------------------------------------------------------------------------
@@ -217,3 +217,40 @@ def test_openai_call_path_logs_a_row(monkeypatch):
     assert r.tokens_in == 42
     assert r.tokens_out == 17
     assert r.success is True
+
+
+# ---------------------------------------------------------------------------
+# Attribution (slice B7-M1): skip rows and the per-agent run filter
+# ---------------------------------------------------------------------------
+
+def test_aggregates_exclude_skipped_rows():
+    """A skipped attempt (open breaker, no client, grounding cap) made no
+    provider request; counting it as a call or failure would inflate every
+    aggregate (attribution critique #14)."""
+    with llm_call_context(agent_name="Sector", run_id="skip-run"):
+        _record_usage("openai", "gpt-5.4", 100, 50, duration_ms=100)
+        _record_usage("openai", "gpt-5.4", 0, 0, success=False, error="skipped:breaker_open")
+        _record_usage("anthropic", "claude-haiku-4-5", 0, 0, success=False,
+                      error="skipped:partner_breaker_open")
+    info = llm_metrics.cost_per_run("skip-run")
+    assert info["n_calls"] == 1 and info["n_failures"] == 0
+    assert llm_metrics.cost_per_agent()["Sector"]["n_calls"] == 1
+    by_provider = llm_metrics.cost_per_provider()
+    assert by_provider["openai"]["n_calls"] == 1 and "anthropic" not in by_provider
+    assert all(c["duration_ms"] == 100 for c in llm_metrics.slowest_calls())
+    assert llm_metrics.skipped_attempts() == {
+        "skipped:breaker_open": 1, "skipped:partner_breaker_open": 1,
+    }
+    # The rows themselves exist: the skip is visible, just not spend.
+    assert len(_all_rows()) == 3
+
+
+def test_cost_per_run_filters_by_agent():
+    """The debate budget reads only the advocates' spend of a run."""
+    for agent in ("Bull Advocate", "Bear Advocate", "PM Synthesis"):
+        with llm_call_context(agent_name=agent, run_id="agents-run"):
+            _record_usage("anthropic", "claude-opus-4-8", 1000, 100)
+    debate = llm_metrics.cost_per_run("agents-run", agents=["Bull Advocate", "Bear Advocate"])
+    whole = llm_metrics.cost_per_run("agents-run")
+    assert debate["n_calls"] == 2 and whole["n_calls"] == 3
+    assert {c["agent_name"] for c in debate["calls"]} == {"Bull Advocate", "Bear Advocate"}

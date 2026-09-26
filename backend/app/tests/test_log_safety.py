@@ -242,5 +242,6 @@ def test_real_sdk_exchange_masks_the_exception_in_log_and_trace_row(monkeypatch,
     assert OPENAI_KEY not in warn and BEARER not in warn and ANTHROPIC_KEY not in warn
     assert len(persisted) == 1
     err = persisted[0]["error"]
-    assert err.startswith("_ProviderError:")
+    # Type only since FIX-020: an SDK exception can quote the model's output.
+    assert err == "_ProviderError"
     assert OPENAI_KEY not in err and BEARER not in err and ANTHROPIC_KEY not in err

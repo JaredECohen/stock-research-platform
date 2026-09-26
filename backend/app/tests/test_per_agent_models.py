@@ -238,7 +238,10 @@ def test_chat_sdk_agent_never_carries_a_blank_pm_model(monkeypatch):
 
     monkeypatch.setattr(real_sdk, "Agent", _FakeAgent)
     monkeypatch.setattr(real_sdk, "function_tool", lambda fn: fn)
-    monkeypatch.setattr(settings, "use_agents_sdk", True)
+    # CHAT_AGENTS_SDK gates the chat agent since the flag split (plan P14),
+    # and the gate is closed in demo-only mode like every LLM client.
+    monkeypatch.setattr(settings, "chat_agents_sdk", True)
+    monkeypatch.setattr(llm_mod, "_demo_only", lambda: False)
     monkeypatch.setattr(settings, "openai_api_key", "stub-key")
     monkeypatch.setattr(settings, "openai_pm_model", "")
     with _openai_active():
@@ -284,7 +287,13 @@ def test_model_summary_has_every_role_and_no_key_material(monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "sk-summary-test-key-0123456789")
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-summary-test-key-0123456789")
     summary = llm_mod.model_summary()
-    assert set(summary) == {"active_provider", "provider_choice", "role_models", "configured"}
+    # 2026-09-25 (slice B7-M1): the tier routes, Gemini models, chat surface,
+    # failover map and attribution mode join the routing line (design §4.10).
+    assert set(summary) == {
+        "active_provider", "provider_choice", "role_models", "configured",
+        "tiers", "gemini", "chat", "failover_map", "attribution_mode",
+        "reviewer_mode", "debate_mode",
+    }
     assert set(summary["role_models"]) == {"pm", "sector", "tool", "macro", "critic", "strong", "cheap"}
     assert all(summary["role_models"].values()), "no role may resolve to a blank model"
     assert summary["configured"] == {"openai": True, "anthropic": True, "gemini": settings.has_gemini}

@@ -43,7 +43,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..config import settings
 from ..schemas import AgentFinding
@@ -101,7 +101,7 @@ class AgentSpec:
         return f"Long-form ({self.display_name.replace(' Analyst', '')})"
 
 
-def _industry_kwargs(inputs: MemoInputs) -> dict[str, dict | None]:
+def _industry_kwargs(inputs: MemoInputs) -> dict[str, Any]:
     """The sector analyst's `industry_group=` kwarg, present only when
     routing is on and the gather stage read a row — so with the flag off the
     call is byte-for-byte what it was, and a test's three-argument fake
@@ -111,14 +111,29 @@ def _industry_kwargs(inputs: MemoInputs) -> dict[str, dict | None]:
     return {}
 
 
+def _news_kwargs(inputs: MemoInputs) -> dict[str, Any]:
+    """The `news=` kwarg for the sector and industry-group runners (FIX-018).
+
+    The gather stage always sets `inputs.news` inside a memo run (an empty
+    context when the read failed), so there the kwarg is always passed and
+    neither runner re-reads `news_hot` on its own: the sector's own cache
+    read happens only when `news` is absent from the call entirely (chat's
+    `ask_sector`), and the S15 ledger then holds exactly what every model
+    saw. A direct `MemoInputs` construction (tests) carries None and passes
+    nothing, so a three-argument test fake keeps working."""
+    news = getattr(inputs, "news", None)
+    return {"news": news} if news is not None else {}
+
+
 AGENTS: tuple[AgentSpec, ...] = (
     AgentSpec(
         key="sector", display_name="Sector Analyst",
         checkpoint="graph.sector_finding",
         run=lambda i, q: run_sector_agent(
             i.profile, i.ratios, prior_round_critique=q, **_industry_kwargs(i),
+            **_news_kwargs(i),
         ),
-        needs=("profile", "ratios", "industry_group"), memo_field="sector_agent_view",
+        needs=("profile", "ratios", "industry_group", "news"), memo_field="sector_agent_view",
     ),
     AgentSpec(
         key="earnings", display_name="Earnings Analyst",
@@ -192,8 +207,9 @@ AGENTS: tuple[AgentSpec, ...] = (
         # routable mapping and ENABLE_INDUSTRY_ANALYST_ROUTING is on.
         run=lambda i, q: run_industry_group_agent(
             i.profile, i.ratios, prior_round_critique=q, classification=i.industry_group,
+            **_news_kwargs(i),
         ),
-        needs=("profile", "ratios", "industry_group"), memo_field=None,
+        needs=("profile", "ratios", "industry_group", "news"), memo_field=None,
         applies_to=industry_analyst_applies,
         # Last in the roster, so the first entry the PM's 60k cut removes:
         # the PM reads a bounded digest ahead of the JSON instead.

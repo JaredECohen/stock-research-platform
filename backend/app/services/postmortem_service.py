@@ -359,6 +359,7 @@ def _llm_postmortem(
             "honest, and concise. No hedging."
         ),
         route="strong",
+        action="postmortem.review", ticker=outcome.ticker,
     )
     if not isinstance(out, dict):
         return None
@@ -421,6 +422,7 @@ def _llm_postmortem_learning(
             "honest, and concise. No hedging."
         ),
         route="strong",
+        action="postmortem.lesson", ticker=outcome.ticker,
     )
     if not isinstance(out, dict):
         return None
@@ -670,11 +672,15 @@ def run_postmortems(*, horizon_days: int = 90, limit: int = 25) -> dict[str, Any
             continue
         verdict = _classify_verdict(memo.get("rating_label", ""), outcome.alpha)
         learning_view = None
-        if learn:
-            learning_view = learning_ledger.postmortem_context(snap)
-            llm_out = _llm_postmortem(memo, outcome, horizon_days, learning_view)
-        else:
-            llm_out = _llm_postmortem(memo, outcome, horizon_days)
+        # The job is the memo being reviewed, so a postmortem's rows can be
+        # joined to the snapshot it judged (design §4.8).
+        from ..agents.llm import llm_call_context
+        with llm_call_context(ticker=outcome.ticker, job_id=f"snapshot:{outcome.memo_snapshot_id}"):
+            if learn:
+                learning_view = learning_ledger.postmortem_context(snap)
+                llm_out = _llm_postmortem(memo, outcome, horizon_days, learning_view)
+            else:
+                llm_out = _llm_postmortem(memo, outcome, horizon_days)
         lesson = (llm_out or {}).get("lesson") or _deterministic_lesson(
             memo, outcome, verdict, horizon_days,
         )
