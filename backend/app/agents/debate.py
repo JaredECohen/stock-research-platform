@@ -1467,9 +1467,14 @@ class DebateBudget:
         """The admission guard (design §13.3): the debate starts only if the
         run's spend so far plus the whole debate cap fits MEMO_MAX_USD. The
         PM and reviewer run after it, so this is an admission guard, not a
-        hard memo total."""
+        hard memo total.
+
+        On a resume the run total already includes the earlier attempt's
+        debate spend, which `spent()` counts INSIDE the debate cap; it is
+        taken out here so it is not charged twice (once in the total, once
+        as part of the full cap) and a resume admits what a fresh run did."""
         whole = float(self._read(self.run_id).get("cost_usd_total") or 0.0)
-        return whole + self.cap_usd <= self.memo_cap_usd + 1e-9
+        return whole - self.prior_usd + self.cap_usd <= self.memo_cap_usd + 1e-9
 
     def spent(self) -> float:
         return self.prior_usd + sum(self._entries)
