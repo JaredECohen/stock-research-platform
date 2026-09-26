@@ -184,3 +184,79 @@ def test_number_check_exposes_support_refs():
     # The $1.2B also traces to the financials, so only the backlog figure
     # would not have traced without the debate's passages.
     assert [(f.field, f.raw) for f in only_debate] == [("debate.cruxes.bear", "$9.99B")]
+
+
+def test_traced_only_via_is_counterfactual():
+    """A figure anchored to a debate passage that ALSO matches analyst data
+    verbatim at 4+ significant digits still traces without the passage, so
+    it is not "debate-only"; at fewer digits the verbatim match does not
+    trace, and it is. Checked against a registry without the passage."""
+    fin = ("financials", "financials:T", REVENUE)
+    chunk = ("research_note", "chunk:filing:0009", {"backlog": 1_203_000_000})
+    for crux, debate_only in (("Backlog of $1.203B.", False), ("Backlog of $1.2B.", True)):
+        memo = _debated_memo(debate=_debate(cruxes={"bull": "Share gains.", "bear": crux}))
+        with_chunk = nc.check_memo(memo, _registry(fin, chunk), withhold=True)
+        without = nc.check_memo(memo, _registry(fin), withhold=True)
+        still = [f.status for f in nc.figure_support(without) if f.field == "debate.cruxes.bear"]
+        assert still == (["weak"] if debate_only else ["traced"]), crux
+        support = {f.field: f.refs for f in nc.figure_support(with_chunk)}
+        assert support["debate.cruxes.bear"] == (
+            ("chunk:filing:0009",) if debate_only else ("chunk:filing:0009", "financials:T")), crux
+        only = [f.field for f in nc.traced_only_via(with_chunk, {"chunk:filing:0009"})]
+        assert only == (["debate.cruxes.bear"] if debate_only else []), crux
+
+
+def test_support_refs_uncapped_and_carried_for_weak_figures():
+    """`support` is every source, not the eight stored credits, and a weak
+    figure carries its unanchored matches."""
+    notes = [("research_note", f"chunk:filing:{i:04d}", {"revenue": 1_203_000_000}) for i in range(10)]
+    reg = _registry(("financials", "financials:T", REVENUE), *notes)
+    memo = _debated_memo(debate=_debate(cruxes={"bull": "Revenue of $1.203B.", "bear": "Something at $1.2B."}))
+    result = nc.check_memo(memo, reg, withhold=True)
+    bull = next(cc for fr in result.fields if fr.spec.path == "debate.cruxes.bull" for cc in fr.claims)
+    assert bull.status == "traced"
+    assert len(bull.sources) == nc.MAX_CREDITED_REFS
+    assert bull.support == tuple(sorted(["financials:T", *(ref for _, ref, _ in notes)]))
+    weak = [f for f in nc.figure_support(result) if f.field == "debate.cruxes.bear"]
+    assert [(f.status, len(f.refs)) for f in weak] == [("weak", 11)]
+
+
+def test_rebuttals_of_claims_not_shown_are_not_read():
+    """The presenter shows a claim only when its case carries its text, so
+    the check reads the rebuttal and falsifier of no other claim: not of one
+    past the case's five, and not of one the withholding removes from the
+    case (its figures would otherwise move the caps, unseen)."""
+    reg = _registry(("financials", "financials:T", REVENUE))
+    claims = [
+        _claim("BULL-1", "bull", "Revenue reached $1.2B on share gains.", falsifier="Revenue < $1.0B"),
+        _claim("BULL-2", "bull", "Hidden upside of $7.77B.", falsifier="Upside < $5B"),
+        _claim("BULL-3", "bull", "Share gains continue.", falsifier="Share < 20%"),
+        _claim("BULL-4", "bull", "Not in the case.", falsifier="Price < $90"),
+        _claim("BEAR-1", "bear", "Competition is intensifying.", falsifier="Churn > 5%"),
+    ]
+    responses = [
+        DebateResponse(side="bear", target="BULL-1", stance="rebut", argument="Revenue is fine."),
+        DebateResponse(side="bear", target="BULL-2", stance="rebut", argument="It is $3.33B at most."),
+        DebateResponse(side="bear", target="BULL-4", stance="rebut", argument="Nothing like $4.44B."),
+    ]
+    memo = make_memo(
+        bull_case=BullBearCase(headline="Share gains compound", key_points=[
+            "Revenue reached $1.2B on share gains.", "Hidden upside of $7.77B.", "Share gains continue."]),
+        bear_case=BullBearCase(headline="Margins mean-revert", key_points=["Competition is intensifying."]),
+        key_risks=[], thesis_breakers=[], debate=_debate(claims=claims, responses=responses),
+    )
+    # BULL-4 is not in its case: never read, withheld or not.
+    paths = {s.path for s in nc.iter_fields(memo)}
+    assert "debate.responses[2].argument" not in paths and "debate.claims[3].falsifier" not in paths
+    assert {"debate.responses[1].argument", "debate.claims[1].falsifier"} <= paths
+    kept = nc.check_memo(memo, reg, withhold=False)
+    assert "debate.responses[1].argument" in _by_field(kept)
+    # BULL-2's $7.77B is withheld from the case, so its rebuttal and
+    # falsifier leave the check with it; BULL-1's stay.
+    result = nc.check_memo(memo, reg, withhold=True)
+    assert result.plan.items == {"bull_case.key_points": [1]}
+    fields = {fr.spec.path for fr in result.fields}
+    assert "debate.responses[1].argument" not in fields and "debate.claims[1].falsifier" not in fields
+    assert {"debate.responses[0].argument", "debate.claims[0].falsifier"} <= fields
+    summary = nc.summarize(result, assumptions=[], notes=[])
+    assert not [c for c in summary.claims if c.raw == "$3.33B"]

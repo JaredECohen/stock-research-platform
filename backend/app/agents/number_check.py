@@ -649,21 +649,33 @@ def _named_metrics(tokens: frozenset[str]) -> frozenset[str]:
 
 def classify(claim: ParsedClaim, ctx: ClaimContext, registry: FactRegistry) -> tuple[str, list[Fact]]:
     """(status, supporting facts) for one claim of fact."""
+    status, facts, _ = _classify(claim, ctx, registry)
+    return status, facts
+
+
+def _classify(claim: ParsedClaim, ctx: ClaimContext,
+              registry: FactRegistry) -> tuple[str, list[Fact], list[Fact]]:
+    """`classify`, plus every fact that could on its own give the claim its
+    status: for a traced claim, the anchored facts AND (at 4+ significant
+    digits) the non-derived verbatim ones, because either rule traces it;
+    for a weak one, its unanchored matches. `classify`'s facts are the
+    ones that decided it (anchored first), which is what is credited."""
     matches = registry.value_matches(claim.unit, claim.value, claim.tol)
     tokens = effective_tokens(ctx)
     hits = [f for f in matches if anchored(tokens, f.ctx)]
-    if hits:
-        return "traced", hits
     # Derived facts support only anchored claims (critique delta 1).
     verbatim = [f for f in matches if not f.derived]
-    if verbatim and claim.sig_digits >= 4:
-        return "traced", verbatim
+    verbatim_traces = bool(verbatim) and claim.sig_digits >= 4
+    if hits:
+        return "traced", hits, hits + (verbatim if verbatim_traces else [])
+    if verbatim_traces:
+        return "traced", verbatim, verbatim
     if verbatim:
         named = _named_metrics(tokens)
         if named and registry.knows_any(named):
-            return "mis_anchored", []
-        return "weak", verbatim
-    return "untraceable", []
+            return "mis_anchored", [], []
+        return "weak", verbatim, verbatim
+    return "untraceable", [], []
 
 
 @dataclass(frozen=True, slots=True)
@@ -672,13 +684,15 @@ class CheckedClaim:
     status: str
     sources: tuple[str, ...] = ()
     kinds: tuple[str, ...] = ()
-    # EVERY registered source whose fact carries this figure's value, for a
-    # traced claim (the anchored facts, or the verbatim ones at 4+ digits)
-    # and for a weak one (the unanchored matches), sorted. `sources` is the
-    # capped, primary-first list that is stored; this is uncapped, so a
-    # caller can tell a figure that traces ONLY to some refs (debate-
-    # registered passages, critique #7) from one that also traces to data
-    # an analyst was given.
+    # EVERY registered source with a fact that would on its own give this
+    # figure its status, sorted: for a traced claim the anchored facts and,
+    # at 4+ significant digits, the non-derived verbatim matches too (either
+    # rule traces it, so a figure anchored to a debate passage that ALSO
+    # matches analyst data verbatim is not "debate-only"); for a weak one
+    # the unanchored matches. `sources` is the capped, primary-first list
+    # that is stored; this is uncapped, so a caller can tell a figure that
+    # traces ONLY to some refs (debate-registered passages, critique #7)
+    # from one that would still trace without them.
     support: tuple[str, ...] = ()
 
 
@@ -697,13 +711,13 @@ def check_text(
         if c.cls == "threshold":
             out.append(CheckedClaim(c, "threshold"))
             continue
-        status, facts = classify(c, ctx, registry)
+        status, facts, supporting = _classify(c, ctx, registry)
         if status in FLAGGED_STATUSES and _is_declared(c, declared):
             out.append(CheckedClaim(c, "assumption"))
             continue
         traced = status == "traced"
         sources = _credited(facts) if traced else ()
-        support = tuple(sorted({f.source for f in facts}))
+        support = tuple(sorted({f.source for f in supporting}))
         # Kinds come from EVERY supporting fact, not only the stored refs:
         # the same note block is registered once per agent (notes:comps,
         # notes:earnings ...), and truncating to eight refs must not drop the
@@ -830,10 +844,17 @@ def iter_fields(memo: Any) -> Iterator[FieldSpec]:
     rec = q.rating_reconciliation if q is not None else None
     if rec is not None and rec.reason:
         yield FieldSpec("quality.rating_reconciliation.reason", rec.reason, POLICY_PARAGRAPH)
-    yield from _debate_fields(getattr(memo, "debate", None))
+    yield from _debate_fields(memo)
 
 
-def _debate_fields(debate: Any) -> Iterator[FieldSpec]:
+def _debate_case_texts(memo: Any) -> dict[str, set[str]]:
+    """Each side's case key points as the presenter joins claims to them."""
+    return {side: {p.strip() for p in (getattr(memo, f"{side}_case").key_points or [])
+                   if isinstance(p, str)}
+            for side in ("bull", "bear")}
+
+
+def _debate_fields(memo: Any) -> Iterator[FieldSpec]:
     """The debate texts a reader is shown (design-bullbear-final §12.2), only
     for a debate that is shown (complete or partial).
 
@@ -842,26 +863,73 @@ def _debate_fields(debate: Any) -> Iterator[FieldSpec]:
     withhold), so reading it twice would double its weight in the ratio cap.
     Responses are FLAG, never withheld: withholding one would orphan the
     claim id the matrix points at. Only the parts of the record the
-    presenter shows are read: a response to a claim that is not displayable
-    is never shown, so it must not move the untraceable caps either. The
+    presenter shows are read: a claim is shown when it is displayable AND
+    its side's case carries its text (the presenter's join), so a response
+    to, or the falsifier of, any other claim is never shown and must not
+    move the untraceable caps either. A claim the withholding then removes
+    from its case leaves the same way (`_drop_withheld_debate_fields`). The
     deterministic checks are computed facts and are not read."""
     from ..services.memo_sections import DEBATE_SHOWN_STATUSES, debate_claim_displayable
 
+    debate = getattr(memo, "debate", None)
     if debate is None or debate.status not in DEBATE_SHOWN_STATUSES:
         return
-    displayable = {c.id for c in debate.claims if debate_claim_displayable(c)}
+    case_texts = _debate_case_texts(memo)
+    shown = {i: c for i, c in enumerate(debate.claims or [])
+             if debate_claim_displayable(c) and (c.claim or "").strip() in case_texts.get(c.side, set())}
+    shown_ids = {c.id for c in shown.values()}
     for i, r in enumerate(debate.responses or []):
-        if r.target in displayable:
+        if r.target in shown_ids:
             yield FieldSpec(f"debate.responses[{i}].argument", r.argument or "", POLICY_FLAG,
                             list_path="debate.responses", index=i)
     for side in ("bull", "bear"):
         crux = (debate.cruxes or {}).get(side)
         if isinstance(crux, str):
             yield FieldSpec(f"debate.cruxes.{side}", crux, POLICY_PARAGRAPH)
-    for i, c in enumerate(debate.claims or []):
-        if debate_claim_displayable(c) and c.falsifier:
+    for i, c in shown.items():
+        if c.falsifier:
             yield FieldSpec(f"debate.claims[{i}].falsifier", c.falsifier, POLICY_THRESHOLD)
     yield FieldSpec("debate.resolution.crux", debate.resolution.crux or "", POLICY_PARAGRAPH)
+
+
+_DEBATE_CLAIM_FIELD = re.compile(r"^debate\.(?P<list>claims|responses)\[(?P<index>\d+)\]")
+
+
+def _drop_withheld_debate_fields(memo: Any, results: list[FieldResult],
+                                 plan: WithholdPlan) -> list[FieldResult]:
+    """`results` without the debate responses and falsifiers of the claims
+    the plan withholds from their case: the presenter joins claims to the
+    case as withheld, so those parts are never shown (see `_debate_fields`).
+
+    Taken after the plan, in one pass: the dropped fields are FLAG and
+    threshold texts, which never withhold anything themselves, so removing
+    them cannot change which case items the plan withholds (a rebuttal
+    whose words equal a case item's could only have blocked it, and that
+    blocked item then stays flagged, as the plan says)."""
+    debate = getattr(memo, "debate", None)
+    if debate is None or not plan.items:
+        return results
+    withheld: dict[str, set[str]] = {}
+    for side in ("bull", "bear"):
+        points = getattr(memo, f"{side}_case").key_points or []
+        withheld[side] = {str(points[i]).strip() for i in plan.items.get(f"{side}_case.key_points", [])
+                          if i < len(points)}
+    if not any(withheld.values()):
+        return results
+    gone_ids = {c.id for c in debate.claims if (c.claim or "").strip() in withheld.get(c.side, set())}
+    kept: list[FieldResult] = []
+    for r in results:
+        m = _DEBATE_CLAIM_FIELD.match(r.spec.path)
+        if m is not None:
+            i = int(m.group("index"))
+            if m.group("list") == "claims":
+                target = debate.claims[i].id if i < len(debate.claims) else None
+            else:
+                target = debate.responses[i].target if i < len(debate.responses) else None
+            if target in gone_ids:
+                continue
+        kept.append(r)
+    return kept
 
 
 # ---------------------------------------------------------------------------
@@ -936,6 +1004,7 @@ def check_memo(memo: Any, registry: FactRegistry, *, withhold: bool,
     plan = WithholdPlan()
     if withhold:
         _plan_withholding(results, plan)
+        results = _drop_withheld_debate_fields(memo, results, plan)
     return MemoCheck(fields=results, plan=plan, registry_facts=len(registry.facts),
                      registry_sources=len(registry.sources), incomplete=registry.incomplete_steps)
 
@@ -1033,7 +1102,8 @@ def figure_support(result: MemoCheck) -> list[FigureSupport]:
 
 def traced_only_via(result: MemoCheck, refs: Iterable[str]) -> list[FigureSupport]:
     """Traced figures whose every supporting source is in `refs`: without
-    those refs registered, each would not have traced."""
+    those refs registered, each would not have traced (its `support` holds
+    every source that could trace it by either rule, anchored or verbatim)."""
     allowed = frozenset(refs)
     return [f for f in figure_support(result)
             if f.status == "traced" and f.refs and set(f.refs) <= allowed]
