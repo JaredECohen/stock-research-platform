@@ -223,6 +223,17 @@ def test_action_tier_override(prod_env):
         Settings(_env_file=None, llm_action_tier_overrides="industry.report:turbo")
 
 
+def test_unknown_override_action_is_rejected_at_boot():
+    """A typo in the rollback lever must stop the process at boot. Raised
+    later, inside chat_json, it is swallowed by the memo pipeline's
+    safe_call and every routed call silently becomes a stub finding."""
+    with pytest.raises(ValidationError, match="unknown action 'industry.reprot'"):
+        Settings(_env_file=None, llm_action_tier_overrides="industry.reprot:legacy")
+    ok = Settings(_env_file=None,
+                  llm_action_tier_overrides="industry.report:legacy, news.impact:utility")
+    assert ok.llm_action_tier_overrides == "industry.report:legacy, news.impact:utility"
+
+
 def test_unregistered_action_is_an_error():
     with pytest.raises(ValueError, match="unregistered"):
         llm.resolve_action_route("made.up")

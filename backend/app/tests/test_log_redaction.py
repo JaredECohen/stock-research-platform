@@ -14,6 +14,7 @@ would not be enough).
 from __future__ import annotations
 
 import logging
+import re
 
 import pytest
 
@@ -119,6 +120,33 @@ def test_configure_logging_quiets_the_per_request_loggers():
     assert not logging.getLogger("httpx").isEnabledFor(logging.INFO), (
         "httpx INFO logging is what wrote provider keys to the logs"
     )
+
+
+@pytest.mark.parametrize("sdk", ["openai", "anthropic", "google.genai._api_client"])
+def test_the_transport_each_pinned_sdk_uses_is_quieted(sdk, caplog):
+    """Attribution critique #20: openai 3.8 moved to `httpx2`/`httpcore2`,
+    whose INFO lines (`POST https://api.openai.com/...`, one per call) the
+    httpx-only list left on. Read from the installed SDK source, so the next
+    transport rename fails here rather than in production logs."""
+    import importlib
+    import inspect
+
+    try:
+        module = importlib.import_module(sdk if "." in sdk else f"{sdk}._base_client")
+    except Exception:  # pragma: no cover - the SDK is optional at runtime
+        pytest.skip(f"{sdk} not installed")
+    source = inspect.getsource(module)
+    checked = []
+    # Root at INFO, as in production (pytest's own handler would otherwise
+    # leave the root at WARNING and hide an unsilenced logger).
+    with caplog.at_level(logging.INFO):
+        configure_logging()
+        for transport, pool in (("httpx", "httpcore"), ("httpx2", "httpcore2")):
+            if re.search(rf"^\s*(import|from) {transport}\b", source, re.MULTILINE):
+                for name in (transport, pool, f"{pool}.connection", f"{pool}.http11"):
+                    checked.append(name)
+                    assert not logging.getLogger(name).isEnabledFor(logging.INFO), (sdk, name)
+    assert checked, f"{sdk} imports neither httpx nor httpx2; update the transport list"
 
 
 def test_configure_logging_attaches_exactly_one_scrubber_when_called_twice():

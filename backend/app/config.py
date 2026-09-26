@@ -24,6 +24,40 @@ _OVERRIDE_TIERS = frozenset({
 })
 
 
+def _registered_actions() -> frozenset[str] | None:
+    """The keys of `agents/llm_attribution.ACTIONS`, or None when the
+    registry file is not beside this module (the image-defaults test loads
+    config.py alone).
+
+    Read by file path, not `from .agents import llm_attribution`: importing
+    the `agents` package runs its `__init__` (the orchestrator), which
+    imports `settings` from this module before it exists. The registry is
+    stdlib-only on purpose, so executing it standalone is safe.
+    """
+    import sys
+    if __package__:
+        loaded = sys.modules.get(f"{__package__}.agents.llm_attribution")
+        if loaded is not None:
+            return frozenset(getattr(loaded, "ACTIONS", {}))
+    path = Path(__file__).resolve().parent / "agents" / "llm_attribution.py"
+    if not path.is_file():
+        return None
+    import importlib.util
+    name = "_mm_config_llm_attribution_registry"
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:  # pragma: no cover - stdlib contract
+        return None
+    module = importlib.util.module_from_spec(spec)
+    # Registered while it executes: its dataclass resolves annotations
+    # through sys.modules.
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(name, None)
+    return frozenset(getattr(module, "ACTIONS", {}))
+
+
 def _project_env_files() -> list[str]:
     """Resolve env files in load order.
 
@@ -285,17 +319,24 @@ class Settings(BaseSettings):
     @field_validator("llm_action_tier_overrides")
     @classmethod
     def _tier_overrides_well_formed(cls, v: str) -> str:
-        # Shape and tier names only: action names are checked against the
-        # registry by `llm.tier_overrides()`, because this module is also
-        # loaded standalone (the image-defaults test), where the agents
-        # package cannot be imported.
+        # Shape, tier names AND action names, at boot. `llm.tier_overrides()`
+        # raises on an unknown action too, but only inside `chat_json`, where
+        # the memo pipeline's safe_call swallows it: a typo in this emergency
+        # rollback lever would otherwise turn every routed call into stub
+        # findings with nothing louder than a caught exception.
         text = str(v or "").strip()
+        known = _registered_actions()
         for item in (p.strip() for p in text.split(",") if p.strip()):
             action, sep, tier = item.partition(":")
             if not sep or not action.strip() or tier.strip().lower() not in _OVERRIDE_TIERS:
                 raise ValueError(
                     f"llm_action_tier_overrides entry {item!r} must be '<action>:<tier>' "
                     f"with tier in {sorted(_OVERRIDE_TIERS)}"
+                )
+            if known is not None and action.strip() not in known:
+                raise ValueError(
+                    f"llm_action_tier_overrides names an unknown action {action.strip()!r} "
+                    "(see agents/llm_attribution.py ACTIONS)"
                 )
         return text
 
