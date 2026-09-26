@@ -224,11 +224,15 @@ MODEL_SUBMODULES = [
 # `revision`, `debate_review`), all defaulted and expand-only: nothing
 # writes them until the debate and reviewer slices land behind
 # DEBATE_MODE / REVIEWER_MODE, and stored memos read back with `debate`
-# None. These intentional changes are pinned here. Update this deliberately, in
+# None. D4 presenter (2026-09-25) then widened the read-time
+# `SectionReason` with the debate's own states (`debate_unavailable`,
+# `not_run`, `rebuttals_unavailable`; design-bullbear-final §12.1), which
+# D2 left out; expand-only, and never stored (`save_memo` refuses a memo
+# carrying `section_availability`). These intentional changes are pinned here. Update this deliberately, in
 # the same commit, whenever `StockMemoOut` itself changes — never to make
 # an accidental drift pass.
 STOCK_MEMO_OUT_SCHEMA_SHA256 = (
-    "a8059729ecad0be3b2642656f5cf351c53c897fa0eb32fe0921879dfe1cab1dd"
+    "51044e5b344e5cdbcd31375a08f9371d423d73c3d93d9260a1ec903f046cbe31"
 )
 
 

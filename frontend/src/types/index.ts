@@ -626,7 +626,11 @@ export type SectionReason =
   | "pm_view_unavailable"
   | "partial_template"
   | "follow_up_unanswered"
-  | "templated_scenarios";
+  | "templated_scenarios"
+  // D4: the bull/bear debate's own states (design-bullbear-final §12.1).
+  | "debate_unavailable"
+  | "not_run"
+  | "rebuttals_unavailable";
 
 // Read-time verdict on one memo section. Computed by the backend presenter
 // on every read; never stored.
