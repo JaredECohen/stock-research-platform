@@ -659,6 +659,11 @@ def build_case_file(inputs: DebateInputs, news_block: str, refs: Sequence[str], 
 
 # Mirrored template queries: used for BOTH sides when either plan fails
 # (design §4.2). Query selection, not displayed prose, so W2a is not engaged.
+# Each pair has the same corpus, the same word count and the same words in
+# the same places; only the directional words differ, so neither side's
+# fallback retrieval is broader than the other's (BM25 and the embedding
+# both respond to query length and vocabulary). No company slot: retrieval
+# is always ticker-scoped.
 TEMPLATE_QUERIES: dict[str, list[tuple[str, str]]] = {
     "bull": [
         ("filings", "growth drivers demand strength and margin expansion"),
@@ -666,9 +671,9 @@ TEMPLATE_QUERIES: dict[str, list[tuple[str, str]]] = {
         ("news", "positive developments contract wins and upgrades"),
     ],
     "bear": [
-        ("filings", "risk factors competition demand weakness and margin pressure"),
-        ("transcripts", "management guidance lowered headwinds and downside"),
-        ("news", "negative developments litigation losses and downgrades"),
+        ("filings", "risk factors demand weakness and margin pressure"),
+        ("transcripts", "management guidance lowered demand weakness and downside"),
+        ("news", "negative developments contract losses and downgrades"),
     ],
 }
 

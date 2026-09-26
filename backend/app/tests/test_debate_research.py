@@ -197,6 +197,15 @@ def test_template_queries_are_mirrored():
     plans = debate.template_plans()
     assert [q["corpus"] for q in plans["bull"]] == [q["corpus"] for q in plans["bear"]]
     assert len(plans["bull"]) == len(plans["bear"]) <= 3
+    for bull, bear in zip(plans["bull"], plans["bear"], strict=True):
+        bw, rw = bull["query"].split(), bear["query"].split()
+        assert len(bw) == len(rw), (bull["query"], bear["query"])
+        assert abs(len(bull["query"]) - len(bear["query"])) <= 4
+        # A word both sides use sits in the same place: only the directional
+        # words differ, so neither fallback query is broader than the other.
+        for a, b in zip(bw, rw, strict=True):
+            if a in rw or b in bw:
+                assert a == b, (bull["query"], bear["query"])
 
 
 # --- news retrieval stays inside the pack's date rules (L8, §5.2-§5.3) -------------
