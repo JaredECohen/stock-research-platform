@@ -219,6 +219,17 @@ def test_pm_synthesis_row_attributed_under_fake_client(monkeypatch):
     # The specialists this slice owns are attributed as analysts.
     sector = [r for r in rows if r.action == "analyst.sector"]
     assert sector and all(r.agent_name == "Sector Analyst" and r.role == "analyst" for r in sector)
+    # The specialist context itself carries role="analyst" (G1 review): the
+    # sector rows above get it from the action registry whatever the
+    # context says. These four call sites name no action yet (A2a adds
+    # them), so today their rows' role comes only from
+    # `_run_analyst_round`'s context; once A2a registers them the registry
+    # supplies the same role and this still holds.
+    specialists = [r for r in rows if r.agent_name in (
+        "Earnings Analyst", "Filing Analyst", "Valuation Analyst", "Technical Analyst")]
+    assert specialists, [(r.agent_name, r.action) for r in rows]
+    assert all(r.role == "analyst" for r in specialists), [
+        (r.agent_name, r.action, r.role) for r in specialists]
     # No call from the files this slice owns is an unattributed site.
     owned = ("app/agents/graph.py", "app/agents/sector_agents.py", "app/agents/industry_analysts.py",
              "app/agents/intake.py", "app/agents/roster.py", "app/agents/news_context.py")

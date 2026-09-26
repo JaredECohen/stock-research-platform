@@ -25,6 +25,7 @@ memo another test runs.
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import date, datetime, timedelta
 
@@ -35,6 +36,7 @@ from app.agents.news_context import EMPTY_SECTOR_LINE, NewsContext
 from app.agents.source_ledger import PRIMARY_KINDS, SourceLedger
 from app.cache import cache_put, invalidate
 from app.config import settings
+from app.tests import llm_fakes
 
 
 def _ticker() -> str:
@@ -323,11 +325,14 @@ def live_news(monkeypatch):
     monkeypatch.setattr(settings, "news_fetch_at_memo_time", True)
     monkeypatch.setattr(news_agent, "_company_name", lambda t: "Zetawidget Corp")
 
-    def no_patching(*a, **k):
-        raise AssertionError("a memo-time fetch must never reach the patch path")
-
+    # Recorded, never raised: `_fetch_at_memo_time` swallows every
+    # Exception into an empty context, so a raising stub would be caught
+    # there and a fetch that patched memos would still pass (G1 review).
+    # Each test asserts nothing was recorded (`_assert_no_reaction`).
     from app.services import update_orchestrator
-    monkeypatch.setattr(update_orchestrator, "on_news_alert", no_patching)
+    monkeypatch.setattr(update_orchestrator, "on_news_alert",
+                        lambda *a, **k: _PATCHED.append((a, k)))
+    _PATCHED.clear()
     calls: list[dict] = []
     real_run = news_agent.run
 
@@ -336,26 +341,46 @@ def live_news(monkeypatch):
         return real_run(ticker, **kw)
 
     monkeypatch.setattr(news_agent, "run", counting_run)
-    return calls
+    yield calls
+    _assert_no_reaction(calls)
+
+
+_PATCHED: list[tuple] = []
+
+
+def _assert_no_reaction(calls: list[dict]) -> None:
+    """N2: a memo run reads news; it never patches memos and never touches
+    the news loop's throttle (`monitoring/news_loop.py`)."""
+    from app.monitoring import news_loop
+    assert _PATCHED == [], "a memo-time fetch reached the patch path"
+    for c in calls:
+        assert news_loop._last_run_for(c["ticker"]) is None, "a memo-time fetch set the loop throttle"
 
 
 def test_live_memo_without_news_fetches_once(monkeypatch, live_news):
     t = _ticker()
-    contexts: list[dict] = []
-
-    def fake_gemini(prompt, **kw):
-        contexts.append(llm.current_call_context())
-        return {"items": [{"title": f"Zetawidget ({t}) wins a large contract",
-                           "summary": "A multi-year award.", "published_at": _days_ago(1),
-                           "url": "https://www.reuters.com/business/zetawidget-contract"}]}
-
-    monkeypatch.setattr(llm, "gemini_chat_json", fake_gemini)
-    ctx = news_context.load_for_memo(t)
+    item = {"title": f"Zetawidget ({t}) wins a large contract",
+            "summary": "A multi-year award.", "published_at": _days_ago(1),
+            "url": "https://www.reuters.com/business/zetawidget-contract"}
+    # Through the real LLM layer with a fake Gemini client, so the logged
+    # row is what is asserted, not a context read inside a replaced
+    # function: the row's action is the call site's action when one is
+    # passed, else the context's (llm._call_scope), and only the row shows
+    # which one won (G1 review).
+    client = llm_fakes.FakeClient(llm_fakes.gemini_response(json.dumps({"items": [item]})))
+    llm_fakes.live(monkeypatch, gemini=client)
+    run_id = f"g1-news-{uuid.uuid4().hex[:8]}"
+    with llm.llm_call_context(run_id=run_id):
+        ctx = news_context.load_for_memo(t)
     assert live_news == [{"ticker": t, "force_refresh": False}]
+    assert len(client.requests) == 1
+    # The fetch produced an alert, so this is where a patch would show.
+    _assert_no_reaction(live_news)
     assert len(ctx.items) == 1 and ctx.origin == "gemini"
     assert "Zetawidget" in news_context.render_block(ctx, "pm")
     # Attributed as the memo-time fetch, not as the news loop's search.
-    assert contexts and contexts[0]["action"] == "news.memo_fetch" and contexts[0]["role"] == "news"
+    rows = llm_fakes.rows_for(run_id)
+    assert rows and [(r.action, r.role, r.ticker) for r in rows] == [("news.memo_fetch", "news", t)] * len(rows)
     # news_hot is written, so the next read in this window does not fetch.
     news_context.load_for_memo(t)
     assert len(live_news) == 1

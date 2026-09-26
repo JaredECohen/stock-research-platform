@@ -944,6 +944,14 @@ def test_industry_prompt_byte_identical_without_news(monkeypatch):
     # The pre-G1 template, formatted with the same values.
     legacy = prompts.INDUSTRY_GROUP_ANALYST_PROMPT.replace("{news_block}", "")
     assert "Ratios (observed): {ratios_snapshot}\n{critique_block}" in legacy
+    # Pinned against an independent expectation, not only no-kwarg against
+    # an empty context (both new code; G1 review): the with-news prompt
+    # minus exactly "\n\n" + block IS the no-news prompt, so the empty case
+    # adds nothing (not even a blank line) and the news case adds only that.
+    ia.run_industry_group_agent({"ticker": "JPM"}, {"roe": 0.17}, classification=row, news=_NEWS)
+    block = news_context.render_block(_NEWS, "industry_group")
+    assert seen[2].count("\n\n" + block) == 1
+    assert seen[2].replace("\n\n" + block, "") == seen[0]
 
 
 def test_industry_call_is_attributed(monkeypatch):

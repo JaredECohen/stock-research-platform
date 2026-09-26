@@ -13,11 +13,12 @@ test's memo reads them.
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
 
-from app.agents import graph, intake, news_context, prompts
+from app.agents import graph, intake, news_agent, news_context, prompts
 from app.agents import industry_analysts as ia
 from app.agents import llm as llm_mod
 from app.agents.news_context import EMPTY_SECTOR_LINE
@@ -201,3 +202,22 @@ def test_pm_refs_offer_news_only_when_there_is_news(monkeypatch):
     refs = _refs(pm)
     assert refs and f"news_alerts:{TICKER}" not in refs
 
+
+def test_backtest_memo_reads_and_fetches_no_news(monkeypatch):
+    """REGRESSION guard (G1 review): the gather stage must hand
+    `load_for_memo` the run's `as_of_date`. Without it a backtest reads the
+    live cache under an `:asof:` subject, finds nothing, and (on a live
+    deploy) makes a grounded fetch that feeds today's headlines into a
+    historical memo: look-ahead plus spend. The fetch switch is forced on
+    here so dropping the argument is visible in demo mode."""
+    seen = _spy(monkeypatch)
+    monkeypatch.setattr(news_context, "_should_fetch", lambda: True)
+    fetched: list[str] = []
+    monkeypatch.setattr(news_agent, "run", lambda ticker, **kw: fetched.append(ticker))
+    graph.run_stock_memo(TICKER, as_of_date=date.today() - timedelta(days=120))
+    assert fetched == []
+    (sector,) = seen["sector"]
+    slot = sector.split("You will also be handed", 1)[0]
+    assert EMPTY_SECTOR_LINE in slot and MARKER not in slot
+    (pm,) = seen["pm"]
+    assert "## Recent news" not in pm and "<news>" not in pm
